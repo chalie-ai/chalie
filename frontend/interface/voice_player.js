@@ -1,24 +1,28 @@
 /**
- * VoicePlayer — per-message streaming audio overlay.
+ * VoicePlayer — per-message audio overlay.
  *
- * Listens for `chalie:speak-message` from renderer.js speaker buttons.
- * On each event it POSTs /voice/synthesize and reads the response body
- * as an NDJSON stream — one `{index, total, audio}` line per WAV chunk.
- * Each chunk is decoded into an AudioBuffer and queued; buffers play in
- * order by chaining source.onended → _playNextChunk.
+ * Listens for `chalie:speak-message` from renderer.js speaker buttons. Each
+ * event POSTs /voice/synthesize, awaits the full WAV blob, decodes it once
+ * into a single AudioBuffer, and plays it via the Web Audio API. Skip/scrub
+ * controls work against that single buffer.
  *
- * iOS Safari autoplay: AudioContext.resume() runs synchronously inside
- * the click gesture (via the `chalie:speak-message` handler), satisfying
- * the user-activation requirement.
+ * iOS Safari autoplay: AudioContext.resume() runs synchronously inside the
+ * click handler (via the `chalie:speak-message` dispatch), satisfying the
+ * user-activation requirement.
  *
- * Only one session plays at a time — opening a new message supersedes
- * the previous stream via `_openGeneration`.
+ * Only one session plays at a time — opening a new message supersedes the
+ * previous fetch via `_openGeneration`.
  */
 
 import { createWakeLock } from './utils.js';
 
 const _TTS_PATH = '/voice/synthesize';
 const _SKIP_SECONDS = 10;
+// Cold-start retry policy: TTS models can take 10-30s to load on first call.
+// We auto-retry while the server signals `reason: loading` so the user
+// doesn't have to click the speaker button repeatedly.
+const _LOADING_MAX_RETRIES = 6;
+const _LOADING_DEFAULT_DELAY_MS = 3000;
 
 export class VoicePlayer {
   /**
@@ -40,7 +44,7 @@ export class VoicePlayer {
 
     this._boundKeydown = null;
 
-    // Generation counter so a stale stream from a superseded session is
+    // Generation counter so a stale fetch from a superseded session is
     // ignored. Incremented on every _open() and _close().
     this._openGeneration = 0;
     this._fetchAbort = null;
@@ -49,11 +53,8 @@ export class VoicePlayer {
     this._audioCtx = null;
 
     // Per-session playback state
-    this._bufferQueue = [];
-    this._chunkIdx = 0;
-    this._streamDone = false;
+    this._buffer = null;
     this._currentSource = null;
-    this._currentBuffer = null;
     this._sourceStartCtxTime = 0;
     this._sourceStartOffset = 0;
     this._paused = false;
@@ -86,13 +87,11 @@ export class VoicePlayer {
       if (e.target === this._overlay) this._close();
     });
 
-    // Scrubber seeks within the current chunk only — cross-chunk seeking
-    // isn't worth the complexity for a speaker-button UX.
     this._progress?.addEventListener('input', () => {
-      if (!this._currentBuffer) return;
+      if (!this._buffer) return;
       const offset = Number.parseFloat(this._progress.value) || 0;
       this._stopCurrentSource();
-      this._playBufferFrom(this._currentBuffer, offset);
+      this._playBufferFrom(this._buffer, offset);
     });
 
     // Speaker-button click fires here; handler runs inside the user gesture
@@ -133,38 +132,23 @@ export class VoicePlayer {
       const host = this._getHost?.() || '';
       const url = host.replace(/\/$/, '') + _TTS_PATH;
 
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ text }),
-        signal: this._fetchAbort.signal,
-      });
-
+      const resp = await this._fetchWithLoadingRetry(url, text, gen);
       if (gen !== this._openGeneration) return;
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}));
-        if (gen !== this._openGeneration) return;
-        // deps_missing → surface the install hint verbatim. The button SHOULD
-        // already be hidden by the /voice/health poller in app.js, but a stale
-        // page load (interface fetched before voice install completed) can still
-        // hit this path. Show the hint instead of a useless "HTTP 503".
-        if (err.reason === 'deps_missing') {
-          throw new Error(err.hint || err.error || 'Voice dependencies not installed');
-        }
-        throw new Error(err.error || `HTTP ${resp.status}`);
-      }
+      if (!resp) return; // aborted or stale
 
-      const sawDone = await this._consumeStream(resp.body, gen);
-
+      const arrayBuf = await resp.arrayBuffer();
       if (gen !== this._openGeneration) return;
-      if (!sawDone) {
-        this._showLoading(false);
-        this._showError('Audio was cut short — try again');
-        return;
+
+      const buffer = await this._decodeAudio(arrayBuf);
+      if (gen !== this._openGeneration) return;
+
+      this._buffer = buffer;
+      this._showLoading(false);
+      if (this._progress) {
+        this._progress.max = buffer.duration || 0;
+        this._progress.value = 0;
       }
-      this._streamDone = true;
-      this._checkStreamDone();
+      this._playBufferFrom(buffer, 0);
     } catch (err) {
       if (err.name === 'AbortError') return;
       if (gen !== this._openGeneration) return;
@@ -175,99 +159,71 @@ export class VoicePlayer {
   }
 
   /**
-   * Read `body` as an NDJSON stream of `{index, total, audio}` chunks plus
-   * a final `{done: true, total}` sentinel. Decode each WAV inline, push
-   * into the playback queue, and kick playback off when the first buffer
-   * lands. Returns `true` only if the sentinel was received; `false`
-   * means the server closed the stream early (client should show an
-   * error rather than treat partial audio as success).
+   * POST text to /voice/synthesize with cold-start retry.
    *
-   * @param {ReadableStream<Uint8Array>} body
-   * @param {number} gen — generation captured at _open() time
-   * @returns {Promise<boolean>}
+   * The server returns 503 + `{reason: 'loading'}` while Kokoro/Moonshine
+   * are still warming up. We honour `Retry-After` (or fall back to a default
+   * delay) and re-issue the request until the models report ready, the user
+   * supersedes the session, or we hit the retry cap.
+   *
+   * Returns the successful `Response`, or `null` if the session was aborted
+   * or superseded mid-wait. Throws on any non-loading error so the caller's
+   * catch block can surface it to the user.
    */
-  async _consumeStream(body, gen) {
-    const reader = body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    let sawDone = false;
+  async _fetchWithLoadingRetry(url, text, gen) {
+    for (let attempt = 0; attempt <= _LOADING_MAX_RETRIES; attempt += 1) {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ text }),
+        signal: this._fetchAbort.signal,
+      });
+      if (gen !== this._openGeneration) return null;
+      if (resp.ok) return resp;
 
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (gen !== this._openGeneration) { reader.cancel().catch(() => {}); return false; }
-        if (done) break;
-
-        buf += decoder.decode(value, { stream: true });
-
-        let nl;
-        while ((nl = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (!line) continue;
-          if (await this._enqueueLine(line, gen)) sawDone = true;
-          if (gen !== this._openGeneration) { reader.cancel().catch(() => {}); return false; }
-        }
+      const err = await resp.clone().json().catch(() => ({}));
+      // deps_missing → surface the install hint verbatim. The speaker button
+      // SHOULD already be hidden by the /voice/health poller in app.js, but a
+      // stale page load (interface fetched before voice install completed)
+      // can still hit this path.
+      if (err.reason === 'deps_missing') {
+        throw new Error(err.hint || err.error || 'Voice dependencies not installed');
       }
-
-      const tail = buf.trim();
-      if (tail && await this._enqueueLine(tail, gen)) sawDone = true;
-    } finally {
-      try { reader.releaseLock(); } catch { /* already released */ }
+      if (err.reason === 'models_missing') {
+        throw new Error(err.hint || err.error || 'Voice models not installed');
+      }
+      if (err.reason === 'loading' && attempt < _LOADING_MAX_RETRIES) {
+        const retryAfter = Number.parseFloat(resp.headers.get('Retry-After') || '');
+        const delayMs = Number.isFinite(retryAfter) && retryAfter > 0
+          ? retryAfter * 1000
+          : _LOADING_DEFAULT_DELAY_MS;
+        await this._sleepAbortable(delayMs);
+        if (gen !== this._openGeneration) return null;
+        continue;
+      }
+      throw new Error(err.error || `HTTP ${resp.status}`);
     }
-    return sawDone;
+    throw new Error('Voice models still loading — please retry shortly');
   }
 
-  /**
-   * Parse one NDJSON line. Returns `true` iff this line was the
-   * `{done: true}` success sentinel.
-   *
-   * If the line carries an `error` field (server-side synthesis failure
-   * mid-stream), this throws so the fetch's catch in `_open` runs the
-   * normal error path — abort the reader, hide the spinner, surface the
-   * message. The error sentinel does NOT carry `done: true`, so we never
-   * confuse a failure with a clean stream close.
-   */
-  async _enqueueLine(line, gen) {
-    let payload;
-    try {
-      payload = JSON.parse(line);
-    } catch {
-      console.warn('[VoicePlayer] dropping non-JSON line:', line);
-      return false;
-    }
-    if (payload?.error) {
-      this._fetchAbort?.abort();
-      throw new Error(payload.error);
-    }
-    if (payload?.done) return true;
-
-    const audioB64 = payload?.audio;
-    if (!audioB64) return false;
-
-    const raw = atob(audioB64);
-    const bytes = new Uint8Array(raw.length);
-    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-
-    let buffer;
-    try {
-      buffer = await this._decodeAudio(bytes.buffer);
-    } catch (err) {
-      // Malformed WAV or AudioContext gone — abort the fetch so the
-      // server stops synthesising chunks the client will never play.
-      this._fetchAbort?.abort();
-      throw err;
-    }
-    if (gen !== this._openGeneration) return false;
-
-    this._bufferQueue.push(buffer);
-
-    if (!this._currentSource && !this._paused
-        && this._chunkIdx < this._bufferQueue.length) {
-      this._showLoading(false);
-      this._playNextChunk();
-    }
-    return false;
+  /** Resolve after `ms`, or reject immediately if the active fetch aborts. */
+  _sleepAbortable(ms) {
+    return new Promise((resolve, reject) => {
+      const signal = this._fetchAbort?.signal;
+      const t = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(t);
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        reject(err);
+      };
+      if (signal?.aborted) { onAbort(); return; }
+      signal?.addEventListener('abort', onAbort, { once: true });
+    });
   }
 
   /** Promise wrapper around AudioContext.decodeAudioData (callback form for iOS). */
@@ -279,7 +235,7 @@ export class VoicePlayer {
   }
 
   _close() {
-    this._openGeneration += 1; // discard any in-flight stream
+    this._openGeneration += 1; // discard any in-flight fetch
     if (this._fetchAbort) this._fetchAbort.abort();
     this._resetPlayback();
     if (this._overlay?.open) this._overlay.close();
@@ -289,10 +245,7 @@ export class VoicePlayer {
   _resetPlayback() {
     this._stopCurrentSource();
     this._stopProgressTimer();
-    this._bufferQueue = [];
-    this._chunkIdx = 0;
-    this._streamDone = false;
-    this._currentBuffer = null;
+    this._buffer = null;
     this._sourceStartCtxTime = 0;
     this._sourceStartOffset = 0;
     this._paused = false;
@@ -304,47 +257,16 @@ export class VoicePlayer {
     this._wakeLock.release();
   }
 
-  _checkStreamDone() {
-    if (this._streamDone
-        && this._chunkIdx >= this._bufferQueue.length
-        && !this._currentSource) {
-      this._setPlayIcon(false);
-      if (this._progress && this._currentBuffer) {
-        this._progress.value = this._currentBuffer.duration || 0;
-      }
-      this._wakeLock.release();
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // Private — playback
   // ---------------------------------------------------------------------------
 
-  _playNextChunk() {
-    if (this._chunkIdx >= this._bufferQueue.length) {
-      this._checkStreamDone();
-      return;
-    }
-
-    const buffer = this._bufferQueue[this._chunkIdx];
-    this._currentBuffer = buffer;
-    this._paused = false;
-    this._pausedOffset = 0;
-
-    if (this._progress) {
-      this._progress.max = buffer.duration || 0;
-      this._progress.value = 0;
-    }
-
-    this._playBufferFrom(buffer, 0);
-  }
-
   _playBufferFrom(buffer, offset) {
     if (!this._audioCtx) return;
 
-    // Browsers may auto-suspend the AudioContext between chunks (no recent
-    // user gesture). resume() transitions state synchronously for scheduling
-    // purposes — queued start() calls execute once the context is running.
+    // Browsers may auto-suspend the AudioContext after period of inactivity.
+    // resume() transitions state synchronously for scheduling purposes —
+    // queued start() calls execute once the context is running.
     if (this._audioCtx.state === 'suspended') {
       this._audioCtx.resume().catch(() => {});
     }
@@ -357,8 +279,14 @@ export class VoicePlayer {
       if (source !== this._currentSource) return;
       this._currentSource = null;
       if (this._paused) return;
-      this._chunkIdx += 1;
-      this._playNextChunk();
+      // Natural end-of-playback: stop the timer, leave the buffer in place
+      // so the user can press play to replay from the beginning.
+      this._setPlayIcon(false);
+      this._stopProgressTimer();
+      if (this._progress && buffer) {
+        this._progress.value = buffer.duration || 0;
+      }
+      this._wakeLock.release();
     };
 
     try {
@@ -370,7 +298,6 @@ export class VoicePlayer {
     }
 
     this._currentSource = source;
-    this._currentBuffer = buffer;
     this._sourceStartCtxTime = this._audioCtx.currentTime;
     this._sourceStartOffset = offset;
     this._paused = false;
@@ -394,24 +321,14 @@ export class VoicePlayer {
   }
 
   _togglePlayPause() {
-    if (!this._audioCtx) return;
+    if (!this._audioCtx || !this._buffer) return;
     if (this._paused) {
-      if (!this._currentBuffer) return;
-      this._playBufferFrom(this._currentBuffer, this._pausedOffset);
+      this._playBufferFrom(this._buffer, this._pausedOffset);
       return;
     }
     if (!this._currentSource) {
-      // No source playing. Only restart from the beginning if the stream
-      // is fully finished AND every buffered chunk has played; otherwise
-      // we're between chunks (or pre-first-chunk) and the next arrival
-      // will resume playback automatically. Restarting here would replay
-      // the message from chunk 0 — exactly the "replays chunk 1" bug.
-      if (this._streamDone
-          && this._chunkIdx >= this._bufferQueue.length
-          && this._bufferQueue.length) {
-        this._chunkIdx = 0;
-        this._playNextChunk();
-      }
+      // Finished playing — clicking play restarts from the beginning.
+      this._playBufferFrom(this._buffer, 0);
       return;
     }
     this._pausedOffset = this._currentPosition();
@@ -423,41 +340,30 @@ export class VoicePlayer {
   }
 
   _skipForward() {
-    if (!this._currentBuffer || !this._audioCtx) return;
+    if (!this._buffer || !this._audioCtx) return;
     const pos = this._currentPosition();
     const target = pos + _SKIP_SECONDS;
-    if (target < this._currentBuffer.duration) {
+    if (target < this._buffer.duration) {
       this._stopCurrentSource();
-      this._playBufferFrom(this._currentBuffer, target);
+      this._playBufferFrom(this._buffer, target);
       return;
     }
+    // Past end — stop, sit at the end so play restarts from 0.
     this._stopCurrentSource();
-    this._chunkIdx += 1;
-    this._playNextChunk();
+    this._stopProgressTimer();
+    this._paused = false;
+    this._pausedOffset = 0;
+    if (this._progress) this._progress.value = this._buffer.duration || 0;
+    this._setPlayIcon(false);
+    this._wakeLock.release();
   }
 
   _skipBack() {
-    if (!this._currentBuffer || !this._audioCtx) return;
+    if (!this._buffer || !this._audioCtx) return;
     const pos = this._currentPosition();
-    const target = pos - _SKIP_SECONDS;
-    if (target > 0) {
-      this._stopCurrentSource();
-      this._playBufferFrom(this._currentBuffer, target);
-      return;
-    }
-    if (pos > 2) {
-      this._stopCurrentSource();
-      this._playBufferFrom(this._currentBuffer, 0);
-      return;
-    }
-    if (this._chunkIdx > 0) {
-      this._stopCurrentSource();
-      this._chunkIdx -= 1;
-      this._playNextChunk();
-    } else {
-      this._stopCurrentSource();
-      this._playBufferFrom(this._currentBuffer, 0);
-    }
+    const target = Math.max(0, pos - _SKIP_SECONDS);
+    this._stopCurrentSource();
+    this._playBufferFrom(this._buffer, target);
   }
 
   // ---------------------------------------------------------------------------
@@ -510,7 +416,7 @@ export class VoicePlayer {
   }
 
   _updateProgress() {
-    const buf = this._currentBuffer;
+    const buf = this._buffer;
     if (!buf) return;
     const cur = this._currentPosition();
     const dur = buf.duration || 0;
