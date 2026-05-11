@@ -86,10 +86,6 @@ class Ability(ABC):
         """
         ...
 
-    def pre_dispatch(self, params: dict) -> None: ...
-
-    def post_dispatch(self, result: dict) -> None: ...
-
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
         """Resolve a rich-media payload's runtime state at parse time.

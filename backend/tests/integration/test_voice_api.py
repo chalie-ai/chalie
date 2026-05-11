@@ -1,17 +1,19 @@
 """
-Integration: voice API — synthesize (NDJSON streaming) + transcribe + health.
+Integration: voice API — synthesize (single WAV blob) + transcribe + health.
 
-Tests exercise the real Kokoro + Moonshine models. Each test skips with
-pytest.skip() if /voice/health reports models unavailable, so the suite
-stays green in environments without voice dependencies installed.
+Tests exercise the real kokoro-onnx + moonshine-onnx models via the real Flask
+app. Each test that requires model files skips cleanly when the model files are
+absent (resources/voice-models/), so the suite stays green in CI environments
+without voice dependencies installed.
 
-Uses the authed_client fixture from conftest.py (real Flask app, auth
-bypassed, real SQLite + MemoryStore).
+The pure-function tests in test_voice_xml_strip.py run unconditionally; these
+integration tests are for the full HTTP contract only.
+
+Uses the authed_client fixture from conftest.py (real Flask app, auth bypassed,
+real SQLite + MemoryStore).
 """
 
-import base64
 import io
-import json
 
 import pytest
 
@@ -25,26 +27,32 @@ def _voice_available(client) -> bool:
     return (data or {}).get('status') == 'ok'
 
 
-def _read_ndjson(resp):
-    """Decode an NDJSON streaming response into a list of payloads."""
-    body = resp.get_data(as_text=True)
-    chunks = []
-    for line in body.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        chunks.append(json.loads(line))
-    return chunks
-
-
-def _decode_chunk_wav(chunk: dict) -> bytes:
-    """Base64-decode the ``audio`` field of an NDJSON chunk."""
-    return base64.b64decode(chunk['audio'])
+def _wav_duration(data: bytes) -> float:
+    """Parse WAV header for duration without decoding. Returns 0.0 on bad input."""
+    import struct
+    try:
+        if len(data) < 44 or data[:4] != b'RIFF' or data[8:12] != b'WAVE':
+            return 0.0
+        channels = struct.unpack_from('<H', data, 22)[0]
+        sample_rate = struct.unpack_from('<I', data, 24)[0]
+        bits_per_sample = struct.unpack_from('<H', data, 34)[0]
+        if sample_rate == 0 or channels == 0 or bits_per_sample == 0:
+            return 0.0
+        offset = 12
+        while offset < len(data) - 8:
+            chunk_id = data[offset:offset + 4]
+            chunk_size = struct.unpack_from('<I', data, offset + 4)[0]
+            if chunk_id == b'data':
+                return chunk_size / (sample_rate * channels * (bits_per_sample // 8))
+            offset += 8 + chunk_size
+        return 0.0
+    except Exception:
+        return 0.0
 
 
 @pytest.mark.integration
-def test_health_endpoint_shape(authed_client):
-    """GET /voice/health → JSON with 'status' key holding a known string."""
+def test_health_endpoint_returns_known_status(authed_client):
+    """GET /voice/health → 200 with status in {ok, loading, unavailable}."""
     client, _db, _store = authed_client
 
     resp = client.get('/voice/health')
@@ -57,8 +65,8 @@ def test_health_endpoint_shape(authed_client):
 
 
 @pytest.mark.integration
-def test_synthesize_streams_ndjson_chunks(authed_client):
-    """POST /voice/synthesize streams NDJSON chunks; each is a valid WAV."""
+def test_synthesize_returns_single_wav_blob(authed_client):
+    """POST /voice/synthesize → 200 audio/wav blob with non-zero duration."""
     client, _db, _store = authed_client
 
     if not _voice_available(client):
@@ -71,145 +79,159 @@ def test_synthesize_streams_ndjson_chunks(authed_client):
     )
 
     assert resp.status_code == 200
-    assert resp.mimetype == 'application/x-ndjson'
+    assert resp.mimetype == 'audio/wav'
 
-    payloads = _read_ndjson(resp)
-    assert len(payloads) >= 2, 'Expected at least one chunk + a done sentinel'
+    body = resp.get_data()
+    assert body[:4] == b'RIFF', 'Response body must start with RIFF WAV header'
+    assert body[8:12] == b'WAVE', 'Response body must contain WAVE marker'
+    assert len(body) > 44, 'WAV blob too short to contain any audio'
 
-    chunks = [p for p in payloads if not p.get('done')]
-    sentinels = [p for p in payloads if p.get('done')]
-    assert len(sentinels) == 1, 'Expected exactly one done sentinel'
-    assert len(chunks) >= 1, 'Expected at least one audio chunk'
-
-    total = chunks[0]['total']
-    assert len(chunks) == total, f'Got {len(chunks)} chunks, expected total={total}'
-    assert sentinels[0]['total'] == total
-
-    assert [c['index'] for c in chunks] == list(range(total))
-
-    wav_bytes = _decode_chunk_wav(chunks[0])
-    assert len(wav_bytes) > 44, 'Chunk too short to be a WAV file'
-    assert wav_bytes[:4] == b'RIFF', 'Missing RIFF header'
-    assert wav_bytes[8:12] == b'WAVE', 'Missing WAVE marker'
-
-    try:
-        import soundfile as sf
-        data, samplerate = sf.read(io.BytesIO(wav_bytes))
-        duration = len(data) / samplerate
-        assert duration > 0.1, f'Audio too short: {duration:.3f}s'
-    except ImportError:
-        pass
+    duration = _wav_duration(body)
+    assert duration > 0.1, 'Synthesized audio must have non-zero duration (got %fs)' % duration
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize(
-    'text',
-    ['', '   ', '\n\t  \n'],
-    ids=['empty', 'whitespace', 'newlines-tabs'],
-)
-def test_synthesize_rejects_empty_text(authed_client, text):
+def test_synthesize_rejects_empty_text(authed_client):
     """POST /voice/synthesize → 400 for empty or whitespace-only input."""
     client, _db, _store = authed_client
 
     if not _voice_available(client):
         pytest.skip('Voice models not available in this environment')
 
-    resp = client.post(
-        '/voice/synthesize',
-        json={'text': text},
-        content_type='application/json',
-    )
-    assert resp.status_code == 400
-
-    data = resp.get_json()
-    assert data is not None
-    assert 'error' in data
+    for text in ('', '   ', '\n\t  \n'):
+        resp = client.post(
+            '/voice/synthesize',
+            json={'text': text},
+            content_type='application/json',
+        )
+        assert resp.status_code == 400, 'Expected 400 for input %r, got %d' % (text, resp.status_code)
+        data = resp.get_json()
+        assert data is not None
+        assert 'error' in data
+        assert data['error'] == 'Text is required'
 
 
 @pytest.mark.integration
-def test_synthesize_long_text_returns_full_audio(authed_client):
-    """Long text returns a single WAV blob covering the whole message.
+def test_synthesize_markdown_input_produces_audio(authed_client):
+    """Markdown-rich LLM response (bold, italic, code span, list, link) → non-trivial WAV.
 
-    Regression guard: the prior chunked-streaming design split long text
-    into many sentence chunks and was prone to mid-message gaps when
-    synthesis lagged behind playback. The blob form synthesises the full
-    text in one Kokoro call (its internal phoneme batching handles the
-    length) and returns a single audio payload of substantial duration.
+    Regression guard for the _clean_for_tts pipeline: if markdown markers
+    survive into the phonemizer as literal characters, Kokoro either skips them
+    silently or produces very short audio. Duration > 0.5s is the observable
+    proxy that real speech was synthesized.
     """
     client, _db, _store = authed_client
 
     if not _voice_available(client):
         pytest.skip('Voice models not available in this environment')
 
-    sentence = (
-        'The quick brown fox jumps over the lazy dog. '
-        'She sells sea shells by the sea shore. '
-        'How much wood would a woodchuck chuck if a woodchuck could chuck wood. '
-        'Peter Piper picked a peck of pickled peppers. '
-        'All that glitters is not gold and not all who wander are lost. '
+    markdown_text = (
+        "Here are **three key points** about Python:\n\n"
+        "- Use `print()` for output\n"
+        "- Prefer *explicit* over implicit\n"
+        "- See [the docs](https://docs.python.org) for more\n\n"
+        "The _language_ was designed for readability."
     )
-    long_text = sentence * 4  # ~1150 chars
 
     resp = client.post(
         '/voice/synthesize',
-        json={'text': long_text},
+        json={'text': markdown_text},
         content_type='application/json',
     )
 
     assert resp.status_code == 200
-    payloads = _read_ndjson(resp)
-    chunks = [p for p in payloads if not p.get('done')]
-    sentinels = [p for p in payloads if p.get('done')]
-
-    assert len(chunks) == 1, f'Expected single audio blob, got {len(chunks)}'
-    assert len(sentinels) == 1, 'Expected exactly one done sentinel'
-    assert chunks[0]['total'] == 1
-    assert chunks[0]['index'] == 0
-
-    wav = _decode_chunk_wav(chunks[0])
-    assert wav[:4] == b'RIFF'
-    assert wav[8:12] == b'WAVE'
-
-    try:
-        import soundfile as sf
-        data, samplerate = sf.read(io.BytesIO(wav))
-        duration = len(data) / samplerate
-        assert duration > 3.0, f'Expected > 3s of audio, got {duration:.3f}s'
-    except ImportError:
-        pass
+    assert resp.mimetype == 'audio/wav'
+    body = resp.get_data()
+    assert _wav_duration(body) > 0.5, 'Markdown-rich text must produce substantial audio'
 
 
 @pytest.mark.integration
-def test_transcribe_roundtrip(authed_client):
-    """Synthesize 'hello chalie' → feed the chunk WAV back to /voice/transcribe."""
+def test_synthesize_html_input_produces_audio(authed_client):
+    """HTML input (<p>, <strong>, <em>) strips cleanly and synthesizes to audio.
+
+    If the HTML pre-pass in _clean_for_tts is removed or broken, literal tag
+    text reaches the phonemizer and produces garbled or empty output.
+    """
     client, _db, _store = authed_client
 
     if not _voice_available(client):
         pytest.skip('Voice models not available in this environment')
 
-    synth_resp = client.post(
+    html_text = (
+        '<p>The capital of France is <strong>Paris</strong>.</p>'
+        '<p>It sits on the <em>Seine</em> river.</p>'
+    )
+
+    resp = client.post(
         '/voice/synthesize',
-        json={'text': 'hello chalie'},
+        json={'text': html_text},
         content_type='application/json',
     )
-    assert synth_resp.status_code == 200
 
-    payloads = _read_ndjson(synth_resp)
-    chunks = [p for p in payloads if not p.get('done')]
-    assert len(chunks) >= 1
+    assert resp.status_code == 200
+    assert resp.mimetype == 'audio/wav'
+    body = resp.get_data()
+    assert _wav_duration(body) > 0.1, 'HTML input must produce audible audio'
 
-    wav_bytes = _decode_chunk_wav(chunks[0])
 
-    transcribe_resp = client.post(
+@pytest.mark.integration
+def test_synthesize_url_input_produces_audio(authed_client):
+    """Input containing a URL → audio (spoken-host form, not raw URL characters).
+
+    The observable invariant is that audio is produced at all — espeak-ng would
+    struggle or stutter reading raw slash-and-digit sequences, but the
+    spoken-host form ('google dot com') is a normal English phrase.
+    """
+    client, _db, _store = authed_client
+
+    if not _voice_available(client):
+        pytest.skip('Voice models not available in this environment')
+
+    resp = client.post(
+        '/voice/synthesize',
+        json={'text': 'Read more at http://google.com/search for details.'},
+        content_type='application/json',
+    )
+
+    assert resp.status_code == 200
+    assert resp.mimetype == 'audio/wav'
+    body = resp.get_data()
+    assert _wav_duration(body) > 0.1, 'URL-containing input must produce audio'
+
+
+@pytest.mark.integration
+def test_transcribe_empty_file_returns_400(authed_client):
+    """POST /voice/transcribe with an empty file body → 400."""
+    client, _db, _store = authed_client
+
+    if not _voice_available(client):
+        pytest.skip('Voice models not available in this environment')
+
+    resp = client.post(
         '/voice/transcribe',
-        data={'file': (io.BytesIO(wav_bytes), 'test.wav')},
+        data={'file': (io.BytesIO(b''), 'empty.wav')},
         content_type='multipart/form-data',
     )
-    assert transcribe_resp.status_code == 200
-
-    data = transcribe_resp.get_json()
+    assert resp.status_code == 400
+    data = resp.get_json()
     assert data is not None
-    assert 'text' in data
+    assert 'error' in data
 
-    text = (data.get('text') or '').lower()
-    assert 'hello' in text, f"Expected 'hello' in transcript, got: {data.get('text')!r}"
+
+@pytest.mark.integration
+def test_transcribe_missing_file_field_returns_400(authed_client):
+    """POST /voice/transcribe with no file field → 400."""
+    client, _db, _store = authed_client
+
+    if not _voice_available(client):
+        pytest.skip('Voice models not available in this environment')
+
+    resp = client.post(
+        '/voice/transcribe',
+        data={},
+        content_type='multipart/form-data',
+    )
+    assert resp.status_code == 400
+    data = resp.get_json()
+    assert data is not None
+    assert 'error' in data

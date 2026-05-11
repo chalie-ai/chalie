@@ -329,49 +329,6 @@ class MemoryStore:
                 return None
             return lst.pop(0)
 
-    def lindex(self, key: str, index: int) -> Optional[str]:
-        """Return the element at ``index`` in the list at ``key``.
-
-        Supports negative indices.
-
-        Args:
-            key: List key.
-            index: Zero-based position (may be negative).
-
-        Returns:
-            The element at the given position, or ``None`` if out of range or key absent.
-        """
-        with self._list_lock:
-            lst = self._get_list(key)
-            if lst is None:
-                return None
-            try:
-                return lst[index]
-            except IndexError:
-                return None
-
-    def lset(self, key: str, index: int, value: str):
-        """Set the list element at ``index`` to ``value``.
-
-        Args:
-            key: List key.
-            index: Zero-based position to update (may be negative).
-            value: New value (coerced to ``str``).
-
-        Returns:
-            ``True`` on success.
-
-        Raises:
-            Exception: If the key does not exist.
-            IndexError: If ``index`` is out of range.
-        """
-        with self._list_lock:
-            lst = self._get_list(key)
-            if lst is None:
-                raise Exception("no such key")
-            lst[index] = str(value)
-            return True
-
     def brpop(self, key: str, timeout: int = 0) -> Optional[Tuple[str, str]]:
         """Blocking right-pop. Polls with sleep for simplicity."""
         deadline = time.time() + timeout if timeout > 0 else None
@@ -381,22 +338,6 @@ class MemoryStore:
                 if lst:
                     val = lst.pop()
                     return (key, val)
-            if deadline and time.time() >= deadline:
-                return None
-            time.sleep(0.1)
-
-    def blpop(self, keys, timeout: int = 0):
-        """Blocking left-pop from first non-empty key."""
-        if isinstance(keys, str):
-            keys = [keys]
-        deadline = time.time() + timeout if timeout > 0 else None
-        while True:
-            with self._list_lock:
-                for key in keys:
-                    lst = self._get_list(key)
-                    if lst:
-                        val = lst.pop(0)
-                        return (key, val)
             if deadline and time.time() >= deadline:
                 return None
             time.sleep(0.1)
@@ -839,13 +780,6 @@ class PubSubProxy:
                 return self._queue.get_nowait()
         except queue_module.Empty:
             return None
-
-    def listen(self):
-        """Generator that yields messages (blocking)."""
-        while True:
-            msg = self.get_message(timeout=1.0)
-            if msg:
-                yield msg
 
     def close(self):
         """Unsubscribe from all channels and release this proxy's queue from the store."""

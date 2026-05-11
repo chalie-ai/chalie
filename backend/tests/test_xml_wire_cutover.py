@@ -78,11 +78,8 @@ class TestOutputServiceXmlWireFrame:
     @pytest.fixture
     def svc(self, store):
         from services.output_service import OutputService
-        from unittest.mock import patch
 
-        connections = {"memory": {"topics": {"output_queue": "output-queue"}}}
-        with patch("services.config_service.ConfigService.connections", return_value=connections):
-            yield OutputService()
+        yield OutputService()
 
     def test_plaintext_response_passes_through(self, svc, store):
         """Plain text without any tags is valid HTML — pass through, no wrapping."""

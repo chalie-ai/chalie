@@ -12,7 +12,6 @@ import secrets
 from typing import Optional, List, Dict, Any
 
 from services.log_utils import safe
-from services.time_utils import utc_now, parse_utc
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
@@ -426,49 +425,6 @@ class ListService:
         except Exception as e:
             logger.error(f"[LISTS] _set_checked failed: {e}")
             return 0
-
-    # Prompt context
-
-    def get_lists_for_prompt(self) -> str:
-        """
-        Format active lists summary for LLM prompt injection.
-
-        Format: ``- {id} · {name} ({count_str}) — updated {recency}``
-        """
-        lists = self.get_all_lists()
-        if not lists:
-            return ""
-
-        now = utc_now()
-        lines = ["## Active Lists"]
-
-        for lst in lists:
-            item_count = lst['item_count']
-            checked_count = lst['checked_count']
-            updated_at = lst['updated_at']
-
-            recency = "unknown"
-            if updated_at:
-                try:
-                    delta = now - parse_utc(updated_at)
-                    total_seconds = int(delta.total_seconds())
-                    if total_seconds < 3600:
-                        recency = f"{total_seconds // 60}m ago"
-                    elif total_seconds < 86400:
-                        recency = f"{total_seconds // 3600}h ago"
-                    else:
-                        recency = f"{delta.days} days ago"
-                except Exception as e:
-                    logger.debug(f"[LIST] recency calculation failed: {e}")
-
-            if checked_count > 0:
-                count_str = f"{item_count} items, {checked_count} checked"
-            else:
-                count_str = f"{item_count} items"
-
-            lines.append(f"- {lst['id']} · {lst['name']} ({count_str}) — updated {recency}")
-
-        return "\n".join(lines)
 
     # Internal helpers
 

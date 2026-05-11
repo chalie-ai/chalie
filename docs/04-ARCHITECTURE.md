@@ -159,7 +159,8 @@ Two distinct on-disk directories separate runtime-downloaded weights from pre-sh
 
 | Path | Tracked in git | Contents |
 |------|----------------|----------|
-| `data/models/` | No (gitignored) | Encoder ONNX (`gte-modernbert-base`), voice (`kokoro`), `doc2query-small`. Downloaded on first boot or installer step. |
+| `data/models/` | No (gitignored) | Encoder ONNX (`gte-modernbert-base`), `doc2query-small`. Downloaded on first boot or installer step. |
+| `resources/voice-models/` | No (gitignored, downloaded by installer) | Kokoro TTS ONNX + voices (`kokoro/kokoro-v1.0.onnx`, `kokoro/voices-v1.0.bin`) and Moonshine STT ONNX (`moonshine/base/encoder_model.onnx`, `moonshine/base/decoder_model_merged.onnx`). Downloaded by `installer/install.sh` at install time. Placed outside `data/` so the files bake into the Docker image and survive `chalie update`. |
 | `resources/pre-trained/` | Yes | Per-task classifier meta + `.npz` MLP heads (`deliberation_score/`, `mode_detector/`) plus drift sidecars for pre-shipped search indexes (`abilities_sha.json`). Cloning the repo is enough to classify on first turn — no GitHub release fetch. |
 | `backend/abilities/assets/` and similar `*/assets/` directories | Yes (binary diff suppressed via `.gitattributes`) | Pre-shipped sqlite-vec/FTS5 search indexes (`abilities.sqlite`, `concept_lut.sqlite`, `search_tool_providers.sqlite`). Built by `python -m utils.build_ability_db` (and equivalents); a CI `--check` step compares the per-row sha to the sidecar in `resources/pre-trained/` and fails the build on drift. `abilities.sqlite` indexes **every** registered ability, including `save_pattern` and `save_graph` (1 SUMMARY row + 6–8 EXAMPLE rows each, all embedded at 768 dim). Discovery scoping is enforced at query time via each processor's `DISCOVERABLE` list, not by excluding rows from the index. Drift sidecar: `resources/pre-trained/abilities_sha.json`. |
 

@@ -1,16 +1,22 @@
 """
-Voice blueprint — STT + TTS via the unified ``moonshine_voice`` package.
+Voice blueprint — STT + TTS via two single-purpose ONNX libraries.
 
-One pip dependency owns G2P, ONNX runtime wiring, voice asset download, and
-inference for both directions:
+* TTS → ``kokoro_onnx.Kokoro`` (Kokoro v1.0 + espeak-ng phonemizer)
+* STT → ``moonshine_onnx.MoonshineOnnxModel`` (Moonshine base, ONNX)
 
-* STT  → ``moonshine_voice.Transcriber`` (Moonshine encoder/decoder)
-* TTS  → ``moonshine_voice.TextToSpeech`` (Kokoro voice "af_heart")
+Both ONNX model files ship with the install — ``installer/install.sh`` writes
+them to ``resources/voice-models/`` at install time, so the first request does
+not have to wait on a network download. If the deps or files are missing every
+route returns ``{"status":"unavailable"}`` or 503 with a precise hint.
 
-If the package is not installed, all routes return ``{"status":"unavailable"}``
-or 503. Models are loaded lazily on first request to avoid blocking Flask
-while assets download; ``run.py`` fires a daemon thread at boot to warm them
-ahead of the first user message.
+Kokoro uses phonemizer-fork + espeakng-loader under the hood, which preserves
+punctuation as IPA pause tokens and handles numbers, abbreviations, and 2-3
+letter acronyms natively. The TTS-side text pipeline collapses to:
+    markdown/HTML → plaintext → URL → spoken-host → whitespace collapse.
+
+The synthesize route returns a single ``audio/wav`` blob — no streaming, no
+NDJSON, no per-sentence segmentation. Kokoro emits one coherent waveform with
+native prosody from a single ``create()`` call.
 """
 
 import io
@@ -19,8 +25,11 @@ import re
 import struct
 import tempfile
 import threading
+from pathlib import Path
 
 from flask import Blueprint, Response, request, jsonify
+
+from markdown_it import MarkdownIt
 
 from services.markup import extract_plaintext
 
@@ -30,36 +39,45 @@ voice_bp = Blueprint("voice", __name__)
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
-MOONSHINE_LANG = "en"
+# Models are baked into the install by installer/install.sh into a directory
+# sibling to backend/, intentionally OUTSIDE the data/ volume so the files
+# travel with the image and survive `chalie update` on native installs.
+_VOICE_ROOT = Path(__file__).resolve().parents[2] / "resources" / "voice-models"
+_KOKORO_MODEL = _VOICE_ROOT / "kokoro" / "kokoro-v1.0.onnx"
+_KOKORO_VOICES = _VOICE_ROOT / "kokoro" / "voices-v1.0.bin"
+_MOONSHINE_DIR = _VOICE_ROOT / "moonshine" / "base"
+
+TTS_VOICE = "af_heart"
 TTS_LANG = "en-us"
-TTS_VOICE = "kokoro_af_heart"
-MAX_AUDIO_SECONDS = 660
+STT_MODEL_NAME = "base"
+
+# Moonshine internally asserts duration < 64s, so a single transcribe call can
+# only consume short clips. For longer narrations we split the audio into
+# CHUNK_SECONDS windows and concatenate the per-chunk text. MAX_AUDIO_SECONDS
+# is the hard cap on the *whole* upload (10 min) to bound model time + memory.
+CHUNK_SECONDS = 60
+MAX_AUDIO_SECONDS = 600
+MOONSHINE_SAMPLE_RATE = 16000
+# Moonshine asserts the clip is at least 0.1s; below that the model errors out.
+_MIN_CHUNK_SAMPLES = int(0.1 * MOONSHINE_SAMPLE_RATE)
 
 # ── Dependency detection ────────────────────────────────────────────────────
-#
-# We track _which_ voice package is missing so the UI can surface a precise
-# install hint instead of a generic "unavailable" — the fresh-install case.
-# The shipped requirements-voice.txt covers all three; if any are missing the
-# user (or installer) skipped the voice pip step.
 
-_VOICE_REQUIRED_MODULES = ("moonshine_voice", "soundfile", "numpy")
+_VOICE_REQUIRED_MODULES = ("kokoro_onnx", "moonshine_onnx", "soundfile", "numpy")
 _VOICE_MISSING_MODULES: tuple[str, ...] = ()
 
 
 def _detect_voice_modules() -> tuple[str, ...]:
     import importlib.util
-    missing = []
-    for name in _VOICE_REQUIRED_MODULES:
-        if importlib.util.find_spec(name) is None:
-            missing.append(name)
-    return tuple(missing)
+    return tuple(
+        name for name in _VOICE_REQUIRED_MODULES
+        if importlib.util.find_spec(name) is None
+    )
 
 
 _VOICE_MISSING_MODULES = _detect_voice_modules()
 _VOICE_AVAILABLE = not _VOICE_MISSING_MODULES
 
-# Hint surfaced in /voice/health and route 503s. Same string in both places so
-# the frontend has a single canonical install instruction to render.
 _VOICE_INSTALL_HINT = (
     "Voice dependencies are not installed. Run "
     "`pip install -r backend/requirements-voice.txt` (or relaunch with "
@@ -68,7 +86,6 @@ _VOICE_INSTALL_HINT = (
 
 
 def _voice_unavailable_payload() -> dict:
-    """Canonical 503 envelope when voice deps are missing."""
     return {
         "error": "Voice dependencies not installed",
         "reason": "deps_missing",
@@ -76,23 +93,53 @@ def _voice_unavailable_payload() -> dict:
         "hint": _VOICE_INSTALL_HINT,
     }
 
+
+def _loading_or_missing_response():
+    """503 with a precise ``reason`` and ``Retry-After`` so the client can decide
+    whether to auto-retry (transient cold-start) or give up (missing files)."""
+    missing = _missing_model_files()
+    if missing:
+        return jsonify({
+            "error": "Voice models not installed",
+            "reason": "models_missing",
+            "missing": missing,
+            "hint": "Re-run installer to download voice models.",
+        }), 503
+    return jsonify({
+        "error": "Models still loading",
+        "reason": "loading",
+    }), 503, {"Retry-After": "3"}
+
+
+def _missing_model_files() -> list[str]:
+    expected = [
+        _KOKORO_MODEL,
+        _KOKORO_VOICES,
+        _MOONSHINE_DIR / "encoder_model.onnx",
+        _MOONSHINE_DIR / "decoder_model_merged.onnx",
+    ]
+    return [str(p) for p in expected if not p.is_file()]
+
+
 # ── Lazy model state ────────────────────────────────────────────────────────
 
-_stt_model = None
-_tts_model = None
+_kokoro = None
+_moonshine = None
 _load_lock = threading.Lock()
 _models_loaded = False
 _models_loading = False
-# Both engines are single-instance: one user clicks the mic at a time, and
-# ``TextToSpeech.synthesize()`` is not documented as thread-safe (it shares
-# G2P + ORT state under the hood). Serialise both.
-_stt_lock = threading.Lock()
+
+# phonemizer-fork (espeak-ng under the hood) is not thread-safe; kokoro.create()
+# calls it on every invocation. Serialise the full TTS path. STT shares its own
+# lock so a long synthesis does not block a mic recording from getting
+# transcribed.
 _tts_lock = threading.Lock()
+_stt_lock = threading.Lock()
 
 
 def _ensure_models():
-    """Load STT and TTS models on first use. Thread-safe, blocks concurrent loaders."""
-    global _stt_model, _tts_model, _models_loaded, _models_loading
+    """Load Kokoro + Moonshine on first use. Thread-safe."""
+    global _kokoro, _moonshine, _models_loaded, _models_loading
 
     if _models_loaded:
         return True
@@ -101,24 +148,32 @@ def _ensure_models():
         if _models_loaded:
             return True
         if _models_loading:
-            return False  # Another thread is loading — return "loading" status
-
+            return False
         _models_loading = True
 
-    # Load outside the lock to avoid blocking other routes
     try:
-        import moonshine_voice as mv
+        missing = _missing_model_files()
+        if missing:
+            logger.error("[Voice] Model files missing: %s", missing)
+            with _load_lock:
+                _models_loading = False
+            return False
 
-        logger.info("[Voice] Loading STT model (Moonshine, lang=%s)", MOONSHINE_LANG)
-        model_path, model_arch = mv.get_model_for_language(MOONSHINE_LANG)
-        stt = mv.Transcriber(model_path=model_path, model_arch=model_arch)
+        from kokoro_onnx import Kokoro
+        import moonshine_onnx as mo
 
-        logger.info("[Voice] Loading TTS model (lang=%s, voice=%s)", TTS_LANG, TTS_VOICE)
-        tts = mv.TextToSpeech(TTS_LANG, voice=TTS_VOICE)
+        logger.info("[Voice] Loading Kokoro TTS from %s", _KOKORO_MODEL)
+        kokoro = Kokoro(str(_KOKORO_MODEL), str(_KOKORO_VOICES))
+
+        logger.info("[Voice] Loading Moonshine STT from %s", _MOONSHINE_DIR)
+        moonshine = mo.MoonshineOnnxModel(
+            models_dir=str(_MOONSHINE_DIR),
+            model_name=STT_MODEL_NAME,
+        )
 
         with _load_lock:
-            _stt_model = stt
-            _tts_model = tts
+            _kokoro = kokoro
+            _moonshine = moonshine
             _models_loaded = True
             _models_loading = False
 
@@ -132,10 +187,69 @@ def _ensure_models():
         return False
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────────
+# ── TTS text preprocessing ──────────────────────────────────────────────────
+#
+# Kokoro phonemises via phonemizer-fork (espeak-ng), which:
+#   * preserves punctuation as IPA pause tokens (commas, periods, question
+#     marks all produce natural prosody breaks)
+#   * normalises numbers ("v0.8" reads as "vee zero point eight")
+#   * pronounces 2-3 letter acronyms correctly
+#   * handles abbreviations and ordinals natively
+#
+# So we only need to (a) strip HTML/markdown markers so the LLM's raw output
+# doesn't read tags or symbols aloud, (b) rewrite bare URLs to a human-readable
+# host form (otherwise espeak spells out every slash and digit), (c) collapse
+# whitespace.
+
+_md = MarkdownIt("commonmark", {"breaks": True, "html": False})
+_URL_RE = re.compile(r"https?://([^\s/?#]+)\S*")
+_WS_RE = re.compile(r"\s+")
+# Append a period before ``</li>`` when the item doesn't already end in
+# sentence-terminating punctuation. ``extract_plaintext`` strips ``<li>`` tags
+# down to a single space, which espeak runs together without a beat — items
+# need real punctuation to produce a natural between-item pause.
+_LI_NEEDS_TERMINATOR_RE = re.compile(
+    r"([^\s.!?,;:])\s*</li\s*>", re.IGNORECASE,
+)
+
+
+def _spoken_url(match: "re.Match[str]") -> str:
+    """Rewrite ``http://google.com/123`` → ``google dot com``.
+
+    Without this, espeak reads URLs character-by-character ("h t t p
+    slash slash google dot com slash one two three") — fast but unpleasant.
+    Stripping protocol + path and verbalising dots produces a natural read.
+    """
+    host = match.group(1).lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host.replace(".", " dot ")
+
+
+def _clean_for_tts(text: str) -> str:
+    """Markdown/HTML → plaintext; rewrite URLs; collapse whitespace."""
+    if not text:
+        return ""
+    # HTML pre-pass — strip LLM-emitted tags before markdown-it sees them so
+    # `<p>foo</p>` doesn't survive as literal "less-than p greater-than".
+    # Inject list-item terminators here so HTML lists emitted directly by the
+    # LLM (no markdown wrapper) also get inter-item pauses.
+    if "<" in text and ">" in text:
+        text = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", text)
+        text = extract_plaintext(text)
+    rendered = _md.render(text)
+    # Markdown ``- item`` renders to ``<li>item</li>``; add the terminator
+    # before extract_plaintext flattens the tags.
+    rendered = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", rendered)
+    plain = extract_plaintext(rendered)
+    plain = _URL_RE.sub(_spoken_url, plain)
+    return _WS_RE.sub(" ", plain).strip()
+
+
+# ── WAV helpers ─────────────────────────────────────────────────────────────
 
 def _wav_duration_seconds(data: bytes) -> float:
-    """Parse WAV header to get duration without decoding the full file."""
+    """Parse a WAV header for duration without decoding the audio payload."""
     try:
         if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
             return 0.0
@@ -157,206 +271,52 @@ def _wav_duration_seconds(data: bytes) -> float:
         return 0.0
 
 
-# ── Markdown strip patterns (compiled once) ─────────────────────────────────
-#
-# The TTS engine pronounces literal punctuation, so ``*example*`` is spoken as
-# "asterisk example asterisk". The LLM is supposed to emit our HTML subset,
-# but markdown leaks through legacy paths, fenced tool output, and quoted
-# user input. We strip it unconditionally — gating on "<" + ">" was the
-# previous bug (any markdown without HTML tags reached the synthesiser raw).
-
-_MD_FENCE_RE = re.compile(r"```[\w-]*\n?((?:[^`]|`(?!``))*+)```", re.MULTILINE)
-_MD_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
-# Possessive quantifiers (`++`/`*+`) prevent the regex engine from
-# back-tracking inside the bracket and paren bodies, which avoids the
-# polynomial-ReDoS path on adversarial inputs like ``[[[[[…``.
-_MD_LINK_RE = re.compile(r"\[([^\]]++)\]\([^)]*+\)")
-_MD_IMAGE_RE = re.compile(r"!\[([^\]]*+)\]\([^)]*+\)")
-_MD_BARE_URL_RE = re.compile(r"https?://\S+")
-_MD_BOLD_STAR_RE = re.compile(r"\*\*([^\s*][^*]*?[^\s*]|\S)\*\*")
-_MD_ITALIC_STAR_RE = re.compile(r"(?<![\w*])\*([^\s*][^*]*?[^\s*]|\S)\*(?!\w)")
-_MD_BOLD_UNDER_RE = re.compile(r"__([^\s_][^_]*?[^\s_]|\S)__")
-_MD_ITALIC_UNDER_RE = re.compile(r"(?<!\w)_([^\s_][^_]*?[^\s_]|\S)_(?!\w)")
-_MD_HEADER_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s+")
-_MD_BLOCKQUOTE_RE = re.compile(r"(?m)^\s{0,3}>\s?")
-_MD_LIST_BULLET_RE = re.compile(r"(?m)^\s*[-*+]\s+")
-_MD_LIST_NUM_RE = re.compile(r"(?m)^\s*\d+\.\s+")
-_MD_HRULE_RE = re.compile(r"(?m)^\s*(?:[-*_]\s*){3,}\s*$")
-
-
-def _strip_markdown(text: str) -> str:
-    """Strip markdown markers so they aren't pronounced literally.
-
-    The TTS engine speaks raw punctuation. Without this, ``*example*`` becomes
-    "asterisk example asterisk" and ``[click](https://x)`` becomes
-    "open bracket click close bracket open paren ...".
-
-    Order matters: images before links (``![alt](url)`` shares the link
-    syntax), fenced/inline code before star/underscore (so backtick
-    contents are preserved as-is), bold before italic (so ``**`` consumes
-    before ``*`` matches its own pair).
-    """
-    if not text:
-        return ""
-    text = _MD_HRULE_RE.sub("", text)
-    text = _MD_FENCE_RE.sub(r"\1", text)
-    text = _MD_INLINE_CODE_RE.sub(r"\1", text)
-    text = _MD_IMAGE_RE.sub(r"\1", text)
-    text = _MD_LINK_RE.sub(r"\1", text)
-    text = _MD_BARE_URL_RE.sub("", text)
-    text = _MD_BOLD_STAR_RE.sub(r"\1", text)
-    text = _MD_BOLD_UNDER_RE.sub(r"\1", text)
-    text = _MD_ITALIC_STAR_RE.sub(r"\1", text)
-    text = _MD_ITALIC_UNDER_RE.sub(r"\1", text)
-    text = _MD_HEADER_RE.sub("", text)
-    text = _MD_BLOCKQUOTE_RE.sub("", text)
-    text = _MD_LIST_BULLET_RE.sub("", text)
-    text = _MD_LIST_NUM_RE.sub("", text)
-    return text
-
-
-_DIGIT_LETTER_RE = re.compile(r"(\d)([A-Za-z])")
-_LETTER_DIGIT_RE = re.compile(r"([A-Za-z])(\d)")
-_SHORT_ACRONYM_RE = re.compile(r"\b[A-Z]{2,3}\b")
-
-
-def _expand_acronyms_for_tts(text: str) -> str:
-    """Letter-space short ALL-CAPS tokens and split digit-letter joins.
-
-    Moonshine's neural G2P treats 2- and 3-letter ALL-CAPS tokens as fake
-    one-syllable words (``MB``→"eb", ``VM``→"em", ``GB``→"eb"). Splitting
-    the letters with whitespace forces per-letter pronunciation
-    (``M B``→"em bee", ``V M``→"vee em"). Number-letter joins like
-    ``228MB`` confuse it further (``228MB``→"alab"); a space restores the
-    digit run AND the acronym.
-
-    Acronyms of length 4+ test correctly against moonshine's dictionary
-    (``URL``, ``HTTP``, ``HTML``, ``XML``) so we leave them alone.
-    """
-    text = _DIGIT_LETTER_RE.sub(r"\1 \2", text)
-    text = _LETTER_DIGIT_RE.sub(r"\1 \2", text)
-    text = _SHORT_ACRONYM_RE.sub(lambda m: " ".join(m.group(0)), text)
-    return text
-
-
-def _clean_for_tts(text: str) -> str:
-    """Convert response content to TTS-safe plaintext.
-
-    Pipeline: HTML subset (if present) → markdown strip → acronym/unit
-    expansion → whitespace collapse. Markdown stripping runs on every
-    input — the LLM emits HTML, but markdown still leaks through quoted
-    user content, tool output, and legacy paths.
-    """
-    if not text:
-        return ""
-    if "<" in text and ">" in text:
-        text = extract_plaintext(text)
-    text = _strip_markdown(text)
-    text = _expand_acronyms_for_tts(text)
-    return " ".join(text.split())
-
-
-def _transcribe_sync(data: bytes) -> str:
-    """Run Moonshine transcription on raw WAV bytes (blocking)."""
-    import moonshine_voice as mv
-
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
-        tmp.write(data)
-        tmp.flush()
-        audio_data, sample_rate = mv.load_wav_file(tmp.name)
-        transcript = _stt_model.transcribe_without_streaming(audio_data, sample_rate=sample_rate)
-        return " ".join(line.text.strip() for line in transcript.lines).strip()
-
-
-def _audio_to_wav_bytes(audio_array, sample_rate: int) -> bytes:
-    """Encode a numpy audio array as PCM WAV bytes."""
+def _audio_to_wav_bytes(samples, sample_rate: int) -> bytes:
     import soundfile as sf
     buf = io.BytesIO()
-    sf.write(buf, audio_array, sample_rate, format="WAV", subtype="PCM_16")
+    sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
     buf.seek(0)
     return buf.read()
 
 
-# ── Prosody-aware synthesis ─────────────────────────────────────────────────
-#
-# Moonshine's neural G2P strips every punctuation mark before IPA reaches
-# Kokoro, so a single ``synthesize()`` call on a multi-sentence string yields
-# a flat, run-on read with no pauses. The previous espeak-ng path preserved
-# punctuation as IPA pause tokens that Kokoro used for prosody.
-#
-# We restore that prosody by segmenting on real boundary punctuation,
-# synthesising each clause independently, and concatenating waveforms with
-# silence pads sized by which punctuation was at the boundary.
-#
-# Boundary definition: ``.!?,;:`` followed by whitespace or end-of-string.
-# The whitespace requirement is what keeps ``1,000`` and ``http://x.y`` from
-# being split mid-token.
+def _transcribe_sync(data: bytes) -> str:
+    """Run Moonshine on raw WAV bytes (blocking).
 
-_PUNCT_PAUSES = {
-    ".": 0.15, "!": 0.15, "?": 0.15,
-    ":": 0.10, ";": 0.10,
-    ",": 0.06,
-}
-_BOUNDARY_PUNCT = frozenset(_PUNCT_PAUSES)
-
-
-def _segment_for_prosody(text: str) -> list[tuple[str, float]]:
-    """Split ``text`` into ``(chunk, trailing_silence_seconds)`` pairs.
-
-    Punctuation only counts as a boundary when followed by whitespace or
-    end-of-string, so numbers (``1,000``) and URLs survive intact.
+    Clips longer than ``CHUNK_SECONDS`` are split into fixed-size windows and
+    transcribed one window at a time so an arbitrarily long narration (up to
+    ``MAX_AUDIO_SECONDS``) can be handled despite Moonshine's internal 64s
+    assertion. Window results are concatenated with single spaces.
     """
-    segments: list[tuple[str, float]] = []
-    buf: list[str] = []
-    i, n = 0, len(text)
-    while i < n:
-        c = text[i]
-        if c in _BOUNDARY_PUNCT:
-            j = i
-            max_pause = 0.0
-            while j < n and text[j] in _BOUNDARY_PUNCT:
-                max_pause = max(max_pause, _PUNCT_PAUSES[text[j]])
-                j += 1
-            if j >= n or text[j].isspace():
-                chunk = "".join(buf).strip()
-                if chunk:
-                    segments.append((chunk, max_pause))
-                    buf = []
-                i = j
-                while i < n and text[i].isspace():
-                    i += 1
-                continue
-        buf.append(c)
-        i += 1
-    tail = "".join(buf).strip()
-    if tail:
-        segments.append((tail, 0.0))
-    return segments
+    import moonshine_onnx as mo
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
+        tmp.write(data)
+        tmp.flush()
+        # ``mo.load_audio(path)`` resamples to 16 kHz and wraps the samples in
+        # a batch dim → shape ``[1, N]``. ``mo.transcribe()`` internally calls
+        # ``load_audio`` again on its input, which adds a SECOND batch dim and
+        # fails the ``[batch, samples]`` assertion. Strip the wrapper before
+        # we hand the samples back to transcribe (or slice them).
+        audio = mo.load_audio(tmp.name)[0]  # → float32 [N] @ 16 kHz
 
+    n_samples = audio.shape[0]
+    chunk_size = CHUNK_SECONDS * MOONSHINE_SAMPLE_RATE
 
-def _synthesize_with_prosody(text: str):
-    """Synthesise ``text`` with punctuation-driven pauses.
+    if n_samples <= chunk_size:
+        texts = mo.transcribe(audio, model=_moonshine)
+        return " ".join(t.strip() for t in texts).strip()
 
-    Returns ``(samples, sample_rate)`` — same shape as
-    ``TextToSpeech.synthesize()``. Falls back to a single synthesise call
-    when segmentation produces nothing actionable (no punctuation).
-    """
-    import numpy as np
-
-    segments = _segment_for_prosody(text)
-    if len(segments) <= 1:
-        return _tts_model.synthesize(text)
-
-    parts = []
-    sample_rate = None
-    for chunk, pause in segments:
-        chunk_samples, sr = _tts_model.synthesize(chunk)
-        chunk_samples = np.asarray(chunk_samples, dtype=np.float32)
-        sample_rate = sr
-        parts.append(chunk_samples)
-        if pause > 0:
-            parts.append(np.zeros(int(pause * sr), dtype=np.float32))
-    return np.concatenate(parts), sample_rate
+    parts: list[str] = []
+    for start in range(0, n_samples, chunk_size):
+        chunk = audio[start:start + chunk_size]
+        if chunk.shape[0] < _MIN_CHUNK_SAMPLES:
+            # Trailing fragment shorter than Moonshine's min duration — skip
+            # it rather than let the model assert.
+            continue
+        texts = mo.transcribe(chunk, model=_moonshine)
+        part = " ".join(t.strip() for t in texts).strip()
+        if part:
+            parts.append(part)
+    return " ".join(parts).strip()
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -365,10 +325,9 @@ def _synthesize_with_prosody(text: str):
 def voice_health():
     """Voice service health check.
 
-    Returns ``status`` ∈ {``ok``, ``loading``, ``unavailable``} for backwards
-    compatibility with the existing frontend poller and integration tests.
-    When deps are missing we also include ``reason`` + ``missing`` + ``hint``
-    so the UI can show actionable install guidance instead of a silent hide.
+    Returns ``status`` ∈ {``ok``, ``loading``, ``unavailable``}. When models
+    or deps are missing the response also carries ``reason`` + ``missing`` +
+    ``hint`` so the UI can surface actionable install guidance.
     """
     if not _VOICE_AVAILABLE:
         return jsonify({
@@ -377,35 +336,33 @@ def voice_health():
             "missing": list(_VOICE_MISSING_MODULES),
             "hint": _VOICE_INSTALL_HINT,
         }), 200
+
     if _models_loaded:
         return jsonify({"status": "ok"}), 200
     if _models_loading:
         return jsonify({"status": "loading"}), 200
 
-    # First health check triggers lazy model loading in background
-    thread = threading.Thread(target=_ensure_models, daemon=True)
-    thread.start()
+    missing_files = _missing_model_files()
+    if missing_files:
+        return jsonify({
+            "status": "unavailable",
+            "reason": "models_missing",
+            "missing": missing_files,
+            "hint": "Re-run installer to download voice models.",
+        }), 200
+
+    threading.Thread(target=_ensure_models, daemon=True).start()
     return jsonify({"status": "loading"}), 200
 
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
 def voice_synthesize():
-    """Synthesise speech and return the full WAV as a single NDJSON line.
-
-    The response body is two NDJSON lines: one ``{index:0, total:1, audio}``
-    payload carrying the entire base64-encoded WAV, then a
-    ``{done:true, total:1}`` sentinel so the client can distinguish a
-    complete response from a truncated one.
-
-    ``TextToSpeech.synthesize()`` handles G2P, batching, ORT inference, and
-    waveform concatenation. We just clean the input text, lock around the
-    call (the instance is not thread-safe), and ship the WAV.
-    """
+    """Synthesise speech and return a single WAV blob."""
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
 
     if not _ensure_models():
-        return jsonify({"error": "Models still loading"}), 503
+        return _loading_or_missing_response()
 
     data = request.get_json(silent=True) or {}
     text = _clean_for_tts((data.get("text") or "").strip())
@@ -415,52 +372,35 @@ def voice_synthesize():
 
     logger.info("[Voice] synthesize: len=%d head=%r", len(text), text[:80])
 
-    import base64
-    import json
-    import time
-
     try:
-        t0 = time.time()
         with _tts_lock:
-            samples, sample_rate = _synthesize_with_prosody(text)
-        wav_bytes = _audio_to_wav_bytes(samples, sample_rate)
-        logger.info(
-            "[Voice] synthesized %d samples in %.2fs",
-            len(samples), time.time() - t0,
-        )
+            samples, sr = _kokoro.create(
+                text, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
+            )
     except Exception as e:
-        # Log the exception detail server-side; the response body must NOT
-        # echo ``str(e)`` because it can carry stack-frame artefacts that
-        # leak filesystem paths or library internals to the caller.
         logger.error("[Voice] TTS synthesis failed: %s", e)
-        body = (
-            json.dumps({"done": True, "total": 0, "error": "TTS synthesis failed"}) + "\n"
-        )
-        return Response(body, mimetype="application/x-ndjson", status=500)
+        return jsonify({"error": "TTS synthesis failed"}), 500
 
-    payload = json.dumps({
-        "index": 0,
-        "total": 1,
-        "audio": base64.b64encode(wav_bytes).decode("ascii"),
-    }) + "\n"
-    sentinel = json.dumps({"done": True, "total": 1}) + "\n"
-
+    wav_bytes = _audio_to_wav_bytes(samples, sr)
     return Response(
-        payload + sentinel,
-        mimetype="application/x-ndjson",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+        wav_bytes,
+        mimetype="audio/wav",
+        headers={
+            "Content-Length": str(len(wav_bytes)),
+            "Cache-Control": "no-cache",
+        },
     )
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])
 def voice_transcribe():
-    """Transcribe uploaded audio (WAV). Returns {"text": "..."}."""
+    """Transcribe uploaded audio (WAV). Returns ``{"text": "..."}``."""
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
 
-    if not _ensure_models():
-        return jsonify({"error": "Models still loading"}), 503
-
+    # Validate the request shape BEFORE waiting on model load — a malformed
+    # upload should get a 400 instantly instead of stalling on cold-start
+    # phonemizer/ONNX initialisation.
     if "file" not in request.files:
         return jsonify({"error": "No file uploaded"}), 400
 
@@ -471,10 +411,18 @@ def voice_transcribe():
         return jsonify({"error": "Empty file"}), 400
 
     duration = _wav_duration_seconds(data)
+    if duration <= 0.0:
+        # _wav_duration_seconds returns 0.0 on malformed/non-WAV input.
+        # Reject before we hand the bytes to Moonshine so the user gets a
+        # clear error instead of a downstream load_audio crash.
+        return jsonify({"error": "Malformed or unsupported WAV file"}), 400
     if duration > MAX_AUDIO_SECONDS:
         return jsonify({
             "error": f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)"
         }), 400
+
+    if not _ensure_models():
+        return _loading_or_missing_response()
 
     with _stt_lock:
         try:

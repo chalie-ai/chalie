@@ -29,5 +29,11 @@ jobs:
           tags: |
             chalieai/chalie:${{ github.ref_name }}
             chalieai/chalie:latest
+          # Pass the tag into the build so install.sh fetches the
+          # refs/tags/<tag>.tar.gz directly. Without this it falls back to the
+          # GitHub releases API for "latest", which races with the separate
+          # release-publication workflow that runs on the same tag push.
+          build-args: |
+            TAG=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
