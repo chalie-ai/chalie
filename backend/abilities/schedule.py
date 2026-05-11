@@ -54,13 +54,7 @@ class ScheduleAbility(Ability):
             "action": {
                 "type": "string",
                 "enum": ["create", "list", "search", "cancel"],
-                "description": (
-                    "The scheduler action to perform. If the user wants a short "
-                    "ephemeral countdown (e.g. 'set a 5 minute timer', 'start a "
-                    "25 minute focus block'), STOP — call the `timer` tool "
-                    "instead of `schedule`. `schedule` is for calendar-anchored "
-                    "reminders that persist across restarts."
-                ),
+                "description": "The scheduler action to perform.",
             },
             "message": {
                 "type": "string",
