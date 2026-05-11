@@ -349,6 +349,15 @@ _install_voice_deps() {
       *fedora*|*rhel*|*centos*)
         _run_privileged dnf install -y libsndfile ffmpeg 2>/dev/null || true
         ;;
+      *alpine*)
+        _run_privileged apk add --no-cache libsndfile ffmpeg 2>/dev/null || true
+        ;;
+      *arch*|*manjaro*)
+        _run_privileged pacman -S --needed --noconfirm libsndfile ffmpeg 2>/dev/null || true
+        ;;
+      *opensuse*|*suse*)
+        _run_privileged zypper install -y libsndfile ffmpeg 2>/dev/null || true
+        ;;
       *)
         _warn "Cannot auto-install voice deps on distro: $distro"
         _warn "Install manually: libsndfile, ffmpeg"
@@ -403,7 +412,20 @@ _download_voice_models() {
   _fetch_model "$moonshine_hf/decoder_model_merged.onnx" "$moonshine_dir/decoder_model_merged.onnx" "Moonshine decoder" || true
 
   if [[ "$fetched" -eq 0 ]]; then
-    _ok "Voice models already present at $voice_root"
+    local missing=()
+    [[ -f "$kokoro_dir/kokoro-v1.0.onnx" ]]             || missing+=("resources/voice-models/kokoro/kokoro-v1.0.onnx")
+    [[ -f "$kokoro_dir/voices-v1.0.bin" ]]               || missing+=("resources/voice-models/kokoro/voices-v1.0.bin")
+    [[ -f "$moonshine_dir/encoder_model.onnx" ]]         || missing+=("resources/voice-models/moonshine/base/encoder_model.onnx")
+    [[ -f "$moonshine_dir/decoder_model_merged.onnx" ]]  || missing+=("resources/voice-models/moonshine/base/decoder_model_merged.onnx")
+    if [[ "${#missing[@]}" -eq 0 ]]; then
+      _ok "Voice models already present at $voice_root"
+    else
+      _warn "Voice models missing — no downloads were attempted but the following files are absent:"
+      for f in "${missing[@]}"; do
+        _warn "  $f"
+      done
+      _warn "Re-run the installer to download them."
+    fi
   else
     _ok "Voice models ready at $voice_root"
   fi
