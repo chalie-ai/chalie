@@ -204,8 +204,10 @@ def _wav_duration_seconds(data: bytes) -> float:
 #      fenced/inline code, links, images, lists, blockquotes)
 #   2. extract_plaintext (services.markup) strips all tags via nh3 and decodes
 #      HTML entities — same function used by the speak button
-#   3. Bare URLs are stripped post-plaintext (commonmark does not autolink, so
-#      bare https://... survives tag-stripping as a text node)
+#   3. Bare URLs are rewritten to their spoken host form post-plaintext
+#      (commonmark does not autolink, so bare https://... survives tag-
+#      stripping as a text node). Protocol and path are dropped so
+#      "http://google.com/123" reads as "google dot com".
 #   4. Ordinal integers (1st, 21st, …) are expanded to words via num2words —
 #      only ordinal-suffixed integers; bare integers are NEVER expanded
 #   5. Short ALL-CAPS acronyms and digit-letter joins are letter-spaced so the
@@ -215,8 +217,20 @@ def _wav_duration_seconds(data: bytes) -> float:
 _md = MarkdownIt("commonmark", {"breaks": True, "html": False})
 _segmenter = pysbd.Segmenter(language="en", clean=False)
 
-_URL_RE = re.compile(r"https?://\S+")
+_URL_RE = re.compile(r"https?://([^\s/?#]+)\S*")
 _WS_RE = re.compile(r"\s+")
+
+
+def _spoken_url(match: "re.Match[str]") -> str:
+    """Render a URL as its host read aloud, dropping protocol and path.
+
+    ``http://google.com/123`` → ``google dot com``. Leading ``www.`` is
+    dropped so ``www.example.com`` reads as ``example dot com``.
+    """
+    host = match.group(1).lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host.replace(".", " dot ")
 
 # Ordinal suffix pattern — matches ONLY integers with an ordinal suffix.
 # Bare integers (phone numbers, years, version numbers) are not touched.
@@ -271,8 +285,9 @@ def _clean_for_tts(text: str) -> str:
          italic, fenced code, links, images, lists) become clean HTML.
       3. extract_plaintext again to strip those tags + decode any entities
          introduced by markdown-it-py (e.g. ``&quot;`` inside code spans).
-      4. Strip bare URLs (commonmark does not autolink, so https://... survives
-         as a text node through tag stripping).
+      4. Rewrite bare URLs to their spoken host form (commonmark does not
+         autolink, so https://... survives as a text node through tag
+         stripping). ``http://google.com/123`` → ``google dot com``.
       5. Expand ordinal integers (``1st`` → ``first``).
       6. Letter-space short ALL-CAPS acronyms and split digit-letter joins.
       7. Collapse whitespace.
@@ -290,8 +305,8 @@ def _clean_for_tts(text: str) -> str:
     # Step 2-3: markdown render → tag strip + entity decode
     html = _md.render(text)
     plain = extract_plaintext(html)
-    # Step 4: URL strip
-    plain = _URL_RE.sub("", plain)
+    # Step 4: URL → spoken host (e.g. "google dot com")
+    plain = _URL_RE.sub(_spoken_url, plain)
     # Steps 5-6: text expansions
     plain = _expand_ordinals_for_tts(plain)
     plain = _expand_acronyms_for_tts(plain)
@@ -362,8 +377,14 @@ def _synth_to_float32(text: str):
     return samples, sr
 
 
-def _synthesize_sentence_wav(sentence: str, pause: float, sample_rate: int) -> bytes:
-    """Synthesise one sentence and return WAV bytes with silence pad baked in."""
+def _synthesize_sentence_wav(sentence: str, pause: float) -> bytes:
+    """Synthesise one sentence and return WAV bytes with silence pad baked in.
+
+    Sample rate is taken from the model's actual output (``_synth_to_float32``);
+    callers do not pass one because the silence pad and WAV encoding must use
+    the same rate the model produced — passing a different value would create
+    a pad/audio mismatch.
+    """
     import numpy as np
     samples, sr = _synth_to_float32(sentence)
     if pause > 0:
@@ -461,11 +482,16 @@ def voice_synthesize():
         for i, (sentence, pause) in enumerate(segments):
             try:
                 with _tts_lock:
-                    wav_bytes = _synthesize_sentence_wav(sentence, pause, 24000)
+                    wav_bytes = _synthesize_sentence_wav(sentence, pause)
             except Exception as e:
                 logger.error("[Voice] TTS synthesis failed on segment %d: %s", i, e)
+                # NB: error sentinel intentionally does NOT carry ``done: true``.
+                # The frontend treats ``done`` as the success terminator; if we
+                # set it on errors the spinner stays up and no error is shown.
+                # See voice_player.js _enqueueLine — it routes ``error`` lines
+                # through the fetch's abort/catch path instead.
                 error_line = json.dumps({
-                    "done": True, "total": total, "error": "TTS synthesis failed",
+                    "error": "TTS synthesis failed", "total": total, "index": i,
                 }) + "\n"
                 yield error_line
                 return

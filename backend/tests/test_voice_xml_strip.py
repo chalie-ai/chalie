@@ -1,7 +1,7 @@
 """Voice TTS text-cleanup tests.
 
 Covers the pre-Kokoro text pipeline: markdown render → nh3 tag strip →
-URL strip → ordinal expansion → acronym expansion → whitespace collapse.
+URL spoken-form rewrite → ordinal expansion → acronym expansion → whitespace collapse.
 
 The individual regex chain (_strip_markdown) has been replaced by
 markdown-it-py + nh3 (both upstream-tested); these tests verify the
@@ -61,11 +61,29 @@ class TestCleanForTts:
         assert _clean_for_tts("<p>cats &amp; dogs</p>") == "cats & dogs"
         assert _clean_for_tts("<p>it&#39;s fine</p>") == "it's fine"
 
-    def test_bare_url_dropped(self):
-        result = _clean_for_tts("see https://example.com/foo for details")
+    def test_url_rewritten_to_spoken_host(self):
+        # http://google.com/123 → "google dot com" (protocol + path stripped,
+        # dots spoken so the neural G2P doesn't fuse them into one token).
+        result = _clean_for_tts("see http://google.com/123 for details")
         assert "http" not in result
-        assert "example.com" not in result
+        assert "/123" not in result
+        assert "google dot com" in result
         assert "details" in result
+
+    def test_url_strips_www_prefix(self):
+        result = _clean_for_tts("visit https://www.example.com/page")
+        assert "www" not in result
+        assert "example dot com" in result
+
+    def test_url_subdomain_is_spoken(self):
+        # Multi-segment hosts get every dot spoken, not just TLD.
+        result = _clean_for_tts("docs at https://api.example.co.uk/v2")
+        assert "api dot example dot co dot uk" in result
+
+    def test_url_without_path_is_spoken(self):
+        result = _clean_for_tts("see https://example.com please")
+        assert "example dot com" in result
+        assert "please" in result
 
     def test_plain_text_passthrough(self):
         assert _clean_for_tts("just plain text") == "just plain text"

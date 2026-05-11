@@ -220,7 +220,13 @@ export class VoicePlayer {
 
   /**
    * Parse one NDJSON line. Returns `true` iff this line was the
-   * `{done: true}` sentinel.
+   * `{done: true}` success sentinel.
+   *
+   * If the line carries an `error` field (server-side synthesis failure
+   * mid-stream), this throws so the fetch's catch in `_open` runs the
+   * normal error path — abort the reader, hide the spinner, surface the
+   * message. The error sentinel does NOT carry `done: true`, so we never
+   * confuse a failure with a clean stream close.
    */
   async _enqueueLine(line, gen) {
     let payload;
@@ -229,6 +235,10 @@ export class VoicePlayer {
     } catch {
       console.warn('[VoicePlayer] dropping non-JSON line:', line);
       return false;
+    }
+    if (payload?.error) {
+      this._fetchAbort?.abort();
+      throw new Error(payload.error);
     }
     if (payload?.done) return true;
 
