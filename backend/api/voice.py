@@ -277,9 +277,14 @@ def _transcribe_sync(data: bytes) -> str:
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
         tmp.write(data)
         tmp.flush()
-        audio = mo.load_audio(tmp.name)  # → float32 [1, N] @ 16 kHz
+        # ``mo.load_audio(path)`` resamples to 16 kHz and wraps the samples in
+        # a batch dim → shape ``[1, N]``. ``mo.transcribe()`` internally calls
+        # ``load_audio`` again on its input, which adds a SECOND batch dim and
+        # fails the ``[batch, samples]`` assertion. Strip the wrapper before
+        # we hand the samples back to transcribe (or slice them).
+        audio = mo.load_audio(tmp.name)[0]  # → float32 [N] @ 16 kHz
 
-    n_samples = audio.shape[-1]
+    n_samples = audio.shape[0]
     chunk_size = CHUNK_SECONDS * MOONSHINE_SAMPLE_RATE
 
     if n_samples <= chunk_size:
@@ -288,8 +293,8 @@ def _transcribe_sync(data: bytes) -> str:
 
     parts: list[str] = []
     for start in range(0, n_samples, chunk_size):
-        chunk = audio[..., start:start + chunk_size]
-        if chunk.shape[-1] < _MIN_CHUNK_SAMPLES:
+        chunk = audio[start:start + chunk_size]
+        if chunk.shape[0] < _MIN_CHUNK_SAMPLES:
             # Trailing fragment shorter than Moonshine's min duration — skip
             # it rather than let the model assert.
             continue
