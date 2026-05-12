@@ -1,0 +1,150 @@
+"""
+EmailAbility — Read, search, and send emails via the connected mail account.
+
+Delegates to MailCapability's IMAP/SMTP handlers. The capability is lazy-loaded
+inside execute() to avoid circular imports and to handle the case where the
+capability is not yet connected.
+"""
+
+import json
+import logging
+from abilities._base import Ability
+from services.innate_skills._tag import tag as _skill_tag
+
+logger = logging.getLogger(__name__)
+LOG_PREFIX = "[EMAIL ABILITY]"
+
+
+class EmailAbility(Ability):
+    NAME = "email"
+    SUMMARY = (
+        "Read, search, and send emails via the connected mail account. "
+        "Available when the user asks to check, find, or reply to email."
+    )
+    EXAMPLES = [
+        "check my email",
+        "search emails from John",
+        "do I have any unread messages",
+        "read that email from Sarah",
+        "send an email to the team about the meeting",
+        "reply to that invoice email",
+        "find emails about the project from last week",
+        "show me unanswered emails",
+    ]
+    INPUT_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["search", "read", "send"],
+                "description": (
+                    "The email action to perform. "
+                    "search — find emails by sender, subject, keyword, date range, triage, or unanswered flag. "
+                    "read — fetch the full body of an email by its IMAP UID. "
+                    "send — send a new email or reply via SMTP (requires to, subject, body)."
+                ),
+            },
+            "sender": {
+                "type": "string",
+                "description": "search: filter by sender email address or name.",
+            },
+            "subject": {
+                "type": "string",
+                "description": "search: filter by subject keyword. send: email subject line.",
+            },
+            "keyword": {
+                "type": "string",
+                "description": "search: full-text keyword search across email body and subject.",
+            },
+            "date_from": {
+                "type": "string",
+                "description": "search: ISO date lower bound (YYYY-MM-DD).",
+            },
+            "date_to": {
+                "type": "string",
+                "description": "search: ISO date upper bound (YYYY-MM-DD).",
+            },
+            "triage": {
+                "type": "string",
+                "enum": ["actionable", "informational", "noise"],
+                "description": "search: filter by triage category.",
+            },
+            "unanswered": {
+                "type": "boolean",
+                "description": "search: when true, return only unanswered emails.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "search: maximum number of results (default 20, max 100).",
+            },
+            "uid": {
+                "type": "integer",
+                "description": "read: IMAP UID of the email to fetch.",
+            },
+            "to": {
+                "type": "string",
+                "description": "send: recipient email address.",
+            },
+            "body": {
+                "type": "string",
+                "description": "send: plain-text email body.",
+            },
+            "in_reply_to": {
+                "type": "string",
+                "description": "send: Message-ID for threading this as a reply.",
+            },
+        },
+        "required": ["action"],
+    }
+    TIMEOUT = 30
+
+    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+        action = params.get("action", "search").lower()
+
+        from capabilities import load_capabilities
+        caps = load_capabilities()
+        cap = caps.get("mail")
+
+        if cap is None or not cap.is_connected():
+            result = {
+                "status": "error",
+                "error": "Mail capability not connected. Configure it in the Brain dashboard.",
+            }
+            return {"text": _skill_tag("email", json.dumps(result), action=action)}
+
+        tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
+
+        _ACTION_TO_HANDLER = {
+            "search": "search_email",
+            "read": "read_email",
+            "send": "send_email",
+        }
+
+        handler_name = _ACTION_TO_HANDLER.get(action)
+        if handler_name is None:
+            result = {"status": "error", "error": f"Unknown email action: {action}"}
+            return {"text": _skill_tag("email", json.dumps(result), action=action)}
+
+        handler = tool_map.get(handler_name)
+        if handler is None:
+            result = {
+                "status": "error",
+                "error": (
+                    f"Handler '{handler_name}' not available. "
+                    "The required protocol may not be connected."
+                ),
+            }
+            return {"text": _skill_tag("email", json.dumps(result), action=action)}
+
+        try:
+            action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
+            raw = handler(topic="", params=action_params, telemetry=telemetry)
+            if isinstance(raw, dict):
+                result = raw
+            else:
+                result = {"status": "ok", "data": raw}
+        except Exception as exc:
+            logger.error(f"{LOG_PREFIX} action={action} failed: {exc}", exc_info=True)
+            result = {"status": "error", "error": str(exc)}
+
+        return {"text": _skill_tag("email", json.dumps(result), action=action)}

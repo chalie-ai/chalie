@@ -343,14 +343,17 @@ class AbstractCapability(ABC):
 
     @abstractmethod
     def get_tools(self) -> list:
-        """Return tool definitions for dynamic registration.
+        """Return tool definitions exposed by this capability.
 
         Each entry in the returned list must be a dict with at minimum the
-        keys ``name`` (str), ``handler`` (callable), and ``metadata`` (dict).
+        keys ``name`` (str), ``handler`` (callable), and ``parameters`` (dict).
+        Handlers are closures that check connection state and dispatch to the
+        appropriate protocol handler. Ability subclasses (email, calendar,
+        contacts) call ``get_tools()`` to obtain and invoke these handlers.
 
         Returns:
-            list[dict]: Tool definitions suitable for passing to
-            :func:`~services.tool_library_service.register_tool`.
+            list[dict]: Tool definition dicts with ``name``, ``handler``,
+            ``parameters``, ``description``, and ``timeout`` keys.
         """
 
     # ------------------------------------------------------------------

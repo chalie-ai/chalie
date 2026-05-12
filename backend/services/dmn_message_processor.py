@@ -57,7 +57,10 @@ class DMNMessageProcessor(MessageProcessor):
         "search",
     ]
     DISCOVERABLE: list[str] = [
+        "calendar",
         "code_eval",
+        "contacts",
+        "email",
         "programming_docs_search",
         "weather",
     ]

@@ -357,10 +357,12 @@ def main():
 
 
 def _bootstrap_capability_sync():
-    """Bootstrap connected capabilities into the scheduler's system handler registry.
+    """Bootstrap connected capabilities at startup.
 
     For each capability, call connect() — it checks credentials internally and
     registers its sync handler + ensures recurring scheduled_items exist.
+    Capability tools are surfaced to the LLM via Ability subclasses (email,
+    calendar, contacts) which are auto-discovered by AbilityRegistry.
     """
     try:
         from capabilities import load_capabilities
@@ -371,19 +373,6 @@ def _bootstrap_capability_sync():
                     cap.connect()
                 if cap.is_connected():
                     logger.info("[bootstrap] Auto-connected capability: %s", cap_id)
-                    # Re-register dynamic tools so find_tools can discover them after restart
-                    from services.tool_library_service import register_tool
-                    for tool_def in cap.get_tools():
-                        tool_name = tool_def["name"]
-                        handler = tool_def.get("handler")
-                        if handler is None:
-                            continue
-                        metadata = {k: v for k, v in tool_def.items() if k != "handler"}
-                        try:
-                            register_tool(tool_name, handler, metadata)
-                            logger.info("[bootstrap] Registered tool '%s' for capability '%s'", tool_name, cap_id)
-                        except Exception as reg_exc:
-                            logger.warning("[bootstrap] Failed to register tool '%s': %s", tool_name, reg_exc)
             except Exception as exc:
                 logger.warning("[bootstrap] Failed to auto-connect %s: %s", cap_id, exc)
     except Exception as exc:

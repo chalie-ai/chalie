@@ -59,7 +59,10 @@ class UserMessageProcessor(MessageProcessor):
     ]
     DISCOVERABLE: list[str] = [
         "browser",
+        "calendar",
         "code_eval",
+        "contacts",
+        "email",
         "news",
         "programming_docs_search",
         "search",
