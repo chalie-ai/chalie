@@ -498,7 +498,7 @@ class CaldavHandler:
                 if calendar_name and meta.get("calendar_name", "").lower() != calendar_name.lower():
                     continue
                 results.append({
-                    "summary": meta.get("uid", msg),
+                    "uid": meta.get("uid"),
                     "title": msg,
                     "dtstart": due_at,
                     "dtend": meta.get("dtend"),
@@ -506,7 +506,6 @@ class CaldavHandler:
                     "attendees": meta.get("attendees", []),
                     "all_day": meta.get("all_day", False),
                     "calendar_name": meta.get("calendar_name"),
-                    "uid": meta.get("uid"),
                 })
             return {"events": results, "count": len(results)}
         except Exception as exc:
