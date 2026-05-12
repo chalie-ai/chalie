@@ -1,5 +1,4 @@
-"""Feature tests for the three capability-backed Ability wrappers and the
-subconscious worker sync integration.
+"""Feature tests for the three capability-backed Ability wrappers.
 
 Real-world assertions only — no mocks of in-process production code.
 
@@ -8,12 +7,8 @@ What each test asserts:
      NAME, SUMMARY, and EXAMPLES count (6–8 enforced by _base.py metaclass).
   2. When the mail capability is not connected (no credentials in test env),
      each ability returns a structured error dict — not an exception.
-  3. The subconscious sync cadence: calendar on every even tick, contacts on
-     every 12th tick — verified by inspecting the keys returned by
-     _run_capability_syncs() across N calls.
-  4. The subconscious _step_calendar_sync / _step_contacts_sync survive
-     gracefully when the registry has a capability that is not connected —
-     returning "ok" (execute was called, returned structured error, no raise).
+  3. MailCapability scheduler-driven sync is the authoritative sync path
+     (not the subconscious worker).
 
 Context: MailCapability is discovered at import time but is_connected()
 returns False in test environments (no credentials configured). This means
@@ -22,7 +17,6 @@ path without requiring real IMAP/CalDAV/CardDAV credentials.
 """
 
 import json
-import threading
 
 import pytest
 
@@ -44,24 +38,6 @@ def _extract_json(result: dict) -> dict:
     # First line is the tag opener, last is [end:name], middle is JSON.
     body = "\n".join(lines[1:-1])
     return json.loads(body)
-
-
-def _make_worker_bare() -> object:
-    """Construct a SubconsciousWorker with all state initialised but without
-    touching the database or MemoryStore (skipping the hydrate call).
-
-    Uses __new__ to bypass __init__'s _load_last_fired_from_storage() call so
-    the test does not need a real DB. Only the fields touched by
-    _run_capability_syncs() are set.
-    """
-    from services.subconscious_worker import SubconsciousWorker
-
-    worker = SubconsciousWorker.__new__(SubconsciousWorker)
-    worker._sync_tick_count = 0
-    worker._lock = threading.Lock()
-    worker._cached_last_fired = None
-    worker._decay_engine = None
-    return worker
 
 
 # ---------------------------------------------------------------------------
@@ -145,80 +121,34 @@ def test_contacts_not_connected_returns_structured_error():
 
 
 # ---------------------------------------------------------------------------
-# 3. Subconscious sync cadence
+# 3. Scheduler-driven sync is the authoritative sync path
 # ---------------------------------------------------------------------------
 
 
-def test_sync_cadence_calendar_on_even_ticks_contacts_on_12th():
-    """_run_capability_syncs fires calendar every 2nd tick and contacts every 12th.
+def test_mail_capability_registers_sync_handler():
+    """MailCapability._ensure_sync_registration registers a mail:sync handler.
 
-    Drives 12 calls and checks that:
-    - "calendar" key appears in the result for every even tick.
-    - "contacts" key appears only on tick 12 (the first tick divisible by 12).
-    - Odd ticks produce an empty result dict.
+    Verifies the method exists and the registration flag starts False.
+    The actual registration requires a connected DB + scheduler, which the
+    test env doesn't have — we just confirm the mechanism is wired.
     """
-    worker = _make_worker_bare()
+    from capabilities.mail_capability.capability import MailCapability
 
-    calendar_ticks = []
-    contacts_ticks = []
-
-    for call_number in range(1, 13):
-        results = worker._run_capability_syncs()
-        if "calendar" in results:
-            calendar_ticks.append(call_number)
-        if "contacts" in results:
-            contacts_ticks.append(call_number)
-
-    # Calendar should fire on ticks 2, 4, 6, 8, 10, 12
-    assert calendar_ticks == [2, 4, 6, 8, 10, 12], (
-        f"Calendar did not fire on every even tick. Fired on: {calendar_ticks}"
-    )
-    # Contacts fires only on tick 12 within this window
-    assert contacts_ticks == [12], (
-        f"Contacts did not fire only on tick 12. Fired on: {contacts_ticks}"
-    )
+    cap = MailCapability()
+    assert hasattr(cap, "_ensure_sync_registration")
+    assert cap._sync_registered is False
 
 
-def test_sync_odd_tick_produces_empty_result():
-    """On odd ticks, _run_capability_syncs returns an empty dict (no syncs run)."""
-    worker = _make_worker_bare()
+def test_subconscious_worker_has_no_capability_sync_steps():
+    """The subconscious worker must NOT have capability sync steps.
 
-    # First call increments to 1 — odd
-    result = worker._run_capability_syncs()
-    assert result == {}, (
-        f"Odd tick must produce empty sync result, got: {result}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# 4. Subconscious step survives when capability is not connected
-# ---------------------------------------------------------------------------
-
-
-def test_step_calendar_sync_does_not_raise_when_not_connected():
-    """_step_calendar_sync completes without raising when calendar is registered
-    but the underlying mail account is not connected.
-
-    The step calls calendar.execute() which returns a structured error dict.
-    The step must return "ok" — it is fire-and-forget from the worker's
-    perspective (the error is logged but does not abort the tick).
+    Capability syncs are driven by the scheduler via MailCapability._do_monitor().
+    The worker previously had broken _step_calendar_sync / _step_contacts_sync
+    that called read-only abilities instead of actual server sync — those are
+    now removed.
     """
-    worker = _make_worker_bare()
-    # Direct call — does not go through _safe_step so exceptions would propagate.
-    result = worker._step_calendar_sync()
-    assert result == "ok", (
-        f"_step_calendar_sync must return 'ok' even when capability is not "
-        f"connected. Got: {result!r}"
-    )
+    from services.subconscious_worker import SubconsciousWorker
 
-
-def test_step_contacts_sync_does_not_raise_when_not_connected():
-    """_step_contacts_sync completes without raising when contacts is registered
-    but the underlying mail account is not connected.
-    """
-    worker = _make_worker_bare()
-    result = worker._step_contacts_sync()
-    assert result == "ok", (
-        f"_step_contacts_sync must return 'ok' even when capability is not "
-        f"connected. Got: {result!r}"
-    )
+    assert not hasattr(SubconsciousWorker, "_step_calendar_sync")
+    assert not hasattr(SubconsciousWorker, "_step_contacts_sync")
+    assert not hasattr(SubconsciousWorker, "_run_capability_syncs")

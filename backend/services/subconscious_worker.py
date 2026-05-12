@@ -85,9 +85,6 @@ class SubconsciousWorker:
         # so re-instantiating per tick would burn a config read every 5 min.
         # Lazy-built on first use so import failures surface as a step error.
         self._decay_engine = None
-        # Counter for capability sync cadence — incremented on every run_once()
-        # call so syncs run at their own cadence independent of the idle gate.
-        self._sync_tick_count: int = 0
         # Hydrate from durable state on construction so the first tick after a
         # restart sees the correct already-fired value. Failure is non-fatal —
         # worst case we run one extra tick on first idle window after a crash.
@@ -108,24 +105,17 @@ class SubconsciousWorker:
             - ``steps``: dict per step with ``status`` (``ok`` | ``skipped`` |
               ``error``) and optional ``detail`` / ``error`` fields.
             - ``last_fired_at``: ISO string when state was bumped, else ``None``.
-            - ``sync``: dict of capability sync results (keyed by capability name),
-              present even when cognitive steps are gate-skipped.
         """
         if not self._lock.acquire(blocking=False):
             logger.info(f"{LOG_PREFIX} tick already running — skipping re-entry")
             return {"skipped": "re_entrant", "steps": {}, "last_fired_at": None}
 
         try:
-            # Capability syncs run on cadence, NOT idle-gated.
-            sync_results = self._run_capability_syncs()
-
             gate_skip = self._check_gates()
             if gate_skip is not None:
                 logger.info(f"{LOG_PREFIX} tick skipped: {gate_skip}")
-                return {"skipped": gate_skip, "steps": {}, "last_fired_at": None, "sync": sync_results}
-            tick_result = self._tick()
-            tick_result["sync"] = sync_results
-            return tick_result
+                return {"skipped": gate_skip, "steps": {}, "last_fired_at": None}
+            return self._tick()
         finally:
             self._lock.release()
 
@@ -375,48 +365,6 @@ class SubconsciousWorker:
 
         from services.dmn_message_processor import DMNMessageProcessor
         DMNMessageProcessor(raw_input='').send()
-        return "ok"
-
-    # ── Capability syncs ─────────────────────────────────────────────────────
-
-    def _run_capability_syncs(self) -> dict:
-        """Run capability data syncs on their own cadence, independent of idle gate.
-
-        Calendar syncs every 2nd tick (~10 minutes). Contacts sync every 12th
-        tick (~60 minutes — contacts change infrequently). Syncs are
-        fire-and-forget; failures are logged but never abort the tick.
-        """
-        self._sync_tick_count += 1
-        results: dict = {}
-
-        if self._sync_tick_count % 2 == 0:
-            results["calendar"] = self._safe_step("calendar_sync", self._step_calendar_sync)
-
-        if self._sync_tick_count % 12 == 0:
-            results["contacts"] = self._safe_step("contacts_sync", self._step_contacts_sync)
-
-        return results
-
-    def _step_calendar_sync(self) -> str:
-        """Pull calendar events via the calendar ability."""
-        from abilities._registry import AbilityRegistry
-
-        try:
-            cal = AbilityRegistry.get("calendar")
-        except KeyError:
-            return "skipped: calendar ability not registered"
-        cal.execute(channel="subconscious", params={"action": "list_events"}, telemetry=None)
-        return "ok"
-
-    def _step_contacts_sync(self) -> str:
-        """Pull contacts via the contacts ability."""
-        from abilities._registry import AbilityRegistry
-
-        try:
-            contacts = AbilityRegistry.get("contacts")
-        except KeyError:
-            return "skipped: contacts ability not registered"
-        contacts.execute(channel="subconscious", params={"action": "list"}, telemetry=None)
         return "ok"
 
     def _load_user_synthesis(self) -> Optional[str]:

@@ -1,26 +1,25 @@
 """Unit tests for CarddavHandler.
 
 Coverage:
-    1.  parse_vcard — full card with all fields
+    1.  parse_vcard — full card with all fields (including typed emails/phones)
     2.  parse_vcard — minimal card (FN only, no N/emails/phones/org/title)
     3.  parse_vcard — card with multiple emails and phones
     4.  parse_vcard — returns None for invalid vCard data
     5.  parse_vcard — returns None when card has neither FN nor emails
     6.  parse_vcard — ORG as list value is flattened
-    7.  index_contacts — calls DataGraphService.store with salience_score=0.9
-    8.  index_contacts — skips contacts with no emails
-    9.  index_contacts — skips entries with no display name
-    10. index_contacts — enriches data dict with org, title, name parts
-    11. index_contacts — survives a store() exception
-    12. list_contacts — delegates to contact_resolver.resolve when query given
-    13. list_contacts — queries DataGraphService directly when no query
-    14. list_contacts — caps limit at 50
-    15. get_contact — returns contact dict when found
-    16. get_contact — returns error dict when not found
-    17. get_contact — returns error dict when identifier is empty
-    18. monitor — calls sync_contacts then index_contacts
-    19. open_client — returns None on DAVClient exception
-    20. sync_contacts — returns empty list when principal() raises
+    7.  index_contacts — calls index_contact_profile per contact
+    8.  index_contacts — skips entries with blank display name
+    9.  index_contacts — one call per contact (not per email)
+    10. index_contacts — survives a profile exception
+    11. list_contacts — delegates to contact_resolver.resolve when query given
+    12. list_contacts — parses both JSON profiles and legacy rows when no query
+    13. list_contacts — caps limit at 50
+    14. get_contact — returns contact dict when found
+    15. get_contact — returns error dict when not found
+    16. get_contact — returns error dict when identifier is empty
+    17. monitor — calls sync_contacts then index_contacts
+    18. open_client — returns None on DAVClient exception
+    19. sync_contacts — returns empty list when principal() raises
 """
 
 from __future__ import annotations
@@ -115,9 +114,14 @@ def test_parse_vcard_full_fields():
     assert contact["fn"] == "Sarah Chen"
     assert contact["given_name"] == "Sarah"
     assert contact["family_name"] == "Chen"
-    assert "s.chen@acme.com" in contact["emails"]
-    assert "sarah@personal.com" in contact["emails"]
-    assert "+1-555-0100" in contact["phones"]
+    assert contact["nickname"] == ""
+    email_vals = [e["value"] for e in contact["emails"]]
+    assert "s.chen@acme.com" in email_vals
+    assert "sarah@personal.com" in email_vals
+    assert contact["emails"][0]["type"] == "work"
+    assert contact["emails"][1]["type"] == "home"
+    phone_vals = [p["value"] for p in contact["phones"]]
+    assert "+1-555-0100" in phone_vals
     assert contact["org"] == "Acme Corp"
     assert contact["title"] == "VP Engineering"
 
@@ -169,7 +173,8 @@ def test_parse_vcard_no_fn_with_email_is_accepted():
     result = handler.parse_vcard(_NO_FN_WITH_EMAIL)
     # fn is empty but email present — should be returned (fn="" is fine)
     assert result is not None
-    assert "anon@example.com" in result["emails"]
+    email_vals = [e["value"] for e in result["emails"]]
+    assert "anon@example.com" in email_vals
 
 
 @pytest.mark.unit
@@ -189,91 +194,59 @@ def test_parse_vcard_org_list_flattened():
 
 
 @pytest.mark.unit
-def test_index_contacts_calls_index_person():
-    """index_contacts delegates to contact_resolver.index_person per email."""
+def test_index_contacts_calls_index_contact_profile():
+    """index_contacts delegates to contact_resolver.index_contact_profile per contact."""
     handler = _make_handler()
-    contacts = [{"fn": "Sarah Chen", "emails": ["s.chen@acme.com"], "phones": [], "org": "", "title": "", "given_name": "", "family_name": ""}]
+    contacts = [{"fn": "Sarah Chen", "emails": [{"value": "s.chen@acme.com", "type": "work"}], "phones": [], "org": "", "title": "", "given_name": "", "family_name": "", "nickname": "", "uid": ""}]
 
-    with patch("capabilities.contact_resolver.index_person") as mock_ip:
+    with patch("capabilities.contact_resolver.index_contact_profile") as mock_icp:
         handler.index_contacts(contacts)
 
-    mock_ip.assert_called_once_with("s.chen@acme.com", "Sarah Chen", source="carddav")
-
-
-@pytest.mark.unit
-def test_index_contacts_skips_no_emails():
-    handler = _make_handler()
-    contacts = [{"fn": "Ghost User", "emails": [], "phones": []}]
-
-    with patch("capabilities.contact_resolver.index_person") as mock_ip:
-        handler.index_contacts(contacts)
-
-    mock_ip.assert_not_called()
+    mock_icp.assert_called_once_with(contacts[0], source="carddav")
 
 
 @pytest.mark.unit
 def test_index_contacts_skips_blank_fn():
     handler = _make_handler()
-    contacts = [{"fn": "  ", "emails": ["nobody@example.com"], "phones": []}]
+    contacts = [{"fn": "  ", "emails": [{"value": "nobody@example.com", "type": "other"}], "phones": []}]
 
-    with patch("capabilities.contact_resolver.index_person") as mock_ip:
+    with patch("capabilities.contact_resolver.index_contact_profile") as mock_icp:
         handler.index_contacts(contacts)
 
-    mock_ip.assert_not_called()
+    mock_icp.assert_not_called()
 
 
 @pytest.mark.unit
-def test_index_contacts_multiple_emails_each_indexed():
-    """Each email address in the contact gets its own index_person call."""
+def test_index_contacts_one_call_per_contact():
+    """Each contact results in one index_contact_profile call regardless of email count."""
     handler = _make_handler()
     contacts = [{
         "fn": "Alice Wang",
-        "emails": ["alice@corp.com", "alice@personal.com"],
+        "emails": [{"value": "alice@corp.com", "type": "work"}, {"value": "alice@personal.com", "type": "home"}],
         "phones": [],
         "org": "",
         "title": "",
         "given_name": "",
         "family_name": "",
+        "nickname": "",
+        "uid": "",
     }]
 
-    with patch("capabilities.contact_resolver.index_person") as mock_ip:
+    with patch("capabilities.contact_resolver.index_contact_profile") as mock_icp:
         handler.index_contacts(contacts)
 
-    assert mock_ip.call_count == 2
-    emails_indexed = {c.args[0] for c in mock_ip.call_args_list}
-    assert "alice@corp.com" in emails_indexed
-    assert "alice@personal.com" in emails_indexed
+    assert mock_icp.call_count == 1
 
 
 @pytest.mark.unit
-def test_index_contacts_survives_index_person_exception():
-    """Exception from index_person must not propagate."""
+def test_index_contacts_survives_profile_exception():
+    """Exception from index_contact_profile must not propagate."""
     handler = _make_handler()
-    contacts = [{"fn": "Test User", "emails": ["test@example.com"], "phones": []}]
+    contacts = [{"fn": "Test User", "emails": [{"value": "test@example.com", "type": "other"}], "phones": []}]
 
-    with patch("capabilities.contact_resolver.index_person",
+    with patch("capabilities.contact_resolver.index_contact_profile",
                side_effect=RuntimeError("db down")):
-        # Must not raise
         handler.index_contacts(contacts)
-
-
-@pytest.mark.unit
-def test_index_contacts_multiple_emails_per_contact():
-    handler = _make_handler()
-    contacts = [{
-        "fn": "Dave Lee",
-        "emails": ["dave@work.com", "dave@home.com"],
-        "phones": [],
-        "org": "",
-        "title": "",
-        "given_name": "",
-        "family_name": "",
-    }]
-
-    with patch("capabilities.contact_resolver.index_person") as mock_ip:
-        handler.index_contacts(contacts)
-
-    assert mock_ip.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -296,10 +269,12 @@ def test_list_contacts_delegates_to_resolve_when_query_given():
 
 @pytest.mark.unit
 def test_list_contacts_uses_dgs_fetch_when_no_query():
+    import json as _json
+    profile = {"fn": "Sarah Chen", "emails": [{"value": "s@c.com", "type": "work"}], "phones": []}
     mock_dgs = MagicMock()
     mock_dgs.fetch.return_value = [
+        {"key": "contact:Sarah Chen", "value": _json.dumps(profile)},
         {"key": "contact:a@b.com", "value": "A B"},
-        {"key": "contact:c@d.com", "value": "C D"},
     ]
     handler = _make_handler()
 
@@ -308,9 +283,8 @@ def test_list_contacts_uses_dgs_fetch_when_no_query():
 
     mock_dgs.fetch.assert_called_once()
     assert result["count"] == 2
-    emails = {c["email"] for c in result["contacts"]}
-    assert "a@b.com" in emails
-    assert "c@d.com" in emails
+    assert result["contacts"][0]["fn"] == "Sarah Chen"
+    assert result["contacts"][1] == {"email": "a@b.com", "name": "A B"}
 
 
 @pytest.mark.unit
