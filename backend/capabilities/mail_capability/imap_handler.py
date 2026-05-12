@@ -353,3 +353,46 @@ class ImapHandler:
                 conn.quit()
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Manage
+    # ------------------------------------------------------------------
+
+    def manage_email(self, client, params: dict) -> dict:
+        uid = params.get("uid")
+        if uid is None:
+            return {"error": "uid is required"}
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            return {"error": "uid must be an integer"}
+        operation = params.get("operation")
+        _valid_ops = {"delete", "mark_read", "mark_important", "move_to_spam"}
+        if operation not in _valid_ops:
+            return {"error": f"operation must be one of: {', '.join(sorted(_valid_ops))}"}
+        try:
+            if operation == "delete":
+                client.select_folder("INBOX")
+                client.delete_messages([uid])
+                client.expunge([uid])
+                return {"success": True, "uid": uid, "operation": "delete"}
+            elif operation == "mark_read":
+                client.select_folder("INBOX")
+                client.set_flags([uid], [b"\\Seen"])
+                return {"success": True, "uid": uid, "operation": "mark_read"}
+            elif operation == "mark_important":
+                client.select_folder("INBOX")
+                client.set_flags([uid], [b"\\Flagged"])
+                return {"success": True, "uid": uid, "operation": "mark_important"}
+            else:  # move_to_spam
+                client.select_folder("INBOX")
+                try:
+                    client.move([uid], "Junk")
+                except Exception:
+                    client.copy([uid], "Junk")
+                    client.delete_messages([uid])
+                    client.expunge([uid])
+                return {"success": True, "uid": uid, "operation": "move_to_spam"}
+        except Exception as exc:
+            logger.error("[imap_handler] manage_email: %s", exc)
+            return {"error": str(exc)}

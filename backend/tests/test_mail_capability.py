@@ -356,12 +356,12 @@ class TestMailCapabilityGetTools:
         tools = cap.get_tools()
         assert tools == []
 
-    def test_imap_only_returns_three_tools(self):
+    def test_imap_only_returns_four_tools(self):
         cap, _, _ = _make_capability()
         cap._imap_ok = True
         tools = cap.get_tools()
         names = {t["name"] for t in tools}
-        assert names == {"search_email", "read_email", "send_email"}
+        assert names == {"search_email", "read_email", "send_email", "manage_email"}
 
     def test_caldav_only_returns_seven_tools(self):
         cap, _, _ = _make_capability()
@@ -380,13 +380,13 @@ class TestMailCapabilityGetTools:
         names = {t["name"] for t in tools}
         assert names == {"list_contacts", "get_contact"}
 
-    def test_all_protocols_returns_twelve_tools(self):
+    def test_all_protocols_returns_thirteen_tools(self):
         cap, _, _ = _make_capability()
         cap._imap_ok = True
         cap._caldav_ok = True
         cap._carddav_ok = True
         tools = cap.get_tools()
-        assert len(tools) == 12
+        assert len(tools) == 13
 
     def test_all_tools_have_required_keys(self):
         cap, _, _ = _make_capability()

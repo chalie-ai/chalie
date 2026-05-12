@@ -628,7 +628,7 @@ class MailCapability(AbstractCapability):
         """Return tool definitions conditioned on which protocols are connected.
 
         IMAP tools (when ``_imap_ok``):
-            ``search_email``, ``read_email``, ``send_email``
+            ``search_email``, ``read_email``, ``send_email``, ``manage_email``
 
         CalDAV tools (when ``_caldav_ok``):
             ``list_events``, ``get_event``, ``create_event``, ``update_event``,
@@ -732,6 +732,23 @@ class MailCapability(AbstractCapability):
                 except Exception as exc:
                     return {"error": str(exc)}
 
+            def _manage_email(topic, params, config=None, telemetry=None):
+                if not cap._imap_ok:
+                    return {"error": _ERR_IMAP_NOT_CONNECTED}
+                try:
+                    client = _open_imap_client()
+                    if client is None:
+                        return {"error": "Failed to open IMAP connection."}
+                    try:
+                        return cap._imap_handler.manage_email(client, params)
+                    finally:
+                        try:
+                            client.logout()
+                        except Exception:
+                            pass
+                except Exception as exc:
+                    return {"error": str(exc)}
+
             tools += [
                 {
                     "name": "search_email",
@@ -789,6 +806,24 @@ class MailCapability(AbstractCapability):
                     },
                     "handler": _send_email,
                     "timeout": 30,
+                },
+                {
+                    "name": "manage_email",
+                    "description": "Manage an email: delete, mark as read, mark as important, or move to spam.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "uid": {"type": "integer", "description": "IMAP UID of the email"},
+                            "operation": {
+                                "type": "string",
+                                "enum": ["delete", "mark_read", "mark_important", "move_to_spam"],
+                                "description": "The management operation to perform.",
+                            },
+                        },
+                        "required": ["uid", "operation"],
+                    },
+                    "handler": _manage_email,
+                    "timeout": 15,
                 },
             ]
 

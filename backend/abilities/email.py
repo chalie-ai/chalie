@@ -36,12 +36,13 @@ class EmailAbility(Ability):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["search", "read", "send"],
+                "enum": ["search", "read", "send", "manage"],
                 "description": (
                     "The email action to perform. "
                     "search — find emails by sender, subject, keyword, date range, triage, or unanswered flag. "
                     "read — fetch the full body of an email by its IMAP UID. "
-                    "send — send a new email or reply via SMTP (requires to, subject, body)."
+                    "send — send a new email or reply via SMTP (requires to, subject, body). "
+                    "manage — delete, mark as read, mark as important, or move an email to spam (requires uid, operation)."
                 ),
             },
             "sender": {
@@ -79,7 +80,12 @@ class EmailAbility(Ability):
             },
             "uid": {
                 "type": "integer",
-                "description": "read: IMAP UID of the email to fetch.",
+                "description": "read/manage: IMAP UID of the email.",
+            },
+            "operation": {
+                "type": "string",
+                "enum": ["delete", "mark_read", "mark_important", "move_to_spam"],
+                "description": "manage: the operation to perform on the email.",
             },
             "to": {
                 "type": "string",
@@ -118,6 +124,7 @@ class EmailAbility(Ability):
             "search": "search_email",
             "read": "read_email",
             "send": "send_email",
+            "manage": "manage_email",
         }
 
         handler_name = _ACTION_TO_HANDLER.get(action)
