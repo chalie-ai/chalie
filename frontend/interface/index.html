@@ -130,9 +130,6 @@
           <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z"></path>
         </svg>
       </button>
-      <button id="appsBtn" class="btn-icon hidden" aria-label="Apps" title="Apps">
-        <i data-lucide="layout-grid" style="width:18px;height:18px"></i>
-      </button>
       <button id="installBtn" class="btn-icon hidden" aria-label="Install Chalie" title="Install app">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -373,75 +370,6 @@
         <button id="saveKeyBtn" class="btn btn-primary" disabled>Save &amp; Connect</button>
       </div>
       <p id="apiKeyStatus" class="api-key-dialog__status"></p>
-    </div>
-  </dialog>
-
-  <!-- Apps slide-out panel -->
-  <aside id="appsPanel" class="apps-panel hidden">
-    <div class="apps-panel__header">
-      <span class="apps-panel__title">Apps</span>
-      <button class="btn-icon" id="closeAppsPanel" aria-label="Close">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-    </div>
-    <div class="apps-panel__list" id="appsPanelList">
-      <p class="apps-panel__empty">No apps installed</p>
-    </div>
-  </aside>
-
-  <!-- App full-screen overlay -->
-  <div id="appOverlay" class="app-overlay hidden">
-    <div class="app-overlay__bar">
-      <button class="btn-icon" id="closeAppOverlay" aria-label="Back">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="19" y1="12" x2="5" y2="12"></line>
-          <polyline points="12 19 5 12 12 5"></polyline>
-        </svg>
-      </button>
-      <span class="app-overlay__title" id="appOverlayTitle"></span>
-    </div>
-    <div class="app-overlay__content" id="appOverlayContent"></div>
-  </div>
-
-  <!-- Scope approval dialog -->
-  <dialog id="scopeDialog" class="api-key-dialog">
-    <div class="api-key-dialog__content scope-dialog">
-      <button class="scope-dialog__close btn-icon" aria-label="Close" id="scopeDialogClose">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-      <h2 class="api-key-dialog__title" id="scopeDialogTitle">Approve App</h2>
-      <p class="api-key-dialog__desc" id="scopeDialogDesc"></p>
-      <div id="scopeDialogScopes" class="scope-dialog__scopes"></div>
-      <div class="api-key-dialog__actions">
-        <button id="scopeDenyBtn" class="btn btn-secondary">Deny</button>
-        <button id="scopeApproveBtn" class="btn btn-primary">Approve</button>
-      </div>
-    </div>
-  </dialog>
-
-  <!-- App detail dialog -->
-  <dialog id="appDetailDialog" class="api-key-dialog">
-    <div class="api-key-dialog__content app-detail-dialog">
-      <button class="app-detail-dialog__close btn-icon" aria-label="Close" id="appDetailClose">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-      <h2 class="api-key-dialog__title" id="appDetailTitle"></h2>
-      <p class="api-key-dialog__desc" id="appDetailMeta"></p>
-      <div id="appDetailScopes" class="scope-dialog__scopes"></div>
-      <div id="appDetailCapabilities" class="app-detail__capabilities"></div>
-      <div class="api-key-dialog__actions">
-        <button id="appDetailRemoveBtn" class="btn btn-secondary" style="color:var(--error)">Remove</button>
-        <button id="appDetailSaveBtn" class="btn btn-primary">Save Scopes</button>
-      </div>
     </div>
   </dialog>
 

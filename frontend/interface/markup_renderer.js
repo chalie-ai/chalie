@@ -95,8 +95,7 @@ function _wireActionsContainer(container) {
   container.classList.add('chalie-actions-row');
 }
 
-// Inline action attributes that get mirrored onto the live element as
-// ``data-*`` so AppsPanel._wireOverlayActions can pick them up.
+// Inline action attributes that get mirrored onto the live element as ``data-*``.
 const _ACTION_DATA_ATTRS = ['execute', 'collect', 'target', 'open-url', 'payload'];
 
 function _wireActionButton(actionEl) {
@@ -122,10 +121,6 @@ function _wireActionButton(actionEl) {
     actionEl.removeAttribute(name);
   }
 
-  // Chat-action click handler — overlay actions (execute=...) are wired by
-  // AppsPanel._wireOverlayActions, so we skip dispatch in that case to
-  // avoid double-firing.
-  if (actionEl.dataset.execute) return;
   actionEl.addEventListener('click', () => {
     const row = actionEl.closest('.chalie-actions-row');
     if (row) {

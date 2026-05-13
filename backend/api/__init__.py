@@ -196,7 +196,6 @@ def _init_dashboard_gateway(app):
     """
     from gateway import db as dashboard_db
     from gateway.gateway import gateway_bp, init_gateway
-    from gateway.interfaces import interfaces_bp as apps_bp, init_interfaces
     from gateway.chalie_client import ChalieClient
 
     from runtime_config import get as rc_get
@@ -232,12 +231,10 @@ def _init_dashboard_gateway(app):
         client.token = boot_token
 
     init_gateway(client, port, data_dir)
-    init_interfaces(client, port, data_dir)
 
     app.register_blueprint(gateway_bp)
-    app.register_blueprint(apps_bp)
 
-    logger.info("[Dashboard] Gateway + app management blueprints registered")
+    logger.info("[Dashboard] Gateway blueprint registered")
 
 
 def _register_blueprints(app: Flask) -> None:

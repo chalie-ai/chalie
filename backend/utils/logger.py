@@ -114,9 +114,9 @@ class Logger:
         root.addHandler(stream_handler)
 
         # Werkzeug logs every request at INFO. Frontend polling fires
-        # /health, /api/apps, /system/observability/tasks, /scheduler every
-        # 30–60s — that's per-request CPU + log noise for no value. WARNING
-        # keeps real errors (404/500) visible without the per-request stream.
+        # /health, /system/observability/tasks, /scheduler every 30–60s —
+        # that's per-request CPU + log noise for no value. WARNING keeps real
+        # errors (404/500) visible without the per-request stream.
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
     @staticmethod
