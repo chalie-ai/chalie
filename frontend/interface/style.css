@@ -2553,101 +2553,97 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 /* --------------------------------------------------------------------------
    28. Persistent Task Strip
    -------------------------------------------------------------------------- */
-.task-strip {
+/* --------------------------------------------------------------------------
+   37b. Task Drawer — slideout panel from right edge
+   -------------------------------------------------------------------------- */
+
+/* Scrim (click-outside target) */
+.task-drawer-scrim {
   position: fixed;
-  top: 56px;
-  left: 0;
+  inset: 0;
+  z-index: 149;
+  background: transparent;
+}
+
+/* Drawer panel */
+.task-drawer {
+  position: fixed;
+  top: 0;
   right: 0;
-  z-index: 90;
+  bottom: 0;
+  width: 320px;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
   background: rgba(6, 8, 14, 0.97);
-  border-bottom: 1px solid rgba(138, 92, 255, 0.18);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: taskStripEnter 220ms ease both;
+  border-left: 1px solid rgba(138, 92, 255, 0.18);
+  backdrop-filter: blur(24px) saturate(120%);
+  -webkit-backdrop-filter: blur(24px) saturate(120%);
+  transform: translateX(100%);
+  transition: transform var(--duration-normal) var(--ease-out);
 }
 
-@keyframes taskStripEnter {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
+.task-drawer.open {
+  transform: translateX(0);
 }
 
-.task-strip__toggle {
+/* Drawer header */
+.task-drawer__header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 20px;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: color 220ms ease;
-}
-
-.task-strip__toggle:hover { color: var(--text-primary); }
-
-.task-strip__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent, #8A5CFF);
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 var(--space-md) 0 var(--space-lg);
+  border-bottom: 1px solid color-mix(in oklab, var(--violet) 8%, transparent);
   flex-shrink: 0;
-  animation: taskDotPulse 2s ease-in-out infinite;
 }
 
-@keyframes taskDotPulse {
-  0%, 100% { opacity: 0.7; }
-  50%       { opacity: 1; }
+.task-drawer__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
-.task-strip__label   { flex: 1; text-align: left; }
-
-.task-strip__chevron {
-  transition: transform 220ms ease;
-  opacity: 0.5;
+.task-drawer__close {
+  font-size: 20px;
+  line-height: 1;
 }
 
-.task-strip.--expanded .task-strip__chevron {
-  transform: rotate(180deg);
+/* Scrollable body */
+.task-drawer__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-sm) 0;
 }
 
-.task-strip__list {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 220ms ease;
-}
-
-.task-strip.--expanded .task-strip__list {
-  max-height: 300px;
-}
-
-.task-strip__item {
+/* Items */
+.task-drawer__item {
   position: relative;
-  padding: 8px 36px 10px 20px;
-  border-top: 1px solid color-mix(in oklab, var(--text) 3%, transparent);
+  padding: 12px var(--space-lg) 14px;
+  border-bottom: 1px solid color-mix(in oklab, var(--text) 3%, transparent);
 }
 
-.task-strip__item > .task-strip__dismiss {
+.task-drawer__item.--paused { opacity: 0.5; }
+
+.task-drawer__item > .task-drawer__dismiss {
   position: absolute;
-  top: 8px;
-  right: 10px;
+  top: 10px;
+  right: 12px;
 }
 
-.task-strip__item.--paused { opacity: 0.5; }
-
-.task-strip__goal {
+.task-drawer__goal {
   font-size: 13px;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 600px;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  padding-right: 20px;
 }
 
-.task-strip__progress-bar {
+.task-drawer__progress-bar {
   height: 2px;
   background: color-mix(in oklab, var(--text) 4%, transparent);
   border-radius: 1px;
@@ -2655,14 +2651,14 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   overflow: hidden;
 }
 
-.task-strip__progress-fill {
+.task-drawer__progress-fill {
   height: 100%;
   background: var(--accent, #8A5CFF);
   border-radius: 1px;
   transition: width 400ms ease;
 }
 
-.task-strip__summary {
+.task-drawer__summary {
   font-size: 11px;
   color: var(--text-tertiary);
   white-space: nowrap;
@@ -2670,13 +2666,13 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   text-overflow: ellipsis;
 }
 
-.task-strip__steps {
+.task-drawer__steps {
   font-size: 11px;
   color: rgba(234, 230, 242, 0.45);
   margin-top: 4px;
 }
 
-.task-strip__current-step {
+.task-drawer__current-step {
   font-size: 10px;
   color: rgba(138, 92, 255, 0.6);
   margin-top: 2px;
@@ -2686,33 +2682,34 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   text-overflow: ellipsis;
 }
 
-.task-strip__blocked {
+.task-drawer__blocked {
   font-size: 10px;
   color: rgba(251, 113, 133, 0.7);
   margin-top: 2px;
 }
 
 /* Kind dot */
-.task-strip__kind-dot {
+.task-drawer__kind-dot {
   display: inline-block;
   width: 5px;
   height: 5px;
   border-radius: 50%;
   flex-shrink: 0;
   margin-right: 6px;
+  vertical-align: middle;
 }
 
-.task-strip__kind-dot--task     { background: var(--accent-primary, #8A5CFF); }
-.task-strip__kind-dot--reminder { background: var(--accent-tertiary, #00F0FF); }
+.task-drawer__kind-dot--task     { background: var(--accent-primary, #8A5CFF); }
+.task-drawer__kind-dot--reminder { background: var(--accent-tertiary, #00F0FF); }
 
 /* Reminder item */
-.task-strip__item--reminder {
+.task-drawer__item--reminder {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.task-strip__msg {
+.task-drawer__msg {
   flex: 1;
   font-size: 13px;
   color: var(--text-primary);
@@ -2722,18 +2719,18 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   min-width: 0;
 }
 
-.task-strip__due {
+.task-drawer__due {
   font-size: 11px;
   color: rgba(0, 240, 255, 0.6);
   white-space: nowrap;
   flex-shrink: 0;
 }
 
-.task-strip__dismiss {
+.task-drawer__dismiss {
   background: none;
   border: none;
   color: var(--text-tertiary);
-  font-size: 14px;
+  font-size: 16px;
   cursor: pointer;
   padding: 0 2px;
   line-height: 1;
@@ -2741,19 +2738,51 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   transition: color 220ms ease;
 }
 
-.task-strip__dismiss:hover { color: var(--text-primary); }
+.task-drawer__dismiss:hover { color: var(--text-primary); }
 
-.task-strip__hint {
-  padding: 6px 20px 8px;
+.task-drawer__hint {
+  padding: 8px var(--space-lg) 10px;
   font-size: 11px;
   color: var(--text-tertiary);
   font-style: italic;
   border-top: 1px solid color-mix(in oklab, var(--text) 3%, transparent);
 }
 
-/* Adjust conversation spine when task strip is visible */
-body.has-task-strip .conversation-spine {
-  padding-top: calc(56px + 40px + var(--space-xl));
+/* Trigger button in presence bar */
+.task-drawer-trigger {
+  position: relative;
+}
+
+.task-drawer-trigger__dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent, #8A5CFF);
+  animation: taskDotPulse 2s ease-in-out infinite;
+}
+
+.task-drawer-trigger__badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent, #8A5CFF);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+}
+
+@keyframes taskDotPulse {
+  0%, 100% { opacity: 0.7; }
+  50%       { opacity: 1; }
 }
 
 /* --------------------------------------------------------------------------
