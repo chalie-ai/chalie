@@ -123,13 +123,10 @@ class EmailAbility(Ability):
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
 
-        if action == "draft":
-            result = _draft_email(params)
-            return {"text": _skill_tag("email", json.dumps(result), action=action)}
-
         _ACTION_TO_HANDLER = {
             "search": "search_email",
             "read": "read_email",
+            "draft": "draft_email",
             "manage": "manage_email",
         }
 
@@ -161,19 +158,3 @@ class EmailAbility(Ability):
             result = {"status": "error", "error": str(exc)}
 
         return {"text": _skill_tag("email", json.dumps(result), action=action)}
-
-
-def _draft_email(params: dict) -> dict:
-    to = (params.get("to") or "").strip()
-    subject = (params.get("subject") or "").strip()
-    body = (params.get("body") or "").strip()
-    if not to or not subject or not body:
-        return {"status": "error", "error": "draft requires to, subject, and body"}
-    draft = {"to": to, "subject": subject, "body": body}
-    if params.get("in_reply_to"):
-        draft["in_reply_to"] = params["in_reply_to"]
-    return {
-        "status": "draft",
-        "draft": draft,
-        "message": "Email drafted. Present it to the user for review — do not send it.",
-    }

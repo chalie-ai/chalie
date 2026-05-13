@@ -555,7 +555,7 @@ class MailCapability(AbstractCapability):
         """Dispatch a write action to the appropriate protocol handler.
 
         Args:
-            action: Tool name, e.g. ``"send_email"``, ``"create_event"``.
+            action: Tool name, e.g. ``"draft_email"``, ``"create_event"``.
             params: Action-specific parameters.
 
         Returns:
@@ -580,7 +580,7 @@ class MailCapability(AbstractCapability):
         """Return tool definitions conditioned on which protocols are connected.
 
         IMAP tools (when ``_imap_ok``):
-            ``search_email``, ``read_email``, ``send_email``, ``manage_email``
+            ``search_email``, ``read_email``, ``draft_email``, ``manage_email``
 
         CalDAV tools (when ``_caldav_ok``):
             ``list_events``, ``get_event``, ``create_event``, ``update_event``,
@@ -664,6 +664,26 @@ class MailCapability(AbstractCapability):
                 except Exception as exc:
                     return {"error": str(exc)}
 
+            def _draft_email(topic, params, config=None, telemetry=None):
+                if not cap._imap_ok:
+                    return {"error": _ERR_IMAP_NOT_CONNECTED}
+                try:
+                    _email = cap.load_credential(_K_EMAIL)
+                    client = _open_imap_client()
+                    if client is None:
+                        return {"error": "Failed to open IMAP connection."}
+                    try:
+                        return cap._imap_handler.draft_email(
+                            client, from_addr=_email, params=params,
+                        )
+                    finally:
+                        try:
+                            client.logout()
+                        except Exception:
+                            pass
+                except Exception as exc:
+                    return {"error": str(exc)}
+
             def _manage_email(topic, params, config=None, telemetry=None):
                 if not cap._imap_ok:
                     return {"error": _ERR_IMAP_NOT_CONNECTED}
@@ -719,6 +739,25 @@ class MailCapability(AbstractCapability):
                     },
                     "handler": _read_email,
                     "timeout": 30,
+                },
+                {
+                    "name": "draft_email",
+                    "description": "Create a draft email in the user's Drafts folder via IMAP.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "to": {"type": "string", "description": "Recipient email address"},
+                            "subject": {"type": "string", "description": "Email subject line"},
+                            "body": {"type": "string", "description": "Plain-text email body"},
+                            "in_reply_to": {
+                                "type": "string",
+                                "description": "Message-ID for threading this as a reply",
+                            },
+                        },
+                        "required": ["to", "subject", "body"],
+                    },
+                    "handler": _draft_email,
+                    "timeout": 15,
                 },
                 {
                     "name": "manage_email",

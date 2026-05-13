@@ -1,4 +1,4 @@
-"""ImapHandler — protocol-specific IMAP/SMTP logic for MailCapability.
+"""ImapHandler — protocol-specific IMAP logic for MailCapability.
 
 Plain class; no AbstractCapability.  Credentials are passed as parameters
 so the parent MailCapability remains the sole credential owner.
@@ -28,14 +28,23 @@ _IMAP_FETCH_HEADER = b"RFC822.HEADER"
 # ---------------------------------------------------------------------------
 
 _SPAM_NAMES = {"junk", "spam", "[gmail]/spam", "bulk mail", "spamverdacht"}
+_DRAFTS_NAMES = {"drafts", "[gmail]/drafts", "draft", "entwürfe"}
+
+
+def _find_folder(client, names: set[str]) -> str | None:
+    folders = client.list_folders()
+    for _flags, _delim, name in folders:
+        if name.lower() in names:
+            return name
+    return None
 
 
 def _find_spam_folder(client) -> str | None:
-    folders = client.list_folders()
-    for _flags, _delim, name in folders:
-        if name.lower() in _SPAM_NAMES:
-            return name
-    return None
+    return _find_folder(client, _SPAM_NAMES)
+
+
+def _find_drafts_folder(client) -> str | None:
+    return _find_folder(client, _DRAFTS_NAMES)
 
 
 def _imap_date(iso_str: str) -> str:
@@ -112,22 +121,6 @@ class ImapHandler:
             return c
         except Exception as exc:
             logger.error("[imap_handler] open_client: %s", exc)
-            return None
-
-    def open_smtp(self, host: str, port: int, tls: bool,
-                  email: str, password: str, timeout: int = 30):
-        """Open and return an authenticated SMTP connection, or None on failure."""
-        import smtplib
-        try:
-            if tls:
-                conn = smtplib.SMTP_SSL(host, port, timeout=timeout)
-            else:
-                conn = smtplib.SMTP(host, port, timeout=timeout)
-                conn.starttls()
-            conn.login(email, password)
-            return conn
-        except Exception as exc:
-            logger.error("[imap_handler] open_smtp: %s", exc)
             return None
 
     # ------------------------------------------------------------------
@@ -324,42 +317,35 @@ class ImapHandler:
     # Send
     # ------------------------------------------------------------------
 
-    def send_email(self, *, smtp_host: str, smtp_port: int, smtp_tls: bool,
-                   email: str, password: str, params: dict) -> dict:
-        """Send an email via SMTP.
+    def draft_email(self, client, *, from_addr: str, params: dict) -> dict:
+        """Create a draft email in the provider's Drafts folder via IMAP APPEND.
 
         Required params: to, subject, body.
         Optional params: in_reply_to (Message-ID for threading).
         """
         from email.mime.text import MIMEText
-        to         = (params.get("to")         or "").strip()
-        subject    = (params.get("subject")    or "").strip()
-        body       = (params.get("body")       or "").strip()
+        to = (params.get("to") or "").strip()
+        subject = (params.get("subject") or "").strip()
+        body = (params.get("body") or "").strip()
         in_reply_to = (params.get("in_reply_to") or "").strip()
         if not to or not subject or not body:
             return {"error": "to, subject, and body are required"}
         msg = MIMEText(body, "plain", "utf-8")
-        msg["From"] = email
+        msg["From"] = from_addr
         msg["To"] = to
         msg["Subject"] = subject
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = in_reply_to
-        conn = self.open_smtp(host=smtp_host, port=smtp_port, tls=smtp_tls,
-                               email=email, password=password)
-        if not conn:
-            return {"error": "Failed to connect to SMTP server"}
+        drafts = _find_drafts_folder(client)
+        if not drafts:
+            return {"error": "No drafts folder found on this mail server"}
         try:
-            conn.send_message(msg)
-            return {"success": True, "to": to, "subject": subject}
+            client.append(drafts, msg.as_bytes(), flags=[b"\\Draft", b"\\Seen"])
+            return {"success": True, "to": to, "subject": subject, "folder": drafts}
         except Exception as exc:
-            logger.error("[imap_handler] send_email: %s", exc)
+            logger.error("[imap_handler] draft_email: %s", exc)
             return {"error": str(exc)}
-        finally:
-            try:
-                conn.quit()
-            except Exception:
-                pass
 
     # ------------------------------------------------------------------
     # Manage
