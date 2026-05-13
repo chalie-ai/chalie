@@ -54,6 +54,7 @@ class DMNMessageProcessor(MessageProcessor):
         "news",
         "read",
         "review_tool_calls",
+        "review_transcript",
         "schedule",
         "search",
     ]

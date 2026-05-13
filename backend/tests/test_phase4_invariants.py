@@ -115,6 +115,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "programming_docs_search",
     "read",
     "review_tool_calls",
+    "review_transcript",
     "save_graph",
     "save_pattern",
     "schedule",
@@ -125,8 +126,8 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
 })
 
 
-def test_abilities_directory_has_exactly_20_non_underscore_modules():
-    """abilities/ contains exactly the 20 dispatchable top-level modules.
+def test_abilities_directory_has_exactly_21_non_underscore_modules():
+    """abilities/ contains exactly the 21 dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
@@ -154,7 +155,7 @@ def test_abilities_directory_has_exactly_20_non_underscore_modules():
         f"Expected ability modules are missing from abilities/: {sorted(removed)}. "
         "Remove them from _EXPECTED_ABILITY_MODULE_STEMS if intentional."
     )
-    assert len(walked) == 20
+    assert len(walked) == 21
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +176,7 @@ def test_abilities_directory_has_exactly_20_non_underscore_modules():
 
 _DEFAULT_ALWAYS = frozenset({
     "document", "find_tools", "list", "memory",
-    "read", "review_tool_calls", "schedule", "timer",
+    "read", "review_tool_calls", "review_transcript", "schedule", "timer",
 })
 
 # `subagent` is discoverable in UMP only — DMN/Scheduled/Subagent processors

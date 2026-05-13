@@ -42,7 +42,7 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # 8 innate abilities — pre-injected on every ACT iteration. The 7 in
+    # 9 innate abilities — pre-injected on every ACT iteration. The 10 in
     # DISCOVERABLE are surfaced at runtime via find_tools and never
     # pre-injected. `subagent` lives in DISCOVERABLE so it competes with
     # weather/search/news/browser via find_tools rather than appearing as
@@ -54,6 +54,7 @@ class UserMessageProcessor(MessageProcessor):
         "memory",
         "read",
         "review_tool_calls",
+        "review_transcript",
         "schedule",
         "timer",
     ]
@@ -521,6 +522,7 @@ class SubagentReturnProcessor(UserMessageProcessor):
 class ScheduledPromptProcessor(UserMessageProcessor):
     """Scheduled prompt — UMP with hidden input and clean context window."""
 
+    USAGE_CLASS = 'subconscious'
     SKIP_INPUT_ROW = True
 
     def getPreviousMessages(self, token_budget: int | None = None) -> str:
