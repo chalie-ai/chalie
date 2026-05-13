@@ -232,7 +232,7 @@ The `execute(channel, params, telemetry)` method is the sole dispatch surface. `
 Per-ability implementation notes:
 
 - `browser` — `playwright.sync_api` imported unconditionally at module top. Companion modules under `tools/browser/`.
-- `calendar` — delegates to `MailCapability`'s CalDAV handler closures. Actions: `list_events`, `get_event`, `update_event`. DISCOVERABLE in UMP + DMN only.
+- `calendar` — read ops (`list_events`, `get_event`) query `scheduled_items` via `query_items()` in `abilities/schedule.py` (the single SQL path for that table, filtering `hidden=1, source='mail', item_type='event'`). Write ops (`update_event`) delegate to `MailCapability`'s CalDAV handler. DISCOVERABLE in UMP + DMN only.
 - `code_eval` — `_RESTRICTED_GLOBALS` built once as `ClassVar[dict]`; a fresh `dict()` copy is taken per call so state never leaks between executions.
 - `contacts` — delegates to `MailCapability`'s CardDAV handler closures. Actions: `list`, `get`. DISCOVERABLE in UMP + DMN only. CardDAV contacts are stored in `data_graph` with `kind='user_specific'`, `key='contact:<Display Name>'`, and a JSON value containing `fn`, `given_name`, `family_name`, `nickname`, `emails` (typed: `[{"value": "…", "type": "work"}, …]`), `phones` (typed, same shape), `org`, `title`, and `uid`. IMAP sender contacts continue to use the lightweight `key='contact:<email>'`, `value='<display_name>'` format. Both formats are handled transparently by `contact_resolver.resolve()` and `_parse_contact_row()`.
 - `document` — `create_document_artifacts` exposed as both a module-level function and a `classmethod` so `api/documents.py` and `services/folder_watcher_service.py` import the same path.
