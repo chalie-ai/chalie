@@ -484,7 +484,6 @@ class MailCapability(AbstractCapability):
         if not self.is_connected():
             return
 
-        self._cycle_count += 1
         now = utc_now()
 
         email = self.load_credential(_K_EMAIL)
@@ -545,6 +544,8 @@ class MailCapability(AbstractCapability):
                     self._carddav_handler.monitor(client)
             except Exception as exc:
                 logger.error("[mail] _do_monitor() CardDAV: %s", exc)
+
+        self._cycle_count += 1
 
     # ------------------------------------------------------------------
     # Cognitive pipeline — act
