@@ -53,6 +53,7 @@ class UserSummaryProcessor(MessageProcessor):
 
     CHANNEL = 'user_summary'
     ROLE = 'user_summary'
+    USAGE_CLASS = 'subconscious'
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UserSummarySystemPrompt
     ALWAYS_AVAILABLE: list[str] = []
