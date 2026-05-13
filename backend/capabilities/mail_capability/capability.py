@@ -664,26 +664,6 @@ class MailCapability(AbstractCapability):
                 except Exception as exc:
                     return {"error": str(exc)}
 
-            def _send_email(topic, params, config=None, telemetry=None):
-                if not cap._imap_ok:
-                    return {"error": _ERR_IMAP_NOT_CONNECTED}
-                try:
-                    _email = cap.load_credential(_K_EMAIL)
-                    _password = cap.load_credential(_K_PASSWORD)
-                    _provider = discover_provider(_email or "")
-                    if not _provider or not _provider.smtp:
-                        return {"error": "SMTP provider not available."}
-                    return cap._imap_handler.send_email(
-                        smtp_host=_provider.smtp.host,
-                        smtp_port=_provider.smtp.port,
-                        smtp_tls=_provider.smtp.tls,
-                        email=_email,
-                        password=_password,
-                        params=params,
-                    )
-                except Exception as exc:
-                    return {"error": str(exc)}
-
             def _manage_email(topic, params, config=None, telemetry=None):
                 if not cap._imap_ok:
                     return {"error": _ERR_IMAP_NOT_CONNECTED}
@@ -738,25 +718,6 @@ class MailCapability(AbstractCapability):
                         "required": ["uid"],
                     },
                     "handler": _read_email,
-                    "timeout": 30,
-                },
-                {
-                    "name": "send_email",
-                    "description": "Send an email via SMTP.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "to": {"type": "string", "description": "Recipient email address"},
-                            "subject": {"type": "string", "description": "Email subject line"},
-                            "body": {"type": "string", "description": "Plain-text email body"},
-                            "in_reply_to": {
-                                "type": "string",
-                                "description": "Message-ID for threading this as a reply",
-                            },
-                        },
-                        "required": ["to", "subject", "body"],
-                    },
-                    "handler": _send_email,
                     "timeout": 30,
                 },
                 {

@@ -1,9 +1,12 @@
 """
-EmailAbility — Read, search, and send emails via the connected mail account.
+EmailAbility — Read, search, draft, and manage emails via the connected mail account.
 
-Delegates to MailCapability's IMAP/SMTP handlers. The capability is lazy-loaded
+Delegates to MailCapability's IMAP handler. The capability is lazy-loaded
 inside execute() to avoid circular imports and to handle the case where the
 capability is not yet connected.
+
+Sending is intentionally not supported — the draft action composes the email
+and returns it for user review. The user sends it themselves.
 """
 
 import json
@@ -18,16 +21,16 @@ LOG_PREFIX = "[EMAIL ABILITY]"
 class EmailAbility(Ability):
     NAME = "email"
     SUMMARY = (
-        "Read, search, and send emails via the connected mail account. "
-        "Available when the user asks to check, find, or reply to email."
+        "Read, search, draft, and manage emails via the connected mail account. "
+        "Available when the user asks to check, find, compose, or manage email."
     )
     EXAMPLES = [
         "check my email",
         "search emails from John",
         "do I have any unread messages",
         "read that email from Sarah",
-        "send an email to the team about the meeting",
-        "reply to that invoice email",
+        "draft an email to the team about the meeting",
+        "compose a reply to that invoice email",
         "find emails about the project from last week",
         "show me unanswered emails",
     ]
@@ -36,12 +39,12 @@ class EmailAbility(Ability):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["search", "read", "send", "manage"],
+                "enum": ["search", "read", "draft", "manage"],
                 "description": (
                     "The email action to perform. "
                     "search — find emails by sender, subject, keyword, date range, triage, or unanswered flag. "
                     "read — fetch the full body of an email by its IMAP UID. "
-                    "send — send a new email or reply via SMTP (requires to, subject, body). "
+                    "draft — compose an email and return it for user review (requires to, subject, body). "
                     "manage — delete, mark as read, mark as important, or move an email to spam (requires uid, operation)."
                 ),
             },
@@ -51,7 +54,7 @@ class EmailAbility(Ability):
             },
             "subject": {
                 "type": "string",
-                "description": "search: filter by subject keyword. send: email subject line.",
+                "description": "search: filter by subject keyword. draft: email subject line.",
             },
             "keyword": {
                 "type": "string",
@@ -89,15 +92,15 @@ class EmailAbility(Ability):
             },
             "to": {
                 "type": "string",
-                "description": "send: recipient email address.",
+                "description": "draft: recipient email address.",
             },
             "body": {
                 "type": "string",
-                "description": "send: plain-text email body.",
+                "description": "draft: plain-text email body.",
             },
             "in_reply_to": {
                 "type": "string",
-                "description": "send: Message-ID for threading this as a reply.",
+                "description": "draft: Message-ID for threading this as a reply.",
             },
         },
         "required": ["action"],
@@ -120,10 +123,13 @@ class EmailAbility(Ability):
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
 
+        if action == "draft":
+            result = _draft_email(params)
+            return {"text": _skill_tag("email", json.dumps(result), action=action)}
+
         _ACTION_TO_HANDLER = {
             "search": "search_email",
             "read": "read_email",
-            "send": "send_email",
             "manage": "manage_email",
         }
 
@@ -155,3 +161,19 @@ class EmailAbility(Ability):
             result = {"status": "error", "error": str(exc)}
 
         return {"text": _skill_tag("email", json.dumps(result), action=action)}
+
+
+def _draft_email(params: dict) -> dict:
+    to = (params.get("to") or "").strip()
+    subject = (params.get("subject") or "").strip()
+    body = (params.get("body") or "").strip()
+    if not to or not subject or not body:
+        return {"status": "error", "error": "draft requires to, subject, and body"}
+    draft = {"to": to, "subject": subject, "body": body}
+    if params.get("in_reply_to"):
+        draft["in_reply_to"] = params["in_reply_to"]
+    return {
+        "status": "draft",
+        "draft": draft,
+        "message": "Email drafted. Present it to the user for review — do not send it.",
+    }
