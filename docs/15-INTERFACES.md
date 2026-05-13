@@ -266,7 +266,7 @@ Response:
 
 ### GET /
 
-Returns the daemon's UI for the app overlay as a `Block[]`. The gateway proxies `/gw/<interface_id>/render` → daemon's `/`, adds a `gateway` field, and forwards to the frontend. No HTML, JS, or CSS — structure only. See `plans/block-protocol.md` for the full block schema.
+Returns the daemon's UI as a `Block[]`. The gateway proxies `/gw/<interface_id>/render` → daemon's `/` and adds a `gateway` field. No HTML, JS, or CSS — structure only. See `plans/block-protocol.md` for the full block schema.
 
 ---
 
