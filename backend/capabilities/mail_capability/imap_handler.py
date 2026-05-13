@@ -10,7 +10,7 @@ import email as _email_mod
 import email.policy
 import email.utils
 import logging
-import re
+
 from datetime import timedelta
 
 from services.time_utils import utc_now
@@ -18,7 +18,7 @@ from services.time_utils import utc_now
 logger = logging.getLogger(__name__)
 
 _INITIAL_DAYS = 7
-_MAX_BODY_CHARS = 4000
+
 _IMAP_DATE_FMT = "%d-%b-%Y"
 _IMAP_FETCH_HEADER = b"RFC822.HEADER"
 
@@ -67,21 +67,17 @@ def parse_headers(uid: int, header_bytes: bytes) -> dict:
     }
 
 
-def extract_body(raw_bytes: bytes, max_chars: int = _MAX_BODY_CHARS) -> str:
-    """Extract plain-text body from raw RFC822 bytes; falls back to de-HTMLified text/html."""
+def extract_body(raw_bytes: bytes) -> str:
+    """Extract plain-text body from raw RFC822 bytes."""
     msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
     parts = list(msg.walk()) if msg.is_multipart() else [msg]
-    by_type: dict[str, list[str]] = {"text/plain": [], "text/html": []}
+    chunks: list[str] = []
     for p in parts:
-        ct = p.get_content_type()
-        if ct in by_type:
+        if p.get_content_type() == "text/plain":
             c = p.get_content()
             if isinstance(c, str):
-                by_type[ct].append(c)
-    text = "\n".join(by_type["text/plain"]) or re.sub(
-        r"<[^>]+>", "", "\n".join(by_type["text/html"])
-    ).strip()
-    return (text[:max_chars] + "\n[truncated]") if len(text) > max_chars else text
+                chunks.append(c)
+    return "\n".join(chunks)
 
 
 # ---------------------------------------------------------------------------

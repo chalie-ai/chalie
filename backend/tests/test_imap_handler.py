@@ -133,27 +133,9 @@ class TestExtractBody:
         assert "Plain content" in result
         assert "<p>" not in result
 
-    def test_html_fallback_strips_tags(self):
+    def test_html_only_returns_empty(self):
         raw = _make_raw_email(html="<p>Hello <b>world</b></p>")
-        result = extract_body(raw)
-        assert "<p>" not in result
-        assert "Hello" in result
-        assert "world" in result
-
-    def test_truncation(self):
-        long_text = "x" * 5000
-        raw = _make_raw_email(plain=long_text)
-        result = extract_body(raw, max_chars=100)
-        assert result.endswith("\n[truncated]")
-        # Truncated portion is 100 chars + the suffix
-        assert len(result) == 100 + len("\n[truncated]")
-
-    def test_no_truncation_within_limit(self):
-        short = "Short body."
-        raw = _make_raw_email(plain=short)
-        result = extract_body(raw)
-        assert result == short
-        assert "[truncated]" not in result
+        assert extract_body(raw) == ""
 
     def test_empty_body(self):
         raw = _make_raw_email()
