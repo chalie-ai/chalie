@@ -171,7 +171,7 @@ class TestFireItem:
     def test_error_message_is_sanitized(self):
         """On failure, user sees generic message — not raw exception.
 
-        The scheduler constructs ScheduledMessageProcessor(raw_input=..., metadata=...)
+        The scheduler constructs ScheduledPromptProcessor(raw_input=..., metadata=...)
         and calls .send() (v2 API, returns str). When .send() raises, the error
         message must be replaced with a safe generic string before reaching the user.
         """
@@ -185,7 +185,7 @@ class TestFireItem:
         with patch('threading.Thread', side_effect=_capture):
             scheduler_svc._fire_item(item)
 
-        with patch('services.scheduled_message_processor.ScheduledMessageProcessor') as mock_proc, \
+        with patch('services.user_message_processor.ScheduledPromptProcessor') as mock_proc, \
              patch('services.output_service.OutputService') as mock_out:
             # v2 API: .send() raises, not .process()
             mock_proc.return_value.send.side_effect = RuntimeError("secret error")

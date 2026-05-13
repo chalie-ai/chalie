@@ -116,11 +116,6 @@ _BACKGROUND_PROCESSOR_CASES = [
         {'raw_input': 'pursue goal'},
     ),
     (
-        'ScheduledMessageProcessor',
-        'services.scheduled_message_processor',
-        {'raw_input': 'run scheduled task'},
-    ),
-    (
         'UserSummaryProcessor',
         'services.user_summary_processor',
         {},  # no raw_input — takes metadata only

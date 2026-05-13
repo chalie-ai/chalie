@@ -32,12 +32,10 @@ class TestImport:
             SystemMessagePrompt,
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
-            ScheduledSystemMessagePrompt,
         )
         assert callable(SystemMessagePrompt)
         assert callable(UnifiedSystemMessagePrompt)
         assert callable(DMNSystemMessagePrompt)
-        assert callable(ScheduledSystemMessagePrompt)
 
     def test_import_does_not_hit_database(self):
         """Importing the module must not open any DB connections."""
@@ -225,7 +223,7 @@ class TestUnifiedSystemMessagePrompt:
 
 
 class TestBackgroundChannelPrompts:
-    """DMN, Subagent, and Scheduled each return a non-empty inlined string."""
+    """DMN returns a non-empty inlined string."""
 
     def test_dmn_returns_non_empty(self):
         from services.system_message_prompt import DMNSystemMessagePrompt
@@ -233,56 +231,25 @@ class TestBackgroundChannelPrompts:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_scheduled_returns_non_empty(self):
-        from services.system_message_prompt import ScheduledSystemMessagePrompt
-        result = ScheduledSystemMessagePrompt().getPrompt()
-        assert isinstance(result, str)
-        assert len(result) > 0
-
-    @pytest.mark.parametrize("cls_name", [
-        "DMNSystemMessagePrompt",
-        "ScheduledSystemMessagePrompt",
-    ])
-    def test_return_type_is_str(self, cls_name):
-        """Each background-channel subclass always returns a str."""
-        import services.system_message_prompt as mod
-        cls = getattr(mod, cls_name)
-        result = cls().getPrompt()
+    def test_return_type_is_str(self):
+        from services.system_message_prompt import DMNSystemMessagePrompt
+        result = DMNSystemMessagePrompt().getPrompt()
         assert isinstance(result, str)
 
-    @pytest.mark.parametrize("cls_name", [
-        "DMNSystemMessagePrompt",
-        "ScheduledSystemMessagePrompt",
-    ])
-    def test_mentions_chalie(self, cls_name):
-        """Each background-channel prompt introduces the agent as Chalie."""
-        import services.system_message_prompt as mod
-        cls = getattr(mod, cls_name)
-        result = cls().getPrompt()
+    def test_mentions_chalie(self):
+        from services.system_message_prompt import DMNSystemMessagePrompt
+        result = DMNSystemMessagePrompt().getPrompt()
         assert 'Chalie' in result
 
-    @pytest.mark.parametrize("cls_name", [
-        "DMNSystemMessagePrompt",
-        "ScheduledSystemMessagePrompt",
-    ])
-    def test_idempotent(self, cls_name):
-        """Each background-channel prompt is deterministic."""
-        import services.system_message_prompt as mod
-        cls = getattr(mod, cls_name)
-        sut = cls()
+    def test_idempotent(self):
+        from services.system_message_prompt import DMNSystemMessagePrompt
+        sut = DMNSystemMessagePrompt()
         assert sut.getPrompt() == sut.getPrompt()
 
-    @pytest.mark.parametrize("cls_name", [
-        "DMNSystemMessagePrompt",
-        "ScheduledSystemMessagePrompt",
-    ])
-    def test_no_file_reads(self, cls_name):
-        """Background-channel prompts are inlined Python constants —
-        constructing and calling getPrompt() must not read any files."""
-        import services.system_message_prompt as mod
-        cls = getattr(mod, cls_name)
+    def test_no_file_reads(self):
+        from services.system_message_prompt import DMNSystemMessagePrompt
         with patch('builtins.open') as mock_open:
-            cls().getPrompt()
+            DMNSystemMessagePrompt().getPrompt()
         mock_open.assert_not_called()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,20 +264,14 @@ class TestInheritanceChain:
         from services.system_message_prompt import SystemMessagePrompt, DMNSystemMessagePrompt
         assert issubclass(DMNSystemMessagePrompt, SystemMessagePrompt)
 
-    def test_scheduled_is_subclass(self):
-        from services.system_message_prompt import SystemMessagePrompt, ScheduledSystemMessagePrompt
-        assert issubclass(ScheduledSystemMessagePrompt, SystemMessagePrompt)
-
     def test_each_concrete_instance_is_system_message_prompt(self):
         from services.system_message_prompt import (
             SystemMessagePrompt,
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
-            ScheduledSystemMessagePrompt,
         )
         for cls in (
             UnifiedSystemMessagePrompt,
             DMNSystemMessagePrompt,
-            ScheduledSystemMessagePrompt,
         ):
             assert isinstance(cls(), SystemMessagePrompt)

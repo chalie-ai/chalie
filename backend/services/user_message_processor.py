@@ -516,3 +516,12 @@ class SubagentReturnProcessor(UserMessageProcessor):
 
     ROLE = 'subagent_return'
     SKIP_INPUT_ROW = True
+
+
+class ScheduledPromptProcessor(UserMessageProcessor):
+    """Scheduled prompt — UMP with hidden input and clean context window."""
+
+    SKIP_INPUT_ROW = True
+
+    def getPreviousMessages(self, token_budget: int | None = None) -> str:
+        return ''
