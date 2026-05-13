@@ -42,7 +42,6 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
-import uuid
 
 import yaml
 
@@ -99,7 +98,6 @@ class MailCapability(AbstractCapability):
         _caldav_ok (bool): CalDAV protocol is connected and operational.
         _carddav_ok (bool): CardDAV protocol is connected and operational.
         _cycle_count (int): Monitor cycles since last successful :meth:`connect`.
-        _sync_registered (bool): Scheduler handler has been registered.
     """
 
     def __init__(self) -> None:
@@ -112,7 +110,6 @@ class MailCapability(AbstractCapability):
         self._caldav_ok: bool = False
         self._carddav_ok: bool = False
         self._cycle_count: int = 0
-        self._sync_registered: bool = False
 
     # ------------------------------------------------------------------
     # Identity
@@ -340,9 +337,6 @@ class MailCapability(AbstractCapability):
 
         any_ok = self._imap_ok or self._caldav_ok or self._carddav_ok
         self._connected = any_ok
-
-        if any_ok:
-            self._ensure_sync_registration()
 
         return any_ok
 
@@ -576,49 +570,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
     # Scheduler registration
     # ------------------------------------------------------------------
-
-    def _ensure_sync_registration(self) -> None:
-        """Register the ``mail:sync`` handler and create the recurring scheduled_item.
-
-        Runs once per capability lifetime (guarded by ``_sync_registered``).
-        Uses a 5-minute base interval matching the IMAP polling cadence.
-        """
-        if self._sync_registered:
-            return
-        try:
-            from services.scheduler_service import register_system_handler
-            register_system_handler("mail:sync", self.monitor)
-
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            now = utc_now()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                # Backfill: any mail/caldav records created before `hidden` column
-                # will have hidden=NULL; treat them as hidden.
-                cursor.execute(
-                    "UPDATE scheduled_items SET hidden = 1"
-                    " WHERE source = 'mail' AND COALESCE(hidden, 0) != 1"
-                )
-                cursor.execute(
-                    "SELECT id FROM scheduled_items WHERE external_uid = ?",
-                    ("system:mail:sync",),
-                )
-                if not cursor.fetchone():
-                    cursor.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, recurrence, status,
-                            topic, source, external_uid, hidden, created_at)
-                         VALUES (?, 'system', 'Mail sync', ?, 'interval:5',
-                                 'pending', 'mail:sync', 'mail', 'system:mail:sync',
-                                 1, ?)""",
-                        (uuid.uuid4().hex[:8], now.isoformat(), now.isoformat()),
-                    )
-                conn.commit()
-            self._sync_registered = True
-            logger.info("[mail] Sync handler registered + scheduled_item ensured.")
-        except Exception as exc:
-            logger.warning("[mail] _ensure_sync_registration: %s", exc)
 
     # ------------------------------------------------------------------
     # Tools

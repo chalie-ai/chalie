@@ -254,7 +254,7 @@ class TestMailCapabilityConnect:
         cap, vault, tcs = _make_capability()
         cap._imap_handler.open_client.return_value = MagicMock()
         cap._caldav_handler.open_client.return_value = None
-        cap._ensure_sync_registration = MagicMock()
+
 
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.store_credential("mail:email", "user@gmail.com")
@@ -273,7 +273,7 @@ class TestMailCapabilityConnect:
         cap._imap_handler.open_client.return_value = MagicMock()
         cap._caldav_handler.open_client.return_value = MagicMock()
         cap._carddav_handler.open_client.return_value = MagicMock()
-        cap._ensure_sync_registration = MagicMock()
+
 
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.store_credential("mail:email", "user@gmail.com")
@@ -285,19 +285,6 @@ class TestMailCapabilityConnect:
         assert cap._imap_ok is True
         assert cap._caldav_ok is True
         assert cap._carddav_ok is True
-
-    def test_connect_calls_ensure_sync_registration(self):
-        cap, vault, tcs = _make_capability()
-        cap._imap_handler.open_client.return_value = MagicMock()
-        cap._ensure_sync_registration = MagicMock()
-
-        with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
-            cap.store_credential("mail:email", "user@gmail.com")
-            cap.store_credential("mail:password", "pw")
-            cap.store_credential("mail:protocols", json.dumps(["imap"]))
-            cap.connect()
-
-        cap._ensure_sync_registration.assert_called_once()
 
 
 @pytest.mark.unit
@@ -560,48 +547,3 @@ class TestMailCapabilityAct:
         assert "events" in result
 
 
-@pytest.mark.unit
-class TestEnsureSyncRegistration:
-    """_ensure_sync_registration() registers once and creates the scheduled_item."""
-
-    def test_registration_only_runs_once(self):
-        cap, _, _ = _make_capability()
-
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = None  # item does not exist yet
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
-        mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
-
-        with patch("services.scheduler_service.register_system_handler"):
-            with patch("services.database_service.get_shared_db_service", return_value=mock_db):
-                with patch("capabilities.mail_capability.capability.utc_now") as mock_now:
-                    from datetime import datetime, timezone
-                    mock_now.return_value = datetime(2026, 1, 1, tzinfo=timezone.utc)
-                    cap._ensure_sync_registration()
-                    cap._ensure_sync_registration()  # second call should be a no-op
-
-        # UPDATE (backfill) + SELECT + INSERT on first call only; second call is no-op
-        assert mock_cursor.execute.call_count == 3
-
-    def test_registration_sets_flag(self):
-        cap, _, _ = _make_capability()
-
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = ("existing-id",)  # already exists
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
-        mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
-
-        with patch("services.scheduler_service.register_system_handler"):
-            with patch("services.database_service.get_shared_db_service", return_value=mock_db):
-                with patch("capabilities.mail_capability.capability.utc_now") as mock_now:
-                    from datetime import datetime, timezone
-                    mock_now.return_value = datetime(2026, 1, 1, tzinfo=timezone.utc)
-                    cap._ensure_sync_registration()
-
-        assert cap._sync_registered is True

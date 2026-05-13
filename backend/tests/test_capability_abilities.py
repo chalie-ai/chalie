@@ -125,30 +125,28 @@ def test_contacts_not_connected_returns_structured_error():
 # ---------------------------------------------------------------------------
 
 
-def test_mail_capability_registers_sync_handler():
-    """MailCapability._ensure_sync_registration registers a mail:sync handler.
+def test_subconscious_worker_owns_capability_sync():
+    """The subconscious worker drives capability syncs via _step_capability_sync.
 
-    Verifies the method exists and the registration flag starts False.
-    The actual registration requires a connected DB + scheduler, which the
-    test env doesn't have — we just confirm the mechanism is wired.
-    """
-    from capabilities.mail_capability.capability import MailCapability
-
-    cap = MailCapability()
-    assert hasattr(cap, "_ensure_sync_registration")
-    assert cap._sync_registered is False
-
-
-def test_subconscious_worker_has_no_capability_sync_steps():
-    """The subconscious worker must NOT have capability sync steps.
-
-    Capability syncs are driven by the scheduler via MailCapability._do_monitor().
-    The worker previously had broken _step_calendar_sync / _step_contacts_sync
-    that called read-only abilities instead of actual server sync — those are
-    now removed.
+    The worker calls each connected capability's monitor() method on every
+    tick. MailCapability._do_monitor() handles per-protocol cadence internally.
+    The scheduler is NOT involved in triggering syncs.
     """
     from services.subconscious_worker import SubconsciousWorker
 
+    assert hasattr(SubconsciousWorker, "_step_capability_sync")
     assert not hasattr(SubconsciousWorker, "_step_calendar_sync")
     assert not hasattr(SubconsciousWorker, "_step_contacts_sync")
-    assert not hasattr(SubconsciousWorker, "_run_capability_syncs")
+
+
+def test_mail_capability_has_no_scheduler_sync_registration():
+    """MailCapability must NOT register a scheduler handler for syncs.
+
+    Syncs are driven by the subconscious worker, not the scheduler.
+    The scheduler only stores calendar event data.
+    """
+    from capabilities.mail_capability.capability import MailCapability
+
+    assert not hasattr(MailCapability, "_ensure_sync_registration") or not callable(getattr(MailCapability, "_ensure_sync_registration", None))
+    cap = MailCapability()
+    assert not hasattr(cap, "_sync_registered")
