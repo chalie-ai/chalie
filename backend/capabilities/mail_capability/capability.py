@@ -783,16 +783,6 @@ class MailCapability(AbstractCapability):
         # ------------------------------------------------------------------
 
         if self._caldav_ok:
-            def _list_events(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                return cap._caldav_handler.list_events(params)
-
-            def _get_event(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                return cap._caldav_handler.get_event(params)
-
             def _create_event(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
                     return {"error": _ERR_CALDAV_NOT_CONNECTED}
@@ -837,34 +827,6 @@ class MailCapability(AbstractCapability):
                 return cap._caldav_handler.get_attendees(params)
 
             tools += [
-                {
-                    "name": "list_events",
-                    "description": "List calendar events within an optional date range.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "date_from": {"type": "string", "description": "ISO 8601 start bound"},
-                            "date_to": {"type": "string", "description": "ISO 8601 end bound"},
-                            "calendar_name": {"type": "string", "description": "Filter by calendar name"},
-                            "limit": {"type": "integer", "description": "Max results (default 50, max 200)"},
-                        },
-                    },
-                    "handler": _list_events,
-                    "timeout": 15,
-                },
-                {
-                    "name": "get_event",
-                    "description": "Get full details of a calendar event by UID.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "uid": {"type": "string", "description": _DESC_CALDAV_UID},
-                        },
-                        "required": ["uid"],
-                    },
-                    "handler": _get_event,
-                    "timeout": 15,
-                },
                 {
                     "name": "create_event",
                     "description": "Create a new calendar event on the CalDAV server.",

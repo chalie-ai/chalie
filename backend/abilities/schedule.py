@@ -30,6 +30,77 @@ _RICH_MEDIA_INSTRUCTION = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Shared query engine — single SQL path for all scheduled_items readers
+# ---------------------------------------------------------------------------
+
+def query_items(
+    *,
+    hidden: int | None = 0,
+    source: str | None = None,
+    item_type: str | None = None,
+    status: tuple[str, ...] = ("pending",),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    external_uid: str | None = None,
+    limit: int | None = None,
+    columns: tuple[str, ...] = (
+        "id", "item_type", "message", "due_at", "recurrence", "status",
+    ),
+) -> list[dict]:
+    """Query ``scheduled_items`` with flexible filters.
+
+    This is the single query path for all callers — the schedule ability,
+    the calendar ability, and anything else that reads scheduled_items.
+    """
+    from services.database_service import get_shared_db_service
+
+    db = get_shared_db_service()
+    col_str = ", ".join(columns)
+    clauses: list[str] = []
+    params: list = []
+
+    if status:
+        placeholders = ", ".join("?" for _ in status)
+        clauses.append(f"status IN ({placeholders})")
+        params.extend(status)
+
+    if hidden is not None:
+        clauses.append("COALESCE(hidden, 0) = ?")
+        params.append(hidden)
+
+    if source:
+        clauses.append("source = ?")
+        params.append(source)
+
+    if item_type:
+        clauses.append("item_type = ?")
+        params.append(item_type)
+
+    if date_from:
+        clauses.append("due_at >= ?")
+        params.append(date_from)
+
+    if date_to:
+        clauses.append("due_at <= ?")
+        params.append(date_to)
+
+    if external_uid:
+        clauses.append("external_uid = ?")
+        params.append(external_uid)
+
+    where = " AND ".join(clauses) if clauses else "1=1"
+    query = f"SELECT {col_str} FROM scheduled_items WHERE {where} ORDER BY due_at ASC"
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    with db.connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    return [dict(zip(columns, row)) for row in rows]
+
+
 class ScheduleAbility(Ability):
     NAME = "schedule"
     SUMMARY = (
@@ -415,44 +486,27 @@ def _search(params: dict) -> dict:
 
 def _list(params: dict) -> dict:
     try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
         time_range = params.get("time_range", "all").lower()
-
         start_dt, end_dt, _ = _resolve_time_range(time_range)
 
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            if start_dt and end_dt:
-                cursor.execute("""
-                    SELECT id, item_type, message, due_at, recurrence, status
-                    FROM scheduled_items
-                    WHERE status IN ('pending', 'fired') AND due_at BETWEEN ? AND ?
-                      AND hidden = 0
-                    ORDER BY due_at ASC
-                """, (start_dt, end_dt))
-            else:
-                cursor.execute("""
-                    SELECT id, item_type, message, due_at, recurrence, status
-                    FROM scheduled_items
-                    WHERE status = 'pending' AND hidden = 0
-                    ORDER BY due_at ASC
-                """)
-            rows = cursor.fetchall()
+        rows = query_items(
+            hidden=0,
+            status=("pending", "fired") if start_dt else ("pending",),
+            date_from=start_dt,
+            date_to=end_dt,
+        )
 
         from services.time_formatter_service import TimeFormatterService
         records = []
         for row in rows:
-            item_id, item_type, message, due_at, recurrence, status = row
-            local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or str(due_at)
+            local_due = TimeFormatterService.local(row["due_at"], fmt=_LOCAL_ISO_FMT) or str(row["due_at"])
             records.append({
-                "id": item_id,
-                "message": message,
+                "id": row["id"],
+                "message": row["message"],
                 "due_at": local_due,
-                "item_type": item_type,
-                "recurrence": recurrence,
-                "status": status,
+                "item_type": row["item_type"],
+                "recurrence": row["recurrence"],
+                "status": row["status"],
             })
 
         return {

@@ -88,13 +88,34 @@ def test_email_not_connected_returns_structured_error():
     assert "not connected" in payload["error"].lower()
 
 
-def test_calendar_not_connected_returns_structured_error():
-    """CalendarAbility.execute returns {status: error} when mail is not connected."""
+def test_calendar_read_returns_structured_error_without_db():
+    """CalendarAbility.execute read ops return structured error when DB is unavailable.
+
+    Read operations (list_events, get_event) query scheduled_items via the
+    schedule ability's query_items — they do NOT require the mail capability
+    to be connected. In test env the DB is absent, so we get a DB error
+    wrapped in a structured dict.
+    """
     from abilities.calendar import CalendarAbility
 
     result = CalendarAbility().execute(
         channel="test",
         params={"action": "list_events"},
+        telemetry=None,
+    )
+    assert isinstance(result, dict)
+    assert "text" in result
+    payload = _extract_json(result)
+    assert payload.get("status") == "error" or "error" in payload
+
+
+def test_calendar_write_not_connected_returns_structured_error():
+    """CalendarAbility.execute write ops return {status: error} when mail not connected."""
+    from abilities.calendar import CalendarAbility
+
+    result = CalendarAbility().execute(
+        channel="test",
+        params={"action": "update_event", "uid": "test-123", "summary": "New title"},
         telemetry=None,
     )
     assert isinstance(result, dict)

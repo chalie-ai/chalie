@@ -1,12 +1,15 @@
 """
-CalendarAbility — List, view, and update calendar events via the connected CalDAV account.
+CalendarAbility — List, view, and update calendar events.
 
-Delegates to MailCapability's CalDAV handler. The capability is lazy-loaded
-inside execute() to avoid circular imports and to handle the case where the
-capability is not yet connected.
+Read operations (list_events, get_event) query scheduled_items via the
+shared ``query_items`` engine in the schedule ability — the scheduler owns
+the single SQL path for that table.
+
+Write operations (update_event, create_event, delete_event) delegate to
+MailCapability's CalDAV handler which pushes changes to the server.
 """
 
-import json
+import json as _json
 import logging
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -92,50 +95,99 @@ class CalendarAbility(Ability):
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list_events").lower()
 
+        # --- Read operations: query scheduled_items via the shared engine ---
+        if action in ("list_events", "get_event"):
+            try:
+                result = _read_events(action, params)
+            except Exception as exc:
+                logger.error(f"{LOG_PREFIX} action={action} failed: {exc}", exc_info=True)
+                result = {"status": "error", "error": str(exc)}
+            return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
+
+        # --- Write operations: delegate to capability's CalDAV handler ---
         from capabilities import load_capabilities
-        caps = load_capabilities()
-        cap = caps.get("mail")
+        cap = (load_capabilities()).get("mail")
 
         if cap is None or not cap.is_connected():
             result = {
                 "status": "error",
                 "error": "Calendar capability not connected. Configure the mail integration in the Brain dashboard.",
             }
-            return {"text": _skill_tag("calendar", json.dumps(result), action=action)}
+            return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
-
-        _ACTION_TO_HANDLER = {
-            "list_events": "list_events",
-            "get_event": "get_event",
-            "update_event": "update_event",
-        }
-
-        handler_name = _ACTION_TO_HANDLER.get(action)
-        if handler_name is None:
-            result = {"status": "error", "error": f"Unknown calendar action: {action}"}
-            return {"text": _skill_tag("calendar", json.dumps(result), action=action)}
-
-        handler = tool_map.get(handler_name)
+        handler = tool_map.get(action)
         if handler is None:
-            result = {
-                "status": "error",
-                "error": (
-                    f"Handler '{handler_name}' not available. "
-                    "CalDAV may not be connected for this mail account."
-                ),
-            }
-            return {"text": _skill_tag("calendar", json.dumps(result), action=action)}
+            result = {"status": "error", "error": f"Unknown calendar action: {action}"}
+            return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
 
         try:
             action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
             raw = handler(topic="", params=action_params, telemetry=telemetry)
-            if isinstance(raw, dict):
-                result = raw
-            else:
-                result = {"status": "ok", "data": raw}
+            result = raw if isinstance(raw, dict) else {"status": "ok", "data": raw}
         except Exception as exc:
             logger.error(f"{LOG_PREFIX} action={action} failed: {exc}", exc_info=True)
             result = {"status": "error", "error": str(exc)}
 
-        return {"text": _skill_tag("calendar", json.dumps(result), action=action)}
+        return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
+
+
+# ---------------------------------------------------------------------------
+# Read helpers — query scheduled_items via schedule.query_items
+# ---------------------------------------------------------------------------
+
+_EVENT_COLUMNS = ("message", "due_at", "metadata", "external_uid")
+
+
+def _read_events(action: str, params: dict) -> dict:
+    from abilities.schedule import query_items
+
+    if action == "get_event":
+        uid = (params.get("uid") or "").strip()
+        if not uid:
+            return {"error": "uid is required"}
+        rows = query_items(
+            hidden=1, source="mail", item_type="event",
+            external_uid=f"caldav:{uid}",
+            columns=_EVENT_COLUMNS, limit=1,
+        )
+        if not rows:
+            return {"error": f"Event not found (UID: {uid})"}
+        return _format_event(rows[0])
+
+    # list_events
+    limit = min(int(params.get("limit", 50)), 200)
+    calendar_name = params.get("calendar_name")
+
+    rows = query_items(
+        hidden=1, source="mail", item_type="event",
+        date_from=params.get("date_from"),
+        date_to=params.get("date_to"),
+        limit=limit,
+        columns=_EVENT_COLUMNS,
+    )
+
+    events = []
+    for row in rows:
+        ev = _format_event(row)
+        if calendar_name and ev.get("calendar_name", "").lower() != calendar_name.lower():
+            continue
+        events.append(ev)
+
+    return {"events": events, "count": len(events)}
+
+
+def _format_event(row: dict) -> dict:
+    meta = _json.loads(row.get("metadata") or "{}") if isinstance(row.get("metadata"), str) else {}
+    ext_uid = row.get("external_uid", "")
+    uid = ext_uid.removeprefix("caldav:") if ext_uid else meta.get("uid", "")
+    return {
+        "uid": uid,
+        "title": row.get("message", ""),
+        "dtstart": row.get("due_at"),
+        "dtend": meta.get("dtend"),
+        "location": meta.get("location"),
+        "attendees": meta.get("attendees", []),
+        "all_day": meta.get("all_day", False),
+        "calendar_name": meta.get("calendar_name"),
+    }

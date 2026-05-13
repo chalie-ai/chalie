@@ -350,14 +350,14 @@ class TestMailCapabilityGetTools:
         names = {t["name"] for t in tools}
         assert names == {"search_email", "read_email", "send_email", "manage_email"}
 
-    def test_caldav_only_returns_seven_tools(self):
+    def test_caldav_only_returns_five_tools(self):
         cap, _, _ = _make_capability()
         cap._caldav_ok = True
         tools = cap.get_tools()
         names = {t["name"] for t in tools}
         assert names == {
-            "list_events", "get_event", "create_event",
-            "update_event", "delete_event", "find_free_slots", "get_attendees",
+            "create_event", "update_event", "delete_event",
+            "find_free_slots", "get_attendees",
         }
 
     def test_carddav_only_returns_two_tools(self):
@@ -373,7 +373,7 @@ class TestMailCapabilityGetTools:
         cap._caldav_ok = True
         cap._carddav_ok = True
         tools = cap.get_tools()
-        assert len(tools) == 13
+        assert len(tools) == 11
 
     def test_all_tools_have_required_keys(self):
         cap, _, _ = _make_capability()
@@ -404,7 +404,7 @@ class TestMailCapabilityGetTools:
         tools = {t["name"]: t for t in cap.get_tools()}
 
         cap._caldav_ok = False
-        result = tools["list_events"]["handler"]("", {})
+        result = tools["create_event"]["handler"]("", {})
         assert "error" in result
 
     def test_carddav_tool_returns_error_when_disconnected(self):
@@ -541,9 +541,9 @@ class TestMailCapabilityAct:
     def test_act_dispatches_to_known_tool(self):
         cap, _, _ = _make_capability()
         cap._caldav_ok = True
-        cap._caldav_handler.list_events.return_value = {"events": [], "count": 0}
+        cap._caldav_handler.find_free_slots.return_value = {"free_slots": []}
 
-        result = cap.act("list_events", {"limit": 10})
-        assert "events" in result
+        result = cap.act("find_free_slots", {})
+        assert "free_slots" in result
 
 
