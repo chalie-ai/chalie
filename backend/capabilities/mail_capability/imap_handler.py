@@ -27,6 +27,17 @@ _IMAP_FETCH_HEADER = b"RFC822.HEADER"
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
+_SPAM_NAMES = {"junk", "spam", "[gmail]/spam", "bulk mail", "spamverdacht"}
+
+
+def _find_spam_folder(client) -> str | None:
+    folders = client.list_folders()
+    for _flags, _delim, name in folders:
+        if name.lower() in _SPAM_NAMES:
+            return name
+    return None
+
+
 def _imap_date(iso_str: str) -> str:
     """ISO YYYY-MM-DD → IMAP DD-Mon-YYYY."""
     from datetime import datetime as _dt
@@ -382,10 +393,13 @@ class ImapHandler:
                 return {"success": True, "uid": uid, "operation": "mark_important"}
             else:  # move_to_spam
                 client.select_folder("INBOX")
+                spam = _find_spam_folder(client)
+                if not spam:
+                    return {"error": "No spam/junk folder found on this mail server"}
                 try:
-                    client.move([uid], "Junk")
+                    client.move([uid], spam)
                 except Exception:
-                    client.copy([uid], "Junk")
+                    client.copy([uid], spam)
                     client.delete_messages([uid])
                     client.expunge([uid])
                 return {"success": True, "uid": uid, "operation": "move_to_spam"}
