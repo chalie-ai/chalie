@@ -150,10 +150,18 @@ class Providers:
         )
 
     def _resolve(self, job):
-        """Resolve LLM provider for a job. Uses ConfigService → create_llm_service."""
+        """Resolve LLM provider for a job. Uses ConfigService → create_llm_service.
+
+        Injects _usage_class from the calling processor's USAGE_CLASS constant
+        so llm_call_log rows are tagged as 'chat', 'subagent', or 'subconscious'.
+        """
         from services.config_service import ConfigService
         from services.llm_service import create_llm_service
+        from services.message_processor import current_processor
         config = ConfigService.resolve_agent_config(job)
+        proc = current_processor()
+        if proc is not None:
+            config['_usage_class'] = proc.USAGE_CLASS
         return create_llm_service(config)
 
     def _get_tools(self):

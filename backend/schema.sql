@@ -443,12 +443,18 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
     model TEXT NOT NULL,
     tokens_input INTEGER NOT NULL DEFAULT 0,
     tokens_output INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_create INTEGER NOT NULL DEFAULT 0,
+    tokens_thinking INTEGER NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,
+    usage_class TEXT NOT NULL DEFAULT 'chat',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_created
     ON llm_call_log (job_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_usage_class
+    ON llm_call_log (usage_class, created_at);
 
 -- ────────────────────────────────────────────────────────────────
 -- MEMORY RECALL LOG — telemetry for dynamic memory radius tuning

@@ -74,6 +74,7 @@
                 <button class="filter-tab" data-subtab="worldstate">World State</button>
                 <button class="filter-tab" data-subtab="personality">Personality</button>
                 <button class="filter-tab" data-subtab="errors">Errors</button>
+                <button class="filter-tab" data-subtab="usage">Usage</button>
             </div>
 
             <div class="cognition-subpanel active" id="subtab-memory">
@@ -119,6 +120,25 @@
 
             <!-- Errors sub-panel -->
             <div class="cognition-subpanel" id="subtab-errors"></div>
+
+            <!-- Usage sub-panel -->
+            <div class="cognition-subpanel" id="subtab-usage">
+                <div class="usage-controls">
+                    <div class="filter-tabs" id="usageWindowSelector">
+                        <button class="filter-tab" data-window="hour">Hour</button>
+                        <button class="filter-tab active" data-window="day">Day</button>
+                        <button class="filter-tab" data-window="week">Week</button>
+                        <button class="filter-tab" data-window="month">Month</button>
+                        <button class="filter-tab" data-window="lifetime">All Time</button>
+                    </div>
+                </div>
+                <div id="usageSummaryRow" class="usage-summary-row"></div>
+                <div id="usageChartWrap" class="usage-chart-wrap">
+                    <svg id="usageChart" class="usage-chart"></svg>
+                    <div id="usageChartEmpty" class="obs-empty" style="display:none">No token data for this window.</div>
+                </div>
+                <div id="usageLegend" class="usage-legend"></div>
+            </div>
 
             <!-- Personality sub-panel -->
             <div class="cognition-subpanel" id="subtab-personality">

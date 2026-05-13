@@ -39,6 +39,7 @@ class DMNMessageProcessor(MessageProcessor):
 
     CHANNEL = 'dmn'
     ROLE = 'proactive_thought'
+    USAGE_CLASS = 'subconscious'
     MAX_ITERATIONS = 15
     SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
