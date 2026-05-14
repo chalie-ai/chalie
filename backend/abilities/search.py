@@ -48,7 +48,7 @@ _RICH_MEDIA_INSTRUCTION = (
 
 class SearchAbility(Ability):
     NAME = "search"
-    SUMMARY = "Search Wikipedia, GitHub, Reddit, arXiv, news, and more with automatic provider routing from a plain language query."
+    SUMMARY = "Search the web for current information from a plain language query."
     EXAMPLES = [
         "what is the current price of EUR compared to USD",
         "find recent papers on transformer architecture improvements",
