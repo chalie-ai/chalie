@@ -237,32 +237,40 @@ def _validate_message(params: dict) -> tuple[str, dict | None]:
 
 
 def _resolve_due_at(params: dict, past_due_grace: int):
-    """Parse due_at, apply grace if past, return (due_at, error_response | None)."""
+    """Parse due_at, apply grace if past, return (due_at_utc, due_at_store, error_response | None).
+
+    due_at_utc   — timezone-aware UTC datetime for in-process comparisons.
+    due_at_store — value to write to scheduled_items.due_at: the original ISO 8601
+                   string with offset when the time is in the future (preserves the
+                   local hour so LIKE '%HH:MM%' queries work), or the bumped UTC
+                   datetime string when the grace window fired.
+    """
     due_at_str = params.get("due_at", "").strip()
     if not due_at_str:
-        return None, {"status": "error", "error": "due_at (ISO 8601 with timezone) is required"}
+        return None, None, {"status": "error", "error": "due_at (ISO 8601 with timezone) is required"}
 
     from services.time_utils import parse_utc
     sentinel = datetime.min.replace(tzinfo=timezone.utc)
     due_at = parse_utc(due_at_str)
     if due_at == sentinel:
-        return None, {"status": "error", "error": f"invalid ISO 8601 due_at: '{due_at_str}'"}
+        return None, None, {"status": "error", "error": f"invalid ISO 8601 due_at: '{due_at_str}'"}
 
     now = utc_now()
     if due_at > now:
-        return due_at, None
+        # Preserve original offset string so the local hour is visible in the DB.
+        return due_at, due_at_str, None
 
     past_seconds = (now - due_at).total_seconds()
     if past_seconds <= past_due_grace:
         original_due_at_iso = due_at.isoformat()
         due_at = now + timedelta(seconds=5)
         logger.info(f"{LOG_PREFIX} _create: past-due {original_due_at_iso} bumped to {due_at.isoformat()} (grace)")
-        return due_at, None
+        return due_at, due_at.isoformat(), None
 
     from services.time_formatter_service import TimeFormatterService
     logger.warning(f"{LOG_PREFIX} _create rejected — due_at {due_at.isoformat()} is not in the future (now={now.isoformat()})")
     local_now = TimeFormatterService.local(now, fmt=_LOCAL_ISO_FMT) or now.isoformat()
-    return None, {"status": "error", "error": f"due_at must be in the future (current time: {local_now})"}
+    return None, None, {"status": "error", "error": f"due_at must be in the future (current time: {local_now})"}
 
 
 _VALID_RECURRENCES = ("daily", "weekly", "monthly", "weekdays", "hourly")
@@ -330,7 +338,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
         message, err = _validate_message(params)
         if err:
             return err
-        due_at, err = _resolve_due_at(params, past_due_grace)
+        due_at, due_at_store, err = _resolve_due_at(params, past_due_grace)
         if err:
             return err
         item_type, err = _validate_item_type(params)
@@ -366,7 +374,9 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
                       AND created_at > datetime('now', '-60 seconds')
                 )
             """, (
-                item_id, item_type, message, due_at,
+                # due_at_store preserves the original offset string so the local hour
+                # remains visible in the DB; readers use parse_utc() to get a UTC instant.
+                item_id, item_type, message, due_at_store,
                 recurrence, window_start, window_end,
                 channel, None,
                 item_id,  # group_id = own id (root of new series)
