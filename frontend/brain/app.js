@@ -2095,7 +2095,8 @@ function _renderUsageChart(svgEl, entries) {
     const maxTotal = Math.max(...buckets.map(b => bucketTotals[b].total), 1);
     const classes  = ['chat', 'subagent', 'subconscious'];
 
-    const W  = svgEl.parentElement.clientWidth - 32 || 600;
+    const wrap = document.getElementById('usageChartWrap');
+    const W  = (wrap ? wrap.clientWidth : 0) - 32 || 600;
     const H  = 180;
     const PL = 48, PR = 8, PT = 8, PB = 28;
     const chartW = W - PL - PR;
@@ -2104,7 +2105,11 @@ function _renderUsageChart(svgEl, entries) {
     const barW  = Math.max(4, Math.min(40, (chartW / buckets.length) * 0.7));
     const gap   = (chartW / buckets.length);
 
-    let html = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">`;
+    svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svgEl.setAttribute('width', W);
+    svgEl.setAttribute('height', H);
+
+    let html = '';
 
     // Y-axis grid lines + labels.
     const ticks = [0, 0.25, 0.5, 0.75, 1.0];
@@ -2143,8 +2148,7 @@ function _renderUsageChart(svgEl, entries) {
         }
     });
 
-    html += '</svg>';
-    svgEl.outerHTML = html;
+    svgEl.innerHTML = html;
 }
 
 function _fmtTokens(n) {
