@@ -15,8 +15,9 @@ letter acronyms natively. The TTS-side text pipeline collapses to:
     markdown/HTML → plaintext → URL → spoken-host → whitespace collapse.
 
 The synthesize route returns a single ``audio/wav`` blob — no streaming, no
-NDJSON, no per-sentence segmentation. Kokoro emits one coherent waveform with
-native prosody from a single ``create()`` call.
+NDJSON. Long text is split into sentence-level chunks (≤320 chars each) before
+being passed to Kokoro so the 510-phoneme hard limit is never hit. Chunks are
+concatenated with short silence pads and encoded as a single waveform.
 """
 
 import io
@@ -60,6 +61,11 @@ MAX_AUDIO_SECONDS = 600
 MOONSHINE_SAMPLE_RATE = 16000
 # Moonshine asserts the clip is at least 0.1s; below that the model errors out.
 _MIN_CHUNK_SAMPLES = int(0.1 * MOONSHINE_SAMPLE_RATE)
+
+# Moonshine (Whisper-family) hallucinates by repeating phrases 15-20× on
+# silence or noise. Collapse any n-gram (2-6 words) that appears more than
+# this many consecutive times down to exactly this many occurrences.
+_MAX_CONSECUTIVE_PHRASE_REPEATS = 2
 
 # ── Dependency detection ────────────────────────────────────────────────────
 
@@ -246,6 +252,83 @@ def _clean_for_tts(text: str) -> str:
     return _WS_RE.sub(" ", plain).strip()
 
 
+# Kokoro ONNX hard limit is 510 phonemes (~1.5 chars/phoneme → 340 chars).
+# 320 gives headroom for phoneme-heavy words.
+_MAX_TTS_CHUNK_CHARS = 320
+_TTS_SILENCE_PAD_SECONDS = 0.15
+_TTS_SPLIT_RE = re.compile(r"(?<=[.!?,;:—])\s+")
+
+
+def _segment_for_tts(text: str) -> list[str]:
+    """Split text into chunks under ``_MAX_TTS_CHUNK_CHARS`` on punctuation boundaries."""
+    if not text:
+        return []
+    limit = _MAX_TTS_CHUNK_CHARS
+    chunks: list[str] = []
+    current = ""
+    for fragment in _TTS_SPLIT_RE.split(text):
+        fragment = fragment.strip()
+        if not fragment:
+            continue
+        candidate = f"{current} {fragment}".strip() if current else fragment
+        if len(candidate) <= limit:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            # Fragment itself over limit — hard-split on whitespace.
+            if len(fragment) > limit:
+                for word in fragment.split():
+                    word = word[:limit]
+                    wc = f"{current} {word}".strip() if current else word
+                    if len(wc) <= limit:
+                        current = wc
+                    else:
+                        if current:
+                            chunks.append(current)
+                        current = word
+            else:
+                current = fragment
+    if current:
+        chunks.append(current)
+    return chunks or [text]
+
+
+def _dedup_repetitions(text: str) -> str:
+    """Collapse Moonshine hallucination loops (consecutive identical 2-6 word phrases)."""
+    if not text:
+        return text
+    try:
+        words = text.split()
+        for n in range(6, 1, -1):
+            if len(words) < n * 3:
+                continue
+            lower = [w.lower() for w in words]
+            out: list[str] = []
+            i = 0
+            while i < len(words):
+                if i + n > len(words):
+                    out.extend(words[i:])
+                    break
+                phrase = tuple(lower[i:i + n])
+                j, run = i + n, 1
+                while j + n <= len(words) and tuple(lower[j:j + n]) == phrase:
+                    run += 1
+                    j += n
+                if run > _MAX_CONSECUTIVE_PHRASE_REPEATS:
+                    for _ in range(_MAX_CONSECUTIVE_PHRASE_REPEATS):
+                        out.extend(words[i:i + n])
+                    i = j
+                else:
+                    out.append(words[i])
+                    i += 1
+            words = out
+        return " ".join(words)
+    except Exception:
+        logger.exception("[Voice] _dedup_repetitions failed on len=%d", len(text))
+        return text
+
+
 # ── WAV helpers ─────────────────────────────────────────────────────────────
 
 def _wav_duration_seconds(data: bytes) -> float:
@@ -303,7 +386,8 @@ def _transcribe_sync(data: bytes) -> str:
 
     if n_samples <= chunk_size:
         texts = mo.transcribe(audio, model=_moonshine)
-        return " ".join(t.strip() for t in texts).strip()
+        raw = " ".join(t.strip() for t in texts).strip()
+        return _dedup_repetitions(raw)
 
     parts: list[str] = []
     for start in range(0, n_samples, chunk_size):
@@ -313,10 +397,10 @@ def _transcribe_sync(data: bytes) -> str:
             # it rather than let the model assert.
             continue
         texts = mo.transcribe(chunk, model=_moonshine)
-        part = " ".join(t.strip() for t in texts).strip()
+        part = _dedup_repetitions(" ".join(t.strip() for t in texts).strip())
         if part:
             parts.append(part)
-    return " ".join(parts).strip()
+    return _dedup_repetitions(" ".join(parts).strip())
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -370,13 +454,34 @@ def voice_synthesize():
     if not text:
         return jsonify({"error": "Text is required"}), 400
 
-    logger.info("[Voice] synthesize: len=%d head=%r", len(text), text[:80])
+    chunks = _segment_for_tts(text)
+    logger.info(
+        "[Voice] synthesize: len=%d chunks=%d head=%r",
+        len(text), len(chunks), text[:80],
+    )
 
     try:
-        with _tts_lock:
-            samples, sr = _kokoro.create(
-                text, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
-            )
+        if len(chunks) == 1:
+            with _tts_lock:
+                samples, sr = _kokoro.create(
+                    chunks[0], voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
+                )
+        else:
+            import numpy as np
+            all_samples: list = []
+            sr = None
+            with _tts_lock:
+                for i, chunk in enumerate(chunks):
+                    chunk_samples, chunk_sr = _kokoro.create(
+                        chunk, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
+                    )
+                    if sr is None:
+                        sr = chunk_sr
+                    all_samples.append(chunk_samples)
+                    if i < len(chunks) - 1:
+                        pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
+                        all_samples.append(np.zeros(pad_len, dtype=chunk_samples.dtype))
+            samples = np.concatenate(all_samples)
     except Exception as e:
         logger.error("[Voice] TTS synthesis failed: %s", e)
         return jsonify({"error": "TTS synthesis failed"}), 500

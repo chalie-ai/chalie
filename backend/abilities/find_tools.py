@@ -18,7 +18,7 @@ KNN_DEPTH = 30
 
 class FindToolsAbility(Ability):
     NAME = "find_tools"
-    SUMMARY = "Discover tools by semantic search — call this whenever the user names a skill, tool, or capability you don't see in your current toolbox, or when none of your loaded tools can handle the task."
+    SUMMARY = "Semantic search to discover tools or capabilities not in your current toolbox."
     EXAMPLES = [
         "I want to check if Apple's Q2 earnings report is out yet",
         "can you look up a flight for me",
