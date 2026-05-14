@@ -21,8 +21,6 @@ class DocumentAbility(Ability):
         "search my documents for information about coral bleaching",
         "what documents do I have uploaded",
         "show me the climate report",
-        "create a note called project-ideas.md with my brainstorm",
-        "save this text as a document",
         "delete the old invoice document",
         "what did that report say about carbon emissions",
         "list all my documents",
