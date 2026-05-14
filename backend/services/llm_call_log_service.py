@@ -156,19 +156,12 @@ def _compute_summary(entries: list) -> dict:
     except Exception:
         tokens_today = 0
 
-    # Most active model by total call count across all time.
-    try:
-        db = get_shared_db_service()
-        model_rows = db.fetch_all(
-            """SELECT model, COUNT(*) AS cnt
-               FROM llm_call_log
-               GROUP BY model
-               ORDER BY cnt DESC
-               LIMIT 1"""
-        )
-        most_active_model = model_rows[0]['model'] if model_rows else None
-    except Exception:
-        most_active_model = None
+    # Most active model within the current window (derived from entries).
+    model_totals: dict[str, int] = {}
+    for e in entries:
+        m = e.get('model') or 'unknown'
+        model_totals[m] = model_totals.get(m, 0) + e['tokens_input'] + e['tokens_output']
+    most_active_model = max(model_totals, key=model_totals.get) if model_totals else None
 
     return {
         'total_tokens': total_tokens,
