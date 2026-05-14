@@ -252,156 +252,80 @@ def _clean_for_tts(text: str) -> str:
     return _WS_RE.sub(" ", plain).strip()
 
 
-# ── TTS segmentation ────────────────────────────────────────────────────────
-#
-# Kokoro ONNX has a hard 510-phoneme limit. Empirically, ~1.5 chars map to one
-# phoneme, so 510 phonemes ≈ 340 chars. We use 320 as the safe ceiling to give
-# Kokoro headroom for phoneme-heavy words (numbers, acronyms, punctuation
-# tokens). Text is split on sentence boundaries first, then on clause
-# boundaries, then on whitespace — in that priority order.
-
+# Kokoro ONNX hard limit is 510 phonemes (~1.5 chars/phoneme → 340 chars).
+# 320 gives headroom for phoneme-heavy words.
 _MAX_TTS_CHUNK_CHARS = 320
 _TTS_SILENCE_PAD_SECONDS = 0.15
-
-# Matches sentence-ending punctuation (.!?) followed by whitespace or EOS.
-# The split keeps the punctuation with the preceding sentence (positive
-# look-behind) so the prosody boundary is preserved.
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
-
-# Clause-boundary split for sentences that still exceed the char limit.
-# Splits on comma, semicolon, colon, or em-dash followed by whitespace.
-_CLAUSE_SPLIT_RE = re.compile(r"(?<=[,;:—])\s+")
+_TTS_SPLIT_RE = re.compile(r"(?<=[.!?,;:—])\s+")
 
 
 def _segment_for_tts(text: str) -> list[str]:
-    """Split *text* into chunks that each stay under ``_MAX_TTS_CHUNK_CHARS``.
-
-    Splitting priority:
-    1. Sentence boundaries (.!? + whitespace).
-    2. Clause boundaries (,;:— + whitespace) for over-long sentences.
-    3. Whitespace at the char limit for over-long clauses.
-
-    Returns ``[]`` for empty input; otherwise always returns a non-empty
-    ``list[str]``.  Strips each chunk; empty chunks are silently dropped.
-    """
+    """Split text into chunks under ``_MAX_TTS_CHUNK_CHARS`` on punctuation boundaries."""
     if not text:
         return []
-
     limit = _MAX_TTS_CHUNK_CHARS
-    sentences = _SENTENCE_SPLIT_RE.split(text)
-
     chunks: list[str] = []
     current = ""
-
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
+    for fragment in _TTS_SPLIT_RE.split(text):
+        fragment = fragment.strip()
+        if not fragment:
             continue
-
-        # Does this sentence fit in the current accumulator?
-        candidate = (current + " " + sentence).strip() if current else sentence
+        candidate = f"{current} {fragment}".strip() if current else fragment
         if len(candidate) <= limit:
             current = candidate
-            continue
-
-        # Flush whatever we have accumulated so far.
-        if current:
-            chunks.append(current)
-            current = ""
-
-        # The sentence alone exceeds the limit — break it on clause boundaries.
-        if len(sentence) > limit:
-            clauses = _CLAUSE_SPLIT_RE.split(sentence)
-            for clause in clauses:
-                clause = clause.strip()
-                if not clause:
-                    continue
-                clause_candidate = (current + " " + clause).strip() if current else clause
-                if len(clause_candidate) <= limit:
-                    current = clause_candidate
-                    continue
-
-                # Flush and handle an over-long clause.
-                if current:
-                    chunks.append(current)
-                    current = ""
-
-                if len(clause) > limit:
-                    # Last resort — split on whitespace at the hard char limit.
-                    words = clause.split()
-                    for word in words:
-                        # Truncate tokens that individually exceed the limit
-                        # (e.g. base64 blobs, run-on identifiers from LLM output).
-                        if len(word) > limit:
-                            word = word[:limit]
-                        word_candidate = (current + " " + word).strip() if current else word
-                        if len(word_candidate) <= limit:
-                            current = word_candidate
-                        else:
-                            if current:
-                                chunks.append(current)
-                            current = word
-                else:
-                    current = clause
         else:
-            current = sentence
-
+            if current:
+                chunks.append(current)
+            # Fragment itself over limit — hard-split on whitespace.
+            if len(fragment) > limit:
+                for word in fragment.split():
+                    word = word[:limit]
+                    wc = f"{current} {word}".strip() if current else word
+                    if len(wc) <= limit:
+                        current = wc
+                    else:
+                        if current:
+                            chunks.append(current)
+                        current = word
+            else:
+                current = fragment
     if current:
         chunks.append(current)
-
-    return chunks if chunks else [text]
+    return chunks or [text]
 
 
 def _dedup_repetitions(text: str) -> str:
-    """Collapse Moonshine hallucination loops in transcribed text.
-
-    Scans for consecutive identical n-grams (2-6 words) and collapses any run
-    longer than ``_MAX_CONSECUTIVE_PHRASE_REPEATS`` down to that many copies.
-    Largest n-gram first so the broadest pattern wins. Single-word repetition
-    is intentionally ignored — "no no no" is natural speech.
-
-    Case-insensitive matching; original casing is preserved in output.
-    """
+    """Collapse Moonshine hallucination loops (consecutive identical 2-6 word phrases)."""
     if not text:
         return text
     try:
         words = text.split()
-        n_words = len(words)
         for n in range(6, 1, -1):
-            if n_words < n * 3:
+            if len(words) < n * 3:
                 continue
-            words_lower = [w.lower() for w in words]
-            result: list[str] = []
+            lower = [w.lower() for w in words]
+            out: list[str] = []
             i = 0
             while i < len(words):
-                phrase_lower = tuple(words_lower[i:i + n])
-                if len(phrase_lower) < n:
-                    result.extend(words[i:])
-                    i = len(words)
+                if i + n > len(words):
+                    out.extend(words[i:])
                     break
-                run = 1
-                j = i + n
-                while j + n <= len(words):
-                    if tuple(words_lower[j:j + n]) == phrase_lower:
-                        run += 1
-                        j += n
-                    else:
-                        break
+                phrase = tuple(lower[i:i + n])
+                j, run = i + n, 1
+                while j + n <= len(words) and tuple(lower[j:j + n]) == phrase:
+                    run += 1
+                    j += n
                 if run > _MAX_CONSECUTIVE_PHRASE_REPEATS:
                     for _ in range(_MAX_CONSECUTIVE_PHRASE_REPEATS):
-                        result.extend(words[i:i + n])
+                        out.extend(words[i:i + n])
                     i = j
                 else:
-                    result.append(words[i])
+                    out.append(words[i])
                     i += 1
-            words = result
-            n_words = len(words)
+            words = out
         return " ".join(words)
     except Exception:
-        logger.exception(
-            "[Voice] _dedup_repetitions failed on len=%d — returning original",
-            len(text),
-        )
+        logger.exception("[Voice] _dedup_repetitions failed on len=%d", len(text))
         return text
 
 
