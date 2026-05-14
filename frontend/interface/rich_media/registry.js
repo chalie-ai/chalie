@@ -13,6 +13,8 @@ import * as articleModule from './article.js';
 import * as schedulerModule from './scheduler.js';
 import * as listModule from './list.js';
 import * as timerModule from './timer.js';
+import * as calendarModule from './calendar.js';
+import * as contactsModule from './contacts.js';
 
 const REGISTRY = {
   weather: weatherModule,
@@ -21,6 +23,8 @@ const REGISTRY = {
   schedule: schedulerModule,
   list: listModule,
   timer: timerModule,
+  calendar: calendarModule,
+  contacts: contactsModule,
 };
 
 /**

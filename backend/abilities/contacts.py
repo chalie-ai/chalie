@@ -14,6 +14,14 @@ from services.innate_skills._tag import tag as _skill_tag
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CONTACTS ABILITY]"
 
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a contact card; without it, the user sees only "
+    "plain text. Write a brief summary. Example: "
+    "\"<span id='{tag}'>Here's John's contact info.</span>\""
+)
+
 
 class ContactsAbility(Ability):
     NAME = "contacts"
@@ -61,6 +69,7 @@ class ContactsAbility(Ability):
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list").lower()
+        ordinal = params.get("_rich_media_ordinal")
 
         from capabilities import load_capabilities
         caps = load_capabilities()
@@ -107,4 +116,20 @@ class ContactsAbility(Ability):
             logger.error(f"{LOG_PREFIX} action={action} failed: {exc}", exc_info=True)
             result = {"status": "error", "error": str(exc)}
 
+        if ordinal is not None and "error" not in result:
+            return _serialise_rich(result, action, ordinal)
         return {"text": _skill_tag("contacts", json.dumps(result), action=action)}
+
+
+def _serialise_rich(result: dict, action: str, ordinal: int) -> str:
+    tag = f"contacts_{ordinal}"
+    payload = {"action_performed": action}
+    if "contacts" in result:
+        payload["contacts"] = result["contacts"]
+        payload["count"] = result.get("count", len(result["contacts"]))
+    elif "contact" in result:
+        payload["contact"] = result["contact"]
+    else:
+        payload.update({k: v for k, v in result.items() if k != "status"})
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{json.dumps(payload)}\n\n{instruction}"

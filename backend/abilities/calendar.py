@@ -17,6 +17,14 @@ from services.innate_skills._tag import tag as _skill_tag
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CALENDAR ABILITY]"
 
+_RICH_MEDIA_INSTRUCTION = (
+    "This tool supports rich-media rendering. You MUST present this result by "
+    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "The span will render as a calendar card; without it, the user sees only "
+    "plain text. Write a brief summary. Example: "
+    "\"<span id='{tag}'>You have 3 meetings tomorrow, starting with standup at 09:00.</span>\""
+)
+
 
 class CalendarAbility(Ability):
     NAME = "calendar"
@@ -94,6 +102,7 @@ class CalendarAbility(Ability):
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list_events").lower()
+        ordinal = params.get("_rich_media_ordinal")
 
         # --- Read operations: query scheduled_items via the shared engine ---
         if action in ("list_events", "get_event"):
@@ -102,6 +111,8 @@ class CalendarAbility(Ability):
             except Exception as exc:
                 logger.error(f"{LOG_PREFIX} action={action} failed: {exc}", exc_info=True)
                 result = {"status": "error", "error": str(exc)}
+            if ordinal is not None and "error" not in result:
+                return _serialise_rich(result, action, ordinal)
             return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
 
         # --- Write operations: delegate to capability's CalDAV handler ---
@@ -129,6 +140,8 @@ class CalendarAbility(Ability):
             logger.error(f"{LOG_PREFIX} action={action} failed: {exc}", exc_info=True)
             result = {"status": "error", "error": str(exc)}
 
+        if ordinal is not None and "error" not in result:
+            return _serialise_rich(result, action, ordinal)
         return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
 
 
@@ -191,3 +204,15 @@ def _format_event(row: dict) -> dict:
         "all_day": meta.get("all_day", False),
         "calendar_name": meta.get("calendar_name"),
     }
+
+
+def _serialise_rich(result: dict, action: str, ordinal: int) -> str:
+    tag = f"calendar_{ordinal}"
+    payload = {"action_performed": action}
+    if "events" in result:
+        payload["events"] = result["events"]
+        payload["count"] = result.get("count", len(result["events"]))
+    else:
+        payload["event"] = result
+    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
+    return f"{_json.dumps(payload)}\n\n{instruction}"
