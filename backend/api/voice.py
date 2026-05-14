@@ -15,8 +15,9 @@ letter acronyms natively. The TTS-side text pipeline collapses to:
     markdown/HTML → plaintext → URL → spoken-host → whitespace collapse.
 
 The synthesize route returns a single ``audio/wav`` blob — no streaming, no
-NDJSON, no per-sentence segmentation. Kokoro emits one coherent waveform with
-native prosody from a single ``create()`` call.
+NDJSON. Long text is split into sentence-level chunks (≤320 chars each) before
+being passed to Kokoro so the 510-phoneme hard limit is never hit. Chunks are
+concatenated with short silence pads and encoded as a single waveform.
 """
 
 import io
@@ -60,6 +61,11 @@ MAX_AUDIO_SECONDS = 600
 MOONSHINE_SAMPLE_RATE = 16000
 # Moonshine asserts the clip is at least 0.1s; below that the model errors out.
 _MIN_CHUNK_SAMPLES = int(0.1 * MOONSHINE_SAMPLE_RATE)
+
+# Moonshine (Whisper-family) hallucinates by repeating phrases 15-20× on
+# silence or noise. Collapse any n-gram (2-6 words) that appears more than
+# this many consecutive times down to exactly this many occurrences.
+_MAX_CONSECUTIVE_PHRASE_REPEATS = 2
 
 # ── Dependency detection ────────────────────────────────────────────────────
 
@@ -246,6 +252,159 @@ def _clean_for_tts(text: str) -> str:
     return _WS_RE.sub(" ", plain).strip()
 
 
+# ── TTS segmentation ────────────────────────────────────────────────────────
+#
+# Kokoro ONNX has a hard 510-phoneme limit. Empirically, ~1.5 chars map to one
+# phoneme, so 510 phonemes ≈ 340 chars. We use 320 as the safe ceiling to give
+# Kokoro headroom for phoneme-heavy words (numbers, acronyms, punctuation
+# tokens). Text is split on sentence boundaries first, then on clause
+# boundaries, then on whitespace — in that priority order.
+
+_MAX_TTS_CHUNK_CHARS = 320
+_TTS_SILENCE_PAD_SECONDS = 0.15
+
+# Matches sentence-ending punctuation (.!?) followed by whitespace or EOS.
+# The split keeps the punctuation with the preceding sentence (positive
+# look-behind) so the prosody boundary is preserved.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+# Clause-boundary split for sentences that still exceed the char limit.
+# Splits on comma, semicolon, colon, or em-dash followed by whitespace.
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[,;:—])\s+")
+
+
+def _segment_for_tts(text: str) -> list[str]:
+    """Split *text* into chunks that each stay under ``_MAX_TTS_CHUNK_CHARS``.
+
+    Splitting priority:
+    1. Sentence boundaries (.!? + whitespace).
+    2. Clause boundaries (,;:— + whitespace) for over-long sentences.
+    3. Whitespace at the char limit for over-long clauses.
+
+    Returns ``[]`` for empty input; otherwise always returns a non-empty
+    ``list[str]``.  Strips each chunk; empty chunks are silently dropped.
+    """
+    if not text:
+        return []
+
+    limit = _MAX_TTS_CHUNK_CHARS
+    sentences = _SENTENCE_SPLIT_RE.split(text)
+
+    chunks: list[str] = []
+    current = ""
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        # Does this sentence fit in the current accumulator?
+        candidate = (current + " " + sentence).strip() if current else sentence
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+
+        # Flush whatever we have accumulated so far.
+        if current:
+            chunks.append(current)
+            current = ""
+
+        # The sentence alone exceeds the limit — break it on clause boundaries.
+        if len(sentence) > limit:
+            clauses = _CLAUSE_SPLIT_RE.split(sentence)
+            for clause in clauses:
+                clause = clause.strip()
+                if not clause:
+                    continue
+                clause_candidate = (current + " " + clause).strip() if current else clause
+                if len(clause_candidate) <= limit:
+                    current = clause_candidate
+                    continue
+
+                # Flush and handle an over-long clause.
+                if current:
+                    chunks.append(current)
+                    current = ""
+
+                if len(clause) > limit:
+                    # Last resort — split on whitespace at the hard char limit.
+                    words = clause.split()
+                    for word in words:
+                        # Truncate tokens that individually exceed the limit
+                        # (e.g. base64 blobs, run-on identifiers from LLM output).
+                        if len(word) > limit:
+                            word = word[:limit]
+                        word_candidate = (current + " " + word).strip() if current else word
+                        if len(word_candidate) <= limit:
+                            current = word_candidate
+                        else:
+                            if current:
+                                chunks.append(current)
+                            current = word
+                else:
+                    current = clause
+        else:
+            current = sentence
+
+    if current:
+        chunks.append(current)
+
+    return chunks if chunks else [text]
+
+
+def _dedup_repetitions(text: str) -> str:
+    """Collapse Moonshine hallucination loops in transcribed text.
+
+    Scans for consecutive identical n-grams (2-6 words) and collapses any run
+    longer than ``_MAX_CONSECUTIVE_PHRASE_REPEATS`` down to that many copies.
+    Largest n-gram first so the broadest pattern wins. Single-word repetition
+    is intentionally ignored — "no no no" is natural speech.
+
+    Case-insensitive matching; original casing is preserved in output.
+    """
+    if not text:
+        return text
+    try:
+        words = text.split()
+        n_words = len(words)
+        for n in range(6, 1, -1):
+            if n_words < n * 3:
+                continue
+            words_lower = [w.lower() for w in words]
+            result: list[str] = []
+            i = 0
+            while i < len(words):
+                phrase_lower = tuple(words_lower[i:i + n])
+                if len(phrase_lower) < n:
+                    result.extend(words[i:])
+                    i = len(words)
+                    break
+                run = 1
+                j = i + n
+                while j + n <= len(words):
+                    if tuple(words_lower[j:j + n]) == phrase_lower:
+                        run += 1
+                        j += n
+                    else:
+                        break
+                if run > _MAX_CONSECUTIVE_PHRASE_REPEATS:
+                    for _ in range(_MAX_CONSECUTIVE_PHRASE_REPEATS):
+                        result.extend(words[i:i + n])
+                    i = j
+                else:
+                    result.append(words[i])
+                    i += 1
+            words = result
+            n_words = len(words)
+        return " ".join(words)
+    except Exception:
+        logger.exception(
+            "[Voice] _dedup_repetitions failed on len=%d — returning original",
+            len(text),
+        )
+        return text
+
+
 # ── WAV helpers ─────────────────────────────────────────────────────────────
 
 def _wav_duration_seconds(data: bytes) -> float:
@@ -303,7 +462,8 @@ def _transcribe_sync(data: bytes) -> str:
 
     if n_samples <= chunk_size:
         texts = mo.transcribe(audio, model=_moonshine)
-        return " ".join(t.strip() for t in texts).strip()
+        raw = " ".join(t.strip() for t in texts).strip()
+        return _dedup_repetitions(raw)
 
     parts: list[str] = []
     for start in range(0, n_samples, chunk_size):
@@ -313,10 +473,10 @@ def _transcribe_sync(data: bytes) -> str:
             # it rather than let the model assert.
             continue
         texts = mo.transcribe(chunk, model=_moonshine)
-        part = " ".join(t.strip() for t in texts).strip()
+        part = _dedup_repetitions(" ".join(t.strip() for t in texts).strip())
         if part:
             parts.append(part)
-    return " ".join(parts).strip()
+    return _dedup_repetitions(" ".join(parts).strip())
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
@@ -370,13 +530,34 @@ def voice_synthesize():
     if not text:
         return jsonify({"error": "Text is required"}), 400
 
-    logger.info("[Voice] synthesize: len=%d head=%r", len(text), text[:80])
+    chunks = _segment_for_tts(text)
+    logger.info(
+        "[Voice] synthesize: len=%d chunks=%d head=%r",
+        len(text), len(chunks), text[:80],
+    )
 
     try:
-        with _tts_lock:
-            samples, sr = _kokoro.create(
-                text, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
-            )
+        if len(chunks) == 1:
+            with _tts_lock:
+                samples, sr = _kokoro.create(
+                    chunks[0], voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
+                )
+        else:
+            import numpy as np
+            all_samples: list = []
+            sr = None
+            with _tts_lock:
+                for i, chunk in enumerate(chunks):
+                    chunk_samples, chunk_sr = _kokoro.create(
+                        chunk, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
+                    )
+                    if sr is None:
+                        sr = chunk_sr
+                    all_samples.append(chunk_samples)
+                    if i < len(chunks) - 1:
+                        pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
+                        all_samples.append(np.zeros(pad_len, dtype=chunk_samples.dtype))
+            samples = np.concatenate(all_samples)
     except Exception as e:
         logger.error("[Voice] TTS synthesis failed: %s", e)
         return jsonify({"error": "TTS synthesis failed"}), 500
