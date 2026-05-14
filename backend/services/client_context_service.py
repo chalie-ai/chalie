@@ -31,11 +31,6 @@ HISTORY_KEY = "client_context:history"
 HISTORY_MAX = 12  # ~1hr at 5min intervals
 TTL = 3600  # 1 hour (used by ephemeral MemoryStore keys, not telemetry)
 
-# Session re-entry: user returned after extended absence
-REENTRY_KEY = "ambient:session_reentry"
-REENTRY_THRESHOLD = 1800  # 30 min
-REENTRY_TTL = 300  # 5 min flag
-
 # Demographic seeding
 CULTURE_SEED_KEY = "ambient:culture_seeded"
 
@@ -210,9 +205,6 @@ class ClientContextService:
                 if "location_name" in cached_ctx:
                     ctx["location_name"] = cached_ctx["location_name"]
 
-        # Session re-entry detection
-        self._check_session_reentry(cached_ctx)
-
         # Persist timezone to settings (survives restarts, enables CalDAV/scheduler)
         if tz_name := ctx.get("timezone"):
             self._persist_timezone(tz_name, cached_ctx.get("timezone"))
@@ -293,28 +285,6 @@ class ClientContextService:
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to push history: {e}")
 
-    # ── Session Re-entry Detection ─────────────────────────────────────
-
-    def _check_session_reentry(self, cached_ctx: dict):
-        """Detect if user returned after extended absence (>30min)."""
-        if not cached_ctx:
-            return
-
-        saved_at = cached_ctx.get("saved_at", 0)
-        if not saved_at:
-            return
-
-        age = time.time() - saved_at
-        if age > REENTRY_THRESHOLD:
-            try:
-                self._store.setex(REENTRY_KEY, REENTRY_TTL, json.dumps({
-                    "absent_seconds": int(age),
-                    "returned_at": time.time(),
-                }))
-                logging.debug(f"[CLIENT CONTEXT] Session re-entry detected (absent {age:.0f}s)")
-            except Exception as e:
-                logging.debug(f"[CLIENT CONTEXT] Re-entry flag failed: {e}")
-
     def _persist_timezone(self, tz_name: str, previous_tz: str | None):
         """Write user_timezone to settings if it changed.
 
@@ -339,36 +309,6 @@ class ClientContextService:
             logging.debug(f"[CLIENT CONTEXT] Persisted user_timezone={tz_name}")
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to persist timezone: {e}")
-
-    def is_session_reentry(self) -> bool:
-        """Check if the user just returned from an extended absence."""
-        return bool(self._store.get(REENTRY_KEY))
-
-    def get_timezone_offset(self) -> int | None:
-        """Return the user's UTC offset in minutes, derived from the stored IANA timezone.
-
-        Positive values mean east of UTC (e.g. UTC+2 → 120).
-        Negative values mean west of UTC (e.g. UTC-5 → -300).
-        Returns None if no timezone is stored or the ZoneInfo lookup fails.
-        """
-        ctx = self.get()
-        timezone = ctx.get("timezone")
-        if not timezone:
-            return None
-        try:
-            from zoneinfo import ZoneInfo
-            from datetime import datetime, timezone as dt_timezone
-            # Use the current wall-clock moment so DST is accounted for correctly.
-            now_utc = datetime.now(dt_timezone.utc)
-            tz = ZoneInfo(timezone)
-            local_dt = now_utc.astimezone(tz)
-            # utcoffset() returns a timedelta; convert to whole minutes.
-            offset = local_dt.utcoffset()
-            if offset is not None:
-                return int(offset.total_seconds() // 60)
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] get_timezone_offset failed: {e}")
-        return None
 
     # ── Demographic Trait Seeding ──────────────────────────────────────
 

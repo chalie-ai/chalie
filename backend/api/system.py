@@ -154,7 +154,7 @@ def system_status():
         from services.database_service import get_shared_db_service
 
         store = MemoryClientService.create_connection()
-        result = {"status": "ok", "memory": {}, "storage": {}, "queues": {}}
+        result = {"status": "ok", "memory": {}, "storage": {}}
 
         # MemoryStore health
         try:
@@ -187,14 +187,6 @@ def system_status():
         except Exception as e:
             result["status"] = "degraded"
             result["database_error"] = str(e)
-
-        # Queue depths
-        for queue_name in ["output-queue"]:
-            try:
-                result["queues"][queue_name] = store.llen(queue_name)
-            except Exception as e:
-                logger.warning(f"[SYSTEM] Queue depth check failed for '{queue_name}': {e}")
-                result["queues"][queue_name] = -1
 
         return jsonify(result), 200
 
@@ -311,6 +303,28 @@ def observability_tools():
         logger.error(f"[REST API] observability/tools error: {e}")
         return jsonify({"error": "Failed to retrieve tool data"}), 500
 
+
+
+@system_bp.route('/system/observability/token-usage', methods=['GET'])
+@require_session
+def observability_token_usage():
+    """Token usage aggregated by time window, model, provider, and usage class.
+
+    Query params:
+        window: hour | day | week | month | lifetime (default: day)
+        usage_class: chat | subagent | subconscious (optional filter)
+    """
+    from services.llm_call_log_service import get_token_usage, VALID_WINDOWS
+    window = request.args.get('window', 'day')
+    if window not in VALID_WINDOWS:
+        return jsonify({'error': f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}"}), 400
+    usage_class = request.args.get('usage_class') or None
+    try:
+        data = get_token_usage(window=window, usage_class=usage_class)
+        return jsonify(data), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/token-usage error: {e}")
+        return jsonify({"error": "Failed to retrieve token usage data"}), 500
 
 
 @system_bp.route('/system/observability/tasks', methods=['GET'])

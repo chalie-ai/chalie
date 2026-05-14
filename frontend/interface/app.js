@@ -21,7 +21,6 @@ import { Notifications } from './notifications.js';
 import { ImageAttach } from './image_attach.js';
 import { DocumentUpload } from './document_upload.js';
 import { UpdateSystem } from './update_system.js';
-import { AppsPanel } from './apps_panel.js';
 import { showToast, lsGet, lsSet } from './utils.js';
 
 // Disable the browser's scroll-restoration so a refresh never lands the
@@ -105,9 +104,6 @@ class ChalieApp {
     // Document upload module
     this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
     this._docUpload.init();
-
-    // Apps panel module
-    this._appsPanel = new AppsPanel({ getHost: () => this._backendHost });
 
     // Update system module
     this._updateSystem = new UpdateSystem({ getHost: () => this._backendHost });
@@ -311,9 +307,6 @@ class ChalieApp {
 
       // Task strip — init + 60s safety-net polling
       this._taskStrip.init();
-
-      // Apps panel
-      this._appsPanel.init();
 
       // Settings button → brain dashboard
       document.getElementById('settingsBtn')?.addEventListener('click', () => {

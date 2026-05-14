@@ -149,6 +149,10 @@ class MessageProcessor:
     # ── Class constants (overridable by subclasses) ───────────────────────────
 
     JOB: str = 'frontal-cortex-unified'
+    # Usage class written to llm_call_log.usage_class for every LLM call made
+    # by this processor. Override in subclasses to distinguish chat / subagent /
+    # subconscious traffic in the cognition usage dashboard.
+    USAGE_CLASS: str = 'chat'
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
     # Ability names pre-injected as native tools on every ACT iteration.
     ALWAYS_AVAILABLE: list[str] = []

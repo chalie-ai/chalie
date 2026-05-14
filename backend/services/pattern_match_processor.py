@@ -24,6 +24,7 @@ TOP_PATTERN_CAP = 50  # bound for {existing_patterns_block} in system prompt
 class PatternMatchProcessor(MessageProcessor):
     CHANNEL = "pattern_match"
     ROLE = "background"
+    USAGE_CLASS = 'subconscious'
     JOB = "frontal-cortex-unified"
     # save_pattern + save_graph are innate to PMP — pre-injected every
     # iteration. No other processor includes them today; processors that

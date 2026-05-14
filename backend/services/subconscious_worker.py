@@ -11,6 +11,7 @@ Tick body (sequential, per §5.3):
     3. Run pattern match.
     4. Run user synthesis.
     5. Run DMN reflection (skipped when no user_summary row exists).
+    6. Capability sync (IMAP/CalDAV/CardDAV via MailCapability._do_monitor).
 
 Gates (both must pass — §5.2):
     - User-active: ``last_user_message_at`` is older than 30 minutes.
@@ -140,6 +141,7 @@ class SubconsciousWorker:
         steps["pattern_match"] = self._safe_step("pattern_match", self._step_pattern_match)
         steps["synthesis"] = self._safe_step("synthesis", self._step_synthesis)
         steps["dmn"] = self._safe_step("dmn", self._step_dmn)
+        steps["capability_sync"] = self._safe_step("capability_sync", self._step_capability_sync)
 
         now = utc_now()
         try:
@@ -156,7 +158,8 @@ class SubconsciousWorker:
             f"decay={steps['decay']['status']} "
             f"pattern_match={steps['pattern_match']['status']} "
             f"synthesis={steps['synthesis']['status']} "
-            f"dmn={steps['dmn']['status']}"
+            f"dmn={steps['dmn']['status']} "
+            f"capability_sync={steps['capability_sync']['status']}"
         )
         return {"steps": steps, "last_fired_at": last_iso}
 
@@ -366,6 +369,22 @@ class SubconsciousWorker:
         from services.dmn_message_processor import DMNMessageProcessor
         DMNMessageProcessor(raw_input='').send()
         return "ok"
+
+    def _step_capability_sync(self) -> str:
+        """Step 6 — IMAP / CalDAV / CardDAV server sync.
+
+        Delegates to every connected capability's ``monitor()`` method.
+        MailCapability._do_monitor() manages per-protocol cadence internally
+        (IMAP every call, CalDAV every 3rd, CardDAV every 12th).
+        """
+        from capabilities import load_capabilities
+
+        synced = []
+        for cap in load_capabilities().values():
+            if cap.is_connected():
+                cap.monitor()
+                synced.append(cap.NAME)
+        return f"synced: {', '.join(synced)}" if synced else "no connected capabilities"
 
     def _load_user_synthesis(self) -> Optional[str]:
         """Check whether a user_summary row exists in data_graph.

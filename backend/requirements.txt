@@ -32,6 +32,7 @@ PyYAML>=6.0
 vobject>=0.9.7
 nltk>=3.8
 nh3>=0.2.0
+markdown-it-py>=3.0.0
 
 # ── Test dependencies (not needed in production) ──
 pytest>=8.0.0

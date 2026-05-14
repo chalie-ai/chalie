@@ -1,8 +1,9 @@
 """
-Metrics Service - Structured metrics and per-request tracing.
+Metrics Service — Redis-backed counters, timing records, and dashboard data.
 
-MemoryStore-backed counters and timing records with daily rollup keys.
-No external dependencies required.
+record_counter() is called by UserMessageProcessor, SubagentProcessor,
+and DMNMessageProcessor to increment daily turn counters.
+get_dashboard_data() is called by the /metrics API endpoint.
 """
 
 import time
@@ -16,117 +17,92 @@ class MetricsService:
     """Manages metrics collection with MemoryStore counters and timing records."""
 
     def __init__(self):
-        """Initialize metrics service with MemoryStore connection."""
         self.store = MemoryClientService.create_connection()
 
     def start_trace(self) -> str:
-        """
-        Start a new trace for a request.
-
-        Returns:
-            trace_id: Unique trace identifier
-        """
+        """Start a new trace for a request. Returns a unique trace identifier."""
         trace_id = str(uuid.uuid4())[:8]
         trace_key = f"trace:{trace_id}"
-
         trace_data = {
             'trace_id': trace_id,
             'started_at': time.time(),
             'timings': {},
-            'counters': {}
+            'counters': {},
         }
-
-        # Store trace with 1-hour TTL
         self.store.setex(trace_key, 3600, json.dumps(trace_data))
         return trace_id
 
     def record_timing(self, trace_id: str, operation: str, duration_ms: float):
-        """
-        Record a timing measurement for a traced operation.
+        """Record a timing measurement for a traced operation.
 
         Args:
-            trace_id: Trace identifier from start_trace()
-            operation: Name of the operation (e.g., 'classification', 'response_generation')
-            duration_ms: Duration in milliseconds
+            trace_id: Trace identifier from start_trace().
+            operation: Name of the operation (e.g., 'classification').
+            duration_ms: Duration in milliseconds.
         """
         trace_key = f"trace:{trace_id}"
         trace_json = self.store.get(trace_key)
-
         if trace_json:
             trace_data = json.loads(trace_json)
             trace_data['timings'][operation] = duration_ms
             self.store.setex(trace_key, 3600, json.dumps(trace_data))
 
-        # Also record in daily rollup
         day_key = time.strftime('%Y-%m-%d')
         rollup_key = f"metrics:timing:{operation}:{day_key}"
-
         pipe = self.store.pipeline()
         pipe.rpush(rollup_key, str(duration_ms))
-        pipe.expire(rollup_key, 86400 * 7)  # 7-day retention
+        pipe.expire(rollup_key, 86400 * 7)
         pipe.execute()
 
     def record_counter(self, metric_name: str, value: int = 1):
-        """
-        Increment a counter metric.
+        """Increment a counter metric.
 
         Args:
-            metric_name: Name of the metric (e.g., 'requests_total', 'errors_total')
-            value: Value to increment by (default 1)
+            metric_name: Name of the metric (e.g., 'requests_total').
+            value: Value to increment by (default 1).
         """
         day_key = time.strftime('%Y-%m-%d')
         counter_key = f"metrics:counter:{metric_name}:{day_key}"
-
         pipe = self.store.pipeline()
         pipe.incrby(counter_key, value)
-        pipe.expire(counter_key, 86400 * 7)  # 7-day retention
+        pipe.expire(counter_key, 86400 * 7)
         pipe.execute()
 
     def get_dashboard_data(self) -> Dict[str, Any]:
-        """
-        Get aggregated metrics for dashboard display.
-
-        Returns:
-            Dict with counters, timing averages, and recent activity
-        """
+        """Get aggregated metrics for dashboard display."""
         day_key = time.strftime('%Y-%m-%d')
-        dashboard = {
+        dashboard: Dict[str, Any] = {
             'date': day_key,
             'counters': {},
-            'timing_averages': {}
+            'timing_averages': {},
         }
 
-        # Collect counters
         counter_names = [
             'requests_total', 'responses_total', 'errors_total',
             'embeddings_total', 'facts_extracted',
             'memory_chunks_enqueued', 'episodes_generated',
             'user_messages_total',
-            'dmn_turns_total', 'subagent_turns_total', 'scheduled_turns_total'
+            'dmn_turns_total', 'subagent_turns_total', 'scheduled_turns_total',
         ]
-
         for name in counter_names:
             counter_key = f"metrics:counter:{name}:{day_key}"
             value = self.store.get(counter_key)
             dashboard['counters'][name] = int(value) if value else 0
 
-        # Collect timing averages
         timing_operations = [
             'embedding', 'response_generation',
-            'fact_extraction', 'context_assembly'
+            'fact_extraction', 'context_assembly',
         ]
-
         for operation in timing_operations:
             rollup_key = f"metrics:timing:{operation}:{day_key}"
             values = self.store.lrange(rollup_key, 0, -1)
-
             if values:
                 float_values = [float(v) for v in values]
                 dashboard['timing_averages'][operation] = {
                     'count': len(float_values),
                     'avg_ms': sum(float_values) / len(float_values),
                     'min_ms': min(float_values),
-                    'max_ms': max(float_values)
+                    'max_ms': max(float_values),
                 }
 
         return dashboard

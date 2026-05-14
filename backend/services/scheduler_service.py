@@ -2,7 +2,7 @@
 Scheduler Service — Background poller for scheduled items in SQLite.
 
 Polls scheduled_items table every 60 seconds. Fires due items either as
-direct notifications (OutputService) or through ScheduledMessageProcessor
+direct notifications (OutputService) or through ScheduledPromptProcessor
 for prompt-type items that need LLM execution with full tool access.
 
 SQLite's WAL mode provides implicit locking — no explicit row locks needed.
@@ -102,7 +102,7 @@ def scheduler_worker():
 
 
 def _poll_and_fire():
-    """Poll for due items and fire them — direct delivery or ScheduledMessageProcessor."""
+    """Poll for due items and fire them — direct delivery or ScheduledPromptProcessor."""
     try:
         from services.database_service import get_shared_db_service
 
@@ -228,16 +228,15 @@ def _fire_item(item: dict):
             logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
             return
 
-        # Dispatch via ScheduledMessageProcessor in a daemon thread
         item_id = item.get('id', 'unknown')
 
         def _run():
             _PROMPT_SEMAPHORE.acquire()
             try:
-                from services.scheduled_message_processor import ScheduledMessageProcessor
+                from services.user_message_processor import ScheduledPromptProcessor
                 from services.output_service import OutputService
 
-                response_text = ScheduledMessageProcessor(
+                response_text = ScheduledPromptProcessor(
                     raw_input=message,
                     metadata={'item_id': item_id},
                 ).send()

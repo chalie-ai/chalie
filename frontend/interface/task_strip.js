@@ -1,7 +1,8 @@
 import { escHtml, relativeTime, lsGet, lsSet } from './utils.js';
 
 /**
- * Persistent task strip — displays active tasks and pending reminders.
+ * Task drawer — displays active tasks and pending reminders in a slideout
+ * panel that slides in from the right edge of the viewport.
  */
 export class TaskStrip {
   constructor({ api }) {
@@ -11,15 +12,20 @@ export class TaskStrip {
   }
 
   /**
-   * Bind toggle button and start 60s polling interval.
+   * Bind trigger / close controls and start 60s polling interval.
    */
   init() {
-    const toggle = document.getElementById('taskStripToggle');
-    const strip = document.getElementById('taskStrip');
-    if (!toggle || !strip) return;
+    const triggerBtn = document.getElementById('taskDrawerBtn');
+    const closeBtn   = document.getElementById('taskDrawerClose');
+    const scrim      = document.getElementById('taskDrawerScrim');
+    if (!triggerBtn || !closeBtn || !scrim) return;
 
-    toggle.addEventListener('click', () => {
-      strip.classList.toggle('--expanded');
+    triggerBtn.addEventListener('click', () => this._openDrawer());
+    closeBtn.addEventListener('click',   () => this._closeDrawer());
+    scrim.addEventListener('click',      () => this._closeDrawer());
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') this._closeDrawer();
     });
 
     this.loadActiveTasks();
@@ -50,12 +56,12 @@ export class TaskStrip {
       const reminders = (schedData.items || []).filter(
         r => r.status === 'pending' && r.due_at
       );
-      this._renderTaskStrip(tasks, reminders);
+      this._render(tasks, reminders);
     } catch (e) {
       if (e?.message === 'AUTH') {
         this._onAuthFailureCb?.();
       }
-      // Other errors: silently fail — task strip is supplementary
+      // Other errors: silently fail — drawer is supplementary
     }
   }
 
@@ -71,66 +77,99 @@ export class TaskStrip {
   // Private
   // ---------------------------------------------------------------------------
 
-  _renderTaskStrip(tasks, reminders = []) {
-    const strip = document.getElementById('taskStrip');
-    const list = document.getElementById('taskStripList');
-    const countEl = document.getElementById('taskStripCount');
-    if (!strip || !list) return;
+  _openDrawer() {
+    const drawer = document.getElementById('taskDrawer');
+    const scrim  = document.getElementById('taskDrawerScrim');
+    if (!drawer) return;
+
+    scrim.classList.remove('hidden');
+    drawer.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      drawer.classList.add('open');
+    });
+  }
+
+  _closeDrawer() {
+    const drawer = document.getElementById('taskDrawer');
+    const scrim  = document.getElementById('taskDrawerScrim');
+    if (!drawer) return;
+
+    drawer.classList.remove('open');
+    scrim.classList.add('hidden');
+    drawer.addEventListener('transitionend', () => {
+      if (!drawer.classList.contains('open')) {
+        drawer.classList.add('hidden');
+      }
+    }, { once: true });
+  }
+
+  _render(tasks, reminders = []) {
+    const drawer   = document.getElementById('taskDrawer');
+    const list     = document.getElementById('taskDrawerList');
+    const trigger  = document.getElementById('taskDrawerBtn');
+    const badge    = document.getElementById('taskDrawerCount');
+    if (!drawer || !list) return;
 
     const totalCount = tasks.length + reminders.length;
-    const wasEmpty = strip.classList.contains('hidden');
 
-    if (totalCount === 0) {
-      strip.classList.add('hidden');
-      strip.classList.remove('--expanded');
-      document.body.classList.remove('has-task-strip');
-      return;
+    // Update trigger button visibility and badge
+    if (trigger) {
+      if (totalCount === 0) {
+        trigger.classList.add('hidden');
+      } else {
+        trigger.classList.remove('hidden');
+      }
+    }
+    if (badge) {
+      if (totalCount === 0) {
+        badge.classList.add('hidden');
+      } else {
+        badge.classList.remove('hidden');
+        badge.textContent = totalCount;
+      }
     }
 
-    strip.classList.remove('hidden');
-    document.body.classList.add('has-task-strip');
-    countEl.textContent = totalCount;
-
-    // Auto-expand when items appear for the first time (was hidden → now visible)
-    if (wasEmpty) {
-      strip.classList.add('--expanded');
+    // Auto-close the drawer when all items are gone
+    if (totalCount === 0) {
+      this._closeDrawer();
+      list.innerHTML = '';
+      return;
     }
 
     let html = '';
 
     // Render persistent tasks
     for (const t of tasks) {
-      const goal = (t.goal || 'Working…').slice(0, 60);
+      const goal     = (t.goal || 'Working…').slice(0, 60);
       const progress = t.progress || {};
       const coverage = Math.round((progress.coverage_estimate || 0) * 100);
-      const summary = progress.last_summary || '';
+      const summary  = progress.last_summary || '';
       const pausedClass = t.status === 'paused' ? ' --paused' : '';
 
-      // Step-level progress from plan DAG
       const plan = progress.plan;
       let stepsHtml = '';
       if (plan && plan.steps && plan.steps.length > 0) {
-        const done = plan.steps.filter(s => s.status === 'completed' || s.status === 'skipped').length;
-        const total = plan.steps.length;
+        const done    = plan.steps.filter(s => s.status === 'completed' || s.status === 'skipped').length;
+        const total   = plan.steps.length;
         const current = plan.steps.find(s => s.status === 'in_progress');
-        stepsHtml = `<div class="task-strip__steps">${done}/${total} steps</div>`;
+        stepsHtml = `<div class="task-drawer__steps">${done}/${total} steps</div>`;
         if (current) {
-          stepsHtml += `<div class="task-strip__current-step">${escHtml(current.description)}</div>`;
+          stepsHtml += `<div class="task-drawer__current-step">${escHtml(current.description)}</div>`;
         }
         if (plan.blocked_on) {
-          stepsHtml += `<div class="task-strip__blocked">Blocked: ${escHtml(plan.blocked_reason || 'dependency failed')}</div>`;
+          stepsHtml += `<div class="task-drawer__blocked">Blocked: ${escHtml(plan.blocked_reason || 'dependency failed')}</div>`;
         }
       }
 
-      html += `<div class="task-strip__item${pausedClass}">
-        <span class="task-strip__kind-dot task-strip__kind-dot--task"></span>
-        <div class="task-strip__goal">${escHtml(goal)}</div>
-        <div class="task-strip__progress-bar">
-          <div class="task-strip__progress-fill" style="width:${coverage}%"></div>
+      html += `<div class="task-drawer__item${pausedClass}">
+        <span class="task-drawer__kind-dot task-drawer__kind-dot--task"></span>
+        <div class="task-drawer__goal">${escHtml(goal)}</div>
+        <div class="task-drawer__progress-bar">
+          <div class="task-drawer__progress-fill" style="width:${coverage}%"></div>
         </div>
         ${stepsHtml}
-        ${summary ? `<div class="task-strip__summary">${escHtml(summary)}</div>` : ''}
-        <button class="task-strip__dismiss" data-dismiss-task="${t.id}" aria-label="Dismiss task">&times;</button>
+        ${summary ? `<div class="task-drawer__summary">${escHtml(summary)}</div>` : ''}
+        <button class="task-drawer__dismiss" data-dismiss-task="${t.id}" aria-label="Dismiss task">&times;</button>
       </div>`;
     }
 
@@ -138,20 +177,20 @@ export class TaskStrip {
     for (const r of reminders) {
       const msg = (r.message || '').slice(0, 80);
       const due = r.due_at ? relativeTime(r.due_at) : '';
-      const id = r.id;
+      const id  = r.id;
 
-      html += `<div class="task-strip__item task-strip__item--reminder">
-        <span class="task-strip__kind-dot task-strip__kind-dot--reminder"></span>
-        <span class="task-strip__msg">${escHtml(msg)}</span>
-        ${due ? `<span class="task-strip__due">${escHtml(due)}</span>` : ''}
-        <button class="task-strip__dismiss" data-dismiss-reminder="${escHtml(id)}" aria-label="Dismiss reminder">&times;</button>
+      html += `<div class="task-drawer__item task-drawer__item--reminder">
+        <span class="task-drawer__kind-dot task-drawer__kind-dot--reminder"></span>
+        <span class="task-drawer__msg">${escHtml(msg)}</span>
+        ${due ? `<span class="task-drawer__due">${escHtml(due)}</span>` : ''}
+        <button class="task-drawer__dismiss" data-dismiss-reminder="${escHtml(id)}" aria-label="Dismiss reminder">&times;</button>
       </div>`;
     }
 
     // First-time hint
     if (!lsGet('task_strip_hint_shown')) {
       lsSet('task_strip_hint_shown', '1');
-      html += '<div class="task-strip__hint">I\'ll show what I\'m working on here.</div>';
+      html += '<div class="task-drawer__hint">I\'ll show what I\'m working on here.</div>';
     }
 
     list.innerHTML = html;

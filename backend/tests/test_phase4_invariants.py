@@ -10,8 +10,8 @@ tool-scope spec:
  * abilities.sqlite — the find_tools index — contains EVERY ability,
    including save_pattern + save_graph. find_tools gates discovery via the
    calling processor's DISCOVERABLE allowlist; the index itself is global.
- * abilities/ disk layout matches the 17 dispatchable abilities the registry
-   walk expects (15 generic + save_pattern + save_graph).
+ * abilities/ disk layout matches the 20 dispatchable abilities the registry
+   walk expects (18 generic + save_pattern + save_graph, including email/calendar/contacts).
  * Each MessageProcessor subclass declares the exact ALWAYS_AVAILABLE +
    DISCOVERABLE the spec dictates — discoverable externals are NEVER
    pre-injected; processor-innate abilities live solely on the owning
@@ -103,8 +103,11 @@ def test_abilities_sqlite_indexes_save_pattern_and_save_graph():
 
 _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "browser",
+    "calendar",
     "code_eval",
+    "contacts",
     "document",
+    "email",
     "find_tools",
     "list",
     "memory",
@@ -112,6 +115,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "programming_docs_search",
     "read",
     "review_tool_calls",
+    "review_transcript",
     "save_graph",
     "save_pattern",
     "schedule",
@@ -122,8 +126,8 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
 })
 
 
-def test_abilities_directory_has_exactly_17_non_underscore_modules():
-    """abilities/ contains exactly the 17 dispatchable top-level modules.
+def test_abilities_directory_has_exactly_21_non_underscore_modules():
+    """abilities/ contains exactly the 21 dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
@@ -151,7 +155,7 @@ def test_abilities_directory_has_exactly_17_non_underscore_modules():
         f"Expected ability modules are missing from abilities/: {sorted(removed)}. "
         "Remove them from _EXPECTED_ABILITY_MODULE_STEMS if intentional."
     )
-    assert len(walked) == 17
+    assert len(walked) == 21
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +176,7 @@ def test_abilities_directory_has_exactly_17_non_underscore_modules():
 
 _DEFAULT_ALWAYS = frozenset({
     "document", "find_tools", "list", "memory",
-    "read", "review_tool_calls", "schedule", "timer",
+    "read", "review_tool_calls", "review_transcript", "schedule", "timer",
 })
 
 # `subagent` is discoverable in UMP only — DMN/Scheduled/Subagent processors
@@ -180,9 +184,19 @@ _DEFAULT_ALWAYS = frozenset({
 # here keeps the leak-check honest: any processor that pre-injects `subagent`
 # into ALWAYS_AVAILABLE will trip the assertion in
 # test_per_processor_tool_scope_matches_spec.
+#
+# email/calendar/contacts are discoverable in UMP (personal data tools) and
+# DMN (background research may need calendar/contacts context), but NOT in
+# Scheduled or Subagent processors — those run headless without personal
+# data access.
 _DEFAULT_DISCOVERABLE = frozenset({
-    "browser", "code_eval", "news", "programming_docs_search", "search", "subagent", "weather",
+    "browser", "calendar", "code_eval", "contacts", "email",
+    "news", "programming_docs_search", "search", "subagent", "weather",
 })
+
+# Capability tools (email/calendar/contacts) are personal-data tools — they
+# must not be surfaced in headless background processors (Scheduled, Subagent).
+_CAPABILITY_TOOLS = frozenset({"email", "calendar", "contacts"})
 
 
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
@@ -191,15 +205,22 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     # `timer` is dropped: DMN runs in the background without a user-channel
     # surface, so the rich-media card would never render. `subagent` is
     # excluded everywhere except UMP so background processes cannot spawn
-    # nested subagents.
+    # nested subagents. email/calendar/contacts remain discoverable for DMN
+    # — background reflection needs access to personal data context.
     "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
                                    _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent"}),
-    # Scheduled has no UI surface either — drop `timer` for the same reason.
-    "ScheduledMessageProcessor": (_DEFAULT_ALWAYS - {"schedule", "timer"}, _DEFAULT_DISCOVERABLE - {"subagent"}),
+    # ScheduledPromptProcessor — same tool surface as UMP. Scheduled prompts
+    # act on the user's behalf with full capabilities.
+    "ScheduledPromptProcessor": (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
     # the class-level attribute is [] (empty). The per-instance value is
     # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
-    "SubagentProcessor":         (frozenset(), frozenset((set(_DEFAULT_DISCOVERABLE) - {"subagent"}) | {"document", "list", "memory", "read", "review_tool_calls", "schedule"})),
+    # Subagent does not get capability tools — subagents are task-scoped, not
+    # user-personal-data-scoped.
+    "SubagentProcessor":         (frozenset(), frozenset(
+        (set(_DEFAULT_DISCOVERABLE) - {"subagent"} - _CAPABILITY_TOOLS)
+        | {"document", "list", "memory", "read", "review_tool_calls", "schedule"}
+    )),
     # PMP owns save_pattern + save_graph today; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # Background / no tools at all.
@@ -228,16 +249,15 @@ def test_per_processor_tool_scope_matches_spec():
     from services.dmn_message_processor import DMNMessageProcessor
     from services.episode_encoder_processor import EpisodeEncoderProcessor
     from services.pattern_match_processor import PatternMatchProcessor
-    from services.scheduled_message_processor import ScheduledMessageProcessor
     from services.subagent_processor import SubagentProcessor
     from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
-    from services.user_message_processor import UserMessageProcessor
+    from services.user_message_processor import ScheduledPromptProcessor, UserMessageProcessor
     from services.user_summary_processor import UserSummaryProcessor
 
     processors = {
         "UserMessageProcessor": UserMessageProcessor,
         "DMNMessageProcessor": DMNMessageProcessor,
-        "ScheduledMessageProcessor": ScheduledMessageProcessor,
+        "ScheduledPromptProcessor": ScheduledPromptProcessor,
         "SubagentProcessor": SubagentProcessor,
         "PatternMatchProcessor": PatternMatchProcessor,
         "ContinuityCompactionProcessor": ContinuityCompactionProcessor,

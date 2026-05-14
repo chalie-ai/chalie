@@ -112,8 +112,9 @@ class CarddavHandler:
         uid = _vcard_text(card, "uid")
         fn = _vcard_text(card, "fn")
         given_name, family_name = _vcard_name(card)
-        emails = _vcard_list(card, "email")
-        phones = _vcard_list(card, "tel")
+        nickname = _vcard_text(card, "nickname")
+        emails = _vcard_typed_list(card, "email")
+        phones = _vcard_typed_list(card, "tel")
         org = _vcard_org(card)
         title = _vcard_text(card, "title")
 
@@ -125,6 +126,7 @@ class CarddavHandler:
             "fn": fn,
             "given_name": given_name,
             "family_name": family_name,
+            "nickname": nickname,
             "emails": emails,
             "phones": phones,
             "org": org,
@@ -136,24 +138,20 @@ class CarddavHandler:
     # -----------------------------------------------------------------------
 
     def index_contacts(self, contacts: list[dict]) -> None:
-        """Store *contacts* in the data graph.
+        """Store *contacts* as full profile objects in the data graph.
 
-        CardDAV contacts are authoritative signals — stored as user_specific
-        with key='contact:<email>' via contact_resolver.index_person.
+        Each contact is stored with ``key='contact:<Display Name>'`` and
+        ``value`` as a JSON object containing all available vCard fields.
         """
-        from capabilities.contact_resolver import index_person  # noqa: PLC0415
+        from capabilities.contact_resolver import index_contact_profile  # noqa: PLC0415
         for contact in contacts:
-            fn = contact.get("fn", "")
-            display = fn.strip()
-            if not display:
+            fn = (contact.get("fn") or "").strip()
+            if not fn:
                 continue
-            for email in contact.get("emails", []):
-                if not email or "@" not in email:
-                    continue
-                try:
-                    index_person(email, display, source="carddav")
-                except Exception as exc:
-                    logger.debug("[carddav] index_contacts failed for %s: %s", email, exc)
+            try:
+                index_contact_profile(contact, source="carddav")
+            except Exception as exc:
+                logger.debug("[carddav] index_contacts failed for %s: %s", fn, exc)
 
     # -----------------------------------------------------------------------
     # Monitor (full sync cycle)
@@ -178,7 +176,10 @@ class CarddavHandler:
 
         Returns ``{"contacts": [...], "count": int}``.
         """
-        from capabilities.contact_resolver import resolve  # noqa: PLC0415
+        from capabilities.contact_resolver import (  # noqa: PLC0415
+            _parse_contact_row,
+            resolve,
+        )
 
         limit = min(int(params.get("limit", 20)), 50)
         query = (params.get("query") or "").strip()
@@ -187,15 +188,13 @@ class CarddavHandler:
             matches = resolve(query, limit=limit)
             return {"contacts": matches, "count": len(matches)}
 
-        # No query — list all contact rows by name.
-        from capabilities.contact_resolver import _CONTACT_KEY_PREFIX  # noqa: PLC0415
         try:
             rows = _dgs().fetch(kinds=["user_specific"], order_by="key ASC", limit=limit)
-            contacts = [
-                {"email": r["key"][len(_CONTACT_KEY_PREFIX):], "name": r.get("value", "")}
-                for r in rows
-                if (r.get("key") or "").startswith(_CONTACT_KEY_PREFIX)
-            ]
+            contacts = []
+            for r in rows:
+                parsed = _parse_contact_row(r.get("key", ""), r.get("value", ""))
+                if parsed is not None:
+                    contacts.append(parsed)
         except Exception as exc:
             logger.debug("[carddav] list_contacts fallback failed: %s", exc)
             contacts = []
@@ -254,11 +253,28 @@ def _vcard_name(card) -> tuple[str, str]:
         return "", ""
 
 
-def _vcard_list(card, prop: str) -> list[str]:
-    """Return all string values for *prop* from *card*."""
+def _vcard_typed_list(card, prop: str) -> list[dict]:
+    """Return all values for *prop* with their TYPE parameter.
+
+    Each entry is ``{"value": "<str>", "type": "<work|home|other>"}``
+    so consumers can distinguish work vs personal emails/phones.
+    """
     try:
         items = card.contents.get(prop) or []
-        return [str(obj.value).strip() for obj in items if obj.value]
+        result = []
+        for obj in items:
+            if not obj.value:
+                continue
+            val = str(obj.value).strip()
+            type_param = ""
+            if hasattr(obj, "params") and obj.params:
+                raw = obj.params.get("TYPE", [])
+                if isinstance(raw, list) and raw:
+                    type_param = str(raw[0]).lower()
+                elif isinstance(raw, str):
+                    type_param = raw.lower()
+            result.append({"value": val, "type": type_param or "other"})
+        return result
     except Exception:
         return []
 

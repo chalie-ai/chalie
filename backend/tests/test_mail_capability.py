@@ -254,7 +254,7 @@ class TestMailCapabilityConnect:
         cap, vault, tcs = _make_capability()
         cap._imap_handler.open_client.return_value = MagicMock()
         cap._caldav_handler.open_client.return_value = None
-        cap._ensure_sync_registration = MagicMock()
+
 
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.store_credential("mail:email", "user@gmail.com")
@@ -273,7 +273,7 @@ class TestMailCapabilityConnect:
         cap._imap_handler.open_client.return_value = MagicMock()
         cap._caldav_handler.open_client.return_value = MagicMock()
         cap._carddav_handler.open_client.return_value = MagicMock()
-        cap._ensure_sync_registration = MagicMock()
+
 
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.store_credential("mail:email", "user@gmail.com")
@@ -285,19 +285,6 @@ class TestMailCapabilityConnect:
         assert cap._imap_ok is True
         assert cap._caldav_ok is True
         assert cap._carddav_ok is True
-
-    def test_connect_calls_ensure_sync_registration(self):
-        cap, vault, tcs = _make_capability()
-        cap._imap_handler.open_client.return_value = MagicMock()
-        cap._ensure_sync_registration = MagicMock()
-
-        with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
-            cap.store_credential("mail:email", "user@gmail.com")
-            cap.store_credential("mail:password", "pw")
-            cap.store_credential("mail:protocols", json.dumps(["imap"]))
-            cap.connect()
-
-        cap._ensure_sync_registration.assert_called_once()
 
 
 @pytest.mark.unit
@@ -356,21 +343,21 @@ class TestMailCapabilityGetTools:
         tools = cap.get_tools()
         assert tools == []
 
-    def test_imap_only_returns_three_tools(self):
+    def test_imap_only_returns_four_tools(self):
         cap, _, _ = _make_capability()
         cap._imap_ok = True
         tools = cap.get_tools()
         names = {t["name"] for t in tools}
-        assert names == {"search_email", "read_email", "send_email"}
+        assert names == {"search_email", "read_email", "draft_email", "manage_email"}
 
-    def test_caldav_only_returns_seven_tools(self):
+    def test_caldav_only_returns_five_tools(self):
         cap, _, _ = _make_capability()
         cap._caldav_ok = True
         tools = cap.get_tools()
         names = {t["name"] for t in tools}
         assert names == {
-            "list_events", "get_event", "create_event",
-            "update_event", "delete_event", "find_free_slots", "get_attendees",
+            "create_event", "update_event", "delete_event",
+            "find_free_slots", "get_attendees",
         }
 
     def test_carddav_only_returns_two_tools(self):
@@ -380,13 +367,13 @@ class TestMailCapabilityGetTools:
         names = {t["name"] for t in tools}
         assert names == {"list_contacts", "get_contact"}
 
-    def test_all_protocols_returns_twelve_tools(self):
+    def test_all_protocols_returns_thirteen_tools(self):
         cap, _, _ = _make_capability()
         cap._imap_ok = True
         cap._caldav_ok = True
         cap._carddav_ok = True
         tools = cap.get_tools()
-        assert len(tools) == 12
+        assert len(tools) == 11
 
     def test_all_tools_have_required_keys(self):
         cap, _, _ = _make_capability()
@@ -417,7 +404,7 @@ class TestMailCapabilityGetTools:
         tools = {t["name"]: t for t in cap.get_tools()}
 
         cap._caldav_ok = False
-        result = tools["list_events"]["handler"]("", {})
+        result = tools["create_event"]["handler"]("", {})
         assert "error" in result
 
     def test_carddav_tool_returns_error_when_disconnected(self):
@@ -554,54 +541,9 @@ class TestMailCapabilityAct:
     def test_act_dispatches_to_known_tool(self):
         cap, _, _ = _make_capability()
         cap._caldav_ok = True
-        cap._caldav_handler.list_events.return_value = {"events": [], "count": 0}
+        cap._caldav_handler.find_free_slots.return_value = {"free_slots": []}
 
-        result = cap.act("list_events", {"limit": 10})
-        assert "events" in result
+        result = cap.act("find_free_slots", {})
+        assert "free_slots" in result
 
 
-@pytest.mark.unit
-class TestEnsureSyncRegistration:
-    """_ensure_sync_registration() registers once and creates the scheduled_item."""
-
-    def test_registration_only_runs_once(self):
-        cap, _, _ = _make_capability()
-
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = None  # item does not exist yet
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
-        mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
-
-        with patch("services.scheduler_service.register_system_handler"):
-            with patch("services.database_service.get_shared_db_service", return_value=mock_db):
-                with patch("capabilities.mail_capability.capability.utc_now") as mock_now:
-                    from datetime import datetime, timezone
-                    mock_now.return_value = datetime(2026, 1, 1, tzinfo=timezone.utc)
-                    cap._ensure_sync_registration()
-                    cap._ensure_sync_registration()  # second call should be a no-op
-
-        # UPDATE (backfill) + SELECT + INSERT on first call only; second call is no-op
-        assert mock_cursor.execute.call_count == 3
-
-    def test_registration_sets_flag(self):
-        cap, _, _ = _make_capability()
-
-        mock_db = MagicMock()
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = ("existing-id",)  # already exists
-        mock_conn.cursor.return_value = mock_cursor
-        mock_db.connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
-        mock_db.connection.return_value.__exit__ = MagicMock(return_value=False)
-
-        with patch("services.scheduler_service.register_system_handler"):
-            with patch("services.database_service.get_shared_db_service", return_value=mock_db):
-                with patch("capabilities.mail_capability.capability.utc_now") as mock_now:
-                    from datetime import datetime, timezone
-                    mock_now.return_value = datetime(2026, 1, 1, tzinfo=timezone.utc)
-                    cap._ensure_sync_registration()
-
-        assert cap._sync_registered is True

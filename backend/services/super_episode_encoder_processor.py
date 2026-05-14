@@ -155,6 +155,7 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
 
     CHANNEL = 'super_episode_encoder'
     ROLE = 'super_episode_encoder'
+    USAGE_CLASS = 'subconscious'
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = SuperEpisodeEncoderSystemPrompt
     ALWAYS_AVAILABLE: list[str] = []
