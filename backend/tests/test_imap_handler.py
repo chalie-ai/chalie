@@ -133,27 +133,9 @@ class TestExtractBody:
         assert "Plain content" in result
         assert "<p>" not in result
 
-    def test_html_fallback_strips_tags(self):
+    def test_html_only_returns_empty(self):
         raw = _make_raw_email(html="<p>Hello <b>world</b></p>")
-        result = extract_body(raw)
-        assert "<p>" not in result
-        assert "Hello" in result
-        assert "world" in result
-
-    def test_truncation(self):
-        long_text = "x" * 5000
-        raw = _make_raw_email(plain=long_text)
-        result = extract_body(raw, max_chars=100)
-        assert result.endswith("\n[truncated]")
-        # Truncated portion is 100 chars + the suffix
-        assert len(result) == 100 + len("\n[truncated]")
-
-    def test_no_truncation_within_limit(self):
-        short = "Short body."
-        raw = _make_raw_email(plain=short)
-        result = extract_body(raw)
-        assert result == short
-        assert "[truncated]" not in result
+        assert extract_body(raw) == ""
 
     def test_empty_body(self):
         raw = _make_raw_email()
@@ -218,42 +200,6 @@ class TestOpenClient:
             mock_cls.assert_called_with(
                 "imap.example.com", port=143, ssl=False, timeout=30
             )
-
-
-# ---------------------------------------------------------------------------
-# open_smtp
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestOpenSmtp:
-    def test_smtp_ssl_on_tls_true(self, handler):
-        mock_conn = MagicMock()
-        with patch("smtplib.SMTP_SSL", return_value=mock_conn):
-            result = handler.open_smtp(
-                host="smtp.example.com", port=465, tls=True,
-                email="u@example.com", password="pw",
-            )
-        mock_conn.login.assert_called_once_with("u@example.com", "pw")
-        assert result is mock_conn
-
-    def test_smtp_starttls_on_tls_false(self, handler):
-        mock_conn = MagicMock()
-        with patch("smtplib.SMTP", return_value=mock_conn):
-            result = handler.open_smtp(
-                host="smtp.example.com", port=587, tls=False,
-                email="u@example.com", password="pw",
-            )
-        mock_conn.starttls.assert_called_once()
-        mock_conn.login.assert_called_once_with("u@example.com", "pw")
-        assert result is mock_conn
-
-    def test_returns_none_on_error(self, handler):
-        with patch("smtplib.SMTP_SSL", side_effect=OSError("refused")):
-            result = handler.open_smtp(
-                host="bad.host", port=465, tls=True,
-                email="u@example.com", password="pw",
-            )
-        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -437,80 +383,3 @@ class TestReadEmail:
         result = handler.read_email(client, {"uid": "7"})
         assert result["uid"] == 7
 
-
-# ---------------------------------------------------------------------------
-# send_email
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestSendEmail:
-    _creds = dict(
-        smtp_host="smtp.example.com",
-        smtp_port=465,
-        smtp_tls=True,
-        email="sender@example.com",
-        password="secret",
-    )
-
-    def test_success(self, handler):
-        mock_conn = MagicMock()
-        with patch.object(handler, "open_smtp", return_value=mock_conn):
-            result = handler.send_email(
-                **self._creds,
-                params={"to": "bob@example.com", "subject": "Hi", "body": "Hello"},
-            )
-        mock_conn.send_message.assert_called_once()
-        mock_conn.quit.assert_called_once()
-        assert result == {
-            "success": True,
-            "to": "bob@example.com",
-            "subject": "Hi",
-        }
-
-    def test_smtp_connect_failure(self, handler):
-        with patch.object(handler, "open_smtp", return_value=None):
-            result = handler.send_email(
-                **self._creds,
-                params={"to": "bob@example.com", "subject": "Hi", "body": "Hello"},
-            )
-        assert "error" in result
-
-    def test_missing_required_params(self, handler):
-        result = handler.send_email(
-            **self._creds,
-            params={"to": "bob@example.com"},  # missing subject + body
-        )
-        assert result == {"error": "to, subject, and body are required"}
-
-    def test_in_reply_to_sets_headers(self, handler):
-        mock_conn = MagicMock()
-        sent_msg = {}
-
-        def capture(msg):
-            sent_msg["msg"] = msg
-
-        mock_conn.send_message.side_effect = capture
-        with patch.object(handler, "open_smtp", return_value=mock_conn):
-            handler.send_email(
-                **self._creds,
-                params={
-                    "to": "bob@example.com",
-                    "subject": "Re: Hi",
-                    "body": "Reply body",
-                    "in_reply_to": "<orig@example.com>",
-                },
-            )
-        msg = sent_msg["msg"]
-        assert msg["In-Reply-To"] == "<orig@example.com>"
-        assert msg["References"] == "<orig@example.com>"
-
-    def test_smtp_error_returns_error_dict(self, handler):
-        mock_conn = MagicMock()
-        mock_conn.send_message.side_effect = OSError("SMTP error")
-        with patch.object(handler, "open_smtp", return_value=mock_conn):
-            result = handler.send_email(
-                **self._creds,
-                params={"to": "b@ex.com", "subject": "S", "body": "B"},
-            )
-        assert "error" in result
-        assert "SMTP error" in result["error"]

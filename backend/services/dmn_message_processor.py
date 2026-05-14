@@ -39,6 +39,7 @@ class DMNMessageProcessor(MessageProcessor):
 
     CHANNEL = 'dmn'
     ROLE = 'proactive_thought'
+    USAGE_CLASS = 'subconscious'
     MAX_ITERATIONS = 15
     SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
@@ -53,11 +54,15 @@ class DMNMessageProcessor(MessageProcessor):
         "news",
         "read",
         "review_tool_calls",
+        "review_transcript",
         "schedule",
         "search",
     ]
     DISCOVERABLE: list[str] = [
+        "calendar",
         "code_eval",
+        "contacts",
+        "email",
         "programming_docs_search",
         "weather",
     ]

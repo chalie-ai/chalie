@@ -1,4 +1,4 @@
-"""ImapHandler — protocol-specific IMAP/SMTP logic for MailCapability.
+"""ImapHandler — protocol-specific IMAP logic for MailCapability.
 
 Plain class; no AbstractCapability.  Credentials are passed as parameters
 so the parent MailCapability remains the sole credential owner.
@@ -10,7 +10,7 @@ import email as _email_mod
 import email.policy
 import email.utils
 import logging
-import re
+
 from datetime import timedelta
 
 from services.time_utils import utc_now
@@ -18,7 +18,7 @@ from services.time_utils import utc_now
 logger = logging.getLogger(__name__)
 
 _INITIAL_DAYS = 7
-_MAX_BODY_CHARS = 4000
+
 _IMAP_DATE_FMT = "%d-%b-%Y"
 _IMAP_FETCH_HEADER = b"RFC822.HEADER"
 
@@ -26,6 +26,26 @@ _IMAP_FETCH_HEADER = b"RFC822.HEADER"
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+_SPAM_NAMES = {"junk", "spam", "[gmail]/spam", "bulk mail", "spamverdacht"}
+_DRAFTS_NAMES = {"drafts", "[gmail]/drafts", "draft", "entwürfe"}
+
+
+def _find_folder(client, names: set[str]) -> str | None:
+    folders = client.list_folders()
+    for _flags, _delim, name in folders:
+        if name.lower() in names:
+            return name
+    return None
+
+
+def _find_spam_folder(client) -> str | None:
+    return _find_folder(client, _SPAM_NAMES)
+
+
+def _find_drafts_folder(client) -> str | None:
+    return _find_folder(client, _DRAFTS_NAMES)
+
 
 def _imap_date(iso_str: str) -> str:
     """ISO YYYY-MM-DD → IMAP DD-Mon-YYYY."""
@@ -67,21 +87,17 @@ def parse_headers(uid: int, header_bytes: bytes) -> dict:
     }
 
 
-def extract_body(raw_bytes: bytes, max_chars: int = _MAX_BODY_CHARS) -> str:
-    """Extract plain-text body from raw RFC822 bytes; falls back to de-HTMLified text/html."""
+def extract_body(raw_bytes: bytes) -> str:
+    """Extract plain-text body from raw RFC822 bytes."""
     msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
     parts = list(msg.walk()) if msg.is_multipart() else [msg]
-    by_type: dict[str, list[str]] = {"text/plain": [], "text/html": []}
+    chunks: list[str] = []
     for p in parts:
-        ct = p.get_content_type()
-        if ct in by_type:
+        if p.get_content_type() == "text/plain":
             c = p.get_content()
             if isinstance(c, str):
-                by_type[ct].append(c)
-    text = "\n".join(by_type["text/plain"]) or re.sub(
-        r"<[^>]+>", "", "\n".join(by_type["text/html"])
-    ).strip()
-    return (text[:max_chars] + "\n[truncated]") if len(text) > max_chars else text
+                chunks.append(c)
+    return "\n".join(chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -105,22 +121,6 @@ class ImapHandler:
             return c
         except Exception as exc:
             logger.error("[imap_handler] open_client: %s", exc)
-            return None
-
-    def open_smtp(self, host: str, port: int, tls: bool,
-                  email: str, password: str, timeout: int = 30):
-        """Open and return an authenticated SMTP connection, or None on failure."""
-        import smtplib
-        try:
-            if tls:
-                conn = smtplib.SMTP_SSL(host, port, timeout=timeout)
-            else:
-                conn = smtplib.SMTP(host, port, timeout=timeout)
-                conn.starttls()
-            conn.login(email, password)
-            return conn
-        except Exception as exc:
-            logger.error("[imap_handler] open_smtp: %s", exc)
             return None
 
     # ------------------------------------------------------------------
@@ -317,39 +317,78 @@ class ImapHandler:
     # Send
     # ------------------------------------------------------------------
 
-    def send_email(self, *, smtp_host: str, smtp_port: int, smtp_tls: bool,
-                   email: str, password: str, params: dict) -> dict:
-        """Send an email via SMTP.
+    def draft_email(self, client, *, from_addr: str, params: dict) -> dict:
+        """Create a draft email in the provider's Drafts folder via IMAP APPEND.
 
         Required params: to, subject, body.
         Optional params: in_reply_to (Message-ID for threading).
         """
         from email.mime.text import MIMEText
-        to         = (params.get("to")         or "").strip()
-        subject    = (params.get("subject")    or "").strip()
-        body       = (params.get("body")       or "").strip()
+        to = (params.get("to") or "").strip()
+        subject = (params.get("subject") or "").strip()
+        body = (params.get("body") or "").strip()
         in_reply_to = (params.get("in_reply_to") or "").strip()
         if not to or not subject or not body:
             return {"error": "to, subject, and body are required"}
         msg = MIMEText(body, "plain", "utf-8")
-        msg["From"] = email
+        msg["From"] = from_addr
         msg["To"] = to
         msg["Subject"] = subject
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
             msg["References"] = in_reply_to
-        conn = self.open_smtp(host=smtp_host, port=smtp_port, tls=smtp_tls,
-                               email=email, password=password)
-        if not conn:
-            return {"error": "Failed to connect to SMTP server"}
+        drafts = _find_drafts_folder(client)
+        if not drafts:
+            return {"error": "No drafts folder found on this mail server"}
         try:
-            conn.send_message(msg)
-            return {"success": True, "to": to, "subject": subject}
+            client.append(drafts, msg.as_bytes(), flags=[b"\\Draft", b"\\Seen"])
+            return {"success": True, "to": to, "subject": subject, "folder": drafts}
         except Exception as exc:
-            logger.error("[imap_handler] send_email: %s", exc)
+            logger.error("[imap_handler] draft_email: %s", exc)
             return {"error": str(exc)}
-        finally:
-            try:
-                conn.quit()
-            except Exception:
-                pass
+
+    # ------------------------------------------------------------------
+    # Manage
+    # ------------------------------------------------------------------
+
+    def manage_email(self, client, params: dict) -> dict:
+        uid = params.get("uid")
+        if uid is None:
+            return {"error": "uid is required"}
+        try:
+            uid = int(uid)
+        except (TypeError, ValueError):
+            return {"error": "uid must be an integer"}
+        operation = params.get("operation")
+        _valid_ops = {"delete", "mark_read", "mark_important", "move_to_spam"}
+        if operation not in _valid_ops:
+            return {"error": f"operation must be one of: {', '.join(sorted(_valid_ops))}"}
+        try:
+            if operation == "delete":
+                client.select_folder("INBOX")
+                client.delete_messages([uid])
+                client.expunge([uid])
+                return {"success": True, "uid": uid, "operation": "delete"}
+            elif operation == "mark_read":
+                client.select_folder("INBOX")
+                client.set_flags([uid], [b"\\Seen"])
+                return {"success": True, "uid": uid, "operation": "mark_read"}
+            elif operation == "mark_important":
+                client.select_folder("INBOX")
+                client.set_flags([uid], [b"\\Flagged"])
+                return {"success": True, "uid": uid, "operation": "mark_important"}
+            else:  # move_to_spam
+                client.select_folder("INBOX")
+                spam = _find_spam_folder(client)
+                if not spam:
+                    return {"error": "No spam/junk folder found on this mail server"}
+                try:
+                    client.move([uid], spam)
+                except Exception:
+                    client.copy([uid], spam)
+                    client.delete_messages([uid])
+                    client.expunge([uid])
+                return {"success": True, "uid": uid, "operation": "move_to_spam"}
+        except Exception as exc:
+            logger.error("[imap_handler] manage_email: %s", exc)
+            return {"error": str(exc)}

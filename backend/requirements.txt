@@ -33,8 +33,6 @@ vobject>=0.9.7
 nltk>=3.8
 nh3>=0.2.0
 markdown-it-py>=3.0.0
-pysbd>=0.3.4
-num2words>=0.5.13
 
 # ── Test dependencies (not needed in production) ──
 pytest>=8.0.0

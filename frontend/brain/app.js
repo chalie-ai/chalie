@@ -1711,6 +1711,9 @@ document.getElementById('obsRefreshBtn').addEventListener('click', () => {
 function loadCognitionSubtab(subtab) {
     if (subtab === 'memory') { loadRecordsObs(); return; }
     if (subtab === 'personality') { loadPersonality(); return; }
+    // usage tab is window-selectable — always reload (window selector manages
+    // its own state via _usageWindow).
+    if (subtab === 'usage') { loadUsageObs(); return; }
     if (obsLoaded[subtab]) return; // Already cached
 
     const loaders = {
@@ -1982,6 +1985,196 @@ async function loadWorldStateObs() {
         console.warn('[brain/app] failed to load world state data:', e);
         el.innerHTML = '<div class="obs-empty">Could not load world state data.</div>';
     }
+}
+
+// ── Token Usage ──
+
+let _usageWindow = 'day';
+
+// Colour palette for stacked bars: chat / subagent / subconscious, then token
+// sub-types (input, output, cache_read, cache_create, thinking).
+const _USAGE_CLASS_COLORS = {
+    chat:         '#8a5cff',
+    subagent:     '#3fb8af',
+    subconscious: '#f4a261',
+};
+
+const _TOKEN_TYPE_COLORS = {
+    tokens_input:        '#8a5cff',
+    tokens_output:       '#3fb8af',
+    tokens_cache_read:   '#2ec4b6',
+    tokens_cache_create: '#f4a261',
+    tokens_thinking:     '#e76f51',
+};
+
+document.getElementById('usageWindowSelector').addEventListener('click', (e) => {
+    const btn = e.target.closest('.filter-tab');
+    if (!btn) return;
+    document.querySelectorAll('#usageWindowSelector .filter-tab').forEach(b => {
+        b.classList.toggle('active', b === btn);
+    });
+    _usageWindow = btn.dataset.window;
+    loadUsageObs();
+});
+
+async function loadUsageObs() {
+    const summaryEl = document.getElementById('usageSummaryRow');
+    const chartEl   = document.getElementById('usageChart');
+    const emptyEl   = document.getElementById('usageChartEmpty');
+    const legendEl  = document.getElementById('usageLegend');
+
+    summaryEl.innerHTML = [1,2,3,4].map(() => `<div class="usage-stat-card">${obsSkeletonBlock(36)}</div>`).join('');
+    chartEl.innerHTML   = '';
+    emptyEl.style.display = 'none';
+    legendEl.innerHTML  = '';
+
+    try {
+        const res = await apiFetch(`/system/observability/token-usage?window=${_usageWindow}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        obsSetTimestamp(data.generated_at);
+
+        const s = data.summary || {};
+        summaryEl.innerHTML = _usageSummaryCards(s);
+
+        const entries = data.entries || [];
+        if (entries.length === 0) {
+            chartEl.style.display   = 'none';
+            emptyEl.style.display   = 'block';
+            legendEl.innerHTML      = '';
+            return;
+        }
+
+        chartEl.style.display = '';
+        _renderUsageChart(chartEl, entries);
+        legendEl.innerHTML = _usageLegendHtml(entries);
+    } catch (e) {
+        console.warn('[brain/app] loadUsageObs failed:', e);
+        summaryEl.innerHTML = '<div class="obs-empty">Failed to load token usage data.</div>';
+    }
+}
+
+function _usageSummaryCards(s) {
+    const fmt = n => {
+        if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+        if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k';
+        return String(n);
+    };
+    const cards = [
+        { label: 'Total Tokens', value: fmt(s.total_tokens ?? 0), sub: 'lifetime' },
+        { label: 'Cache Hit Rate', value: (s.cache_hit_pct ?? 0).toFixed(1) + '%', sub: 'of prompt tokens' },
+        { label: 'Tokens Today', value: fmt(s.tokens_today ?? 0), sub: 'UTC day' },
+        { label: 'Top Model', value: s.most_active_model ? escapeHtml(s.most_active_model) : '—', sub: 'most calls' },
+    ];
+    return cards.map(c => `
+        <div class="usage-stat-card">
+            <div class="usage-stat-card__label">${c.label}</div>
+            <div class="usage-stat-card__value">${c.value}</div>
+            <div class="usage-stat-card__sub">${c.sub}</div>
+        </div>`).join('');
+}
+
+function _renderUsageChart(svgEl, entries) {
+    // Aggregate entries by bucket — sum all token types per bucket.
+    const bucketTotals = {};
+    for (const e of entries) {
+        const b = e.bucket;
+        if (!bucketTotals[b]) bucketTotals[b] = { chat: 0, subagent: 0, subconscious: 0, total: 0 };
+        const cls = e.usage_class || 'chat';
+        const t   = (e.tokens_input || 0) + (e.tokens_output || 0) +
+                    (e.tokens_cache_read || 0) + (e.tokens_cache_create || 0) +
+                    (e.tokens_thinking || 0);
+        bucketTotals[b][cls] = (bucketTotals[b][cls] || 0) + t;
+        bucketTotals[b].total += t;
+    }
+
+    const buckets = Object.keys(bucketTotals).sort();
+    if (buckets.length === 0) return;
+
+    const maxTotal = Math.max(...buckets.map(b => bucketTotals[b].total), 1);
+    const classes  = ['chat', 'subagent', 'subconscious'];
+
+    const wrap = document.getElementById('usageChartWrap');
+    const W  = (wrap ? wrap.clientWidth : 0) - 32 || 600;
+    const H  = 180;
+    const PL = 48, PR = 8, PT = 8, PB = 28;
+    const chartW = W - PL - PR;
+    const chartH = H - PT - PB;
+
+    const barW  = Math.max(4, Math.min(40, (chartW / buckets.length) * 0.7));
+    const gap   = (chartW / buckets.length);
+
+    svgEl.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svgEl.setAttribute('width', W);
+    svgEl.setAttribute('height', H);
+
+    let html = '';
+
+    // Y-axis grid lines + labels.
+    const ticks = [0, 0.25, 0.5, 0.75, 1.0];
+    for (const t of ticks) {
+        const y = PT + chartH - t * chartH;
+        const label = _fmtTokens(maxTotal * t);
+        html += `<line x1="${PL}" y1="${y}" x2="${PL + chartW}" y2="${y}"
+                       stroke="rgba(255,255,255,0.07)" stroke-width="1"/>`;
+        html += `<text x="${PL - 4}" y="${y + 4}" text-anchor="end"
+                       font-size="9" fill="rgba(255,255,255,0.35)">${label}</text>`;
+    }
+
+    // Bars (stacked by usage_class).
+    buckets.forEach((b, i) => {
+        const x0 = PL + i * gap + (gap - barW) / 2;
+        let yOffset = PT + chartH;
+
+        for (const cls of classes) {
+            const val = bucketTotals[b][cls] || 0;
+            if (val === 0) continue;
+            const bh = (val / maxTotal) * chartH;
+            const bY = yOffset - bh;
+            html += `<rect x="${x0.toFixed(1)}" y="${bY.toFixed(1)}"
+                           width="${barW.toFixed(1)}" height="${bh.toFixed(1)}"
+                           fill="${_USAGE_CLASS_COLORS[cls]}" rx="2"/>`;
+            yOffset -= bh;
+        }
+
+        // X-axis label — show every Nth bucket so they don't overlap.
+        const step = Math.max(1, Math.ceil(buckets.length / 10));
+        if (i % step === 0) {
+            const label = _bucketLabel(b);
+            html += `<text x="${(x0 + barW / 2).toFixed(1)}" y="${PT + chartH + 14}"
+                           text-anchor="middle" font-size="9"
+                           fill="rgba(255,255,255,0.40)">${escapeHtml(label)}</text>`;
+        }
+    });
+
+    svgEl.innerHTML = html;
+}
+
+function _fmtTokens(n) {
+    if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+    if (n >= 1_000)     return (n / 1_000).toFixed(0) + 'k';
+    return String(Math.round(n));
+}
+
+function _bucketLabel(bucket) {
+    // bucket is either "YYYY-MM-DDTHH:00:00" or "YYYY-MM-DD".
+    if (bucket.includes('T')) {
+        return bucket.slice(11, 16);   // "HH:00"
+    }
+    return bucket.slice(5);            // "MM-DD"
+}
+
+function _usageLegendHtml(entries) {
+    const classesPresent = [...new Set(entries.map(e => e.usage_class).filter(Boolean))];
+    return classesPresent.map(cls => {
+        const color = _USAGE_CLASS_COLORS[cls] || '#888';
+        const label = cls.charAt(0).toUpperCase() + cls.slice(1);
+        return `<span class="usage-legend__item">
+            <span class="usage-legend__swatch" style="background:${color}"></span>
+            ${escapeHtml(label)}
+        </span>`;
+    }).join('');
 }
 
 // ── Error Log ──

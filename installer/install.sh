@@ -328,7 +328,8 @@ _install_voice_deps() {
   os="$(_detect_os)"
 
   # Install system-level dependencies for soundfile + ffmpeg.
-  # moonshine_voice ships its own neural G2P, so espeak-ng is no longer needed.
+  # kokoro-onnx pulls in espeakng-loader (wheel-shipped espeak-ng binary),
+  # so the system-level espeak-ng package is not required.
   if [[ "$os" == "darwin" ]]; then
     if command -v brew >/dev/null 2>&1; then
       _info "Installing libsndfile and ffmpeg via Homebrew…"
@@ -348,6 +349,15 @@ _install_voice_deps() {
       *fedora*|*rhel*|*centos*)
         _run_privileged dnf install -y libsndfile ffmpeg 2>/dev/null || true
         ;;
+      *alpine*)
+        _run_privileged apk add --no-cache libsndfile ffmpeg 2>/dev/null || true
+        ;;
+      *arch*|*manjaro*)
+        _run_privileged pacman -S --needed --noconfirm libsndfile ffmpeg 2>/dev/null || true
+        ;;
+      *opensuse*|*suse*)
+        _run_privileged zypper install -y libsndfile ffmpeg 2>/dev/null || true
+        ;;
       *)
         _warn "Cannot auto-install voice deps on distro: $distro"
         _warn "Install manually: libsndfile, ffmpeg"
@@ -355,6 +365,70 @@ _install_voice_deps() {
     esac
   fi
   _ok "Voice system dependencies ready"
+}
+
+# ─── Voice Models (baked into the install) ─────────────────────────────────
+#
+# Kokoro TTS (~310 MB ONNX + ~28 MB voices) and Moonshine STT (~150 MB ONNX
+# encoder + decoder) live under $CHALIE_HOME/app/resources/voice-models/. This
+# directory is OUTSIDE the data/ bind mount, so the files travel with the
+# image when Docker builds, and survive `chalie update` on native installs.
+#
+# All downloads are idempotent — if the file already exists at the expected
+# path, the curl is skipped. Failures here are non-fatal: voice will return
+# 503 at runtime with a clear hint, but the rest of Chalie still boots.
+_download_voice_models() {
+  if [[ "$_DISABLE_VOICE" == "true" ]]; then
+    return 0
+  fi
+
+  _section "Voice Models"
+  local voice_root="$CHALIE_HOME/app/resources/voice-models"
+  local kokoro_dir="$voice_root/kokoro"
+  local moonshine_dir="$voice_root/moonshine/base"
+  mkdir -p "$kokoro_dir" "$moonshine_dir"
+
+  local kokoro_release="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+  local moonshine_hf="https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/merged/base/float"
+
+  local fetched=0
+  _fetch_model() {
+    local url="$1" dest="$2" label="$3"
+    if [[ -f "$dest" ]] && [[ "$(stat -c%s "$dest" 2>/dev/null || stat -f%z "$dest" 2>/dev/null)" -gt 1024 ]]; then
+      return 0
+    fi
+    _info "Downloading $label…"
+    if ! curl -fL --progress-bar -o "$dest" "$url"; then
+      _warn "$label download failed — voice will be unavailable until you re-run the installer"
+      rm -f "$dest"
+      return 1
+    fi
+    fetched=$((fetched + 1))
+  }
+
+  _fetch_model "$kokoro_release/kokoro-v1.0.onnx" "$kokoro_dir/kokoro-v1.0.onnx" "Kokoro TTS model (~310 MB)" || true
+  _fetch_model "$kokoro_release/voices-v1.0.bin"   "$kokoro_dir/voices-v1.0.bin"   "Kokoro voices (~28 MB)"     || true
+  _fetch_model "$moonshine_hf/encoder_model.onnx"        "$moonshine_dir/encoder_model.onnx"        "Moonshine encoder" || true
+  _fetch_model "$moonshine_hf/decoder_model_merged.onnx" "$moonshine_dir/decoder_model_merged.onnx" "Moonshine decoder" || true
+
+  if [[ "$fetched" -eq 0 ]]; then
+    local missing=()
+    [[ -f "$kokoro_dir/kokoro-v1.0.onnx" ]]             || missing+=("resources/voice-models/kokoro/kokoro-v1.0.onnx")
+    [[ -f "$kokoro_dir/voices-v1.0.bin" ]]               || missing+=("resources/voice-models/kokoro/voices-v1.0.bin")
+    [[ -f "$moonshine_dir/encoder_model.onnx" ]]         || missing+=("resources/voice-models/moonshine/base/encoder_model.onnx")
+    [[ -f "$moonshine_dir/decoder_model_merged.onnx" ]]  || missing+=("resources/voice-models/moonshine/base/decoder_model_merged.onnx")
+    if [[ "${#missing[@]}" -eq 0 ]]; then
+      _ok "Voice models already present at $voice_root"
+    else
+      _warn "Voice models missing — no downloads were attempted but the following files are absent:"
+      for f in "${missing[@]}"; do
+        _warn "  $f"
+      done
+      _warn "Re-run the installer to download them."
+    fi
+  else
+    _ok "Voice models ready at $voice_root"
+  fi
 }
 
 # ─── Download Latest Release ────────────────────────────────────────────────
@@ -466,6 +540,7 @@ _setup_venv() {
 
   _ok "Python environment ready"
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
+  _info "Voice models (Kokoro TTS + Moonshine STT) download next, baked into the install"
 }
 
 # ─── Playwright Browsers ────────────────────────────────────────────────────
@@ -774,6 +849,7 @@ main() {
   _install_onnxruntime_variant
   _install_playwright_browsers
   _install_sqlite_vec_fix
+  _download_voice_models
   _install_cli
   _print_success
 

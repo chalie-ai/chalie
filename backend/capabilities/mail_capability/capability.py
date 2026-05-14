@@ -42,7 +42,6 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
-import uuid
 
 import yaml
 
@@ -99,7 +98,6 @@ class MailCapability(AbstractCapability):
         _caldav_ok (bool): CalDAV protocol is connected and operational.
         _carddav_ok (bool): CardDAV protocol is connected and operational.
         _cycle_count (int): Monitor cycles since last successful :meth:`connect`.
-        _sync_registered (bool): Scheduler handler has been registered.
     """
 
     def __init__(self) -> None:
@@ -112,7 +110,6 @@ class MailCapability(AbstractCapability):
         self._caldav_ok: bool = False
         self._carddav_ok: bool = False
         self._cycle_count: int = 0
-        self._sync_registered: bool = False
 
     # ------------------------------------------------------------------
     # Identity
@@ -341,9 +338,6 @@ class MailCapability(AbstractCapability):
         any_ok = self._imap_ok or self._caldav_ok or self._carddav_ok
         self._connected = any_ok
 
-        if any_ok:
-            self._ensure_sync_registration()
-
         return any_ok
 
     # ------------------------------------------------------------------
@@ -490,7 +484,6 @@ class MailCapability(AbstractCapability):
         if not self.is_connected():
             return
 
-        self._cycle_count += 1
         now = utc_now()
 
         email = self.load_credential(_K_EMAIL)
@@ -552,6 +545,8 @@ class MailCapability(AbstractCapability):
             except Exception as exc:
                 logger.error("[mail] _do_monitor() CardDAV: %s", exc)
 
+        self._cycle_count += 1
+
     # ------------------------------------------------------------------
     # Cognitive pipeline — act
     # ------------------------------------------------------------------
@@ -560,7 +555,7 @@ class MailCapability(AbstractCapability):
         """Dispatch a write action to the appropriate protocol handler.
 
         Args:
-            action: Tool name, e.g. ``"send_email"``, ``"create_event"``.
+            action: Tool name, e.g. ``"draft_email"``, ``"create_event"``.
             params: Action-specific parameters.
 
         Returns:
@@ -577,49 +572,6 @@ class MailCapability(AbstractCapability):
     # Scheduler registration
     # ------------------------------------------------------------------
 
-    def _ensure_sync_registration(self) -> None:
-        """Register the ``mail:sync`` handler and create the recurring scheduled_item.
-
-        Runs once per capability lifetime (guarded by ``_sync_registered``).
-        Uses a 5-minute base interval matching the IMAP polling cadence.
-        """
-        if self._sync_registered:
-            return
-        try:
-            from services.scheduler_service import register_system_handler
-            register_system_handler("mail:sync", self.monitor)
-
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            now = utc_now()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                # Backfill: any mail/caldav records created before `hidden` column
-                # will have hidden=NULL; treat them as hidden.
-                cursor.execute(
-                    "UPDATE scheduled_items SET hidden = 1"
-                    " WHERE source = 'mail' AND COALESCE(hidden, 0) != 1"
-                )
-                cursor.execute(
-                    "SELECT id FROM scheduled_items WHERE external_uid = ?",
-                    ("system:mail:sync",),
-                )
-                if not cursor.fetchone():
-                    cursor.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, recurrence, status,
-                            topic, source, external_uid, hidden, created_at)
-                         VALUES (?, 'system', 'Mail sync', ?, 'interval:5',
-                                 'pending', 'mail:sync', 'mail', 'system:mail:sync',
-                                 1, ?)""",
-                        (uuid.uuid4().hex[:8], now.isoformat(), now.isoformat()),
-                    )
-                conn.commit()
-            self._sync_registered = True
-            logger.info("[mail] Sync handler registered + scheduled_item ensured.")
-        except Exception as exc:
-            logger.warning("[mail] _ensure_sync_registration: %s", exc)
-
     # ------------------------------------------------------------------
     # Tools
     # ------------------------------------------------------------------
@@ -628,7 +580,7 @@ class MailCapability(AbstractCapability):
         """Return tool definitions conditioned on which protocols are connected.
 
         IMAP tools (when ``_imap_ok``):
-            ``search_email``, ``read_email``, ``send_email``
+            ``search_email``, ``read_email``, ``draft_email``, ``manage_email``
 
         CalDAV tools (when ``_caldav_ok``):
             ``list_events``, ``get_event``, ``create_event``, ``update_event``,
@@ -712,23 +664,40 @@ class MailCapability(AbstractCapability):
                 except Exception as exc:
                     return {"error": str(exc)}
 
-            def _send_email(topic, params, config=None, telemetry=None):
+            def _draft_email(topic, params, config=None, telemetry=None):
                 if not cap._imap_ok:
                     return {"error": _ERR_IMAP_NOT_CONNECTED}
                 try:
                     _email = cap.load_credential(_K_EMAIL)
-                    _password = cap.load_credential(_K_PASSWORD)
-                    _provider = discover_provider(_email or "")
-                    if not _provider or not _provider.smtp:
-                        return {"error": "SMTP provider not available."}
-                    return cap._imap_handler.send_email(
-                        smtp_host=_provider.smtp.host,
-                        smtp_port=_provider.smtp.port,
-                        smtp_tls=_provider.smtp.tls,
-                        email=_email,
-                        password=_password,
-                        params=params,
-                    )
+                    client = _open_imap_client()
+                    if client is None:
+                        return {"error": "Failed to open IMAP connection."}
+                    try:
+                        return cap._imap_handler.draft_email(
+                            client, from_addr=_email, params=params,
+                        )
+                    finally:
+                        try:
+                            client.logout()
+                        except Exception:
+                            pass
+                except Exception as exc:
+                    return {"error": str(exc)}
+
+            def _manage_email(topic, params, config=None, telemetry=None):
+                if not cap._imap_ok:
+                    return {"error": _ERR_IMAP_NOT_CONNECTED}
+                try:
+                    client = _open_imap_client()
+                    if client is None:
+                        return {"error": "Failed to open IMAP connection."}
+                    try:
+                        return cap._imap_handler.manage_email(client, params)
+                    finally:
+                        try:
+                            client.logout()
+                        except Exception:
+                            pass
                 except Exception as exc:
                     return {"error": str(exc)}
 
@@ -772,8 +741,8 @@ class MailCapability(AbstractCapability):
                     "timeout": 30,
                 },
                 {
-                    "name": "send_email",
-                    "description": "Send an email via SMTP.",
+                    "name": "draft_email",
+                    "description": "Create a draft email in the user's Drafts folder via IMAP.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -787,8 +756,26 @@ class MailCapability(AbstractCapability):
                         },
                         "required": ["to", "subject", "body"],
                     },
-                    "handler": _send_email,
-                    "timeout": 30,
+                    "handler": _draft_email,
+                    "timeout": 15,
+                },
+                {
+                    "name": "manage_email",
+                    "description": "Manage an email: delete, mark as read, mark as important, or move to spam.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "uid": {"type": "integer", "description": "IMAP UID of the email"},
+                            "operation": {
+                                "type": "string",
+                                "enum": ["delete", "mark_read", "mark_important", "move_to_spam"],
+                                "description": "The management operation to perform.",
+                            },
+                        },
+                        "required": ["uid", "operation"],
+                    },
+                    "handler": _manage_email,
+                    "timeout": 15,
                 },
             ]
 
@@ -797,16 +784,6 @@ class MailCapability(AbstractCapability):
         # ------------------------------------------------------------------
 
         if self._caldav_ok:
-            def _list_events(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                return cap._caldav_handler.list_events(params)
-
-            def _get_event(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                return cap._caldav_handler.get_event(params)
-
             def _create_event(topic, params, config=None, telemetry=None):
                 if not cap._caldav_ok:
                     return {"error": _ERR_CALDAV_NOT_CONNECTED}
@@ -851,34 +828,6 @@ class MailCapability(AbstractCapability):
                 return cap._caldav_handler.get_attendees(params)
 
             tools += [
-                {
-                    "name": "list_events",
-                    "description": "List calendar events within an optional date range.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "date_from": {"type": "string", "description": "ISO 8601 start bound"},
-                            "date_to": {"type": "string", "description": "ISO 8601 end bound"},
-                            "calendar_name": {"type": "string", "description": "Filter by calendar name"},
-                            "limit": {"type": "integer", "description": "Max results (default 50, max 200)"},
-                        },
-                    },
-                    "handler": _list_events,
-                    "timeout": 15,
-                },
-                {
-                    "name": "get_event",
-                    "description": "Get full details of a calendar event by UID.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "uid": {"type": "string", "description": _DESC_CALDAV_UID},
-                        },
-                        "required": ["uid"],
-                    },
-                    "handler": _get_event,
-                    "timeout": 15,
-                },
                 {
                     "name": "create_event",
                     "description": "Create a new calendar event on the CalDAV server.",
