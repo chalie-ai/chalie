@@ -42,11 +42,14 @@ class UserMessageProcessor(MessageProcessor):
     JOB = 'frontal-cortex-unified'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # 9 innate abilities — pre-injected on every ACT iteration. The 10 in
+    # 10 innate abilities — pre-injected on every ACT iteration. The 9 in
     # DISCOVERABLE are surfaced at runtime via find_tools and never
     # pre-injected. `subagent` lives in DISCOVERABLE so it competes with
-    # weather/search/news/browser via find_tools rather than appearing as
-    # an always-on fallback that biases routing for single-tool lookups.
+    # search/news/browser via find_tools rather than appearing as an always-on
+    # fallback that biases routing for single-tool lookups. `weather` is
+    # promoted to ALWAYS_AVAILABLE because the find_tools→weather hop costs an
+    # extra LLM iteration per weather query with no routing benefit — weather
+    # has a narrow, unambiguous trigger that does not need discovery gating.
     ALWAYS_AVAILABLE: list[str] = [
         "find_tools",
         "document",
@@ -57,6 +60,7 @@ class UserMessageProcessor(MessageProcessor):
         "review_transcript",
         "schedule",
         "timer",
+        "weather",
     ]
     DISCOVERABLE: list[str] = [
         "browser",
@@ -68,7 +72,6 @@ class UserMessageProcessor(MessageProcessor):
         "programming_docs_search",
         "search",
         "subagent",
-        "weather",
     ]
 
     # ── Constructor ───────────────────────────────────────────────────────────

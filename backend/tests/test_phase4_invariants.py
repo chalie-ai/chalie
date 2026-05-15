@@ -169,14 +169,15 @@ def test_abilities_directory_has_exactly_21_non_underscore_modules():
 #     for this processor.  find_tools filters its DB query by this list.
 #
 # The bug this test prevents: pre-injecting discoverable externals
-# (browser, code_eval, news, programming_docs_search, search, weather) into
-# a processor's ALWAYS_AVAILABLE that should not own them.  Pre-injection
+# (browser, code_eval, news, programming_docs_search, search) into a
+# processor's ALWAYS_AVAILABLE that should not own them.  Pre-injection
 # bloated tools arrays from ~5kB to ~12.8kB and produced Ollama 500 errors +
 # model hallucinations in nightly run 346.
 
 _DEFAULT_ALWAYS = frozenset({
     "document", "find_tools", "list", "memory",
     "read", "review_tool_calls", "review_transcript", "schedule", "timer",
+    "weather",
 })
 
 # `subagent` is discoverable in UMP only — DMN/Scheduled/Subagent processors
@@ -200,18 +201,20 @@ _CAPABILITY_TOOLS = frozenset({"email", "calendar", "contacts"})
 
 
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
-    "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
+    # `weather` is promoted to ALWAYS_AVAILABLE — narrow unambiguous trigger,
+    # eliminates the find_tools→weather extra LLM iteration per query.
+    "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE - {"weather"}),
     # DMN has news, search, browser natively per masterplan §4 — no find_tools round-trip.
     # `timer` is dropped: DMN runs in the background without a user-channel
     # surface, so the rich-media card would never render. `subagent` is
     # excluded everywhere except UMP so background processes cannot spawn
     # nested subagents. email/calendar/contacts remain discoverable for DMN
     # — background reflection needs access to personal data context.
-    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
+    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer", "weather"}) | {"news", "search", "browser"},
                                    _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent"}),
     # ScheduledPromptProcessor — same tool surface as UMP. Scheduled prompts
     # act on the user's behalf with full capabilities.
-    "ScheduledPromptProcessor": (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
+    "ScheduledPromptProcessor": (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE - {"weather"}),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
     # the class-level attribute is [] (empty). The per-instance value is
     # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
@@ -276,7 +279,15 @@ def test_per_processor_tool_scope_matches_spec():
 
         # DMNMessageProcessor has news/search/browser promoted to
         # ALWAYS_AVAILABLE per masterplan §4 — not a leak, by design.
-        approved_always_externals = {"news", "search", "browser"} if name == "DMNMessageProcessor" else set()
+        # UMP and ScheduledPromptProcessor have weather promoted to
+        # ALWAYS_AVAILABLE — narrow unambiguous trigger, no routing benefit
+        # from a find_tools round-trip.
+        if name == "DMNMessageProcessor":
+            approved_always_externals = {"news", "search", "browser"}
+        elif name in {"UserMessageProcessor", "ScheduledPromptProcessor"}:
+            approved_always_externals = {"weather"}
+        else:
+            approved_always_externals = set()
         leaked_externals = always & (_DEFAULT_DISCOVERABLE - approved_always_externals)
         assert not leaked_externals, (
             f"{name}.ALWAYS_AVAILABLE leaks discoverable externals "
