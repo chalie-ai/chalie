@@ -49,7 +49,7 @@ from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
 from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler
-from capabilities.mail_capability.providers import discover_provider
+from capabilities.mail_capability.providers import build_custom_provider, discover_provider
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -136,6 +136,35 @@ class MailCapability(AbstractCapability):
         return self._manifest_cache
 
     # ------------------------------------------------------------------
+    # Provider resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_provider(self, email: str):
+        """Resolve provider from email domain, falling back to stored credentials.
+
+        Known domains (Gmail, Apple, Yahoo, Outlook) resolve from the registry.
+        Custom/self-hosted servers fall back to connection fields persisted
+        during :meth:`configure`.
+
+        Returns:
+            UnifiedProvider or ``None`` if resolution fails entirely.
+        """
+        provider = discover_provider(email)
+        if provider is not None:
+            return provider
+        # Fall back to stored connection fields (custom provider)
+        imap_host = self.load_credential(_K_IMAP_HOST)
+        if not imap_host:
+            return None
+        return build_custom_provider(
+            imap_host=imap_host,
+            imap_port=int(self.load_credential(_K_IMAP_PORT) or "993"),
+            imap_tls=self.load_credential(_K_IMAP_TLS) != "0",
+            caldav_url=self.load_credential(_K_CALDAV_URL) or None,
+            carddav_url=self.load_credential(_K_CARDDAV_URL) or None,
+        )
+
+    # ------------------------------------------------------------------
     # Lifecycle — configure
     # ------------------------------------------------------------------
 
@@ -158,9 +187,20 @@ class MailCapability(AbstractCapability):
 
         provider = discover_provider(email)
         if provider is None:
-            raise ValueError(
-                f"[mail] Unsupported provider for '{email}'. "
-                "Supported: Google, Apple, Yahoo, Outlook."
+            imap_host = (credentials.get("imap_host") or "").strip()
+            if not imap_host:
+                raise ValueError(
+                    f"[mail] Unsupported provider for '{email}'. "
+                    "Supported: Google, Apple, Yahoo, Outlook. "
+                    "For custom servers, pass imap_host."
+                )
+            _tls = str(credentials.get("imap_tls", "1")).lower()
+            provider = build_custom_provider(
+                imap_host=imap_host,
+                imap_port=int(credentials.get("imap_port", 993)),
+                imap_tls=_tls not in ("0", "false", "no"),
+                caldav_url=(credentials.get("caldav_url") or "").strip() or None,
+                carddav_url=(credentials.get("carddav_url") or "").strip() or None,
             )
 
         # Persist base credentials
@@ -177,6 +217,16 @@ class MailCapability(AbstractCapability):
             self.store_credential(_K_SMTP_HOST, provider.smtp.host)
             self.store_credential(_K_SMTP_PORT, str(provider.smtp.port))
             self.store_credential(_K_SMTP_TLS, "1" if provider.smtp.tls else "0")
+        if provider.caldav_url:
+            self.store_credential(
+                _K_CALDAV_URL,
+                provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email),
+            )
+        if provider.carddav_url:
+            self.store_credential(
+                _K_CARDDAV_URL,
+                provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email),
+            )
 
         # Probe each protocol independently
         active_protocols: list[str] = []
@@ -280,9 +330,9 @@ class MailCapability(AbstractCapability):
             logger.warning("[mail] connect(): no active protocols stored.")
             return False
 
-        provider = discover_provider(email)
+        provider = self._resolve_provider(email)
         if provider is None:
-            logger.error("[mail] connect(): unsupported provider for '%s'.", email)
+            logger.error("[mail] connect(): no provider for '%s'.", email)
             return False
 
         self._imap_ok = False
@@ -387,7 +437,7 @@ class MailCapability(AbstractCapability):
         items: list[dict] = []
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
-        provider = discover_provider(email or "")
+        provider = self._resolve_provider(email or "")
         if not provider:
             return []
 
@@ -488,7 +538,7 @@ class MailCapability(AbstractCapability):
 
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
-        provider = discover_provider(email or "")
+        provider = self._resolve_provider(email or "")
         if not provider:
             return
 
@@ -603,7 +653,7 @@ class MailCapability(AbstractCapability):
         def _open_imap_client():
             _email = cap.load_credential(_K_EMAIL)
             _password = cap.load_credential(_K_PASSWORD)
-            _provider = discover_provider(_email or "")
+            _provider = cap._resolve_provider(_email or "")
             if not _provider or not _provider.imap:
                 raise ValueError("IMAP not available for this provider.")
             return cap._imap_handler.open_client(
@@ -617,7 +667,7 @@ class MailCapability(AbstractCapability):
         def _open_caldav_client():
             _email = cap.load_credential(_K_EMAIL)
             _password = cap.load_credential(_K_PASSWORD)
-            _provider = discover_provider(_email or "")
+            _provider = cap._resolve_provider(_email or "")
             if not _provider or not _provider.caldav_url:
                 raise ValueError("CalDAV not available for this provider.")
             _url = _provider.caldav_url.replace(_PLACEHOLDER_USERNAME, _email)

@@ -144,3 +144,27 @@ def discover_provider(email: str) -> UnifiedProvider | None:
 def list_supported_providers() -> list[str]:
     """Return a sorted, deduplicated list of supported provider names."""
     return sorted({p.name for p in PROVIDERS.values()})
+
+
+def build_custom_provider(
+    *,
+    imap_host: str | None = None,
+    imap_port: int = 993,
+    imap_tls: bool = True,
+    caldav_url: str | None = None,
+    carddav_url: str | None = None,
+) -> UnifiedProvider:
+    """Build a provider from explicit connection fields.
+
+    Used for custom or self-hosted mail servers (e.g. GreenMail + Radicale
+    in test environments) that are not in the ``PROVIDERS`` registry.
+    """
+    return UnifiedProvider(
+        name="Custom",
+        imap=ServerSettings(imap_host, imap_port, imap_tls) if imap_host else None,
+        smtp=None,  # Chalie does not send — no SMTP needed
+        caldav_url=caldav_url,
+        caldav_principal_template=None,
+        carddav_url=carddav_url,
+        requires_app_password=False,
+    )

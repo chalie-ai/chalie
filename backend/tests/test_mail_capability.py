@@ -163,11 +163,61 @@ class TestMailCapabilityConfigure:
             with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
                 cap.configure({"email": "user@gmail.com"})
 
-    def test_configure_unsupported_provider_raises(self):
+    def test_configure_unsupported_provider_no_imap_host_raises(self):
         cap, vault, tcs = _make_capability()
-        with pytest.raises(ValueError, match="Unsupported provider"):
+        with pytest.raises(ValueError, match="imap_host"):
             with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
                 cap.configure({"email": "user@unknown-corp.io", "password": "x"})
+
+    def test_configure_custom_provider_with_imap_host(self):
+        cap, vault, tcs = _make_capability()
+        cap._imap_handler.open_client.return_value = MagicMock()
+        cap._caldav_handler.open_client.return_value = None
+        cap._carddav_handler.open_client.return_value = None
+        cap.connect = MagicMock(return_value=True)
+
+        with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
+            cap.configure({
+                "email": "test@example.com",
+                "password": "test@example.com",
+                "imap_host": "greenmail",
+                "imap_port": 3143,
+                "imap_tls": False,
+            })
+            provider_name = cap.load_credential("mail:provider_name")
+            host = cap.load_credential("mail:imap_host")
+            tls = cap.load_credential("mail:imap_tls")
+            protocols = json.loads(cap.load_credential("mail:protocols"))
+
+        assert provider_name == "Custom"
+        assert host == "greenmail"
+        assert tls == "0"
+        assert protocols == ["imap"]
+
+    def test_configure_custom_provider_all_protocols(self):
+        cap, vault, tcs = _make_capability()
+        cap._imap_handler.open_client.return_value = MagicMock()
+        cap._caldav_handler.open_client.return_value = MagicMock()
+        cap._carddav_handler.open_client.return_value = MagicMock()
+        cap.connect = MagicMock(return_value=True)
+
+        with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
+            cap.configure({
+                "email": "test@example.com",
+                "password": "test@example.com",
+                "imap_host": "greenmail",
+                "imap_port": 3143,
+                "imap_tls": False,
+                "caldav_url": "http://radicale:5232",
+                "carddav_url": "http://radicale:5232",
+            })
+            protocols = json.loads(cap.load_credential("mail:protocols"))
+            caldav = cap.load_credential("mail:caldav_url")
+            carddav = cap.load_credential("mail:carddav_url")
+
+        assert set(protocols) == {"imap", "caldav", "carddav"}
+        assert caldav == "http://radicale:5232"
+        assert carddav == "http://radicale:5232"
 
     def test_configure_all_probes_fail_deletes_creds_and_raises(self):
         cap, vault, tcs = _make_capability()
@@ -228,6 +278,40 @@ class TestMailCapabilityConfigure:
                 cap.configure({"email": "user@gmail.com", "password": "app-pw"})
 
         assert tcs.get_tool_config("mail") == {}
+
+
+@pytest.mark.unit
+class TestResolveProvider:
+    """_resolve_provider() falls back to stored credentials for custom servers."""
+
+    def test_known_domain_returns_registry_provider(self):
+        cap, vault, tcs = _make_capability()
+        with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
+            provider = cap._resolve_provider("user@gmail.com")
+        assert provider is not None
+        assert provider.name == "Google"
+
+    def test_unknown_domain_no_stored_creds_returns_none(self):
+        cap, vault, tcs = _make_capability()
+        with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
+            provider = cap._resolve_provider("user@example.com")
+        assert provider is None
+
+    def test_unknown_domain_with_stored_creds_builds_custom(self):
+        cap, vault, tcs = _make_capability()
+        with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
+            cap.store_credential("mail:imap_host", "greenmail")
+            cap.store_credential("mail:imap_port", "3143")
+            cap.store_credential("mail:imap_tls", "0")
+            cap.store_credential("mail:caldav_url", "http://radicale:5232")
+            provider = cap._resolve_provider("user@example.com")
+
+        assert provider is not None
+        assert provider.name == "Custom"
+        assert provider.imap.host == "greenmail"
+        assert provider.imap.port == 3143
+        assert provider.imap.tls is False
+        assert provider.caldav_url == "http://radicale:5232"
 
 
 @pytest.mark.unit
