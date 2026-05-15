@@ -22,8 +22,7 @@ LOG_PREFIX = "[SCHEDULER SKILL]"
 _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a scheduler card; without it, the user sees only "
     "plain text. Write a brief confirmation. Example: "
     "\"<span id='{tag}'>Done — 30 min with Mira on Thursday at 14:30.</span>\""

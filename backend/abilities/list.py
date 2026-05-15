@@ -22,8 +22,7 @@ from services.innate_skills._tag import tag as _skill_tag
 logger = logging.getLogger(__name__)
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a checklist card; without it, the user sees only "
     "plain text. Write a brief acknowledgement. Example: "
     "\"<span id='{tag}'>Added milk and eggs to your grocery list.</span>\""

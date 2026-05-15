@@ -15,8 +15,7 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CONTACTS ABILITY]"
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a contact card; without it, the user sees only "
     "plain text. Write a brief summary. Example: "
     "\"<span id='{tag}'>Here's John's contact info.</span>\""

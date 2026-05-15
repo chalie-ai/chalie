@@ -117,8 +117,7 @@ class WeatherAbility(Ability):
 
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a weather card; without it, the user sees only "
     "plain text. Example output: \"Current conditions in "
     "<span id='{tag}'>Paris is 14°C with light rain — bring an umbrella.</span>\" "
