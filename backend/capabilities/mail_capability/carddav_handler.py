@@ -58,6 +58,8 @@ class CarddavHandler:
         Returns a (possibly empty) list of normalised contact dicts.  Failures
         for individual cards are logged and skipped.
         """
+        import caldav as _caldav  # noqa: PLC0415
+
         contacts: list[dict] = []
         try:
             principal = client.principal()
@@ -65,6 +67,18 @@ class CarddavHandler:
         except Exception as exc:
             logger.warning("[carddav] could not list address books: %s", exc)
             return contacts
+
+        # Fallback: if principal-based discovery found nothing, treat the
+        # client's own URL as a direct address-book collection.  This covers
+        # servers (e.g. Radicale) where the caldav library lacks CardDAV
+        # address-book discovery but the collection URL is known.
+        if not address_books:
+            try:
+                direct = _caldav.Calendar(client=client, url=str(client.url))
+                address_books = [direct]
+                logger.info("[carddav] using direct collection URL as address book")
+            except Exception:
+                pass
 
         for abook in address_books:
             try:
@@ -336,5 +350,10 @@ def _extract_vcard_data(card_obj) -> str:
     if hasattr(card_obj, "vcard_to_string"):
         return str(card_obj.vcard_to_string())
     if hasattr(card_obj, "data"):
-        return str(card_obj.data)
-    return str(card_obj)
+        data = card_obj.data
+        if not data and hasattr(card_obj, "load"):
+            card_obj.load()
+            data = card_obj.data
+        if data:
+            return str(data)
+    return ""
