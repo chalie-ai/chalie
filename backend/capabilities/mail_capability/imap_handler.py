@@ -263,11 +263,65 @@ class ImapHandler:
                 since = (utc_now() - timedelta(days=7)).strftime(_IMAP_DATE_FMT)
                 criteria.extend(["SINCE", since])
             uids = client.search(criteria)
+
+            # IMAP FROM "<name>" substring-matches the raw From: header literal, so
+            # "Alice" never matches "alice@example.com" when there is no display name.
+            # When the initial search returns nothing and the caller supplied a name
+            # (no "@"), fetch by date range only and post-filter in Python.
+            prefetched: dict | None = None
+            if not uids and sender and "@" not in sender:
+                fallback_criteria: list = []
+                if date_from:
+                    fallback_criteria.extend(["SINCE", _imap_date(date_from)])
+                else:
+                    fallback_criteria.extend(
+                        ["SINCE", (utc_now() - timedelta(days=14)).strftime(_IMAP_DATE_FMT)]
+                    )
+                if date_to:
+                    fallback_criteria.extend(["BEFORE", _imap_date(date_to)])
+                if params.get("unanswered"):
+                    fallback_criteria.append("UNANSWERED")
+                fallback_uids = client.search(fallback_criteria)
+                logger.info(
+                    "[imap_handler] search empty; name-fallback for %r: %d candidates",
+                    sender, len(fallback_uids),
+                )
+                if fallback_uids:
+                    raw_all = client.fetch(fallback_uids, [_IMAP_FETCH_HEADER])
+                    sender_lower = sender.lower()
+                    matched: list[int] = []
+                    for uid_fb, data_fb in raw_all.items():
+                        h = parse_headers(uid_fb, data_fb[_IMAP_FETCH_HEADER])
+                        from_name_l = h.get("from_name", "").lower()
+                        from_addr_l = h.get("from_addr", "").lower()
+                        local_part = from_addr_l.split("@")[0] if "@" in from_addr_l else from_addr_l
+                        sender_match = (
+                            sender_lower in from_name_l
+                            or sender_lower in from_addr_l
+                            or sender_lower in local_part
+                        )
+                        if not sender_match:
+                            continue
+                        if subject and subject.lower() not in h.get("subject", "").lower():
+                            continue
+                        if keyword and keyword.lower() not in h.get("subject", "").lower():
+                            continue
+                        matched.append(uid_fb)
+                    uids = sorted(matched)
+                    prefetched = {uid_fb: raw_all[uid_fb] for uid_fb in uids}
+                    logger.info(
+                        "[imap_handler] name-fallback matched %d/%d for sender=%r",
+                        len(uids), len(fallback_uids), sender,
+                    )
+
             limit = int(params.get("limit", 20))
             uids = uids[-limit:] if len(uids) > limit else uids
             if not uids:
                 return {"emails": [], "count": 0}
-            raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
+            if prefetched is not None:
+                raw = {u: prefetched[u] for u in uids}
+            else:
+                raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
             triage_filter = (params.get("triage") or "").lower()
             results = []
             for u in sorted(raw.keys(), reverse=True):
