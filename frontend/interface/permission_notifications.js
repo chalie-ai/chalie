@@ -69,11 +69,7 @@ function buildParamsEl(params) {
 }
 
 export class PermissionNotifications {
-  /**
-   * @param {{ ws: import('./ws.js').WSClient }} options
-   */
-  constructor({ ws }) {
-    this._ws = ws;
+  constructor() {
     /** @type {Map<string, { el: HTMLElement, timer: number, interval: number }>} */
     this._active = new Map();
     this._container = null;
@@ -221,10 +217,12 @@ export class PermissionNotifications {
     clearInterval(entry.interval);
     this._active.delete(requestId);
 
-    // Send the response via WebSocket
-    if (this._ws.isConnected) {
-      this._ws.sendProtocol({ type: 'permission_response', request_id: requestId, approved });
-    }
+    // Send via REST — the WebSocket receive loop is blocked during chat processing
+    fetch('/api/policies/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId, approved }),
+    }).catch((e) => console.warn('[PermNotif] respond failed:', e));
 
     // Animate out
     const { el } = entry;

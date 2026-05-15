@@ -2,6 +2,7 @@
 Policies blueprint — per-action permission control (allow / ask / deny).
 """
 
+import json
 import logging
 
 from flask import Blueprint, jsonify, request
@@ -101,6 +102,29 @@ def reset_policies():
     except Exception as exc:
         logger.error("[POLICIES API] Reset failed: %s", exc)
         return jsonify({"error": "Failed to reset policies"}), 500
+
+
+@policies_bp.route('/respond', methods=['POST'])
+@require_session
+def respond_permission():
+    """Write the user's allow/deny decision to Redis for the blocked dispatch thread.
+
+    The chat WebSocket receive loop is blocked during chat processing, so the
+    frontend sends permission responses via this REST endpoint instead.
+    """
+    body = request.get_json(silent=True) or {}
+    request_id = body.get('request_id', '')
+    approved = bool(body.get('approved', False))
+    if not request_id:
+        return jsonify(error='request_id required'), 400
+    try:
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        store.setex(f'policy:response:{request_id}', 60, json.dumps({'approved': approved}))
+        return jsonify(ok=True), 200
+    except Exception as exc:
+        logger.error("[POLICIES API] Respond failed: %s", exc)
+        return jsonify(error='Failed to write response'), 500
 
 
 @policies_bp.route('/blocked', methods=['GET'])

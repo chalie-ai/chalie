@@ -111,7 +111,7 @@ class ChalieApp {
     this._updateSystem.init();
 
     // Permission notifications module
-    const permNotifications = new PermissionNotifications({ ws: this.ws });
+    const permNotifications = new PermissionNotifications();
     permNotifications.init();
     this._permNotifications = permNotifications;
 
