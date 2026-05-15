@@ -151,6 +151,9 @@ def build_custom_provider(
     imap_host: str | None = None,
     imap_port: int = 993,
     imap_tls: bool = True,
+    smtp_host: str | None = None,
+    smtp_port: int = 587,
+    smtp_tls: bool = False,
     caldav_url: str | None = None,
     carddav_url: str | None = None,
 ) -> UnifiedProvider:
@@ -158,11 +161,12 @@ def build_custom_provider(
 
     Used for custom or self-hosted mail servers (e.g. GreenMail + Radicale
     in test environments) that are not in the ``PROVIDERS`` registry.
+    SMTP settings are optional; omit to disable outbound sending.
     """
     return UnifiedProvider(
         name="Custom",
         imap=ServerSettings(imap_host, imap_port, imap_tls) if imap_host else None,
-        smtp=None,  # Chalie does not send — no SMTP needed
+        smtp=ServerSettings(smtp_host, smtp_port, smtp_tls) if smtp_host else None,
         caldav_url=caldav_url,
         caldav_principal_template=None,
         carddav_url=carddav_url,

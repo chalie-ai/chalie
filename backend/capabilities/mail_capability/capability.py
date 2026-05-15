@@ -156,10 +156,14 @@ class MailCapability(AbstractCapability):
         imap_host = self.load_credential(_K_IMAP_HOST)
         if not imap_host:
             return None
+        smtp_host = self.load_credential(_K_SMTP_HOST) or None
         return build_custom_provider(
             imap_host=imap_host,
             imap_port=int(self.load_credential(_K_IMAP_PORT) or "993"),
             imap_tls=self.load_credential(_K_IMAP_TLS) != "0",
+            smtp_host=smtp_host,
+            smtp_port=int(self.load_credential(_K_SMTP_PORT) or "587"),
+            smtp_tls=self.load_credential(_K_SMTP_TLS) == "1",
             caldav_url=self.load_credential(_K_CALDAV_URL) or None,
             carddav_url=self.load_credential(_K_CARDDAV_URL) or None,
         )
@@ -194,11 +198,16 @@ class MailCapability(AbstractCapability):
                     "Supported: Google, Apple, Yahoo, Outlook. "
                     "For custom servers, pass imap_host."
                 )
-            _tls = str(credentials.get("imap_tls", "1")).lower()
+            _imap_tls = str(credentials.get("imap_tls", "1")).lower()
+            _smtp_host = (credentials.get("smtp_host") or "").strip() or None
+            _smtp_tls = str(credentials.get("smtp_tls", "0")).lower()
             provider = build_custom_provider(
                 imap_host=imap_host,
                 imap_port=int(credentials.get("imap_port", 993)),
-                imap_tls=_tls not in ("0", "false", "no"),
+                imap_tls=_imap_tls not in ("0", "false", "no"),
+                smtp_host=_smtp_host,
+                smtp_port=int(credentials.get("smtp_port", 587)),
+                smtp_tls=_smtp_tls not in ("0", "false", "no"),
                 caldav_url=(credentials.get("caldav_url") or "").strip() or None,
                 carddav_url=(credentials.get("carddav_url") or "").strip() or None,
             )
@@ -651,6 +660,51 @@ class MailCapability(AbstractCapability):
         # Connection helpers
         # ------------------------------------------------------------------
 
+        def _load_smtp_creds() -> dict | None:
+            """Load SMTP credentials from the capability's credential store.
+
+            Returns a dict with host/port/tls/from_addr/password, or None
+            when SMTP is not configured for this provider.
+            """
+            smtp_host = cap.load_credential(_K_SMTP_HOST)
+            if not smtp_host:
+                return None
+            return {
+                "host": smtp_host,
+                "port": int(cap.load_credential(_K_SMTP_PORT) or "587"),
+                "tls": cap.load_credential(_K_SMTP_TLS) == "1",
+                "from_addr": cap.load_credential(_K_EMAIL),
+                "password": cap.load_credential(_K_PASSWORD),
+            }
+
+        def _was_read_in_current_turn(uid) -> bool:
+            """Return True when email.read for *uid* was called this ACT turn.
+
+            Inspects ToolCallService records for the current transcript so
+            reply/forward actions can enforce a read-before-act contract.
+            """
+            import json as _json
+            from services.message_processor import current_processor
+            from services.tool_call_service import ToolCallService
+            proc = current_processor()
+            if not proc or not getattr(proc, "_uid", None):
+                return False
+            try:
+                uid_int = int(uid)
+            except (TypeError, ValueError):
+                return False
+            calls = ToolCallService().get_by_transcript(proc._uid)
+            for tc in calls:
+                if tc.get("tool_name") != "email":
+                    continue
+                try:
+                    p = _json.loads(tc.get("params") or "{}")
+                except (ValueError, TypeError):
+                    continue
+                if p.get("action") == "read" and int(p.get("uid", 0)) == uid_int:
+                    return True
+            return False
+
         def _open_imap_client():
             _email = cap.load_credential(_K_EMAIL)
             _password = cap.load_credential(_K_PASSWORD)
@@ -751,6 +805,177 @@ class MailCapability(AbstractCapability):
                             pass
                 except Exception as exc:
                     return {"error": str(exc)}
+
+            # ------------------------------------------------------------------
+            # SMTP tools — only when SMTP credentials are present
+            # ------------------------------------------------------------------
+
+            smtp_host = self.load_credential(_K_SMTP_HOST)
+            if smtp_host:
+                def _send_email(topic, params, config=None, telemetry=None):
+                    if not cap._imap_ok:
+                        return {"error": _ERR_IMAP_NOT_CONNECTED}
+                    smtp_creds = _load_smtp_creds()
+                    if not smtp_creds:
+                        return {"error": "SMTP not configured for this provider."}
+                    try:
+                        return cap._imap_handler.send_email(
+                            smtp_host=smtp_creds["host"],
+                            smtp_port=smtp_creds["port"],
+                            smtp_tls=smtp_creds["tls"],
+                            from_addr=smtp_creds["from_addr"],
+                            password=smtp_creds["password"],
+                            params=params,
+                        )
+                    except Exception as exc:
+                        return {"error": str(exc)}
+
+                def _reply_email(topic, params, config=None, telemetry=None):
+                    if not cap._imap_ok:
+                        return {"error": _ERR_IMAP_NOT_CONNECTED}
+                    smtp_creds = _load_smtp_creds()
+                    if not smtp_creds:
+                        return {"error": "SMTP not configured for this provider."}
+                    uid = params.get("uid")
+                    if not uid:
+                        return {"error": "uid is required for reply"}
+                    if not _was_read_in_current_turn(uid):
+                        return {"error": "You need to read the email before replying."}
+                    try:
+                        client = _open_imap_client()
+                        if client is None:
+                            return {"error": "Failed to open IMAP connection."}
+                        try:
+                            original = cap._imap_handler.read_email(client, {"uid": uid})
+                        finally:
+                            try:
+                                client.logout()
+                            except Exception:
+                                pass
+                        if "error" in original:
+                            return original
+                        return cap._imap_handler.send_email(
+                            smtp_host=smtp_creds["host"],
+                            smtp_port=smtp_creds["port"],
+                            smtp_tls=smtp_creds["tls"],
+                            from_addr=smtp_creds["from_addr"],
+                            password=smtp_creds["password"],
+                            params={
+                                "to": original.get("from_addr", ""),
+                                "subject": f"Re: {original.get('subject', '')}",
+                                "body": params.get("body", ""),
+                                "in_reply_to": original.get("message_id", ""),
+                            },
+                        )
+                    except Exception as exc:
+                        return {"error": str(exc)}
+
+                def _forward_email(topic, params, config=None, telemetry=None):
+                    if not cap._imap_ok:
+                        return {"error": _ERR_IMAP_NOT_CONNECTED}
+                    smtp_creds = _load_smtp_creds()
+                    if not smtp_creds:
+                        return {"error": "SMTP not configured for this provider."}
+                    uid = params.get("uid")
+                    if not uid:
+                        return {"error": "uid is required for forward"}
+                    if not _was_read_in_current_turn(uid):
+                        return {"error": "You need to read the email before forwarding."}
+                    to = (params.get("to") or "").strip()
+                    if not to:
+                        return {"error": "to is required for forward"}
+                    try:
+                        client = _open_imap_client()
+                        if client is None:
+                            return {"error": "Failed to open IMAP connection."}
+                        try:
+                            original = cap._imap_handler.read_email(client, {"uid": uid})
+                        finally:
+                            try:
+                                client.logout()
+                            except Exception:
+                                pass
+                        if "error" in original:
+                            return original
+                        from_name = original.get("from_name") or original.get("from_addr", "")
+                        forward_header = (
+                            f"---------- Forwarded message ----------\n"
+                            f"From: {from_name}\n"
+                            f"Date: {original.get('date', '')}\n"
+                            f"Subject: {original.get('subject', '')}\n\n"
+                        )
+                        body = forward_header + original.get("body", "")
+                        return cap._imap_handler.send_email(
+                            smtp_host=smtp_creds["host"],
+                            smtp_port=smtp_creds["port"],
+                            smtp_tls=smtp_creds["tls"],
+                            from_addr=smtp_creds["from_addr"],
+                            password=smtp_creds["password"],
+                            params={
+                                "to": to,
+                                "subject": f"Fwd: {original.get('subject', '')}",
+                                "body": body,
+                            },
+                        )
+                    except Exception as exc:
+                        return {"error": str(exc)}
+
+                tools += [
+                    {
+                        "name": "send_email",
+                        "description": "Send an email via SMTP.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "to": {"type": "string", "description": "Recipient email address"},
+                                "subject": {"type": "string", "description": "Email subject line"},
+                                "body": {"type": "string", "description": "Plain-text email body"},
+                                "cc": {"type": "string", "description": "CC recipient email address"},
+                                "in_reply_to": {
+                                    "type": "string",
+                                    "description": "Message-ID for threading this as a reply",
+                                },
+                            },
+                            "required": ["to", "subject", "body"],
+                        },
+                        "handler": _send_email,
+                        "timeout": 30,
+                    },
+                    {
+                        "name": "reply_email",
+                        "description": (
+                            "Reply to an email by UID. Requires email.read to have been "
+                            "called on the same UID in this turn."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "uid": {"type": "integer", "description": "IMAP UID of the email to reply to"},
+                                "body": {"type": "string", "description": "Plain-text reply body"},
+                            },
+                            "required": ["uid", "body"],
+                        },
+                        "handler": _reply_email,
+                        "timeout": 30,
+                    },
+                    {
+                        "name": "forward_email",
+                        "description": (
+                            "Forward an email by UID to a new recipient. Requires email.read "
+                            "to have been called on the same UID in this turn."
+                        ),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "uid": {"type": "integer", "description": "IMAP UID of the email to forward"},
+                                "to": {"type": "string", "description": "Recipient email address"},
+                            },
+                            "required": ["uid", "to"],
+                        },
+                        "handler": _forward_email,
+                        "timeout": 30,
+                    },
+                ]
 
             tools += [
                 {

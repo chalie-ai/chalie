@@ -1,12 +1,13 @@
 """
-EmailAbility — Read, search, draft, and manage emails via the connected mail account.
+EmailAbility — Read, search, draft, send, reply, forward, and manage emails.
 
-Delegates to MailCapability's IMAP handler. The capability is lazy-loaded
+Delegates to MailCapability's IMAP/SMTP handler. The capability is lazy-loaded
 inside execute() to avoid circular imports and to handle the case where the
 capability is not yet connected.
 
-Sending is intentionally not supported — the draft action composes the email
-and returns it for user review. The user sends it themselves.
+Send, reply, and forward require SMTP to be configured. Reply and forward
+additionally require that email.read was called on the target UID in the
+current ACT turn.
 """
 
 import json
@@ -21,8 +22,9 @@ LOG_PREFIX = "[EMAIL ABILITY]"
 class EmailAbility(Ability):
     NAME = "email"
     SUMMARY = (
-        "Read, search, draft, and manage emails via the connected mail account. "
-        "Available when the user asks to check, find, compose, or manage email."
+        "Read, search, draft, send, reply, forward, and manage emails via the connected "
+        "mail account. Available when the user asks to check, find, compose, send, "
+        "reply to, forward, or manage email."
     )
     EXAMPLES = [
         "check my email",
@@ -30,22 +32,25 @@ class EmailAbility(Ability):
         "do I have any unread messages",
         "read that email from Sarah",
         "draft an email to the team about the meeting",
-        "compose a reply to that invoice email",
-        "find emails about the project from last week",
-        "show me unanswered emails",
+        "send an email to John about the meeting",
+        "reply to Alice's email saying I agree",
+        "forward the newsletter to the marketing team",
     ]
     INPUT_SCHEMA = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["search", "read", "draft", "manage"],
+                "enum": ["search", "read", "draft", "manage", "send", "reply", "forward"],
                 "description": (
                     "The email action to perform. "
                     "search — find emails by sender, subject, keyword, date range, triage, or unanswered flag. "
                     "read — fetch the full body of an email by its IMAP UID. "
-                    "draft — compose an email and return it for user review (requires to, subject, body). "
-                    "manage — delete, mark as read, mark as important, or move an email to spam (requires uid, operation)."
+                    "draft — compose an email and save to Drafts (requires to, subject, body). "
+                    "manage — delete, mark as read, mark as important, or move an email to spam (requires uid, operation). "
+                    "send — send an email via SMTP (requires to, subject, body). "
+                    "reply — reply to an email by UID; must call read on the same UID first (requires uid, body). "
+                    "forward — forward an email by UID to a new recipient; must call read on the same UID first (requires uid, to)."
                 ),
             },
             "sender": {
@@ -54,7 +59,7 @@ class EmailAbility(Ability):
             },
             "subject": {
                 "type": "string",
-                "description": "search: filter by subject keyword. draft: email subject line.",
+                "description": "search: filter by subject keyword. draft/send: email subject line.",
             },
             "keyword": {
                 "type": "string",
@@ -83,7 +88,7 @@ class EmailAbility(Ability):
             },
             "uid": {
                 "type": "integer",
-                "description": "read/manage: IMAP UID of the email.",
+                "description": "read/manage/reply/forward: IMAP UID of the email.",
             },
             "operation": {
                 "type": "string",
@@ -92,15 +97,22 @@ class EmailAbility(Ability):
             },
             "to": {
                 "type": "string",
-                "description": "draft: recipient email address.",
+                "description": "draft/send/forward: recipient email address.",
             },
             "body": {
                 "type": "string",
-                "description": "draft: plain-text email body.",
+                "description": "draft/send/reply: plain-text email body.",
+            },
+            "cc": {
+                "type": "string",
+                "description": "send: CC recipient email address.",
             },
             "in_reply_to": {
                 "type": "string",
-                "description": "draft: Message-ID for threading this as a reply.",
+                "description": (
+                    "draft: Message-ID for threading this as a reply. "
+                    "reply: auto-set from the original email — do not pass manually."
+                ),
             },
         },
         "required": ["action"],
@@ -128,6 +140,9 @@ class EmailAbility(Ability):
             "read": "read_email",
             "draft": "draft_email",
             "manage": "manage_email",
+            "send": "send_email",
+            "reply": "reply_email",
+            "forward": "forward_email",
         }
 
         handler_name = _ACTION_TO_HANDLER.get(action)

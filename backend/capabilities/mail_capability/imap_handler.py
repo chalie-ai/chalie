@@ -348,6 +348,62 @@ class ImapHandler:
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
+    # Send via SMTP
+    # ------------------------------------------------------------------
+
+    def send_email(self, *, smtp_host: str, smtp_port: int, smtp_tls: bool,
+                   from_addr: str, password: str, params: dict) -> dict:
+        """Send an email via SMTP.
+
+        Required params: to, subject, body.
+        Optional params: in_reply_to (Message-ID for threading), cc.
+        """
+        import smtplib
+        from email.mime.text import MIMEText
+
+        to = (params.get("to") or "").strip()
+        subject = (params.get("subject") or "").strip()
+        body = (params.get("body") or "").strip()
+        in_reply_to = (params.get("in_reply_to") or "").strip()
+        cc = (params.get("cc") or "").strip()
+
+        if not to or not subject or not body:
+            return {"error": "to, subject, and body are required"}
+
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["From"] = from_addr
+        msg["To"] = to
+        msg["Subject"] = subject
+        if cc:
+            msg["Cc"] = cc
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+            msg["References"] = in_reply_to
+
+        try:
+            if smtp_tls:
+                with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as server:
+                    server.login(from_addr, password)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                    server.ehlo()
+                    try:
+                        server.starttls()
+                        server.ehlo()
+                    except smtplib.SMTPNotSupportedError:
+                        pass
+                    try:
+                        server.login(from_addr, password)
+                    except smtplib.SMTPNotSupportedError:
+                        pass
+                    server.send_message(msg)
+            return {"success": True, "to": to, "subject": subject}
+        except Exception as exc:
+            logger.error("[imap_handler] send_email: %s", exc)
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
     # Manage
     # ------------------------------------------------------------------
 
