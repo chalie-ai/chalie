@@ -22,6 +22,7 @@ import { ImageAttach } from './image_attach.js';
 import { DocumentUpload } from './document_upload.js';
 import { UpdateSystem } from './update_system.js';
 import { PermissionNotifications } from './permission_notifications.js';
+import { QuickTipCard } from './quick_tip_card.js';
 import { showToast, lsGet, lsSet } from './utils.js';
 
 // Disable the browser's scroll-restoration so a refresh never lands the
@@ -114,6 +115,10 @@ class ChalieApp {
     const permNotifications = new PermissionNotifications();
     permNotifications.init();
     this._permNotifications = permNotifications;
+
+    // Quick tip card module
+    this._quickTipCard = new QuickTipCard({ getHost: () => this._backendHost });
+    this._quickTipCard.init();
 
     // Event router — dispatches WS drift events to modules
     this._eventRouter = new EventRouter({ ws: this.ws, renderer: this.renderer });
@@ -459,6 +464,10 @@ class ChalieApp {
 
     this._eventRouter.onPermissionRequest((data) => {
       this._permNotifications.handleRequest(data);
+    });
+
+    this._eventRouter.onQuickTip((data) => {
+      this._quickTipCard.handleTip(data);
     });
   }
 

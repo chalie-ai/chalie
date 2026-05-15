@@ -14,6 +14,7 @@ export class EventRouter {
     this._onBackgroundContent = null;
     this._onCapabilityAlert = null;
     this._onPermissionRequest = null;
+    this._onQuickTip = null;
     this._isSendingGetter = () => false;
   }
 
@@ -34,6 +35,9 @@ export class EventRouter {
 
   /** Register handler for 'permission_request' events. */
   onPermissionRequest(cb) { this._onPermissionRequest = cb; }
+
+  /** Register handler for 'quick_tip' events. */
+  onQuickTip(cb) { this._onQuickTip = cb; }
 
   /**
    * Register handler for background drift/response/escalation content.
@@ -82,6 +86,11 @@ export class EventRouter {
 
     if (data.type === 'permission_request') {
       if (this._onPermissionRequest) this._onPermissionRequest(data);
+      return;
+    }
+
+    if (data.type === 'quick_tip') {
+      if (this._onQuickTip) this._onQuickTip(data);
       return;
     }
 
