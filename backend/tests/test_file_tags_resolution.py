@@ -263,13 +263,14 @@ def test_nonexistent_image_emits_not_found_tag(_ft_db):
 def test_empty_image_ids_picks_up_recent_upload_document(_ft_db):
     """
     When image_ids is empty but a source_type='upload' document was created
-    within the last 120 seconds and is ready with clean_text, _resolve_file_tags
-    must inject [document(id=..., name=...)]content[end:document] with the
-    document's clean_text.
+    within the last 120 seconds and is ready, _resolve_file_tags must inject
+    a structural marker [document(id=..., name=...)][end:document] with no
+    inline body.
 
-    This is the drag-and-drop PDF / text-file path: the user uploads a PDF
-    alongside their message, and even though no explicit image_ids are sent,
-    the file context is injected automatically.
+    clean_text retrieval is now the document tool's responsibility — the
+    file_tag for source_type='upload' emits a structural marker only so that
+    the model is forced to call the document tool rather than answering from
+    the inline content.
     """
     _, seed_conn = _ft_db
     _insert_doc(
@@ -286,9 +287,7 @@ def test_empty_image_ids_picks_up_recent_upload_document(_ft_db):
 
     assert len(tags) == 1
     tag = tags[0]
-    assert tag.startswith("[document(id=doc00001, name=report.pdf)]")
-    assert tag.endswith("[end:document]")
-    assert "Quarterly revenue grew 18%" in tag
+    assert tag == "[document(id=doc00001, name=report.pdf)][end:document]"
 
 
 @pytest.mark.unit

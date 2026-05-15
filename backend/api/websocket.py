@@ -276,14 +276,12 @@ def _resolve_image_tag(svc, image_id: str, deadline: float, request_id: str) -> 
     return f"[image(id={image_id})]timeout of {int(_UPLOAD_DEADLINE_S)} seconds exceeded[end:image]"
 
 
-def _format_ready_upload_tag(svc, doc_id: str, original_name: str, fallback_text: str, source_type: str) -> str:
+def _format_ready_upload_tag(svc, doc_id: str, original_name: str, source_type: str) -> str:
     """Format the tag for a ready recent-upload. Re-reads for the final committed row."""
     final = svc.get_document(doc_id) or {}
     if source_type == 'chat_image':
         return _image_ocr_tag(final, doc_id)
-    final_text = (final.get('clean_text') or fallback_text or '').strip()
-    body = final_text[:2000] if final_text else 'no content extracted'
-    return f"[document(id={doc_id}, name={original_name})]{body}[end:document]"
+    return f"[document(id={doc_id}, name={original_name})][end:document]"
 
 
 def _fetch_recent_upload_row(db):
@@ -313,12 +311,12 @@ def _resolve_recent_upload(db, svc, request_id: str):
     if not row:
         return None, None
 
-    doc_id, original_name, doc_status, clean_text, source_type = row
+    doc_id, original_name, doc_status, _, source_type = row
     if doc_status not in ('ready', 'failed'):
         doc_status = _poll_until_terminal(svc, doc_id, _time.monotonic() + _UPLOAD_DEADLINE_S)
 
     if doc_status == 'ready':
-        return _format_ready_upload_tag(svc, doc_id, original_name, clean_text, source_type), doc_id
+        return _format_ready_upload_tag(svc, doc_id, original_name, source_type), doc_id
 
     tag_kind = 'image' if source_type == 'chat_image' else 'document'
     if tag_kind == 'image':
