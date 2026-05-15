@@ -8,7 +8,7 @@ the address.  These tests verify that path without a live IMAP server.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,7 +29,7 @@ def _header_bytes(
     lines = [
         f"Subject: {subject}",
         f"From: {from_addr}",
-        f"To: bob@example.com",
+        "To: bob@example.com",
         f"Date: {date}",
         f"Message-ID: {message_id}",
     ]
