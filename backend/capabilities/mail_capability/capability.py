@@ -652,31 +652,6 @@ class MailCapability(AbstractCapability):
             password=self.load_credential(_K_PASSWORD),
         )
 
-    @staticmethod
-    def _was_read_in_current_turn(uid) -> bool:
-        """Return True when email.read for *uid* was called this ACT turn."""
-        import json as _json
-        from services.message_processor import current_processor
-        from services.tool_call_service import ToolCallService
-        proc = current_processor()
-        if not proc or not getattr(proc, "_uid", None):
-            return False
-        try:
-            uid_int = int(uid)
-        except (TypeError, ValueError):
-            return False
-        calls = ToolCallService().get_by_transcript(proc._uid)
-        for tc in calls:
-            if tc.get("tool_name") != "email":
-                continue
-            try:
-                p = _json.loads(tc.get("params") or "{}")
-            except (ValueError, TypeError):
-                continue
-            if p.get("action") == "read" and int(p.get("uid", 0)) == uid_int:
-                return True
-        return False
-
     # ------------------------------------------------------------------
     # Tools
     # ------------------------------------------------------------------
@@ -830,8 +805,6 @@ class MailCapability(AbstractCapability):
                     uid = params.get("uid")
                     if not uid:
                         return {"error": "uid is required for reply"}
-                    if not cap._was_read_in_current_turn(uid):
-                        return {"error": "You need to read the email before replying."}
                     try:
                         creds = cap._load_smtp_creds()
                         client = _open_imap_client()
@@ -846,7 +819,7 @@ class MailCapability(AbstractCapability):
                                 pass
                         if "error" in original:
                             return original
-                        return cap._imap_handler.send_email(
+                        result = cap._imap_handler.send_email(
                             creds=creds,
                             params={
                                 "to": original.get("from_addr", ""),
@@ -855,6 +828,14 @@ class MailCapability(AbstractCapability):
                                 "in_reply_to": original.get("message_id", ""),
                             },
                         )
+                        if result.get("success"):
+                            result["original"] = {
+                                "from": original.get("from_addr", ""),
+                                "subject": original.get("subject", ""),
+                                "body": original.get("body", ""),
+                                "date": original.get("date", ""),
+                            }
+                        return result
                     except Exception as exc:
                         return {"error": str(exc)}
 
@@ -864,8 +845,6 @@ class MailCapability(AbstractCapability):
                     uid = params.get("uid")
                     if not uid:
                         return {"error": "uid is required for forward"}
-                    if not cap._was_read_in_current_turn(uid):
-                        return {"error": "You need to read the email before forwarding."}
                     to = (params.get("to") or "").strip()
                     if not to:
                         return {"error": "to is required for forward"}
@@ -891,7 +870,7 @@ class MailCapability(AbstractCapability):
                             f"Subject: {original.get('subject', '')}\n\n"
                         )
                         body = forward_header + original.get("body", "")
-                        return cap._imap_handler.send_email(
+                        result = cap._imap_handler.send_email(
                             creds=creds,
                             params={
                                 "to": to,
@@ -899,6 +878,14 @@ class MailCapability(AbstractCapability):
                                 "body": body,
                             },
                         )
+                        if result.get("success"):
+                            result["original"] = {
+                                "from": original.get("from_addr", ""),
+                                "subject": original.get("subject", ""),
+                                "body": original.get("body", ""),
+                                "date": original.get("date", ""),
+                            }
+                        return result
                     except Exception as exc:
                         return {"error": str(exc)}
 
@@ -926,8 +913,8 @@ class MailCapability(AbstractCapability):
                     {
                         "name": "reply_email",
                         "description": (
-                            "Reply to an email by UID. Requires email.read to have been "
-                            "called on the same UID in this turn."
+                            "Reply to an email by UID. Reads the original email, "
+                            "then sends the reply. Returns the original email content."
                         ),
                         "parameters": {
                             "type": "object",
@@ -943,8 +930,8 @@ class MailCapability(AbstractCapability):
                     {
                         "name": "forward_email",
                         "description": (
-                            "Forward an email by UID to a new recipient. Requires email.read "
-                            "to have been called on the same UID in this turn."
+                            "Forward an email by UID to a new recipient. Reads the "
+                            "original email, then sends it. Returns the original content."
                         ),
                         "parameters": {
                             "type": "object",
