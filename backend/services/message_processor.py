@@ -117,6 +117,11 @@ def bind_current_processor(processor: "MessageProcessor"):
 
     Also sets/clears ``processor._turn_active`` so async subagent delivery
     threads can distinguish a live parent (mid-turn) from a finished one.
+
+    On exit, drains any leftover ``processor._pending_steers`` through Case B
+    (``_spawn_return_processor``). Closes the race where a subagent completes
+    during the parent's last ACT iteration and the envelope would otherwise
+    sit in ``_pending_steers`` with no further iteration to drain it.
     """
     token = _CURRENT_PROCESSOR.set(processor)
     processor._turn_active.set()
@@ -124,6 +129,23 @@ def bind_current_processor(processor: "MessageProcessor"):
         yield processor
     finally:
         processor._turn_active.clear()
+        pending = list(getattr(processor, '_pending_steers', []))
+        if hasattr(processor, '_pending_steers'):
+            processor._pending_steers.clear()
+        if pending:
+            try:
+                from abilities.subagent import _spawn_return_processor
+                for envelope in pending:
+                    try:
+                        _spawn_return_processor(envelope)
+                    except Exception as exc:
+                        logger.error(
+                            "bind_current_processor: failed to flush pending steer: %s", exc
+                        )
+            except Exception as exc:
+                logger.error(
+                    "bind_current_processor: could not import _spawn_return_processor: %s", exc
+                )
         _CURRENT_PROCESSOR.reset(token)
 
 

@@ -349,6 +349,61 @@ class TestDeliverEnvelopeDiscriminator:
 
 
 # ---------------------------------------------------------------------------
+# AD1b. bind_current_processor flushes leftover _pending_steers on exit
+#
+# Regression for a race condition: when a subagent completes during the
+# parent's last ACT iteration, Case A appends the envelope to _pending_steers
+# (parent is still active). If the parent then produces its final response
+# without another iteration, the envelope is silently dropped — the drain
+# only runs at the top of each new iteration. Fix: bind_current_processor's
+# finally block flushes leftover steers via _spawn_return_processor (Case B).
+# ---------------------------------------------------------------------------
+
+
+class TestBindCurrentProcessorFlushesPendingSteers:
+    def test_pending_steers_flushed_via_spawn_on_context_exit(self):
+        """Leftover _pending_steers must be drained through _spawn_return_processor
+        when the bind_current_processor context exits."""
+        import threading
+        from unittest.mock import patch
+        from services.message_processor import bind_current_processor
+        from services.user_message_processor import UserMessageProcessor
+
+        envelope = "[subagent.complete(type=web_surfer)]\nLate result\n[end:subagent.complete]"
+
+        parent = UserMessageProcessor.__new__(UserMessageProcessor)
+        parent._pending_steers = []
+        parent._turn_active = threading.Event()
+
+        with patch('abilities.subagent._spawn_return_processor') as mock_spawn:
+            with bind_current_processor(parent):
+                # Subagent completes mid-turn — Case A path appends to _pending_steers
+                assert parent._turn_active.is_set()
+                parent._pending_steers.append(envelope)
+            # Parent ended turn without another ACT iteration — flush must fire
+
+        mock_spawn.assert_called_once_with(envelope)
+        assert parent._pending_steers == []
+
+    def test_no_flush_when_pending_steers_empty(self):
+        """Empty _pending_steers must not invoke _spawn_return_processor."""
+        import threading
+        from unittest.mock import patch
+        from services.message_processor import bind_current_processor
+        from services.user_message_processor import UserMessageProcessor
+
+        parent = UserMessageProcessor.__new__(UserMessageProcessor)
+        parent._pending_steers = []
+        parent._turn_active = threading.Event()
+
+        with patch('abilities.subagent._spawn_return_processor') as mock_spawn:
+            with bind_current_processor(parent):
+                pass
+
+        mock_spawn.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # AD2. _spawn_return_processor wires OutputService
 #
 # Regression: _spawn_return_processor used to call
