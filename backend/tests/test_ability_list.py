@@ -1,9 +1,10 @@
 """
 Feature tests for ListAbility — strict CRUD interface.
 
-Existing lists are addressed by ``id`` (8-char hex). ``name`` is used only
-for ``create`` and ``rename``. The LLM discovers ids by calling
-``list_all`` first.
+Existing lists are addressed by ``id`` (8-char hex) or by exact name
+(case-insensitive). ``name`` is used only for ``create`` and ``rename``.
+The LLM discovers ids by calling ``list_all`` first, or may address lists
+directly by name when the id isn't already in context.
 
 Actions: list_all, create, view, add, check, remove, clear, rename, delete
 
@@ -130,7 +131,7 @@ class TestView:
     def test_unknown_id_fails(self, ability):
         body = _payload(_exec(ability, {"action": "view", "id": "deadbeef"}))
         assert body['status'] == 'fail'
-        assert 'not found' in body['message']
+        assert 'No list found' in body['message']
 
 
 # ─── action: add ───────────────────────────────────────────────────────────
@@ -159,7 +160,7 @@ class TestAdd:
             "action": "add", "id": "deadbeef", "items": ["milk"],
         }))
         assert body['status'] == 'fail'
-        assert 'not found' in body['message']
+        assert 'No list found' in body['message']
 
     def test_all_duplicates_fails(self, ability, service):
         list_id = service.create_list("Groceries")
@@ -246,7 +247,7 @@ class TestClear:
     def test_unknown_id_fails(self, ability):
         body = _payload(_exec(ability, {"action": "clear", "id": "deadbeef"}))
         assert body['status'] == 'fail'
-        assert 'not found' in body['message']
+        assert 'No list found' in body['message']
 
 
 # ─── action: rename ────────────────────────────────────────────────────────
@@ -286,7 +287,60 @@ class TestDelete:
     def test_unknown_id_fails(self, ability):
         body = _payload(_exec(ability, {"action": "delete", "id": "deadbeef"}))
         assert body['status'] == 'fail'
-        assert 'not found' in body['message']
+        assert 'No list found' in body['message']
+
+
+# ─── id-or-name resolver (_resolve_id) ────────────────────────────────────
+
+class TestResolveId:
+    """Verify that the id field accepts both 8-char hex ids and exact names."""
+
+    def test_view_by_exact_name(self, ability, service):
+        list_id = service.create_list("Groceries")
+        service.add_items(list_id, ["milk"])
+        body = _payload(_exec(ability, {"action": "view", "id": "Groceries"}))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == list_id
+
+    def test_view_by_name_case_insensitive(self, ability, service):
+        list_id = service.create_list("Groceries")
+        body = _payload(_exec(ability, {"action": "view", "id": "groceries"}))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == list_id
+
+    def test_name_not_found_fails_with_list_all_hint(self, ability):
+        body = _payload(_exec(ability, {"action": "view", "id": "NoSuchList"}))
+        assert body['status'] == 'fail'
+        assert 'No list found' in body['message']
+        assert 'list_all' in body['message']
+
+    def test_add_by_name(self, ability, service):
+        list_id = service.create_list("Weekend Chores")
+        body = _payload(_exec(ability, {
+            "action": "add", "id": "Weekend Chores", "items": ["mow lawn"],
+        }))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == list_id
+        assert body['list']['items'][0]['content'] == 'mow lawn'
+
+    def test_delete_by_name(self, ability, service):
+        service.create_list("Temporary")
+        body = _payload(_exec(ability, {"action": "delete", "id": "Temporary"}))
+        assert body['status'] == 'success'
+        assert 'deleted' in body['message']
+
+    def test_8char_id_prefers_id_path_when_list_found(self, ability, service):
+        """An id that looks like hex AND matches a list id takes the id path."""
+        list_id = service.create_list("SomeName")
+        # list_id is 8-char hex; hex path succeeds via get_list
+        body = _payload(_exec(ability, {"action": "view", "id": list_id}))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == list_id
+
+    def test_missing_id_error_mentions_id_field(self, ability):
+        body = _payload(_exec(ability, {"action": "view"}))
+        assert body['status'] == 'fail'
+        assert "'id'" in body['message']
 
 
 # ─── unknown action ────────────────────────────────────────────────────────

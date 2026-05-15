@@ -1,8 +1,9 @@
 """
 ListAbility — Manage deterministic lists via the ACT loop.
 
-Strict CRUD interface. Existing lists are addressed by ``id``; ``name`` is
-used only for ``create`` and ``rename``. ``list_all`` returns ids to reuse.
+Strict CRUD interface. Existing lists are addressed by ``id`` (8-char hex) or
+by exact name; ``name`` is the new name for ``create`` and ``rename``.
+``list_all`` returns ids to reuse.
 
 Actions: list_all, create, view, add, check, remove, clear, rename, delete
 
@@ -14,12 +15,15 @@ Rich-media rendering:
 
 import json
 import logging
+import re
 from typing import Optional
 
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
+
+_LIST_ID_RE = re.compile(r"^[a-f0-9]{8}$", re.IGNORECASE)
 
 _RICH_MEDIA_INSTRUCTION = (
     "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
@@ -31,7 +35,7 @@ _RICH_MEDIA_INSTRUCTION = (
 
 class ListAbility(Ability):
     NAME = "list"
-    SUMMARY = "Create and manage named lists — shopping, to-do, chores — addressed by id."
+    SUMMARY = "Create and manage named lists — shopping, to-do, chores — addressed by id or exact name."
     EXAMPLES = [
         "create a grocery list and add milk, eggs, and bread",
         "show me all my lists",
@@ -65,8 +69,8 @@ class ListAbility(Ability):
             "id": {
                 "type": "string",
                 "description": (
-                    "List id (8-char hex). Required for view/add/check/remove/clear/rename/delete. "
-                    "Reuse the id returned by create or list_all."
+                    "List id (8-char hex) or the list's exact name. Required for view/add/check/remove/clear/rename/delete. "
+                    "Reuse the id returned by create or list_all; use the name when the id isn't already in context."
                 ),
             },
             "name": {
@@ -197,11 +201,31 @@ def _normalize_string_items(params: dict) -> list:
     return [i.strip() for i in items if isinstance(i, str) and i.strip()]
 
 
-def _require_id(params: dict) -> tuple[Optional[str], Optional[str]]:
-    list_id = (params.get("id") or "").strip()
-    if not list_id:
-        return None, _fail("'id' is required. Use the id returned by create or list_all.")
-    return list_id, None
+def _resolve_id(service, params: dict) -> tuple[Optional[str], Optional[str]]:
+    """Return (list_id, None) on success or (None, error_json) on failure.
+
+    Accepts either an 8-char hex id or an exact list name (case-insensitive).
+    When the raw value looks like an id but isn't found, falls through to
+    name lookup so that 8-char list names still work.
+    """
+    raw = (params.get("id") or "").strip()
+    if not raw:
+        return None, _fail(
+            "'id' is required. Provide the list id from list_all/create, or the list's exact name."
+        )
+
+    if _LIST_ID_RE.match(raw):
+        if service.get_list(raw):
+            return raw, None
+        # Fall through: could be an 8-char list name
+
+    all_lists = service.get_all_lists()
+    matches = [lst for lst in all_lists if lst["name"].strip().lower() == raw.lower()]
+    if len(matches) == 1:
+        return matches[0]["id"], None
+    if len(matches) == 0:
+        return None, _fail(f"No list found for '{raw}'. Call list_all to see existing lists.")
+    return None, _fail(f"Multiple lists match '{raw}'. Use the 8-char id from list_all to disambiguate.")
 
 
 def _require_name(params: dict) -> tuple[Optional[str], Optional[str]]:
@@ -256,7 +280,7 @@ def _handle_create(service, params: dict) -> str:
 
 
 def _handle_view(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_id(service, params)
     if err:
         return err
 
@@ -268,7 +292,7 @@ def _handle_view(service, params: dict) -> str:
 
 
 def _handle_add(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_id(service, params)
     if err:
         return err
 
@@ -291,7 +315,7 @@ def _handle_add(service, params: dict) -> str:
 
 
 def _handle_check(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_id(service, params)
     if err:
         return err
 
@@ -331,7 +355,7 @@ def _split_check_items(raw_items: list) -> tuple[list, list]:
 
 
 def _handle_remove(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_id(service, params)
     if err:
         return err
 
@@ -355,7 +379,7 @@ def _handle_remove(service, params: dict) -> str:
 
 
 def _handle_clear(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_id(service, params)
     if err:
         return err
 
@@ -367,7 +391,7 @@ def _handle_clear(service, params: dict) -> str:
 
 
 def _handle_rename(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_id(service, params)
     if err:
         return err
 
@@ -383,7 +407,7 @@ def _handle_rename(service, params: dict) -> str:
 
 
 def _handle_delete(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_id(service, params)
     if err:
         return err
 
