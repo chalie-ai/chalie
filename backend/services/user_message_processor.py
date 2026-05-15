@@ -64,6 +64,7 @@ class UserMessageProcessor(MessageProcessor):
         "code_eval",
         "contacts",
         "email",
+        "home",
         "news",
         "programming_docs_search",
         "search",

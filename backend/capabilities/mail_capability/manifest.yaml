@@ -8,3 +8,13 @@ providers:
   - apple
   - yahoo
   - outlook
+fields:
+  - name: email
+    label: Email Address
+    type: text
+    placeholder: "you@example.com"
+    required: true
+  - name: password
+    label: App Password
+    type: password
+    required: true

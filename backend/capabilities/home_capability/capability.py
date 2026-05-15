@@ -1,0 +1,293 @@
+"""HomeCapability -- Home Assistant integration via REST + WebSocket.
+
+REST for commands/queries (list_devices, get_state, control, list_automations,
+trigger_automation). Persistent WebSocket for subscribe_events and efficient
+_do_monitor() liveness checks.
+
+Credential storage: home:url, home:token, home:verify_ssl (encrypted via
+VaultService in tool_configs).
+"""
+
+from __future__ import annotations
+
+import logging
+import pathlib
+
+import yaml
+
+from capabilities.base import AbstractCapability
+from capabilities.home_capability import ha_rest_handler as rest
+from capabilities.home_capability.ha_ws_handler import HaWebSocketHandler
+
+logger = logging.getLogger(__name__)
+
+_MANIFEST_PATH = pathlib.Path(__file__).parent / "manifest.yaml"
+
+_K_URL = "home:url"
+_K_TOKEN = "home:token"
+_K_VERIFY_SSL = "home:verify_ssl"
+
+
+class HomeCapability(AbstractCapability):
+    """Home Assistant capability.
+
+    Attributes:
+        _url (str): Home Assistant base URL, e.g. ``http://homeassistant.local:8123``.
+        _token (str): Long-Lived Access Token.
+        _verify_ssl (bool): Whether to verify SSL certificates on HTTPS connections.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._manifest_cache: dict | None = None
+        self._ws_handler = HaWebSocketHandler()
+        self._url: str = ""
+        self._token: str = ""
+        self._verify_ssl: bool = True
+
+    # ── Identity ─────────────────────────────────────────────────────
+
+    def get_id(self) -> str:
+        return "home"
+
+    def get_manifest(self) -> dict:
+        if self._manifest_cache is None:
+            with open(_MANIFEST_PATH, encoding="utf-8") as fh:
+                self._manifest_cache = yaml.safe_load(fh)
+        return self._manifest_cache
+
+    # ── Lifecycle ────────────────────────────────────────────────────
+
+    def configure(self, credentials: dict) -> None:
+        """Validate credentials, probe HA REST API, and persist.
+
+        Args:
+            credentials: Must contain ``url`` (str) and ``token`` (str).
+                Optional ``verify_ssl`` (bool, default True).
+
+        Raises:
+            ValueError: If url or token is missing, or the HA instance rejects them.
+        """
+        url = (credentials.get("url") or "").strip().rstrip("/")
+        token = (credentials.get("token") or "").strip()
+        if not url:
+            raise ValueError("Home Assistant URL is required")
+        if not token:
+            raise ValueError("Long-Lived Access Token is required")
+
+        verify_ssl = credentials.get("verify_ssl", True)
+        if isinstance(verify_ssl, str):
+            verify_ssl = verify_ssl.lower() not in ("0", "false", "no")
+
+        try:
+            rest.probe(url, token, verify_ssl)
+        except Exception as exc:
+            raise ValueError(f"[home] Connection probe failed: {exc}") from exc
+
+        self.store_credential(_K_URL, url)
+        self.store_credential(_K_TOKEN, token)
+        self.store_credential(_K_VERIFY_SSL, "1" if verify_ssl else "0")
+
+        self._url = url
+        self._token = token
+        self._verify_ssl = verify_ssl
+        self.connect()
+
+    def connect(self) -> bool:
+        """Load stored credentials and probe the HA REST API.
+
+        Returns:
+            bool: ``True`` if the probe succeeds, ``False`` otherwise.
+        """
+        url = self.load_credential(_K_URL)
+        token = self.load_credential(_K_TOKEN)
+        ssl_raw = self.load_credential(_K_VERIFY_SSL)
+        if not url or not token:
+            self._connected = False
+            return False
+
+        self._url = url
+        self._token = token
+        self._verify_ssl = ssl_raw != "0"
+
+        try:
+            rest.probe(self._url, self._token, self._verify_ssl)
+            self._connected = True
+        except Exception as exc:
+            logger.warning("[home] connect probe failed: %s", exc)
+            self._connected = False
+        return self._connected
+
+    def disconnect(self) -> None:
+        """Stop WebSocket handler, clear connection state, and remove credentials."""
+        self._connected = False
+        self._ws_handler.stop()
+        self.delete_credentials()
+        logger.info("[home] Disconnected and credentials removed.")
+
+    # ── Cognitive pipeline ───────────────────────────────────────────
+
+    def ingest(self) -> list:
+        """Fetch all entity states from HA REST API.
+
+        Returns:
+            list[dict]: Entity summary dicts, or ``[]`` when not connected.
+        """
+        if not self.is_connected():
+            return []
+        try:
+            return rest.list_devices(
+                self._url, self._token, self._verify_ssl, limit=200
+            ).get("devices", [])
+        except Exception as exc:
+            logger.warning("[home] ingest failed: %s", exc)
+            return []
+
+    def understand(self, items: list) -> list:
+        return items
+
+    def _do_monitor(self) -> None:
+        """Probe HA REST API unless a WebSocket connection is already alive."""
+        if self._ws_handler.is_alive:
+            return
+        rest.probe(self._url, self._token, self._verify_ssl)
+
+    def act(self, action: str, params: dict) -> dict:
+        """Dispatch a write action to the matching tool handler.
+
+        Args:
+            action: Tool name, e.g. ``"control"``, ``"trigger_automation"``.
+            params: Action-specific parameters.
+
+        Returns:
+            dict: Handler result, or ``{"error": ...}`` for unknown actions.
+        """
+        tool_map = {t["name"]: t["handler"] for t in self.get_tools()}
+        handler = tool_map.get(action)
+        if handler is None:
+            return {"error": f"Unknown action: {action}"}
+        return handler(topic="", params=params)
+
+    # ── Tools ────────────────────────────────────────────────────────
+
+    def get_tools(self) -> list:
+        """Return tool definitions for all 6 home actions.
+
+        Handlers are closures capturing ``self`` (bound to ``cap``).
+
+        Returns:
+            list[dict]: Tool dicts with ``name``, ``description``, ``parameters``,
+            ``handler``, and ``timeout`` keys.
+        """
+        cap = self
+
+        def _check() -> dict | None:
+            if not cap.is_connected():
+                return {"error": "Home capability not connected. Configure it in the Brain dashboard."}
+            return None
+
+        def _list_devices(topic, params, config=None, telemetry=None) -> dict:
+            err = _check()
+            if err:
+                return err
+            return rest.list_devices(
+                cap._url, cap._token, cap._verify_ssl,
+                domain=params.get("domain"),
+                area=params.get("area"),
+                limit=int(params.get("limit", 50)),
+            )
+
+        def _get_state(topic, params, config=None, telemetry=None) -> dict:
+            err = _check()
+            if err:
+                return err
+            eid = params.get("entity_id")
+            if not eid:
+                return {"error": "entity_id is required"}
+            return rest.get_state(cap._url, cap._token, cap._verify_ssl, eid)
+
+        def _control(topic, params, config=None, telemetry=None) -> dict:
+            err = _check()
+            if err:
+                return err
+            eid = params.get("entity_id")
+            svc = params.get("service")
+            if not eid or not svc:
+                return {"error": "entity_id and service are required"}
+            return rest.control(
+                cap._url, cap._token, cap._verify_ssl,
+                eid, svc, params.get("service_data"),
+            )
+
+        def _list_automations(topic, params, config=None, telemetry=None) -> dict:
+            err = _check()
+            if err:
+                return err
+            return rest.list_automations(cap._url, cap._token, cap._verify_ssl)
+
+        def _trigger_automation(topic, params, config=None, telemetry=None) -> dict:
+            err = _check()
+            if err:
+                return err
+            aid = params.get("automation_id")
+            if not aid:
+                return {"error": "automation_id is required"}
+            return rest.trigger_automation(cap._url, cap._token, cap._verify_ssl, aid)
+
+        def _subscribe_events(topic, params, config=None, telemetry=None) -> dict:
+            err = _check()
+            if err:
+                return err
+            eid = params.get("entity_id")
+            if not eid:
+                return {"error": "entity_id is required"}
+            ws_url = cap._url.replace("http://", "ws://").replace("https://", "wss://")
+            ws_url = f"{ws_url}/api/websocket"
+            cap._ws_handler.start(ws_url, cap._token)
+            cap._ws_handler.subscribe(eid)
+            return {"status": "subscribed", "entity_id": eid}
+
+        return [
+            {
+                "name": "list_devices",
+                "description": "List smart home entities, optionally filtered by domain or area.",
+                "parameters": {},
+                "handler": _list_devices,
+                "timeout": 30,
+            },
+            {
+                "name": "get_state",
+                "description": "Get the current state and attributes of a single entity.",
+                "parameters": {},
+                "handler": _get_state,
+                "timeout": 15,
+            },
+            {
+                "name": "control",
+                "description": "Call a service on an entity (e.g. turn_on, turn_off).",
+                "parameters": {},
+                "handler": _control,
+                "timeout": 15,
+            },
+            {
+                "name": "list_automations",
+                "description": "List all automation entities with their enabled state.",
+                "parameters": {},
+                "handler": _list_automations,
+                "timeout": 30,
+            },
+            {
+                "name": "trigger_automation",
+                "description": "Manually trigger an automation by automation_id.",
+                "parameters": {},
+                "handler": _trigger_automation,
+                "timeout": 15,
+            },
+            {
+                "name": "subscribe_events",
+                "description": "Subscribe to real-time state_changed events for an entity.",
+                "parameters": {},
+                "handler": _subscribe_events,
+                "timeout": 15,
+            },
+        ]

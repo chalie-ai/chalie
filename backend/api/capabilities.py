@@ -115,6 +115,7 @@ def list_capabilities():
                 "connected": cap.is_connected(),
                 "last_sync_at": _get_last_sync_at(cap_id),
                 "providers": manifest.get("providers", []),
+                "fields": manifest.get("fields"),
             })
         return jsonify({"capabilities": result}), 200
 

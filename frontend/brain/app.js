@@ -1880,68 +1880,11 @@ async function loadToolsObs() {
     }
 }
 
-// ── Working On (Tasks) ──
+// ── Working On (Tasks) — endpoint removed, stub only ──
 
 async function loadTasksObs() {
     const el = document.getElementById('tasksContent');
-    el.innerHTML = obsSkeletonBlock(40) + obsSkeletonBlock(120);
-
-    try {
-        const res = await apiFetch('/system/observability/tasks');
-        if (!res.ok) throw new Error('Failed to load');
-        const data = await res.json();
-        obsData.tasks = data;
-        obsLoaded.tasks = true;
-        obsSetTimestamp(data.generated_at);
-
-        const tasks = data.persistent_tasks || [];
-
-        let html = `<p class="obs-summary">Chalie is currently working on ${tasks.length} background task${tasks.length === 1 ? '' : 's'}.</p>`;
-
-        // Persistent tasks
-        if (tasks.length > 0) {
-            html += '<div class="obs-section-title">Background Tasks</div>';
-            const statusLabels = { accepted: 'Accepted', in_progress: 'In Progress', paused: 'Paused' };
-            for (const t of tasks) {
-                const label = statusLabels[t.status] || t.status;
-                const badgeClass = t.status === 'paused' ? '--paused' : '--active';
-                const progress = t.max_iterations ? `${t.iterations_used || 0} / ${t.max_iterations} iterations` : '';
-                html += `<div class="obs-task-card">
-                    <div class="obs-task-card__header">
-                        <span class="obs-task-card__title">${escapeHtml(t.goal || 'Untitled task')}</span>
-                        <span class="obs-task-card__badge ${badgeClass}">${escapeHtml(label)}</span>
-                    </div>
-                    <div class="obs-task-card__meta">
-                        ${t.priority ? 'Priority: ' + escapeHtml(String(t.priority)) + ' · ' : ''}${progress}
-                    </div>
-                    <div class="obs-task-card__actions">
-                        <button class="obs-task-btn --cancel" data-task-cancel="${t.id}">Cancel</button>
-                    </div>
-                </div>`;
-            }
-        } else {
-            html += '<div class="obs-section-title">Background Tasks</div>';
-            html += '<div class="obs-empty">No active background tasks.</div>';
-        }
-
-        el.innerHTML = html;
-
-        // Wire cancel buttons
-        el.querySelectorAll('[data-task-cancel]').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const taskId = e.target.dataset.taskCancel;
-                if (!confirm('Cancel this task?')) return;
-                try {
-                    const r = await apiFetch(`/system/observability/tasks/${taskId}`, { method: 'DELETE' });
-                    if (r.ok) loadTasksObs();
-                    else alert('Failed to cancel task');
-                } catch (e) { console.warn('[brain/app] task cancel failed:', e); alert('Failed to cancel task'); }
-            });
-        });
-    } catch (e) {
-        console.warn('[brain/app] failed to load task data:', e);
-        el.innerHTML = '<div class="obs-empty">Could not load task data.</div>';
-    }
+    el.innerHTML = '<div class="obs-empty">No active background tasks.</div>';
 }
 
 
@@ -3108,44 +3051,78 @@ function renderCapabilities() {
 function openCapSetup(capId) {
     document.getElementById('capSetupForm').reset();
     document.getElementById('capSetupId').value = capId;
-    document.getElementById('capServerUrl').value = '';
-    document.getElementById('capServerUrlGroup').classList.add('hidden');
-    document.getElementById('capPasswordHint').textContent = '';
 
     const cap = capabilitiesData.find(c => c.id === capId);
     document.getElementById('capSetupTitle').textContent = `Connect ${cap ? cap.name : capId}`;
 
-    // Populate provider options from capability's providers list
-    const select = document.getElementById('capProvider');
-    select.innerHTML = '<option value="">Select provider...</option>';
-    if (cap && cap.providers) {
-        for (const p of cap.providers) {
-            const opt = document.createElement('option');
-            opt.value = p;
-            opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
-            select.appendChild(opt);
-        }
+    const formBody = document.getElementById('capSetupFormBody');
+
+    if (cap && cap.fields) {
+        // Dynamic fields from manifest
+        formBody.innerHTML = cap.fields.map(f => {
+            if (f.type === 'checkbox') {
+                return `<div class="form-group form-group-checkbox">
+                    <label><input type="checkbox" name="${escapeHtml(f.name)}"
+                        ${f.default !== false ? 'checked' : ''}> ${escapeHtml(f.label)}</label>
+                </div>`;
+            }
+            const inputType = f.type === 'password' ? 'password' : 'text';
+            return `<div class="form-group">
+                <label>${escapeHtml(f.label)}</label>
+                <input type="${inputType}" name="${escapeHtml(f.name)}"
+                    placeholder="${escapeHtml(f.placeholder || '')}"
+                    ${f.required ? 'required' : ''}>
+            </div>`;
+        }).join('');
+    } else {
+        // Fallback: legacy provider/username/password form
+        const providers = (cap && cap.providers) || [];
+        formBody.innerHTML = `
+            <div class="form-group">
+                <label>Provider</label>
+                <select id="capProvider" required>
+                    <option value="">Select provider...</option>
+                    ${providers.map(p =>
+                        `<option value="${escapeHtml(p)}">${escapeHtml(p.charAt(0).toUpperCase() + p.slice(1))}</option>`
+                    ).join('')}
+                </select>
+            </div>
+            <div class="form-group hidden" id="capServerUrlGroup">
+                <label>Server URL</label>
+                <input type="url" id="capServerUrl" placeholder="https://your-server.example.com">
+                <p class="form-hint">Your server's base URL (self-hosted providers only)</p>
+            </div>
+            <div class="form-group">
+                <label>Username / Email</label>
+                <input type="text" id="capUsername" placeholder="your.email@example.com" autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label>App Password</label>
+                <input type="password" id="capPassword" placeholder="App-specific password" autocomplete="current-password">
+                <p class="form-hint" id="capPasswordHint"></p>
+            </div>`;
     }
 
     document.getElementById('capSetupOverlay').classList.remove('hidden');
-    select.focus();
-}
 
-// Show/hide server URL based on provider selection
-document.getElementById('capProvider').addEventListener('change', (e) => {
-    const provider = e.target.value;
-    const serverGroup = document.getElementById('capServerUrlGroup');
-    const hint = document.getElementById('capPasswordHint');
-
-    if (_SELF_HOSTED_PROVIDERS.has(provider)) {
-        serverGroup.classList.remove('hidden');
-    } else {
-        serverGroup.classList.add('hidden');
-        document.getElementById('capServerUrl').value = '';
+    // Wire up legacy provider change handler when not using dynamic fields
+    const legacySelect = document.getElementById('capProvider');
+    if (legacySelect) {
+        legacySelect.addEventListener('change', (e) => {
+            const provider = e.target.value;
+            const serverGroup = document.getElementById('capServerUrlGroup');
+            const hint = document.getElementById('capPasswordHint');
+            if (_SELF_HOSTED_PROVIDERS.has(provider)) {
+                serverGroup.classList.remove('hidden');
+            } else {
+                serverGroup.classList.add('hidden');
+                document.getElementById('capServerUrl').value = '';
+            }
+            if (hint) hint.textContent = _APP_PASSWORD_HINTS[provider] || '';
+        });
+        legacySelect.focus();
     }
-
-    hint.textContent = _APP_PASSWORD_HINTS[provider] || '';
-});
+}
 
 // Close modal
 document.getElementById('capSetupClose').addEventListener('click', () => {
@@ -3159,25 +3136,46 @@ document.getElementById('capSetupCancel').addEventListener('click', () => {
 document.getElementById('capSetupForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const capId = document.getElementById('capSetupId').value;
-    const provider = document.getElementById('capProvider').value;
-    const username = document.getElementById('capUsername').value.trim();
-    const password = document.getElementById('capPassword').value;
-    const serverUrl = document.getElementById('capServerUrl').value.trim();
+    const cap = capabilitiesData.find(c => c.id === capId);
+    const btn = document.getElementById('capSetupSubmit');
 
-    if (!provider) { showToast('Select a provider', 'error'); return; }
-    if (!username) { showToast('Username is required', 'error'); return; }
-    if (!password) { showToast('App password is required', 'error'); return; }
-    if (_SELF_HOSTED_PROVIDERS.has(provider) && !serverUrl) {
-        showToast('Server URL is required for self-hosted providers', 'error');
-        return;
+    let body;
+    if (cap && cap.fields) {
+        // Collect dynamic field values from manifest fields
+        body = {};
+        for (const f of cap.fields) {
+            const el = document.querySelector(`#capSetupFormBody [name="${f.name}"]`);
+            if (!el) continue;
+            if (f.type === 'checkbox') {
+                body[f.name] = el.checked;
+            } else {
+                const val = el.value.trim();
+                if (f.required && !val) {
+                    showToast(`${f.label} is required`, 'error');
+                    return;
+                }
+                body[f.name] = val;
+            }
+        }
+    } else {
+        // Legacy provider/username/password form
+        const provider = document.getElementById('capProvider') ? document.getElementById('capProvider').value : '';
+        const username = document.getElementById('capUsername') ? document.getElementById('capUsername').value.trim() : '';
+        const password = document.getElementById('capPassword') ? document.getElementById('capPassword').value : '';
+        const serverUrl = document.getElementById('capServerUrl') ? document.getElementById('capServerUrl').value.trim() : '';
+        if (!provider) { showToast('Select a provider', 'error'); return; }
+        if (!username) { showToast('Username is required', 'error'); return; }
+        if (!password) { showToast('App password is required', 'error'); return; }
+        if (_SELF_HOSTED_PROVIDERS.has(provider) && !serverUrl) {
+            showToast('Server URL is required for self-hosted providers', 'error');
+            return;
+        }
+        body = { provider, username, password };
+        if (serverUrl) body.server_url = serverUrl;
     }
 
-    const btn = document.getElementById('capSetupSubmit');
     btn.disabled = true;
     btn.textContent = 'Connecting...';
-
-    const body = { provider, username, password };
-    if (serverUrl) body.server_url = serverUrl;
 
     try {
         const res = await apiFetch(`/api/capabilities/${capId}/setup`, {
