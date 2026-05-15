@@ -400,6 +400,7 @@ class MailCapability(AbstractCapability):
         self._caldav_ok = False
         self._carddav_ok = False
         self._connected = False
+        self._cycle_count = 0
 
         try:
             from services.database_service import get_shared_db_service
