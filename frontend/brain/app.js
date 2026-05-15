@@ -325,6 +325,7 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
         loadDocuments();
     } else if (tabName === 'capabilities') {
         loadCapabilities();
+        loadQuickTipsSetting();
     } else if (tabName === 'policies') {
         loadPolicies();
     }
@@ -3104,6 +3105,43 @@ function renderCapabilities() {
         btn.addEventListener('click', () => disconnectCapability(btn.dataset.capDisconnect));
     });
 }
+
+// ── Quick Tips toggle ──────────────────────────────────────────
+async function loadQuickTipsSetting() {
+    try {
+        const res = await apiFetch('/system/settings/quick_tips_enabled');
+        if (!res.ok) return;
+        const data = await res.json();
+        const enabled = !data.value || data.value === 'true' || data.value === '';
+        const cb = document.getElementById('quickTipsCheckbox');
+        const dot = document.getElementById('quickTipsDot');
+        if (cb) cb.checked = enabled;
+        if (dot) {
+            dot.classList.toggle('cap-status-connected', enabled);
+            dot.classList.toggle('cap-status-disconnected', !enabled);
+        }
+    } catch (e) {
+        console.warn('[brain] failed to load quick tips setting:', e);
+    }
+}
+
+document.getElementById('quickTipsCheckbox')?.addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    const dot = document.getElementById('quickTipsDot');
+    if (dot) {
+        dot.classList.toggle('cap-status-connected', enabled);
+        dot.classList.toggle('cap-status-disconnected', !enabled);
+    }
+    try {
+        await apiFetch('/system/settings/quick_tips_enabled', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: enabled ? 'true' : 'false' }),
+        });
+    } catch (e) {
+        console.warn('[brain] failed to save quick tips setting:', e);
+    }
+});
 
 function openCapSetup(capId) {
     document.getElementById('capSetupForm').reset();

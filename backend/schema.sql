@@ -682,3 +682,16 @@ CREATE TABLE IF NOT EXISTS telemetry (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- ────────────────────────────────────────────────────────────────
+-- QUICK TIP STATE — tracks per-tip display/dismiss/retire state
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS quick_tip_state (
+    tip_id        TEXT    NOT NULL,
+    shown_count   INTEGER NOT NULL DEFAULT 0,
+    dismissed     INTEGER NOT NULL DEFAULT 0,
+    retired       INTEGER NOT NULL DEFAULT 0,
+    last_shown_at TEXT,
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    PRIMARY KEY (tip_id)
+);

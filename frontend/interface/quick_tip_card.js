@@ -101,7 +101,8 @@ export class QuickTipCard {
     const bodyEl = this._el.querySelector('.tip__body');
     const promptEl = this._el.querySelector('.tip__example-prompt');
 
-    // Icon — use SVG from data.icon_svg if provided, else fallback to lightbulb
+    // Icon — use SVG from data.icon_svg if provided, else fallback to lightbulb.
+    // TRUST: icon_svg originates from chalie-web guide frontmatter (first-party).
     iconEl.innerHTML = data.icon_svg || this._fallbackIcon();
     bodyEl.textContent = data.body || '';
     promptEl.textContent = data.example || '';
@@ -124,7 +125,7 @@ export class QuickTipCard {
       fetch(`${base}/api/tips/dismiss`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-
+        credentials: 'same-origin',
         body: JSON.stringify({ tip_id: tipId }),
       }).catch((e) => console.warn('[QuickTip] dismiss failed:', e));
     }

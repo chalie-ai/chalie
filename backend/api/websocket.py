@@ -864,6 +864,23 @@ def _handle_chat(ws, store, msg, active_request=None):
                 )
                 _buffer_event(message_evt)
                 _send_json(ws, message_evt)
+
+                # -- Quick tip check (fire-and-forget in a daemon thread) --
+                # Runs after the response is delivered to avoid blocking
+                # done_evt if chalie-web is slow or unreachable.
+                def _check_quick_tip():
+                    try:
+                        from services.quick_tip_service import QuickTipService
+                        tip = QuickTipService().maybe_show_tip()
+                        if tip:
+                            store.publish("output:events", json.dumps({
+                                "type": "quick_tip",
+                                **tip,
+                            }))
+                    except Exception as _tip_err:
+                        logger.debug("[WS] quick tip check failed: %s", _tip_err)
+                threading.Thread(target=_check_quick_tip, daemon=True, name="quick-tip").start()
+
                 message_received = True
 
                 # Clear active request when response is delivered
