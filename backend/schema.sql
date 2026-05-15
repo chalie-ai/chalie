@@ -647,6 +647,29 @@ CREATE TRIGGER IF NOT EXISTS expanded_semantic_vec_sync
 END;
 
 -- ============================================================================
+-- POLICY — per-action permission control (allow / ask / deny).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS policy_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id TEXT NOT NULL,
+    context TEXT NOT NULL,
+    state TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(action_id, context)
+);
+
+CREATE TABLE IF NOT EXISTS policy_blocked_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id TEXT NOT NULL,
+    context TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    params_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_policy_blocked_log_created ON policy_blocked_log(created_at DESC);
+
+-- ============================================================================
 -- TELEMETRY — flat key/value store for the latest client heartbeat.
 -- ============================================================================
 -- Populated by /health POST. The frontend (heartbeat.js) is the source of

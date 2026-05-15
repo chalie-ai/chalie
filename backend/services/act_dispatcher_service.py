@@ -9,7 +9,9 @@ critic evaluation.
 """
 
 import contextvars
+import json
 import time
+import uuid
 from typing import Dict, Any
 from threading import Thread
 import logging
@@ -92,8 +94,26 @@ def _extract_notes(action_type: str, action: Dict[str, Any], raw_result: Any) ->
     return '; '.join(notes_parts) if notes_parts else ''
 
 
+def _summarize_params(action: dict, max_keys: int = 4) -> dict:
+    """Extract a small preview of action params for the permission card."""
+    skip = {'type', 'action', '_rich_media_ordinal'}
+    preview = {}
+    for k, v in action.items():
+        if k in skip:
+            continue
+        if len(preview) >= max_keys:
+            break
+        if isinstance(v, str) and len(v) > 80:
+            v = v[:77] + '...'
+        preview[k] = v
+    return preview
+
+
 class ActDispatcherService:
     """Dispatches internal cognitive actions with timeout enforcement."""
+
+    _POLICY_DENY_MSG = "This action is not permitted by your current policy settings. You can ask the user to change it in Brain → Policies."
+    _POLICY_UNAVAILABLE_MSG = "This action requires user approval but the user is not available right now. The action has been logged for review."
 
     def __init__(self, timeout: float = 10.0):
         """Initialize dispatcher with ability handlers.
@@ -180,6 +200,14 @@ class ActDispatcherService:
                 'confidence': 0.0,
                 'notes': '',
             }
+
+        # ── Policy enforcement ──────────────────────────────────────────
+        try:
+            policy_result = self._enforce_policy(action_type, action, channel)
+            if policy_result is not None:
+                return policy_result
+        except Exception as _pol_err:
+            logging.warning(f"[ACT DISPATCH] Policy check failed, allowing: {_pol_err}")
 
         # Determine effective timeout: ability TIMEOUT ClassVar overrides the default.
         # Falls back to self.timeout when the action type is not a registered ability.
@@ -365,4 +393,96 @@ class ActDispatcherService:
         except Exception as e:
             logging.debug(f"[ACT DISPATCH] Wrapper intent routing failed: {e}")
             return None
+
+    def _enforce_policy(self, action_type, action, channel):
+        """Check policy and return a result dict if blocked, or None to proceed."""
+        from services.policy_service import PolicyService, get_defaults, USAGE_CLASS_TO_CONTEXT
+        from services.message_processor import current_processor
+
+        action_id = PolicyService.resolve_action_id(action_type, action)
+
+        # Unknown actions (not in default matrix) skip enforcement
+        if action_id not in get_defaults():
+            return None
+
+        # Resolve context from the current processor's USAGE_CLASS
+        proc = current_processor()
+        usage_class = getattr(proc, 'USAGE_CLASS', 'chat') if proc else 'chat'
+        context = USAGE_CLASS_TO_CONTEXT.get(usage_class, 'chat')
+
+        from services.database_service import get_shared_db_service
+        svc = PolicyService(get_shared_db_service())
+        state = svc.check(action_id, context)
+
+        if state == 'allow':
+            return None
+
+        if state == 'deny':
+            svc.log_blocked(action_id, context, 'policy_deny', _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': self._POLICY_DENY_MSG,
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_id}/{context}=deny',
+            }
+
+        # state == 'ask'
+        if context == 'subconscious':
+            svc.log_blocked(action_id, context, 'user_unavailable', _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': self._POLICY_UNAVAILABLE_MSG,
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_id}/{context}=ask(auto-reject)',
+            }
+
+        # Chat / subagent: request user permission via WebSocket
+        approved = self._request_permission(action_id, action, context)
+        if not approved:
+            svc.log_blocked(action_id, context, 'user_denied', _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': 'The user denied this action.',
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_id}/{context}=ask(denied)',
+            }
+
+        return None  # Approved — proceed with execution
+
+    def _request_permission(self, action_id, action, context):
+        """Publish a permission_request via Redis and poll for response."""
+        try:
+            from services.memory_client import MemoryClientService
+            store = MemoryClientService.create_connection()
+
+            request_id = str(uuid.uuid4())
+            event = json.dumps({
+                'type': 'permission_request',
+                'request_id': request_id,
+                'action_id': action_id,
+                'context': context,
+                'params_preview': _summarize_params(action),
+            })
+            store.publish('output:events', event)
+
+            response_key = f'policy:response:{request_id}'
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                raw = store.get(response_key)
+                if raw:
+                    store.delete(response_key)
+                    resp = json.loads(raw)
+                    return resp.get('approved', False)
+                time.sleep(0.5)
+
+            return False  # Timeout — treat as denial
+        except Exception as e:
+            logging.warning(f"[ACT DISPATCH] Permission request failed: {e}")
+            return True  # Fail open on Redis errors
 

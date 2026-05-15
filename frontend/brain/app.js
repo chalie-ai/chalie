@@ -325,6 +325,8 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
         loadDocuments();
     } else if (tabName === 'capabilities') {
         loadCapabilities();
+    } else if (tabName === 'policies') {
+        loadPolicies();
     }
 });
 
@@ -3301,6 +3303,258 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 250);
         });
     });
+});
+
+// ==========================================
+// Policies Tab
+// ==========================================
+
+const _POLICY_ACTION_LABELS = {
+    'browser.render': 'Browse webpage', 'browser.screenshot': 'Take screenshot', 'browser.monitor': 'Monitor page', 'browser.interact': 'Interact with page',
+    'calendar.list_events': 'List events', 'calendar.get_event': 'View event', 'calendar.update_event': 'Update event',
+    'code_eval': 'Execute code',
+    'contacts.list': 'List contacts', 'contacts.get': 'View contact',
+    'document.search': 'Search documents', 'document.list': 'List documents', 'document.view': 'View document', 'document.create': 'Create document', 'document.delete': 'Delete document', 'document.restore': 'Restore document',
+    'email.search': 'Search email', 'email.read': 'Read email', 'email.draft': 'Draft email', 'email.manage': 'Manage email',
+    'find_tools': 'Discover tools',
+    'list.list_all': 'View lists', 'list.view': 'View list', 'list.create': 'Create list', 'list.add': 'Add to list', 'list.check': 'Check list item', 'list.remove': 'Remove from list', 'list.clear': 'Clear list', 'list.rename': 'Rename list', 'list.delete': 'Delete list',
+    'memory.recall': 'Recall memory', 'memory.reflect': 'Reflect on memory', 'memory.store': 'Store memory', 'memory.forget': 'Forget memory',
+    'news': 'Read news',
+    'programming_docs_search': 'Search docs',
+    'read': 'Read content',
+    'review_tool_calls': 'Review tool calls', 'review_transcript': 'Review transcript',
+    'save_graph': 'Save graph', 'save_pattern': 'Save pattern',
+    'schedule.list': 'List schedules', 'schedule.search': 'Search schedules', 'schedule.create': 'Create schedule', 'schedule.cancel': 'Cancel schedule',
+    'search': 'Web search',
+    'subagent': 'Launch subagent',
+    'timer': 'Set timer',
+    'weather': 'Check weather',
+};
+
+const _POLICY_CATEGORIES = {
+    'Email': ['email.search', 'email.read', 'email.draft', 'email.manage'],
+    'Calendar': ['calendar.list_events', 'calendar.get_event', 'calendar.update_event'],
+    'Contacts': ['contacts.list', 'contacts.get'],
+    'Documents': ['document.search', 'document.list', 'document.view', 'document.create', 'document.delete', 'document.restore'],
+    'Lists': ['list.list_all', 'list.view', 'list.create', 'list.add', 'list.check', 'list.remove', 'list.clear', 'list.rename', 'list.delete'],
+    'Memory': ['memory.recall', 'memory.reflect', 'memory.store', 'memory.forget'],
+    'Browsing & Search': ['browser.render', 'browser.screenshot', 'browser.monitor', 'browser.interact', 'search', 'news', 'programming_docs_search', 'read'],
+    'System': ['code_eval', 'find_tools', 'review_tool_calls', 'review_transcript', 'save_graph', 'save_pattern', 'schedule.list', 'schedule.search', 'schedule.create', 'schedule.cancel', 'subagent', 'timer', 'weather'],
+};
+
+const _POLICY_PRESETS = {
+    careful: () => {
+        const rules = {};
+        for (const aid of Object.keys(_POLICY_ACTION_LABELS)) {
+            rules[aid] = (aid.includes('search') || aid.includes('list') || aid.includes('view') || aid.includes('read') || aid.includes('get') || aid === 'find_tools' || aid === 'weather' || aid === 'review_tool_calls' || aid === 'review_transcript') ? 'allow' : 'ask';
+        }
+        return rules;
+    },
+    balanced: () => {
+        return null;
+    },
+    autonomous: () => {
+        const rules = {};
+        for (const aid of Object.keys(_POLICY_ACTION_LABELS)) {
+            rules[aid] = 'allow';
+        }
+        return rules;
+    },
+};
+
+let _policiesData = null;
+let _policiesActiveContext = 'chat';
+
+async function loadPolicies() {
+    try {
+        const res = await apiFetch('/api/policies');
+        if (!res.ok) {
+            document.getElementById('policiesGrid').innerHTML = '<div class="obs-empty">Failed to load policies.</div>';
+            return;
+        }
+        const body = await res.json();
+        _policiesData = body.policies || {};
+        _renderPoliciesGrid(_policiesData, _policiesActiveContext);
+        _loadBlockedLog();
+    } catch (err) {
+        console.warn('[policies] load failed:', err);
+        document.getElementById('policiesGrid').innerHTML = '<div class="obs-empty">Cannot connect to backend.</div>';
+    }
+}
+
+function _renderPoliciesGrid(policies, activeContext) {
+    const grid = document.getElementById('policiesGrid');
+    if (!grid) return;
+
+    const html = Object.entries(_POLICY_CATEGORIES).map(([category, actionIds]) => {
+        const rows = actionIds.map(aid => {
+            const label = _POLICY_ACTION_LABELS[aid] || aid;
+            const actionRules = (policies && policies[aid]) || {};
+            const state = actionRules[activeContext] || 'ask';
+            return `
+            <div class="policy-row" data-action-id="${escapeHtml(aid)}">
+                <span class="policy-label">${escapeHtml(label)}</span>
+                <div class="policy-seg">
+                    <button class="policy-seg-btn${state === 'allow' ? ' policy-seg-btn--active-allow' : ''}" data-value="allow">Allow</button>
+                    <button class="policy-seg-btn${state === 'ask' ? ' policy-seg-btn--active-ask' : ''}" data-value="ask">Ask</button>
+                    <button class="policy-seg-btn${state === 'deny' ? ' policy-seg-btn--active-deny' : ''}" data-value="deny">Deny</button>
+                </div>
+            </div>`;
+        }).join('');
+
+        return `
+        <div class="policy-group">
+            <div class="policy-group-header">${escapeHtml(category)}</div>
+            ${rows}
+        </div>`;
+    }).join('');
+
+    grid.innerHTML = html;
+
+    // Wire toggle buttons
+    grid.querySelectorAll('.policy-seg-btn').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            const row = btn.closest('.policy-row');
+            const aid = row.dataset.actionId;
+            const value = btn.dataset.value;
+            await _setPolicyRule(aid, value);
+        });
+    });
+}
+
+async function _setPolicyRule(actionId, value) {
+    try {
+        const res = await apiFetch('/api/policies', {
+            method: 'PUT',
+            body: JSON.stringify({ rules: [{ action_id: actionId, context: _policiesActiveContext, state: value }] }),
+        });
+        if (!res.ok) {
+            showToast('Failed to update policy', 'error');
+            return;
+        }
+        if (!_policiesData) _policiesData = {};
+        if (!_policiesData[actionId]) _policiesData[actionId] = {};
+        _policiesData[actionId][_policiesActiveContext] = value;
+        _renderPoliciesGrid(_policiesData, _policiesActiveContext);
+        _syncPolicyPresetBar();
+    } catch (err) {
+        console.warn('[policies] set rule failed:', err);
+        showToast('Failed to update policy', 'error');
+    }
+}
+
+function _syncPolicyPresetBar() {
+    const btns = document.querySelectorAll('.policies-preset-btn');
+    btns.forEach(btn => btn.classList.remove('active'));
+    // Mark Custom as active when no preset matches exactly
+    const customBtn = document.querySelector('.policies-preset-btn[data-preset="custom"]');
+    if (customBtn) customBtn.classList.add('active');
+}
+
+async function _loadBlockedLog() {
+    try {
+        const res = await apiFetch('/api/policies/blocked');
+        if (!res.ok) return;
+        const data = await res.json();
+        const body = document.getElementById('policiesBlockedBody');
+        if (!body) return;
+        const entries = data.entries || [];
+        if (entries.length === 0) {
+            body.innerHTML = '<div class="obs-empty">No blocked actions.</div>';
+            return;
+        }
+        body.innerHTML = entries.map(e => `
+            <div class="policy-blocked-entry">
+                <span class="policy-blocked-action">${escapeHtml(e.action_id || '')}</span>
+                <span class="policy-blocked-context">${escapeHtml(e.context || '')}</span>
+                <span class="policy-blocked-time">${escapeHtml(e.created_at || '')}</span>
+            </div>
+        `).join('');
+    } catch (err) {
+        console.warn('[policies] blocked log failed:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Sub-tab switching
+    const subtabs = document.getElementById('policiesSubtabs');
+    if (subtabs) {
+        subtabs.addEventListener('click', (e) => {
+            const btn = e.target.closest('.policies-subtab');
+            if (!btn) return;
+            subtabs.querySelectorAll('.policies-subtab').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            _policiesActiveContext = btn.dataset.context;
+            if (_policiesData) _renderPoliciesGrid(_policiesData, _policiesActiveContext);
+        });
+    }
+
+    // Preset buttons
+    const presetBar = document.getElementById('policiesPresetBar');
+    if (presetBar) {
+        presetBar.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.policies-preset-btn');
+            if (!btn) return;
+            const preset = btn.dataset.preset;
+            if (preset === 'custom') return;
+
+            const presetFn = _POLICY_PRESETS[preset];
+            if (!presetFn) return;
+
+            const stateMap = presetFn();
+            if (stateMap === null) {
+                try {
+                    const rr = await apiFetch('/api/policies/reset', {
+                        method: 'POST',
+                        body: JSON.stringify({ context: _policiesActiveContext }),
+                    });
+                    if (!rr.ok) { showToast('Failed to reset', 'error'); return; }
+                    await loadPolicies();
+                    presetBar.querySelectorAll('.policies-preset-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    showToast('Balanced preset applied (defaults restored)', 'success');
+                } catch (err) {
+                    showToast('Failed to reset', 'error');
+                }
+                return;
+            }
+            const rulesArr = Object.entries(stateMap).map(([aid, st]) => ({ action_id: aid, context: _policiesActiveContext, state: st }));
+            try {
+                const res = await apiFetch('/api/policies', {
+                    method: 'PUT',
+                    body: JSON.stringify({ rules: rulesArr }),
+                });
+                if (!res.ok) {
+                    showToast('Failed to apply preset', 'error');
+                    return;
+                }
+                if (!_policiesData) _policiesData = {};
+                for (const [aid, st] of Object.entries(stateMap)) {
+                    if (!_policiesData[aid]) _policiesData[aid] = {};
+                    _policiesData[aid][_policiesActiveContext] = st;
+                }
+                _renderPoliciesGrid(_policiesData, _policiesActiveContext);
+
+                presetBar.querySelectorAll('.policies-preset-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                showToast(`${preset.charAt(0).toUpperCase() + preset.slice(1)} preset applied`, 'success');
+            } catch (err) {
+                console.warn('[policies] preset apply failed:', err);
+                showToast('Failed to apply preset', 'error');
+            }
+        });
+    }
+
+    // Blocked log toggle
+    const blockedToggle = document.getElementById('policiesBlockedToggle');
+    if (blockedToggle) {
+        blockedToggle.addEventListener('click', () => {
+            const body = document.getElementById('policiesBlockedBody');
+            if (!body) return;
+            const isOpen = blockedToggle.classList.toggle('active');
+            body.classList.toggle('active', isOpen);
+        });
+    }
 });
 
 // ==========================================

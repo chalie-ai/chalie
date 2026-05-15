@@ -13,6 +13,7 @@ export class EventRouter {
     this._onNotification = null;
     this._onBackgroundContent = null;
     this._onCapabilityAlert = null;
+    this._onPermissionRequest = null;
     this._isSendingGetter = () => false;
   }
 
@@ -30,6 +31,9 @@ export class EventRouter {
 
   /** Register handler for 'capability_alert' events. */
   onCapabilityAlert(cb) { this._onCapabilityAlert = cb; }
+
+  /** Register handler for 'permission_request' events. */
+  onPermissionRequest(cb) { this._onPermissionRequest = cb; }
 
   /**
    * Register handler for background drift/response/escalation content.
@@ -73,6 +77,11 @@ export class EventRouter {
 
     if (data.type === 'capability_alert') {
       if (this._onCapabilityAlert) this._onCapabilityAlert(data);
+      return;
+    }
+
+    if (data.type === 'permission_request') {
+      if (this._onPermissionRequest) this._onPermissionRequest(data);
       return;
     }
 

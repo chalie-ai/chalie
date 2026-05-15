@@ -331,6 +331,7 @@ _ALLOWED_REGISTRY_ALL_CALLERS = frozenset({
     "utils/build_ability_db.py",
     "services/act_dispatcher_service.py",
     "services/self_model_service.py",
+    "services/policy_service.py",
 })
 
 _REGISTRY_ALL_PATTERN = re.compile(r"AbilityRegistry\.all\(\)")

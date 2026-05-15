@@ -214,6 +214,8 @@ def register_websocket(sock):
                     _handle_resume(ws, msg)
                 elif msg_type == 'pong':
                     pass  # Client keepalive response — no action needed
+                elif msg_type == 'permission_response':
+                    _handle_permission_response(store, msg)
 
         except Exception as e:
             logger.debug(f"[WS] Connection closed: {e}")
@@ -229,6 +231,15 @@ def _parse_meta(meta) -> dict:
         except Exception:
             return {}
     return meta or {}
+
+
+def _handle_permission_response(store, msg):
+    """Write the user's allow/deny decision to Redis for the blocked dispatch thread."""
+    request_id = msg.get('request_id', '')
+    approved = bool(msg.get('approved', False))
+    if request_id:
+        response_key = f'policy:response:{request_id}'
+        store.setex(response_key, 60, json.dumps({'approved': approved}))
 
 
 def _poll_until_terminal(svc, doc_id: str, deadline: float) -> str:

@@ -206,6 +206,15 @@ def main():
     except Exception:
         pass
 
+    # Seed default policy rules for any new action_ids
+    try:
+        from services.policy_service import PolicyService
+        _policy_svc = PolicyService(database_service)
+        _seeded = _policy_svc.seed_defaults()
+        if _seeded:
+            logger.info(f"[Startup] Policy rules seeded: {_seeded} new defaults")
+    except Exception as _pol_err:
+        logger.warning(f"[Startup] Policy seed skipped: {_pol_err}")
 
     # Encryption key initialisation and capability reconnection are deferred to
     # the post-login hook in user_auth.py (_reconnect_capabilities).  The vault

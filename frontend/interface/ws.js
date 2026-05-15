@@ -215,6 +215,19 @@ export class WSClient {
   }
 
   /**
+   * Send a non-chat protocol message (e.g. permission response).
+   * @param {object} data
+   */
+  sendProtocol(data) {
+    if (!this.isConnected) return;
+    try {
+      this._ws.send(JSON.stringify(data));
+    } catch (e) {
+      console.warn('[WS] sendProtocol failed:', e);
+    }
+  }
+
+  /**
    * Send a deterministic action (button click) — bypasses LLM routing.
    *
    * @param {object} payload — action payload from the button

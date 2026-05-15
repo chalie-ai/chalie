@@ -21,6 +21,7 @@ import { Notifications } from './notifications.js';
 import { ImageAttach } from './image_attach.js';
 import { DocumentUpload } from './document_upload.js';
 import { UpdateSystem } from './update_system.js';
+import { PermissionNotifications } from './permission_notifications.js';
 import { showToast, lsGet, lsSet } from './utils.js';
 
 // Disable the browser's scroll-restoration so a refresh never lands the
@@ -108,6 +109,11 @@ class ChalieApp {
     // Update system module
     this._updateSystem = new UpdateSystem({ getHost: () => this._backendHost });
     this._updateSystem.init();
+
+    // Permission notifications module
+    const permNotifications = new PermissionNotifications({ ws: this.ws });
+    permNotifications.init();
+    this._permNotifications = permNotifications;
 
     // Event router — dispatches WS drift events to modules
     this._eventRouter = new EventRouter({ ws: this.ws, renderer: this.renderer });
@@ -449,6 +455,10 @@ class ChalieApp {
       } else {
         this._addCapabilityAlert(data.cap_id, data.cap_name, data.error);
       }
+    });
+
+    this._eventRouter.onPermissionRequest((data) => {
+      this._permNotifications.handleRequest(data);
     });
   }
 

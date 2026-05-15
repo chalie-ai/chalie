@@ -3805,3 +3805,180 @@ details.block-section[open] > summary.block-section__title::before {
   color: var(--text-secondary);
   border-color: var(--border-subtle);
 }
+
+/* --------------------------------------------------------------------------
+   19. Permission Notification Cards
+   -------------------------------------------------------------------------- */
+
+.perm-stack {
+  position: fixed;
+  bottom: calc(var(--input-dock-height, 80px) + var(--space-md));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(480px, calc(100vw - var(--space-lg) * 2));
+  display: flex;
+  flex-direction: column-reverse;
+  gap: var(--space-sm);
+  pointer-events: none;
+  z-index: 200;
+}
+
+.perm-card {
+  background: color-mix(in oklab, var(--surface, var(--bg-chalie)) 95%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.20);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  pointer-events: auto;
+  overflow: hidden;
+  transform: translateY(20px);
+  opacity: 0;
+  transition: transform var(--duration-normal) ease,
+              opacity var(--duration-normal) ease,
+              border-color var(--duration-fast) ease;
+}
+
+.perm-card--visible {
+  transform: none;
+  opacity: 1;
+}
+
+.perm-card--leaving {
+  transform: translateY(-20px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+@keyframes perm-timeout-flash {
+  0%, 100% { border-color: var(--border-subtle); }
+  50%       { border-color: rgba(251, 191, 36, 0.55); }
+}
+
+.perm-card--timeout {
+  animation: perm-timeout-flash 1.4s ease-in-out infinite;
+}
+
+.perm-card__body {
+  padding: var(--space-md);
+}
+
+.perm-card__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.perm-card__icon {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.perm-card__title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.perm-card__intro {
+  font-size: var(--font-size-sm);
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-xs);
+  line-height: 1.45;
+}
+
+.perm-card__action {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0 0 var(--space-sm);
+}
+
+.perm-card__params {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px var(--space-sm);
+  margin: 0 0 var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  background: color-mix(in oklab, var(--text) 4%, transparent);
+  border-radius: var(--radius-sm);
+}
+
+.perm-card__param-key {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  margin: 0;
+  padding: 2px 0;
+}
+
+.perm-card__param-val {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  padding: 2px 0;
+}
+
+.perm-card__actions {
+  display: flex;
+  gap: var(--space-xs);
+  justify-content: flex-end;
+}
+
+.perm-card__btn {
+  padding: 5px var(--space-sm);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast),
+              color var(--duration-fast);
+  line-height: 1.4;
+}
+
+.perm-card__btn--allow {
+  background: rgba(52, 211, 153, 0.15);
+  border-color: rgba(52, 211, 153, 0.35);
+  color: #34d399;
+}
+
+.perm-card__btn--allow:hover {
+  background: rgba(52, 211, 153, 0.25);
+  border-color: rgba(52, 211, 153, 0.55);
+}
+
+.perm-card__btn--deny {
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  border-color: var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.perm-card__btn--deny:hover {
+  background: color-mix(in oklab, var(--text) 9%, transparent);
+  border-color: color-mix(in oklab, var(--text) 15%, transparent);
+  color: var(--text-primary);
+}
+
+.perm-card__progress {
+  width: 100%;
+  height: 3px;
+  background: color-mix(in oklab, var(--text) 8%, transparent);
+  overflow: hidden;
+}
+
+.perm-card__progress-fill {
+  height: 100%;
+  background: var(--accent-primary);
+  transition: width linear;
+}

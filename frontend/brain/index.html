@@ -37,6 +37,7 @@
                         <button class="nav-link" data-tab="lists">Lists</button>
                         <button class="nav-link" data-tab="documents">Documents</button>
                         <button class="nav-link" data-tab="capabilities">Capabilities</button>
+                        <button class="nav-link" data-tab="policies">Policies</button>
                     </div>
                 </div>
             </div>
@@ -304,6 +305,31 @@
             </div>
             <div id="capabilitiesList">
                 <div class="loading">Loading capabilities...</div>
+            </div>
+        </div>
+
+        <!-- Policies Tab -->
+        <div class="tab-panel" id="tab-policies">
+            <div class="panel-header">
+                <h2>Policies</h2>
+            </div>
+            <div class="policies-subtabs" id="policiesSubtabs">
+                <button class="policies-subtab active" data-context="chat">Chat</button>
+                <button class="policies-subtab" data-context="subagent">Subagent</button>
+                <button class="policies-subtab" data-context="subconscious">Background</button>
+            </div>
+            <div class="policies-preset-bar" id="policiesPresetBar">
+                <button class="policies-preset-btn" data-preset="careful">Careful</button>
+                <button class="policies-preset-btn" data-preset="balanced">Balanced</button>
+                <button class="policies-preset-btn" data-preset="autonomous">Autonomous</button>
+                <button class="policies-preset-btn" data-preset="custom">Custom</button>
+            </div>
+            <div class="policies-grid" id="policiesGrid">
+                <div class="loading">Loading policies...</div>
+            </div>
+            <div class="policies-blocked-section" id="policiesBlockedSection">
+                <button class="policies-blocked-toggle" id="policiesBlockedToggle">Blocked Actions Log ▾</button>
+                <div class="policies-blocked-body" id="policiesBlockedBody"></div>
             </div>
         </div>
     </main>

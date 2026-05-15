@@ -1979,3 +1979,214 @@ body::before {
 @media (max-width: 700px) {
     .usage-summary-row { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* =====================================================
+   Policies Tab
+   ===================================================== */
+
+.policies-subtabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+    padding-bottom: 0;
+}
+
+.policies-subtab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    margin-bottom: -1px;
+    transition: color 150ms, border-color 150ms;
+}
+
+.policies-subtab:hover { color: var(--text-primary); }
+
+.policies-subtab.active {
+    color: var(--accent-primary);
+    border-bottom-color: var(--accent-primary);
+}
+
+.policies-preset-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.policies-preset-btn {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 5px 14px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 150ms, border-color 150ms, color 150ms;
+}
+
+.policies-preset-btn:hover {
+    background: rgba(138, 92, 255, 0.06);
+    border-color: rgba(138, 92, 255, 0.30);
+    color: var(--text-primary);
+}
+
+.policies-preset-btn.active {
+    background: rgba(138, 92, 255, 0.12);
+    border-color: rgba(138, 92, 255, 0.45);
+    color: var(--accent-primary);
+}
+
+.policies-grid {
+    margin-bottom: 24px;
+}
+
+.policy-group {
+    margin-bottom: 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    padding-bottom: 8px;
+}
+
+.policy-group:last-child {
+    border-bottom: none;
+}
+
+.policy-group-header {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-secondary);
+    padding: 4px 0 8px;
+}
+
+.policy-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    gap: 12px;
+}
+
+.policy-row + .policy-row {
+    border-top: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.policy-label {
+    flex-grow: 1;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.policy-seg {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.policy-seg-btn {
+    background: none;
+    border: none;
+    border-right: 1px solid var(--border);
+    padding: 4px 10px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 120ms, color 120ms;
+    white-space: nowrap;
+}
+
+.policy-seg-btn:last-child { border-right: none; }
+
+.policy-seg-btn:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
+}
+
+.policy-seg-btn--active-allow {
+    background: rgba(52, 211, 153, 0.15);
+    color: #34d399;
+}
+
+.policy-seg-btn--active-ask {
+    background: rgba(251, 191, 36, 0.15);
+    color: #fbbf24;
+}
+
+.policy-seg-btn--active-deny {
+    background: rgba(248, 113, 113, 0.12);
+    color: #f87171;
+}
+
+.policies-blocked-section {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.policies-blocked-toggle {
+    display: block;
+    width: 100%;
+    background: none;
+    border: none;
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: color 150ms, background 150ms;
+    user-select: none;
+}
+
+.policies-blocked-toggle:hover,
+.policies-blocked-toggle.active {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.policies-blocked-body {
+    display: none;
+    padding: 4px 16px 12px;
+    border-top: 1px solid var(--border);
+}
+
+.policies-blocked-body.active {
+    display: block;
+}
+
+.policy-blocked-entry {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 6px 0;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.policy-blocked-entry:last-child { border-bottom: none; }
+
+.policy-blocked-action {
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--accent-primary);
+    flex-shrink: 0;
+}
+
+.policy-blocked-context {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.policy-blocked-time {
+    color: var(--text-muted);
+    margin-left: auto;
+    white-space: nowrap;
+    font-size: 11px;
+}
