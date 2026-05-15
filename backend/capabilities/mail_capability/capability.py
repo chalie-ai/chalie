@@ -572,27 +572,46 @@ class MailCapability(AbstractCapability):
                 logger.error("[mail] _do_monitor() IMAP: %s", exc)
 
         # --- CalDAV: every 3rd cycle ---
+        logger.info(
+            "[mail] _do_monitor() CalDAV gate: ok=%s cycle=%d mod3=%s url=%s",
+            self._caldav_ok, self._cycle_count,
+            self._cycle_count % 3 == 0,
+            bool(provider.caldav_url),
+        )
         if self._caldav_ok and self._cycle_count % 3 == 0 and provider.caldav_url:
             try:
                 caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
+                logger.info("[mail] _do_monitor() CalDAV: opening client for %s", caldav_url)
                 client = self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
                 )
                 if client is not None:
                     events = self._caldav_handler.ingest(client)
+                    logger.info("[mail] _do_monitor() CalDAV: ingested %d events", len(events))
                     self._caldav_handler.upsert_events(events, now)
+                else:
+                    logger.warning("[mail] _do_monitor() CalDAV: open_client returned None")
             except Exception as exc:
                 logger.error("[mail] _do_monitor() CalDAV: %s", exc)
 
         # --- CardDAV: every 12th cycle ---
+        logger.info(
+            "[mail] _do_monitor() CardDAV gate: ok=%s cycle=%d mod12=%s url=%s",
+            self._carddav_ok, self._cycle_count,
+            self._cycle_count % 12 == 0,
+            bool(provider.carddav_url),
+        )
         if self._carddav_ok and self._cycle_count % 12 == 0 and provider.carddav_url:
             try:
                 carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
+                logger.info("[mail] _do_monitor() CardDAV: opening client for %s", carddav_url)
                 client = self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
                 )
                 if client is not None:
                     self._carddav_handler.monitor(client)
+                else:
+                    logger.warning("[mail] _do_monitor() CardDAV: open_client returned None")
             except Exception as exc:
                 logger.error("[mail] _do_monitor() CardDAV: %s", exc)
 
