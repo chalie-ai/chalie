@@ -18,8 +18,7 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CALENDAR ABILITY]"
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a calendar card; without it, the user sees only "
     "plain text. Write a brief summary. Example: "
     "\"<span id='{tag}'>You have 3 meetings tomorrow, starting with standup at 09:00.</span>\""
