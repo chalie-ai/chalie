@@ -91,6 +91,12 @@ Structured responses render as typed cards rather than prose. All cards share th
 - **Goal** — title, progress bar, target date, status (active/completed/abandoned), update actions
 - **Knowledge** — concept name and strength, related concepts, last accessed
 
+## Quick Tips
+
+Slide-up informational cards for feature discovery. Surface above the input dock after the assistant responds when a cooldown has elapsed (3 h for new accounts, 24 h after 2 weeks). Each card shows an icon, body text, a "Try saying" example prompt, a dismiss ✕, and a "Don't show more tips" mute button. Tips are fetched from `chalie-web /guide/tips.json` (built by Eleventy from guide doc frontmatter). State tracked in `quick_tip_state` table: max 2 shows per tip, auto-retire on ≥2 non-ephemeral `tool_calls` for the tip's ability. Dismiss sends `POST /api/tips/dismiss`, mute sends `POST /api/tips/mute` (sets `quick_tips_enabled` setting to false). WebSocket drift event type: `quick_tip`. Brain exposes a toggle in the Capabilities tab.
+
+CSS: `.tip` at z-index 190 (below `.perm-stack` at 200). Violet top-edge accent, frosted glass backdrop, 300 ms slide-up animation matching the permission card pattern.
+
 ## Rich-Media Cards
 
 Rich-media cards are tool-driven structured renders that appear inline with text bubbles in the chat surface. They follow the same Radiant conventions (near-black surface, 1 px violet/cyan accent edge, hover glow) and are the only component class that may use entrance animation.
@@ -163,6 +169,8 @@ The cognitive dashboard. Tabs expose episodic memory with decay visualization, s
 The **Personality** subtab (under Cognition) exposes five sliders — warmth, mood, expressiveness, curiosity, humor — each ranging from −2 to +2. The selected combination maps to a voice paragraph prepended to the system prompt for user-facing conversations. Background processors (memory encoding, goal pursuit, scheduled tasks) are unaffected.
 
 The **Errors** subtab (under Cognition) shows the most recent ERROR and CRITICAL log entries from `/tmp/chalie.log`, newest first, capped at 200 entries. Served by `GET /system/observability/errors` (`@require_session`). Reads only the last ~256 KB of the log file. Returns an empty list on a missing file rather than a 500.
+
+The **Capabilities** tab lists capability plugins (email, calendar, contacts) with connect/disconnect management. A Quick Tips toggle at the top controls whether feature-discovery tip cards appear in the chat interface (`quick_tips_enabled` setting via `GET/PUT /system/settings/quick_tips_enabled`).
 
 The **Policies** tab provides per-action permission control (allow / ask / deny) across three independent contexts: Chat, Subagent, and Background (subconscious). Each action has a three-state segmented toggle. Three presets are available: Careful (reads allowed, writes ask), Balanced (restore defaults), and Autonomous (all allowed). A collapsible Blocked Actions Log section shows recent policy denials. Served by `GET/PUT /api/policies`, `POST /api/policies/reset`, `GET/DELETE /api/policies/blocked`.
 
