@@ -61,21 +61,21 @@ class CarddavHandler:
         contacts: list[dict] = []
         try:
             principal = client.principal()
-            address_books = self._get_address_books(principal)
+            address_books = _get_address_books(principal)
         except Exception as exc:
             logger.warning("[carddav] could not list address books: %s", exc)
             return contacts
 
         for abook in address_books:
             try:
-                cards = self._fetch_vcard_objects(abook)
+                cards = _fetch_vcard_objects(abook)
             except Exception as exc:
                 logger.warning("[carddav] could not fetch cards from address book: %s", exc)
                 continue
 
             for card in cards:
                 try:
-                    raw = self._extract_vcard_data(card)
+                    raw = _extract_vcard_data(card)
                     if not raw:
                         continue
                     contact = self.parse_vcard(raw)
