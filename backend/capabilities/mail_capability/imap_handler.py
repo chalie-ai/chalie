@@ -10,14 +10,24 @@ import email as _email_mod
 import email.policy
 import email.utils
 import logging
-
+from dataclasses import dataclass
 from datetime import timedelta
 
 from services.time_utils import utc_now
 
+
+@dataclass(frozen=True, slots=True)
+class SmtpCreds:
+    host: str
+    port: int
+    tls: bool
+    from_addr: str
+    password: str
+
 logger = logging.getLogger(__name__)
 
 _INITIAL_DAYS = 7
+_SMTP_TIMEOUT = 15
 
 _IMAP_DATE_FMT = "%d-%b-%Y"
 _IMAP_FETCH_HEADER = b"RFC822.HEADER"
@@ -303,6 +313,7 @@ class ImapHandler:
             headers = parse_headers(uid, raw_bytes)
             return {
                 "uid": uid,
+                "message_id": headers.get("message_id", ""),
                 "subject": headers.get("subject", ""),
                 "from_name": headers.get("from_name", ""),
                 "from_addr": headers.get("from_addr", ""),
@@ -351,8 +362,7 @@ class ImapHandler:
     # Send via SMTP
     # ------------------------------------------------------------------
 
-    def send_email(self, *, smtp_host: str, smtp_port: int, smtp_tls: bool,
-                   from_addr: str, password: str, params: dict) -> dict:
+    def send_email(self, *, creds: SmtpCreds, params: dict) -> dict:
         """Send an email via SMTP.
 
         Required params: to, subject, body.
@@ -371,7 +381,7 @@ class ImapHandler:
             return {"error": "to, subject, and body are required"}
 
         msg = MIMEText(body, "plain", "utf-8")
-        msg["From"] = from_addr
+        msg["From"] = creds.from_addr
         msg["To"] = to
         msg["Subject"] = subject
         if cc:
@@ -381,22 +391,22 @@ class ImapHandler:
             msg["References"] = in_reply_to
 
         try:
-            if smtp_tls:
-                with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15) as server:
-                    server.login(from_addr, password)
+            if creds.tls:
+                with smtplib.SMTP_SSL(creds.host, creds.port, timeout=_SMTP_TIMEOUT) as server:
+                    server.login(creds.from_addr, creds.password)
                     server.send_message(msg)
             else:
-                with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as server:
+                with smtplib.SMTP(creds.host, creds.port, timeout=_SMTP_TIMEOUT) as server:
                     server.ehlo()
                     try:
                         server.starttls()
                         server.ehlo()
                     except smtplib.SMTPNotSupportedError:
-                        pass
+                        logger.warning("[imap_handler] STARTTLS not supported by %s:%s", creds.host, creds.port)
                     try:
-                        server.login(from_addr, password)
+                        server.login(creds.from_addr, creds.password)
                     except smtplib.SMTPNotSupportedError:
-                        pass
+                        logger.warning("[imap_handler] AUTH not supported by %s:%s — sending unauthenticated", creds.host, creds.port)
                     server.send_message(msg)
             return {"success": True, "to": to, "subject": subject}
         except Exception as exc:

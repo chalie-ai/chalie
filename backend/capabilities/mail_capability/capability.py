@@ -48,7 +48,7 @@ import yaml
 from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
 from capabilities.mail_capability.carddav_handler import CarddavHandler
-from capabilities.mail_capability.imap_handler import ImapHandler
+from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
 from capabilities.mail_capability.providers import build_custom_provider, discover_provider
 from services.time_utils import utc_now
 
@@ -633,6 +633,51 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
+    # SMTP / guard helpers
+    # ------------------------------------------------------------------
+
+    def _load_smtp_creds(self) -> SmtpCreds:
+        """Load SMTP credentials from the credential store.
+
+        Raises ValueError when SMTP is not configured.
+        """
+        smtp_host = self.load_credential(_K_SMTP_HOST)
+        if not smtp_host:
+            raise ValueError("SMTP not configured for this provider.")
+        return SmtpCreds(
+            host=smtp_host,
+            port=int(self.load_credential(_K_SMTP_PORT) or "587"),
+            tls=self.load_credential(_K_SMTP_TLS) == "1",
+            from_addr=self.load_credential(_K_EMAIL),
+            password=self.load_credential(_K_PASSWORD),
+        )
+
+    @staticmethod
+    def _was_read_in_current_turn(uid) -> bool:
+        """Return True when email.read for *uid* was called this ACT turn."""
+        import json as _json
+        from services.message_processor import current_processor
+        from services.tool_call_service import ToolCallService
+        proc = current_processor()
+        if not proc or not getattr(proc, "_uid", None):
+            return False
+        try:
+            uid_int = int(uid)
+        except (TypeError, ValueError):
+            return False
+        calls = ToolCallService().get_by_transcript(proc._uid)
+        for tc in calls:
+            if tc.get("tool_name") != "email":
+                continue
+            try:
+                p = _json.loads(tc.get("params") or "{}")
+            except (ValueError, TypeError):
+                continue
+            if p.get("action") == "read" and int(p.get("uid", 0)) == uid_int:
+                return True
+        return False
+
+    # ------------------------------------------------------------------
     # Tools
     # ------------------------------------------------------------------
 
@@ -641,6 +686,9 @@ class MailCapability(AbstractCapability):
 
         IMAP tools (when ``_imap_ok``):
             ``search_email``, ``read_email``, ``draft_email``, ``manage_email``
+
+        SMTP tools (when ``_imap_ok`` and SMTP credentials are stored):
+            ``send_email``, ``reply_email``, ``forward_email``
 
         CalDAV tools (when ``_caldav_ok``):
             ``list_events``, ``get_event``, ``create_event``, ``update_event``,
@@ -659,51 +707,6 @@ class MailCapability(AbstractCapability):
         # ------------------------------------------------------------------
         # Connection helpers
         # ------------------------------------------------------------------
-
-        def _load_smtp_creds() -> dict | None:
-            """Load SMTP credentials from the capability's credential store.
-
-            Returns a dict with host/port/tls/from_addr/password, or None
-            when SMTP is not configured for this provider.
-            """
-            smtp_host = cap.load_credential(_K_SMTP_HOST)
-            if not smtp_host:
-                return None
-            return {
-                "host": smtp_host,
-                "port": int(cap.load_credential(_K_SMTP_PORT) or "587"),
-                "tls": cap.load_credential(_K_SMTP_TLS) == "1",
-                "from_addr": cap.load_credential(_K_EMAIL),
-                "password": cap.load_credential(_K_PASSWORD),
-            }
-
-        def _was_read_in_current_turn(uid) -> bool:
-            """Return True when email.read for *uid* was called this ACT turn.
-
-            Inspects ToolCallService records for the current transcript so
-            reply/forward actions can enforce a read-before-act contract.
-            """
-            import json as _json
-            from services.message_processor import current_processor
-            from services.tool_call_service import ToolCallService
-            proc = current_processor()
-            if not proc or not getattr(proc, "_uid", None):
-                return False
-            try:
-                uid_int = int(uid)
-            except (TypeError, ValueError):
-                return False
-            calls = ToolCallService().get_by_transcript(proc._uid)
-            for tc in calls:
-                if tc.get("tool_name") != "email":
-                    continue
-                try:
-                    p = _json.loads(tc.get("params") or "{}")
-                except (ValueError, TypeError):
-                    continue
-                if p.get("action") == "read" and int(p.get("uid", 0)) == uid_int:
-                    return True
-            return False
 
         def _open_imap_client():
             _email = cap.load_credential(_K_EMAIL)
@@ -815,33 +818,22 @@ class MailCapability(AbstractCapability):
                 def _send_email(topic, params, config=None, telemetry=None):
                     if not cap._imap_ok:
                         return {"error": _ERR_IMAP_NOT_CONNECTED}
-                    smtp_creds = _load_smtp_creds()
-                    if not smtp_creds:
-                        return {"error": "SMTP not configured for this provider."}
                     try:
-                        return cap._imap_handler.send_email(
-                            smtp_host=smtp_creds["host"],
-                            smtp_port=smtp_creds["port"],
-                            smtp_tls=smtp_creds["tls"],
-                            from_addr=smtp_creds["from_addr"],
-                            password=smtp_creds["password"],
-                            params=params,
-                        )
+                        creds = cap._load_smtp_creds()
+                        return cap._imap_handler.send_email(creds=creds, params=params)
                     except Exception as exc:
                         return {"error": str(exc)}
 
                 def _reply_email(topic, params, config=None, telemetry=None):
                     if not cap._imap_ok:
                         return {"error": _ERR_IMAP_NOT_CONNECTED}
-                    smtp_creds = _load_smtp_creds()
-                    if not smtp_creds:
-                        return {"error": "SMTP not configured for this provider."}
                     uid = params.get("uid")
                     if not uid:
                         return {"error": "uid is required for reply"}
-                    if not _was_read_in_current_turn(uid):
+                    if not cap._was_read_in_current_turn(uid):
                         return {"error": "You need to read the email before replying."}
                     try:
+                        creds = cap._load_smtp_creds()
                         client = _open_imap_client()
                         if client is None:
                             return {"error": "Failed to open IMAP connection."}
@@ -855,11 +847,7 @@ class MailCapability(AbstractCapability):
                         if "error" in original:
                             return original
                         return cap._imap_handler.send_email(
-                            smtp_host=smtp_creds["host"],
-                            smtp_port=smtp_creds["port"],
-                            smtp_tls=smtp_creds["tls"],
-                            from_addr=smtp_creds["from_addr"],
-                            password=smtp_creds["password"],
+                            creds=creds,
                             params={
                                 "to": original.get("from_addr", ""),
                                 "subject": f"Re: {original.get('subject', '')}",
@@ -873,18 +861,16 @@ class MailCapability(AbstractCapability):
                 def _forward_email(topic, params, config=None, telemetry=None):
                     if not cap._imap_ok:
                         return {"error": _ERR_IMAP_NOT_CONNECTED}
-                    smtp_creds = _load_smtp_creds()
-                    if not smtp_creds:
-                        return {"error": "SMTP not configured for this provider."}
                     uid = params.get("uid")
                     if not uid:
                         return {"error": "uid is required for forward"}
-                    if not _was_read_in_current_turn(uid):
+                    if not cap._was_read_in_current_turn(uid):
                         return {"error": "You need to read the email before forwarding."}
                     to = (params.get("to") or "").strip()
                     if not to:
                         return {"error": "to is required for forward"}
                     try:
+                        creds = cap._load_smtp_creds()
                         client = _open_imap_client()
                         if client is None:
                             return {"error": "Failed to open IMAP connection."}
@@ -906,11 +892,7 @@ class MailCapability(AbstractCapability):
                         )
                         body = forward_header + original.get("body", "")
                         return cap._imap_handler.send_email(
-                            smtp_host=smtp_creds["host"],
-                            smtp_port=smtp_creds["port"],
-                            smtp_tls=smtp_creds["tls"],
-                            from_addr=smtp_creds["from_addr"],
-                            password=smtp_creds["password"],
+                            creds=creds,
                             params={
                                 "to": to,
                                 "subject": f"Fwd: {original.get('subject', '')}",
