@@ -109,6 +109,66 @@ def _summarize_params(action: dict, max_keys: int = 4) -> dict:
     return preview
 
 
+def _build_action_description(action_id: str, action: dict) -> str:
+    """Build a human-readable one-liner describing the action for the permission card."""
+    _VERBS = {
+        'email.read': 'Reading an email',
+        'email.search': 'Searching emails',
+        'email.draft': 'Drafting an email',
+        'email.send': 'Sending an email',
+        'email.manage': 'Managing an email',
+        'calendar.update_event': 'Updating a calendar event',
+        'calendar.create_event': 'Creating a calendar event',
+        'schedule.create': 'Creating a scheduled task',
+        'schedule.cancel': 'Cancelling a scheduled task',
+        'browser.interact': 'Interacting with a webpage',
+        'browser.render': 'Reading a webpage',
+        'document.delete': 'Deleting a document',
+        'document.create': 'Creating a document',
+        'list.delete': 'Deleting a list',
+        'memory.forget': 'Forgetting a memory',
+        'code_eval': 'Running code',
+    }
+
+    # Pick the first available context param in priority order per action.
+    _CONTEXT_KEYS = {
+        'email.manage': ['operation'],
+        'email.draft': ['to', 'subject'],
+        'email.send': ['to', 'subject'],
+        'email.search': ['sender', 'subject', 'keyword'],
+        'schedule.create': ['description'],
+        'schedule.cancel': ['description'],
+        'browser.interact': ['url'],
+        'browser.render': ['url'],
+        'document.delete': ['name'],
+        'document.create': ['name'],
+        'list.delete': ['list_name'],
+        'calendar.update_event': ['summary'],
+        'calendar.create_event': ['summary'],
+    }
+
+    base = _VERBS.get(action_id)
+    if not base:
+        # Fallback: "Email read" → "Email Read"
+        base = action_id.replace('.', ' ').replace('_', ' ').title()
+
+    # Special case: email.manage uses operation as the verb
+    if action_id == 'email.manage':
+        op = action.get('operation', '')
+        if op:
+            base = op.replace('_', ' ').title() + ' an email'
+
+    # Append first meaningful context value
+    context_keys = _CONTEXT_KEYS.get(action_id, [])
+    for key in context_keys:
+        val = action.get(key)
+        if val and isinstance(val, str) and key != 'operation':
+            if len(val) > 60:
+                val = val[:57] + '...'
+            return f"{base} — {val}"
+    return base
+
+
 class ActDispatcherService:
     """Dispatches internal cognitive actions with timeout enforcement."""
 
@@ -467,7 +527,7 @@ class ActDispatcherService:
                 'request_id': request_id,
                 'action_id': action_id,
                 'context': context,
-                'params_preview': _summarize_params(action),
+                'description': _build_action_description(action_id, action),
             })
             store.publish('output:events', event)
 

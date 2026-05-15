@@ -3,7 +3,7 @@
  *
  * Renders a stack of cards above the input dock. Each card shows:
  *   - Human-readable action label
- *   - Key/value params preview
+ *   - One-line description of what the action does
  *   - Allow / Deny buttons
  *   - 30-second countdown progress bar that auto-denies on expiry
  *
@@ -11,18 +11,40 @@
  */
 
 const ACTION_LABELS = {
-  'email.manage':          'Manage email',
-  'email.draft':           'Draft email',
-  'email.send':            'Send email',
-  'calendar.update_event': 'Update calendar event',
-  'calendar.create_event': 'Create calendar event',
-  'code_eval':             'Execute code',
-  'browser.interact':      'Interact with webpage',
-  'document.delete':       'Delete document',
-  'list.delete':           'Delete list',
-  'memory.forget':         'Forget memory',
-  'schedule.create':       'Create schedule',
-  'schedule.cancel':       'Cancel schedule',
+  'email.read':            'Read Email',
+  'email.search':          'Search Email',
+  'email.manage':          'Manage Email',
+  'email.draft':           'Draft Email',
+  'email.send':            'Send Email',
+  'calendar.list_events':  'List Calendar Events',
+  'calendar.get_event':    'Read Calendar Event',
+  'calendar.update_event': 'Update Calendar Event',
+  'calendar.create_event': 'Create Calendar Event',
+  'code_eval':             'Execute Code',
+  'browser.render':        'Read Webpage',
+  'browser.interact':      'Interact with Webpage',
+  'browser.screenshot':    'Screenshot Webpage',
+  'browser.monitor':       'Monitor Webpage',
+  'document.search':       'Search Documents',
+  'document.list':         'List Documents',
+  'document.view':         'View Document',
+  'document.create':       'Create Document',
+  'document.delete':       'Delete Document',
+  'document.restore':      'Restore Document',
+  'list.delete':           'Delete List',
+  'memory.store':          'Store Memory',
+  'memory.recall':         'Recall Memory',
+  'memory.forget':         'Forget Memory',
+  'memory.reflect':        'Reflect on Memory',
+  'schedule.create':       'Create Schedule',
+  'schedule.cancel':       'Cancel Schedule',
+  'schedule.list':         'List Schedules',
+  'schedule.search':       'Search Schedules',
+  'contacts':              'Access Contacts',
+  'news':                  'Fetch News',
+  'search':                'Web Search',
+  'weather':               'Check Weather',
+  'timer':                 'Set Timer',
 };
 
 const TIMEOUT_MS = 30_000;
@@ -36,36 +58,6 @@ function actionLabel(actionId) {
   return actionId
     .replace(/[._]/g, ' ')
     .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/**
- * Render params_preview as a small key/value block.
- * Returns null if params is empty / not an object.
- */
-function buildParamsEl(params) {
-  if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
-  const entries = Object.entries(params);
-  if (!entries.length) return null;
-
-  const dl = document.createElement('dl');
-  dl.className = 'perm-card__params';
-
-  for (const [k, v] of entries) {
-    const dt = document.createElement('dt');
-    dt.className = 'perm-card__param-key';
-    dt.textContent = k;
-
-    const dd = document.createElement('dd');
-    dd.className = 'perm-card__param-val';
-    // Truncate very long values so the card stays compact
-    const str = typeof v === 'string' ? v : JSON.stringify(v);
-    dd.textContent = str.length > 80 ? str.slice(0, 77) + '…' : str;
-
-    dl.appendChild(dt);
-    dl.appendChild(dd);
-  }
-
-  return dl;
 }
 
 export class PermissionNotifications {
@@ -88,16 +80,16 @@ export class PermissionNotifications {
 
   /**
    * Handle a permission_request event from the backend.
-   * @param {{ request_id: string, action_id: string, context?: string, params_preview?: object }} data
+   * @param {{ request_id: string, action_id: string, description?: string, context?: string }} data
    */
   handleRequest(data) {
-    const { request_id, action_id, params_preview } = data;
+    const { request_id, action_id, description } = data;
     if (!request_id || !action_id) return;
 
     // Deduplicate — if already shown, ignore
     if (this._active.has(request_id)) return;
 
-    const card = this._buildCard(request_id, action_id, params_preview);
+    const card = this._buildCard(request_id, action_id, description);
     this._container.prepend(card);  // newest on top
 
     const startTime = Date.now();
@@ -126,12 +118,16 @@ export class PermissionNotifications {
   // Internal
   // ---------------------------------------------------------------------------
 
-  _buildCard(requestId, actionId, paramsPreview) {
+  _buildCard(requestId, actionId, description) {
     const card = document.createElement('div');
     card.className = 'perm-card';
     card.dataset.requestId = requestId;
     card.setAttribute('role', 'dialog');
     card.setAttribute('aria-label', 'Permission request');
+
+    // Body wrapper — provides padding around content (progress bar stays flush)
+    const body = document.createElement('div');
+    body.className = 'perm-card__body';
 
     // Header
     const header = document.createElement('div');
@@ -149,26 +145,18 @@ export class PermissionNotifications {
 
     const title = document.createElement('p');
     title.className = 'perm-card__title';
-
-    const intro = document.createElement('span');
-    intro.className = 'perm-card__intro';
-    intro.textContent = 'Chalie wants to: ';
-
-    const action = document.createElement('strong');
-    action.className = 'perm-card__action';
-    action.textContent = actionLabel(actionId);
-
-    title.appendChild(intro);
-    title.appendChild(action);
+    title.textContent = actionLabel(actionId);
 
     header.appendChild(icon);
     header.appendChild(title);
-    card.appendChild(header);
+    body.appendChild(header);
 
-    // Params preview
-    const paramsEl = buildParamsEl(paramsPreview);
-    if (paramsEl) {
-      card.appendChild(paramsEl);
+    // Description — one-line summary of what the action does
+    if (description) {
+      const desc = document.createElement('p');
+      desc.className = 'perm-card__desc';
+      desc.textContent = description;
+      body.appendChild(desc);
     }
 
     // Actions
@@ -187,9 +175,11 @@ export class PermissionNotifications {
 
     actions.appendChild(denyBtn);
     actions.appendChild(allowBtn);
-    card.appendChild(actions);
+    body.appendChild(actions);
 
-    // Progress bar (countdown depletes left to right)
+    card.appendChild(body);
+
+    // Progress bar (countdown depletes left to right) — flush to card edges
     const progressTrack = document.createElement('div');
     progressTrack.className = 'perm-card__progress';
 
