@@ -164,6 +164,8 @@ The **Personality** subtab (under Cognition) exposes five sliders — warmth, mo
 
 The **Errors** subtab (under Cognition) shows the most recent ERROR and CRITICAL log entries from `/tmp/chalie.log`, newest first, capped at 200 entries. Served by `GET /system/observability/errors` (`@require_session`). Reads only the last ~256 KB of the log file. Returns an empty list on a missing file rather than a 500.
 
+The **Policies** tab provides per-action permission control (allow / ask / deny) across three independent contexts: Chat, Subagent, and Background (subconscious). Each action has a three-state segmented toggle. Three presets are available: Careful (reads allowed, writes ask), Balanced (restore defaults), and Autonomous (all allowed). A collapsible Blocked Actions Log section shows recent policy denials. Served by `GET/PUT /api/policies`, `POST /api/policies/reset`, `GET/DELETE /api/policies/blocked`.
+
 ### Onboarding (`/on-boarding/`)
 
 Account creation only — username and password. If an account already exists, the page bounces to login. After creating an account it redirects to Brain so the user can add a provider.
