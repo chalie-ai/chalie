@@ -109,6 +109,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "document",
     "email",
     "find_tools",
+    "home",
     "list",
     "memory",
     "news",
@@ -127,7 +128,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
 
 
 def test_abilities_directory_has_exactly_21_non_underscore_modules():
-    """abilities/ contains exactly the 21 dispatchable top-level modules.
+    """abilities/ contains exactly the 22 dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
@@ -155,7 +156,7 @@ def test_abilities_directory_has_exactly_21_non_underscore_modules():
         f"Expected ability modules are missing from abilities/: {sorted(removed)}. "
         "Remove them from _EXPECTED_ABILITY_MODULE_STEMS if intentional."
     )
-    assert len(walked) == 21
+    assert len(walked) == 22
 
 
 # ---------------------------------------------------------------------------
@@ -199,8 +200,10 @@ _DEFAULT_DISCOVERABLE = frozenset({
 _CAPABILITY_TOOLS = frozenset({"email", "calendar", "contacts"})
 
 
+_UMP_ALWAYS = _DEFAULT_ALWAYS | {"home"}
+
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
-    "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
+    "UserMessageProcessor":      (_UMP_ALWAYS, _DEFAULT_DISCOVERABLE),
     # DMN has news, search, browser natively per masterplan §4 — no find_tools round-trip.
     # `timer` is dropped: DMN runs in the background without a user-channel
     # surface, so the rich-media card would never render. `subagent` is
@@ -211,7 +214,7 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
                                    _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent"}),
     # ScheduledPromptProcessor — same tool surface as UMP. Scheduled prompts
     # act on the user's behalf with full capabilities.
-    "ScheduledPromptProcessor": (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
+    "ScheduledPromptProcessor": (_UMP_ALWAYS, _DEFAULT_DISCOVERABLE),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
     # the class-level attribute is [] (empty). The per-instance value is
     # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
