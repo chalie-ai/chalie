@@ -5,7 +5,7 @@
  *   - Human-readable action label
  *   - One-line description of what the action does
  *   - Allow / Deny buttons
- *   - 30-second countdown progress bar that auto-denies on expiry
+ *   - No auto-deny — waits indefinitely for user response
  *
  * Multiple concurrent requests stack vertically, newest on top.
  */
@@ -16,6 +16,8 @@ const ACTION_LABELS = {
   'email.manage':          'Manage Email',
   'email.draft':           'Draft Email',
   'email.send':            'Send Email',
+  'email.reply':           'Reply to Email',
+  'email.forward':         'Forward Email',
   'calendar.list_events':  'List Calendar Events',
   'calendar.get_event':    'Read Calendar Event',
   'calendar.update_event': 'Update Calendar Event',
@@ -47,7 +49,8 @@ const ACTION_LABELS = {
   'timer':                 'Set Timer',
 };
 
-const TIMEOUT_MS = 30_000;
+// No auto-deny — the card stays until the user explicitly clicks Allow or Deny.
+// The backend polls indefinitely (1-hour safety net).
 
 /**
  * Convert an action_id to a readable label.
@@ -62,7 +65,7 @@ function actionLabel(actionId) {
 
 export class PermissionNotifications {
   constructor() {
-    /** @type {Map<string, { el: HTMLElement, timer: number, interval: number }>} */
+    /** @type {Map<string, { el: HTMLElement }>} */
     this._active = new Map();
     this._container = null;
   }
@@ -92,23 +95,7 @@ export class PermissionNotifications {
     const card = this._buildCard(request_id, action_id, description);
     this._container.prepend(card);  // newest on top
 
-    const startTime = Date.now();
-
-    // Countdown: update the progress bar every 100ms
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const remaining = Math.max(0, TIMEOUT_MS - elapsed);
-      const pct = (remaining / TIMEOUT_MS) * 100;
-      const bar = card.querySelector('.perm-card__progress-fill');
-      if (bar) bar.style.width = pct + '%';
-    }, 100);
-
-    // Auto-deny after timeout
-    const timer = setTimeout(() => {
-      this._respond(request_id, false, true);
-    }, TIMEOUT_MS);
-
-    this._active.set(request_id, { el: card, timer, interval });
+    this._active.set(request_id, { el: card });
 
     // Trigger slide-in animation
     requestAnimationFrame(() => card.classList.add('perm-card--visible'));
@@ -125,7 +112,7 @@ export class PermissionNotifications {
     card.setAttribute('role', 'dialog');
     card.setAttribute('aria-label', 'Permission request');
 
-    // Body wrapper — provides padding around content (progress bar stays flush)
+    // Body wrapper — provides padding around content
     const body = document.createElement('div');
     body.className = 'perm-card__body';
 
@@ -166,29 +153,18 @@ export class PermissionNotifications {
     const allowBtn = document.createElement('button');
     allowBtn.className = 'perm-card__btn perm-card__btn--allow';
     allowBtn.textContent = 'Allow';
-    allowBtn.addEventListener('click', () => this._respond(requestId, true, false));
+    allowBtn.addEventListener('click', () => this._respond(requestId, true));
 
     const denyBtn = document.createElement('button');
     denyBtn.className = 'perm-card__btn perm-card__btn--deny';
     denyBtn.textContent = 'Deny';
-    denyBtn.addEventListener('click', () => this._respond(requestId, false, false));
+    denyBtn.addEventListener('click', () => this._respond(requestId, false));
 
     actions.appendChild(denyBtn);
     actions.appendChild(allowBtn);
     body.appendChild(actions);
 
     card.appendChild(body);
-
-    // Progress bar (countdown depletes left to right) — flush to card edges
-    const progressTrack = document.createElement('div');
-    progressTrack.className = 'perm-card__progress';
-
-    const progressFill = document.createElement('div');
-    progressFill.className = 'perm-card__progress-fill';
-    progressFill.style.width = '100%';
-
-    progressTrack.appendChild(progressFill);
-    card.appendChild(progressTrack);
 
     return card;
   }
@@ -197,14 +173,11 @@ export class PermissionNotifications {
    * Send a permission response and dismiss the card.
    * @param {string} requestId
    * @param {boolean} approved
-   * @param {boolean} timedOut  — adds a brief "timed out" flash before removal
    */
-  _respond(requestId, approved, timedOut) {
+  _respond(requestId, approved) {
     const entry = this._active.get(requestId);
     if (!entry) return;
 
-    clearTimeout(entry.timer);
-    clearInterval(entry.interval);
     this._active.delete(requestId);
 
     // Send via REST — the WebSocket receive loop is blocked during chat processing
@@ -214,14 +187,7 @@ export class PermissionNotifications {
       body: JSON.stringify({ request_id: requestId, approved }),
     }).catch((e) => console.warn('[PermNotif] respond failed:', e));
 
-    // Animate out
-    const { el } = entry;
-    if (timedOut) {
-      el.classList.add('perm-card--timeout');
-      setTimeout(() => this._removeCard(el), 600);
-    } else {
-      this._removeCard(el);
-    }
+    this._removeCard(entry.el);
   }
 
   _removeCard(el) {

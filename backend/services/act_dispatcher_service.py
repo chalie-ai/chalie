@@ -116,6 +116,8 @@ def _build_action_description(action_id: str, action: dict) -> str:
         'email.search': 'Searching emails',
         'email.draft': 'Drafting an email',
         'email.send': 'Sending an email',
+        'email.reply': 'Replying to an email',
+        'email.forward': 'Forwarding an email',
         'email.manage': 'Managing an email',
         'calendar.update_event': 'Updating a calendar event',
         'calendar.create_event': 'Creating a calendar event',
@@ -135,6 +137,8 @@ def _build_action_description(action_id: str, action: dict) -> str:
         'email.manage': ['operation'],
         'email.draft': ['to', 'subject'],
         'email.send': ['to', 'subject'],
+        'email.reply': ['to', 'subject'],
+        'email.forward': ['to', 'subject'],
         'email.search': ['sender', 'subject', 'keyword'],
         'schedule.create': ['description'],
         'schedule.cancel': ['description'],
@@ -172,8 +176,10 @@ def _build_action_description(action_id: str, action: dict) -> str:
 class ActDispatcherService:
     """Dispatches internal cognitive actions with timeout enforcement."""
 
-    _POLICY_DENY_MSG = "This action is not permitted by your current policy settings. You can ask the user to change it in Brain → Policies."
-    _POLICY_UNAVAILABLE_MSG = "This action requires user approval but the user is not available right now. The action has been logged for review."
+    _POLICY_DENY_MSG = "POLICY BLOCK: This action ({action_id}) is permanently blocked by the user's policy settings (state=deny). Do NOT retry — the user must change this in Brain → Policies before it can run."
+    _POLICY_UNAVAILABLE_MSG = "POLICY BLOCK: This action ({action_id}) requires explicit user approval but cannot be requested during background processing. It has been logged for the user to review."
+    _POLICY_USER_DENIED_MSG = "POLICY BLOCK: The user was shown a permission prompt for this action ({action_id}) and explicitly denied it. Do NOT retry this action in this conversation."
+    _POLICY_TIMEOUT_MSG = "POLICY BLOCK: This action ({action_id}) requires user approval. A permission prompt was shown but the user did not respond. Do NOT retry this action unless the user asks."
 
     def __init__(self, timeout: float = 10.0):
         """Initialize dispatcher with ability handlers.
@@ -482,7 +488,7 @@ class ActDispatcherService:
             return {
                 'action_type': action_type,
                 'status': 'policy_denied',
-                'result': self._POLICY_DENY_MSG,
+                'result': self._POLICY_DENY_MSG.format(action_id=action_id),
                 'execution_time': 0.0,
                 'confidence': 0.0,
                 'notes': f'policy:{action_id}/{context}=deny',
@@ -494,29 +500,40 @@ class ActDispatcherService:
             return {
                 'action_type': action_type,
                 'status': 'policy_denied',
-                'result': self._POLICY_UNAVAILABLE_MSG,
+                'result': self._POLICY_UNAVAILABLE_MSG.format(action_id=action_id),
                 'execution_time': 0.0,
                 'confidence': 0.0,
                 'notes': f'policy:{action_id}/{context}=ask(auto-reject)',
             }
 
-        # Chat / subagent: request user permission via WebSocket
-        approved = self._request_permission(action_id, action, context)
-        if not approved:
-            svc.log_blocked(action_id, context, 'user_denied', _summarize_params(action))
+        # Chat / subagent: request user permission via REST → Redis
+        verdict = self._request_permission(action_id, action, context)
+        if verdict != 'approved':
+            reason = 'user_denied' if verdict == 'denied' else 'timeout'
+            msg = (self._POLICY_USER_DENIED_MSG if verdict == 'denied'
+                   else self._POLICY_TIMEOUT_MSG).format(action_id=action_id)
+            svc.log_blocked(action_id, context, reason, _summarize_params(action))
             return {
                 'action_type': action_type,
                 'status': 'policy_denied',
-                'result': 'The user denied this action.',
+                'result': msg,
                 'execution_time': 0.0,
                 'confidence': 0.0,
-                'notes': f'policy:{action_id}/{context}=ask(denied)',
+                'notes': f'policy:{action_id}/{context}=ask({verdict})',
             }
 
         return None  # Approved — proceed with execution
 
     def _request_permission(self, action_id, action, context):
-        """Publish a permission_request via Redis and poll for response."""
+        """Publish a permission_request via Redis and poll for response.
+
+        Polls indefinitely (2s interval) until the user responds via the
+        REST endpoint or the WebSocket disconnects.  Returns one of:
+          'approved'  — user clicked Allow
+          'denied'    — user clicked Deny
+          'timeout'   — poll exhausted (should not happen with indefinite wait,
+                        but kept as a safety net at 1 hour)
+        """
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
@@ -532,17 +549,17 @@ class ActDispatcherService:
             store.publish('output:events', event)
 
             response_key = f'policy:response:{request_id}'
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + 3600  # 1-hour safety net
             while time.monotonic() < deadline:
                 raw = store.get(response_key)
                 if raw:
                     store.delete(response_key)
                     resp = json.loads(raw)
-                    return resp.get('approved', False)
-                time.sleep(0.5)
+                    return 'approved' if resp.get('approved', False) else 'denied'
+                time.sleep(2)
 
-            return False  # Timeout — treat as denial
+            return 'timeout'
         except Exception as e:
             logging.warning(f"[ACT DISPATCH] Permission request failed: {e}")
-            return True  # Fail open on Redis errors
+            return 'approved'  # Fail open on Redis errors
 
