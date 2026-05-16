@@ -20,6 +20,8 @@ reach the MCP protocol layer.
 
 import asyncio
 import logging
+import re
+import sqlite3
 
 import uvicorn
 from starlette.applications import Starlette
@@ -34,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 _MCP_SERVER_NAME = "chalie"
 _DEFAULT_PORT = 8462
+_SAFE_NAME_RE = re.compile(r'^[A-Za-z0-9 _\-\.]{1,100}$')
 
 
 class BearerTokenMiddleware(BaseHTTPMiddleware):
@@ -54,7 +57,7 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
                 status_code=401,
             )
 
-        wrapper_id = self._validate_token(raw_token)
+        wrapper_id = await asyncio.to_thread(self._validate_token, raw_token)
         if wrapper_id is None:
             return JSONResponse(
                 {"error": "Invalid or revoked token"},
@@ -109,7 +112,7 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
     )
 
     @mcp.tool()
-    def talk_to_chalie(
+    async def talk_to_chalie(
         message: str,
         agent_name: str,
         project_or_task_name: str,
@@ -129,6 +132,11 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
         Returns:
             Chalie's response.
         """
+        if not _SAFE_NAME_RE.match(agent_name):
+            return "Error: agent_name must be 1-100 chars of [A-Za-z0-9 _\\-.]"
+        if not _SAFE_NAME_RE.match(project_or_task_name):
+            return "Error: project_or_task_name must be 1-100 chars of [A-Za-z0-9 _\\-.]"
+
         from services.external_agent_message_processor import ExternalAgentMessageProcessor
 
         logger.info(
@@ -136,14 +144,16 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
             agent_name, project_or_task_name, loop_in_human,
         )
 
-        proc = ExternalAgentMessageProcessor(
-            raw_input=message,
-            agent_name=agent_name,
-            project_or_task_name=project_or_task_name,
-            loop_in_human=loop_in_human,
-        )
+        def _run():
+            proc = ExternalAgentMessageProcessor(
+                raw_input=message,
+                agent_name=agent_name,
+                project_or_task_name=project_or_task_name,
+                loop_in_human=loop_in_human,
+            )
+            return proc.send()
 
-        response = proc.send()
+        response = await asyncio.to_thread(_run)
         return response or "(No response generated)"
 
     return mcp
@@ -170,7 +180,10 @@ def run_mcp_server() -> None:
         return
 
     port_setting = settings.get("mcp_server_port")
-    port = int(port_setting) if port_setting else _DEFAULT_PORT
+    try:
+        port = int(port_setting) if port_setting else _DEFAULT_PORT
+    except (ValueError, TypeError):
+        port = _DEFAULT_PORT
 
     _ensure_mcp_token(db)
 
@@ -195,14 +208,22 @@ def _ensure_mcp_token(db) -> None:
             return
 
     auth_svc = WrapperAuthService(db)
-    raw_token, wrapper_id = auth_svc.create_token(
-        name="MCP Server (External Agents)",
-        capabilities={"signals": [], "intents": ["talk_to_chalie"]},
-        permissions={"query": ["*"], "update": ["*"], "broadcast": False},
-        wrapper_id_override="__mcp_server__",
-    )
+    try:
+        raw_token, wrapper_id = auth_svc.create_token(
+            name="MCP Server (External Agents)",
+            capabilities={"signals": [], "intents": ["talk_to_chalie"]},
+            permissions={"query": ["*"], "update": ["*"], "broadcast": False},
+            wrapper_id_override="__mcp_server__",
+        )
+    except sqlite3.IntegrityError:
+        logger.info("[MCP] Token already exists (concurrent boot); skipping")
+        return
 
     settings.set("mcp_server_token_wrapper_id", wrapper_id)
-    settings.set("mcp_server_token", raw_token)
 
-    logger.info("[MCP] Generated MCP auth token (wrapper_id=%s)", wrapper_id)
+    logger.info(
+        "[MCP] Generated MCP auth token (wrapper_id=%s). "
+        "Retrieve via: Settings > MCP Server in the brain dashboard.",
+        wrapper_id,
+    )
+    logger.info("[MCP] Token (shown once): %s", raw_token)
