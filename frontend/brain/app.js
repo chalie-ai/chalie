@@ -3575,24 +3575,20 @@ async function loadMcpSettings() {
         const toggle = document.getElementById('mcpEnabledToggle');
         const portInput = document.getElementById('mcpPortInput');
         const tokenEl = document.getElementById('mcpTokenValue');
-        const snippet = document.getElementById('mcpConnectionSnippet');
-
         if (toggle) toggle.checked = data.enabled;
         if (portInput) portInput.value = data.port || 8462;
-        if (tokenEl) tokenEl.textContent = data.token || '(no token generated)';
 
-        const host = window.location.hostname || 'localhost';
-        const port = data.port || 8462;
-        if (snippet) {
-            snippet.textContent = JSON.stringify({
-                mcpServers: {
-                    chalie: {
-                        type: 'http',
-                        url: `http://${host}:${port}/mcp`,
-                        headers: { Authorization: `Bearer ${data.token || '<TOKEN>'}` }
-                    }
-                }
-            }, null, 2);
+        if (!data.token) {
+            if (tokenEl) tokenEl.textContent = 'Generating...';
+            const genRes = await apiFetch('/api/mcp-server/regenerate-token', { method: 'POST' });
+            if (genRes.ok) {
+                const genData = await genRes.json();
+                if (tokenEl) tokenEl.textContent = genData.token;
+            } else {
+                if (tokenEl) tokenEl.textContent = '(failed to generate token)';
+            }
+        } else {
+            if (tokenEl) tokenEl.textContent = data.token;
         }
     } catch (err) {
         console.warn('[mcp] load failed:', err);
