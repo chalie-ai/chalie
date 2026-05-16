@@ -171,8 +171,8 @@ class ExternalAgentMessageProcessor(MessageProcessor):
         disclosure_input = (
             f"An external agent called '{self._agent_name}' just contacted you "
             f"about '{self._project_or_task_name}'. "
-            f"Here's what they said:\n\n\"{self._raw_input[:500]}\"\n\n"
-            f"You replied:\n\n\"{self._final_response[:500]}\"\n\n"
+            f"Here's what they said:\n\n\"{self._raw_input}\"\n\n"
+            f"You replied:\n\n\"{self._final_response}\"\n\n"
             f"Let the user know about this exchange in your own words."
         )
 
