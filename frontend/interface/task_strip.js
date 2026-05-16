@@ -131,7 +131,6 @@ export class TaskStrip {
         <span class="task-drawer__kind-dot task-drawer__kind-dot--reminder"></span>
         <span class="task-drawer__msg">${escHtml(msg)}</span>
         ${due ? `<span class="task-drawer__due">${escHtml(due)}</span>` : ''}
-        <button class="task-drawer__dismiss" data-dismiss-reminder="${escHtml(id)}" aria-label="Dismiss reminder">&times;</button>
       </div>`;
     }
 
@@ -143,17 +142,6 @@ export class TaskStrip {
 
     list.innerHTML = html;
 
-    // Wire dismiss buttons — reminders
-    list.querySelectorAll('[data-dismiss-reminder]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const remId = btn.dataset.dismissReminder;
-        try {
-          await this._api._delete(`/scheduler/${remId}`);
-        } catch { /* ignore */ }
-        this.loadActiveTasks();
-      });
-    });
 
   }
 }

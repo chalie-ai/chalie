@@ -2623,11 +2623,6 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 
 .task-drawer__item.--paused { opacity: 0.5; }
 
-.task-drawer__item > .task-drawer__dismiss {
-  position: absolute;
-  top: 10px;
-  right: 12px;
-}
 
 .task-drawer__goal {
   font-size: 13px;
@@ -2722,19 +2717,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   flex-shrink: 0;
 }
 
-.task-drawer__dismiss {
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
-  font-size: 16px;
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
-  flex-shrink: 0;
-  transition: color 220ms ease;
-}
 
-.task-drawer__dismiss:hover { color: var(--text-primary); }
 
 .task-drawer__hint {
   padding: 8px var(--space-lg) 10px;
@@ -2749,22 +2732,8 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   position: relative;
 }
 
-.task-drawer-trigger__dot {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent, #8A5CFF);
-  animation: taskDotPulse 2s ease-in-out infinite;
-}
 
 
-@keyframes taskDotPulse {
-  0%, 100% { opacity: 0.7; }
-  50%       { opacity: 1; }
-}
 
 /* --------------------------------------------------------------------------
    38. Block Types — Interface Daemon Blocks (P5)
