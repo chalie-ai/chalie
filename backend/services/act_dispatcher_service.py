@@ -549,7 +549,7 @@ class ActDispatcherService:
             store.publish('output:events', event)
 
             response_key = f'policy:response:{request_id}'
-            deadline = time.monotonic() + 3600  # 1-hour safety net
+            deadline = time.monotonic() + 90  # 90s budget — beyond this, treat as user-unresponsive (timeout)
             while time.monotonic() < deadline:
                 raw = store.get(response_key)
                 if raw:
