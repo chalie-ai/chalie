@@ -124,6 +124,50 @@ def list_capabilities():
         return jsonify({"error": "Failed to list capabilities"}), 500
 
 
+@capabilities_bp.route("/<cap_id>", methods=["GET"])
+@require_auth
+def get_capability(cap_id: str):
+    """Return capability details with non-sensitive config for editing.
+
+    Password fields are excluded — only non-secret fields (e.g. email
+    address) are returned so the UI can pre-fill the edit form.
+
+    Returns:
+        Response: ``200`` with JSON body, ``404`` if not found.
+    """
+    try:
+        caps = _load_caps()
+        if cap_id not in caps:
+            return jsonify({"error": f"Capability not found: {cap_id}"}), 404
+
+        cap = caps[cap_id]
+        manifest = cap.get_manifest()
+        fields = manifest.get("fields") or []
+
+        config = {}
+        if cap.is_connected():
+            for field in fields:
+                if field.get("type") == "password":
+                    continue
+                key = f"{cap_id}:{field['name']}"
+                val = cap.load_credential(key)
+                if val is not None:
+                    config[field["name"]] = val
+
+        return jsonify({
+            "id": cap_id,
+            "name": manifest.get("name", cap_id),
+            "version": manifest.get("version", ""),
+            "connected": cap.is_connected(),
+            "last_sync_at": _get_last_sync_at(cap_id),
+            "config": config,
+        }), 200
+
+    except Exception as exc:
+        logger.error("[capabilities] get_capability('%s') error: %s", cap_id, exc, exc_info=True)
+        return jsonify({"error": "Internal error fetching capability"}), 500
+
+
 @capabilities_bp.route("/<cap_id>/setup", methods=["POST"])
 @require_auth
 def setup_capability(cap_id: str):

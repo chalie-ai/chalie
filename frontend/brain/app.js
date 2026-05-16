@@ -11,7 +11,7 @@ const BrainApp = (() => {
 
   const SUB_ROUTES = {
     providers: null,
-    cognition: ['memory', 'tools', 'working', 'world', 'personality', 'errors', 'usage'],
+    cognition: ['memory', 'tools', 'personality', 'errors', 'usage'],
     scheduler: ['all', 'pending', 'fired', 'failed', 'cancelled'],
     lists: null,
     documents: ['active', 'processing', 'uploads', 'deleted'],
@@ -24,8 +24,7 @@ const BrainApp = (() => {
     providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
     lists: 'Lists', documents: 'Documents', capabilities: 'Capabilities',
     policies: 'Policies', mcp: 'MCP Server',
-    memory: 'Memory', tools: 'Tools', working: 'Working on', world: 'World state',
-    personality: 'Personality', errors: 'Errors', usage: 'Usage',
+    memory: 'Memory', tools: 'Tools', personality: 'Personality', errors: 'Errors', usage: 'Usage',
     all: 'All', pending: 'Pending', fired: 'Fired', failed: 'Failed', cancelled: 'Cancelled',
     active: 'Active', processing: 'Processing', uploads: 'Uploads', deleted: 'Deleted',
     chat: 'Chat', subagent: 'Subagent', background: 'Background', external: 'External agent',
@@ -255,9 +254,7 @@ const BrainApp = (() => {
           <kbd>⌘K</kbd>
         </div>
       </div>
-      <div class="topbar-actions">
-        <button class="icon-btn" id="notifBtn" aria-label="Notifications">${Icons.Bell()}</button>
-      </div>`;
+      <div class="topbar-actions"></div>`;
 
     document.getElementById('hamburgerBtn').addEventListener('click', openMobileSidebar);
     document.getElementById('collapserBtn').addEventListener('click', toggleSidebar);
@@ -354,6 +351,16 @@ const BrainApp = (() => {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
+  function formatDate(raw) {
+    if (!raw) return '';
+    try {
+      const d = new Date(raw.includes('T') || raw.includes('+') || raw.includes('Z') ? raw : raw.replace(' ', 'T') + 'Z');
+      if (isNaN(d.getTime())) return raw;
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch { return raw; }
+  }
+
   // ── Public API ──
   return {
     init,
@@ -368,6 +375,7 @@ const BrainApp = (() => {
     apiFetch,
     showToast,
     escapeHtml,
+    formatDate,
   };
 })();
 

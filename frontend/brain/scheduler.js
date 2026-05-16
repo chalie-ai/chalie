@@ -48,24 +48,23 @@ const PanelScheduler = (() => {
       return;
     }
 
-    el.innerHTML = `<div class="schedule-list">${filtered.map(s => {
-      const statusCls = { pending: 'badge-warning', fired: 'badge-success', failed: 'badge-danger', cancelled: 'badge-muted' }[s.status] || 'badge-muted';
-      return `<div class="schedule-item" data-id="${s.id}">
-        <div class="schedule-main">
-          <div class="schedule-message">${BrainApp.escapeHtml(s.message || s.prompt || '')}</div>
-          <div class="schedule-meta">
-            <span class="badge ${statusCls}">${BrainApp.escapeHtml(s.status || '')}</span>
-            <span>${BrainApp.escapeHtml(s.due_at || s.due || '')}</span>
-            ${s.recurrence ? `<span>· ${BrainApp.escapeHtml(s.recurrence)}</span>` : ''}
-            <span>· ${BrainApp.escapeHtml(s.type || 'notification')}</span>
-          </div>
-        </div>
-        <div class="schedule-actions">
-          <button class="btn btn-sm btn-secondary" data-edit-sched="${s.id}">Edit</button>
-          ${s.status === 'pending' ? `<button class="btn btn-sm btn-danger" data-cancel-sched="${s.id}">Cancel</button>` : ''}
-        </div>
-      </div>`;
-    }).join('')}</div>`;
+    el.innerHTML = `<table class="records-table">
+      <thead><tr><th>Message</th><th>Status</th><th>Due</th><th>Recurrence</th><th>Type</th><th></th></tr></thead>
+      <tbody>${filtered.map(s => {
+        const statusCls = { pending: 'badge-warning', fired: 'badge-success', failed: 'badge-danger', cancelled: 'badge-muted' }[s.status] || 'badge-muted';
+        return `<tr>
+          <td class="key-cell">${BrainApp.escapeHtml(s.message || s.prompt || '')}</td>
+          <td><span class="badge ${statusCls}">${BrainApp.escapeHtml(s.status || '')}</span></td>
+          <td>${BrainApp.formatDate(s.due_at || s.due)}</td>
+          <td>${BrainApp.escapeHtml(s.recurrence || '—')}</td>
+          <td><span class="badge badge-muted">${BrainApp.escapeHtml(s.type || 'notification')}</span></td>
+          <td class="row-actions">
+            <button class="btn btn-sm btn-secondary" data-edit-sched="${s.id}">Edit</button>
+            ${s.status === 'pending' ? `<button class="btn btn-sm btn-danger" data-cancel-sched="${s.id}">Cancel</button>` : ''}
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
 
     el.querySelectorAll('[data-edit-sched]').forEach(b => {
       b.addEventListener('click', () => _openModal(Number(b.dataset.editSched) || b.dataset.editSched));
@@ -77,12 +76,13 @@ const PanelScheduler = (() => {
 
   function _openModal(id) {
     const item = id ? _items.find(s => s.id === id || s.id === String(id)) : null;
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `<div class="modal">
-      <div class="modal-header">
+    const el = document.getElementById('schedContent');
+    if (!el) return;
+
+    el.innerHTML = `<div class="provider-form-page">
+      <div class="form-page-header">
+        <button class="btn btn-secondary btn-sm back-btn" id="backToSched">${Icons.Chevron(14)} Back</button>
         <h3>${id ? 'Edit Schedule' : 'New Schedule'}</h3>
-        <button class="btn-close" id="closeSchedModal">${Icons.Close(16)}</button>
       </div>
       <form id="schedForm">
         <div class="form-group">
@@ -97,7 +97,7 @@ const PanelScheduler = (() => {
           <label for="schedType">Type</label>
           <select id="schedType">
             <option value="notification" ${item?.type === 'notification' ? 'selected' : ''}>Notification</option>
-            <option value="prompt" ${item?.type === 'prompt' ? 'selected' : ''}>Prompt</option>
+            <option value="prompt" ${item?.type === 'prompt' || item?.item_type === 'prompt' ? 'selected' : ''}>Prompt</option>
           </select>
         </div>
         <div class="form-group">
@@ -119,10 +119,8 @@ const PanelScheduler = (() => {
       </form>
     </div>`;
 
-    document.body.appendChild(overlay);
-    document.getElementById('closeSchedModal').addEventListener('click', () => overlay.remove());
-    document.getElementById('cancelSchedBtn').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('backToSched').addEventListener('click', _renderList);
+    document.getElementById('cancelSchedBtn').addEventListener('click', _renderList);
 
     document.getElementById('schedForm').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -136,33 +134,19 @@ const PanelScheduler = (() => {
         const method = id ? 'PUT' : 'POST';
         const path = id ? `/scheduler/${id}` : '/scheduler';
         const res = await BrainApp.apiFetch(path, { method, body: JSON.stringify(body) });
-        if (res.ok) { overlay.remove(); BrainApp.showToast(id ? 'Schedule updated' : 'Schedule created', 'success'); _loaded = false; _load(); }
+        if (res.ok) { BrainApp.showToast(id ? 'Schedule updated' : 'Schedule created', 'success'); _loaded = false; _load(); }
         else { const d = await res.json().catch(() => ({})); BrainApp.showToast(d.error || 'Save failed', 'error'); }
       } catch { BrainApp.showToast('Network error', 'error'); }
     });
   }
 
   async function _cancelSchedule(id) {
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `<div class="modal modal-sm">
-      <div class="modal-header"><h3>Cancel Schedule</h3></div>
-      <p class="modal-desc">Are you sure you want to cancel this scheduled item?</p>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" id="keepSchedBtn">No, Keep It</button>
-        <button class="btn btn-danger" id="confirmCancelSchedBtn">Yes, Cancel</button>
-      </div>
-    </div>`;
-    document.body.appendChild(overlay);
-    document.getElementById('keepSchedBtn').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    document.getElementById('confirmCancelSchedBtn').addEventListener('click', async () => {
-      try {
-        const res = await BrainApp.apiFetch(`/scheduler/${id}`, { method: 'DELETE' });
-        if (res.ok) { overlay.remove(); BrainApp.showToast('Schedule cancelled', 'success'); _loaded = false; _load(); }
-        else BrainApp.showToast('Cancel failed', 'error');
-      } catch { BrainApp.showToast('Network error', 'error'); }
-    });
+    if (!confirm('Cancel this scheduled item?')) return;
+    try {
+      const res = await BrainApp.apiFetch(`/scheduler/${id}`, { method: 'DELETE' });
+      if (res.ok) { BrainApp.showToast('Schedule cancelled', 'success'); _loaded = false; _load(); }
+      else BrainApp.showToast('Cancel failed', 'error');
+    } catch { BrainApp.showToast('Network error', 'error'); }
   }
 
   return { mount, unmount };

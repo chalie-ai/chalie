@@ -138,7 +138,7 @@ const PanelLists = (() => {
   async function _addItem(listId, text) {
     try {
       const res = await BrainApp.apiFetch(`/lists/${listId}/items`, { method: 'POST', body: JSON.stringify({ items: [text] }) });
-      if (res.ok) { _loaded = false; _load(); }
+      if (res.ok) await _fetchListDetail(listId);
     } catch { BrainApp.showToast('Failed to add item', 'error'); }
   }
 

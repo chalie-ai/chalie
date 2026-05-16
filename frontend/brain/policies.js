@@ -159,7 +159,7 @@ const PanelPolicies = (() => {
         ${_blockedOpen ? `<div class="blocked-list">${_blocked.map(b => `<div class="blocked-item">
           <span class="badge badge-danger">${BrainApp.escapeHtml(b.action || '')}</span>
           <span>${BrainApp.escapeHtml(b.context || '')}</span>
-          <span class="blocked-time">${BrainApp.escapeHtml(b.time || '')}</span>
+          <span class="blocked-time">${BrainApp.formatDate(b.time)}</span>
         </div>`).join('')}</div>` : ''}
       </div>`;
     }

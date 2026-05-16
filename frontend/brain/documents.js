@@ -7,6 +7,7 @@ const PanelDocuments = (() => {
   let _loaded = false;
   let _search = '';
   let _groupBy = 'all';
+  let _drillGroup = null;
 
   function mount(root, sub) {
     _root = root;
@@ -41,7 +42,8 @@ const PanelDocuments = (() => {
       const btn = e.target.closest('[data-group]');
       if (!btn) return;
       _groupBy = btn.dataset.group;
-      _renderDocs();
+      _drillGroup = null;
+      _renderDocsView();
       document.querySelectorAll('#docGroupTabs .group-tab').forEach(b => b.classList.toggle('active', b === btn));
     });
 
@@ -63,31 +65,39 @@ const PanelDocuments = (() => {
     _renderDocs();
   }
 
-  function _renderDocs() {
-    const el = document.getElementById('docsContent');
-    if (!el) return;
-
+  function _getFiltered() {
     let filtered = _docs;
     if (_sub === 'active') filtered = _docs.filter(d => d.status === 'ready');
     else if (_sub === 'processing') filtered = _docs.filter(d => d.status === 'building' || d.status === 'processing' || d.status === 'pending');
     else if (_sub === 'uploads') filtered = _docs.filter(d => d.source_type === 'upload');
     else if (_sub === 'deleted') filtered = _docs.filter(d => d.deleted_at !== null);
-
     if (_search) {
       const q = _search.toLowerCase();
       filtered = filtered.filter(d => (d.original_name || '').toLowerCase().includes(q) || (d.doc_category || '').toLowerCase().includes(q));
     }
+    return filtered;
+  }
 
+  function _renderDocs() {
+    _drillGroup = null;
+    _renderDocsView();
+  }
+
+  function _renderDocsView() {
+    const el = document.getElementById('docsContent');
+    if (!el) return;
+
+    const filtered = _getFiltered();
     let html = '';
 
-    if (_folders.length > 0) {
+    if (!_drillGroup && _folders.length > 0) {
       html += `<div class="watched-folders-section">
         <h4 class="section-head">Watched Folders</h4>
         <div class="watched-folders-list">${_folders.map(f => `<div class="watched-folder-item">
           <span class="wf-icon">${Icons.Eye(14)}</span>
           <span class="wf-label">${BrainApp.escapeHtml(f.label || f.path || '')}</span>
           <span class="wf-path">${BrainApp.escapeHtml(f.path || '')}</span>
-          <span class="wf-meta">${f.files || 0} files · ${BrainApp.escapeHtml(f.last_scan || '')}</span>
+          <span class="wf-meta">${f.files || 0} files · ${BrainApp.formatDate(f.last_scan)}</span>
           <span class="wf-status">${f.active ? '<span class="status-dot active"></span>' : '<span class="status-dot"></span>'}</span>
         </div>`).join('')}</div>
       </div>`;
@@ -95,22 +105,35 @@ const PanelDocuments = (() => {
 
     if (filtered.length === 0) {
       html += `<div class="empty-state"><div class="empty-icon">${Icons.Document(40)}</div><h3>No documents</h3><p>Upload or watch a folder to get started.</p></div>`;
+    } else if (_groupBy !== 'all' && !_drillGroup) {
+      const groupKey = { doc_category: 'doc_category', doc_project: 'doc_project', doc_date: 'doc_date' }[_groupBy] || 'doc_category';
+      const groups = {};
+      for (const d of filtered) { const k = d[groupKey] || 'Other'; (groups[k] = groups[k] || []).push(d); }
+      html += `<div class="group-cards-grid">${Object.entries(groups).sort(([a], [b]) => a.localeCompare(b)).map(([gname, gdocs]) =>
+        `<button class="group-card" data-drill="${BrainApp.escapeHtml(gname)}">
+          <div class="group-card-name">${BrainApp.escapeHtml(gname)}</div>
+          <div class="group-card-count">${gdocs.length} document${gdocs.length === 1 ? '' : 's'}</div>
+        </button>`
+      ).join('')}</div>`;
+    } else if (_groupBy !== 'all' && _drillGroup) {
+      const groupKey = { doc_category: 'doc_category', doc_project: 'doc_project', doc_date: 'doc_date' }[_groupBy] || 'doc_category';
+      const groupDocs = filtered.filter(d => (d[groupKey] || 'Other') === _drillGroup);
+      html += `<div class="form-page-header">
+        <button class="btn btn-secondary btn-sm back-btn" id="backToGroups">${Icons.Chevron(14)} Back</button>
+        <h3>${BrainApp.escapeHtml(_drillGroup)}</h3>
+        <span class="doc-meta-item">${groupDocs.length} document${groupDocs.length === 1 ? '' : 's'}</span>
+      </div>`;
+      html += _renderDocTable(groupDocs);
     } else {
-      if (_groupBy !== 'all') {
-        const groupKey = { doc_category: 'doc_category', doc_project: 'doc_project', doc_date: 'doc_date' }[_groupBy] || 'doc_category';
-        const groups = {};
-        for (const d of filtered) { const k = d[groupKey] || 'Other'; (groups[k] = groups[k] || []).push(d); }
-        for (const [gname, gdocs] of Object.entries(groups)) {
-          html += `<h4 class="section-head">${BrainApp.escapeHtml(gname)}</h4>`;
-          html += _renderDocTable(gdocs);
-        }
-      } else {
-        html += _renderDocTable(filtered);
-      }
+      html += _renderDocTable(filtered);
     }
 
     el.innerHTML = html;
 
+    el.querySelectorAll('[data-drill]').forEach(b => {
+      b.addEventListener('click', () => { _drillGroup = b.dataset.drill; _renderDocsView(); });
+    });
+    el.querySelector('#backToGroups')?.addEventListener('click', () => { _drillGroup = null; _renderDocsView(); });
     el.querySelectorAll('[data-view-doc]').forEach(b => {
       b.addEventListener('click', () => _viewDoc(b.dataset.viewDoc));
     });
@@ -136,7 +159,7 @@ const PanelDocuments = (() => {
           <td><span class="badge badge-muted">${BrainApp.escapeHtml(d.source_type || '')}</span></td>
           <td><span class="badge ${statusCls}">${BrainApp.escapeHtml(d.status || '')}</span></td>
           <td>${_fmtSize(d.file_size_bytes)}</td>
-          <td>${BrainApp.escapeHtml(d.created_at || '')}</td>
+          <td>${BrainApp.formatDate(d.created_at)}</td>
           <td class="row-actions">
             <button class="btn btn-sm btn-secondary" data-view-doc="${d.id}">View</button>
             <button class="btn btn-sm btn-danger" data-del-doc="${d.id}">${Icons.Trash(12)}</button>
@@ -147,45 +170,39 @@ const PanelDocuments = (() => {
   }
 
   async function _viewDoc(id) {
+    const el = document.getElementById('docsContent');
+    if (!el) return;
+    el.innerHTML = '<div class="loading">Loading…</div>';
     try {
       const res = await BrainApp.apiFetch(`/documents/${id}`);
-      if (!res.ok) { BrainApp.showToast('Failed to load document', 'error'); return; }
+      if (!res.ok) { BrainApp.showToast('Failed to load document', 'error'); _renderDocs(); return; }
       const data = await res.json();
       const doc = data.item || data;
-      const overlay = document.createElement('div');
-      overlay.className = 'modal-overlay';
-      overlay.innerHTML = `<div class="modal modal-lg">
-        <div class="modal-header">
+      el.innerHTML = `<div class="provider-form-page" style="max-width:none">
+        <div class="form-page-header">
+          <button class="btn btn-secondary btn-sm back-btn" id="backToDocs">${Icons.Chevron(14)} Back</button>
           <h3>${BrainApp.escapeHtml(doc.original_name || 'Document')}</h3>
-          <button class="btn-close" id="closeDocView">${Icons.Close(16)}</button>
         </div>
-        <div class="modal-body"><pre class="doc-content">${BrainApp.escapeHtml(doc.summary || 'No content available.')}</pre></div>
+        <div class="doc-meta-row">
+          ${doc.source_type ? `<span class="badge badge-muted">${BrainApp.escapeHtml(doc.source_type)}</span>` : ''}
+          ${doc.doc_category ? `<span class="badge badge-violet">${BrainApp.escapeHtml(doc.doc_category)}</span>` : ''}
+          ${doc.file_size_bytes ? `<span class="doc-meta-item">${_fmtSize(doc.file_size_bytes)}</span>` : ''}
+          ${doc.created_at ? `<span class="doc-meta-item">${BrainApp.formatDate(doc.created_at)}</span>` : ''}
+        </div>
+        <pre class="doc-content">${BrainApp.escapeHtml(doc.summary || 'No content available.')}</pre>
       </div>`;
-      document.body.appendChild(overlay);
-      document.getElementById('closeDocView').addEventListener('click', () => overlay.remove());
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    } catch { BrainApp.showToast('Network error', 'error'); }
+      document.getElementById('backToDocs').addEventListener('click', _renderDocs);
+    } catch { BrainApp.showToast('Network error', 'error'); _renderDocs(); }
   }
 
-  function _deleteDoc(id) {
+  async function _deleteDoc(id) {
     const doc = _docs.find(d => String(d.id) === String(id));
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `<div class="modal modal-sm">
-      <div class="modal-header"><h3>Delete Document</h3></div>
-      <p class="modal-desc">Delete "${BrainApp.escapeHtml(doc?.original_name || 'this document')}"? This cannot be undone.</p>
-      <div class="modal-actions"><button class="btn btn-secondary" id="keepDoc">Cancel</button><button class="btn btn-danger" id="confirmDelDoc">Delete</button></div>
-    </div>`;
-    document.body.appendChild(overlay);
-    document.getElementById('keepDoc').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    document.getElementById('confirmDelDoc').addEventListener('click', async () => {
-      try {
-        const res = await BrainApp.apiFetch(`/documents/${id}`, { method: 'DELETE' });
-        if (res.ok) { overlay.remove(); BrainApp.showToast('Document deleted', 'success'); _loaded = false; _load(); }
-        else { overlay.remove(); BrainApp.showToast('Delete failed', 'error'); }
-      } catch { overlay.remove(); BrainApp.showToast('Network error', 'error'); }
-    });
+    if (!confirm(`Delete "${doc?.original_name || 'this document'}"? This cannot be undone.`)) return;
+    try {
+      const res = await BrainApp.apiFetch(`/documents/${id}`, { method: 'DELETE' });
+      if (res.ok) { BrainApp.showToast('Document deleted', 'success'); _loaded = false; _load(); }
+      else BrainApp.showToast('Delete failed', 'error');
+    } catch { BrainApp.showToast('Network error', 'error'); }
   }
 
   function _uploadDoc() {

@@ -1,4 +1,4 @@
-// Cognition panel — 7 sub-views: memory, tools, working, world, personality, errors, usage.
+// Cognition panel — 5 sub-views: memory, tools, personality, errors, usage.
 const PanelCognition = (() => {
   let _root = null;
   let _sub = 'memory';
@@ -15,16 +15,8 @@ const PanelCognition = (() => {
 
   function _render() {
     if (!_root) return;
-    _root.innerHTML = `<div class="panel-header">
-      <h2>Cognition</h2>
-      <div class="panel-header-actions">
-        <span class="obs-timestamp" id="obsTimestamp"></span>
-        <button class="btn btn-sm btn-secondary" id="obsRefreshBtn">${Icons.Refresh(14)} Refresh</button>
-      </div>
-    </div>
+    _root.innerHTML = `<div class="panel-header"><h2>Cognition</h2></div>
     <div id="cognitionContent"></div>`;
-
-    document.getElementById('obsRefreshBtn').addEventListener('click', () => { _loaded[_sub] = false; _loadSub(); });
     _loadSub();
   }
 
@@ -39,8 +31,6 @@ const PanelCognition = (() => {
         switch (targetSub) {
           case 'memory': await _fetchMemory(); break;
           case 'tools': await _fetchTools(); break;
-          case 'working': await _fetchWorking(); break;
-          case 'world': await _fetchWorld(); break;
           case 'personality': await _fetchPersonality(); break;
           case 'errors': await _fetchErrors(); break;
           case 'usage': await _fetchUsage(); break;
@@ -82,22 +72,6 @@ const PanelCognition = (() => {
     _tools = data.tools || [];
   }
 
-  // ── Working On ──
-  let _selfModel = {};
-  async function _fetchWorking() {
-    const res = await BrainApp.apiFetch('/system/observability/self-model');
-    if (!res.ok) throw new Error('fetch failed');
-    _selfModel = await res.json();
-  }
-
-  // ── World State ──
-  let _worldState = '';
-  async function _fetchWorld() {
-    const res = await BrainApp.apiFetch('/system/observability/world-state');
-    if (!res.ok) throw new Error('fetch failed');
-    const data = await res.json();
-    _worldState = typeof data.state === 'string' ? data.state : JSON.stringify(data.state, null, 2);
-  }
 
   // ── Personality ──
   let _personality = { warmth: 0, mood: 0, expressiveness: 0, curiosity: 0, humor: 0 };
@@ -134,14 +108,10 @@ const PanelCognition = (() => {
     switch (_sub) {
       case 'memory': _renderMemory(el); break;
       case 'tools': _renderTools(el); break;
-      case 'working': _renderWorking(el); break;
-      case 'world': _renderWorld(el); break;
       case 'personality': _renderPersonality(el); break;
       case 'errors': _renderErrors(el); break;
       case 'usage': _renderUsage(el); break;
     }
-    const ts = document.getElementById('obsTimestamp');
-    if (ts && _data.memoryTs) ts.textContent = `Updated ${_data.memoryTs}`;
   }
 
   function _renderMemory(el) {
@@ -155,8 +125,8 @@ const PanelCognition = (() => {
     <table class="records-table">
       <thead><tr><th>Created</th><th>Last Accessed</th><th>Key</th><th>Value</th></tr></thead>
       <tbody>${_memoryRecords.map(r => `<tr>
-        <td>${BrainApp.escapeHtml(r.created || '')}</td>
-        <td>${BrainApp.escapeHtml(r.last_accessed || '')}</td>
+        <td>${BrainApp.formatDate(r.created)}</td>
+        <td>${BrainApp.formatDate(r.last_accessed)}</td>
         <td class="key-cell">${BrainApp.escapeHtml(r.key || '')}</td>
         <td class="val-cell">${BrainApp.escapeHtml(r.value || '')}</td>
       </tr>`).join('')}</tbody>
@@ -184,40 +154,11 @@ const PanelCognition = (() => {
       <tbody>${_tools.map(t => `<tr>
         <td class="key-cell">${BrainApp.escapeHtml(t.tool_name || '')}</td>
         <td>${t.count ?? '—'}</td>
-        <td>${BrainApp.escapeHtml(t.last_used_at || '—')}</td>
+        <td>${BrainApp.formatDate(t.last_used_at) || '—'}</td>
       </tr>`).join('')}</tbody>
     </table>`;
   }
 
-  function _renderWorking(el) {
-    const ep = _selfModel.epistemic || {};
-    const op = _selfModel.operational || {};
-    const noteworthy = _selfModel.noteworthy || [];
-    const pressure = op.memory_pressure || {};
-    const threads = op.thread_health || {};
-
-    let html = `<div class="stat-grid">
-      <div class="stat-card"><div class="stat-value">${ep.context_warmth ?? '—'}</div><div class="stat-label">Context Warmth</div></div>
-      <div class="stat-card"><div class="stat-value">${ep.working_memory_depth ?? '—'}</div><div class="stat-label">Working Memory Depth</div></div>
-      <div class="stat-card"><div class="stat-value">${pressure.episode_count ?? '—'}</div><div class="stat-label">Episodes</div></div>
-      <div class="stat-card"><div class="stat-value">${threads.active ?? '—'}/${threads.total ?? '—'}</div><div class="stat-label">Threads Active</div></div>
-    </div>`;
-
-    if (noteworthy.length > 0) {
-      html += `<h4 class="section-head">Noteworthy</h4><div class="error-list">${noteworthy.map(n => `<div class="error-item">
-        <span class="badge ${n.severity >= 0.7 ? 'badge-danger' : n.severity >= 0.3 ? 'badge-warning' : 'badge-muted'}">${BrainApp.escapeHtml(String(n.severity ?? ''))}</span>
-        <span class="error-msg">${BrainApp.escapeHtml(n.signal || '')}</span>
-      </div>`).join('')}</div>`;
-    } else {
-      html += `<div class="empty-state"><p>All systems nominal.</p></div>`;
-    }
-
-    el.innerHTML = html;
-  }
-
-  function _renderWorld(el) {
-    el.innerHTML = `<div class="code-block"><pre><code>${BrainApp.escapeHtml(_worldState)}</code></pre></div>`;
-  }
 
   function _renderPersonality(el) {
     const sliders = [
@@ -255,7 +196,7 @@ const PanelCognition = (() => {
   function _renderErrors(el) {
     if (_errors.length === 0) { el.innerHTML = '<div class="empty-state"><p>No recent errors.</p></div>'; return; }
     el.innerHTML = `<div class="error-list">${_errors.map(e => `<div class="error-item">
-      <span class="error-time">${BrainApp.escapeHtml(e.time || e.timestamp || '')}</span>
+      <span class="error-time">${BrainApp.formatDate(e.time || e.timestamp)}</span>
       <span class="error-msg">${BrainApp.escapeHtml(e.message || '')}</span>
     </div>`).join('')}</div>`;
   }
@@ -281,7 +222,12 @@ const PanelCognition = (() => {
     }
     const chart = Object.entries(bucketMap)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([bucket, v]) => ({ label: bucket.slice(-5), input: v.input, output: v.output }));
+      .map(([bucket, v]) => {
+        let label;
+        if (_usageWindow === 'hour' || _usageWindow === 'day') label = bucket.slice(11, 16);
+        else label = bucket.slice(5, 10);
+        return { label, input: v.input, output: v.output };
+      });
 
     el.innerHTML = `<div class="filter-tabs" id="usageWindowTabs">
       ${windows.map(w => `<button class="filter-tab${w === _usageWindow ? ' active' : ''}" data-win="${w}">${w.charAt(0).toUpperCase() + w.slice(1)}</button>`).join('')}
@@ -308,21 +254,24 @@ const PanelCognition = (() => {
 
   function _renderChart(chart) {
     const maxVal = Math.max(...chart.map(d => (d.input || 0) + (d.output || 0)), 1);
-    const barW = Math.max(20, Math.floor(600 / chart.length) - 4);
+    const barW = Math.max(16, Math.floor(600 / chart.length) - 4);
     const h = 160;
+    const labelH = 40;
+    const showEvery = chart.length > 20 ? Math.ceil(chart.length / 15) : 1;
     const bars = chart.map((d, i) => {
       const inputH = ((d.input || 0) / maxVal) * h;
       const outputH = ((d.output || 0) / maxVal) * h;
       const x = i * (barW + 4);
+      const showLabel = i % showEvery === 0;
       return `<g>
         <rect x="${x}" y="${h - inputH - outputH}" width="${barW}" height="${outputH}" class="bar-cloud"/>
         <rect x="${x}" y="${h - inputH}" width="${barW}" height="${inputH}" class="bar-local"/>
-        <text x="${x + barW / 2}" y="${h + 14}" class="bar-label">${BrainApp.escapeHtml(String(d.label || ''))}</text>
+        ${showLabel ? `<text x="${x + barW / 2}" y="${h + 6}" class="bar-label" transform="rotate(45 ${x + barW / 2} ${h + 6})">${BrainApp.escapeHtml(String(d.label || ''))}</text>` : ''}
       </g>`;
     }).join('');
     const svgW = chart.length * (barW + 4);
-    return `<div class="chart-wrap"><svg class="usage-chart" viewBox="0 0 ${svgW} ${h + 20}" preserveAspectRatio="none">${bars}</svg></div>
-    <div class="chart-legend"><span class="legend-local">Input</span><span class="legend-cloud">Output</span></div>`;
+    return `<div class="chart-wrap"><svg class="usage-chart" viewBox="0 0 ${svgW} ${h + labelH}" preserveAspectRatio="none">${bars}</svg></div>
+    <div class="chart-legend"><span class="legend-local">Chat</span><span class="legend-cloud">Subconscious</span></div>`;
   }
 
   return { mount, unmount };

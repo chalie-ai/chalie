@@ -100,13 +100,12 @@ const PanelProviders = (() => {
     const cfg = PLATFORM_CONFIG[_editPlatform];
     const platforms = Object.keys(PLATFORM_CONFIG);
 
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.id = 'providerModalOverlay';
-    overlay.innerHTML = `<div class="modal">
-      <div class="modal-header">
+    const root = document.getElementById('providersList');
+    if (!root) return;
+    root.innerHTML = `<div class="provider-form-page">
+      <div class="form-page-header">
+        <button class="btn btn-secondary btn-sm back-btn" id="backToProviders">${Icons.Chevron(14)} Back</button>
         <h3>${id ? 'Edit Provider' : 'Add Provider'}</h3>
-        <button class="btn-close" id="closeProvModal">${Icons.Close(16)}</button>
       </div>
       <div class="platform-tabs" id="platTabs">
         ${platforms.map(k => `<button class="platform-tab${k === _editPlatform ? ' active' : ''}" data-plat="${k}">${k === 'openai_compatible' ? 'OpenAI-Compat' : k.charAt(0).toUpperCase() + k.slice(1)}</button>`).join('')}
@@ -138,12 +137,10 @@ const PanelProviders = (() => {
       </form>
     </div>`;
 
-    document.body.appendChild(overlay);
     _populateModels();
 
-    document.getElementById('closeProvModal').addEventListener('click', () => overlay.remove());
-    document.getElementById('cancelProvBtn').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('backToProviders').addEventListener('click', _render);
+    document.getElementById('cancelProvBtn').addEventListener('click', _render);
 
     document.getElementById('platTabs').addEventListener('click', (e) => {
       const tab = e.target.closest('[data-plat]');
@@ -158,7 +155,7 @@ const PanelProviders = (() => {
     });
 
     document.getElementById('testProvBtn').addEventListener('click', _testConnection);
-    document.getElementById('providerForm').addEventListener('submit', (e) => { e.preventDefault(); _saveProvider(overlay); });
+    document.getElementById('providerForm').addEventListener('submit', (e) => { e.preventDefault(); _saveProvider(); });
 
     if (id) _fetchModels();
   }
@@ -220,7 +217,7 @@ const PanelProviders = (() => {
     btn.disabled = false; btn.textContent = 'Test';
   }
 
-  async function _saveProvider(overlay) {
+  async function _saveProvider() {
     const body = { platform: _editPlatform, name: document.getElementById('pName').value.trim(), model: document.getElementById('pModel').value };
     if (PLATFORM_CONFIG[_editPlatform].hasHost) body.host = document.getElementById('pHost').value.trim();
     if (PLATFORM_CONFIG[_editPlatform].hasApiKey) { const k = document.getElementById('pKey').value.trim(); if (k) body.api_key = k; }
@@ -230,7 +227,6 @@ const PanelProviders = (() => {
       const path = _editingId ? `/providers/${_editingId}` : '/providers';
       const res = await BrainApp.apiFetch(path, { method, body: JSON.stringify(body) });
       if (res.ok) {
-        overlay.remove();
         BrainApp.showToast(_editingId ? 'Provider updated' : 'Provider added', 'success');
         await _load();
       } else {
@@ -240,28 +236,14 @@ const PanelProviders = (() => {
     } catch { BrainApp.showToast('Network error', 'error'); }
   }
 
-  function _confirmDelete(id) {
+  async function _confirmDelete(id) {
     const p = _providers.find(x => x.id === id);
-    const overlay = document.createElement('div');
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `<div class="modal modal-sm">
-      <div class="modal-header"><h3>Delete Provider</h3></div>
-      <p class="modal-desc">Delete "${BrainApp.escapeHtml(p?.name)}"? This cannot be undone.</p>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" id="cancelDelBtn">Cancel</button>
-        <button class="btn btn-danger" id="confirmDelBtn">Delete</button>
-      </div>
-    </div>`;
-    document.body.appendChild(overlay);
-    document.getElementById('cancelDelBtn').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-    document.getElementById('confirmDelBtn').addEventListener('click', async () => {
-      try {
-        const res = await BrainApp.apiFetch(`/providers/${id}`, { method: 'DELETE' });
-        if (res.ok) { overlay.remove(); BrainApp.showToast('Provider deleted', 'success'); await _load(); }
-        else { BrainApp.showToast('Delete failed', 'error'); }
-      } catch { BrainApp.showToast('Network error', 'error'); }
-    });
+    if (!confirm(`Delete "${p?.name}"? This cannot be undone.`)) return;
+    try {
+      const res = await BrainApp.apiFetch(`/providers/${id}`, { method: 'DELETE' });
+      if (res.ok) { BrainApp.showToast('Provider deleted', 'success'); await _load(); }
+      else { BrainApp.showToast('Delete failed', 'error'); }
+    } catch { BrainApp.showToast('Network error', 'error'); }
   }
 
   return { mount, unmount };

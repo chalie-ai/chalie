@@ -6,8 +6,6 @@ const BrainSidebar = (() => {
       sub: [
         { id: 'memory', label: 'Memory' },
         { id: 'tools', label: 'Tools' },
-        { id: 'working', label: 'Working on' },
-        { id: 'world', label: 'World state' },
         { id: 'personality', label: 'Personality' },
         { id: 'errors', label: 'Errors' },
         { id: 'usage', label: 'Usage' },
@@ -45,7 +43,7 @@ const BrainSidebar = (() => {
     _el = container;
     container.innerHTML = `
       <div class="sidebar-brand">
-        <img src="/interface/icons/icon.png" alt="Chalie" width="28" height="28">
+        <img src="/icons/icon.png" alt="Chalie" width="28" height="28">
         <div class="sidebar-brand-text">
           <div class="wordmark">Chalie</div>
           <div class="wordmark-sub">Brain</div>
@@ -56,13 +54,9 @@ const BrainSidebar = (() => {
         <button class="icon-btn theme-toggle" id="themeToggleBtn" aria-label="Toggle theme">
           ${Icons.Sun()}
         </button>
-        <button class="icon-btn" id="cmdKBtn" aria-label="Command palette" title="⌘K">
-          ${Icons.Search()}
-        </button>
       </div>`;
 
     document.getElementById('themeToggleBtn').addEventListener('click', BrainApp.toggleTheme);
-    document.getElementById('cmdKBtn').addEventListener('click', () => BrainApp.openCommandPalette());
     _renderNav();
   }
 

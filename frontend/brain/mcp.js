@@ -42,26 +42,31 @@ const PanelMcp = (() => {
           <span class="switch-track"></span>
         </label>
       </div>
-      <div class="mcp-row">
-        <label class="mcp-label" for="mcpPort">Port</label>
-        <div class="mcp-port-group">
-          <input type="number" id="mcpPort" class="port-input" value="${_config.port || 8462}" min="1024" max="65535">
-          <button class="btn btn-sm btn-secondary" id="mcpPortSave">Save</button>
+      <div class="form-group">
+        <label for="mcpPort">Port</label>
+        <div class="input-group">
+          <span class="input-prefix">TCP</span>
+          <input type="number" id="mcpPort" value="${_config.port || 8462}" min="1024" max="65535">
         </div>
       </div>
       <div class="mcp-token-section">
         <h4>Connection Token</h4>
         <p class="mcp-hint">Give this token to external agents so they can authenticate.</p>
-        <div class="mcp-token-row">
-          <code class="mcp-token">${BrainApp.escapeHtml(_config.token || '—')}</code>
-          <button class="btn btn-sm btn-secondary" id="mcpCopy" title="Copy">${Icons.Copy(14)}</button>
+        <div class="input-group">
+          <input type="text" id="mcpTokenInput" value="${BrainApp.escapeHtml(_config.token || '')}" readonly class="monospace">
+          <button class="input-suffix-btn" id="mcpCopy" title="Copy">${Icons.Copy(14)}</button>
         </div>
-        <button class="btn btn-sm btn-danger" id="mcpRegen">Regenerate Token</button>
+        <div style="margin-top:10px">
+          <button class="btn btn-sm btn-danger" id="mcpRegen">Regenerate Token</button>
+        </div>
       </div>
     </div>`;
 
     document.getElementById('mcpEnabled').addEventListener('change', (e) => _save({ enabled: e.target.checked }));
-    document.getElementById('mcpPortSave').addEventListener('click', () => _save({ port: Number(document.getElementById('mcpPort').value) }));
+    document.getElementById('mcpPort').addEventListener('blur', () => {
+      const val = Number(document.getElementById('mcpPort').value);
+      if (val >= 1024 && val <= 65535 && val !== _config.port) _save({ port: val });
+    });
     document.getElementById('mcpCopy').addEventListener('click', () => {
       navigator.clipboard.writeText(_config.token || '').then(
         () => BrainApp.showToast('Token copied', 'success'),
