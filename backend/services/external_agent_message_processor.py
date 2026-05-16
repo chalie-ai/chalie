@@ -125,10 +125,11 @@ class ExternalAgentMessageProcessor(MessageProcessor):
 
         user_name = self._resolve_user_name()
 
-        body = body.format(
-            user_name=user_name,
-            agent_name=self._agent_name,
-            project_or_task_name=self._project_or_task_name,
+        body = (
+            body
+            .replace("{user_name}", user_name)
+            .replace("{agent_name}", self._agent_name)
+            .replace("{project_or_task_name}", self._project_or_task_name)
         )
         return f"{self.getUserDefinition()}\n\n{body}"
 
@@ -149,8 +150,8 @@ class ExternalAgentMessageProcessor(MessageProcessor):
                 if key == 'user_summary' and val:
                     first_word = val.split()[0] if val else ''
                     return first_word if first_word else 'the user'
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[EAMP] _resolve_user_name failed: %s", e)
         return 'the user'
 
     def postTurn(self) -> None:
