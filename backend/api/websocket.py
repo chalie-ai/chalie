@@ -200,9 +200,12 @@ def register_websocket(sock):
                 try:
                     msg = json.loads(raw)
                 except (json.JSONDecodeError, TypeError):
+                    logger.warning("[WS-DEBUG] JSON parse failed, raw_len=%d, raw_start=%s", len(raw) if raw else 0, repr(raw[:200]) if raw else 'None')
                     continue
 
                 msg_type = msg.get('type', '')
+                if msg_type == 'chat':
+                    logger.info("[WS-DEBUG] recv chat: raw_len=%d, msg_keys=%s, has_files=%s", len(raw), list(msg.keys()), 'files' in msg)
 
                 if msg_type == 'chat':
                     _handle_chat(ws, store, msg, active_request)
@@ -443,6 +446,7 @@ def _handle_chat(ws, store, msg, active_request=None):
     text = (msg.get('text') or '').strip()
     image_ids = (msg.get('image_ids') or [])[:3]  # max 3 images
     files = (msg.get('files') or [])[:5]
+    logger.info("[WS-DEBUG] _handle_chat: msg_keys=%s, files_count=%d, msg_len=%d", list(msg.keys()), len(files), len(str(msg)))
 
     if not text and not image_ids and not files:
         return  # Nothing to process — silently drop
