@@ -141,10 +141,25 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
         Returns:
             Chalie's response.
         """
-        if not _SAFE_NAME_RE.match(agent_name):
-            return "Error: agent_name must be 1-100 chars of [A-Za-z0-9 _\\-.]"
-        if not _SAFE_NAME_RE.match(project_or_task_name):
-            return "Error: project_or_task_name must be 1-100 chars of [A-Za-z0-9 _\\-.]"
+        errors = []
+        if not message or not message.strip():
+            errors.append("'message' is required and cannot be empty.")
+        if not agent_name:
+            errors.append("'agent_name' is required.")
+        elif not _SAFE_NAME_RE.match(agent_name):
+            errors.append(
+                f"'agent_name' is invalid (got {len(agent_name)} chars). "
+                "Must be 1-100 characters, only letters, numbers, spaces, hyphens, underscores, and dots."
+            )
+        if not project_or_task_name:
+            errors.append("'project_or_task_name' is required.")
+        elif not _SAFE_NAME_RE.match(project_or_task_name):
+            errors.append(
+                f"'project_or_task_name' is invalid (got {len(project_or_task_name)} chars). "
+                "Must be 1-100 characters, only letters, numbers, spaces, hyphens, underscores, and dots."
+            )
+        if errors:
+            return "Invalid parameters:\n" + "\n".join(f"- {e}" for e in errors)
 
         from services.external_agent_message_processor import ExternalAgentMessageProcessor
 

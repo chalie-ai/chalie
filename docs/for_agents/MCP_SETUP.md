@@ -92,9 +92,17 @@ Set this to `true` when:
 
 ### Input constraints
 
-- `agent_name`: 1-100 characters, alphanumeric plus spaces, hyphens, underscores, and dots
-- `project_or_task_name`: 1-100 characters, same character set
-- `message`: non-empty string
+- `message`: required, non-empty string
+- `agent_name`: required, 1-100 characters, only letters, numbers, spaces, hyphens, underscores, and dots
+- `project_or_task_name`: required, 1-100 characters, same character set as above
+
+If you supply invalid parameters, Chalie returns a clear error listing each problem. For example:
+
+```
+Invalid parameters:
+- 'message' is required and cannot be empty.
+- 'project_or_task_name' is invalid (got 150 chars). Must be 1-100 characters, only letters, numbers, spaces, hyphens, underscores, and dots.
+```
 
 ### What Chalie can help with
 
@@ -119,8 +127,3 @@ Ask Chalie anything you'd ask a knowledgeable personal assistant.
 | Connection refused | MCP server may be disabled or on a different port. Ask user to verify in Brain dashboard. |
 | Tool not found | Ensure you're connecting to `/mcp` path and the session is initialized. |
 
-## Security notes
-
-- Each token is scoped to a unique wrapper ID — your conversations are isolated from other agents
-- Tokens can be revoked and regenerated at any time from the Brain dashboard
-- The MCP server can be fully disabled from the Brain dashboard
