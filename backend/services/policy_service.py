@@ -57,7 +57,7 @@ _CHAT_ALLOW: dict[str, State] = {
     "search": "allow",
     "weather": "allow",
     # Reversible writes
-    "document.create": "allow", "document.restore": "allow",
+    "document.create": "allow", "document.restore": "allow", "document.upload": "allow",
     "email.draft": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
@@ -104,7 +104,7 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "search": "allow",
     "weather": "allow",
     # Internal writes
-    "document.create": "allow", "document.restore": "allow",
+    "document.create": "allow", "document.restore": "allow", "document.upload": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
@@ -134,7 +134,7 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "search": "allow",
     "weather": "allow",
     # Reversible writes
-    "document.create": "allow", "document.restore": "allow",
+    "document.create": "allow", "document.restore": "allow", "document.upload": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",

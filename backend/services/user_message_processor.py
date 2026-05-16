@@ -442,7 +442,6 @@ class UserMessageProcessor(MessageProcessor):
         audit rows, WS events, and policy enforcement via ActDispatcher.
         """
         files = self._metadata.get('files') or []
-        logger.info("[FILE-DEBUG] _process_file_attachments: metadata_keys=%s, files_count=%d", list(self._metadata.keys()), len(files))
         if not files:
             return
 
