@@ -1,13 +1,11 @@
 """Unit tests for PolicyService — per-action permission control."""
 
-import json
 import sqlite3
 import pytest
 
 from services.policy_service import (
     PolicyService,
     get_defaults,
-    reset_defaults_cache,
     VALID_STATES,
     VALID_CONTEXTS,
     USAGE_CLASS_TO_CONTEXT,
