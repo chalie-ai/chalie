@@ -16,10 +16,12 @@ export class TaskStrip {
    */
   init() {
     const triggerBtn = document.getElementById('taskDrawerBtn');
+    const closeBtn   = document.getElementById('taskDrawerClose');
     const scrim      = document.getElementById('taskDrawerScrim');
     if (!triggerBtn || !scrim) return;
 
     triggerBtn.addEventListener('click', () => this._openDrawer());
+    if (closeBtn) closeBtn.addEventListener('click', () => this._closeDrawer());
     scrim.addEventListener('click',      () => this._closeDrawer());
 
     document.addEventListener('keydown', (e) => {
