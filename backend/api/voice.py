@@ -345,9 +345,10 @@ def _extract_speech(audio, sr: int):
     """Strip non-speech regions using Silero VAD.
 
     Returns a float32 array containing only the detected speech segments
-    (with padding to avoid clipping word edges), or ``None`` when no speech
-    is detected. On any error the original audio is returned unchanged
-    (fail-safe).
+    (with padding to avoid clipping word edges), or the original audio
+    unchanged when no speech is confidently detected (avoids false-negative
+    drops on quiet or noisy recordings). On any error the original audio
+    is returned unchanged (fail-safe).
     """
     try:
         import numpy as np
@@ -377,7 +378,7 @@ def _extract_speech(audio, sr: int):
                 speech_regions.append((start, end))
 
         if not speech_regions:
-            return None
+            return audio
 
         merged: list[list[int]] = []
         for region in speech_regions:
@@ -546,8 +547,6 @@ def _transcribe_sync(data: bytes) -> str:
         audio = mo.load_audio(tmp.name)[0]  # → float32 [N] @ 16 kHz
 
     audio = _extract_speech(audio, MOONSHINE_SAMPLE_RATE)
-    if audio is None:
-        return ""
     audio = _denoise(audio, MOONSHINE_SAMPLE_RATE)
 
     if audio.shape[0] < _MIN_CHUNK_SAMPLES:
