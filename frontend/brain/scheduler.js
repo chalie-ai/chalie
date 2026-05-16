@@ -4,8 +4,6 @@ const PanelScheduler = (() => {
   let _sub = 'all';
   let _items = [];
   let _loaded = false;
-  let _offset = 0;
-  let _hasMore = false;
 
   function mount(root, sub) {
     _root = root;
@@ -89,11 +87,11 @@ const PanelScheduler = (() => {
       <form id="schedForm">
         <div class="form-group">
           <label for="schedMsg">Prompt / Message</label>
-          <textarea id="schedMsg" rows="3" maxlength="1000" placeholder="What Chalie should do when this fires">${BrainApp.escapeHtml(item?.message || item?.prompt || '')}</textarea>
+          <textarea id="schedMsg" rows="3" maxlength="1000" placeholder="What Chalie should do when this fires" required>${BrainApp.escapeHtml(item?.message || item?.prompt || '')}</textarea>
         </div>
         <div class="form-group">
           <label for="schedDue">Due Date & Time</label>
-          <input type="datetime-local" id="schedDue" value="${item?.due_at ? item.due_at.slice(0, 16) : ''}">
+          <input type="datetime-local" id="schedDue" value="${item?.due_at ? item.due_at.slice(0, 16) : ''}" required>
         </div>
         <div class="form-group">
           <label for="schedType">Type</label>

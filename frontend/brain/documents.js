@@ -22,7 +22,6 @@ const PanelDocuments = (() => {
       <h2>Documents</h2>
       <div class="panel-header-actions">
         <input type="text" id="docSearchInput" class="search-input" placeholder="Search documents…" value="${BrainApp.escapeHtml(_search)}">
-        <button class="btn btn-secondary" id="docWatchBtn">${Icons.Folder(14)} Watch Folder</button>
         <button class="btn btn-primary" id="docUploadBtn">${Icons.Upload(14)} Upload</button>
       </div>
     </div>
@@ -38,7 +37,6 @@ const PanelDocuments = (() => {
       if (e.key === 'Enter') { _search = e.target.value; _loaded = false; _load(); }
     });
     document.getElementById('docUploadBtn').addEventListener('click', _uploadDoc);
-    document.getElementById('docWatchBtn').addEventListener('click', _watchFolder);
     document.getElementById('docGroupTabs').addEventListener('click', (e) => {
       const btn = e.target.closest('[data-group]');
       if (!btn) return;
@@ -71,6 +69,7 @@ const PanelDocuments = (() => {
     let filtered = _docs;
     if (_sub === 'active') filtered = _docs.filter(d => d.status === 'ready' || d.status === 'active');
     else if (_sub === 'processing') filtered = _docs.filter(d => d.status === 'building' || d.status === 'processing');
+    else if (_sub === 'uploads') filtered = _docs.filter(d => d.source === 'upload' || d.doc_type === 'upload');
     else if (_sub === 'deleted') filtered = _docs.filter(d => d.status === 'deleted');
 
     if (_search) {
@@ -159,12 +158,25 @@ const PanelDocuments = (() => {
     } catch { BrainApp.showToast('Network error', 'error'); }
   }
 
-  async function _deleteDoc(id) {
-    try {
-      const res = await BrainApp.apiFetch(`/documents/${id}`, { method: 'DELETE' });
-      if (res.ok) { BrainApp.showToast('Document deleted', 'success'); _loaded = false; _load(); }
-      else BrainApp.showToast('Delete failed', 'error');
-    } catch { BrainApp.showToast('Network error', 'error'); }
+  function _deleteDoc(id) {
+    const doc = _docs.find(d => String(d.id) === String(id));
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `<div class="modal modal-sm">
+      <div class="modal-header"><h3>Delete Document</h3></div>
+      <p class="modal-desc">Delete "${BrainApp.escapeHtml(doc?.name || 'this document')}"? This cannot be undone.</p>
+      <div class="modal-actions"><button class="btn btn-secondary" id="keepDoc">Cancel</button><button class="btn btn-danger" id="confirmDelDoc">Delete</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    document.getElementById('keepDoc').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    document.getElementById('confirmDelDoc').addEventListener('click', async () => {
+      try {
+        const res = await BrainApp.apiFetch(`/documents/${id}`, { method: 'DELETE' });
+        if (res.ok) { overlay.remove(); BrainApp.showToast('Document deleted', 'success'); _loaded = false; _load(); }
+        else { overlay.remove(); BrainApp.showToast('Delete failed', 'error'); }
+      } catch { overlay.remove(); BrainApp.showToast('Network error', 'error'); }
+    });
   }
 
   function _uploadDoc() {
@@ -185,9 +197,6 @@ const PanelDocuments = (() => {
     input.click();
   }
 
-  function _watchFolder() {
-    BrainApp.showToast('Watch folder: use the file browser modal', 'info');
-  }
 
   return { mount, unmount };
 })();

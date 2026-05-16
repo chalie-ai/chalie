@@ -54,7 +54,10 @@ const BrainApp = (() => {
       ...(isMultipart ? {} : { 'Content-Type': 'application/json' }),
       ...(options.headers || {}),
     };
-    return fetch(url, { ...options, headers, credentials: 'same-origin' });
+    const creds = API_BASE ? 'include' : 'same-origin';
+    const res = await fetch(url, { ...options, headers, credentials: creds });
+    if (res.status === 401) { location.replace('/login/?next=/brain/'); return res; }
+    return res;
   }
 
   // ── Toast ──
@@ -83,7 +86,9 @@ const BrainApp = (() => {
     const h = (location.hash || '').replace(/^#\/?/, '');
     const [section, sub] = h.split('/');
     if (section && SUB_ROUTES.hasOwnProperty(section)) {
-      return { section, sub: sub || (SUB_ROUTES[section]?.[0]) || null };
+      const allowed = SUB_ROUTES[section];
+      const validSub = allowed ? (allowed.includes(sub) ? sub : allowed[0]) : null;
+      return { section, sub: validSub };
     }
     return { section: 'providers', sub: null };
   }
@@ -200,11 +205,11 @@ const BrainApp = (() => {
       else if (e.key === 'Escape') { _closeCommandPalette(); }
     });
 
-    overlay.addEventListener('click', (e) => {
+    overlay.onclick = (e) => {
       if (e.target === overlay) { _closeCommandPalette(); return; }
       const row = e.target.closest('.cp-row');
       if (row) _selectCpRow(row);
-    });
+    };
   }
 
   function _highlightCpRow(rows, idx) {
@@ -251,12 +256,16 @@ const BrainApp = (() => {
         </div>
       </div>
       <div class="topbar-actions">
-        <button class="icon-btn" id="notifBtn" aria-label="Notifications">${Icons.Bell()}<span class="dot"></span></button>
+        <button class="icon-btn" id="notifBtn" aria-label="Notifications">${Icons.Bell()}</button>
       </div>`;
 
     document.getElementById('hamburgerBtn').addEventListener('click', openMobileSidebar);
     document.getElementById('collapserBtn').addEventListener('click', toggleSidebar);
-    document.getElementById('topbarSearch').addEventListener('click', openCommandPalette);
+    const searchBtn = document.getElementById('topbarSearch');
+    searchBtn.addEventListener('click', openCommandPalette);
+    searchBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCommandPalette(); }
+    });
   }
 
   // ── Panel Rendering ──
@@ -288,7 +297,8 @@ const BrainApp = (() => {
     if (_heartbeatFired) return;
     try {
       const url = API_BASE ? `${API_BASE.replace(/\/$/, '')}/auth/status` : '/auth/status';
-      const res = await fetch(url, { credentials: 'same-origin' });
+      const creds = API_BASE ? 'include' : 'same-origin';
+      const res = await fetch(url, { credentials: creds });
       if (!res.ok) return;
       const data = await res.json();
       if (data.has_master_account && !data.has_session) {
@@ -338,7 +348,7 @@ const BrainApp = (() => {
   }
 
   // ── Helpers ──
-  function _escapeAttr(s) { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+  function _escapeAttr(s) { return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
   function escapeHtml(s) {
     if (!s) return '';
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -358,7 +368,6 @@ const BrainApp = (() => {
     apiFetch,
     showToast,
     escapeHtml,
-    API_BASE,
   };
 })();
 

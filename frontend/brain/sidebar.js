@@ -98,8 +98,9 @@ const BrainSidebar = (() => {
     nav.querySelectorAll('[data-sub]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const section = btn.closest('[data-section]').dataset.section;
-        BrainApp.navigate(section, btn.dataset.sub);
+        const sectionEl = btn.closest('[data-section]');
+        if (!sectionEl) return;
+        BrainApp.navigate(sectionEl.dataset.section, btn.dataset.sub);
         if (window.innerWidth <= 900) BrainApp.closeMobileSidebar();
       });
     });

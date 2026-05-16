@@ -31,11 +31,12 @@ const PanelCognition = (() => {
   async function _loadSub() {
     const el = document.getElementById('cognitionContent');
     if (!el) return;
+    const targetSub = _sub;
 
-    if (!_loaded[_sub]) {
+    if (!_loaded[targetSub]) {
       el.innerHTML = '<div class="loading">Loading…</div>';
       try {
-        switch (_sub) {
+        switch (targetSub) {
           case 'memory': await _fetchMemory(); break;
           case 'tools': await _fetchTools(); break;
           case 'working': await _fetchWorking(); break;
@@ -44,8 +45,12 @@ const PanelCognition = (() => {
           case 'errors': await _fetchErrors(); break;
           case 'usage': await _fetchUsage(); break;
         }
-        _loaded[_sub] = true;
-      } catch (e) { el.innerHTML = `<div class="empty-state"><p>Failed to load data.</p></div>`; return; }
+        if (_sub !== targetSub) return;
+        _loaded[targetSub] = true;
+      } catch (e) {
+        if (_sub !== targetSub) return;
+        el.innerHTML = `<div class="empty-state"><p>Failed to load data.</p></div>`; return;
+      }
     }
     _renderSub(el);
   }

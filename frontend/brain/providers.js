@@ -35,7 +35,6 @@ const PanelProviders = (() => {
         BrainApp.apiFetch('/providers'),
         BrainApp.apiFetch('/providers/selected'),
       ]);
-      if (provRes.status === 401) { location.replace('/login/?next=/brain/'); return; }
       if (provRes.ok) { const d = await provRes.json(); _providers = d.providers || []; }
       if (selRes.ok) { const d = await selRes.json(); _selectedId = d.provider ? d.provider.id : null; }
     } catch (e) { BrainApp.showToast('Failed to connect to backend', 'error'); }
