@@ -13,6 +13,7 @@ Supported formats:
   - Plain text  (direct read)
   - Markdown    (direct read)
   - Any text/*  (direct read)
+  - Image (PNG, JPEG, WEBP, GIF, BMP, TIFF) via RapidOCR
 
 All heavy-library imports are lazy so missing optional deps degrade gracefully.
 """
@@ -45,11 +46,21 @@ def extract_text(file_path: str, mime_type: str = None) -> str:
         'text/html': _extract_html_file,
         'text/plain': _extract_plain,
         'text/markdown': _extract_plain,
+        'image/png': _extract_image,
+        'image/jpeg': _extract_image,
+        'image/webp': _extract_image,
+        'image/gif': _extract_image,
+        'image/bmp': _extract_image,
+        'image/tiff': _extract_image,
     }
 
     extractor = extractors.get(mime_type)
     if extractor:
         return extractor(file_path)
+
+    # Fallback: any image/* type (e.g. image/heic) via OCR
+    if mime_type and mime_type.startswith('image/'):
+        return _extract_image(file_path)
 
     # Fallback: any text/* type (code files, CSV, etc.)
     if mime_type and mime_type.startswith('text/'):
@@ -278,6 +289,25 @@ def _extract_plain(path: str) -> str:
             return f.read()
     except Exception as e:
         logger.error(f'[TEXT EXTRACTOR] Plain text read failed: {e}')
+        return ''
+
+
+def _extract_image(path: str) -> str:
+    """Extract text from an image file using RapidOCR."""
+    try:
+        from PIL import Image
+        import services.ocr_service as ocr_service
+    except ImportError:
+        logger.warning('[TEXT EXTRACTOR] PIL or rapidocr not installed — cannot extract image text')
+        return ''
+
+    try:
+        img = Image.open(path)
+        img.load()
+        result = ocr_service._extract_text(img)
+        return result or ''
+    except Exception as e:
+        logger.warning(f'[TEXT EXTRACTOR] Image OCR extraction failed: {e}')
         return ''
 
 
