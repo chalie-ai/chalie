@@ -338,6 +338,18 @@ class DocumentService:
             logger.error("[DOCS] update_status failed for %s: %s", safe(doc_id), e)
             raise
 
+    def update_clean_text(self, doc_id: str, clean_text: str) -> None:
+        try:
+            def _update(did=doc_id, txt=clean_text, db=self.db):
+                with db.connection() as conn:
+                    conn.execute(
+                        "UPDATE documents SET clean_text = ?, updated_at = datetime('now') WHERE id = ?",
+                        (txt, did),
+                    )
+            self._write_queue.submit_sync(_update)
+        except Exception as e:
+            logger.error(f"[DOCS] update_clean_text failed: {e}")
+
     def update_summary(self, doc_id: str, summary: str) -> None:
         try:
             def _update(did=doc_id, s=summary, db=self.db):

@@ -63,13 +63,23 @@ MOONSHINE_SAMPLE_RATE = 16000
 _MIN_CHUNK_SAMPLES = int(0.1 * MOONSHINE_SAMPLE_RATE)
 
 # Moonshine (Whisper-family) hallucinates by repeating phrases 15-20× on
-# silence or noise. Collapse any n-gram (2-6 words) that appears more than
+# silence or noise. Collapse any n-gram (2–20 words) that appears more than
 # this many consecutive times down to exactly this many occurrences.
 _MAX_CONSECUTIVE_PHRASE_REPEATS = 2
+_MAX_NGRAM_WORDS = 20
+
+# Silero VAD settings (16 kHz audio, 512-sample / 32ms windows).
+# Lower threshold → fewer false negatives (borderline speech passes through).
+_VAD_SPEECH_THRESHOLD = 0.4
+# Pad detected speech regions on both sides to avoid clipping word edges.
+_VAD_PAD_SAMPLES = 1024  # 64 ms at 16 kHz
 
 # ── Dependency detection ────────────────────────────────────────────────────
 
-_VOICE_REQUIRED_MODULES = ("kokoro_onnx", "moonshine_onnx", "soundfile", "numpy")
+_VOICE_REQUIRED_MODULES = (
+    "kokoro_onnx", "moonshine_onnx", "soundfile", "numpy",
+    "silero_vad_lite", "noisereduce",
+)
 _VOICE_MISSING_MODULES: tuple[str, ...] = ()
 
 
@@ -295,12 +305,12 @@ def _segment_for_tts(text: str) -> list[str]:
 
 
 def _dedup_repetitions(text: str) -> str:
-    """Collapse Moonshine hallucination loops (consecutive identical 2-6 word phrases)."""
+    """Collapse Moonshine hallucination loops (consecutive identical 2–20 word phrases)."""
     if not text:
         return text
     try:
         words = text.split()
-        for n in range(6, 1, -1):
+        for n in range(_MAX_NGRAM_WORDS, 1, -1):
             if len(words) < n * 3:
                 continue
             lower = [w.lower() for w in words]
@@ -327,6 +337,161 @@ def _dedup_repetitions(text: str) -> str:
     except Exception:
         logger.exception("[Voice] _dedup_repetitions failed on len=%d", len(text))
         return text
+
+
+# ── STT audio preprocessing ─────────────────────────────────────────────────
+
+def _extract_speech(audio, sr: int):
+    """Strip non-speech regions using Silero VAD.
+
+    Returns a float32 array containing only the detected speech segments
+    (with padding to avoid clipping word edges), or the original audio
+    unchanged when no speech is confidently detected (avoids false-negative
+    drops on quiet or noisy recordings). On any error the original audio
+    is returned unchanged (fail-safe).
+    """
+    try:
+        import numpy as np
+        from silero_vad_lite import SileroVAD
+
+        vad = SileroVAD(sr)
+        window = 512
+        # SileroVAD.process() requires a *writable* float32 array.
+        audio_rw = np.array(audio, dtype=np.float32)
+        n = len(audio_rw)
+
+        # Walk in 512-sample windows, zero-padding the last partial window.
+        speech_flags: list[bool] = []
+        for start in range(0, n, window):
+            chunk = audio_rw[start:start + window]
+            if len(chunk) < window:
+                chunk = np.concatenate([chunk, np.zeros(window - len(chunk), dtype=np.float32)])
+            prob = vad.process(chunk)
+            speech_flags.append(prob >= _VAD_SPEECH_THRESHOLD)
+
+        # Collect speech sample ranges (one flag per 512-sample window).
+        speech_regions: list[tuple[int, int]] = []
+        for idx, is_speech in enumerate(speech_flags):
+            if is_speech:
+                start = max(0, idx * window - _VAD_PAD_SAMPLES)
+                end = min(n, (idx + 1) * window + _VAD_PAD_SAMPLES)
+                speech_regions.append((start, end))
+
+        if not speech_regions:
+            return audio
+
+        merged: list[list[int]] = []
+        for region in speech_regions:
+            if merged and region[0] <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], region[1])
+            else:
+                merged.append([region[0], region[1]])
+
+        segments = [audio_rw[s:e] for s, e in merged]
+        return np.concatenate(segments).astype(np.float32)
+    except Exception:
+        logger.exception("[Voice] VAD failed — passing audio through")
+        return audio
+
+
+def _denoise(audio, sr: int):
+    """Apply spectral noise reduction to a float32 audio array.
+
+    Skips clips shorter than n_fft=2048 samples (128 ms at 16 kHz) to avoid
+    STFT boundary errors. Returns original audio on any error (fail-safe).
+    """
+    if len(audio) < 2048:
+        return audio
+    try:
+        import numpy as np
+        import noisereduce as nr
+
+        result = nr.reduce_noise(y=audio, sr=sr, stationary=False)
+        return np.array(result, dtype=np.float32)
+    except Exception:
+        logger.exception("[Voice] noisereduce failed — passing audio through")
+        return audio
+
+
+# Filler words produced by speakers (not by Moonshine). Match whole words only
+# — "umbrella", "error", "hermit", "ahead", and "uh-huh" must NOT be stripped.
+_FILLER_RE = re.compile(
+    r"\b(u+h+|u+m+|h+m+|e+r+|a+h+|e+r+m+)\b",
+    re.IGNORECASE,
+)
+_MULTI_SPACE_RE = re.compile(r" {2,}")
+
+
+def _strip_fillers(text: str) -> str:
+    """Remove spoken filler words (um, uh, hmm, er, ah, erm) from STT output."""
+    if not text:
+        return text
+    return _MULTI_SPACE_RE.sub(" ", _FILLER_RE.sub("", text)).strip()
+
+
+# Moonshine drops apostrophes from contractions.  This table maps the
+# apostrophe-free form (lowercase) to the correct spelling. Ordered
+# longest-first so a longer match is never shadowed by a shorter prefix.
+_CONTRACTIONS: list[tuple[str, str]] = [
+    ("shouldnt", "shouldn't"),
+    ("couldnt", "couldn't"),
+    ("wouldnt", "wouldn't"),
+    ("doesnt", "doesn't"),
+    ("havent", "haven't"),
+    ("hadnt", "hadn't"),
+    ("hasnt", "hasn't"),
+    ("werent", "weren't"),
+    ("wasnt", "wasn't"),
+    ("arent", "aren't"),
+    ("didnt", "didn't"),
+    ("mustnt", "mustn't"),
+    ("isnt", "isn't"),
+    ("dont", "don't"),
+    ("cant", "can't"),
+    ("wont", "won't"),
+    ("thats", "that's"),
+    ("whats", "what's"),
+    ("whos", "who's"),
+    ("youre", "you're"),
+    ("youve", "you've"),
+    ("youll", "you'll"),
+    ("youd", "you'd"),
+    ("theyre", "they're"),
+    ("theyve", "they've"),
+    ("theyll", "they'll"),
+    ("theyd", "they'd"),
+    ("weve", "we've"),
+    ("hes", "he's"),
+    ("shes", "she's"),
+    ("ive", "I've"),
+    ("im", "I'm"),
+]
+
+_CONTRACTION_RES: list[tuple["re.Pattern[str]", str]] = [
+    (re.compile(r"\b" + re.escape(src) + r"\b", re.IGNORECASE), dst)
+    for src, dst in _CONTRACTIONS
+]
+
+
+def _fix_contractions(text: str) -> str:
+    """Restore apostrophes that Moonshine drops from common English contractions.
+
+    Ambiguous words whose bare form is independently valid ("were", "well",
+    "its", "lets") are deliberately excluded to avoid false corrections.
+    Casing of the original token is preserved (lower/title/upper).
+    """
+    if not text:
+        return text
+    for pattern, replacement in _CONTRACTION_RES:
+        def _recase(m: "re.Match[str]", rep: str = replacement) -> str:
+            orig = m.group(0)
+            if orig.isupper():
+                return rep.upper()
+            if orig[0].isupper():
+                return rep[0].upper() + rep[1:]
+            return rep
+        text = pattern.sub(_recase, text)
+    return text
 
 
 # ── WAV helpers ─────────────────────────────────────────────────────────────
@@ -381,26 +546,36 @@ def _transcribe_sync(data: bytes) -> str:
         # we hand the samples back to transcribe (or slice them).
         audio = mo.load_audio(tmp.name)[0]  # → float32 [N] @ 16 kHz
 
+    audio = _extract_speech(audio, MOONSHINE_SAMPLE_RATE)
+    audio = _denoise(audio, MOONSHINE_SAMPLE_RATE)
+
+    if audio.shape[0] < _MIN_CHUNK_SAMPLES:
+        return ""
+
     n_samples = audio.shape[0]
     chunk_size = CHUNK_SECONDS * MOONSHINE_SAMPLE_RATE
 
     if n_samples <= chunk_size:
         texts = mo.transcribe(audio, model=_moonshine)
         raw = " ".join(t.strip() for t in texts).strip()
-        return _dedup_repetitions(raw)
+        result = _dedup_repetitions(raw)
+    else:
+        parts: list[str] = []
+        for start in range(0, n_samples, chunk_size):
+            chunk = audio[start:start + chunk_size]
+            if chunk.shape[0] < _MIN_CHUNK_SAMPLES:
+                # Trailing fragment shorter than Moonshine's min duration — skip
+                # it rather than let the model assert.
+                continue
+            texts = mo.transcribe(chunk, model=_moonshine)
+            part = _dedup_repetitions(" ".join(t.strip() for t in texts).strip())
+            if part:
+                parts.append(part)
+        result = _dedup_repetitions(" ".join(parts).strip())
 
-    parts: list[str] = []
-    for start in range(0, n_samples, chunk_size):
-        chunk = audio[start:start + chunk_size]
-        if chunk.shape[0] < _MIN_CHUNK_SAMPLES:
-            # Trailing fragment shorter than Moonshine's min duration — skip
-            # it rather than let the model assert.
-            continue
-        texts = mo.transcribe(chunk, model=_moonshine)
-        part = _dedup_repetitions(" ".join(t.strip() for t in texts).strip())
-        if part:
-            parts.append(part)
-    return _dedup_repetitions(" ".join(parts).strip())
+    result = _strip_fillers(result)
+    result = _fix_contractions(result)
+    return result
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────

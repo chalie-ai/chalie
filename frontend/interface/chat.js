@@ -3,15 +3,16 @@
  */
 export class Chat {
   /**
-   * @param {{ api, ws, renderer, presence, notifications, imageAttach }} deps
+   * @param {{ api, ws, renderer, presence, notifications, imageAttach, documentUpload }} deps
    */
-  constructor({ api, ws, renderer, presence, notifications, imageAttach }) {
+  constructor({ api, ws, renderer, presence, notifications, imageAttach, documentUpload }) {
     this._api = api;
     this._ws = ws;
     this._renderer = renderer;
     this._presence = presence;
     this._notifications = notifications;
     this._imageAttach = imageAttach || null;
+    this._documentUpload = documentUpload || null;
 
     // Send state
     this._isSending = false;
@@ -95,8 +96,12 @@ export class Chat {
     const sendBtn = document.getElementById('sendBtn');
     const text = textarea.value.trim();
     const imageIds = this._imageAttach ? this._imageAttach.getImageIds() : [];
+    const pendingFiles = [
+      ...(this._imageAttach ? this._imageAttach.getPendingFiles() : []),
+      ...(this._documentUpload ? this._documentUpload.getPendingFiles() : []),
+    ];
 
-    if (!text && !imageIds.length) return;
+    if (!text && !imageIds.length && !pendingFiles.length) return;
 
     // Only route as steer when the ACT loop is actively narrating.
     // This prevents normal replies (e.g. to clarifications) from being
@@ -191,7 +196,7 @@ export class Chat {
         this._isSending = false;
         this._onSendCompleteCb?.();
       },
-    }, pendingImageIds);
+    }, pendingImageIds, pendingFiles);
 
   }
 

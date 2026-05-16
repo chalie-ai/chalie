@@ -84,6 +84,10 @@ class ChalieApp {
     // Voice player (speaker button → overlay audio player)
     this._voicePlayer = new VoicePlayer({ getHost: () => this._backendHost });
 
+    // Document upload module (must be constructed before Chat so the reference is live)
+    this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
+    this._docUpload.init();
+
     // Chat module (send + history)
     this._chat = new Chat({
       api: this.api,
@@ -92,6 +96,7 @@ class ChalieApp {
       presence: this.presence,
       notifications: this._notifications,
       imageAttach: this._imageAttach,
+      documentUpload: this._docUpload,
     });
     this._chat.onAuthFailure(() => this._handleAuthFailure());
 
@@ -102,10 +107,6 @@ class ChalieApp {
     // Heartbeat — redirect to login if the session becomes invalid
     // (server restart that locks the vault, session expiry, etc.)
     this.heartbeat.onAuthFailure(() => this._handleAuthFailure());
-
-    // Document upload module
-    this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
-    this._docUpload.init();
 
     // Update system module
     this._updateSystem = new UpdateSystem({ getHost: () => this._backendHost });

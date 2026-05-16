@@ -687,6 +687,9 @@ class MessageProcessor:
                     len(self._thinking_exploration),
                 )
 
+            with self._metrics.stage('file_attachments'):
+                self._process_file_attachments()
+
             self._current_iteration = 0
             llm_response = None
             loop_exited_cleanly = False
@@ -1203,6 +1206,10 @@ class MessageProcessor:
         UserMessageProcessor overrides to run the memory seed via the
         canonical tool dispatch path.
         """
+        pass
+
+    def _process_file_attachments(self) -> None:
+        """Override in subclasses that handle file attachments."""
         pass
 
     # ── Thinking-gate (CHANNEL='user' only) ──────────────────────────────────

@@ -171,17 +171,19 @@ class ExternalAgentMessageProcessor(MessageProcessor):
         disclosure_input = (
             f"An external agent called '{self._agent_name}' just contacted you "
             f"about '{self._project_or_task_name}'. "
-            f"Here's what they said:\n\n\"{self._raw_input[:500]}\"\n\n"
-            f"You replied:\n\n\"{self._final_response[:500]}\"\n\n"
+            f"Here's what they said:\n\n\"{self._raw_input}\"\n\n"
+            f"You replied:\n\n\"{self._final_response}\"\n\n"
             f"Let the user know about this exchange in your own words."
         )
 
         def _run():
             from services.output_service import OutputService
-            from services.user_message_processor import ScheduledPromptProcessor
+            from services.user_message_processor import UserMessageProcessor
 
             try:
-                response_text = ScheduledPromptProcessor(raw_input=disclosure_input).send()
+                proc = UserMessageProcessor(raw_input=disclosure_input)
+                proc.SKIP_INPUT_ROW = True
+                response_text = proc.send()
                 response_text = (response_text or '').strip()
                 if not response_text:
                     response_text = (

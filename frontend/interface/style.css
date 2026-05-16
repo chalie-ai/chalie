@@ -2691,18 +2691,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 }
 
 /* Kind dot */
-.task-drawer__kind-dot {
-  display: inline-block;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  margin-right: 6px;
-  vertical-align: middle;
-}
 
-.task-drawer__kind-dot--task     { background: var(--accent-primary, #8A5CFF); }
-.task-drawer__kind-dot--reminder { background: var(--accent-tertiary, #00F0FF); }
 
 /* Reminder item */
 .task-drawer__item--reminder {

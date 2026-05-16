@@ -170,7 +170,7 @@ class UserMessageProcessor(MessageProcessor):
           4. ## Previous Messages block (via getPreviousMessages())
           (blank line separator)
           5. Memory seed block (canonical tag block set by pre_act(), injected verbatim)
-          6. Current turn line: user: <raw_input> [file_tags] [nudge_tag]
+          6. Current turn line: user: <raw_input> [nudge_tag]
           7. ACT loop trail (empty string on iteration 1)
 
         Note: The ## Checkpoint / ## Current State envelope is NOT emitted
@@ -209,17 +209,9 @@ class UserMessageProcessor(MessageProcessor):
         if self._memory_seed:
             parts.append(self._memory_seed)
 
-        # 5. Current turn line with optional file tags and nudge
+        # 5. Current turn line with optional nudge
         turn_line = f"user: {self._raw_input}"
-        file_tags = self._metadata.get('file_tags', [])
         nudge_tag = self._metadata.get('nudge_tag')
-        if file_tags:
-            kinds = [t.split('(', 1)[0].lstrip('[') for t in file_tags]
-            logger.info(
-                f"[UMP] file_tags present uuid={self._uid} "
-                f"count={len(file_tags)} kinds={kinds}"
-            )
-            turn_line += ' ' + ' '.join(file_tags)
         if nudge_tag:
             turn_line += ' ' + nudge_tag
         parts.append(turn_line)
@@ -442,6 +434,48 @@ class UserMessageProcessor(MessageProcessor):
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
     # ── Private helpers ───────────────────────────────────────────────────────
+
+    def _process_file_attachments(self) -> None:
+        """Dispatch document.upload + document.view for each attached file.
+
+        Called after pre_act(). Uses handleTool() so each call produces
+        audit rows, WS events, and policy enforcement via ActDispatcher.
+        """
+        files = self._metadata.get('files') or []
+        logger.info("[FILE-DEBUG] _process_file_attachments: metadata_keys=%s, files_count=%d", list(self._metadata.keys()), len(files))
+        if not files:
+            return
+
+        for file_info in files:
+            name = file_info.get('name', 'attachment')
+            data = file_info.get('data', '')
+            content_type = file_info.get('content_type', 'application/octet-stream')
+
+            if not data:
+                continue
+
+            upload_result = self.handleTool({
+                'name': 'document',
+                'input': {
+                    'action': 'upload',
+                    'name': name,
+                    'content': data,
+                    'content_type': content_type,
+                },
+            })
+
+            doc_id = self._extract_doc_id_from_upload(upload_result)
+            if doc_id:
+                self.handleTool({
+                    'name': 'document',
+                    'input': {'action': 'view', 'id': doc_id},
+                })
+
+    def _extract_doc_id_from_upload(self, result_text: str) -> str | None:
+        """Parse doc_id from upload result like '(id=abc123ef)'."""
+        import re
+        match = re.search(r'\bid=([0-9a-f]{8})\b', result_text or '')
+        return match.group(1) if match else None
 
     def _get_self_awareness(self) -> str:
         """Get system health degradation signals from SelfModelService.

@@ -1,11 +1,15 @@
 """
 DocumentAbility — Search and manage documents via the ACT loop.
 
-Actions: search, list, view, delete, restore, create
+Actions: search, list, view, delete, restore, create, upload
 """
 
+import base64 as _base64
+import hashlib as _hashlib
 import json as _json
 import logging
+import os as _os
+import secrets as _secrets
 from typing import Optional
 
 from abilities._base import Ability
@@ -32,10 +36,11 @@ class DocumentAbility(Ability):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["search", "list", "view", "delete", "restore", "create"],
+                "enum": ["search", "list", "view", "delete", "restore", "create", "upload"],
                 "description": (
                     "Document operation to perform; use `create` when the user asks you to "
-                    "create, save, write, or store a note or document."
+                    "create, save, write, or store a note or document; use `upload` to "
+                    "store a binary or base64-encoded file attachment."
                 ),
             },
             "query": {
@@ -49,13 +54,17 @@ class DocumentAbility(Ability):
             "name": {
                 "type": "string",
                 "description": (
-                    "Required for `create`; use a filename like 'research-notes.md' if the user "
-                    "didn't give one. Optional fuzzy match for view/delete/restore."
+                    "Required for `create` and `upload`; use a filename like 'research-notes.md' "
+                    "if the user didn't give one. Optional fuzzy match for view/delete/restore."
                 ),
             },
             "content": {
                 "type": "string",
-                "description": "The full text body to write. Required for `create`.",
+                "description": "The full text body to write. Required for `create`. Base64-encoded file bytes for `upload`.",
+            },
+            "content_type": {
+                "type": "string",
+                "description": "MIME type of uploaded file (e.g. 'application/pdf', 'image/png'). Required for upload.",
             },
             "source_type": {
                 "type": "string",
@@ -110,8 +119,10 @@ def _dispatch(service, action: str, params: dict) -> str:
         return _handle_restore(service, params)
     elif action == "create":
         return _handle_create(service, params)
+    elif action == "upload":
+        return _handle_upload(service, params)
     else:
-        valid = "search, list, view, delete, restore, create"
+        valid = "search, list, view, delete, restore, create, upload"
         return f"[DOCUMENT] Unknown action '{action}'. Use: {valid}"
 
 
@@ -410,6 +421,55 @@ def create_document_artifacts(doc_id: str, text_content: str) -> int:
         )
 
     return len(artifacts)
+
+
+def _handle_upload(service, params: dict) -> str:
+    name = params.get("name", "attachment")
+    content = params.get("content", "")
+    content_type = params.get("content_type", "application/octet-stream")
+
+    if not name:
+        return "[DOCUMENT] 'name' is required for upload."
+    if not content:
+        return "[DOCUMENT] 'content' (base64 data) is required for upload."
+
+    try:
+        file_bytes = _base64.b64decode(content)
+    except Exception as e:
+        return f"[DOCUMENT] Failed to decode base64 content: {e}"
+
+    file_hash = _hashlib.sha256(file_bytes).hexdigest()
+    doc_id = _secrets.token_hex(4)
+    file_path_rel = f"{doc_id}/{name}"
+
+    try:
+        from api.documents import DOCUMENTS_ROOT, _run_upload_extraction
+
+        dir_path = _os.path.join(DOCUMENTS_ROOT, doc_id)
+        _os.makedirs(dir_path, exist_ok=True)
+        full_path = _os.path.join(dir_path, name)
+        with open(full_path, 'wb') as fh:
+            fh.write(file_bytes)
+
+        service.create_document(
+            original_name=name,
+            mime_type=content_type,
+            file_size=len(file_bytes),
+            file_path=file_path_rel,
+            file_hash=file_hash,
+            source_type='upload',
+            doc_id=doc_id,
+        )
+
+        _run_upload_extraction(doc_id)
+
+        return (
+            f"[DOCUMENT] Uploaded '{name}' (id={doc_id}). "
+            f"Call document(action='view', id='{doc_id}') to read contents."
+        )
+    except Exception as e:
+        logger.error(f"[DOCUMENT SKILL] Upload failed: {e}", exc_info=True)
+        return f"[DOCUMENT] Failed to upload document: {e}"
 
 
 def _handle_create(service, params: dict) -> str:

@@ -262,19 +262,16 @@ Singleton with an `RLock`. Exposes only `get(name)` and `all()`. Lazily walks `b
 
 ## Chat File Attachments
 
-When a WebSocket `chat` frame carries `image_ids` — or when a recent upload/chat-image document exists for the current user — `_resolve_file_tags()` in `backend/api/websocket.py` runs before the `UserMessageProcessor` is constructed. It **blocks** the turn until every referenced document reaches a terminal state (`ready` or `failed`) or a shared 5-minute deadline (`_UPLOAD_DEADLINE_S = 300`) expires. Tags use the standard envelope format and are attached to `metadata['file_tags']`:
+When a WebSocket `chat` frame carries a `files` array, the frontend has already read each file as base64 and included it in the payload (`{name, data, content_type}`). No separate upload endpoint is called for chat-attached files.
 
-- `[image(id=<doc>)]ocr text[end:image]` — ready image, OCR text truncated to 500 chars
-- `[image(id=<doc>)]analysis failed[end:image]` — image processing failed
-- `[image(id=<doc>)]image not found[end:image]` — no document record for this ID
-- `[image(id=<doc>)]timeout of 300 seconds exceeded[end:image]` — deadline expired
-- `[document(id=<doc>, name=<filename>)]content[end:document]` — ready PDF/text document
-- `[document(id=<doc>, name=<filename>)]processing failed[end:document]` — extraction failed
-- `[document(id=<doc>, name=<filename>)]timeout of 300 seconds exceeded[end:document]` — deadline expired
+`_handle_chat()` in `backend/api/websocket.py` extracts `files` (capped at 5) and passes them via `metadata['files']` to the processor. `UserMessageProcessor._process_file_attachments()` iterates each file and dispatches two tool calls through `handleTool()`:
 
-`UserMessageProcessor.getUserPrompt()` appends these tags to the turn line so the LLM sees file context inline with the user message. The no-silent-drop invariant applies: every failure mode emits a tag — the model learns a file was attached and what happened to it, never an empty prompt.
+1. `document(action='upload', name=..., data=..., content_type=...)` — decodes base64, persists to disk, runs text extraction synchronously, returns a document ID.
+2. `document(action='view', id=<doc_id>)` — retrieves the extracted content.
 
-Images land via `POST /chat/image` (source_type `chat_image`, triggers OCR + scene analysis). Documents land via `POST /documents/upload` (source_type `upload`, triggers text extraction for PDFs via `document_skill.create_document_artifacts`). The deadline is shared across every file resolved in the turn — worst case one wait, not N.
+Both calls go through `ActDispatcher` — policy enforcement, WS tool events, and `tool_calls` audit rows are generated naturally. The results land in `_act_trail` so the LLM sees file content on iter-0 of the ACT loop.
+
+Images sent via `POST /chat/image` (source_type `chat_image`) still trigger OCR + scene analysis through the existing `chat_image.py` pipeline. The `/documents/upload` REST endpoint remains available for the Brain document management UI but is no longer used by the chat flow.
 
 ---
 
