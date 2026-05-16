@@ -1,0 +1,193 @@
+// Documents panel — document management + watched folders.
+const PanelDocuments = (() => {
+  let _root = null;
+  let _sub = 'active';
+  let _docs = [];
+  let _folders = [];
+  let _loaded = false;
+  let _search = '';
+  let _groupBy = 'all';
+
+  function mount(root, sub) {
+    _root = root;
+    _sub = sub || 'active';
+    _render();
+  }
+
+  function unmount() { _root = null; }
+
+  function _render() {
+    if (!_root) return;
+    _root.innerHTML = `<div class="panel-header">
+      <h2>Documents</h2>
+      <div class="panel-header-actions">
+        <input type="text" id="docSearchInput" class="search-input" placeholder="Search documents…" value="${BrainApp.escapeHtml(_search)}">
+        <button class="btn btn-secondary" id="docWatchBtn">${Icons.Folder(14)} Watch Folder</button>
+        <button class="btn btn-primary" id="docUploadBtn">${Icons.Upload(14)} Upload</button>
+      </div>
+    </div>
+    <div class="doc-group-tabs" id="docGroupTabs">
+      ${['all', 'doc_category', 'doc_project', 'doc_date'].map(g => {
+        const label = { all: 'All', doc_category: 'Category', doc_project: 'Project', doc_date: 'Date' }[g];
+        return `<button class="group-tab${g === _groupBy ? ' active' : ''}" data-group="${g}">${label}</button>`;
+      }).join('')}
+    </div>
+    <div id="docsContent"><div class="loading">Loading…</div></div>`;
+
+    document.getElementById('docSearchInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { _search = e.target.value; _loaded = false; _load(); }
+    });
+    document.getElementById('docUploadBtn').addEventListener('click', _uploadDoc);
+    document.getElementById('docWatchBtn').addEventListener('click', _watchFolder);
+    document.getElementById('docGroupTabs').addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-group]');
+      if (!btn) return;
+      _groupBy = btn.dataset.group;
+      _renderDocs();
+      document.querySelectorAll('#docGroupTabs .group-tab').forEach(b => b.classList.toggle('active', b === btn));
+    });
+
+    if (!_loaded) _load();
+    else _renderDocs();
+  }
+
+  async function _load() {
+    try {
+      const [docRes, folderRes] = await Promise.all([
+        BrainApp.apiFetch('/documents'),
+        BrainApp.apiFetch('/documents/watched-folders'),
+      ]);
+      if (docRes.ok) { const d = await docRes.json(); _docs = d.documents || []; }
+      if (folderRes.ok) { const d = await folderRes.json(); _folders = d.folders || []; }
+      _loaded = true;
+    } catch { BrainApp.showToast('Failed to load documents', 'error'); }
+    _renderDocs();
+  }
+
+  function _renderDocs() {
+    const el = document.getElementById('docsContent');
+    if (!el) return;
+
+    let filtered = _docs;
+    if (_sub === 'active') filtered = _docs.filter(d => d.status === 'ready' || d.status === 'active');
+    else if (_sub === 'processing') filtered = _docs.filter(d => d.status === 'building' || d.status === 'processing');
+    else if (_sub === 'deleted') filtered = _docs.filter(d => d.status === 'deleted');
+
+    if (_search) {
+      const q = _search.toLowerCase();
+      filtered = filtered.filter(d => (d.name || '').toLowerCase().includes(q) || (d.category || '').toLowerCase().includes(q));
+    }
+
+    let html = '';
+
+    if (_folders.length > 0) {
+      html += `<div class="watched-folders-section">
+        <h4 class="section-head">Watched Folders</h4>
+        <div class="watched-folders-list">${_folders.map(f => `<div class="watched-folder-item">
+          <span class="wf-icon">${Icons.Eye(14)}</span>
+          <span class="wf-label">${BrainApp.escapeHtml(f.label || f.path || '')}</span>
+          <span class="wf-path">${BrainApp.escapeHtml(f.path || '')}</span>
+          <span class="wf-meta">${f.files || 0} files · ${BrainApp.escapeHtml(f.last_scan || '')}</span>
+          <span class="wf-status">${f.active ? '<span class="status-dot active"></span>' : '<span class="status-dot"></span>'}</span>
+        </div>`).join('')}</div>
+      </div>`;
+    }
+
+    if (filtered.length === 0) {
+      html += `<div class="empty-state"><div class="empty-icon">${Icons.Document(40)}</div><h3>No documents</h3><p>Upload or watch a folder to get started.</p></div>`;
+    } else {
+      if (_groupBy !== 'all') {
+        const groupKey = { doc_category: 'category', doc_project: 'project', doc_date: 'added' }[_groupBy] || 'category';
+        const groups = {};
+        for (const d of filtered) { const k = d[groupKey] || 'Other'; (groups[k] = groups[k] || []).push(d); }
+        for (const [gname, gdocs] of Object.entries(groups)) {
+          html += `<h4 class="section-head">${BrainApp.escapeHtml(gname)}</h4>`;
+          html += _renderDocTable(gdocs);
+        }
+      } else {
+        html += _renderDocTable(filtered);
+      }
+    }
+
+    el.innerHTML = html;
+
+    el.querySelectorAll('[data-view-doc]').forEach(b => {
+      b.addEventListener('click', () => _viewDoc(b.dataset.viewDoc));
+    });
+    el.querySelectorAll('[data-del-doc]').forEach(b => {
+      b.addEventListener('click', () => _deleteDoc(b.dataset.delDoc));
+    });
+  }
+
+  function _renderDocTable(docs) {
+    return `<table class="records-table">
+      <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Size</th><th>Added</th><th></th></tr></thead>
+      <tbody>${docs.map(d => {
+        const statusCls = { ready: 'badge-success', building: 'badge-warning', processing: 'badge-warning', error: 'badge-danger', deleted: 'badge-muted' }[d.status] || 'badge-muted';
+        return `<tr>
+          <td class="key-cell">${BrainApp.escapeHtml(d.name || '')}</td>
+          <td><span class="badge badge-muted">${BrainApp.escapeHtml(d.type || d.doc_type || '')}</span></td>
+          <td><span class="badge ${statusCls}">${BrainApp.escapeHtml(d.status || '')}</span></td>
+          <td>${BrainApp.escapeHtml(d.size || '')}</td>
+          <td>${BrainApp.escapeHtml(d.added || d.created_at || '')}</td>
+          <td class="row-actions">
+            <button class="btn btn-sm btn-secondary" data-view-doc="${d.id}">View</button>
+            <button class="btn btn-sm btn-danger" data-del-doc="${d.id}">${Icons.Trash(12)}</button>
+          </td>
+        </tr>`;
+      }).join('')}</tbody>
+    </table>`;
+  }
+
+  async function _viewDoc(id) {
+    try {
+      const res = await BrainApp.apiFetch(`/documents/${id}`);
+      if (!res.ok) { BrainApp.showToast('Failed to load document', 'error'); return; }
+      const doc = await res.json();
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `<div class="modal modal-lg">
+        <div class="modal-header">
+          <h3>${BrainApp.escapeHtml(doc.name || 'Document')}</h3>
+          <button class="btn-close" id="closeDocView">${Icons.Close(16)}</button>
+        </div>
+        <div class="modal-body"><pre class="doc-content">${BrainApp.escapeHtml(doc.content || doc.text || 'No content available.')}</pre></div>
+      </div>`;
+      document.body.appendChild(overlay);
+      document.getElementById('closeDocView').addEventListener('click', () => overlay.remove());
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    } catch { BrainApp.showToast('Network error', 'error'); }
+  }
+
+  async function _deleteDoc(id) {
+    try {
+      const res = await BrainApp.apiFetch(`/documents/${id}`, { method: 'DELETE' });
+      if (res.ok) { BrainApp.showToast('Document deleted', 'success'); _loaded = false; _load(); }
+      else BrainApp.showToast('Delete failed', 'error');
+    } catch { BrainApp.showToast('Network error', 'error'); }
+  }
+
+  function _uploadDoc() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.pdf,.docx,.md,.txt,.csv,.zip';
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      if (!file) return;
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const res = await BrainApp.apiFetch('/documents', { method: 'POST', body: formData }, true);
+        if (res.ok) { BrainApp.showToast('Document uploaded', 'success'); _loaded = false; _load(); }
+        else { const d = await res.json().catch(() => ({})); BrainApp.showToast(d.error || 'Upload failed', 'error'); }
+      } catch { BrainApp.showToast('Network error', 'error'); }
+    });
+    input.click();
+  }
+
+  function _watchFolder() {
+    BrainApp.showToast('Watch folder: use the file browser modal', 'info');
+  }
+
+  return { mount, unmount };
+})();
