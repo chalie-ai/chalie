@@ -333,6 +333,41 @@ class UserMessageProcessor(MessageProcessor):
             transcript_id=self._uid,
         ).renderAndRecord()
 
+        # Audit rows for file_tags fast-path reads. When a recent upload is
+        # auto-injected as a tag block the model performs a document view
+        # without going through the ACT loop, so no tool_calls row is written.
+        # Emit one here per injected tag so audit trails reflect the read.
+        # Bodies signalling failed extraction are skipped — no real view.
+        for tag in self._metadata.get('file_tags', []):
+            for prefix, end_marker in (
+                ('[document(', '[end:document]'),
+                ('[image(', '[end:image]'),
+            ):
+                if not tag.startswith(prefix):
+                    continue
+                try:
+                    end_params = tag.index(')')
+                    body = tag[end_params + 1:tag.index(end_marker)]
+                    if body in ('no content extracted', 'processing failed') or body.startswith('timeout of '):
+                        break
+                    doc_id = next(
+                        (p.strip()[3:] for p in tag[len(prefix):end_params].split(',') if p.strip().startswith('id=')),
+                        None,
+                    )
+                    if doc_id is None:
+                        logger.debug('[UMP] file_tags: could not parse id from %s tag', prefix)
+                        break
+                    ToolRenderAndRecordService(
+                        tool_name='document',
+                        params={'action': 'view', 'id': doc_id},
+                        result=body,
+                        ephemeral=False,
+                        transcript_id=self._uid,
+                    ).renderAndRecord()
+                except Exception as e:
+                    logger.debug('[UMP] file_tags: failed to emit audit row: %s', e)
+                break
+
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Push mid-loop narration text to the per-request SSE channel.
 
