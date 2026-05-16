@@ -19,6 +19,7 @@ reach the MCP protocol layer.
 """
 
 import asyncio
+import contextvars
 import logging
 import re
 import sqlite3
@@ -37,6 +38,10 @@ logger = logging.getLogger(__name__)
 _MCP_SERVER_NAME = "chalie"
 _DEFAULT_PORT = 8462
 _SAFE_NAME_RE = re.compile(r'^[A-Za-z0-9 _\-\.]{1,100}$')
+
+_current_wrapper_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    'mcp_current_wrapper_id', default=None
+)
 
 
 class BearerTokenMiddleware(BaseHTTPMiddleware):
@@ -64,7 +69,11 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
                 status_code=401,
             )
 
-        response = await call_next(request)
+        ctx_token = _current_wrapper_id.set(wrapper_id)
+        try:
+            response = await call_next(request)
+        finally:
+            _current_wrapper_id.reset(ctx_token)
         return response
 
     @staticmethod
@@ -139,9 +148,10 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
 
         from services.external_agent_message_processor import ExternalAgentMessageProcessor
 
+        wrapper_id = _current_wrapper_id.get()
         logger.info(
-            "[MCP] talk_to_chalie: agent=%s project=%s loop_in_human=%s",
-            agent_name, project_or_task_name, loop_in_human,
+            "[MCP] talk_to_chalie: agent=%s project=%s loop_in_human=%s wrapper=%s",
+            agent_name, project_or_task_name, loop_in_human, wrapper_id,
         )
 
         def _run():
@@ -150,6 +160,7 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
                 agent_name=agent_name,
                 project_or_task_name=project_or_task_name,
                 loop_in_human=loop_in_human,
+                wrapper_id=wrapper_id,
             )
             return proc.send()
 

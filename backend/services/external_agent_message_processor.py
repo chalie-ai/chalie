@@ -64,16 +64,18 @@ class ExternalAgentMessageProcessor(MessageProcessor):
         agent_name: str,
         project_or_task_name: str,
         loop_in_human: bool = False,
+        wrapper_id: str | None = None,
         metadata: dict | None = None,
     ):
         super().__init__(raw_input, metadata)
         self._agent_name = agent_name
         self._project_or_task_name = project_or_task_name
         self._loop_in_human = loop_in_human
-        # Captured in store() so postTurn() can reference it without args.
+        self._wrapper_id = wrapper_id
         self._final_response: str = ''
-        # Dynamic channel per agent — isolates transcript history per agent identity.
-        self.CHANNEL = f"external-agent:{agent_name}"
+        # Channel namespaced by wrapper_id to prevent cross-agent transcript access.
+        prefix = f"{wrapper_id}:" if wrapper_id else ""
+        self.CHANNEL = f"external-agent:{prefix}{agent_name}"
 
     def getUserDefinition(self) -> str:
         return (

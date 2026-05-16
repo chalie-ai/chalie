@@ -327,6 +327,8 @@ document.getElementById('mainTabs').addEventListener('click', (e) => {
         loadCapabilities();
     } else if (tabName === 'policies') {
         loadPolicies();
+    } else if (tabName === 'mcp') {
+        loadMcpSettings();
     }
 });
 
@@ -3553,6 +3555,117 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!body) return;
             const isOpen = blockedToggle.classList.toggle('active');
             body.classList.toggle('active', isOpen);
+        });
+    }
+});
+
+// ==========================================
+// MCP Server Tab
+// ==========================================
+let _mcpLoaded = false;
+
+async function loadMcpSettings() {
+    if (_mcpLoaded) return;
+    try {
+        const res = await apiFetch('/api/mcp-server');
+        if (!res.ok) return;
+        const data = await res.json();
+        _mcpLoaded = true;
+
+        const toggle = document.getElementById('mcpEnabledToggle');
+        const portInput = document.getElementById('mcpPortInput');
+        const tokenEl = document.getElementById('mcpTokenValue');
+        const snippet = document.getElementById('mcpConnectionSnippet');
+
+        if (toggle) toggle.checked = data.enabled;
+        if (portInput) portInput.value = data.port || 8462;
+        if (tokenEl) tokenEl.textContent = data.token || '(no token generated)';
+
+        const host = window.location.hostname || 'localhost';
+        const port = data.port || 8462;
+        if (snippet) {
+            snippet.textContent = JSON.stringify({
+                mcpServers: {
+                    chalie: {
+                        type: 'http',
+                        url: `http://${host}:${port}/mcp`,
+                        headers: { Authorization: `Bearer ${data.token || '<TOKEN>'}` }
+                    }
+                }
+            }, null, 2);
+        }
+    } catch (err) {
+        console.warn('[mcp] load failed:', err);
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const toggle = document.getElementById('mcpEnabledToggle');
+    if (toggle) {
+        toggle.addEventListener('change', async () => {
+            const res = await apiFetch('/api/mcp-server', {
+                method: 'PUT',
+                body: JSON.stringify({ enabled: toggle.checked }),
+            });
+            if (res.ok) {
+                showToast(toggle.checked ? 'MCP server enabled' : 'MCP server disabled (restart required)', 'success');
+            } else {
+                showToast('Failed to update setting', 'error');
+            }
+        });
+    }
+
+    const portSave = document.getElementById('mcpPortSave');
+    if (portSave) {
+        portSave.addEventListener('click', async () => {
+            const portInput = document.getElementById('mcpPortInput');
+            const port = parseInt(portInput.value, 10);
+            if (isNaN(port) || port < 1024 || port > 65535) {
+                showToast('Port must be 1024-65535', 'error');
+                return;
+            }
+            const res = await apiFetch('/api/mcp-server', {
+                method: 'PUT',
+                body: JSON.stringify({ port }),
+            });
+            if (res.ok) {
+                showToast('Port saved (restart required)', 'success');
+                _mcpLoaded = false;
+                loadMcpSettings();
+            } else {
+                showToast('Failed to save port', 'error');
+            }
+        });
+    }
+
+    const copyBtn = document.getElementById('mcpTokenCopy');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+            const tokenEl = document.getElementById('mcpTokenValue');
+            if (tokenEl && tokenEl.textContent) {
+                navigator.clipboard.writeText(tokenEl.textContent).then(() => {
+                    showToast('Token copied', 'success');
+                }).catch(() => {
+                    showToast('Copy failed', 'error');
+                });
+            }
+        });
+    }
+
+    const regenBtn = document.getElementById('mcpTokenRegenerate');
+    if (regenBtn) {
+        regenBtn.addEventListener('click', async () => {
+            if (!confirm('This will revoke the current token. All connected agents will need to update their configuration.')) return;
+            const res = await apiFetch('/api/mcp-server/regenerate-token', { method: 'POST' });
+            if (res.ok) {
+                const data = await res.json();
+                document.getElementById('mcpTokenValue').textContent = data.token;
+                showToast('Token regenerated', 'success');
+                _mcpLoaded = false;
+                loadMcpSettings();
+            } else {
+                showToast('Failed to regenerate token', 'error');
+            }
         });
     }
 });

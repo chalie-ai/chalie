@@ -38,6 +38,7 @@
                         <button class="nav-link" data-tab="documents">Documents</button>
                         <button class="nav-link" data-tab="capabilities">Capabilities</button>
                         <button class="nav-link" data-tab="policies">Policies</button>
+                        <button class="nav-link" data-tab="mcp">MCP Server</button>
                     </div>
                 </div>
             </div>
@@ -308,6 +309,45 @@
             </div>
         </div>
 
+        <!-- MCP Server Tab -->
+        <div class="tab-panel" id="tab-mcp">
+            <div class="panel-header">
+                <h2>MCP Server</h2>
+            </div>
+            <p class="panel-desc">External agents (Claude Code, Codex, CI bots) connect to Chalie via MCP. Manage access and view the connection token below.</p>
+
+            <div class="mcp-settings">
+                <div class="mcp-toggle-row">
+                    <label class="mcp-toggle-label" for="mcpEnabledToggle">Server Enabled</label>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="mcpEnabledToggle" checked>
+                    </div>
+                </div>
+
+                <div class="mcp-port-row">
+                    <label class="mcp-port-label" for="mcpPortInput">Port</label>
+                    <input type="number" class="form-control mcp-port-input" id="mcpPortInput" value="8462" min="1024" max="65535">
+                    <button class="btn btn-secondary btn-sm" id="mcpPortSave">Save</button>
+                </div>
+
+                <div class="mcp-token-section">
+                    <h3>Connection Token</h3>
+                    <p class="mcp-token-hint">Give this token to external agents so they can authenticate. Token is generated once — regenerate if compromised.</p>
+                    <div class="mcp-token-display">
+                        <code id="mcpTokenValue" class="mcp-token-code">Loading...</code>
+                        <button class="btn btn-secondary btn-sm" id="mcpTokenCopy" title="Copy to clipboard">Copy</button>
+                    </div>
+                    <button class="btn btn-danger btn-sm mt-2" id="mcpTokenRegenerate">Regenerate Token</button>
+                </div>
+
+                <div class="mcp-connection-info">
+                    <h3>Connection Details</h3>
+                    <p class="mcp-token-hint">Add this to your agent's MCP configuration:</p>
+                    <pre id="mcpConnectionSnippet" class="mcp-snippet"></pre>
+                </div>
+            </div>
+        </div>
+
         <!-- Policies Tab -->
         <div class="tab-panel" id="tab-policies">
             <div class="panel-header">
@@ -317,6 +357,7 @@
                 <button class="policies-subtab active" data-context="chat">Chat</button>
                 <button class="policies-subtab" data-context="subagent">Subagent</button>
                 <button class="policies-subtab" data-context="subconscious">Background</button>
+                <button class="policies-subtab" data-context="external_agent">External Agent</button>
             </div>
             <div class="policies-preset-bar" id="policiesPresetBar">
                 <button class="policies-preset-btn" data-preset="careful">Careful</button>

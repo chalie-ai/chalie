@@ -2190,3 +2190,73 @@ body::before {
     white-space: nowrap;
     font-size: 11px;
 }
+
+/* ── MCP Server Tab ─────────────────────────────────────────── */
+
+.mcp-settings {
+    max-width: 600px;
+}
+
+.mcp-toggle-row,
+.mcp-port-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.mcp-toggle-label,
+.mcp-port-label {
+    font-weight: 500;
+    min-width: 120px;
+}
+
+.mcp-port-input {
+    width: 100px;
+}
+
+.mcp-token-section,
+.mcp-connection-info {
+    margin-top: 24px;
+}
+
+.mcp-token-section h3,
+.mcp-connection-info h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.mcp-token-hint {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 10px;
+}
+
+.mcp-token-display {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.mcp-token-code {
+    font-size: 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 12px;
+    word-break: break-all;
+    flex: 1;
+    max-width: 420px;
+}
+
+.mcp-snippet {
+    font-size: 12px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    overflow-x: auto;
+    white-space: pre;
+}
