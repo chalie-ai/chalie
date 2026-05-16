@@ -16,12 +16,10 @@ export class TaskStrip {
    */
   init() {
     const triggerBtn = document.getElementById('taskDrawerBtn');
-    const closeBtn   = document.getElementById('taskDrawerClose');
     const scrim      = document.getElementById('taskDrawerScrim');
-    if (!triggerBtn || !closeBtn || !scrim) return;
+    if (!triggerBtn || !scrim) return;
 
     triggerBtn.addEventListener('click', () => this._openDrawer());
-    closeBtn.addEventListener('click',   () => this._closeDrawer());
     scrim.addEventListener('click',      () => this._closeDrawer());
 
     document.addEventListener('keydown', (e) => {
@@ -46,17 +44,12 @@ export class TaskStrip {
    */
   async loadActiveTasks() {
     try {
-      const [taskData, schedData] = await Promise.all([
-        this._api._get('/system/observability/tasks').catch((e) => { if (e?.message === 'AUTH') throw e; return {}; }),
-        this._api._get('/scheduler?status=pending').catch((e) => { if (e?.message === 'AUTH') throw e; return {}; }),
-      ]);
-      const tasks = (taskData.persistent_tasks || []).filter(
-        t => t.status === 'accepted' || t.status === 'in_progress' || t.status === 'paused'
-      );
+      const schedData = await this._api._get('/scheduler?status=pending').catch((e) => { if (e?.message === 'AUTH') throw e; return {}; });
+      const tasks = [];
       const reminders = (schedData.items || []).filter(
         r => r.status === 'pending' && r.due_at
       );
-      this._render(tasks, reminders);
+      this._render(reminders);
     } catch (e) {
       if (e?.message === 'AUTH') {
         this._onAuthFailureCb?.();
@@ -103,14 +96,13 @@ export class TaskStrip {
     }, { once: true });
   }
 
-  _render(tasks, reminders = []) {
+  _render(reminders = []) {
     const drawer   = document.getElementById('taskDrawer');
     const list     = document.getElementById('taskDrawerList');
     const trigger  = document.getElementById('taskDrawerBtn');
-    const badge    = document.getElementById('taskDrawerCount');
     if (!drawer || !list) return;
 
-    const totalCount = tasks.length + reminders.length;
+    const totalCount = reminders.length;
 
     // Update trigger button visibility and badge
     if (trigger) {
@@ -118,14 +110,6 @@ export class TaskStrip {
         trigger.classList.add('hidden');
       } else {
         trigger.classList.remove('hidden');
-      }
-    }
-    if (badge) {
-      if (totalCount === 0) {
-        badge.classList.add('hidden');
-      } else {
-        badge.classList.remove('hidden');
-        badge.textContent = totalCount;
       }
     }
 
@@ -137,41 +121,6 @@ export class TaskStrip {
     }
 
     let html = '';
-
-    // Render persistent tasks
-    for (const t of tasks) {
-      const goal     = (t.goal || 'Working…').slice(0, 60);
-      const progress = t.progress || {};
-      const coverage = Math.round((progress.coverage_estimate || 0) * 100);
-      const summary  = progress.last_summary || '';
-      const pausedClass = t.status === 'paused' ? ' --paused' : '';
-
-      const plan = progress.plan;
-      let stepsHtml = '';
-      if (plan && plan.steps && plan.steps.length > 0) {
-        const done    = plan.steps.filter(s => s.status === 'completed' || s.status === 'skipped').length;
-        const total   = plan.steps.length;
-        const current = plan.steps.find(s => s.status === 'in_progress');
-        stepsHtml = `<div class="task-drawer__steps">${done}/${total} steps</div>`;
-        if (current) {
-          stepsHtml += `<div class="task-drawer__current-step">${escHtml(current.description)}</div>`;
-        }
-        if (plan.blocked_on) {
-          stepsHtml += `<div class="task-drawer__blocked">Blocked: ${escHtml(plan.blocked_reason || 'dependency failed')}</div>`;
-        }
-      }
-
-      html += `<div class="task-drawer__item${pausedClass}">
-        <span class="task-drawer__kind-dot task-drawer__kind-dot--task"></span>
-        <div class="task-drawer__goal">${escHtml(goal)}</div>
-        <div class="task-drawer__progress-bar">
-          <div class="task-drawer__progress-fill" style="width:${coverage}%"></div>
-        </div>
-        ${stepsHtml}
-        ${summary ? `<div class="task-drawer__summary">${escHtml(summary)}</div>` : ''}
-        <button class="task-drawer__dismiss" data-dismiss-task="${t.id}" aria-label="Dismiss task">&times;</button>
-      </div>`;
-    }
 
     // Render pending reminders
     for (const r of reminders) {
@@ -207,16 +156,6 @@ export class TaskStrip {
       });
     });
 
-    // Wire dismiss buttons — persistent tasks
-    list.querySelectorAll('[data-dismiss-task]').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const taskId = btn.dataset.dismissTask;
-        try {
-          await this._api._delete(`/system/observability/tasks/${taskId}`);
-        } catch { /* ignore */ }
-        this.loadActiveTasks();
-      });
     });
   }
 }

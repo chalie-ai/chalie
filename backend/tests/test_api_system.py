@@ -366,25 +366,6 @@ class TestSystemAPI:
 
 
 
-    # GET /system/observability/tasks
-
-    def test_observability_tasks_returns_generated_at(self, client):
-        """GET /system/observability/tasks returns generated_at."""
-        resp = client.get('/system/observability/tasks')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert 'generated_at' in data
-
-    def test_observability_tasks_handles_store_failures(self, client):
-        """GET /system/observability/tasks returns 200 even if store query fails."""
-        with patch('services.memory_client.MemoryClientService.create_connection', side_effect=RuntimeError('store down')):
-            resp = client.get('/system/observability/tasks')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert 'generated_at' in data
-
     # generated_at field on all observability endpoints
 
     def test_observability_tools_includes_generated_at(self, client, db):

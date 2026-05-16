@@ -327,20 +327,6 @@ def observability_token_usage():
         return jsonify({"error": "Failed to retrieve token usage data"}), 500
 
 
-@system_bp.route('/system/observability/tasks', methods=['GET'])
-@require_session
-def observability_tasks():
-    """Task observability stats."""
-    try:
-        result = {
-            'generated_at': _now_iso(),
-        }
-        return jsonify(result), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/tasks error: {e}")
-        return jsonify({"error": "Failed to retrieve task data"}), 500
-
-
 
 @system_bp.route('/system/observability/world-state', methods=['GET'])
 @require_session

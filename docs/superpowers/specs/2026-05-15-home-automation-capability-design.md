@@ -8,7 +8,7 @@
 
 ## Overview
 
-Add a Home Automation capability that integrates with Home Assistant via its REST and WebSocket APIs. HA bridges all major smart home platforms (Matter, Google Home, Alexa, HomeKit, Z-Wave, Zigbee, 2000+ integrations), making it the single integration point for Chalie.
+Add a Home Automation capability that integrates exclusively with Home Assistant via its REST and WebSocket APIs. Chalie talks to HA and HA only — it does not communicate directly with device protocols (MQTT, Zigbee, Z-Wave, Matter, etc.) or third-party cloud APIs (Google Home, Alexa, HomeKit). HA is the sole integration point; any device that HA can see, Chalie can control through HA.
 
 ## Architecture
 
@@ -114,7 +114,7 @@ Persistent WebSocket client using `websocket-client` (synchronous) in a dedicate
 Follows the `email.py` pattern — capability-backed, multi-action, no rich-media.
 
 ```python
-NAME = "home"
+NAME = "home_assistant"
 SUMMARY = (
     "Control smart home devices and automations via the connected "
     "Home Assistant instance. Available when the user asks about "
@@ -192,11 +192,11 @@ TIMEOUT = 30
 2. Check connection: return error dict if not connected
 3. Build tool map from `cap.get_tools()`
 4. Dispatch to handler by `action`
-5. Return via `_skill_tag("home", json.dumps(result), action=action)`
+5. Return via `_skill_tag("home_assistant", json.dumps(result), action=action)`
 
 ### Tool Classification
 
-Add `"home"` to **DISCOVERABLE** list in `user_message_processor.py`. NOT to ALWAYS_AVAILABLE (TKT-411: 9 entries is the safe ceiling; promoting a 10th caused routing degradation).
+Add `"home_assistant"` to **DISCOVERABLE** list in `user_message_processor.py`. NOT to ALWAYS_AVAILABLE (TKT-411: 9 entries is the safe ceiling; promoting a 10th caused routing degradation).
 
 ## Policy Manager Integration
 
@@ -204,19 +204,19 @@ In `backend/services/policy_service.py`:
 
 ```python
 # _CHAT_ALLOW (reads — execute without confirmation):
-"home.list_devices": "allow",
-"home.get_state": "allow",
-"home.list_automations": "allow",
-"home.subscribe_events": "allow",
+"home_assistant.list_devices": "allow",
+"home_assistant.get_state": "allow",
+"home_assistant.list_automations": "allow",
+"home_assistant.subscribe_events": "allow",
 
 # _CHAT_ASK (writes — require user confirmation):
-"home.control": "ask",
-"home.trigger_automation": "ask",
+"home_assistant.control": "ask",
+"home_assistant.trigger_automation": "ask",
 
 # _SUBCONSCIOUS_ALLOW (background worker — reads only):
-"home.list_devices": "allow",
-"home.get_state": "allow",
-"home.list_automations": "allow",
+"home_assistant.list_devices": "allow",
+"home_assistant.get_state": "allow",
+"home_assistant.list_automations": "allow",
 ```
 
 `home.control` and `home.trigger_automation` are excluded from subconscious — destructive actions require explicit user confirmation.
@@ -298,7 +298,7 @@ Added to docker-compose.yml and registered in `ALLOWED_EXTERNAL_SERVICES` in the
 **Conversation**: "What smart home devices do I have set up?"
 
 **Assertions**:
-- `tool_calls` row: `tool_name='home'`, params contains `action='list_devices'`
+- `tool_calls` row: `tool_name='home_assistant'`, params contains `action='list_devices'`
 - LLM response mentions at least 3 device names from seed data
 
 ### 137 — capability-home-get-state.yaml
@@ -308,7 +308,7 @@ Added to docker-compose.yml and registered in `ALLOWED_EXTERNAL_SERVICES` in the
 **Conversation**: "Is the AC in the bedroom on?"
 
 **Assertions**:
-- `tool_calls` row: `tool_name='home'`, params contains `action='get_state'`, `entity_id` contains `bedroom`
+- `tool_calls` row: `tool_name='home_assistant'`, params contains `action='get_state'`, `entity_id` contains `bedroom`
 - LLM response references the bedroom climate state (temperature or heat mode)
 
 ### 138 — capability-home-control.yaml
@@ -318,7 +318,7 @@ Added to docker-compose.yml and registered in `ALLOWED_EXTERNAL_SERVICES` in the
 **Conversation**: "Turn on my living room light"
 
 **Assertions**:
-- `tool_calls` row: `tool_name='home'`, params contains `action='control'`, `service='turn_on'`
+- `tool_calls` row: `tool_name='home_assistant'`, params contains `action='control'`, `service='turn_on'`
 - Mock HA recorded a `POST /api/services/light/turn_on` with `entity_id='light.living_room'`
 
 **Cleanup**: Restore policy defaults.
