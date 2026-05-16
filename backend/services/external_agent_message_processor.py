@@ -1,0 +1,189 @@
+# Copyright 2026 Dylan Grech
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+"""
+ExternalAgentMessageProcessor — handles messages from external agents via MCP.
+
+Lifecycle: one instance per external agent message. Instantiated by the MCP
+server's tool handler, runs a full ACT loop, and optionally enqueues a
+proactive UMP turn to disclose the exchange to the user.
+"""
+
+import logging
+
+from services.message_processor import MessageProcessor
+from services.system_message_prompt import ExternalAgentSystemMessagePrompt
+
+logger = logging.getLogger(__name__)
+
+
+class ExternalAgentMessageProcessor(MessageProcessor):
+    """MessageProcessor subclass for external agent communication.
+
+    Runs a full ACT loop with policy-gated tools. Conversation history
+    is isolated per-agent via dynamic channel naming.
+    """
+
+    ROLE = 'user'
+    JOB = 'external-agent'
+    USAGE_CLASS = 'external_agent'
+    SYSTEM_PROMPT_CLASS = ExternalAgentSystemMessagePrompt
+    MAX_ITERATIONS = 20
+
+    ALWAYS_AVAILABLE: list[str] = [
+        "document",
+        "find_tools",
+        "list",
+        "memory",
+        "read",
+        "review_tool_calls",
+        "review_transcript",
+        "schedule",
+    ]
+    DISCOVERABLE: list[str] = [
+        "browser",
+        "calendar",
+        "code_eval",
+        "contacts",
+        "email",
+        "home_assistant",
+        "news",
+        "programming_docs_search",
+        "search",
+        "weather",
+    ]
+
+    def __init__(
+        self,
+        raw_input: str,
+        agent_name: str,
+        project_or_task_name: str,
+        loop_in_human: bool = False,
+        metadata: dict | None = None,
+    ):
+        super().__init__(raw_input, metadata)
+        self._agent_name = agent_name
+        self._project_or_task_name = project_or_task_name
+        self._loop_in_human = loop_in_human
+        # Captured in store() so postTurn() can reference it without args.
+        self._final_response: str = ''
+        # Dynamic channel per agent — isolates transcript history per agent identity.
+        self.CHANNEL = f"external-agent:{agent_name}"
+
+    def getUserDefinition(self) -> str:
+        return (
+            f"The user is {self._agent_name}, an external agent. "
+            f"This conversation is about: {self._project_or_task_name}."
+        )
+
+    def getUserPrompt(self) -> str:
+        """Build user-message body for one ACT iteration.
+
+        Stripped compared to UMP: no world state, no system awareness,
+        no file tags, no nudge. Keeps: previousMessages, memory seed,
+        current turn, ACT trail.
+        """
+        parts = []
+
+        # Previous Messages
+        prev = self.getPreviousMessages()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
+
+        parts.append('')
+
+        # Memory seed (set by pre_act)
+        if self._memory_seed:
+            parts.append(self._memory_seed)
+
+        # Current turn line
+        parts.append(f"user: {self._raw_input}")
+
+        # Drain pending steers from async subagent completions
+        if self._pending_steers:
+            steers = self._pending_steers[:]
+            self._pending_steers.clear()
+            for steer in steers:
+                self._act_trail.append(steer)
+
+        # ACT loop trail
+        trail = self.getActLoopTrail()
+        if trail:
+            parts.append(trail)
+
+        return '\n'.join(parts)
+
+    def getSystemPrompt(self) -> str:
+        """Build system prompt with template variables substituted."""
+        body = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        body = self._substitute_provider_placeholders(body)
+
+        user_name = self._resolve_user_name()
+
+        body = body.format(
+            user_name=user_name,
+            agent_name=self._agent_name,
+            project_or_task_name=self._project_or_task_name,
+        )
+        return f"{self.getUserDefinition()}\n\n{body}"
+
+    def store(self, llm_response: str) -> None:
+        """Capture the final response text before delegating to the base store."""
+        self._final_response = llm_response or ''
+        super().store(llm_response)
+
+    def _resolve_user_name(self) -> str:
+        """Get the user's first name from data_graph, falling back to 'the user'."""
+        try:
+            from services.data_graph_service import get_data_graph_service
+            dgs = get_data_graph_service()
+            rows = dgs.fetch(kinds=['system'])
+            for row in rows:
+                key = row['key'] if hasattr(row, '__getitem__') else getattr(row, 'key', None)
+                val = row['value'] if hasattr(row, '__getitem__') else getattr(row, 'value', None)
+                if key == 'user_summary' and val:
+                    first_word = val.split()[0] if val else ''
+                    return first_word if first_word else 'the user'
+        except Exception:
+            pass
+        return 'the user'
+
+    def postTurn(self) -> None:
+        """After ACT loop completes, optionally enqueue user disclosure.
+
+        When loop_in_human=True, publishes a summary of the agent exchange
+        to the user channel via OutputService.enqueue_proactive — the same
+        pattern used by subagent.py _spawn_return_processor.
+
+        response_text is read from self._final_response, captured in store()
+        before postTurn() is called by the base send() method.
+        """
+        if not self._loop_in_human:
+            return
+
+        disclosure_prompt = (
+            f"An external agent ({self._agent_name}) working on "
+            f"'{self._project_or_task_name}' communicated with you. "
+            f"Their message: \"{self._raw_input[:500]}\"\n"
+            f"Your response: \"{self._final_response[:500]}\"\n\n"
+            f"Disclose this to the user and keep them in the loop."
+        )
+
+        try:
+            from services.output_service import OutputService
+            OutputService().enqueue_proactive(
+                topic='user',
+                response=disclosure_prompt,
+                source='external_agent',
+            )
+            logger.info(
+                "[EAMP] loop_in_human: enqueued user disclosure for agent=%s project=%s",
+                self._agent_name, self._project_or_task_name,
+            )
+        except Exception as e:
+            logger.warning("[EAMP] Failed to enqueue user disclosure: %s", e)

@@ -352,6 +352,9 @@ def main():
             logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
     _warmup()
 
+    # MCP Server for external agent communication (TKT-438)
+    _try_register(manager, "mcp-server", "mcp_server.server", "run_mcp_server")
+
     # Register the Flask API worker (this is the main thread's HTTP server)
     def _flask_worker():
         from api import create_app
