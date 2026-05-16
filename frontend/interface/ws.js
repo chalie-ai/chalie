@@ -183,8 +183,10 @@ export class WSClient {
    *   onDone?:      (data: object) => void,
    *   onSteerSent?: (text: string) => void,
    * }} callbacks
+   * @param {string[]} [imageIds]
+   * @param {Array<{name: string, data: string, content_type: string}>} [files]
    */
-  send(text, source, callbacks = {}, imageIds = []) {
+  send(text, source, callbacks = {}, imageIds = [], files = []) {
     // If a chat is already in-flight, check if this is a steer (empty callbacks = steer)
     if (this._chatCallbacks) {
       const isSteer = !callbacks.onMessage && !callbacks.onDone;
@@ -211,6 +213,7 @@ export class WSClient {
 
     const payload = { type: 'chat', text, source };
     if (imageIds?.length) payload.image_ids = imageIds;
+    if (files?.length) payload.files = files;
     this._send(payload);
   }
 

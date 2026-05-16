@@ -233,142 +233,6 @@ def _parse_meta(meta) -> dict:
     return meta or {}
 
 
-def _poll_until_terminal(svc, doc_id: str, deadline: float) -> str:
-    """Poll a document until status is 'ready' / 'failed' or the deadline expires."""
-    import time as _time
-    doc = svc.get_document(doc_id)
-    status = doc.get('status', '') if doc else ''
-    while status not in ('ready', 'failed') and _time.monotonic() < deadline:
-        _time.sleep(0.2)
-        doc = svc.get_document(doc_id)
-        if doc:
-            status = doc.get('status', '')
-    return status
-
-
-_UPLOAD_DEADLINE_S = 300.0
-
-
-def _image_ocr_tag(doc: dict, image_id: str) -> str:
-    """Format a ready-image tag with OCR text."""
-    ocr = (_parse_meta(doc.get('extracted_metadata')).get('ocr_text') or '').strip()
-    body = ocr[:500] if ocr else 'no text detected'
-    return f"[image(id={image_id})]{body}[end:image]"
-
-
-def _resolve_image_tag(svc, image_id: str, deadline: float, request_id: str) -> str:
-    """Resolve one image_id to a structured tag. Never silently drops context."""
-    doc = svc.get_document(image_id)
-    if not doc:
-        logger.warning(f"[WS] file_tags image not found image_id={image_id} request_id={request_id}")
-        return f"[image(id={image_id})]image not found[end:image]"
-
-    status = doc.get('status', '')
-    if status not in ('ready', 'failed'):
-        status = _poll_until_terminal(svc, image_id, deadline)
-
-    if status == 'ready':
-        return _image_ocr_tag(svc.get_document(image_id) or doc, image_id)
-    if status == 'failed':
-        logger.warning(f"[WS] file_tags image analysis failed image_id={image_id} request_id={request_id}")
-        return f"[image(id={image_id})]analysis failed[end:image]"
-    logger.warning(f"[WS] file_tags image analysis timed out image_id={image_id} status={status} request_id={request_id}")
-    return f"[image(id={image_id})]timeout of {int(_UPLOAD_DEADLINE_S)} seconds exceeded[end:image]"
-
-
-def _format_ready_upload_tag(svc, doc_id: str, original_name: str, fallback_text: str, source_type: str) -> str:
-    """Format the tag for a ready recent-upload. Re-reads for the final committed row."""
-    final = svc.get_document(doc_id) or {}
-    if source_type == 'chat_image':
-        return _image_ocr_tag(final, doc_id)
-    final_text = (final.get('clean_text') or fallback_text or '').strip()
-    body = final_text[:2000] if final_text else 'no content extracted'
-    return f"[document(id={doc_id}, name={original_name})]{body}[end:document]"
-
-
-def _fetch_recent_upload_row(db):
-    """SELECT the most recent upload/chat_image within the last 120 seconds."""
-    with db.connection() as conn:
-        return conn.execute(
-            """
-            SELECT id, original_name, status, clean_text, source_type
-            FROM documents
-            WHERE source_type IN ('upload', 'chat_image')
-              AND deleted_at IS NULL
-              AND created_at >= datetime('now', '-120 seconds')
-            ORDER BY created_at DESC
-            LIMIT 1
-            """,
-        ).fetchone()
-
-
-def _resolve_recent_upload(db, svc, request_id: str):
-    """Return (tag, doc_id_if_injected) for the recent-upload fallback, or (None, None)."""
-    import time as _time
-    try:
-        row = _fetch_recent_upload_row(db)
-    except Exception as e:
-        logger.warning(f"[WS] file_tags recent-upload heuristic error request_id={request_id}: {e}")
-        return None, None
-    if not row:
-        return None, None
-
-    doc_id, original_name, doc_status, clean_text, source_type = row
-    if doc_status not in ('ready', 'failed'):
-        doc_status = _poll_until_terminal(svc, doc_id, _time.monotonic() + _UPLOAD_DEADLINE_S)
-
-    if doc_status == 'ready':
-        return _format_ready_upload_tag(svc, doc_id, original_name, clean_text, source_type), doc_id
-
-    tag_kind = 'image' if source_type == 'chat_image' else 'document'
-    if tag_kind == 'image':
-        params = f"id={doc_id}"
-    else:
-        params = f"id={doc_id}, name={original_name}"
-
-    if doc_status == 'failed':
-        logger.warning(f"[WS] file_tags recent upload failed doc_id={doc_id} source_type={source_type} request_id={request_id}")
-        return f"[{tag_kind}({params})]processing failed[end:{tag_kind}]", None
-    logger.warning(f"[WS] file_tags recent upload timed out doc_id={doc_id} source_type={source_type} status={doc_status} request_id={request_id}")
-    return f"[{tag_kind}({params})]timeout of {int(_UPLOAD_DEADLINE_S)} seconds exceeded[end:{tag_kind}]", None
-
-
-def _resolve_file_tags(image_ids: list, request_id: str) -> list:
-    """
-    Build file_tags for a chat turn. Returns structured strings to be appended
-    to metadata['file_tags'] — consumed by UserMessageProcessor.getUserPrompt.
-
-    All images share a single deadline so N slow images cannot block a turn
-    for N × deadline. When image_ids is empty, the most recent upload/chat_image
-    (within 120 s) falls back in — covers paste/drop where the chat turn is
-    sent before the upload XHR completes. Every failure path emits a tag.
-    """
-    import time as _time
-    from services.document_service import DocumentService
-    from services.database_service import get_shared_db_service
-
-    db = get_shared_db_service()
-    svc = DocumentService(db)
-
-    tags = []
-    doc_ids_injected = []
-
-    images_deadline = _time.monotonic() + _UPLOAD_DEADLINE_S
-    for image_id in image_ids:
-        tags.append(_resolve_image_tag(svc, image_id, images_deadline, request_id))
-
-    if not image_ids:
-        tag, injected_id = _resolve_recent_upload(db, svc, request_id)
-        if tag:
-            tags.append(tag)
-            if injected_id:
-                doc_ids_injected.append(injected_id)
-
-    logger.info(
-        f"[WS] file_tags injected request_id={request_id} "
-        f"tags={len(tags)} image_ids={image_ids} doc_ids={doc_ids_injected}"
-    )
-    return tags
 
 
 def _fetch_tool_calls_for_transcript_ids(transcript_ids: list) -> list[dict]:
@@ -578,8 +442,9 @@ def _handle_chat(ws, store, msg, active_request=None):
     """Process a chat message — replaces the POST /chat SSE endpoint."""
     text = (msg.get('text') or '').strip()
     image_ids = (msg.get('image_ids') or [])[:3]  # max 3 images
+    files = (msg.get('files') or [])[:5]
 
-    if not text and not image_ids:
+    if not text and not image_ids and not files:
         return  # Nothing to process — silently drop
 
     # If user sent only images with no text, provide a sensible fallback.
@@ -632,17 +497,9 @@ def _handle_chat(ws, store, msg, active_request=None):
                 'exchange_id': request_id,
                 'source': source,
                 'image_ids': image_ids,
+                'files': files,
                 'channel': 'user',
             }
-
-            # Resolve file context tags — blocks until upload processing
-            # completes (up to _UPLOAD_DEADLINE_S). Injects a recent-upload
-            # document heuristic when applicable. MUST run before
-            # UserMessageProcessor is constructed so that getUserPrompt()
-            # picks up file_tags on its first call.
-            _file_tags_t0 = time.time()
-            metadata['file_tags'] = _resolve_file_tags(image_ids, request_id)
-            _file_tags_wait_ms = int((time.time() - _file_tags_t0) * 1000)
 
             def _on_narration(text, step=0):
                 """Publish per-iteration synthesis text to the per-request SSE channel."""
@@ -696,10 +553,6 @@ def _handle_chat(ws, store, msg, active_request=None):
                 on_tool_event=_on_tool_event,
             )
             proc.set_turn_start(turn_start)
-            try:
-                proc._metrics.add_stage_ms('file_tags_wait', _file_tags_wait_ms)
-            except Exception:
-                pass
             response = proc.send(request_id=request_id)
 
             metrics = proc._metrics.snapshot()

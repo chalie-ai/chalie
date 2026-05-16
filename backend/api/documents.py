@@ -186,8 +186,8 @@ def _run_upload_extraction(doc_id: str):
 
     artifact_count = create_document_artifacts(doc_id, text)
 
-    # Write clean_text so websocket._resolve_file_tags can inject content into
-    # the LLM prompt. Merge with prior metadata to avoid clobbering concurrent
+    # Write clean_text so document(action='view') can return full text.
+    # Merge with prior metadata to avoid clobbering concurrent
     # synthesis/classification writes.
     svc.update_extracted_metadata(
         doc_id,

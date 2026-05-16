@@ -14,6 +14,11 @@ export class ImageAttach {
     // [{id: string, element: HTMLElement}]
     this._attachedImages = [];
 
+    // [{name: string, data: string, content_type: string}]
+    // Base64 file data collected alongside the /chat/image upload, consumed once
+    // per send by getPendingFiles() and forwarded in the WS payload.
+    this._pendingFiles = [];
+
     // image_id → {element: HTMLElement, timeout: number}
     // Populated by handleFile; cleared by handleImageReady or timeout.
     this._pendingImageAnalysis = new Map();
@@ -52,6 +57,18 @@ export class ImageAttach {
       return;
     }
     const thumbEl = this._addImagePreview(file);
+
+    // Read file as base64 for the WS payload (in parallel with the REST upload).
+    const fileReader = new FileReader();
+    fileReader.onload = () => {
+      const base64 = fileReader.result.split(',')[1];
+      this._pendingFiles.push({
+        name: file.name,
+        data: base64,
+        content_type: file.type || 'application/octet-stream',
+      });
+    };
+    fileReader.readAsDataURL(file);
 
     const formData = new FormData();
     formData.append('image', file);
@@ -132,6 +149,18 @@ export class ImageAttach {
   }
 
   /**
+   * Returns base64 file entries collected since the last send, then clears the
+   * internal list.  Each entry is forwarded in the WS `files` payload field.
+   *
+   * @returns {Array<{name: string, data: string, content_type: string}>}
+   */
+  getPendingFiles() {
+    const files = [...this._pendingFiles];
+    this._pendingFiles = [];
+    return files;
+  }
+
+  /**
    * Clears preview strip and cancels pending timeouts.
    *
    * Called when a message is sent or the user navigates away.  Cancels any
@@ -146,6 +175,7 @@ export class ImageAttach {
     this._pendingImageAnalysis.clear();
 
     this._attachedImages = [];
+    this._pendingFiles = [];
     const strip = document.getElementById('imagePreview');
     if (strip) {
       strip.innerHTML = '';

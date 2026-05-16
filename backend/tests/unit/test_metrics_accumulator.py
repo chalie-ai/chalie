@@ -211,9 +211,9 @@ class TestMetricsAccumulator:
 
     def test_add_stage_ms_external_record(self):
         acc = MetricsAccumulator()
-        acc.add_stage_ms("file_tags_wait", 250)
+        acc.add_stage_ms("external_stage", 250)
         snap = acc.snapshot()
-        assert snap["timing"]["stages"]["file_tags_wait"] == 250
+        assert snap["timing"]["stages"]["external_stage"] == 250
         assert snap["timing"]["pre_llm_ms"] == 250
 
     def test_merge_absorbs_llm_time(self):
