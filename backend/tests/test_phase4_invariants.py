@@ -109,6 +109,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "document",
     "email",
     "find_tools",
+    "home",
     "list",
     "memory",
     "news",
@@ -126,8 +127,8 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
 })
 
 
-def test_abilities_directory_has_exactly_21_non_underscore_modules():
-    """abilities/ contains exactly the 21 dispatchable top-level modules.
+def test_abilities_directory_has_exactly_22_non_underscore_modules():
+    """abilities/ contains exactly the 22 dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
@@ -155,7 +156,7 @@ def test_abilities_directory_has_exactly_21_non_underscore_modules():
         f"Expected ability modules are missing from abilities/: {sorted(removed)}. "
         "Remove them from _EXPECTED_ABILITY_MODULE_STEMS if intentional."
     )
-    assert len(walked) == 21
+    assert len(walked) == 22
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +191,7 @@ _DEFAULT_ALWAYS = frozenset({
 # Scheduled or Subagent processors — those run headless without personal
 # data access.
 _DEFAULT_DISCOVERABLE = frozenset({
-    "browser", "calendar", "code_eval", "contacts", "email",
+    "browser", "calendar", "code_eval", "contacts", "email", "home",
     "news", "programming_docs_search", "search", "subagent", "weather",
 })
 
@@ -208,7 +209,7 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     # nested subagents. email/calendar/contacts remain discoverable for DMN
     # — background reflection needs access to personal data context.
     "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
-                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent"}),
+                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent", "home"}),
     # ScheduledPromptProcessor — same tool surface as UMP. Scheduled prompts
     # act on the user's behalf with full capabilities.
     "ScheduledPromptProcessor": (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
@@ -218,7 +219,7 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     # Subagent does not get capability tools — subagents are task-scoped, not
     # user-personal-data-scoped.
     "SubagentProcessor":         (frozenset(), frozenset(
-        (set(_DEFAULT_DISCOVERABLE) - {"subagent"} - _CAPABILITY_TOOLS)
+        (set(_DEFAULT_DISCOVERABLE) - {"subagent", "home"} - _CAPABILITY_TOOLS)
         | {"document", "list", "memory", "read", "review_tool_calls", "schedule"}
     )),
     # PMP owns save_pattern + save_graph today; nothing discoverable.
