@@ -45,7 +45,6 @@ export class TaskStrip {
   async loadActiveTasks() {
     try {
       const schedData = await this._api._get('/scheduler?status=pending').catch((e) => { if (e?.message === 'AUTH') throw e; return {}; });
-      const tasks = [];
       const reminders = (schedData.items || []).filter(
         r => r.status === 'pending' && r.due_at
       );
@@ -156,6 +155,5 @@ export class TaskStrip {
       });
     });
 
-    });
   }
 }
