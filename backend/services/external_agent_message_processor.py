@@ -178,10 +178,12 @@ class ExternalAgentMessageProcessor(MessageProcessor):
 
         def _run():
             from services.output_service import OutputService
-            from services.user_message_processor import ScheduledPromptProcessor
+            from services.user_message_processor import UserMessageProcessor
 
             try:
-                response_text = ScheduledPromptProcessor(raw_input=disclosure_input).send()
+                proc = UserMessageProcessor(raw_input=disclosure_input)
+                proc.SKIP_INPUT_ROW = True
+                response_text = proc.send()
                 response_text = (response_text or '').strip()
                 if not response_text:
                     response_text = (
