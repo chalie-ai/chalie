@@ -157,36 +157,55 @@ class ExternalAgentMessageProcessor(MessageProcessor):
         return 'the user'
 
     def postTurn(self) -> None:
-        """After ACT loop completes, optionally enqueue user disclosure.
+        """After ACT loop completes, optionally trigger user disclosure.
 
-        When loop_in_human=True, publishes a summary of the agent exchange
-        to the user channel via OutputService.enqueue_proactive — the same
-        pattern used by subagent.py _spawn_return_processor.
-
-        response_text is read from self._final_response, captured in store()
-        before postTurn() is called by the base send() method.
+        When loop_in_human=True, spawns a ScheduledPromptProcessor (UMP with
+        hidden input + full personality) so the disclosure goes through the
+        normal Chalie voice — not a raw dump.
         """
         if not self._loop_in_human:
             return
 
-        disclosure_prompt = (
-            f"An external agent ({self._agent_name}) working on "
-            f"'{self._project_or_task_name}' communicated with you. "
-            f"Their message: \"{self._raw_input[:500]}\"\n"
-            f"Your response: \"{self._final_response[:500]}\"\n\n"
-            f"Disclose this to the user and keep them in the loop."
+        import threading
+
+        disclosure_input = (
+            f"An external agent called '{self._agent_name}' just contacted you "
+            f"about '{self._project_or_task_name}'. "
+            f"Here's what they said:\n\n\"{self._raw_input[:500]}\"\n\n"
+            f"You replied:\n\n\"{self._final_response[:500]}\"\n\n"
+            f"Let the user know about this exchange in your own words."
         )
 
-        try:
+        def _run():
             from services.output_service import OutputService
-            OutputService().enqueue_proactive(
-                topic='user',
-                response=disclosure_prompt,
-                source='external_agent',
-            )
-            logger.info(
-                "[EAMP] loop_in_human: enqueued user disclosure for agent=%s project=%s",
-                self._agent_name, self._project_or_task_name,
-            )
-        except Exception as e:
-            logger.warning("[EAMP] Failed to enqueue user disclosure: %s", e)
+            from services.user_message_processor import ScheduledPromptProcessor
+
+            try:
+                response_text = ScheduledPromptProcessor(raw_input=disclosure_input).send()
+                response_text = (response_text or '').strip()
+                if not response_text:
+                    response_text = (
+                        f"{self._agent_name} reached out about "
+                        f"'{self._project_or_task_name}' — check your transcript."
+                    )
+            except Exception as exc:
+                logger.warning("[EAMP] Disclosure UMP failed: %s", exc, exc_info=True)
+                response_text = (
+                    f"{self._agent_name} sent a message about "
+                    f"'{self._project_or_task_name}' but I couldn't summarize it."
+                )
+
+            try:
+                OutputService().enqueue_proactive(
+                    topic='user',
+                    response=response_text,
+                    source='external_agent',
+                )
+                logger.info(
+                    "[EAMP] loop_in_human: disclosure delivered for agent=%s project=%s",
+                    self._agent_name, self._project_or_task_name,
+                )
+            except Exception as exc:
+                logger.warning("[EAMP] Disclosure delivery failed: %s", exc, exc_info=True)
+
+        threading.Thread(target=_run, daemon=True, name="eamp-disclosure").start()
