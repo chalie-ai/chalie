@@ -53,7 +53,7 @@ _CHAT_ALLOW: dict[str, State] = {
     "programming_docs_search": "allow",
     "read": "allow",
     "review_tool_calls": "allow", "review_transcript": "allow",
-    "schedule.create": "allow", "schedule.list": "allow", "schedule.search": "allow",
+    "schedule.cancel": "allow", "schedule.create": "allow", "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
     "weather": "allow",
     # Reversible writes
@@ -80,7 +80,6 @@ _CHAT_ASK: dict[str, State] = {
     "home.trigger_automation": "ask",
     "list.delete": "ask",
     "memory.forget": "ask",
-    "schedule.cancel": "ask",
 }
 
 _SUBCONSCIOUS_ALLOW: dict[str, State] = {
