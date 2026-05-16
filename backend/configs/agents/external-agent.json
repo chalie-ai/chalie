@@ -1,0 +1,11 @@
+{
+  "temperature": 0.4,
+  "timeout": 120,
+  "format": "json",
+  "append_mode": true,
+  "max_act_iterations": 20,
+  "act_cumulative_timeout": 120.0,
+  "act_per_action_timeout": 30.0,
+  "act_repetition_similarity_threshold": 0.92,
+  "context_budget_tokens": 16000
+}
