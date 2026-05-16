@@ -60,6 +60,7 @@ _CHAT_ALLOW: dict[str, State] = {
     "email.draft": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
+    "code_eval": "allow",
     "memory.store": "allow",
     "save_graph": "allow", "save_pattern": "allow",
     "subagent": "allow",
@@ -69,7 +70,6 @@ _CHAT_ALLOW: dict[str, State] = {
 _CHAT_ASK: dict[str, State] = {
     "browser.interact": "ask",
     "calendar.update_event": "ask",
-    "code_eval": "ask",
     "document.delete": "ask",
     "email.forward": "ask",
     "email.manage": "ask",

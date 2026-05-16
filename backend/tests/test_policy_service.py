@@ -90,9 +90,9 @@ class TestDefaults:
         defaults = get_defaults()
         assert defaults["email.manage"]["subconscious"] == "deny"
 
-    def test_defaults_code_eval_is_ask_in_chat(self):
+    def test_defaults_code_eval_is_allow_in_chat(self):
         defaults = get_defaults()
-        assert defaults["code_eval"]["chat"] == "ask"
+        assert defaults["code_eval"]["chat"] == "allow"
 
     def test_defaults_code_eval_is_deny_in_subconscious(self):
         defaults = get_defaults()
