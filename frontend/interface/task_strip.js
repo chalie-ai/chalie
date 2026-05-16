@@ -130,7 +130,6 @@ export class TaskStrip {
       const id  = r.id;
 
       html += `<div class="task-drawer__item task-drawer__item--reminder">
-        <span class="task-drawer__kind-dot task-drawer__kind-dot--reminder"></span>
         <span class="task-drawer__msg">${escHtml(msg)}</span>
         ${due ? `<span class="task-drawer__due">${escHtml(due)}</span>` : ''}
       </div>`;
