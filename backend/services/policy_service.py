@@ -4,7 +4,7 @@ Policy Service — per-action permission control (allow / ask / deny).
 Enforcement point: ActDispatcherService.dispatch_action() calls
 PolicyService.check() between handler lookup and execution.
 
-Three independent contexts: chat, subagent, subconscious.
+Four independent contexts: chat, subagent, subconscious, external_agent.
 Three states: allow (proceed), ask (block for user confirmation), deny (reject).
 """
 
@@ -18,15 +18,16 @@ from services.time_utils import utc_now
 logger = logging.getLogger(__name__)
 
 State = Literal["allow", "ask", "deny"]
-Context = Literal["chat", "subagent", "subconscious"]
+Context = Literal["chat", "subagent", "subconscious", "external_agent"]
 
 VALID_STATES: set[str] = {"allow", "ask", "deny"}
-VALID_CONTEXTS: set[str] = {"chat", "subagent", "subconscious"}
+VALID_CONTEXTS: set[str] = {"chat", "subagent", "subconscious", "external_agent"}
 
 USAGE_CLASS_TO_CONTEXT: dict[str, Context] = {
     "chat": "chat",
     "subagent": "subagent",
     "subconscious": "subconscious",
+    "external_agent": "external_agent",
 }
 
 # ── Default policy matrix ────────────────────────────────────────────────────
@@ -111,6 +112,56 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "timer": "allow",
 }
 
+_EXTERNAL_AGENT_ALLOW: dict[str, State] = {
+    # Reads
+    "browser.render": "allow", "browser.screenshot": "allow", "browser.monitor": "allow",
+    "calendar.list_events": "allow", "calendar.get_event": "allow",
+    "contacts.list": "allow", "contacts.get": "allow",
+    "document.search": "allow", "document.list": "allow", "document.view": "allow",
+    "email.search": "allow", "email.read": "allow",
+    "find_tools": "allow",
+    "home.get_state": "allow",
+    "home.list_automations": "allow",
+    "home.list_devices": "allow",
+    "home.subscribe_events": "allow",
+    "list.list_all": "allow", "list.view": "allow",
+    "memory.recall": "allow", "memory.reflect": "allow",
+    "news": "allow",
+    "programming_docs_search": "allow",
+    "read": "allow",
+    "review_tool_calls": "allow", "review_transcript": "allow",
+    "schedule.list": "allow", "schedule.search": "allow",
+    "search": "allow",
+    "weather": "allow",
+    # Reversible writes
+    "document.create": "allow", "document.restore": "allow",
+    "list.create": "allow", "list.add": "allow", "list.check": "allow",
+    "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
+    "memory.store": "allow",
+    "save_graph": "allow", "save_pattern": "allow",
+    "timer": "allow",
+}
+
+_EXTERNAL_AGENT_DENY: dict[str, State] = {
+    # Sensitive actions — no user to confirm, so deny by default
+    "browser.interact": "deny",
+    "calendar.update_event": "deny",
+    "code_eval": "deny",
+    "document.delete": "deny",
+    "email.forward": "deny",
+    "email.manage": "deny",
+    "email.reply": "deny",
+    "email.send": "deny",
+    "email.draft": "deny",
+    "home.control": "deny",
+    "home.trigger_automation": "deny",
+    "list.delete": "deny",
+    "memory.forget": "deny",
+    "schedule.create": "deny",
+    "schedule.cancel": "deny",
+    "subagent": "deny",
+}
+
 
 def _build_defaults() -> dict[str, dict[Context, State]]:
     """Build the full default matrix from the ability registry."""
@@ -132,6 +183,7 @@ def _build_defaults() -> dict[str, dict[Context, State]]:
             "chat": _CHAT_ALLOW.get(action_id, _CHAT_ASK.get(action_id, "ask")),
             "subagent": _CHAT_ALLOW.get(action_id, _CHAT_ASK.get(action_id, "ask")),
             "subconscious": _SUBCONSCIOUS_ALLOW.get(action_id, "deny"),
+            "external_agent": _EXTERNAL_AGENT_ALLOW.get(action_id, _EXTERNAL_AGENT_DENY.get(action_id, "deny")),
         }
     return defaults
 
