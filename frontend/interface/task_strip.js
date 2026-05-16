@@ -125,7 +125,7 @@ export class TaskStrip {
 
     // Render pending reminders
     for (const r of reminders) {
-      const msg = (r.message || '').slice(0, 80);
+      const msg = r.message || '';
       const due = r.due_at ? relativeTime(r.due_at) : '';
       const id  = r.id;
 

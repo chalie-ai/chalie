@@ -29,7 +29,8 @@ const CHALIE_GLYPH = `<svg class="sender-glyph" viewBox="0 0 18 18" fill="none" 
   <circle class="sender-glyph__dot" cx="11" cy="2" r="0.9" fill="currentColor" opacity="0.65"></circle>
 </svg>`;
 
-const USER_GLYPH = `<svg class="sender-glyph" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+const USER_GLYPH = `<svg class="sender-glyph" viewBox="0 0 18 18" fill="none" role="img" aria-label="You said">
+  <title>You said</title>
   <path d="M9 2 L11 7 L16 9 L11 11 L9 16 L7 11 L2 9 L7 7 Z" fill="currentColor" opacity="0.85"></path>
 </svg>`;
 

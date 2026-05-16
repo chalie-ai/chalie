@@ -2428,20 +2428,23 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 }
 
 .loading-overlay__dot {
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: var(--violet);
-  animation: glow 2s ease-in-out infinite;
-  box-shadow: 0 0 12px var(--violet), 0 0 24px rgba(138, 92, 255, 0.2);
+  background: var(--violet, #8A5CFF);
+  animation: loadingGlow 2s ease-in-out infinite;
+}
+
+@keyframes loadingGlow {
+  0%, 100% { box-shadow: 0 0 12px var(--violet, #8A5CFF), 0 0 24px rgba(138, 92, 255, 0.3); }
+  50%      { box-shadow: 0 0 24px var(--violet, #8A5CFF), 0 0 48px rgba(138, 92, 255, 0.45); }
 }
 
 .loading-overlay__text {
-  color: var(--text-secondary);
+  color: var(--text-secondary, #888);
   font-size: 15px;
   font-weight: 400;
   letter-spacing: 0.02em;
-  animation: loadingTextFadeIn 400ms ease 400ms both;
 }
 
 .loading-overlay__skip {
@@ -2704,9 +2707,10 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   flex: 1;
   font-size: 13px;
   color: var(--text-primary);
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   min-width: 0;
 }
 

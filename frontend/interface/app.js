@@ -322,7 +322,7 @@ class ChalieApp {
 
       // Settings button → brain dashboard
       document.getElementById('settingsBtn')?.addEventListener('click', () => {
-        window.open('/brain/', '_blank');
+        window.open('/brain/', 'chalie-brain');
       });
 
       // Connect WebSocket and drift event router
@@ -735,6 +735,14 @@ class ChalieApp {
         attachBtn.classList.remove('active');
       }
     });
+
+    // Close on chat scroll (body/window scroll, not a container element)
+    window.addEventListener('scroll', () => {
+      if (!menu.classList.contains('hidden')) {
+        menu.classList.add('hidden');
+        attachBtn.classList.remove('active');
+      }
+    }, { passive: true });
 
     // "Attach Document" → upload dialog
     menu.querySelector('[data-action="document"]')?.addEventListener('click', () => {
