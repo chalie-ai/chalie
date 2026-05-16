@@ -68,9 +68,9 @@ const PanelCognition = (() => {
     const res = await BrainApp.apiFetch(`/system/observability/records?${params}`);
     if (!res.ok) throw new Error('fetch failed');
     const data = await res.json();
-    _memoryRecords = data.records || [];
+    _memoryRecords = data.rows || [];
     _memoryHasMore = data.has_more || false;
-    _data.memoryTs = data.timestamp;
+    _data.memoryTs = data.generated_at;
   }
 
   // ── Tools ──
@@ -83,12 +83,11 @@ const PanelCognition = (() => {
   }
 
   // ── Working On ──
-  let _tasks = [];
+  let _selfModel = {};
   async function _fetchWorking() {
-    const res = await BrainApp.apiFetch('/system/observability/records?source=tasks');
+    const res = await BrainApp.apiFetch('/system/observability/self-model');
     if (!res.ok) throw new Error('fetch failed');
-    const data = await res.json();
-    _tasks = data.records || [];
+    _selfModel = await res.json();
   }
 
   // ── World State ──
@@ -102,10 +101,14 @@ const PanelCognition = (() => {
 
   // ── Personality ──
   let _personality = { warmth: 0, mood: 0, expressiveness: 0, curiosity: 0, humor: 0 };
+  let _personalityVoice = '';
   async function _fetchPersonality() {
     const res = await BrainApp.apiFetch('/settings/personality');
     if (!res.ok) throw new Error('fetch failed');
-    _personality = await res.json();
+    const data = await res.json();
+    const t = data.tuple || [0, 0, 0, 0, 0];
+    _personality = { warmth: t[0], mood: t[1], expressiveness: t[2], curiosity: t[3], humor: t[4] };
+    _personalityVoice = data.voice || '';
   }
 
   // ── Errors ──
@@ -177,22 +180,39 @@ const PanelCognition = (() => {
   function _renderTools(el) {
     if (_tools.length === 0) { el.innerHTML = '<div class="empty-state"><p>No tools loaded.</p></div>'; return; }
     el.innerHTML = `<table class="records-table">
-      <thead><tr><th>Name</th><th>Type</th><th>Calls</th><th>Last Used</th></tr></thead>
+      <thead><tr><th>Name</th><th>Calls</th><th>Last Used</th></tr></thead>
       <tbody>${_tools.map(t => `<tr>
-        <td class="key-cell">${BrainApp.escapeHtml(t.name || '')}</td>
-        <td><span class="badge badge-muted">${BrainApp.escapeHtml(t.type || 'tool')}</span></td>
-        <td>${t.call_count ?? '—'}</td>
-        <td>${BrainApp.escapeHtml(t.last_used || '—')}</td>
+        <td class="key-cell">${BrainApp.escapeHtml(t.tool_name || '')}</td>
+        <td>${t.count ?? '—'}</td>
+        <td>${BrainApp.escapeHtml(t.last_used_at || '—')}</td>
       </tr>`).join('')}</tbody>
     </table>`;
   }
 
   function _renderWorking(el) {
-    if (_tasks.length === 0) { el.innerHTML = '<div class="empty-state"><p>No active tasks.</p></div>'; return; }
-    el.innerHTML = `<div class="task-cards">${_tasks.map(t => `<div class="task-card">
-      <div class="task-title">${BrainApp.escapeHtml(t.key || t.title || '')}</div>
-      <div class="task-meta">${BrainApp.escapeHtml(t.value || t.meta || '')}</div>
-    </div>`).join('')}</div>`;
+    const ep = _selfModel.epistemic || {};
+    const op = _selfModel.operational || {};
+    const noteworthy = _selfModel.noteworthy || [];
+    const pressure = op.memory_pressure || {};
+    const threads = op.thread_health || {};
+
+    let html = `<div class="stat-grid">
+      <div class="stat-card"><div class="stat-value">${ep.context_warmth ?? '—'}</div><div class="stat-label">Context Warmth</div></div>
+      <div class="stat-card"><div class="stat-value">${ep.working_memory_depth ?? '—'}</div><div class="stat-label">Working Memory Depth</div></div>
+      <div class="stat-card"><div class="stat-value">${pressure.episode_count ?? '—'}</div><div class="stat-label">Episodes</div></div>
+      <div class="stat-card"><div class="stat-value">${threads.active ?? '—'}/${threads.total ?? '—'}</div><div class="stat-label">Threads Active</div></div>
+    </div>`;
+
+    if (noteworthy.length > 0) {
+      html += `<h4 class="section-head">Noteworthy</h4><div class="error-list">${noteworthy.map(n => `<div class="error-item">
+        <span class="badge ${n.severity >= 0.7 ? 'badge-danger' : n.severity >= 0.3 ? 'badge-warning' : 'badge-muted'}">${BrainApp.escapeHtml(String(n.severity ?? ''))}</span>
+        <span class="error-msg">${BrainApp.escapeHtml(n.signal || '')}</span>
+      </div>`).join('')}</div>`;
+    } else {
+      html += `<div class="empty-state"><p>All systems nominal.</p></div>`;
+    }
+
+    el.innerHTML = html;
   }
 
   function _renderWorld(el) {
@@ -221,11 +241,12 @@ const PanelCognition = (() => {
     </div>`;
 
     document.getElementById('savePersonalityBtn')?.addEventListener('click', async () => {
-      const body = {};
-      el.querySelectorAll('.personality-range').forEach(r => { body[r.dataset.key] = Number(r.value); });
+      const vals = {};
+      el.querySelectorAll('.personality-range').forEach(r => { vals[r.dataset.key] = Number(r.value); });
+      const tuple = [vals.warmth || 0, vals.mood || 0, vals.expressiveness || 0, vals.curiosity || 0, vals.humor || 0];
       try {
-        const res = await BrainApp.apiFetch('/settings/personality', { method: 'PUT', body: JSON.stringify(body) });
-        if (res.ok) { _personality = body; BrainApp.showToast('Personality saved', 'success'); }
+        const res = await BrainApp.apiFetch('/settings/personality', { method: 'PUT', body: JSON.stringify({ tuple }) });
+        if (res.ok) { _personality = vals; BrainApp.showToast('Personality saved', 'success'); }
         else BrainApp.showToast('Failed to save', 'error');
       } catch { BrainApp.showToast('Network error', 'error'); }
     });
@@ -241,8 +262,26 @@ const PanelCognition = (() => {
 
   function _renderUsage(el) {
     const windows = ['hour', 'day', 'week', 'month', 'lifetime'];
-    const summary = _usage.summary || [];
-    const chart = _usage.chart || [];
+    const rawSummary = _usage.summary || {};
+    const entries = _usage.entries || [];
+
+    const summary = [
+      { value: _fmtTokens(rawSummary.total_tokens || 0), label: 'Total Tokens' },
+      { value: `${rawSummary.cache_hit_pct || 0}%`, label: 'Cache Hit Rate' },
+      { value: _fmtTokens(rawSummary.tokens_today || 0), label: 'Tokens Today' },
+      { value: rawSummary.most_active_model || '—', label: 'Top Model' },
+    ];
+
+    const bucketMap = {};
+    for (const e of entries) {
+      const b = e.bucket || '';
+      if (!bucketMap[b]) bucketMap[b] = { input: 0, output: 0 };
+      bucketMap[b].input += (e.tokens_input || 0) + (e.tokens_cache_read || 0);
+      bucketMap[b].output += (e.tokens_output || 0) + (e.tokens_thinking || 0);
+    }
+    const chart = Object.entries(bucketMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([bucket, v]) => ({ label: bucket.slice(-5), input: v.input, output: v.output }));
 
     el.innerHTML = `<div class="filter-tabs" id="usageWindowTabs">
       ${windows.map(w => `<button class="filter-tab${w === _usageWindow ? ' active' : ''}" data-win="${w}">${w.charAt(0).toUpperCase() + w.slice(1)}</button>`).join('')}
@@ -250,7 +289,6 @@ const PanelCognition = (() => {
     <div class="stat-grid">${summary.map(s => `<div class="stat-card">
       <div class="stat-value">${BrainApp.escapeHtml(String(s.value ?? '—'))}</div>
       <div class="stat-label">${BrainApp.escapeHtml(s.label || '')}</div>
-      ${s.sub ? `<div class="stat-sub">${BrainApp.escapeHtml(s.sub)}</div>` : ''}
     </div>`).join('')}</div>
     ${chart.length > 0 ? _renderChart(chart) : ''}`;
 
@@ -262,23 +300,29 @@ const PanelCognition = (() => {
     });
   }
 
+  function _fmtTokens(n) {
+    if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+    if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+    return String(n);
+  }
+
   function _renderChart(chart) {
-    const maxVal = Math.max(...chart.map(d => (d.local || 0) + (d.cloud || 0)), 1);
+    const maxVal = Math.max(...chart.map(d => (d.input || 0) + (d.output || 0)), 1);
     const barW = Math.max(20, Math.floor(600 / chart.length) - 4);
     const h = 160;
     const bars = chart.map((d, i) => {
-      const localH = ((d.local || 0) / maxVal) * h;
-      const cloudH = ((d.cloud || 0) / maxVal) * h;
+      const inputH = ((d.input || 0) / maxVal) * h;
+      const outputH = ((d.output || 0) / maxVal) * h;
       const x = i * (barW + 4);
       return `<g>
-        <rect x="${x}" y="${h - localH - cloudH}" width="${barW}" height="${cloudH}" class="bar-cloud"/>
-        <rect x="${x}" y="${h - localH}" width="${barW}" height="${localH}" class="bar-local"/>
-        <text x="${x + barW / 2}" y="${h + 14}" class="bar-label">${BrainApp.escapeHtml(String(d.hour || d.label || ''))}</text>
+        <rect x="${x}" y="${h - inputH - outputH}" width="${barW}" height="${outputH}" class="bar-cloud"/>
+        <rect x="${x}" y="${h - inputH}" width="${barW}" height="${inputH}" class="bar-local"/>
+        <text x="${x + barW / 2}" y="${h + 14}" class="bar-label">${BrainApp.escapeHtml(String(d.label || ''))}</text>
       </g>`;
     }).join('');
     const svgW = chart.length * (barW + 4);
     return `<div class="chart-wrap"><svg class="usage-chart" viewBox="0 0 ${svgW} ${h + 20}" preserveAspectRatio="none">${bars}</svg></div>
-    <div class="chart-legend"><span class="legend-local">Local</span><span class="legend-cloud">Cloud</span></div>`;
+    <div class="chart-legend"><span class="legend-local">Input</span><span class="legend-cloud">Output</span></div>`;
   }
 
   return { mount, unmount };

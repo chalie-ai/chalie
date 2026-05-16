@@ -51,12 +51,13 @@ const PanelDocuments = (() => {
 
   async function _load() {
     try {
+      const docUrl = _sub === 'deleted' ? '/documents?include_deleted=true' : '/documents';
       const [docRes, folderRes] = await Promise.all([
-        BrainApp.apiFetch('/documents'),
+        BrainApp.apiFetch(docUrl),
         BrainApp.apiFetch('/documents/watched-folders'),
       ]);
-      if (docRes.ok) { const d = await docRes.json(); _docs = d.documents || []; }
-      if (folderRes.ok) { const d = await folderRes.json(); _folders = d.folders || []; }
+      if (docRes.ok) { const d = await docRes.json(); _docs = d.items || []; }
+      if (folderRes.ok) { const d = await folderRes.json(); _folders = d.items || []; }
       _loaded = true;
     } catch { BrainApp.showToast('Failed to load documents', 'error'); }
     _renderDocs();
@@ -67,14 +68,14 @@ const PanelDocuments = (() => {
     if (!el) return;
 
     let filtered = _docs;
-    if (_sub === 'active') filtered = _docs.filter(d => d.status === 'ready' || d.status === 'active');
-    else if (_sub === 'processing') filtered = _docs.filter(d => d.status === 'building' || d.status === 'processing');
-    else if (_sub === 'uploads') filtered = _docs.filter(d => d.source === 'upload' || d.doc_type === 'upload');
-    else if (_sub === 'deleted') filtered = _docs.filter(d => d.status === 'deleted');
+    if (_sub === 'active') filtered = _docs.filter(d => d.status === 'ready');
+    else if (_sub === 'processing') filtered = _docs.filter(d => d.status === 'building' || d.status === 'processing' || d.status === 'pending');
+    else if (_sub === 'uploads') filtered = _docs.filter(d => d.source_type === 'upload');
+    else if (_sub === 'deleted') filtered = _docs.filter(d => d.deleted_at !== null);
 
     if (_search) {
       const q = _search.toLowerCase();
-      filtered = filtered.filter(d => (d.name || '').toLowerCase().includes(q) || (d.category || '').toLowerCase().includes(q));
+      filtered = filtered.filter(d => (d.original_name || '').toLowerCase().includes(q) || (d.doc_category || '').toLowerCase().includes(q));
     }
 
     let html = '';
@@ -96,7 +97,7 @@ const PanelDocuments = (() => {
       html += `<div class="empty-state"><div class="empty-icon">${Icons.Document(40)}</div><h3>No documents</h3><p>Upload or watch a folder to get started.</p></div>`;
     } else {
       if (_groupBy !== 'all') {
-        const groupKey = { doc_category: 'category', doc_project: 'project', doc_date: 'added' }[_groupBy] || 'category';
+        const groupKey = { doc_category: 'doc_category', doc_project: 'doc_project', doc_date: 'doc_date' }[_groupBy] || 'doc_category';
         const groups = {};
         for (const d of filtered) { const k = d[groupKey] || 'Other'; (groups[k] = groups[k] || []).push(d); }
         for (const [gname, gdocs] of Object.entries(groups)) {
@@ -118,17 +119,24 @@ const PanelDocuments = (() => {
     });
   }
 
+  function _fmtSize(bytes) {
+    if (!bytes) return '—';
+    if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  }
+
   function _renderDocTable(docs) {
     return `<table class="records-table">
-      <thead><tr><th>Name</th><th>Type</th><th>Status</th><th>Size</th><th>Added</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Source</th><th>Status</th><th>Size</th><th>Added</th><th></th></tr></thead>
       <tbody>${docs.map(d => {
-        const statusCls = { ready: 'badge-success', building: 'badge-warning', processing: 'badge-warning', error: 'badge-danger', deleted: 'badge-muted' }[d.status] || 'badge-muted';
+        const statusCls = { ready: 'badge-success', building: 'badge-warning', processing: 'badge-warning', failed: 'badge-danger', error: 'badge-danger', deleted: 'badge-muted' }[d.status] || 'badge-muted';
         return `<tr>
-          <td class="key-cell">${BrainApp.escapeHtml(d.name || '')}</td>
-          <td><span class="badge badge-muted">${BrainApp.escapeHtml(d.type || d.doc_type || '')}</span></td>
+          <td class="key-cell">${BrainApp.escapeHtml(d.original_name || '')}</td>
+          <td><span class="badge badge-muted">${BrainApp.escapeHtml(d.source_type || '')}</span></td>
           <td><span class="badge ${statusCls}">${BrainApp.escapeHtml(d.status || '')}</span></td>
-          <td>${BrainApp.escapeHtml(d.size || '')}</td>
-          <td>${BrainApp.escapeHtml(d.added || d.created_at || '')}</td>
+          <td>${_fmtSize(d.file_size_bytes)}</td>
+          <td>${BrainApp.escapeHtml(d.created_at || '')}</td>
           <td class="row-actions">
             <button class="btn btn-sm btn-secondary" data-view-doc="${d.id}">View</button>
             <button class="btn btn-sm btn-danger" data-del-doc="${d.id}">${Icons.Trash(12)}</button>
@@ -142,15 +150,16 @@ const PanelDocuments = (() => {
     try {
       const res = await BrainApp.apiFetch(`/documents/${id}`);
       if (!res.ok) { BrainApp.showToast('Failed to load document', 'error'); return; }
-      const doc = await res.json();
+      const data = await res.json();
+      const doc = data.item || data;
       const overlay = document.createElement('div');
       overlay.className = 'modal-overlay';
       overlay.innerHTML = `<div class="modal modal-lg">
         <div class="modal-header">
-          <h3>${BrainApp.escapeHtml(doc.name || 'Document')}</h3>
+          <h3>${BrainApp.escapeHtml(doc.original_name || 'Document')}</h3>
           <button class="btn-close" id="closeDocView">${Icons.Close(16)}</button>
         </div>
-        <div class="modal-body"><pre class="doc-content">${BrainApp.escapeHtml(doc.content || doc.text || 'No content available.')}</pre></div>
+        <div class="modal-body"><pre class="doc-content">${BrainApp.escapeHtml(doc.summary || 'No content available.')}</pre></div>
       </div>`;
       document.body.appendChild(overlay);
       document.getElementById('closeDocView').addEventListener('click', () => overlay.remove());
@@ -164,7 +173,7 @@ const PanelDocuments = (() => {
     overlay.className = 'modal-overlay';
     overlay.innerHTML = `<div class="modal modal-sm">
       <div class="modal-header"><h3>Delete Document</h3></div>
-      <p class="modal-desc">Delete "${BrainApp.escapeHtml(doc?.name || 'this document')}"? This cannot be undone.</p>
+      <p class="modal-desc">Delete "${BrainApp.escapeHtml(doc?.original_name || 'this document')}"? This cannot be undone.</p>
       <div class="modal-actions"><button class="btn btn-secondary" id="keepDoc">Cancel</button><button class="btn btn-danger" id="confirmDelDoc">Delete</button></div>
     </div>`;
     document.body.appendChild(overlay);
@@ -189,7 +198,7 @@ const PanelDocuments = (() => {
       const formData = new FormData();
       formData.append('file', file);
       try {
-        const res = await BrainApp.apiFetch('/documents', { method: 'POST', body: formData }, true);
+        const res = await BrainApp.apiFetch('/documents/upload', { method: 'POST', body: formData }, true);
         if (res.ok) { BrainApp.showToast('Document uploaded', 'success'); _loaded = false; _load(); }
         else { const d = await res.json().catch(() => ({})); BrainApp.showToast(d.error || 'Upload failed', 'error'); }
       } catch { BrainApp.showToast('Network error', 'error'); }

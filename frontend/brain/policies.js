@@ -8,57 +8,82 @@ const PanelPolicies = (() => {
   let _blockedOpen = false;
 
   const _POLICY_ACTION_LABELS = {
-    'browser.search': 'Web search',
-    'browser.navigate': 'Navigate to URL',
     'browser.interact': 'Interact with page',
-    'browser.read': 'Read page content',
-    'calendar.read': 'Read calendar',
-    'calendar.create': 'Create events',
-    'calendar.update': 'Update events',
-    'calendar.delete': 'Delete events',
-    'code_eval.evaluate': 'Run sandboxed code',
-    'contacts.search': 'Search contacts',
-    'contacts.add': 'Add contacts',
-    'contacts.update': 'Update contacts',
-    'document.read': 'Read documents',
+    'browser.monitor': 'Monitor page',
+    'browser.render': 'Render page',
+    'browser.screenshot': 'Take screenshot',
+    'calendar.get_event': 'Get event',
+    'calendar.list_events': 'List events',
+    'calendar.update_event': 'Update event',
+    'code_eval': 'Run sandboxed code',
+    'contacts.get': 'Get contact',
+    'contacts.list': 'List contacts',
+    'document.create': 'Create document',
+    'document.delete': 'Delete document',
+    'document.list': 'List documents',
+    'document.restore': 'Restore document',
     'document.search': 'Search documents',
-    'email.search': 'Search email',
+    'document.upload': 'Upload document',
+    'document.view': 'View document',
+    'email.draft': 'Draft email',
+    'email.forward': 'Forward email',
+    'email.manage': 'Manage email',
     'email.read': 'Read email',
-    'email.send': 'Send email',
     'email.reply': 'Reply to email',
-    'home.get_state': 'Get device state',
+    'email.search': 'Search email',
+    'email.send': 'Send email',
+    'find_tools': 'Find tools',
     'home.control': 'Control devices',
+    'home.get_state': 'Get device state',
+    'home.list_automations': 'List automations',
+    'home.list_devices': 'List devices',
     'home.subscribe_events': 'Subscribe events',
-    'list.read': 'Read lists',
-    'list.create': 'Create lists',
-    'list.update': 'Update lists',
-    'list.delete': 'Delete lists',
-    'memory.recall': 'Recall memory',
-    'memory.store': 'Store memory',
+    'home.trigger_automation': 'Trigger automation',
+    'list.add': 'Add list items',
+    'list.check': 'Check list items',
+    'list.clear': 'Clear list',
+    'list.create': 'Create list',
+    'list.delete': 'Delete list',
+    'list.list_all': 'List all lists',
+    'list.remove': 'Remove list items',
+    'list.rename': 'Rename list',
+    'list.view': 'View list',
     'memory.forget': 'Forget memory',
-    'news.search': 'Search news',
-    'schedule.read': 'Read schedules',
-    'schedule.create': 'Create schedules',
-    'schedule.update': 'Update schedules',
-    'schedule.delete': 'Delete schedules',
-    'search.web': 'Web search (tool)',
-    'subagent.spawn': 'Spawn subagent',
-    'weather.current': 'Current weather',
-    'weather.forecast': 'Weather forecast',
+    'memory.recall': 'Recall memory',
+    'memory.reflect': 'Reflect on memory',
+    'memory.store': 'Store memory',
+    'news': 'Search news',
+    'read': 'Read content',
+    'review_tool_calls': 'Review tool calls',
+    'review_transcript': 'Review transcript',
+    'save_graph': 'Save to knowledge graph',
+    'save_pattern': 'Save pattern',
+    'schedule.cancel': 'Cancel schedule',
+    'schedule.create': 'Create schedule',
+    'schedule.list': 'List schedules',
+    'schedule.search': 'Search schedules',
+    'search': 'Web search',
+    'subagent': 'Spawn subagent',
+    'timer': 'Set timer',
+    'weather': 'Weather lookup',
+    'programming_docs_search': 'Search programming docs',
   };
 
   const _POLICY_CATEGORIES = {
-    'Browser': ['browser.search', 'browser.navigate', 'browser.interact', 'browser.read'],
-    'Calendar & Email': ['calendar.read', 'calendar.create', 'calendar.update', 'calendar.delete', 'email.search', 'email.read', 'email.send', 'email.reply'],
-    'Code execution': ['code_eval.evaluate'],
-    'Contacts': ['contacts.search', 'contacts.add', 'contacts.update'],
-    'Documents & Lists': ['document.read', 'document.search', 'list.read', 'list.create', 'list.update', 'list.delete'],
-    'Home': ['home.get_state', 'home.control', 'home.subscribe_events'],
-    'Memory': ['memory.recall', 'memory.store', 'memory.forget'],
-    'News & Weather': ['news.search', 'weather.current', 'weather.forecast'],
-    'Scheduling': ['schedule.read', 'schedule.create', 'schedule.update', 'schedule.delete'],
-    'Search': ['search.web'],
-    'Subagent': ['subagent.spawn'],
+    'Browser': ['browser.interact', 'browser.monitor', 'browser.render', 'browser.screenshot'],
+    'Calendar': ['calendar.get_event', 'calendar.list_events', 'calendar.update_event'],
+    'Email': ['email.search', 'email.read', 'email.send', 'email.reply', 'email.draft', 'email.forward', 'email.manage'],
+    'Code': ['code_eval'],
+    'Contacts': ['contacts.get', 'contacts.list'],
+    'Documents': ['document.list', 'document.view', 'document.search', 'document.create', 'document.upload', 'document.delete', 'document.restore'],
+    'Lists': ['list.list_all', 'list.view', 'list.create', 'list.add', 'list.check', 'list.remove', 'list.clear', 'list.rename', 'list.delete'],
+    'Home': ['home.get_state', 'home.list_devices', 'home.control', 'home.list_automations', 'home.trigger_automation', 'home.subscribe_events'],
+    'Memory': ['memory.recall', 'memory.store', 'memory.forget', 'memory.reflect'],
+    'News & Weather': ['news', 'weather'],
+    'Scheduling': ['schedule.list', 'schedule.search', 'schedule.create', 'schedule.cancel'],
+    'Search & Tools': ['search', 'find_tools', 'read', 'programming_docs_search'],
+    'Subagent': ['subagent'],
+    'System': ['timer', 'review_tool_calls', 'review_transcript', 'save_graph', 'save_pattern'],
   };
 
   const CONTEXT_MAP = { chat: 'chat', subagent: 'subagent', background: 'subconscious', external: 'external_agent' };
@@ -85,8 +110,18 @@ const PanelPolicies = (() => {
         BrainApp.apiFetch('/api/policies'),
         BrainApp.apiFetch('/api/policies/blocked'),
       ]);
-      if (polRes.ok) _policies = await polRes.json();
-      if (blockRes.ok) { const d = await blockRes.json(); _blocked = d.blocked || d.actions || []; }
+      if (polRes.ok) {
+        const raw = await polRes.json();
+        const actionKeyed = raw.policies || {};
+        _policies = {};
+        for (const [actionId, contexts] of Object.entries(actionKeyed)) {
+          for (const [ctx, state] of Object.entries(contexts)) {
+            if (!_policies[ctx]) _policies[ctx] = {};
+            _policies[ctx][actionId] = state;
+          }
+        }
+      }
+      if (blockRes.ok) { const d = await blockRes.json(); _blocked = d.entries || []; }
       _loaded = true;
     } catch { BrainApp.showToast('Failed to load policies', 'error'); }
     _renderPolicies();
@@ -96,7 +131,7 @@ const PanelPolicies = (() => {
     const el = document.getElementById('policiesContent');
     if (!el) return;
     const ctx = CONTEXT_MAP[_sub] || 'chat';
-    const rules = _policies[ctx] || _policies.rules?.[ctx] || {};
+    const rules = _policies[ctx] || {};
 
     let html = `<div class="policies-grid">`;
     for (const [catName, actionIds] of Object.entries(_POLICY_CATEGORIES)) {
@@ -152,7 +187,7 @@ const PanelPolicies = (() => {
     try {
       const res = await BrainApp.apiFetch('/api/policies', {
         method: 'PUT',
-        body: JSON.stringify({ context, action_id: actionId, value }),
+        body: JSON.stringify({ rules: [{ action_id: actionId, context, state: value }] }),
       });
       if (res.ok) {
         if (!_policies[context]) _policies[context] = {};

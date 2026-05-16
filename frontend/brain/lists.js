@@ -30,7 +30,7 @@ const PanelLists = (() => {
       const res = await BrainApp.apiFetch('/lists');
       if (!res.ok) throw new Error();
       const data = await res.json();
-      _lists = data.lists || [];
+      _lists = data.items || [];
       _loaded = true;
     } catch { BrainApp.showToast('Failed to load lists', 'error'); }
     _renderLists();
@@ -46,8 +46,8 @@ const PanelLists = (() => {
 
     el.innerHTML = _lists.map(list => {
       const items = list.items || [];
-      const done = items.filter(i => i.done || i.checked).length;
-      const total = items.length;
+      const done = list.items ? items.filter(i => i.checked).length : (list.checked_count || 0);
+      const total = list.items ? items.length : (list.item_count || 0);
       const pct = total > 0 ? Math.round((done / total) * 100) : 0;
       const isOpen = _expanded[list.id];
 
@@ -66,8 +66,8 @@ const PanelLists = (() => {
         ${total > 0 ? `<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div>` : ''}
         ${isOpen ? `<div class="list-items">
           ${items.map(item => `<label class="list-item" data-item-id="${item.id}" data-list-id="${list.id}">
-            <input type="checkbox" ${item.done || item.checked ? 'checked' : ''}>
-            <span class="${item.done || item.checked ? 'done' : ''}">${BrainApp.escapeHtml(item.text || item.name || '')}</span>
+            <input type="checkbox" ${item.checked ? 'checked' : ''}>
+            <span class="${item.checked ? 'done' : ''}">${BrainApp.escapeHtml(item.content || '')}</span>
           </label>`).join('')}
           <div class="list-add-row">
             <input type="text" class="list-add-input" placeholder="Add item…" data-add-list="${list.id}" maxlength="300">
@@ -81,7 +81,8 @@ const PanelLists = (() => {
         if (e.target.closest('button')) return;
         const id = h.dataset.toggleList;
         _expanded[id] = !_expanded[id];
-        _renderLists();
+        if (_expanded[id]) _fetchListDetail(id);
+        else _renderLists();
       });
     });
 
@@ -109,18 +110,34 @@ const PanelLists = (() => {
     });
   }
 
+  async function _fetchListDetail(listId) {
+    try {
+      const res = await BrainApp.apiFetch(`/lists/${listId}`);
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      const detail = data.item || data;
+      const idx = _lists.findIndex(l => String(l.id) === String(listId));
+      if (idx !== -1) _lists[idx] = { ..._lists[idx], items: detail.items || [] };
+    } catch { BrainApp.showToast('Failed to load list items', 'error'); }
+    _renderLists();
+  }
+
   async function _toggleItem(listId, itemId, checked) {
     try {
-      await BrainApp.apiFetch(`/lists/${listId}/items/${itemId}`, { method: 'PUT', body: JSON.stringify({ done: checked }) });
       const list = _lists.find(l => String(l.id) === String(listId));
-      if (list) { const item = (list.items || []).find(i => String(i.id) === String(itemId)); if (item) item.done = checked; }
+      if (!list) return;
+      const item = (list.items || []).find(i => String(i.id) === String(itemId));
+      if (!item) return;
+      const endpoint = checked ? 'check' : 'uncheck';
+      await BrainApp.apiFetch(`/lists/${listId}/items/${endpoint}`, { method: 'PUT', body: JSON.stringify({ items: [item.content] }) });
+      item.checked = checked;
       _renderLists();
     } catch { BrainApp.showToast('Failed to update item', 'error'); }
   }
 
   async function _addItem(listId, text) {
     try {
-      const res = await BrainApp.apiFetch(`/lists/${listId}/items`, { method: 'POST', body: JSON.stringify({ text }) });
+      const res = await BrainApp.apiFetch(`/lists/${listId}/items`, { method: 'POST', body: JSON.stringify({ items: [text] }) });
       if (res.ok) { _loaded = false; _load(); }
     } catch { BrainApp.showToast('Failed to add item', 'error'); }
   }
@@ -167,7 +184,7 @@ const PanelLists = (() => {
     document.getElementById('renameForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       try {
-        const res = await BrainApp.apiFetch(`/lists/${id}`, { method: 'PUT', body: JSON.stringify({ name: document.getElementById('renameInput').value.trim() }) });
+        const res = await BrainApp.apiFetch(`/lists/${id}/rename`, { method: 'PUT', body: JSON.stringify({ name: document.getElementById('renameInput').value.trim() }) });
         if (res.ok) { overlay.remove(); BrainApp.showToast('List renamed', 'success'); _loaded = false; _load(); }
         else BrainApp.showToast('Failed to rename', 'error');
       } catch { BrainApp.showToast('Network error', 'error'); }
