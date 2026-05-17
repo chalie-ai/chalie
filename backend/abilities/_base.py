@@ -16,6 +16,7 @@ class Ability(ABC):
     EXAMPLES: ClassVar[list[str]]
     INPUT_SCHEMA: ClassVar[dict]
     TIMEOUT: ClassVar[int] = 10
+    INTERNAL: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -25,7 +26,12 @@ class Ability(ABC):
         # Skip intermediate abstract classes that still have abstract methods.
         if getattr(cls, "__abstractmethods__", None):
             return
-        for attr in ("NAME", "SUMMARY", "EXAMPLES", "INPUT_SCHEMA"):
+        for attr in ("NAME", "INPUT_SCHEMA"):
+            if not hasattr(cls, attr):
+                raise TypeError(f"{cls.__name__} must define class attribute '{attr}'")
+        if getattr(cls, "INTERNAL", False):
+            return
+        for attr in ("SUMMARY", "EXAMPLES"):
             if not hasattr(cls, attr):
                 raise TypeError(f"{cls.__name__} must define class attribute '{attr}'")
         if not isinstance(cls.EXAMPLES, list) or not all(

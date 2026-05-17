@@ -121,6 +121,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "save_pattern",
     "schedule",
     "search",
+    "steer",
     "subagent",
     "timer",
     "weather",
