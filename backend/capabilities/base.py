@@ -427,13 +427,8 @@ class AbstractCapability(ABC):
             from services.vault_service import get_vault_service, VaultLockedError
             raw = base64.b64decode(encrypted.encode())
             return get_vault_service().decrypt_str(raw)
-        except VaultLockedError as exc:
-            logger.warning(
-                "[%s] load_credential(%r) failed — vault is "
-                "locked (returning None): %s",
-                self.get_id(), key, exc,
-            )
-            return None
+        except VaultLockedError:
+            raise
         except Exception as exc:
             logger.warning(
                 "[%s] load_credential(%r) failed (returning None): %s",

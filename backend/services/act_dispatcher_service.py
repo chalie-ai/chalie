@@ -306,7 +306,9 @@ class ActDispatcherService:
         with a fresh context and current_processor() returns None.
         """
         try:
-            result_container = {'result': None, 'error': None}
+            from services.vault_service import VaultLockedError
+
+            result_container = {'result': None, 'error': None, 'exc': None}
             ctx = contextvars.copy_context()
 
             def target():
@@ -315,6 +317,7 @@ class ActDispatcherService:
                     result_container['result'] = handler(channel, action)
                 except Exception as e:
                     result_container['error'] = str(e)
+                    result_container['exc'] = e
 
             thread = Thread(target=ctx.run, args=(target,))
             thread.daemon = True
@@ -328,6 +331,16 @@ class ActDispatcherService:
                     'action_type': action_type,
                     'status': 'timeout',
                     'result': f"Action exceeded {effective_timeout}s timeout",
+                    'execution_time': execution_time,
+                    'confidence': 0.0,
+                    'notes': '',
+                }
+
+            if result_container['exc'] is not None and isinstance(result_container['exc'], VaultLockedError):
+                return {
+                    'action_type': action_type,
+                    'status': 'error',
+                    'result': "This function is currently unavailable. The vault is locked. Notify the user that you could not complete this action because they where logged out",
                     'execution_time': execution_time,
                     'confidence': 0.0,
                     'notes': '',
