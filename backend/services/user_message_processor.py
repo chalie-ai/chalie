@@ -325,6 +325,15 @@ class UserMessageProcessor(MessageProcessor):
             transcript_id=self._uid,
         ).renderAndRecord()
 
+        if block and '[id:contact:' in block:
+            ToolRenderAndRecordService(
+                tool_name='contacts',
+                params={'action': 'list', 'via': 'memory_auto_seed', 'query': query},
+                result=block,
+                ephemeral=False,
+                transcript_id=self._uid,
+            ).renderAndRecord()
+
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Push mid-loop narration text to the per-request SSE channel.
 
