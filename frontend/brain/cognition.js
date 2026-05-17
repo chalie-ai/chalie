@@ -228,6 +228,10 @@ const PanelCognition = (() => {
           <tbody>${bgProcs.map(p => `<tr><td>${BrainApp.escapeHtml(typeof p === 'string' ? p : JSON.stringify(p))}</td></tr>`).join('')}</tbody>
         </table>
       </div>` : '<div class="world-section"><h4>Background Processes</h4><p class="panel-desc">None running.</p></div>'}
+      ${_worldState.rendered ? `<div class="world-section">
+        <h4>What Chalie Sees</h4>
+        <div class="code-block"><pre><code>${BrainApp.escapeHtml(_worldState.rendered)}</code></pre></div>
+      </div>` : ''}
     </div>`;
   }
 
