@@ -14,12 +14,12 @@ The `get_user_definition()` line is prepended by `MessageProcessor.get_system_pr
 these classes only build the *body* that follows it.
 
 Lifecycle: per-turn instance — `MessageProcessor.get_system_prompt()` constructs a
-fresh subclass instance, calls `getPrompt()`, and lets it go out of scope.
+fresh subclass instance, calls `get_prompt()`, and lets it go out of scope.
 No singletons.
 
 Design note — all prompts live as Python constants on `_SYSTEM_PROMPT`:
 every subclass overrides only the ``_SYSTEM_PROMPT`` class attribute; the
-``getPrompt()`` method lives on the base and returns ``self._SYSTEM_PROMPT``
+``get_prompt()`` method lives on the base and returns ``self._SYSTEM_PROMPT``
 verbatim. No file reads, no fallbacks — if you want to change a prompt,
 edit the constant.
 
@@ -44,12 +44,16 @@ class SystemMessagePrompt(ABC):
 
     @property
     @abstractmethod
-    def _SYSTEM_PROMPT(self) -> str:
+    def _SYSTEM_PROMPT(self) -> str:  # noqa: N802
         """Abstract class constant — subclasses override with a string literal."""
         ...
 
-    def getPrompt(self) -> str:
+    def get_prompt(self) -> str:
         return self._SYSTEM_PROMPT
+
+    def getPrompt(self) -> str:  # noqa: N802
+        """Backward-compat shim — use ``get_prompt()``."""
+        return self.get_prompt()
 
 
 class UnifiedSystemMessagePrompt(SystemMessagePrompt):

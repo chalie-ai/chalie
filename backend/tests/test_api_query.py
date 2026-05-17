@@ -156,38 +156,25 @@ class TestRelevanceEndpoint:
         )
         return stack, retrieval_mod, store_mock
 
-    def test_returns_200_with_valid_query(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_relevance_services()
-                with stack:
-                    resp = client.get("/api/query/relevance?q=auth+tests")
-        assert resp.status_code == 200
-
-    def test_response_has_required_keys(self, cookie_app):
+    def test_returns_200_with_required_keys(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
                 stack, _, _ = self._patch_relevance_services([])
                 with stack:
                     resp = client.get("/api/query/relevance?q=anything")
+        assert resp.status_code == 200
         data = resp.get_json()
         assert "relevance" in data
         assert "related_traits" in data
         assert "recommendation" in data
 
-    def test_empty_query_returns_no_query(self, cookie_app):
+    def test_empty_or_missing_query_returns_no_query(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
-                resp = client.get("/api/query/relevance?q=")
-        data = resp.get_json()
-        assert data["recommendation"] == "no_query"
-        assert data["relevance"] == pytest.approx(0.0, abs=1e-9)
-
-    def test_missing_q_returns_no_query(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp = client.get("/api/query/relevance")
-        assert resp.get_json()["recommendation"] == "no_query"
+                resp1 = client.get("/api/query/relevance?q=")
+                resp2 = client.get("/api/query/relevance")
+        assert resp1.get_json()["recommendation"] == "no_query"
+        assert resp2.get_json()["recommendation"] == "no_query"
 
     def test_high_score_recommends_surface_now(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -285,20 +272,13 @@ class TestMemoryEndpoint:
         stack.enter_context(patch("api.query._get_db_service", return_value=db_mock))
         return stack, retrieval_mod
 
-    def test_returns_200_with_results(self, cookie_app):
+    def test_returns_200_with_results_key(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
                 stack, _ = self._patch_memory_services()
                 with stack:
                     resp = client.get("/api/query/memory?q=authentication")
         assert resp.status_code == 200
-
-    def test_response_has_results_key(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _ = self._patch_memory_services()
-                with stack:
-                    resp = client.get("/api/query/memory?q=test")
         assert "results" in resp.get_json()
 
     def test_result_items_have_expected_fields(self, cookie_app):
@@ -315,19 +295,13 @@ class TestMemoryEndpoint:
         assert "score" in item
         assert "created_at" in item
 
-    def test_empty_query_returns_empty_results(self, cookie_app):
+    def test_empty_or_missing_q_returns_empty_results(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
-                resp = client.get("/api/query/memory?q=")
-        assert resp.status_code == 200
-        assert resp.get_json()["results"] == []
-
-    def test_missing_q_returns_empty_results(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp = client.get("/api/query/memory")
-        assert resp.status_code == 200
-        assert resp.get_json()["results"] == []
+                resp1 = client.get("/api/query/memory?q=")
+                resp2 = client.get("/api/query/memory")
+        assert resp1.get_json()["results"] == []
+        assert resp2.get_json()["results"] == []
 
     def test_radius_forwarded_to_service(self, cookie_app):
         """retrieve() is called with radius=0.5 (hardcoded in _slice_memory)."""
@@ -387,7 +361,7 @@ class TestCompositeEndpoint:
         stack.enter_context(patch("api.query._get_db_service", return_value=MagicMock()))
         return stack
 
-    def test_single_slice_returns_200(self, cookie_app):
+    def test_memory_slice_returns_200_with_structure(self, cookie_app):
         ep_stack = self._patch_episodic()
         with cookie_app.test_client() as client:
             with _patch_cookie_auth(), ep_stack:
@@ -397,31 +371,10 @@ class TestCompositeEndpoint:
                     content_type="application/json",
                 )
         assert resp.status_code == 200
-
-    def test_composite_response_structure(self, cookie_app):
-        ep_stack = self._patch_episodic()
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), ep_stack:
-                resp = client.post(
-                    "/api/query/composite",
-                    json={"slices": ["memory"]},
-                    content_type="application/json",
-                )
         data = resp.get_json()
         assert "results" in data
         assert "denied" in data
         assert "errors" in data
-
-    def test_memory_slice_returned(self, cookie_app):
-        ep_stack = self._patch_episodic()
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), ep_stack:
-                resp = client.post(
-                    "/api/query/composite",
-                    json={"slices": ["memory"]},
-                    content_type="application/json",
-                )
-        data = resp.get_json()
         assert "memory" in data["results"]
 
     def test_parameterised_relevance_slice(self, cookie_app):
@@ -584,34 +537,19 @@ class TestCheckQueryPermission:
             assert _check_query_permission("anything") is True
 
     def test_bearer_delegates_to_wrapper_service(self):
-        """g.wrapper_id set → calls WrapperAuthService.check_permission."""
+        """g.wrapper_id set → delegates to WrapperAuthService.check_permission."""
         app = _make_app()
-        wrapper_svc = MagicMock()
-        wrapper_svc.check_permission.return_value = True
 
-        with app.test_request_context("/"):
-            from flask import g
-            g.wrapper_id = "wrp_test"
-            with patch("api.query._get_wrapper_service", return_value=wrapper_svc):
-                from api.query import _check_query_permission
-                result = _check_query_permission("memory")
-
-        wrapper_svc.check_permission.assert_called_once_with("wrp_test", "query", "memory")
-        assert result is True
-
-    def test_bearer_denied_returns_false(self):
-        app = _make_app()
-        wrapper_svc = MagicMock()
-        wrapper_svc.check_permission.return_value = False
-
-        with app.test_request_context("/"):
-            from flask import g
-            g.wrapper_id = "wrp_no_perm"
-            with patch("api.query._get_wrapper_service", return_value=wrapper_svc):
-                from api.query import _check_query_permission
-                result = _check_query_permission("memory")
-
-        assert result is False
+        for return_val, expected in [(True, True), (False, False)]:
+            wrapper_svc = MagicMock()
+            wrapper_svc.check_permission.return_value = return_val
+            with app.test_request_context("/"):
+                from flask import g
+                g.wrapper_id = "wrp_test"
+                with patch("api.query._get_wrapper_service", return_value=wrapper_svc):
+                    from api.query import _check_query_permission
+                    result = _check_query_permission("memory")
+            assert result is expected
 
     def test_service_exception_fails_closed(self):
         """WrapperAuthService raising → permission denied (False)."""

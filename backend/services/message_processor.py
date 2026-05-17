@@ -148,7 +148,7 @@ class MessageProcessor:
 
     # ── Class constants (overridable by subclasses) ───────────────────────────
 
-    JOB: str = 'frontal-cortex-unified'
+    LOG_LABEL: str = 'chat'
     # Usage class written to llm_call_log.usage_class for every LLM call made
     # by this processor. Override in subclasses to distinguish chat / subagent /
     # subconscious traffic in the cognition usage dashboard.
@@ -325,11 +325,11 @@ class MessageProcessor:
         subclass-specific args leaks up. Subclasses of `MessageProcessor` that
         need richer system-prompt inputs (personality voice, …) override
         `get_system_prompt()` themselves and weave in the extra context around the
-        template returned by `SYSTEM_PROMPT_CLASS().getPrompt()`.
+        template returned by `SYSTEM_PROMPT_CLASS().get_prompt()`.
         """
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.
-        body = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        body = self.SYSTEM_PROMPT_CLASS().get_prompt()
         body = self._substitute_provider_placeholders(body)
         return f"{self.get_user_definition()}\n\n{body}"
 
@@ -348,7 +348,7 @@ class MessageProcessor:
             return body
         try:
             from services.providers import Providers
-            provider = Providers.instance()._resolve(self.JOB)
+            provider = Providers.instance()._resolve(self.LOG_LABEL)
             label = getattr(provider, 'CONTENT_FIELD_LABEL', None)
         except Exception:
             label = None
@@ -627,7 +627,7 @@ class MessageProcessor:
                 result=result_text,
                 ephemeral=True,
                 transcript_id=self._uid,
-            ).renderAndRecord()
+            ).render_and_record()
         except Exception as exc:
             rendered = f"[{tool_name}()] {result_text}"
             logger.error(
@@ -657,7 +657,7 @@ class MessageProcessor:
                 result=llm_response.text,
                 ephemeral=True,
                 transcript_id=self._uid,
-            ).renderAndRecord()
+            ).render_and_record()
             self._act_trail.append(rendered)
             try:
                 self._emit_narration(llm_response.text, self._current_iteration)
@@ -677,7 +677,7 @@ class MessageProcessor:
                 result=steer,
                 ephemeral=True,
                 transcript_id=self._uid,
-            ).renderAndRecord()
+            ).render_and_record()
             self._act_trail.append(rendered)
 
     def _apply_overflow_guard(self, system_prompt, tools, user_body):
@@ -752,7 +752,7 @@ class MessageProcessor:
         Single-path overflow handling (north star § Context Compaction):
         - At the start of every iteration, the rebuilt user-message body
           (wrapped by ``_wrap_with_checkpoint``) is measured against 80%
-          of the provider's context window for ``self.JOB``.
+          of the provider's context window for ``self.LOG_LABEL``.
         - Over threshold → ``_handle_overflow()`` runs a full continuity
           compaction via ``ContinuityCompactionProcessor``, writes an
           append-only ``tool_calls`` audit row, clears ACT state, and
@@ -805,7 +805,6 @@ class MessageProcessor:
         """
         from services.act_dispatcher_service import ActDispatcherService
         from services.providers import Providers
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
         from services.transcript_service import write_input_row
 
         with bind_current_processor(self):
@@ -898,7 +897,7 @@ class MessageProcessor:
                     # — break to cap exit rather than loop forever.
                     try:
                         llm_response = Providers.instance().send_messages(
-                            system_prompt, messages, job=self.JOB, tools=tools,
+                            system_prompt, messages, job=self.LOG_LABEL, tools=tools,
                             thinking_mode=self._get_thinking_mode_for_send(),
                         )
                     except PayloadTooLargeError as exc:
@@ -1010,7 +1009,7 @@ class MessageProcessor:
             return False
         messages = [{'role': 'user', 'content': user_body}]
         estimated = Providers.instance().estimate_payload_tokens(
-            system_prompt, messages, tools, job=self.JOB
+            system_prompt, messages, tools, job=self.LOG_LABEL
         )
         return estimated > compact_at
 
@@ -1405,7 +1404,7 @@ class MessageProcessor:
             response = Providers.instance().send_messages(
                 system_prompt,
                 [{'role': 'user', 'content': _EXPLORATION_PREFIX + user_body}],
-                job=self.JOB,
+                job=self.LOG_LABEL,
                 tools=tools,
                 thinking_mode='high',
             )
@@ -1458,7 +1457,7 @@ class MessageProcessor:
                 result=self._thinking_exploration,
                 ephemeral=False,
                 transcript_id=transcript_id,
-            ).renderAndRecord()
+            ).render_and_record()
         except Exception as exc:
             logger.info(
                 "[THINKING] failed to persist exploration to tool_calls (%s)", exc

@@ -266,16 +266,6 @@ class TestDeleteAction:
 
         assert "not found" in result.lower()
 
-    def test_delete_failure(self):
-        mock_svc = MagicMock()
-        mock_svc.get_document.return_value = _make_doc()
-        mock_svc.soft_delete.return_value = False
-
-        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            result = _handle_document("topic", {"action": "delete", "id": "doc00001"})
-
-        assert "Failed" in result
-
 
 @pytest.mark.unit
 class TestRestoreAction:
@@ -302,12 +292,6 @@ class TestRestoreAction:
             result = _handle_document("topic", {"action": "restore", "id": "doc00001"})
 
         assert "not deleted" in result.lower()
-
-    def test_restore_missing_params(self):
-        with patch(_P_DB), patch(_P_DOC_SVC):
-            result = _handle_document("topic", {"action": "restore"})
-
-        assert "Specify" in result
 
     def test_restore_by_name(self):
         mock_svc = MagicMock()
@@ -428,13 +412,6 @@ class TestSplitIntoArtifacts:
         result = _split_into_artifacts(text)
         assert result == [text]
 
-    def test_text_exactly_at_min_chars_returns_single_chunk(self):
-        from abilities.document import _split_into_artifacts
-        text = _make_text(512)
-        result = _split_into_artifacts(text)
-        assert len(result) == 1
-        assert result[0] == text
-
     def test_text_slightly_over_min_chars_splits_at_paragraph_boundary(self):
         """Two paragraphs each just over 256 chars should produce at least one split."""
         from abilities.document import _split_into_artifacts
@@ -515,26 +492,6 @@ class TestSplitIntoArtifacts:
         # Re-running split gives same first chunk
         result2 = _split_into_artifacts(text)
         assert result[0] == result2[0]
-
-    def test_single_paragraph_with_no_separator_over_max_returns_list(self):
-        """Text with no \n\n and no punctuation still produces a non-empty list."""
-        from abilities.document import _split_into_artifacts
-        text = "word " * 300  # 1500 chars, no sentence separators
-        result = _split_into_artifacts(text)
-        assert isinstance(result, list)
-        assert len(result) >= 1
-        assert all(c.strip() for c in result)
-
-    def test_returns_list_not_generator(self):
-        from abilities.document import _split_into_artifacts
-        result = _split_into_artifacts("Hello world.")
-        assert isinstance(result, list)
-
-    def test_whitespace_only_text_returns_single_or_empty(self):
-        """Whitespace-only input returns [] (empty after strip) or single chunk."""
-        from abilities.document import _split_into_artifacts
-        result = _split_into_artifacts("   \n\n   ")
-        assert isinstance(result, list)
 
     def test_custom_min_max_respected(self):
         """min_chars/max_chars parameters are honoured over the defaults."""

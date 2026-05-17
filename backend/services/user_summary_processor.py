@@ -54,7 +54,7 @@ class UserSummaryProcessor(MessageProcessor):
     CHANNEL = 'user_summary'
     ROLE = 'user_summary'
     USAGE_CLASS = 'subconscious'
-    JOB = 'frontal-cortex-unified'
+    LOG_LABEL = 'user_summary'
     SYSTEM_PROMPT_CLASS = UserSummarySystemPrompt
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []

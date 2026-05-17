@@ -30,7 +30,7 @@ class ExternalAgentMessageProcessor(MessageProcessor):
     """
 
     ROLE = 'user'
-    JOB = 'external-agent'
+    LOG_LABEL = 'external_agent'
     USAGE_CLASS = 'external_agent'
     SYSTEM_PROMPT_CLASS = ExternalAgentSystemMessagePrompt
     MAX_ITERATIONS = 20
@@ -122,7 +122,7 @@ class ExternalAgentMessageProcessor(MessageProcessor):
 
     def get_system_prompt(self) -> str:
         """Build system prompt with template variables substituted."""
-        body = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        body = self.SYSTEM_PROMPT_CLASS().get_prompt()
         body = self._substitute_provider_placeholders(body)
 
         user_name = self._resolve_user_name()

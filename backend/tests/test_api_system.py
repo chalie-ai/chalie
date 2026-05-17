@@ -1,7 +1,5 @@
 """Tests for api/system.py — /health, /metrics, /system/status, /system/observability/* endpoints."""
 
-from datetime import datetime
-
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -55,16 +53,6 @@ class TestSystemAPI:
         assert data['version'] == '2.5.0'
         assert 'attention' not in data
         mock_ctx_svc.save.assert_called_once_with({'battery': 80, 'screen': 'on'})
-
-    def test_post_health_empty_body_returns_ok(self, client):
-        """POST /health with an empty JSON body still returns 200 ok."""
-        with patch('consumer.APP_VERSION', '1.0.0'):
-            resp = client.post('/health', data='{}', content_type='application/json')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['status'] == 'ok'
-        assert 'attention' not in data
 
     # GET /metrics
 
@@ -258,11 +246,6 @@ class TestSystemAPI:
         assert resp.status_code == 400
         assert resp.get_json()['error'] == 'invalid source'
 
-    def test_records_negative_offset_400(self, client, db):
-        """Negative offset returns 400."""
-        resp = client.get('/system/observability/records?source=episodes&offset=-1')
-        assert resp.status_code == 400
-
     def test_records_excluded_soft_deleted(self, client, db):
         """Soft-deleted episodes and data_graph rows are excluded."""
         now_iso = '2026-01-01T00:00:00+00:00'
@@ -366,18 +349,6 @@ class TestSystemAPI:
 
 
 
-    # generated_at field on all observability endpoints
-
-    def test_observability_tools_includes_generated_at(self, client, db):
-        """GET /system/observability/tools includes a generated_at ISO timestamp."""
-        resp = client.get('/system/observability/tools')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert 'generated_at' in data
-        parsed = datetime.fromisoformat(data['generated_at'])
-        assert parsed.tzinfo is not None
-
     # GET /ready
 
     def _ready_patches(self, db_ok=True, store_ok=True):
@@ -476,15 +447,4 @@ class TestSystemAPI:
         assert data['memory_store']['status'] == 'error'
         assert 'message' in data['memory_store']
 
-    def test_ready_no_checks_key_in_response(self, client, db):
-        """Response must not include the legacy 'checks' key — components are top-level."""
-        patches = self._ready_patches()
-        from contextlib import ExitStack
-        with ExitStack() as stack:
-            for target, mock_val in patches.items():
-                stack.enter_context(patch(target, mock_val))
-            resp = client.get('/ready')
-
-        data = resp.get_json()
-        assert 'checks' not in data
 

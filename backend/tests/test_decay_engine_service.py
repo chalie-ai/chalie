@@ -14,13 +14,9 @@ class TestDecayEngineService:
 
     # ── Constructor / Configuration ───────────────────────────────────
 
-    def test_constructor_uses_defaults_on_config_failure(self):
-        """When ConfigService raises, default decay rates should be used."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            side_effect=Exception('config unavailable'),
-        ):
-            svc = DecayEngineService()
+    def test_constructor_sets_default_decay_exponent(self):
+        """DecayEngineService initialises retrieval_decay_exponent from the class constant."""
+        svc = DecayEngineService()
 
         assert svc.retrieval_decay_exponent == pytest.approx(0.5, abs=1e-9)
 
@@ -33,11 +29,7 @@ class TestDecayEngineService:
         deleted along with the daemon-thread driver). The remaining sub-cycles
         all run unconditionally on each invocation.
         """
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
+        svc = DecayEngineService()
 
         call_log = []
 
@@ -61,11 +53,7 @@ class TestDecayEngineService:
 
     def test_decay_episodic_returns_zero_on_db_failure(self):
         """Episodic decay should return 0 when DB is unavailable."""
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
+        svc = DecayEngineService()
 
         with patch(
             'services.database_service.get_shared_db_service',
@@ -100,12 +88,7 @@ class TestDecayEngineService:
         ).fetchone()[0]
         assert initial_weight == pytest.approx(0.9)
 
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={'retrieval_decay_exponent': 0.5},
-        ):
-            svc = DecayEngineService()
-
+        svc = DecayEngineService()
         updated_count = svc._decay_episodic()
 
         # _decay_episodic closes the shared pool — get a fresh connection to verify
@@ -135,12 +118,7 @@ class TestDecayEngineService:
         )
         db.commit()
 
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
+        svc = DecayEngineService()
         updated_count = svc._decay_episodic()
 
         assert updated_count == 0
@@ -180,12 +158,7 @@ class TestDecayEngineService:
         count_before = db.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
         assert count_before == 5
 
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
+        svc = DecayEngineService()
         purged = svc._purge_tool_calls(max_rows=3)
 
         assert purged == 2  # 5 - 3 = 2 excess rows deleted
@@ -210,12 +183,6 @@ class TestDecayEngineService:
         )
         db.commit()
 
-        with patch(
-            'services.decay_engine_service.ConfigService.get_agent_config',
-            return_value={},
-        ):
-            svc = DecayEngineService()
-
+        svc = DecayEngineService()
         purged = svc._purge_tool_calls(max_rows=1000)
         assert purged == 0
-

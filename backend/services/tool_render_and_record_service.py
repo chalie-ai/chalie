@@ -63,9 +63,13 @@ class ToolRenderAndRecordService:
                 self._tool_name, self._transcript_id,
             )
 
-    def renderAndRecord(self) -> str:
+    def render_and_record(self) -> str:
         self._record()
         return self._render()
+
+    def renderAndRecord(self) -> str:  # noqa: N802
+        """Backward-compat shim — use ``render_and_record()``."""
+        return self.render_and_record()
 
     @staticmethod
     def render_static(tool_name: str, params: dict, result: str) -> str:

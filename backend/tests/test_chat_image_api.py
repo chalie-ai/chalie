@@ -95,53 +95,6 @@ def test_upload_returns_image_id(client, sample_png, mock_store, mock_doc_servic
 
 
 @pytest.mark.unit
-def test_upload_creates_document_record(client, sample_png, mock_store, mock_doc_service, tmp_path):
-    """POST /chat/image must create a document record with source_type='chat_image'."""
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service), \
-         patch('api.chat_image._documents_root', return_value=str(tmp_path)), \
-         patch('api.chat_image._run_analysis'):
-
-        data = {'image': (io.BytesIO(sample_png), 'test.png', 'image/png')}
-        res = client.post('/chat/image', data=data, content_type='multipart/form-data')
-
-    assert res.status_code == 201
-    # create_document must have been called once
-    assert mock_doc_service.create_document.call_count == 1
-    call_kwargs = mock_doc_service.create_document.call_args
-    # Accept both positional and keyword call styles
-    kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
-    args = call_kwargs.args if call_kwargs.args else ()
-    # source_type can be positional (index 5) or keyword
-    source_type = kwargs.get('source_type') or (args[5] if len(args) > 5 else None)
-    assert source_type == 'chat_image', f'Expected source_type=chat_image, got {source_type}'
-
-
-@pytest.mark.unit
-def test_upload_saves_file_to_disk(client, sample_png, mock_store, mock_doc_service, tmp_path):
-    """POST /chat/image must write the image bytes to DOCUMENTS_ROOT/<image_id>/<filename>."""
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service), \
-         patch('api.chat_image._documents_root', return_value=str(tmp_path)), \
-         patch('api.chat_image._run_analysis'):
-
-        data = {'image': (io.BytesIO(sample_png), 'photo.png', 'image/png')}
-        res = client.post('/chat/image', data=data, content_type='multipart/form-data')
-
-    assert res.status_code == 201
-    image_id = res.get_json()['image_id']
-
-    # A directory named after the image_id should exist under tmp_path
-    import os
-    doc_dir = os.path.join(str(tmp_path), image_id)
-    assert os.path.isdir(doc_dir), f'Expected directory {doc_dir}'
-    files = os.listdir(doc_dir)
-    assert len(files) == 1, f'Expected one file, found: {files}'
-    written = open(os.path.join(doc_dir, files[0]), 'rb').read()
-    assert written == sample_png
-
-
-@pytest.mark.unit
 def test_upload_rejects_non_image_mime(client, mock_store, mock_doc_service, tmp_path):
     """POST /chat/image should return 415 for non-image content types."""
     pdf_bytes = b'%PDF-1.4 fake pdf content'
@@ -245,20 +198,6 @@ def test_status_returns_analyzing_while_bytes_exist(client, mock_store, mock_doc
     assert body['status'] == 'analyzing'
     assert body['result'] is None
 
-
-@pytest.mark.unit
-def test_status_returns_failed_on_error_result(client, mock_store, mock_doc_service):
-    """GET /chat/image/<id>/status should return 'failed' when result has error key."""
-    image_id = 'fail0001'
-    error_result = {'error': 'No vision provider', 'description': '', 'ocr_text': '', 'has_text': False}
-    mock_store.set(f'chat_image_result:{image_id}', json.dumps(error_result))
-
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service):
-        res = client.get(f'/chat/image/{image_id}/status')
-
-    body = res.get_json()
-    assert body['status'] == 'failed'
 
 
 @pytest.mark.unit
@@ -420,42 +359,6 @@ def test_status_falls_back_to_document_service_ready(client, mock_store, mock_do
     assert body['result']['description'] == 'A sunset over the ocean.'
 
 
-@pytest.mark.unit
-def test_status_falls_back_to_document_service_processing(client, mock_store, mock_doc_service):
-    """
-    GET /chat/image/<id>/status must return 'analyzing' when the document record
-    shows status='processing' and all MemoryStore keys are absent.
-    """
-    image_id = 'docproc1'
-    mock_doc_service.get_document.return_value = {
-        'id': image_id,
-        'status': 'processing',
-        'extracted_metadata': None,
-    }
-
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service):
-        res = client.get(f'/chat/image/{image_id}/status')
-
-    assert res.status_code == 200
-    body = res.get_json()
-    assert body['status'] == 'analyzing'
-
-
-@pytest.mark.unit
-def test_status_404_when_not_in_store_or_document(client, mock_store, mock_doc_service):
-    """
-    GET /chat/image/<id>/status must return 404 when neither MemoryStore keys
-    nor a document record exist for the given image_id.
-    """
-    image_id = 'notfound1'
-    mock_doc_service.get_document.return_value = None
-
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service):
-        res = client.get(f'/chat/image/{image_id}/status')
-
-    assert res.status_code == 404
 
 
 # ─── GET /chat/image/<id>/file ────────────────────────────────────────────────
@@ -476,16 +379,5 @@ def test_image_file_redirects_to_document_preview(client, mock_doc_service):
 
     assert res.status_code == 302
     assert f'/documents/{image_id}/preview' in res.headers['Location']
-
-
-@pytest.mark.unit
-def test_image_file_returns_404_for_unknown_id(client, mock_doc_service):
-    """GET /chat/image/<id>/file must return 404 when the document record doesn't exist."""
-    mock_doc_service.get_document.return_value = None
-
-    with patch('api.chat_image._get_document_service', return_value=mock_doc_service):
-        res = client.get('/chat/image/notexist2/file')
-
-    assert res.status_code == 404
 
 

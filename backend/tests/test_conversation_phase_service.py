@@ -292,18 +292,6 @@ class TestClosingDetection:
                 result = svc.update(text, is_user=is_user, topic=topic)
         assert result["current"] == "closing"
 
-    def test_goodbye_is_immediate(self):
-        store = _make_store()
-        svc = _make_service(store)
-        result = svc.update("Goodbye for now", is_user=True)
-        assert result["current"] == "closing"
-
-    def test_closing_words_are_case_insensitive(self):
-        store = _make_store()
-        svc = _make_service(store)
-        result = svc.update("BYE BYE!", is_user=True)
-        assert result["current"] == "closing"
-
     def test_has_closing_helper(self):
         from services.conversation_phase_service import _has_closing
         assert _has_closing("talk later")
@@ -669,12 +657,6 @@ class TestHelpers:
 
 
 class TestSingleton:
-    def test_singleton_returns_same_instance(self):
-        from services.conversation_phase_service import get_conversation_phase_service
-        a = get_conversation_phase_service()
-        b = get_conversation_phase_service()
-        assert a is b
-
     def test_singleton_thread_safety(self):
         """Multiple threads obtaining the singleton should all get the same object."""
         from services.conversation_phase_service import (

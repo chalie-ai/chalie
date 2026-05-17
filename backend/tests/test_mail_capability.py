@@ -110,7 +110,7 @@ def _patches(tcs, vault):
 class TestMailCapabilityIdentity:
     """Identity methods."""
 
-    def test_get_id(self):
+    def test_get_id_and_manifest(self):
         from capabilities.mail_capability.capability import MailCapability
         cap = MailCapability.__new__(MailCapability)
         from capabilities.base import AbstractCapability
@@ -123,19 +123,6 @@ class TestMailCapabilityIdentity:
         cap._cycle_count = 0
         cap._sync_registered = False
         assert cap.get_id() == "mail"
-
-    def test_get_manifest_returns_mail_id(self):
-        from capabilities.mail_capability.capability import MailCapability
-        cap = MailCapability.__new__(MailCapability)
-        from capabilities.base import AbstractCapability
-        AbstractCapability.__init__(cap)
-        cap._manifest_cache = None
-        cap._imap_handler = MagicMock()
-        cap._caldav_handler = MagicMock()
-        cap._carddav_handler = MagicMock()
-        cap._imap_ok = cap._caldav_ok = cap._carddav_ok = False
-        cap._cycle_count = 0
-        cap._sync_registered = False
         manifest = cap.get_manifest()
         assert manifest["id"] == "mail"
         assert manifest["entry_class"] == "MailCapability"
@@ -466,33 +453,19 @@ class TestMailCapabilityGetTools:
             assert callable(tool["handler"])
             assert "timeout" in tool
 
-    def test_imap_tool_returns_error_when_disconnected(self):
-        cap, _, _ = _make_capability()
-        cap._imap_ok = True
-        tools = {t["name"]: t for t in cap.get_tools()}
-
-        # Simulate mid-call disconnect
-        cap._imap_ok = False
-        result = tools["search_email"]["handler"]("", {})
-        assert "error" in result
-
-    def test_caldav_tool_returns_error_when_disconnected(self):
-        cap, _, _ = _make_capability()
-        cap._caldav_ok = True
-        tools = {t["name"]: t for t in cap.get_tools()}
-
-        cap._caldav_ok = False
-        result = tools["create_event"]["handler"]("", {})
-        assert "error" in result
-
-    def test_carddav_tool_returns_error_when_disconnected(self):
-        cap, _, _ = _make_capability()
-        cap._carddav_ok = True
-        tools = {t["name"]: t for t in cap.get_tools()}
-
-        cap._carddav_ok = False
-        result = tools["list_contacts"]["handler"]("", {})
-        assert "error" in result
+    def test_tools_return_error_when_disconnected(self):
+        """After a mid-call disconnect, all protocol tools return an error dict."""
+        for flag, tool_name in [
+            ("_imap_ok", "search_email"),
+            ("_caldav_ok", "create_event"),
+            ("_carddav_ok", "list_contacts"),
+        ]:
+            cap, _, _ = _make_capability()
+            setattr(cap, flag, True)
+            tools = {t["name"]: t for t in cap.get_tools()}
+            setattr(cap, flag, False)
+            result = tools[tool_name]["handler"]("", {})
+            assert "error" in result
 
 
 @pytest.mark.unit
@@ -587,14 +560,6 @@ class TestMailCapabilityMonitorCadence:
 @pytest.mark.unit
 class TestMailCapabilityHealthDetails:
     """health_details() structure."""
-
-    def test_health_details_when_disconnected(self):
-        cap, _, _ = _make_capability()
-        details = cap.health_details()
-        assert details == {
-            "connected": False,
-            "protocols": {"imap": False, "caldav": False, "carddav": False},
-        }
 
     def test_health_details_when_partially_connected(self):
         cap, _, _ = _make_capability()

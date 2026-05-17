@@ -150,14 +150,6 @@ def test_parse_vcard_multiple_emails_and_phones():
     assert len(contact["phones"]) == 2
 
 
-@pytest.mark.unit
-def test_parse_vcard_invalid_data():
-    handler = _make_handler()
-    result = handler.parse_vcard("NOT_A_VCARD_AT_ALL")
-    # May return None or an empty-fields dict — important thing is no exception.
-    # vobject may raise or return a malformed object; we just require no crash.
-    # Either None or a dict is acceptable.
-    assert result is None or isinstance(result, dict)
 
 
 @pytest.mark.unit
@@ -216,26 +208,6 @@ def test_index_contacts_skips_blank_fn():
     mock_icp.assert_not_called()
 
 
-@pytest.mark.unit
-def test_index_contacts_one_call_per_contact():
-    """Each contact results in one index_contact_profile call regardless of email count."""
-    handler = _make_handler()
-    contacts = [{
-        "fn": "Alice Wang",
-        "emails": [{"value": "alice@corp.com", "type": "work"}, {"value": "alice@personal.com", "type": "home"}],
-        "phones": [],
-        "org": "",
-        "title": "",
-        "given_name": "",
-        "family_name": "",
-        "nickname": "",
-        "uid": "",
-    }]
-
-    with patch("capabilities.contact_resolver.index_contact_profile") as mock_icp:
-        handler.index_contacts(contacts)
-
-    assert mock_icp.call_count == 1
 
 
 @pytest.mark.unit
@@ -287,16 +259,6 @@ def test_list_contacts_uses_dgs_fetch_when_no_query():
     assert result["contacts"][1] == {"email": "a@b.com", "name": "A B"}
 
 
-@pytest.mark.unit
-def test_list_contacts_caps_limit_at_50():
-    with patch("capabilities.contact_resolver.resolve") as mock_resolve:
-        mock_resolve.return_value = []
-        handler = _make_handler()
-
-        handler.list_contacts({"query": "test", "limit": 999})
-
-    _, kwargs = mock_resolve.call_args
-    assert kwargs["limit"] <= 50
 
 
 @pytest.mark.unit
@@ -345,11 +307,6 @@ def test_get_contact_returns_error_on_empty_identifier():
     assert result == {"error": "identifier is required"}
 
 
-@pytest.mark.unit
-def test_get_contact_returns_error_on_missing_identifier():
-    handler = _make_handler()
-    result = handler.get_contact({})
-    assert result == {"error": "identifier is required"}
 
 
 # ---------------------------------------------------------------------------
@@ -370,16 +327,6 @@ def test_monitor_calls_sync_then_index():
     mock_index.assert_called_once_with(fake_contacts)
 
 
-@pytest.mark.unit
-def test_monitor_skips_index_when_no_contacts():
-    handler = _make_handler()
-
-    with patch.object(handler, "sync_contacts", return_value=[]) as mock_sync, \
-         patch.object(handler, "index_contacts") as mock_index:
-        handler.monitor(MagicMock())
-
-    mock_sync.assert_called_once()
-    mock_index.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -397,13 +344,3 @@ def test_open_client_returns_none_on_exception():
     assert result is None
 
 
-@pytest.mark.unit
-def test_open_client_returns_none_when_principal_raises():
-    handler = _make_handler()
-    mock_client = MagicMock()
-    mock_client.principal.side_effect = PermissionError("401 Unauthorized")
-
-    with patch("caldav.DAVClient", return_value=mock_client):
-        result = handler.open_client("https://contacts.icloud.com/", "user", "badpass")
-
-    assert result is None

@@ -25,7 +25,7 @@ class PatternMatchProcessor(MessageProcessor):
     CHANNEL = "pattern_match"
     ROLE = "background"
     USAGE_CLASS = 'subconscious'
-    JOB = "frontal-cortex-unified"
+    LOG_LABEL = 'pattern_match'
     # save_pattern + save_graph are innate to PMP — pre-injected every
     # iteration. No other processor includes them today; processors that
     # need them in future must opt in by listing them in their own

@@ -365,26 +365,22 @@ class TestRichMedia:
         body = json.loads(text[len("[list(action=view)]\n"):-len("\n[end:list]")])
         assert body['status'] == 'fail'
 
-    def test_delete_does_not_emit_rich_payload(self, ability, service):
-        """Delete returns a message string, not a list. No rich card."""
-        list_id = service.create_list("Groceries")
-        result = _exec_rich(ability, {"action": "delete", "id": list_id}, ordinal=5)
-        assert isinstance(result, dict)
-        assert 'text' in result
-
-    def test_rename_does_not_emit_rich_payload(self, ability, service):
+    def test_non_card_actions_return_text_envelope(self, ability, service):
+        """Delete, rename, and failed calls return the standard dict envelope, not a rich card."""
         list_id = service.create_list("Old")
-        result = _exec_rich(ability, {
-            "action": "rename", "id": list_id, "name": "New",
-        }, ordinal=6)
-        assert isinstance(result, dict)
-        assert 'text' in result
 
-    def test_failure_does_not_emit_rich_payload(self, ability):
-        """A failed call returns the standard text envelope, not a card."""
+        # delete
+        result = _exec_rich(ability, {"action": "delete", "id": list_id}, ordinal=5)
+        assert isinstance(result, dict) and 'text' in result
+
+        # rename
+        list_id2 = service.create_list("RenameMe")
+        result = _exec_rich(ability, {"action": "rename", "id": list_id2, "name": "Renamed"}, ordinal=6)
+        assert isinstance(result, dict) and 'text' in result
+
+        # failed view
         result = _exec_rich(ability, {"action": "view", "id": "deadbeef"}, ordinal=7)
-        assert isinstance(result, dict)
-        assert 'text' in result
+        assert isinstance(result, dict) and 'text' in result
 
 
 # ─── enrich_rich_payload (refresh hook) ────────────────────────────────────

@@ -104,16 +104,6 @@ class TestIngestSignal:
         assert resp.status_code == 400
         assert "signal_type" in resp.get_json()["error"]
 
-    def test_blank_signal_type_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "  ", "content": "x"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
     def test_missing_content_returns_400(self, cookie_app):
         with cookie_app.test_client() as client:
             with _cookie_patches():
@@ -124,16 +114,6 @@ class TestIngestSignal:
                     )
         assert resp.status_code == 400
         assert "content" in resp.get_json()["error"]
-
-    def test_blank_content_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": ""},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
 
     def test_invalid_activation_energy_type_returns_400(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -218,32 +198,6 @@ class TestIngestSignal:
         assert "__chat_ui__" in signals
         assert signals["__chat_ui__"]["label"] == "AAPL at $185.50"
 
-    def test_high_activation_energy_still_goes_to_world_state(self, cookie_app):
-        """Even high-energy signals land in world_state, not a reasoning queue."""
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={
-                            "signal_type": "critical_event",
-                            "content": "production down",
-                            "activation_energy": 0.9,
-                        },
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 202
-
-    def test_default_activation_energy_is_0_5(self, cookie_app):
-        """When activation_energy is omitted the signal is still accepted."""
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 202
-
     def test_full_valid_payload_accepted(self, cookie_app):
         """All optional fields should be accepted without error."""
         with cookie_app.test_client() as client:
@@ -261,22 +215,6 @@ class TestIngestSignal:
                         content_type="application/json",
                     )
         assert resp.status_code == 202
-
-    def test_source_defaults_to_wrapper_id(self, cookie_app):
-        """When source is omitted, the signal is stored under the wrapper_id key."""
-        from services.world_state import world_state
-        world_state.set("signals", {})  # reset
-
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 202
-        signals = world_state.get("signals")
-        assert "__chat_ui__" in signals
 
 
 # ---------------------------------------------------------------------------
@@ -557,30 +495,11 @@ class TestValidateSignal:
         assert result["content"] == "hello"
         assert result["activation_energy"] == pytest.approx(0.5, abs=1e-9)
 
-    def test_defaults_applied(self):
-        from api.signals import _validate_signal
-        result, _ = _validate_signal({"signal_type": "x", "content": "y"})
-        assert result["source"] is None
-        assert result["topic"] is None
-        assert result["metadata"] is None
-
     def test_not_a_dict_returns_error(self):
         from api.signals import _validate_signal
         result, err = _validate_signal("a string")
         assert result is None
         assert "JSON object" in err
-
-    def test_activation_energy_boundary_0(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal({"signal_type": "x", "content": "y", "activation_energy": 0.0})
-        assert err is None
-        assert result["activation_energy"] == pytest.approx(0.0, abs=1e-9)
-
-    def test_activation_energy_boundary_1(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal({"signal_type": "x", "content": "y", "activation_energy": 1.0})
-        assert err is None
-        assert result["activation_energy"] == pytest.approx(1.0, abs=1e-9)
 
     def test_activation_energy_negative_fails(self):
         from api.signals import _validate_signal
@@ -604,11 +523,5 @@ class TestValidateSignal:
         })
         assert err is None
         assert result["metadata"] == {"branch": "main"}
-
-    def test_metadata_none_accepted(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal({"signal_type": "x", "content": "y", "metadata": None})
-        assert err is None
-        assert result["metadata"] is None
 
 

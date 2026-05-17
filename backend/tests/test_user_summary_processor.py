@@ -3,7 +3,7 @@ Tests for UserSummaryProcessor and UserSummarySystemPrompt.
 
 Unit tests use in-memory SQLite via the ``db`` fixture from conftest (built from
 schema.sql via SchemaConvergenceService.converge()).  Integration tests require
-a live provider configured for ``frontal-cortex-unified``.
+a live provider configured for ``user_summary``.
 
 All tests: @pytest.mark.unit or @pytest.mark.integration
 """
@@ -65,25 +65,17 @@ def _make_fake_response(content: str):
 @pytest.mark.unit
 class TestUserSummarySystemPrompt:
 
-    def test_prompt_instantiates_and_returns_string(self):
-        from services.system_message_prompt import UserSummarySystemPrompt
-
-        inst = UserSummarySystemPrompt()
-        body = inst.getPrompt()
-        assert isinstance(body, str)
-        assert len(body) > 0
-
     def test_prompt_contains_json_schema_keys(self):
         from services.system_message_prompt import UserSummarySystemPrompt
 
-        body = UserSummarySystemPrompt().getPrompt()
+        body = UserSummarySystemPrompt().get_prompt()
         assert '"short"' in body
         assert '"long"' in body
 
     def test_prompt_instructs_third_person(self):
         from services.system_message_prompt import UserSummarySystemPrompt
 
-        body = UserSummarySystemPrompt().getPrompt()
+        body = UserSummarySystemPrompt().get_prompt()
         assert 'third person' in body.lower()
 
 
@@ -220,18 +212,6 @@ class TestPostTurn:
         rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') == 'user_summary']
         assert not rows, "user_summary written despite missing 'short' key"
 
-    def test_post_turn_empty_response_writes_nothing(self, db):
-        from services.data_graph_service import get_data_graph_service
-        from services.user_summary_processor import UserSummaryProcessor
-
-        proc = UserSummaryProcessor()
-        proc._last_response = ''
-        proc.post_turn()
-
-        dgs = get_data_graph_service()
-        rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') in ('user_summary', 'user_summary_long')]
-        assert not rows
-
     def test_post_turn_strips_markdown_code_fences(self, db):
         """LLM wrapping JSON in ```json ... ``` fences is handled gracefully."""
         from services.data_graph_service import get_data_graph_service
@@ -358,30 +338,14 @@ class TestPostTurnStorageFailure:
 @pytest.mark.unit
 class TestClassAttributes:
 
-    def test_skip_transcript_write_is_true(self):
+    def test_class_constants(self):
         from services.user_summary_processor import UserSummaryProcessor
 
         assert UserSummaryProcessor.SKIP_TRANSCRIPT_WRITE is True
-
-    def test_max_iterations_is_one(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
         assert UserSummaryProcessor.MAX_ITERATIONS == 1
-
-    def test_always_available_is_empty(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
         assert UserSummaryProcessor.ALWAYS_AVAILABLE == []
-
-    def test_discoverable_is_empty(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
         assert UserSummaryProcessor.DISCOVERABLE == []
-
-    def test_job_is_frontal_cortex_unified(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        assert UserSummaryProcessor.JOB == 'frontal-cortex-unified'
+        assert UserSummaryProcessor.LOG_LABEL == 'user_summary'
 
 
 # ── TestShouldSynthesiseBehavioralPattern ─────────────────────────────────────

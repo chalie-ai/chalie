@@ -9,7 +9,6 @@ cadence is owned by the caller.
 import math
 import logging
 
-from .config_service import ConfigService
 from .log_utils import safe
 
 

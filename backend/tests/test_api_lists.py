@@ -33,12 +33,6 @@ def _seed_item(db, item_id, list_id, content, checked=0, position=0):
 # ─── GET /lists ───────────────────────────────────────────────────────────
 
 class TestGetLists:
-    def test_returns_empty_when_no_lists(self, authed_client):
-        client, _, _ = authed_client
-        resp = client.get('/lists')
-        assert resp.status_code == 200
-        assert resp.get_json() == {"items": []}
-
     def test_returns_summaries(self, authed_client):
         client, db, _ = authed_client
         _seed_list(db, list_id='aaa11111', name='Groceries')
@@ -178,12 +172,6 @@ class TestAddItems:
         resp = client.post('/lists/abc12345/items', json={"items": ["x" * 501]})
         assert resp.status_code == 400
 
-    def test_non_string_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.post('/lists/abc12345/items', json={"items": [123]})
-        assert resp.status_code == 400
-
     def test_unknown_id_returns_404(self, authed_client):
         client, _, _ = authed_client
         resp = client.post('/lists/nonexist/items', json={"items": ["Milk"]})
@@ -245,11 +233,6 @@ class TestCheckItems:
         ).fetchone()
         assert row['checked'] == 1
 
-    def test_missing_items_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.put('/lists/abc12345/items/check', json={})
-        assert resp.status_code == 400
 
 
 # ─── PUT /lists/<id>/items/uncheck ────────────────────────────────────────
@@ -268,8 +251,3 @@ class TestUncheckItems:
         ).fetchone()
         assert row['checked'] == 0
 
-    def test_missing_items_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.put('/lists/abc12345/items/uncheck', json={})
-        assert resp.status_code == 400

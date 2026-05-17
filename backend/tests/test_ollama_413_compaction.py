@@ -204,7 +204,7 @@ def _build_test_processor_class():
         CHANNEL = 'test_413'
         ROLE = 'test_413'
         SKIP_TRANSCRIPT_WRITE = True
-        JOB = 'frontal-cortex-unified'
+        LOG_LABEL = 'compaction'
 
         def __init__(self, raw_input='hello', metadata=None):
             super().__init__(raw_input, metadata)

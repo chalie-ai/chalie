@@ -27,7 +27,7 @@ class EpisodeEncoderProcessor(MessageProcessor):
     CHANNEL = 'episode_encoder'
     ROLE = 'episode_encoder'
     USAGE_CLASS = 'subconscious'
-    JOB = 'frontal-cortex-unified'
+    LOG_LABEL = 'episode_encoder'
     SYSTEM_PROMPT_CLASS = EpisodeEncoderSystemPrompt
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []

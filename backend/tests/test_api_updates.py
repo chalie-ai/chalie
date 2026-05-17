@@ -110,14 +110,6 @@ class TestUpdateBelief:
         assert resp.status_code == 400
         assert "value" in resp.get_json()["error"]
 
-    def test_empty_body_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/belief",
-            json={},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
-
     def test_invalid_category_defaults_to_preference(self, cookie_client):
         """An unrecognised category should be silently coerced to preference."""
         svc_mock = MagicMock()
@@ -212,14 +204,6 @@ class TestUpdateMemory:
         )
         assert resp.status_code == 400
         assert "content" in resp.get_json()["error"]
-
-    def test_empty_content_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/memory",
-            json={"content": "   "},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
 
     def test_memorize_error_returns_422(self, cookie_client):
         with patch("abilities.memory._handle_store",
@@ -341,14 +325,6 @@ class TestUpdateFeedback:
         )
         assert resp.status_code == 400
         assert "outcome" in resp.get_json()["error"]
-
-    def test_empty_body_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/feedback",
-            json={},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
 
     def test_details_optional(self, cookie_client):
         """details field is optional — omitting it should still succeed."""

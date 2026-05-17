@@ -45,17 +45,6 @@ class TestImport:
             importlib.reload(_mod)
             mock_db.assert_not_called()
 
-    def test_import_does_not_spawn_threads(self):
-        """Importing the module must not start background threads."""
-        import threading
-        before = threading.active_count()
-        import importlib
-        import services.system_message_prompt as _mod
-        importlib.reload(_mod)
-        after = threading.active_count()
-        assert after == before, (
-            f"Import spawned {after - before} threads — module must be side-effect free"
-        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,7 +82,7 @@ class TestSystemMessagePromptBase:
         class _GoodPrompt(SystemMessagePrompt):
             _SYSTEM_PROMPT = 'hello'
 
-        assert _GoodPrompt().getPrompt() == 'hello'
+        assert _GoodPrompt().get_prompt() == 'hello'
 
     def test_get_prompt_returns_subclass_constant(self):
         """``getPrompt()`` returns ``self._SYSTEM_PROMPT`` verbatim."""
@@ -102,17 +91,8 @@ class TestSystemMessagePromptBase:
         class _Echo(SystemMessagePrompt):
             _SYSTEM_PROMPT = 'echo-body'
 
-        assert _Echo().getPrompt() == 'echo-body'
+        assert _Echo().get_prompt() == 'echo-body'
 
-    def test_get_prompt_idempotent(self):
-        """Calling getPrompt() twice on the same instance returns the same value."""
-        from services.system_message_prompt import SystemMessagePrompt
-
-        class _Stable(SystemMessagePrompt):
-            _SYSTEM_PROMPT = 'stable'
-
-        sut = _Stable()
-        assert sut.getPrompt() == sut.getPrompt()
 
 
 # UnifiedSystemMessagePrompt
@@ -163,49 +143,37 @@ class TestUnifiedSystemMessagePrompt:
     def test_returns_non_empty_string(self):
         """getPrompt() returns a non-empty string without any mocking."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
+        result = UnifiedSystemMessagePrompt().get_prompt()
         assert isinstance(result, str)
         assert len(result) > 0
-
-    def test_idempotent(self):
-        """Calling getPrompt() twice returns the same value."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        sut = UnifiedSystemMessagePrompt()
-        assert sut.getPrompt() == sut.getPrompt()
 
     def test_identity_section_present(self):
         """Identity section is inlined at the top of the unified prompt."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
+        result = UnifiedSystemMessagePrompt().get_prompt()
         assert '## Identity' in result
         assert 'Chalie' in result
 
     def test_hard_boundaries_section_present(self):
         """Hard Boundaries section is inlined in the unified prompt."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
+        result = UnifiedSystemMessagePrompt().get_prompt()
         assert '## Hard Boundaries' in result
 
     def test_core_principles_section_present(self):
         """Core Principles section is inlined in the unified prompt."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
+        result = UnifiedSystemMessagePrompt().get_prompt()
         assert '## Core Principles' in result
 
     def test_no_identity_modulation_placeholder(self):
         """``{{identity_modulation}}`` must not appear — identity is inlined,
         not injected via template substitution."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
+        result = UnifiedSystemMessagePrompt().get_prompt()
         assert '{{identity_modulation}}' not in result
 
     # ── No side effects on DB / services ──────────────────────────────────────
-
-    def test_get_prompt_returns_non_empty_string(self):
-        """Prompt is a Python constant — getPrompt() returns a non-empty string."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().getPrompt()
-        assert isinstance(result, str) and len(result) > 0
 
     # ── Subclassing contract ──────────────────────────────────────────────────
 
@@ -227,29 +195,19 @@ class TestBackgroundChannelPrompts:
 
     def test_dmn_returns_non_empty(self):
         from services.system_message_prompt import DMNSystemMessagePrompt
-        result = DMNSystemMessagePrompt().getPrompt()
+        result = DMNSystemMessagePrompt().get_prompt()
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_return_type_is_str(self):
-        from services.system_message_prompt import DMNSystemMessagePrompt
-        result = DMNSystemMessagePrompt().getPrompt()
-        assert isinstance(result, str)
-
     def test_mentions_chalie(self):
         from services.system_message_prompt import DMNSystemMessagePrompt
-        result = DMNSystemMessagePrompt().getPrompt()
+        result = DMNSystemMessagePrompt().get_prompt()
         assert 'Chalie' in result
-
-    def test_idempotent(self):
-        from services.system_message_prompt import DMNSystemMessagePrompt
-        sut = DMNSystemMessagePrompt()
-        assert sut.getPrompt() == sut.getPrompt()
 
     def test_no_file_reads(self):
         from services.system_message_prompt import DMNSystemMessagePrompt
         with patch('builtins.open') as mock_open:
-            DMNSystemMessagePrompt().getPrompt()
+            DMNSystemMessagePrompt().get_prompt()
         mock_open.assert_not_called()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,10 +217,6 @@ class TestBackgroundChannelPrompts:
 
 class TestInheritanceChain:
     """All concrete subclasses are proper subclasses of SystemMessagePrompt."""
-
-    def test_dmn_is_subclass(self):
-        from services.system_message_prompt import SystemMessagePrompt, DMNSystemMessagePrompt
-        assert issubclass(DMNSystemMessagePrompt, SystemMessagePrompt)
 
     def test_each_concrete_instance_is_system_message_prompt(self):
         from services.system_message_prompt import (

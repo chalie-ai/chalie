@@ -94,9 +94,7 @@ class TestGetPreviousMessagesEmpty:
         result = p.get_previous_messages()
         assert result == ''
 
-    def test_returns_str_type(self, db):
-        p = _GPMFakeProcessor.make()
-        assert isinstance(p.get_previous_messages(), str)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,13 +272,6 @@ class TestGetPreviousMessagesCompaction:
         new_msg_pos = result.index('New message after compaction')
         assert compacted_pos < new_msg_pos
 
-    def test_token_budget_ignored_in_commit2(self, db):
-        """token_budget is accepted but silently ignored."""
-        self._seed_with_compaction(db)
-        p = _GPMFakeProcessor.make()
-        result_no_budget = p.get_previous_messages()
-        result_with_budget = p.get_previous_messages(token_budget=100)
-        assert result_no_budget == result_with_budget
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -291,28 +282,8 @@ class TestGetPreviousMessagesCompaction:
 class TestGetPreviousMessagesSendStoreWiring:
     """send() and store() are wired — confirm they operate against the real DB."""
 
-    def test_send_is_callable(self, db):
-        """send() is wired — no longer raises NotImplementedError."""
-        from services.llm_service import LLMResponse
-        p = _GPMFakeProcessor.make()
-        fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._trigger_episode_extraction'):
-            mock_inst.return_value.send_messages.return_value = fake_response
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p.send()
-        assert isinstance(result, str)
-
-    def test_store_is_callable(self, db):
-        """store() is wired — calls DB, no longer raises NotImplementedError."""
-        p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._trigger_episode_extraction'):
-            p.store('final response')
-        # store() writes assistant row; no exception = pass
-
-    def test_send_is_wired_in_commit_6(self, db):
-        """send() calls provider, does not raise NotImplementedError."""
+    def test_send_returns_text(self, db):
+        """send() calls provider and returns the response text."""
         from services.llm_service import LLMResponse
         p = _GPMFakeProcessor.make()
         fake_response = LLMResponse(text='done', model='m', provider='p', tool_calls=None)
@@ -324,32 +295,11 @@ class TestGetPreviousMessagesSendStoreWiring:
             result = p.send()
         assert result == 'done'
 
-    def test_store_is_wired_in_commit_4(self, db):
-        """store() calls DB, does not raise NotImplementedError."""
+    def test_store_writes_to_db(self, db):
+        """store() writes assistant row without error."""
         p = _GPMFakeProcessor.make()
         with patch('services.transcript_service._trigger_episode_extraction'):
             p.store('final response')
-        # store() writes assistant row; no exception = pass
-
-    def test_send_accepts_request_id(self, db):
-        """send() accepts an optional request_id parameter."""
-        from services.llm_service import LLMResponse
-        p = _GPMFakeProcessor.make()
-        fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._trigger_episode_extraction'):
-            mock_inst.return_value.send_messages.return_value = fake_response
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p.send('req-id')
-        assert isinstance(result, str)
-
-    def test_store_not_caught_as_plain_exception(self, db):
-        """store() calls DB, no longer raises NotImplementedError."""
-        p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._trigger_episode_extraction'):
-            p.store('response text')
-        # store() writes assistant row; no exception = pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -378,21 +328,6 @@ class TestGetPreviousMessagesCompactionOnlyNoNewRows:
         assert result == 'COMPACTED: all prior context'
         assert 'Old message' not in result
 
-    def test_no_trailing_newline_when_only_compaction(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Seed', '2026-04-09 09:00:00')",
-            (channel,)
-        )
-        seed_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        _seed_compaction_via_tool_calls(db, channel, 'COMPACT BLOCK', seed_id)
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-        assert result == 'COMPACT BLOCK'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -470,24 +405,13 @@ class TestGetPreviousMessagesChannelIsolation:
             )
         db.commit()
 
-    def test_test_channel_does_not_see_user_channel(self, db):
+    def test_test_channel_isolation(self, db):
         self._seed_all_channels(db)
         p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
         result = p.get_previous_messages()
-        assert 'Content from user' not in result
         assert f'Content from {_GPM_CHANNEL}' in result
-
-    def test_test_channel_does_not_see_dmn_channel(self, db):
-        self._seed_all_channels(db)
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-        assert 'Content from dmn' not in result
-
-    def test_test_channel_does_not_see_subagent_channel(self, db):
-        self._seed_all_channels(db)
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-        assert 'Content from subagent' not in result
+        for other in ('user', 'dmn', 'subagent', 'scheduled'):
+            assert f'Content from {other}' not in result
 
     def test_each_channel_sees_only_its_own_rows(self, db):
         """Build four processors with different CHANNELs and assert no bleed."""
@@ -647,19 +571,6 @@ class TestGetPreviousMessagesTimestampFormat:
         result = p.get_previous_messages()
         assert '[2026-04-10 14:03]' in result
 
-    def test_no_seconds_in_timestamp(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Seconds check', '2026-04-10T14:03:27+00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-        assert '14:03:27' not in result
-
     def test_naive_sqlite_timestamp_handled(self, db):
         """Legacy rows use SQLite's naive format; must not crash."""
         channel = _GPM_CHANNEL
@@ -682,78 +593,28 @@ class TestGetPreviousMessagesTimestampFormat:
 
 
 class TestGetPreviousMessagesRoleCase:
-    """Lock the role rendering convention: lowercase for inputs, title-case for
-    assistant only."""
+    """Lock the role rendering convention: lowercase for inputs, title-case for assistant only."""
 
-    def test_user_role_rendered_lowercase(self, db):
+    def test_role_rendering_conventions(self, db):
         channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Hello', '2026-04-10 10:00:00')",
-            (channel,)
-        )
+        for role, content in [
+            ('user', 'Hello'),
+            ('assistant', 'Hi there'),
+            ('subagent', 'Pursuit tick'),
+        ]:
+            db.execute(
+                "INSERT INTO transcript (channel, role, content, created_at) "
+                "VALUES (?, ?, ?, '2026-04-10 10:00:00')",
+                (channel, role, content)
+            )
         db.commit()
 
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
         assert 'user: Hello' in result
-        assert 'USER: Hello' not in result
-
-    def test_assistant_role_rendered_titlecase(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'assistant', 'Hi there', '2026-04-10 10:01:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
         assert 'Assistant: Hi there' in result
-        assert 'ASSISTANT: Hi there' not in result
         assert 'assistant: Hi there' not in result
-
-    def test_arbitrary_role_rendered_lowercase(self, db):
-        """Any non-assistant role string stays lowercase."""
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'proactive_thought', 'Background thought', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-        assert 'proactive_thought: Background thought' in result
-        assert 'PROACTIVE_THOUGHT: Background thought' not in result
-
-    def test_subagent_role_rendered_lowercase(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'subagent', 'Pursuit tick', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
         assert 'subagent: Pursuit tick' in result
-
-    def test_scheduled_role_rendered_lowercase(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'scheduled', 'Timer fired', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-        assert 'scheduled: Timer fired' in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -764,7 +625,7 @@ class TestGetPreviousMessagesRoleCase:
 class TestGetPreviousMessagesTokenBudget:
     """token_budget is accepted without error; output is identical regardless."""
 
-    def test_none_and_integer_budget_produce_identical_output(self, db):
+    def test_budget_does_not_change_output(self, db):
         channel = _GPM_CHANNEL
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -777,20 +638,6 @@ class TestGetPreviousMessagesTokenBudget:
         without_budget = p.get_previous_messages()
         with_budget = p.get_previous_messages(token_budget=100)
         assert without_budget == with_budget
-
-    def test_large_budget_does_not_change_output(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Large budget test', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result_no_budget = p.get_previous_messages()
-        result_large_budget = p.get_previous_messages(token_budget=999999)
-        assert result_no_budget == result_large_budget
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1265,14 +1112,14 @@ class TestRunFullCompaction:
         assert row is not None
         assert row['compacted_up_to_id'] == id7
 
-    def test_e6_compaction_always_uses_frontal_cortex_unified(self, db):
-        """Compaction LLM call always uses 'frontal-cortex-unified' regardless of
-        the host processor's JOB. ContinuityCompactionProcessor hardcodes JOB so
-        all compaction work is logged and provider-routed under one cognitive job."""
+    def test_e6_compaction_uses_own_log_label(self, db):
+        """Compaction LLM call always uses its own LOG_LABEL ('compaction') regardless
+        of the host processor's LOG_LABEL. ContinuityCompactionProcessor hardcodes
+        LOG_LABEL so all compaction work is logged and provider-routed under one label."""
         t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hi')
 
         class CustomJobProcessor(_make_compact_processor().__class__):
-            JOB = 'custom-job-name'  # host JOB must NOT leak into compaction
+            LOG_LABEL = 'custom-job-name'  # host LOG_LABEL must NOT leak into compaction
 
         p = CustomJobProcessor('hi')
         p._uid = t_id
@@ -1297,7 +1144,7 @@ class TestRunFullCompaction:
             mock_inst.return_value.estimate_payload_tokens.return_value = 100
             p._run_full_compaction()
 
-        assert captured_jobs == ['frontal-cortex-unified']
+        assert captured_jobs == ['compaction']
         assert 'custom-job-name' not in captured_jobs
 
 

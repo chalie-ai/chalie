@@ -39,7 +39,7 @@ class UserMessageProcessor(MessageProcessor):
 
     CHANNEL = 'user'
     ROLE = 'user'
-    JOB = 'frontal-cortex-unified'
+    LOG_LABEL = 'chat'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
     # 9 innate abilities — pre-injected on every ACT iteration. The 10 in
@@ -258,7 +258,7 @@ class UserMessageProcessor(MessageProcessor):
         """
         from services.personality.personality_service import get_current_voice
 
-        template = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        template = self.SYSTEM_PROMPT_CLASS().get_prompt()
 
         voice_line = f"When responding; {get_current_voice()}"
         prompt = f"{voice_line}\n\n{template}"
@@ -323,7 +323,7 @@ class UserMessageProcessor(MessageProcessor):
             result=block,
             ephemeral=False,
             transcript_id=self._uid,
-        ).renderAndRecord()
+        ).render_and_record()
 
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Push mid-loop narration text to the per-request SSE channel.

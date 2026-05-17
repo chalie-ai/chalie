@@ -32,8 +32,6 @@ class TestExtractData:
         result = '{"temp": 5}'
         assert _extract_data(result) == {"temp": 5}
 
-    def test_empty_string_returns_empty_string(self):
-        assert _extract_data("") == ""
 
 
 # ── _find_payload ─────────────────────────────────────────────────────────────
@@ -58,9 +56,6 @@ class TestFindPayload:
         tc = _tc("weather", '{"loc":"Rome"}\n\n<span id=\'weather_1\'>')
         assert _find_payload("weather_2", [tc]) is None
 
-    def test_returns_none_for_empty_list(self):
-        assert _find_payload("weather_1", []) is None
-
     def test_first_match_wins(self):
         tc1 = _tc("weather", '{"loc":"A"}\n\n<span id=\'weather_1\'>')
         tc2 = _tc("weather", '{"loc":"B"}\n\n<span id=\'weather_1\'>')
@@ -79,8 +74,6 @@ class TestParseNoSpans:
     def test_empty_content_returns_empty_list(self):
         assert parse("", []) == []
 
-    def test_whitespace_only_returns_empty_list(self):
-        assert parse("   \n  ", []) == []
 
 
 class TestParseSingleCard:

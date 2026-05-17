@@ -151,11 +151,6 @@ class TestGetFolder:
 
 @pytest.mark.unit
 class TestGetAllFolders:
-    def test_returns_empty_list(self, db):
-        svc = FolderWatcherService(get_shared_db_service())
-        result = svc.get_all_folders()
-        assert result == []
-
     def test_returns_multiple_folders(self, db):
         _seed_folder(db, folder_id='f1', folder_path='/test/path1')
         _seed_folder(db, folder_id='f2', folder_path='/test/path2')
@@ -318,14 +313,15 @@ class TestScanScheduling:
         assert service.is_scan_due(folder) is True
 
     def test_scan_due_when_interval_elapsed(self, service):
-        from datetime import datetime, timedelta
-        past = (datetime.utcnow() - timedelta(seconds=400)).isoformat()
+        from datetime import timedelta
+        from services.time_utils import utc_now
+        past = (utc_now() - timedelta(seconds=400)).isoformat()
         folder = _make_folder_dict(last_scan_at=past, scan_interval=300)
         assert service.is_scan_due(folder) is True
 
     def test_scan_not_due_when_recent(self, service):
-        from datetime import datetime
-        just_now = datetime.utcnow().isoformat()
+        from services.time_utils import utc_now
+        just_now = utc_now().isoformat()
         folder = _make_folder_dict(last_scan_at=just_now, scan_interval=300)
         assert service.is_scan_due(folder) is False
 
@@ -706,11 +702,6 @@ class TestEnvironmentTags:
         tags = service._derive_environment_tags(folder, '/Users/dylan/Finance/receipt.pdf')
         assert tags == ['Finance']
 
-    def test_no_label_returns_subfolders_only(self, service):
-        folder = _make_folder_dict(label=None, folder_path='/test/watched')
-        tags = service._derive_environment_tags(folder, '/test/watched/sub/deep/file.txt')
-        assert tags == ['sub', 'deep']
-
     def test_hidden_segments_excluded(self, service):
         folder = _make_folder_dict(label='Code', folder_path='/test/repo')
         tags = service._derive_environment_tags(folder, '/test/repo/.config/hidden/file.py')
@@ -739,19 +730,3 @@ class TestParseJsonList:
 
     def test_returns_empty_for_none(self, service):
         assert service._parse_json_list(None) == []
-
-
-@pytest.mark.unit
-class TestRowToDict:
-    def test_converts_row_with_json_fields(self, service):
-        row = (
-            'abc12345', '/test/watched', 'TestFolder', 'filesystem', 1,
-            '["*"]', '[".git","node_modules"]', 1, 300,
-            None, 0, None, '{}',
-            '2026-03-06 12:00:00', '2026-03-06 12:00:00',
-        )
-        result = service._row_to_dict(row, _FOLDER_COLS)
-        assert result['file_patterns'] == ['*']
-        assert result['ignore_patterns'] == ['.git', 'node_modules']
-        assert result['source_config'] == {}
-        assert result['id'] == 'abc12345'

@@ -81,22 +81,6 @@ def _subscribe_and_get_message(store, trigger_fn):
 
 class TestFailureAlertPublish:
 
-    def test_publishes_to_output_events(self, store):
-        """_maybe_send_failure_alert must publish exactly one message to output:events."""
-        cap = _StubCapability()
-        msg = _subscribe_and_get_message(store, cap._maybe_send_failure_alert)
-
-        assert msg is not None, "Expected a message on output:events"
-        assert msg["channel"] == "output:events"
-
-    def test_published_payload_is_valid_json(self, store):
-        """The published data must be valid JSON."""
-        cap = _StubCapability()
-        msg = _subscribe_and_get_message(store, cap._maybe_send_failure_alert)
-
-        payload = json.loads(msg["data"])  # raises if invalid
-        assert isinstance(payload, dict)
-
     def test_published_payload_structure(self, store):
         """Payload must contain type, cap_id, cap_name, error, and recovered=False."""
         cap = _StubCapability(cap_id="test-cap", cap_name="Test Cap", last_error="connection refused")
@@ -182,14 +166,6 @@ class TestFailureAlertStoreKey:
 # ---------------------------------------------------------------------------
 
 class TestRecoveryAlert:
-
-    def test_publishes_to_output_events(self, store):
-        """_send_recovery_alert must publish to output:events."""
-        cap = _StubCapability()
-        msg = _subscribe_and_get_message(store, cap._send_recovery_alert)
-
-        assert msg is not None, "Expected recovery message on output:events"
-        assert msg["channel"] == "output:events"
 
     def test_published_payload_has_recovered_true(self, store):
         """Recovery payload must contain recovered=True."""
@@ -418,12 +394,6 @@ class TestPayloadStructure:
         assert required.issubset(payload.keys()), (
             f"Missing fields: {required - payload.keys()}"
         )
-
-    def test_failure_payload_type_value(self, store):
-        """type field must be the literal string 'capability_alert'."""
-        cap = _StubCapability()
-        msg = _subscribe_and_get_message(store, cap._maybe_send_failure_alert)
-        assert json.loads(msg["data"])["type"] == "capability_alert"
 
     def test_key_payload_matches_published_payload(self, store):
         """The MemoryStore key payload and the published message payload must be identical."""

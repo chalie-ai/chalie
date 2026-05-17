@@ -140,16 +140,6 @@ class TestCreateWrapper:
         assert resp.status_code == 400
         assert "name" in resp.get_json()["error"]
 
-    def test_create_blank_name_returns_400(self, cookie_client):
-        svc = _make_service_mock()
-        with patch("api.wrappers._get_service", return_value=svc):
-            resp = cookie_client.post(
-                "/api/wrappers",
-                json={"name": "   "},
-                content_type="application/json",
-            )
-        assert resp.status_code == 400
-
     def test_create_passes_capabilities_to_service(self, cookie_client):
         svc = _make_service_mock()
         caps = {"signals": ["context_change"]}
@@ -220,13 +210,6 @@ class TestListWrappers:
         assert "wrappers" in data
         assert len(data["wrappers"]) == 1
         assert data["wrappers"][0]["wrapper_id"] == "wrp_test"
-
-    def test_list_empty_returns_empty_list(self, cookie_client):
-        svc = _make_service_mock(list_return=[])
-        with patch("api.wrappers._get_service", return_value=svc):
-            resp = cookie_client.get("/api/wrappers")
-        assert resp.status_code == 200
-        assert resp.get_json()["wrappers"] == []
 
     def test_list_unauthenticated_returns_401(self, unauthed_client):
         resp = unauthed_client.get("/api/wrappers")

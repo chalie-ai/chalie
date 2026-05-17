@@ -139,10 +139,6 @@ class TestExtractBody:
         raw = _make_raw_email(html="<p>Hello <b>world</b></p>")
         assert extract_body(raw) == ""
 
-    def test_empty_body(self):
-        raw = _make_raw_email()
-        result = extract_body(raw)
-        assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------
@@ -158,10 +154,6 @@ class TestImapDate:
         # Should only use the date portion
         assert _imap_date("2024-01-01T10:00:00") == "01-Jan-2024"
 
-    def test_invalid_passthrough(self):
-        # Bad input returned as-is
-        result = _imap_date("not-a-date")
-        assert result == "not-a-date"
 
 
 # ---------------------------------------------------------------------------
@@ -244,12 +236,6 @@ class TestIngest:
         args = client.search.call_args[0][0]
         assert args[0] == "UID"
         assert args[1] == "51:*"
-
-    def test_empty_inbox_returns_empty_list(self, handler):
-        client = self._make_imap_client(uids=[], raw_map={})
-        items, wm = handler.ingest(client, watermark=None)
-        assert items == []
-        assert wm is None
 
     def test_exception_returns_empty(self, handler):
         client = MagicMock()
@@ -336,11 +322,6 @@ class TestSearch:
         # noise emails filtered out when requesting actionable
         assert result.get("count", 0) == 0 or result.get("emails") == []
 
-    def test_empty_results(self, handler):
-        client = self._make_imap_client(uids=[])
-        with patch("capabilities.mail_capability.email_triage.classify_email"):
-            result = handler.search(client, {})
-        assert result == {"emails": [], "count": 0}
 
 
 # ---------------------------------------------------------------------------

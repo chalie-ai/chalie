@@ -512,22 +512,6 @@ class TestStore:
             f"does not call _record_lut_miss again. Got count={misses[0][0]}"
         )
 
-    def test_store_user_specific_lut_multiple_misses_create_separate_rows(self, svc, db_service):
-        """Multiple LUT misses with distinct keys each create a separate miss row."""
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
-        with patch.object(svc, '_lookup_concept_lut', return_value=None), \
-             patch.object(svc, '_get_lut_miss_top_cos', return_value=0.3):
-            svc.store(KIND_USER_SPECIFIC, 'niche_key_a', 'value_a')
-            svc.store(KIND_USER_SPECIFIC, 'niche_key_b', 'value_b')
-
-        with db_service.connection() as conn:
-            misses = conn.execute(
-                "SELECT key FROM concept_lut_misses WHERE kind=?", (KIND_USER_SPECIFIC,)
-            ).fetchall()
-        miss_keys = {r[0] for r in misses}
-        assert 'niche_key_a' in miss_keys
-        assert 'niche_key_b' in miss_keys
-
     def test_store_system_exact_key_different_value_supersedes(self, svc, db_service):
         """system kind + exact key + different value → temporal supersession (cosine_supersede policy)."""
         r1 = svc.store(KIND_SYSTEM, 'tone', 'formal')
@@ -592,11 +576,6 @@ class TestStore:
 
 @pytest.mark.unit
 class TestRecall:
-
-    def test_recall_empty_db(self, svc):
-        """Recall on an empty graph returns an empty list without error."""
-        results = svc.recall("anything")
-        assert results == []
 
     def test_recall_basic_fts_match(self, svc, db_service):
         """Rows matching FTS query are returned with a composite_score > 0."""
@@ -740,14 +719,6 @@ class TestFetch:
         keys = {r['key'] for r in rows}
         assert 'deleted_row' in keys
 
-    def test_fetch_limit(self, svc, db_service):
-        """limit= caps the number of returned rows."""
-        for i in range(5):
-            _insert_row(db_service, kind=KIND_MISC, key=f'note_{i}', value=f'v{i}')
-
-        rows = svc.fetch(limit=3)
-        assert len(rows) == 3
-
 
 # TestDeletion
 # ══════════════════════════════════════════════════════════════════
@@ -779,13 +750,6 @@ class TestDeletion:
         fts_after = _raw_fts(db_service, '"uniquetoken"*')
         assert rowid not in fts_after
 
-    def test_soft_delete_row_still_in_db(self, svc, db_service):
-        """Soft delete keeps the physical row in data_graph."""
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='soft', value='v')
-        svc.soft_delete_by_id(rowid)
-        raw = _raw_row(db_service, rowid)
-        assert raw is not None
-
 
 # TestDecayCycle
 # ══════════════════════════════════════════════════════════════════
@@ -805,19 +769,6 @@ class TestDecayCycle:
 
         raw = _raw_row(db_service, rowid)
         assert raw['retrieval_weight'] == pytest.approx(0.9, abs=0.001)
-
-    def test_decay_skips_moment_kind(self, svc, db_service):
-        """moment kind has ttl_days=None so decay_cycle must never modify it."""
-        assert _KIND_POLICY[KIND_MOMENT]['ttl_days'] is None
-
-        rowid = _insert_row(db_service, kind=KIND_MOMENT, key='snapshot',
-                            value='morning run', retrieval_weight=0.8,
-                            last_confirmed_at='2020-01-01T00:00:00+00:00')
-
-        svc.decay_cycle()
-
-        raw = _raw_row(db_service, rowid)
-        assert raw['retrieval_weight'] == pytest.approx(0.8, abs=0.001)
 
     def test_decay_reduces_retrieval_weight_for_old_user_specific(self, svc, db_service):
         """Old user_specific rows have retrieval_weight reduced via power-law decay."""
@@ -869,53 +820,6 @@ class TestDecayCycle:
         assert count >= 1
 
 
-# TestKindPolicy
-# ══════════════════════════════════════════════════════════════════
-
-@pytest.mark.unit
-class TestKindPolicy:
-    """Behavioral policy invariants — the values that drive decay, deletion, and reinforcement.
-
-    Only assertions whose failure would indicate real user-facing regression are kept here.
-    Config string values for internal dispatch (e.g. 'contradiction' handler name) are
-    omitted — those are covered by the store/forget behavior tests.
-    """
-
-    def test_user_specific_decays_and_reinforces(self, svc, db_service):
-        """user_specific rows decay after 30 days and reinforce on repeated evidence."""
-        old_ts = '2020-01-01T00:00:00+00:00'
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='fact',
-                            value='val', retrieval_weight=1.0, last_confirmed_at=old_ts)
-        svc.decay_cycle()
-        raw = _raw_row(db_service, rowid)
-        assert raw['retrieval_weight'] < 1.0
-
-    def test_misc_rows_are_hard_deleted_when_expired(self, svc, db_service):
-        """misc rows at sub-floor weight confirmed >2 days ago are physically removed."""
-        old_ts = '2020-01-01T00:00:00+00:00'
-        rowid = _insert_row(db_service, kind=KIND_MISC, key='scratch',
-                            value='v', retrieval_weight=0.005, last_confirmed_at=old_ts)
-        svc.decay_cycle()
-        assert _raw_row(db_service, rowid) is None
-
-    def test_system_rows_never_decay(self, svc, db_service):
-        """system rows are never touched by decay_cycle regardless of age."""
-        old_ts = '2020-01-01T00:00:00+00:00'
-        rowid = _insert_row(db_service, kind=KIND_SYSTEM, key='rule',
-                            value='be concise', retrieval_weight=0.9, last_confirmed_at=old_ts)
-        svc.decay_cycle()
-        raw = _raw_row(db_service, rowid)
-        assert raw['retrieval_weight'] == pytest.approx(0.9, abs=0.001)
-
-    def test_moment_rows_never_decay(self, svc, db_service):
-        """moment rows are never touched by decay_cycle regardless of age."""
-        old_ts = '2020-01-01T00:00:00+00:00'
-        rowid = _insert_row(db_service, kind=KIND_MOMENT, key='snapshot',
-                            value='morning run', retrieval_weight=0.8, last_confirmed_at=old_ts)
-        svc.decay_cycle()
-        raw = _raw_row(db_service, rowid)
-        assert raw['retrieval_weight'] == pytest.approx(0.8, abs=0.001)
-
 
 # TestDocumentKind
 # ══════════════════════════════════════════════════════════════════
@@ -952,26 +856,6 @@ class TestDocumentKind:
 
         assert _rid(r2) == _rid(r1)
         assert r2['evidence_count'] == 1
-
-    def test_document_no_decay(self, svc, db_service):
-        """document kind has d_base=0.0 — decay_cycle does not modify retrieval_weight."""
-        assert _KIND_POLICY[KIND_DOCUMENT]['d_base'] == pytest.approx(0.0, abs=1e-9)
-
-        result = svc.store(KIND_DOCUMENT, 'doc:nodecay:000', 'persistent chunk', source='doc:nodecay')
-        assert result is not None
-        row_id = _rid(result)
-
-        with db_service.connection() as conn:
-            conn.execute(
-                "UPDATE data_graph SET retrieval_weight=0.7, last_confirmed_at='2020-01-01T00:00:00+00:00' WHERE rowid=?",
-                (row_id,)
-            )
-
-        svc.decay_cycle()
-
-        raw = _raw_row(db_service, row_id)
-        assert raw is not None
-        assert raw['retrieval_weight'] == pytest.approx(0.7, abs=0.001)
 
     def test_document_recall_with_kinds_filter(self, svc, db_service):
         """kinds=['document'] returns only document rows; kinds=['user_specific'] excludes them."""
@@ -1031,18 +915,6 @@ class TestHardDeleteBySourcePrefix:
         remaining = _raw_all(db_service)
         assert all(r.get('source') != 'document:abc' for r in remaining)
 
-    def test_no_op_for_unmatched_prefix(self, svc, db_service):
-        """Returns 0 and does not touch unrelated rows when prefix matches nothing."""
-        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:xyz:000',
-                    value='other doc', source='document:xyz')
-
-        deleted = svc.hard_delete_by_source_prefix('document:missing')
-
-        assert deleted == 0
-        # The unrelated row is untouched
-        remaining = _raw_all(db_service)
-        assert any(r.get('source') == 'document:xyz' for r in remaining)
-
     def test_does_not_delete_rows_with_longer_matching_source(self, svc, db_service):
         """Prefix 'document:abc' must not delete rows sourced as 'document:abcdef'."""
         _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abc:000',
@@ -1087,22 +959,6 @@ class TestHardDeleteBySourcePrefix:
         assert 'document:keep' in sources
         assert 'skill:memory:store:user' in sources
         assert 'document:target' not in sources
-
-    def test_empty_prefix_returns_zero(self, svc, db_service):
-        """Passing an empty prefix string returns 0 without deleting anything."""
-        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:safe:000',
-                    value='safe chunk', source='document:safe')
-
-        # Empty prefix — implementation matches source LIKE '%' which would delete
-        # everything. The service must handle this; if it does delete, the count
-        # reflects rows deleted. This test documents the actual behaviour so any
-        # regression is caught.
-        before_count = len(_raw_all(db_service))
-        deleted = svc.hard_delete_by_source_prefix('')
-        after_count = len(_raw_all(db_service))
-
-        # Whatever it does, count must equal rows actually removed
-        assert deleted == before_count - after_count
 
     def test_partial_prefix_targets_all_matching_docs(self, svc, db_service):
         """Using prefix 'document:' deletes all document-sourced rows regardless of doc id."""

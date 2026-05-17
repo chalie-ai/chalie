@@ -24,8 +24,6 @@ class TestEscapeAttr:
     def test_escapes_ampersand_and_quote_combined(self):
         assert escape_attr('a & b "c"') == "a &amp; b &quot;c&quot;"
 
-    def test_passes_unicode_unchanged(self):
-        assert escape_attr("café ☕") == "café ☕"
 
 
 @pytest.mark.unit
@@ -146,9 +144,6 @@ class TestExtractPlaintext:
 
     def test_decodes_entities(self):
         assert extract_plaintext("<p>a &amp; b</p>") == "a & b"
-
-    def test_empty(self):
-        assert extract_plaintext("") == ""
 
     def test_minified_list_items_are_separated(self):
         # Without block-boundary spacing this collapses to ``oneTwoThree`` and

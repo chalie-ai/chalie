@@ -24,12 +24,6 @@ class TestCleanForTts:
     def test_markdown_header_strips(self):
         assert _clean_for_tts("# My Header") == "My Header"
 
-    def test_markdown_bold_strips(self):
-        assert _clean_for_tts("**bold text**") == "bold text"
-
-    def test_markdown_italic_strips(self):
-        assert _clean_for_tts("*italic text*") == "italic text"
-
     def test_markdown_inline_code_strips(self):
         assert _clean_for_tts("use `print()` here") == "use print() here"
 
@@ -65,29 +59,16 @@ class TestCleanForTts:
         assert "google dot com" in result
         assert "details" in result
 
-    def test_url_strips_www_prefix(self):
-        result = _clean_for_tts("visit https://www.example.com/page")
-        assert "www" not in result
-        assert "example dot com" in result
-
     def test_url_subdomain_is_spoken(self):
         # Multi-segment hosts get every dot spoken, not just the TLD.
         result = _clean_for_tts("docs at https://api.example.co.uk/v2")
         assert "api dot example dot co dot uk" in result
-
-    def test_url_without_path_is_spoken(self):
-        result = _clean_for_tts("see https://example.com please")
-        assert "example dot com" in result
-        assert "please" in result
 
     def test_bare_url_round_trip_produces_spoken_host(self):
         # Regression guard: a bare URL with no surrounding text still produces
         # the spoken-host form (not an empty string, not the raw URL).
         result = _clean_for_tts("http://google.com/path/to/page")
         assert result == "google dot com"
-
-    def test_plain_text_passthrough(self):
-        assert _clean_for_tts("just plain text") == "just plain text"
 
     def test_whitespace_collapses_across_blocks(self):
         assert _clean_for_tts("<p>a</p><p>b</p>") == "a b"

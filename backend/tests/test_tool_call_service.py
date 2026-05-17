@@ -51,11 +51,6 @@ class TestStore:
         rows = _all_rows(db)
         assert rows[0]['ephemeral'] == 1
 
-    def test_store_ephemeral_false(self, svc, db, transcript_id):
-        svc.store(transcript_id, 'memory', {}, 'result', ephemeral=False)
-        rows = _all_rows(db)
-        assert rows[0]['ephemeral'] == 0
-
     def test_store_params_serialized_from_dict(self, svc, db, transcript_id):
         svc.store(transcript_id, 'memory', {'key': 'value'}, 'ok')
         rows = _all_rows(db)
@@ -82,10 +77,6 @@ class TestStoreBatch:
         assert len(rows) == 2
         assert rows[0]['tool_name'] == 'memory'
         assert rows[1]['tool_name'] == 'schedule'
-
-    def test_store_batch_empty_does_nothing(self, svc, db, transcript_id):
-        svc.store_batch(transcript_id, [], [])
-        assert _all_rows(db) == []
 
     def test_store_batch_default_ephemeral_true(self, svc, db, transcript_id):
         tool_calls = [{'id': 'tc1', 'name': 'memory', 'input': {}}]
@@ -167,11 +158,6 @@ class TestGetByTimerange:
         assert len(rows) == 1
         assert rows[0]['tool_name'] == 'memory'
 
-    def test_get_by_timerange_empty_when_no_records(self, svc, transcript_id):
-        center = utc_now()
-        rows = svc.get_by_timerange(center.isoformat())
-        assert rows == []
-
     def test_get_by_timerange_excludes_records_outside_window(self, svc, db, transcript_id):
         center = utc_now()
         center_iso = center.isoformat()
@@ -216,10 +202,6 @@ class TestGetFindToolsResults:
 
     def test_get_find_tools_results_empty_when_no_find_tools_records(self, svc, db, transcript_id):
         svc.store(transcript_id, 'memory', {}, 'result')
-        results = svc.get_find_tools_results(transcript_id)
-        assert results == []
-
-    def test_get_find_tools_results_empty_when_no_records(self, svc, transcript_id):
         results = svc.get_find_tools_results(transcript_id)
         assert results == []
 

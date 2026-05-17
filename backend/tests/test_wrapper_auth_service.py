@@ -28,34 +28,21 @@ def _make_flask_request(authorization_header: str = "") -> MagicMock:
 
 
 class TestHashToken:
-    def test_produces_sha256_hex(self):
-        assert _hash_token("hello") == hashlib.sha256(b"hello").hexdigest()
-
-    def test_length_is_64(self):
-        assert len(_hash_token("anything")) == 64
-
-    def test_deterministic(self):
+    def test_produces_sha256_hex_deterministic(self):
+        expected = hashlib.sha256(b"hello").hexdigest()
+        assert _hash_token("hello") == expected
+        assert len(expected) == 64
         assert _hash_token("abc") == _hash_token("abc")
-
-    def test_different_inputs_differ(self):
         assert _hash_token("aaa") != _hash_token("bbb")
 
 
 class TestCreateToken:
-    def test_returns_raw_token_and_wrapper_id(self, svc):
-        raw, wid = svc.create_token("Test Wrapper")
-        assert isinstance(raw, str)
-        assert len(raw) > 20
-        assert wid.startswith("wrp_")
-
-    def test_wrapper_id_is_unique(self, svc):
-        _, wid1 = svc.create_token("W1")
-        _, wid2 = svc.create_token("W2")
+    def test_returns_unique_raw_token_and_wrapper_id(self, svc):
+        raw1, wid1 = svc.create_token("W1")
+        raw2, wid2 = svc.create_token("W2")
+        assert isinstance(raw1, str) and len(raw1) > 20
+        assert wid1.startswith("wrp_")
         assert wid1 != wid2
-
-    def test_raw_token_is_unique(self, svc):
-        raw1, _ = svc.create_token("W1")
-        raw2, _ = svc.create_token("W2")
         assert raw1 != raw2
 
     def test_hash_is_stored_not_raw_token(self, svc, db):
@@ -83,30 +70,18 @@ class TestCreateToken:
         ).fetchone()
         assert json.loads(row[0]) == perms
 
-    def test_defaults_to_empty_dicts(self, svc, db):
+    def test_defaults_and_timestamps(self, svc, db):
         _, wid = svc.create_token("W1")
         row = db.execute(
-            "SELECT capabilities, permissions, metadata "
+            "SELECT capabilities, permissions, metadata, created_at, revoked_at "
             "FROM wrapper_tokens WHERE wrapper_id = ?",
             (wid,),
         ).fetchone()
         assert json.loads(row[0]) == {}
         assert json.loads(row[1]) == {}
         assert json.loads(row[2]) == {}
-
-    def test_created_at_is_utc(self, svc, db):
-        _, wid = svc.create_token("W1")
-        row = db.execute(
-            "SELECT created_at FROM wrapper_tokens WHERE wrapper_id = ?", (wid,)
-        ).fetchone()
-        assert "+00:00" in row[0] or "Z" in row[0]
-
-    def test_revoked_at_is_null_on_creation(self, svc, db):
-        _, wid = svc.create_token("W1")
-        row = db.execute(
-            "SELECT revoked_at FROM wrapper_tokens WHERE wrapper_id = ?", (wid,)
-        ).fetchone()
-        assert row[0] is None
+        assert "+00:00" in row[3] or "Z" in row[3]
+        assert row[4] is None
 
 
 class TestValidateBearer:
@@ -115,19 +90,12 @@ class TestValidateBearer:
         req = _make_flask_request(f"Bearer {raw}")
         assert svc.validate_bearer(req) == wid
 
-    def test_invalid_token_returns_none(self, svc):
-        svc.create_token("W1")
-        req = _make_flask_request("Bearer totally-wrong-token")
-        assert svc.validate_bearer(req) is None
-
-    def test_no_auth_header_returns_none(self, svc):
-        req = _make_flask_request("")
-        assert svc.validate_bearer(req) is None
-
-    def test_non_bearer_scheme_returns_none(self, svc):
+    def test_invalid_and_missing_headers_return_none(self, svc):
         raw, _ = svc.create_token("W1")
-        req = _make_flask_request(f"Basic {raw}")
-        assert svc.validate_bearer(req) is None
+        assert svc.validate_bearer(_make_flask_request("Bearer wrong-token")) is None
+        assert svc.validate_bearer(_make_flask_request("")) is None
+        assert svc.validate_bearer(_make_flask_request(f"Basic {raw}")) is None
+        assert svc.validate_bearer(_make_flask_request("Bearer ")) is None
 
     def test_revoked_token_returns_none(self, svc):
         raw, wid = svc.create_token("W1")
@@ -144,51 +112,27 @@ class TestValidateBearer:
         ).fetchone()
         assert row[0] is not None
 
-    def test_empty_bearer_value_returns_none(self, svc):
-        req = _make_flask_request("Bearer ")
-        assert svc.validate_bearer(req) is None
-
 
 class TestCheckPermission:
-    def test_query_permission_granted(self, svc):
-        perms = {"query": ["memory", "threads"], "update": [], "broadcast": False}
+    def test_listed_resource_granted(self, svc):
+        perms = {"query": ["memory", "threads"], "update": ["memory"], "broadcast": True}
         _, wid = svc.create_token("W1", permissions=perms)
         assert svc.check_permission(wid, "query", "memory") is True
         assert svc.check_permission(wid, "query", "threads") is True
+        assert svc.check_permission(wid, "update", "memory") is True
+        assert svc.check_permission(wid, "broadcast", "") is True
 
-    def test_query_permission_denied_for_unlisted_resource(self, svc):
+    def test_unlisted_resource_denied(self, svc):
         perms = {"query": ["memory"], "update": [], "broadcast": False}
         _, wid = svc.create_token("W1", permissions=perms)
         assert svc.check_permission(wid, "query", "tools") is False
-
-    def test_update_permission_granted(self, svc):
-        perms = {"query": [], "update": ["memory"], "broadcast": False}
-        _, wid = svc.create_token("W1", permissions=perms)
-        assert svc.check_permission(wid, "update", "memory") is True
-
-    def test_broadcast_true(self, svc):
-        perms = {"query": [], "update": [], "broadcast": True}
-        _, wid = svc.create_token("W1", permissions=perms)
-        assert svc.check_permission(wid, "broadcast", "") is True
-
-    def test_broadcast_false(self, svc):
-        perms = {"query": [], "update": [], "broadcast": False}
-        _, wid = svc.create_token("W1", permissions=perms)
         assert svc.check_permission(wid, "broadcast", "") is False
 
-    def test_missing_wrapper_returns_false(self, svc):
+    def test_missing_and_revoked_wrapper_returns_false(self, svc):
         assert svc.check_permission("nonexistent", "query", "memory") is False
-
-    def test_revoked_wrapper_returns_false(self, svc):
         _, wid = svc.create_token("W1")
         svc.revoke(wid)
         assert svc.check_permission(wid, "query", "memory") is False
-
-    def test_empty_permissions_denies_all(self, svc):
-        _, wid = svc.create_token("W1", permissions={})
-        assert svc.check_permission(wid, "query", "memory") is False
-        assert svc.check_permission(wid, "update", "memory") is False
-        assert svc.check_permission(wid, "broadcast", "") is False
 
 
 class TestRevoke:

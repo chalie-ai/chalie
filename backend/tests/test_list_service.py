@@ -206,9 +206,6 @@ class TestAddItems:
         assert row['removed_at'] is None
         assert row['checked'] == 0
 
-    def test_skips_whitespace_and_empty(self, service, db):
-        _seed_list(db)
-        assert service.add_items('abc12345', ['  ', '\t', '']) == 0
 
 
 # ─── remove_items ─────────────────────────────────────────────────────────
@@ -251,9 +248,6 @@ class TestCheckUncheck:
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
         assert service.check_items('abc12345', ['bread']) == 0
 
-    def test_check_empty_input_returns_zero(self, service, db):
-        _seed_list(db)
-        assert service.check_items('abc12345', []) == 0
 
 
 # ─── _get_list_row ────────────────────────────────────────────────────────

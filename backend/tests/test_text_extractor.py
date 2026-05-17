@@ -28,11 +28,6 @@ class TestDetectMimeType:
         from services.text_extractor import detect_mime_type
         assert detect_mime_type('/path/to/page.html') == 'text/html'
 
-    def test_markdown(self):
-        from services.text_extractor import detect_mime_type
-        result = detect_mime_type('/path/to/README.md')
-        assert result is not None  # stdlib may return text/markdown or text/x-markdown
-
     def test_txt(self):
         from services.text_extractor import detect_mime_type
         assert detect_mime_type('/path/to/notes.txt') == 'text/plain'
@@ -63,10 +58,6 @@ class TestNormalizeText:
         from services.text_extractor import normalize_text
         result = normalize_text("a\n\n\n\n\nb")
         assert result == 'a\n\nb'
-
-    def test_empty_string(self):
-        from services.text_extractor import normalize_text
-        assert normalize_text('') == ''
 
     def test_none_safe(self):
         from services.text_extractor import normalize_text

@@ -9,8 +9,7 @@
 """
 Providers — thin singleton wrapping provider resolution and LLM send.
 
-Resolves the correct LLM provider for a given job (e.g. 'frontal-cortex-unified'),
-sends messages, and returns a raw LLMResponse. No response parsing here.
+Resolves the active DB provider, sends messages, returns a raw LLMResponse.
 """
 
 import json

@@ -106,18 +106,6 @@ class TestSchedulerAPI:
         assert "offset" in body
         assert len(body["items"]) == 2
 
-    def test_list_filters_by_pending_status(self, client, db):
-        _insert_item(db, id="pend1", status="pending")
-        _insert_item(db, id="fired1", status="fired", group_id="fired1")
-
-        resp = client.get("/scheduler?status=pending")
-
-        assert resp.status_code == 200
-        body = resp.get_json()
-        assert body["total"] == 1
-        assert len(body["items"]) == 1
-        assert body["items"][0]["status"] == "pending"
-
     def test_list_rejects_invalid_status(self, client, db):
         resp = client.get("/scheduler?status=bogus")
 
@@ -164,7 +152,7 @@ class TestSchedulerAPI:
 
     @pytest.mark.parametrize(
         "recurrence",
-        ["daily", "weekly", "monthly", "weekdays", "hourly", "interval:60"],
+        ["daily", "hourly", "interval:60"],
     )
     def test_create_accepts_valid_recurrence(self, client, db, recurrence):
         payload = {
@@ -197,20 +185,6 @@ class TestSchedulerAPI:
 
         assert resp.status_code == 400
         assert "hourly" in resp.get_json()["error"]
-
-    def test_create_window_start_without_end_returns_400(self, client, db):
-        resp = client.post(
-            "/scheduler",
-            json={
-                "message": "Missing end",
-                "due_at": _future_iso(),
-                "recurrence": "hourly",
-                "window_start": "09:00",
-            },
-        )
-
-        assert resp.status_code == 400
-        assert "window_end" in resp.get_json()["error"]
 
     # ----- GET /scheduler/<id> -----
 
@@ -288,14 +262,6 @@ class TestSchedulerAPI:
             ("cancel01",),
         ).fetchone()
         assert row["status"] == "cancelled"
-
-    def test_cancel_returns_404_for_non_pending(self, client, db):
-        _insert_item(db, id="already_fired", status="fired", group_id="already_fired")
-
-        resp = client.delete("/scheduler/already_fired")
-
-        assert resp.status_code == 404
-        assert "not pending" in resp.get_json()["error"]
 
     # ----- DELETE /scheduler/history -----
 

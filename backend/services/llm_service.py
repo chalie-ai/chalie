@@ -352,26 +352,16 @@ class LoggingLLMService:
 def create_llm_service(config: dict):
     """Create an LLM service based on the platform field in config.
 
-    If the config contains a '_job_name' key (injected by
-    Providers._resolve), the returned service is wrapped with LoggingLLMService
-    so every call is logged.
-
-    An optional '_usage_class' key ('chat', 'subagent', 'subconscious')
-    distinguishes traffic sources in llm_call_log. Injected by Providers._resolve
-    from the calling processor's USAGE_CLASS constant.
-
-    Args:
-        config: Dict with at least 'platform' (defaults to 'ollama').
-
-    Returns:
-        LLM service instance.
+    If the config contains a '_job_name' key, the returned service is wrapped
+    with LoggingLLMService so every call is logged. '_usage_class' distinguishes
+    traffic sources in llm_call_log.
     """
     primary = _build_service(config)
     fallback_name = config.get('fallback_provider')
     if fallback_name:
         try:
-            from services.config_service import ConfigService
-            providers = ConfigService.get_providers()
+            from services.provider_cache_service import ProviderCacheService
+            providers = ProviderCacheService.get_providers()
             if fallback_name in providers:
                 fallback_config = dict(providers[fallback_name])
                 fallback_config['platform'] = providers[fallback_name].get('platform', 'ollama')

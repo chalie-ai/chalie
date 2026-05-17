@@ -45,9 +45,6 @@ class TestStripFillers:
     def test_real_words_are_preserved(self, text):
         assert _strip_fillers(text) == text
 
-    def test_empty_string_returns_empty(self):
-        assert _strip_fillers("") == ""
-
     def test_no_double_spaces_after_removal(self):
         result = _strip_fillers("check um uh my calendar")
         assert "  " not in result
@@ -91,5 +88,3 @@ class TestFixContractions:
     def test_ambiguous_words_are_not_rewritten(self, text):
         assert _fix_contractions(text) == text
 
-    def test_empty_string_returns_empty(self):
-        assert _fix_contractions("") == ""

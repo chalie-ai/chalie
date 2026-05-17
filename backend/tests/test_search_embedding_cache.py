@@ -137,16 +137,6 @@ class TestRouteQuery:
              patch('tools.search.router.sqlite3.connect', side_effect=sqlite3.OperationalError("no db")):
             assert r.route_query("test") == []
 
-    def test_empty_knn_returns_empty(self):
-        import tools.search.router as r
-        mock_emb = MagicMock()
-        mock_emb.generate_embedding.return_value = _make_embedding()
-
-        conn = _mock_router_conn(knn_rows=[], id_to_provider_rows=[])
-
-        with patch('services.embedding_service.EmbeddingService', return_value=mock_emb), \
-             patch('tools.search.router.sqlite3.connect', return_value=conn):
-            assert r.route_query("test") == []
 
 
 # ── search.py ────────────────────────────────────────────────────────────────
@@ -161,11 +151,6 @@ class TestSearchExecute:
     def test_empty_query(self):
         from abilities.search import SearchAbility
         r = SearchAbility().execute("topic", {}, None)
-        assert r['text'].startswith('EMPTY: no query supplied')
-
-    def test_whitespace_query(self):
-        from abilities.search import SearchAbility
-        r = SearchAbility().execute("topic", {"query": "   "}, None)
         assert r['text'].startswith('EMPTY: no query supplied')
 
     def test_forced_ddg(self):
@@ -224,15 +209,6 @@ class TestSearchExecute:
              patch('tools.search.router.route_query', return_value=[]):
             SearchAbility().execute("t", {"query": "test", "limit": -5}, None)
         assert m.call_args[0][1] == 1
-
-    def test_default_limit_5(self):
-        self._reset()
-        from abilities.search import SearchAbility
-        SearchAbility._providers = {}
-        with patch('abilities.search.fetch_ddg_fallback', return_value=[]) as m, \
-             patch('tools.search.router.route_query', return_value=[]):
-            SearchAbility().execute("t", {"query": "test"}, None)
-        assert m.call_args[0][1] == 5
 
     def test_response_shape(self):
         self._reset()

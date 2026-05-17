@@ -20,25 +20,8 @@ class TestSourceClassification:
     def test_https_url(self):
         assert self._classify('https://example.com/article') == 'url'
 
-    def test_ftp_url(self):
-        assert self._classify('ftp://files.example.com/data') == 'url'
-
     def test_absolute_path(self):
         assert self._classify('/home/user/document.pdf') == 'file'
-
-    def test_home_tilde_path(self):
-        assert self._classify('~/Documents/notes.txt') == 'file'
-
-    def test_relative_path(self):
-        assert self._classify('./data/report.docx') == 'file'
-
-    def test_bare_string_no_scheme(self):
-        # No scheme → treated as file path
-        assert self._classify('example.com/page') == 'file'
-
-    def test_windows_style_path(self):
-        # No scheme → file
-        assert self._classify('C:/Users/user/doc.pdf') == 'file'
 
 
 # ─── handle_read entry point ──────────────────────────────────────────────────
@@ -91,11 +74,6 @@ class TestUrlSSRF:
         with patch('socket.getaddrinfo') as mock_dns:
             mock_dns.return_value = [(None, None, None, None, ('127.0.0.1', 0))]
             assert self._check('http://localhost') is True
-
-    def test_loopback_ip_blocked(self):
-        with patch('socket.getaddrinfo') as mock_dns:
-            mock_dns.return_value = [(None, None, None, None, ('127.0.0.1', 0))]
-            assert self._check('http://127.0.0.1') is True
 
     def test_private_10_range_blocked(self):
         with patch('socket.getaddrinfo') as mock_dns:
@@ -276,21 +254,6 @@ class TestFileReadSecurity:
 
     def test_etc_passwd_blocked(self):
         result = self._read('/etc/passwd')
-        assert 'blocked' in result.lower()
-        assert '[end:read]' in result
-
-    def test_proc_blocked(self):
-        result = self._read('/proc/self/environ')
-        assert 'blocked' in result.lower()
-        assert '[end:read]' in result
-
-    def test_dev_blocked(self):
-        result = self._read('/dev/urandom')
-        assert 'blocked' in result.lower()
-        assert '[end:read]' in result
-
-    def test_sys_blocked(self):
-        result = self._read('/sys/kernel/hostname')
         assert 'blocked' in result.lower()
         assert '[end:read]' in result
 

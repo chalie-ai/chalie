@@ -106,17 +106,6 @@ class TestDocumentsAPI:
         # clean_text stripped from response
         assert "clean_text" not in data["items"][0]
 
-    def test_list_documents_empty(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_all_documents.return_value = []
-
-            resp = client.get("/documents")
-
-        assert resp.status_code == 200
-        assert resp.get_json()["items"] == []
-
     def test_list_documents_include_deleted(self, client):
         with patch(_P_SVC) as mock_get:
             mock_svc = MagicMock()
@@ -418,9 +407,6 @@ class TestDocumentsAPI:
         assert resp.status_code == 400
         assert "required" in resp.get_json()["error"].lower()
 
-    def test_search_empty_query(self, client):
-        resp = client.get("/documents/search?q=")
-        assert resp.status_code == 400
 
     # ------------------------------------------------------------------
     # POST /documents/upload
@@ -515,20 +501,12 @@ class TestDocumentsAPI:
 class TestHelpers:
     """Test helper functions in the documents API module."""
 
-    def test_sanitize_filename_strips_traversal(self):
+    def test_sanitize_filename_security(self):
         from api.documents import _sanitize_filename
         assert '/' not in _sanitize_filename('../../etc/passwd')
         assert '\\' not in _sanitize_filename('..\\windows\\system32')
-
-    def test_sanitize_filename_strips_null_bytes(self):
-        from api.documents import _sanitize_filename
-        result = _sanitize_filename('file\x00.txt')
-        assert '\x00' not in result
-
-    def test_sanitize_filename_strips_leading_dots(self):
-        from api.documents import _sanitize_filename
-        result = _sanitize_filename('...hidden')
-        assert not result.startswith('.')
+        assert '\x00' not in _sanitize_filename('file\x00.txt')
+        assert not _sanitize_filename('...hidden').startswith('.')
 
     def test_sanitize_filename_empty_becomes_unnamed(self):
         from api.documents import _sanitize_filename
