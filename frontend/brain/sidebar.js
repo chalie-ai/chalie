@@ -6,6 +6,7 @@ const BrainSidebar = (() => {
       sub: [
         { id: 'memory', label: 'Memory' },
         { id: 'tools', label: 'Tools' },
+        { id: 'world', label: 'World state' },
         { id: 'personality', label: 'Personality' },
         { id: 'errors', label: 'Errors' },
         { id: 'usage', label: 'Usage' },
