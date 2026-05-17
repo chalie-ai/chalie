@@ -107,7 +107,8 @@ def _poll_and_fire():
         from services.database_service import get_shared_db_service
 
         db = get_shared_db_service()
-        now = datetime.now(timezone.utc)
+        from services.time_utils import utc_now
+        now = utc_now()
         now_iso = now.isoformat()
 
         # Check for overdue items (potential stall warning)
@@ -294,13 +295,8 @@ def _build_recurrence(item: dict, _fired_at: object = None) -> dict:
         return None
 
     try:
-        due_at = item["due_at"]
-        if isinstance(due_at, str):
-            due_at = datetime.fromisoformat(due_at)
-
-        # Ensure timezone-aware (convert naive to UTC if needed)
-        if due_at.tzinfo is None:
-            due_at = due_at.replace(tzinfo=timezone.utc)
+        from services.time_utils import parse_utc
+        due_at = parse_utc(item["due_at"])
 
     except Exception:
         return None

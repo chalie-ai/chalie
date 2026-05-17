@@ -19,7 +19,6 @@ Typical usage by a service::
     get_telemetry_collector().record(MEMORY_RECALL, {"episode_count": 5})
 """
 
-import datetime
 import logging
 import threading
 from collections import deque, defaultdict
@@ -117,7 +116,8 @@ class TelemetryCollector:
                 original dict after the call without affecting the stored
                 entry.
         """
-        timestamp = datetime.datetime.utcnow().isoformat() + "Z"
+        from services.time_utils import utc_now
+        timestamp = utc_now().isoformat()
         correlation_id: Optional[str] = get_correlation_id()
 
         entry: Dict[str, Any] = {
