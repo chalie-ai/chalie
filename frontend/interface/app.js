@@ -139,7 +139,7 @@ class ChalieApp {
     // thought card after 2 seconds, enabling visual testing without a backend.
     // The event is fed directly into the event router's internal handler so it
     // exercises the full thought → renderer pipeline.
-    if (new URLSearchParams(window.location.search).has('debug_thought')) {
+    if (new URLSearchParams(globalThis.location.search).has('debug_thought')) {
       setTimeout(() => {
         this._eventRouter._handleEvent({
           type: 'thought',
@@ -236,12 +236,12 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   _initInstallPrompt() {
-    window.addEventListener('beforeinstallprompt', (e) => {
+    globalThis.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       this._deferredInstallPrompt = e;
       document.getElementById('installBtn')?.classList.remove('hidden');
     });
-    window.addEventListener('appinstalled', () => {
+    globalThis.addEventListener('appinstalled', () => {
       this._deferredInstallPrompt = null;
       document.getElementById('installBtn')?.classList.add('hidden');
     });
@@ -321,13 +321,13 @@ class ChalieApp {
 
       // Settings button → brain dashboard
       document.getElementById('settingsBtn')?.addEventListener('click', () => {
-        window.open('/brain/', 'chalie-brain');
+        globalThis.open('/brain/', 'chalie-brain');
       });
 
       // Connect WebSocket and drift event router
       this._eventRouter.init();
 
-      window.addEventListener('beforeunload', () => {
+      globalThis.addEventListener('beforeunload', () => {
         this.ws.close();
         this._taskStrip.destroy();
         this._voiceRecorder.destroy();
@@ -690,7 +690,7 @@ class ChalieApp {
     // Safety net — dragend always fires even if the drop is cancelled,
     // preventing a stuck overlay on drag-out-of-window.
     document.addEventListener('dragend', hideOverlay);
-    window.addEventListener('blur', hideOverlay);
+    globalThis.addEventListener('blur', hideOverlay);
 
     overlay.addEventListener('drop', (ev) => {
       ev.preventDefault();
@@ -736,7 +736,7 @@ class ChalieApp {
     });
 
     // Close on chat scroll (body/window scroll, not a container element)
-    window.addEventListener('scroll', () => {
+    globalThis.addEventListener('scroll', () => {
       if (!menu.classList.contains('hidden')) {
         menu.classList.add('hidden');
         attachBtn.classList.remove('active');
@@ -763,7 +763,7 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   _handleSharedContent() {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(globalThis.location.search);
     const shared = params.get('shared');
     if (!shared) return;
 
@@ -778,8 +778,8 @@ class ChalieApp {
     }
 
     // Clean URL without reload
-    const cleanUrl = window.location.pathname;
-    window.history.replaceState({}, '', cleanUrl);
+    const cleanUrl = globalThis.location.pathname;
+    globalThis.history.replaceState({}, '', cleanUrl);
   }
 
   // ---------------------------------------------------------------------------
@@ -856,10 +856,10 @@ class ChalieApp {
       this._hideConnectionBanner();
       // Version-change detection (post-restart cache bust)
       if (data?.version) {
-        if (!window.__chalieVersion) {
-          window.__chalieVersion = data.version;
-        } else if (data.version !== window.__chalieVersion) {
-          window.__chalieVersion = data.version;
+        if (!globalThis.__chalieVersion) {
+          globalThis.__chalieVersion = data.version;
+        } else if (data.version !== globalThis.__chalieVersion) {
+          globalThis.__chalieVersion = data.version;
           location.reload();
           return;
         }
@@ -935,7 +935,7 @@ class ChalieApp {
 
   _handleAuthFailure() {
     this._taskStrip?.destroy();
-    window.location.replace('/login/');
+    globalThis.location.replace('/login/');
   }
 
   // ---------------------------------------------------------------------------
@@ -967,7 +967,7 @@ class ChalieApp {
 
   _showPwaDialogIfNeeded() {
     // Already installed as PWA
-    if (window.matchMedia('(display-mode: standalone)').matches) return;
+    if (globalThis.matchMedia('(display-mode: standalone)').matches) return;
     // Already dismissed by user
     if (lsGet('chalie_pwa_dismissed')) return;
 

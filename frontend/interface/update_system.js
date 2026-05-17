@@ -52,6 +52,13 @@ export class UpdateSystem {
     if (!dialog || !this._pendingUpdate) return;
 
     const data = this._pendingUpdate;
+    this._populateDialogVersionInfo(data);
+    this._applyDialogDeploymentMode(data);
+    dialog.showModal();
+  }
+
+  /** Populate version labels and release notes in the dialog. */
+  _populateDialogVersionInfo(data) {
     const currentEl = document.getElementById('updateCurrentVer');
     const newEl = document.getElementById('updateNewVer');
     const notesEl = document.getElementById('updateNotes');
@@ -66,6 +73,15 @@ export class UpdateSystem {
     if (actionsEl) actionsEl.classList.remove('hidden');
     if (progressEl) progressEl.classList.add('hidden');
     if (instructionsEl) instructionsEl.classList.add('hidden');
+  }
+
+  /**
+   * Swap the dialog body for deployment-mode-specific instructions when
+   * the apply button cannot be offered (docker or dev modes).
+   */
+  _applyDialogDeploymentMode(data) {
+    const actionsEl = document.getElementById('updateActions');
+    const instructionsEl = document.getElementById('updateInstructions');
 
     if (data.deployment_mode === 'docker') {
       if (actionsEl) actionsEl.classList.add('hidden');
@@ -80,8 +96,6 @@ export class UpdateSystem {
         instructionsEl.classList.remove('hidden');
       }
     }
-
-    dialog.showModal();
   }
 
   _closeUpdateDialog() {
@@ -104,22 +118,27 @@ export class UpdateSystem {
         body: JSON.stringify({ tag: this._pendingUpdate.latest_tag }),
       });
       const result = await resp.json();
-
-      if (!result.ok) {
-        const statusEl = progressEl?.querySelector('.update-dialog__status');
-        if (statusEl) statusEl.textContent = result.message || 'Update failed.';
-        setTimeout(() => {
-          if (actionsEl) actionsEl.classList.remove('hidden');
-          if (progressEl) progressEl.classList.add('hidden');
-        }, 3000);
-        return;
-      }
-
-      const statusEl = progressEl?.querySelector('.update-dialog__status');
-      if (statusEl) statusEl.textContent = 'Restarting Chalie...';
+      this._handleApplyResult(result, actionsEl, progressEl);
     } catch {
       const statusEl = progressEl?.querySelector('.update-dialog__status');
       if (statusEl) statusEl.textContent = 'Update request failed.';
     }
+  }
+
+  /**
+   * Update the progress UI based on the /system/update/apply response.
+   * On failure, restores the action buttons after a short delay.
+   */
+  _handleApplyResult(result, actionsEl, progressEl) {
+    const statusEl = progressEl?.querySelector('.update-dialog__status');
+    if (!result.ok) {
+      if (statusEl) statusEl.textContent = result.message || 'Update failed.';
+      setTimeout(() => {
+        if (actionsEl) actionsEl.classList.remove('hidden');
+        if (progressEl) progressEl.classList.add('hidden');
+      }, 3000);
+      return;
+    }
+    if (statusEl) statusEl.textContent = 'Restarting Chalie...';
   }
 }

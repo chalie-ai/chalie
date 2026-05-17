@@ -173,28 +173,7 @@ export class Chat {
       },
       onDone: (data) => {
         this._onResponseReceivedCb?.();
-        if (responseContent) {
-          responseMeta.duration_ms = data.duration_ms;
-          responseMeta.ts = exchangeTimestamp;
-          // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
-          this._renderer.replaceActWithResponse(actEl, responseContent, responseMeta);
-          this._pendingForm = null;
-          // Notify if user switched away while waiting for the response
-          if (!document.hasFocus()) {
-            // Import extractPlaintext lazily for background notification text
-            import('./markup_extract.js').then(({ extractPlaintext }) => {
-              const notifText = extractPlaintext(responseContent);
-              if (notifText) this._notifications.notifyBackground(notifText);
-            }).catch(() => {});
-          }
-        } else {
-          // No content response — remove the ACT placeholder
-          if (actEl.isConnected) actEl.remove();
-          this._pendingForm = null;
-        }
-        this._presence.setState('resting');
-        this._isSending = false;
-        this._onSendCompleteCb?.();
+        this._finaliseTurn(actEl, responseContent, responseMeta, data, exchangeTimestamp);
       },
     }, pendingImageIds, pendingFiles);
 
@@ -264,6 +243,40 @@ export class Chat {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Finalise a completed send turn: swap or remove the ACT placeholder,
+   * fire background notification if needed, then reset send state.
+   */
+  _finaliseTurn(actEl, responseContent, responseMeta, doneData, exchangeTimestamp) {
+    if (responseContent) {
+      responseMeta.duration_ms = doneData.duration_ms;
+      responseMeta.ts = exchangeTimestamp;
+      // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
+      this._renderer.replaceActWithResponse(actEl, responseContent, responseMeta);
+      this._pendingForm = null;
+      this._notifyBackgroundIfUnfocused(responseContent);
+    } else {
+      // No content response — remove the ACT placeholder
+      if (actEl.isConnected) actEl.remove();
+      this._pendingForm = null;
+    }
+    this._presence.setState('resting');
+    this._isSending = false;
+    this._onSendCompleteCb?.();
+  }
+
+  /**
+   * Fire a background (tab-unfocused) notification for the given text,
+   * extracting plaintext from the XML response markup first.
+   */
+  _notifyBackgroundIfUnfocused(responseContent) {
+    if (document.hasFocus()) return;
+    import('./markup_extract.js').then(({ extractPlaintext }) => {
+      const notifText = extractPlaintext(responseContent);
+      if (notifText) this._notifications.notifyBackground(notifText);
+    }).catch(() => {});
+  }
 
   _appendMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {

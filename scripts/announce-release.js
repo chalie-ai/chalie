@@ -1,8 +1,6 @@
-#!/usr/bin/env node
-
-const { execSync } = require('child_process');
-const https = require('https');
-const http = require('http');
+import { execSync } from 'node:child_process';
+import https from 'node:https';
+import http from 'node:http';
 
 const VERSION = process.env.RELEASE_VERSION;
 
@@ -74,7 +72,8 @@ async function fireWebhook(payload) {
   });
 }
 
-async function main() {
+// Non-fatal — a broken announce must never block the release pipeline
+try {
   const prevTag = getPreviousTag();
   const commits = getCommitsSince(prevTag);
 
@@ -82,10 +81,7 @@ async function main() {
 
   const status = await fireWebhook({ version: VERSION, commits });
   console.log(`Webhook status: ${status}`);
-}
-
-// Non-fatal — a broken announce must never block the release pipeline
-main().catch(err => {
+} catch (err) {
   console.error(`announce-release failed (non-fatal): ${err.message}`);
   process.exit(0);
-});
+}

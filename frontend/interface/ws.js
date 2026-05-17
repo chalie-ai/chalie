@@ -34,7 +34,7 @@ export class WSClient {
     if (host) {
       base = host.replace(/\/$/, '');
     } else {
-      base = window.location.origin;
+      base = globalThis.location.origin;
     }
     // Convert http(s) to ws(s)
     const wsBase = base.replace(/^http/, 'ws');

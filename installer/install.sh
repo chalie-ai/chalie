@@ -63,11 +63,12 @@ _banner() {
 # ─── Parse Installer Args ──────────────────────────────────────────────────
 _parse_args() {
   while [[ $# -gt 0 ]]; do
-    case "$1" in
+    local arg="$1"
+    case "$arg" in
       --disable-voice)         _DISABLE_VOICE=true; shift ;;
-      --branch=*)              _BRANCH="${1#--branch=}"; shift ;;
+      --branch=*)              _BRANCH="${arg#--branch=}"; shift ;;
       --branch)                _BRANCH="$2"; shift 2 ;;
-      --tag=*)                 _TAG="${1#--tag=}"; shift ;;
+      --tag=*)                 _TAG="${arg#--tag=}"; shift ;;
       --tag)                   _TAG="$2"; shift 2 ;;
       --disable-default-tools) shift ;; # deprecated, ignored — tools are bundled in the repo
       *) shift ;;
@@ -522,15 +523,13 @@ _setup_venv() {
   "$venv/bin/pip" install -r "$CHALIE_HOME/app/backend/requirements.txt"
 
   # Voice dependencies (separate file, skipped if --disable-voice)
-  if [[ "$_DISABLE_VOICE" != "true" ]]; then
-    local voice_req="$CHALIE_HOME/app/backend/requirements-voice.txt"
-    if [[ -f "$voice_req" ]]; then
-      _info "Installing voice dependencies (STT/TTS)…"
-      "$venv/bin/pip" install -r "$voice_req" 2>/dev/null || {
-        _warn "Voice dependency install failed — voice will be unavailable"
-        _warn "You can retry later: $venv/bin/pip install -r $voice_req"
-      }
-    fi
+  local voice_req="$CHALIE_HOME/app/backend/requirements-voice.txt"
+  if [[ "$_DISABLE_VOICE" != "true" ]] && [[ -f "$voice_req" ]]; then
+    _info "Installing voice dependencies (STT/TTS)…"
+    "$venv/bin/pip" install -r "$voice_req" 2>/dev/null || {
+      _warn "Voice dependency install failed — voice will be unavailable"
+      _warn "You can retry later: $venv/bin/pip install -r $voice_req"
+    }
   fi
 
   # Prime run.sh stamp files so the first `chalie start` skips redundant pip sync.
@@ -691,14 +690,15 @@ _host="0.0.0.0"
 _cmd=""
 _args=()
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --port=*) _port="${1#--port=}"; shift ;;
+  _arg="$1"
+  case "$_arg" in
+    --port=*) _port="${_arg#--port=}"; shift ;;
     --port)   _port="$2"; shift 2 ;;
-    --host=*) _host="${1#--host=}"; shift ;;
+    --host=*) _host="${_arg#--host=}"; shift ;;
     --host)   _host="$2"; shift 2 ;;
     --version|-V) _cmd="version"; shift ;;
-    stop|restart|update|status|logs|help|version) _cmd="$1"; shift ;;
-    *) _args+=("$1"); shift ;;
+    stop|restart|update|status|logs|help|version) _cmd="$_arg"; shift ;;
+    *) _args+=("$_arg"); shift ;;
   esac
 done
 # Default command: start (if no named command given)

@@ -137,8 +137,9 @@ export class DocumentUpload {
       if (res.duplicates?.length) {
         const dup = res.duplicates[0];
         const dateStr = dup.created_at ? new Date(dup.created_at).toLocaleDateString() : '';
+        const datePart = dateStr ? ` from ${dateStr}` : '';
         dupWarning.innerHTML = `
-          <div>This looks like an updated version of <strong>${escHtml(dup.original_name)}</strong>${dateStr ? ` from ${dateStr}` : ''}. Replace the older version, or keep both?</div>
+          <div>This looks like an updated version of <strong>${escHtml(dup.original_name)}</strong>${datePart}. Replace the older version, or keep both?</div>
           <div class="upload-duplicate__actions">
             <button class="upload-duplicate__btn upload-duplicate__btn--primary" data-action="replace" data-new-id="${res.id}" data-old-id="${dup.id}">Replace</button>
             <button class="upload-duplicate__btn" data-action="keep">Keep Both</button>

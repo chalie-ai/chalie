@@ -335,8 +335,8 @@ const BrainApp = (() => {
     if (gate.providersOnly) _applyProvidersOnly();
 
     document.getElementById('mobileScrim').addEventListener('click', closeMobileSidebar);
-    window.addEventListener('hashchange', () => { _route = _readHash(); _render(); });
-    window.addEventListener('keydown', (e) => {
+    globalThis.addEventListener('hashchange', () => { _route = _readHash(); _render(); });
+    globalThis.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openCommandPalette(); }
       else if (e.key === 'Escape') _closeCommandPalette();
     });

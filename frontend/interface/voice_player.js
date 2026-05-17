@@ -116,7 +116,7 @@ export class VoicePlayer {
     this._resetPlayback();
 
     if (!this._audioCtx) {
-      const Ctor = window.AudioContext || window.webkitAudioContext;
+      const Ctor = globalThis.AudioContext || globalThis.webkitAudioContext;
       this._audioCtx = new Ctor();
     }
     if (this._audioCtx.state === 'suspended') {
@@ -309,8 +309,8 @@ export class VoicePlayer {
   _stopCurrentSource() {
     if (!this._currentSource) return;
     this._currentSource.onended = null;
-    try { this._currentSource.stop(); } catch (e) { console.warn('[VoicePlayer] source.stop failed:', e); }
-    try { this._currentSource.disconnect(); } catch (e) { console.warn('[VoicePlayer] source.disconnect failed:', e); }
+    try { this._currentSource.stop(); } catch (stopErr) { console.warn('[VoicePlayer] source.stop failed:', stopErr); }
+    try { this._currentSource.disconnect(); } catch (disconnectErr) { console.warn('[VoicePlayer] source.disconnect failed:', disconnectErr); }
     this._currentSource = null;
   }
 

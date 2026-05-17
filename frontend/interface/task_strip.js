@@ -106,13 +106,7 @@ export class TaskStrip {
     const totalCount = reminders.length;
 
     // Update trigger button visibility and badge
-    if (trigger) {
-      if (totalCount === 0) {
-        trigger.classList.add('hidden');
-      } else {
-        trigger.classList.remove('hidden');
-      }
-    }
+    trigger?.classList.toggle('hidden', totalCount === 0);
 
     // Auto-close the drawer when all items are gone
     if (totalCount === 0) {

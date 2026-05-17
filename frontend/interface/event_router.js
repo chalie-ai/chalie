@@ -62,75 +62,61 @@ export class EventRouter {
   // ---------------------------------------------------------------------------
 
   _handleEvent(data) {
-    // App update notification
-    if (data.type === 'app_update') {
-      if (this._onUpdate) this._onUpdate(data);
-      return;
-    }
-
-    // Task progress/completion — refresh the task strip
-    if (data.type === 'task') {
-      if (this._onTask) this._onTask(data);
-      return;
-    }
-
-    if (data.type === 'image_ready') {
-      if (this._onImageReady) this._onImageReady(data);
-      return;
-    }
-
-    if (data.type === 'capability_alert') {
-      if (this._onCapabilityAlert) this._onCapabilityAlert(data);
-      return;
-    }
-
-    if (data.type === 'permission_request') {
-      if (this._onPermissionRequest) this._onPermissionRequest(data);
-      return;
-    }
-
-    if (data.type === 'quick_tip') {
-      if (this._onQuickTip) this._onQuickTip(data);
-      return;
-    }
+    if (this._routeSimpleEvent(data)) return;
 
     const content = data.content || '';
     if (!content) return;
 
-    // Proactive thought card — render directly in the conversation spine.
-    // Handled before the 'response' sending-guard so thought cards always
-    // appear regardless of whether a sync /chat request is in flight.
-    if (data.type === 'thought') {
-      const meta = {
-        topic: data.topic,
-        type: data.type,
-        ts: new Date(),
-        mode: data.mode || '',
-        confidence: data.confidence || 0,
-      };
-      this._renderer.appendChalieForm(content, meta);
-      return;
-    }
+    if (this._routeThoughtEvent(data, content)) return;
 
     // Ignore 'response' events from the drift stream while a /chat SSE request
     // is in flight — the chat SSE already renders the reply via replaceActWithResponse.
     if (data.type === 'response' && this._isSendingGetter()) return;
 
-    // System notification + sound when tab is not focused
-    if (!document.hasFocus()) {
-      // Extract plaintext from XML for background notification
-      import('./markup_extract.js').then(({ extractPlaintext }) => {
-        const notifText = extractPlaintext(content);
-        if (notifText && this._onBackgroundContent) this._onBackgroundContent(notifText);
-      }).catch(() => {});
-    }
+    this._notifyBackground(content);
 
-    // Scheduler trigger events — refresh task strip, play sound
-    if (data.type === 'notification') {
-      if (this._onNotification) this._onNotification(data);
-      return;
-    }
+    if (this._routeNotificationEvent(data)) return;
 
+    this._renderContentEvent(data, content);
+  }
+
+  /**
+   * Route event types that require no content — app_update, task, image_ready,
+   * capability_alert, permission_request, quick_tip.
+   * Returns true when the event was handled.
+   */
+  _routeSimpleEvent(data) {
+    switch (data.type) {
+      case 'app_update':
+        if (this._onUpdate) this._onUpdate(data);
+        return true;
+      case 'task':
+        if (this._onTask) this._onTask(data);
+        return true;
+      case 'image_ready':
+        if (this._onImageReady) this._onImageReady(data);
+        return true;
+      case 'capability_alert':
+        if (this._onCapabilityAlert) this._onCapabilityAlert(data);
+        return true;
+      case 'permission_request':
+        if (this._onPermissionRequest) this._onPermissionRequest(data);
+        return true;
+      case 'quick_tip':
+        if (this._onQuickTip) this._onQuickTip(data);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Handle proactive thought cards — rendered before the sending-guard so
+   * they always appear regardless of whether a /chat request is in flight.
+   * Returns true when the event was handled.
+   */
+  _routeThoughtEvent(data, content) {
+    if (data.type !== 'thought') return false;
     const meta = {
       topic: data.topic,
       type: data.type,
@@ -138,8 +124,43 @@ export class EventRouter {
       mode: data.mode || '',
       confidence: data.confidence || 0,
     };
+    this._renderer.appendChalieForm(content, meta);
+    return true;
+  }
 
-    // Render in conversation spine as a Chalie message
+  /**
+   * Fire the background-content callback when the tab is not focused so the
+   * host page can show a system notification / play a sound.
+   */
+  _notifyBackground(content) {
+    if (document.hasFocus()) return;
+    import('./markup_extract.js').then(({ extractPlaintext }) => {
+      const notifText = extractPlaintext(content);
+      if (notifText && this._onBackgroundContent) this._onBackgroundContent(notifText);
+    }).catch(() => {});
+  }
+
+  /**
+   * Handle scheduler notification events (refresh task strip, play sound).
+   * Returns true when the event was handled.
+   */
+  _routeNotificationEvent(data) {
+    if (data.type !== 'notification') return false;
+    if (this._onNotification) this._onNotification(data);
+    return true;
+  }
+
+  /**
+   * Render a response/escalation/drift event into the conversation spine.
+   */
+  _renderContentEvent(data, content) {
+    const meta = {
+      topic: data.topic,
+      type: data.type,
+      ts: new Date(),
+      mode: data.mode || '',
+      confidence: data.confidence || 0,
+    };
     const formEl = this._renderer.appendChalieForm(content, meta);
 
     // Critic escalation — amber border to signal "needs your attention"

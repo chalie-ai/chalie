@@ -225,10 +225,10 @@ function pad2(n) {
 // ── Alarm (Web Audio API) ──────────────────────────────────────────────────
 
 function startAlarm() {
-  const Ctx = window.AudioContext || window.webkitAudioContext;
+  const Ctx = globalThis.AudioContext || globalThis.webkitAudioContext;
   if (!Ctx) return { stop() {} };
   let ctx;
-  try { ctx = new Ctx(); } catch (e) { return { stop() {} }; }
+  try { ctx = new Ctx(); } catch { return { stop() {} }; }
 
   let timer = null;
   let alive = true;
@@ -261,7 +261,7 @@ function startAlarm() {
     stop() {
       alive = false;
       if (timer != null) { clearTimeout(timer); timer = null; }
-      try { ctx.close(); } catch (e) { /* already closed */ }
+      try { ctx.close(); } catch { /* already closed */ }
     },
   };
 }

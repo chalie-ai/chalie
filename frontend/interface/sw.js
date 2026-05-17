@@ -10,19 +10,19 @@
  * so returning users immediately drop stale precached shells.
  */
 
-self.addEventListener('install', (event) => {
-  event.waitUntil(self.skipWaiting());
+globalThis.addEventListener('install', (event) => {
+  event.waitUntil(globalThis.skipWaiting());
 });
 
-self.addEventListener('activate', (event) => {
+globalThis.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys()
       .then((names) => Promise.all(names.map((n) => caches.delete(n))))
-      .then(() => self.clients.claim())
+      .then(() => globalThis.clients.claim())
   );
 });
 
-self.addEventListener('fetch', (event) => {
+globalThis.addEventListener('fetch', (event) => {
   // Share Target: intercept POST to /share-target and redirect with data
   if (event.request.method === 'POST' && new URL(event.request.url).pathname === '/share-target') {
     event.respondWith(
@@ -43,7 +43,7 @@ self.addEventListener('fetch', (event) => {
 // Push notifications
 // ============================================================================
 
-self.addEventListener('push', (event) => {
+globalThis.addEventListener('push', (event) => {
   if (!event.data) return;
 
   let payload;
@@ -61,22 +61,22 @@ self.addEventListener('push', (event) => {
     data: { url: payload.url || '/' },
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(globalThis.registration.showNotification(title, options));
 });
 
-self.addEventListener('notificationclick', (event) => {
+globalThis.addEventListener('notificationclick', (event) => {
   event.notification.close();
 
   const url = event.notification.data?.url || '/';
 
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+    globalThis.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
-        if (client.url.includes(self.location.origin) && 'focus' in client) {
+        if (client.url.includes(globalThis.location.origin) && 'focus' in client) {
           return client.focus();
         }
       }
-      return clients.openWindow(url);
+      return globalThis.clients.openWindow(url);
     })
   );
 });

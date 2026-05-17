@@ -1591,7 +1591,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 .btn-icon--small      { padding: var(--space-xs); }
 
 .btn-install {
-  background: #4caf72;
+  background: #236b41;
   color: #fff;
   border: none;
   padding: var(--space-sm) var(--space-xl);
@@ -1602,7 +1602,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   transition: background var(--duration-fast);
 }
 
-.btn-install:hover     { background: #5cc080; }
+.btn-install:hover     { background: #2e8a53; }
 .btn-install:disabled  { opacity: 0.45; cursor: default; }
 
 /* --------------------------------------------------------------------------
@@ -1865,7 +1865,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   border: 1px solid rgba(255, 200, 0, 0.15);
   border-radius: 6px;
   font-size: 13px;
-  color: rgba(234, 230, 242, 0.70);
+  color: var(--text-secondary);
   margin-bottom: 12px;
 }
 
@@ -3629,11 +3629,11 @@ details.block-section[open] > summary.block-section__title::before {
   right: var(--space-md);
   width: 28px;
   height: 28px;
-  color: var(--text-tertiary);
+  color: var(--text-muted);
 }
 
 .voice-player__close:hover {
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 @media (max-width: 480px) {

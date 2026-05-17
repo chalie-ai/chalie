@@ -170,41 +170,47 @@ export class ClientHeartbeat {
   _detectDevice() {
     const sw = screen.width;
     const sh = screen.height;
-    const minDim = Math.min(sw, sh);
     const coarse = matchMedia('(pointer: coarse)').matches;
 
-    let deviceClass;
-    if (coarse && minDim < 600) deviceClass = 'phone';
-    else if (coarse) deviceClass = 'tablet';
-    else deviceClass = 'desktop';
-
-    // Platform detection from navigator.platform / userAgentData
-    let platform = 'unknown';
-    if (navigator.userAgentData?.platform) {
-      platform = navigator.userAgentData.platform;
-    } else if (navigator.platform) {
-      const p = navigator.platform.toLowerCase();
-      if (p.includes('mac')) platform = 'macOS';
-      else if (p.includes('win')) platform = 'Windows';
-      else if (p.includes('linux')) platform = 'Linux';
-      else if (p.includes('iphone') || p.includes('ipad')) platform = 'iOS';
-    }
-
-    // PWA detection
-    const pwa = matchMedia('(display-mode: standalone)').matches ||
-                matchMedia('(display-mode: fullscreen)').matches ||
-                navigator.standalone === true;
-
     return {
-      class: deviceClass,
-      platform,
+      class: this._classifyDeviceClass(coarse, Math.min(sw, sh)),
+      platform: this._detectPlatform(),
       screen_w: sw,
       screen_h: sh,
       pixel_ratio: window.devicePixelRatio || 1,
       orientation: sw > sh ? 'landscape' : 'portrait',
       input: coarse ? 'coarse' : 'fine',
-      pwa,
+      pwa: this._detectPwa(),
     };
+  }
+
+  /** Classify phone/tablet/desktop from pointer type and minimum screen dimension. */
+  _classifyDeviceClass(coarse, minDim) {
+    if (coarse && minDim < 600) return 'phone';
+    if (coarse) return 'tablet';
+    return 'desktop';
+  }
+
+  /** Detect OS platform from userAgentData or legacy navigator.platform. */
+  _detectPlatform() {
+    if (navigator.userAgentData?.platform) {
+      return navigator.userAgentData.platform;
+    }
+    if (navigator.platform) {
+      const p = navigator.platform.toLowerCase();
+      if (p.includes('mac')) return 'macOS';
+      if (p.includes('win')) return 'Windows';
+      if (p.includes('linux')) return 'Linux';
+      if (p.includes('iphone') || p.includes('ipad')) return 'iOS';
+    }
+    return 'unknown';
+  }
+
+  /** Return true when the app is running as an installed PWA. */
+  _detectPwa() {
+    return matchMedia('(display-mode: standalone)').matches ||
+           matchMedia('(display-mode: fullscreen)').matches ||
+           navigator.standalone === true;
   }
 
   /**
@@ -252,57 +258,8 @@ export class ClientHeartbeat {
    */
   async _sendContext() {
     try {
-      const resolvedLocale = Intl.NumberFormat().resolvedOptions().locale;
-      const ctx = {
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        locale: resolvedLocale,
-        language: navigator.language,
-        currency: _detectCurrency(resolvedLocale),
-        local_time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
-      };
+      const ctx = await this._buildContextPayload();
 
-      // Device info
-      ctx.device = this._detectDevice();
-
-      // Network (enhanced — replaces the old single connection field)
-      const network = this._getNetwork();
-      if (network) {
-        ctx.network = network;
-        // Keep legacy field for backward compatibility
-        if (network.effective_type) ctx.connection = network.effective_type;
-      } else if (navigator.connection?.effectiveType) {
-        ctx.connection = navigator.connection.effectiveType;
-      }
-
-      // Battery (async — Chrome/Edge only)
-      const battery = await this._getBattery();
-      if (battery) ctx.battery = battery;
-
-      // User preferences
-      ctx.preferences = this._getPreferences();
-
-      // Behavioral snapshot from AmbientSensor
-      if (this._ambientSensor) {
-        ctx.behavioral = this._ambientSensor.snapshot();
-      }
-
-      // Best-effort geolocation (no prompt — requestLocationPermission handles that)
-      if (navigator.geolocation && navigator.permissions) {
-        try {
-          const perm = await navigator.permissions.query({ name: 'geolocation' });
-          if (perm.state === 'granted') {
-            ctx.location = await new Promise((res) => {
-              navigator.geolocation.getCurrentPosition(
-                (p) => res({ lat: p.coords.latitude, lon: p.coords.longitude }),
-                () => res(null),
-                { timeout: 3000, maximumAge: 300000 }  // accept 5-min cached position
-              );
-            });
-          }
-        } catch (e) { console.warn('[heartbeat] permissions API not supported:', e); }
-      }
-
-      // Send to backend
       const response = await fetch(this._buildUrl('/health'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -310,19 +267,7 @@ export class ClientHeartbeat {
         body: JSON.stringify(ctx),
       });
 
-      if (!response.ok) {
-        console.warn('[CLIENT HEARTBEAT] Failed to send context:', response.status);
-      } else {
-        try {
-          const result = await response.json();
-          if (result.attention) {
-            document.dispatchEvent(new CustomEvent('chalie:attention', {
-              detail: { attention: result.attention }
-            }));
-          }
-        } catch (e) { console.warn('[heartbeat] failed to parse health response:', e); }
-      }
-
+      await this._handleHealthResponse(response);
       this._lastSentAt = Date.now();
     } catch (err) {
       console.warn('[CLIENT HEARTBEAT] Error sending context:', err.message);
@@ -332,5 +277,94 @@ export class ClientHeartbeat {
     // POST above succeeds even after the vault locks. /auth/status is the
     // source of truth for auth state.
     await this._checkAuth();
+  }
+
+  /**
+   * Build the full context payload object, collecting device, network,
+   * battery, preferences, behavioral, and geolocation data.
+   */
+  async _buildContextPayload() {
+    const resolvedLocale = Intl.NumberFormat().resolvedOptions().locale;
+    const ctx = {
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      locale: resolvedLocale,
+      language: navigator.language,
+      currency: _detectCurrency(resolvedLocale),
+      local_time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    ctx.device = this._detectDevice();
+    this._applyNetworkFields(ctx);
+
+    const battery = await this._getBattery();
+    if (battery) ctx.battery = battery;
+
+    ctx.preferences = this._getPreferences();
+
+    if (this._ambientSensor) {
+      ctx.behavioral = this._ambientSensor.snapshot();
+    }
+
+    ctx.location = await this._getGrantedLocation();
+
+    return ctx;
+  }
+
+  /**
+   * Populate network and legacy connection fields on the context object.
+   */
+  _applyNetworkFields(ctx) {
+    const network = this._getNetwork();
+    if (network) {
+      ctx.network = network;
+      // Keep legacy field for backward compatibility
+      if (network.effective_type) ctx.connection = network.effective_type;
+    } else if (navigator.connection?.effectiveType) {
+      ctx.connection = navigator.connection.effectiveType;
+    }
+  }
+
+  /**
+   * Return the current coordinates if geolocation permission is already
+   * granted, or null otherwise. Never triggers a permission prompt — that
+   * is handled by requestLocationPermission().
+   */
+  async _getGrantedLocation() {
+    if (!navigator.geolocation || !navigator.permissions) return null;
+    try {
+      const perm = await navigator.permissions.query({ name: 'geolocation' });
+      if (perm.state !== 'granted') return null;
+      return await new Promise((res) => {
+        navigator.geolocation.getCurrentPosition(
+          (p) => res({ lat: p.coords.latitude, lon: p.coords.longitude }),
+          () => res(null),
+          { timeout: 3000, maximumAge: 300000 }  // accept 5-min cached position
+        );
+      });
+    } catch (e) {
+      console.warn('[heartbeat] permissions API not supported:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Handle the /health response: warn on failure, dispatch attention event
+   * on success if the server signals one.
+   */
+  async _handleHealthResponse(response) {
+    if (!response.ok) {
+      console.warn('[CLIENT HEARTBEAT] Failed to send context:', response.status);
+      return;
+    }
+    try {
+      const result = await response.json();
+      if (result.attention) {
+        document.dispatchEvent(new CustomEvent('chalie:attention', {
+          detail: { attention: result.attention }
+        }));
+      }
+    } catch (e) {
+      console.warn('[heartbeat] failed to parse health response:', e);
+    }
   }
 }

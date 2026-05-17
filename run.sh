@@ -21,10 +21,11 @@ _HOST="0.0.0.0"
 _VOICE=true
 
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --port=*)   _PORT="${1#--port=}"; shift ;;
+  _arg="$1"
+  case "$_arg" in
+    --port=*)   _PORT="${_arg#--port=}"; shift ;;
     --port)     _PORT="$2"; shift 2 ;;
-    --host=*)   _HOST="${1#--host=}"; shift ;;
+    --host=*)   _HOST="${_arg#--host=}"; shift ;;
     --host)     _HOST="$2"; shift 2 ;;
     --no-voice) _VOICE=false; shift ;;
     *) shift ;;
@@ -112,7 +113,7 @@ fi
 while true; do
   "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST"
   _EXIT=$?
-  if [ "$_EXIT" -ne 42 ]; then
+  if [[ "$_EXIT" -ne 42 ]]; then
     exit $_EXIT
   fi
   echo "→ Restart requested (exit 42). Re-syncing deps and relaunching..."
