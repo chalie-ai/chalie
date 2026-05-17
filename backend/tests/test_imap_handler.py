@@ -6,8 +6,6 @@ and search criteria building.
 
 from __future__ import annotations
 
-MOCK_AUTH_TOKEN = "fake-token-for-test"
-
 import email as _email_mod
 import email.mime.multipart
 import email.mime.text
@@ -21,6 +19,8 @@ from capabilities.mail_capability.imap_handler import (
     extract_body,
     parse_headers,
 )
+
+MOCK_AUTH_TOKEN = "fake-token-for-test"
 
 
 # ---------------------------------------------------------------------------
