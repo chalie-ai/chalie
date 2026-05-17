@@ -25,8 +25,8 @@ class DocumentAbility(Ability):
         "search my documents for information about coral bleaching",
         "what documents do I have uploaded",
         "show me the climate report",
+        "view the chicken tikka recipe by name",
         "create a note called project-ideas.md with my brainstorm",
-        "save this text as a document",
         "delete the old invoice document",
         "what did that report say about carbon emissions",
         "list all my documents",
@@ -49,13 +49,18 @@ class DocumentAbility(Ability):
             },
             "id": {
                 "type": "string",
-                "description": "Document ID for exact match (view, delete, restore).",
+                "description": (
+                    "Document ID for exact match (view, delete, restore). "
+                    "If you don't have an id, use `name` instead — do not call `search` first."
+                ),
             },
             "name": {
                 "type": "string",
                 "description": (
                     "Required for `create` and `upload`; use a filename like 'research-notes.md' "
-                    "if the user didn't give one. Optional fuzzy match for view/delete/restore."
+                    "if the user didn't give one. "
+                    "Preferred shortcut for view/delete/restore when you know the document name: "
+                    "pass `name` directly instead of calling `search` first to get an id."
                 ),
             },
             "content": {
