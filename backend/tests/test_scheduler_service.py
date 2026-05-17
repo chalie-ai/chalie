@@ -61,12 +61,15 @@ class TestFireItem:
         item.update(extra)
         return item
 
-    def test_notification_uses_output_service(self):
-        with patch('services.output_service.OutputService') as mock_cls:
-            mock_output = MagicMock()
-            mock_cls.return_value = mock_output
+    def test_notification_broadcasts_via_websocket(self):
+        with patch('services.websocket_broker.WebSocketBroker') as mock_cls:
+            mock_broker = MagicMock()
+            mock_cls.return_value = mock_broker
             svc._fire_item(self._make_item())
-            assert mock_output.enqueue_text.call_args[1]["mode"] == "NOTIFICATION"
+            mock_broker.broadcast.assert_called_once()
+            payload = mock_broker.broadcast.call_args[0][0]
+            assert payload["type"] == "notification"
+            assert payload["content"] == "Test"
 
     def test_prompt_spawns_thread(self):
         mock_t = MagicMock()

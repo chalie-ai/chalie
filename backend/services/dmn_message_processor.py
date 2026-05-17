@@ -3,7 +3,7 @@ DMNMessageProcessor — Background DMN execution driven by SubconsciousWorker st
 
 MessageProcessor v2 subclass. Hardcodes CHANNEL='dmn', ROLE='proactive_thought'.
 Builds its own context from data_graph (user synthesis) and the episodes table.
-All findings are saved via the memory tool — no UI broadcast, no OutputService call.
+All findings are saved via the memory tool — no UI broadcast.
 
 """
 
@@ -108,7 +108,7 @@ class DMNMessageProcessor(MessageProcessor):
     def post_turn(self) -> None:
         """DMN post-turn: metrics only.
 
-        No OutputService.enqueue_proactive call. No UI broadcast.
+        No UI broadcast.
         DMN's sole side effect is memory-tool writes to data_graph.
         """
         try:

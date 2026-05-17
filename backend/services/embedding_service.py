@@ -297,7 +297,7 @@ def _get_store():
 # ── Inference queue ─────────────────────────────────────────────────────────
 #
 # A single daemon worker serializes ALL ORT inference calls.  Multiple
-# EmbeddingService instances (list_service, search router, api/chat_image, …)
+# EmbeddingService instances (list_service, search router, …)
 # all share this one queue via the module-level globals, preventing concurrent
 # session.run() calls that otherwise allocate 500 MB+ each and OOM under bulk
 # ingestion.
