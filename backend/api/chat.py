@@ -52,11 +52,6 @@ def _set_active_request_id(request_id: str | None) -> None:
 # ── Background helpers ────────────────────────────────────────────────────────
 
 
-def _broadcast(data: dict) -> None:
-    """Fire-and-forget push to the UI via WebSocketBroker."""
-    WebSocketBroker().broadcast(data)
-
-
 def _run_chat_background(
     text: str,
     source: str,
@@ -158,7 +153,7 @@ def _start_turn(text: str, source: str, attachments: list) -> str:
     except Exception as exc:
         logger.debug("[Chat API] world_state.absorb failed: %s", exc)
 
-    _broadcast({"type": "status", "stage": "processing"})
+    WebSocketBroker().broadcast({"type": "status", "stage": "processing"})
 
     thread = threading.Thread(
         target=_run_chat_background,
