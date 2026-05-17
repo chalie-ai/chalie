@@ -46,8 +46,8 @@ See `docs/13-MESSAGE-FLOW.md` for the full turn lifecycle.
 - **One instance per turn.** All turn state lives on the instance. No singletons, no shared instances.
 - **Subclasses hardcode their channel and role.** A processor knows what it is. Context scoping flows from that identity.
 - **Atomic store at the end.** `store()` commits everything in one transaction when the ACT loop finishes.
-- **`handleTool()` is the single dispatch chokepoint.** Tool errors return structured strings to the LLM; they never surface to the user or crash the loop.
-- **`postTurn()` is where channel-specific fan-out lives.** Shared plumbing goes in the base; subclass-specific services go in the subclass.
+- **`handle_tool()` is the single dispatch chokepoint.** Tool errors return structured strings to the LLM; they never surface to the user or crash the loop.
+- **`post_turn()` is where channel-specific fan-out lives.** Shared plumbing goes in the base; subclass-specific services go in the subclass.
 
 History reaches the LLM as a literal `## Previous Messages` text block inside the user message body. The provider always receives a single-element `messages[]` array — not a multi-turn array. This is an intentional design choice: it gives the system full control over what context the model sees on each turn.
 
@@ -68,7 +68,7 @@ Four layers, each optimised for a different timescale and purpose:
 | **Episodes** | Narrative units extracted from transcript windows | Yes — power-law retrieval weight decay |
 | **Data Graph** | Structured knowledge (facts, preferences, moments) | Yes — per-kind decay policy |
 
-**Transcript** is the raw record. `getPreviousMessages()` renders everything above the compaction watermark as a literal text block. When that block approaches the provider's context limit, compaction fires and summarises the older portion — the latest success summary becomes the new floor. Compaction results are stored as `tool_calls` rows (`tool_name='compaction'`, `ephemeral=0`), not in a separate table. `compaction_persistence.get_compaction(channel)` retrieves the most recent success row via a join on `transcript.channel`; failure rows are recorded for audit but filtered from the lookup so a bad LLM output cannot poison subsequent prompts.
+**Transcript** is the raw record. `get_previous_messages()` renders everything above the compaction watermark as a literal text block. When that block approaches the provider's context limit, compaction fires and summarises the older portion — the latest success summary becomes the new floor. Compaction results are stored as `tool_calls` rows (`tool_name='compaction'`, `ephemeral=0`), not in a separate table. `compaction_persistence.get_compaction(channel)` retrieves the most recent success row via a join on `transcript.channel`; failure rows are recorded for audit but filtered from the lookup so a bad LLM output cannot poison subsequent prompts.
 
 **Episodes** are extracted automatically by a rolling trigger: when enough new transcript lines have accumulated for a channel, a background processor encodes that window into narrative snapshots with emotional valence, arousal, and salience scores. Similar episodes consolidate into super-episodes over time. Retrieval uses hybrid vector + FTS5 search, adaptive radius, and apex traversal (following consolidation links upward).
 
@@ -113,14 +113,14 @@ The `subagent` ability (`backend/abilities/subagent.py`) is the public surface. 
 1. `SubagentAbility.execute()` captures `current_processor()` (a `contextvars.ContextVar` bound by `send()`) as `parent_ref` before spawning the daemon thread — so the reference is stable even if the parent turn finishes first.
 2. The daemon runs `SubagentProcessor(...).send()` and wraps the result in a canonical `[subagent.complete(...)]` envelope via `_build_envelope()`.
 3. `_deliver_envelope(envelope, parent_ref)` routes:
-   - **Case A** (`parent_ref._turn_active.is_set()` is True): appends the envelope to `parent_ref._pending_steers`. `getUserPrompt()` drains `_pending_steers` into the ACT trail at the top of the next iteration.
+   - **Case A** (`parent_ref._turn_active.is_set()` is True): appends the envelope to `parent_ref._pending_steers`. `get_user_prompt()` drains `_pending_steers` into the ACT trail at the top of the next iteration.
    - **Case B** (parent idle — `_turn_active` cleared — or non-UMP): spawns a `subagent-return` daemon that runs `SubagentReturnProcessor(envelope).send()` and publishes the result via `OutputService.enqueue_proactive(source='subagent_return')`.
 
 **Liveness discriminator:** `_turn_active` is a `threading.Event` on every `MessageProcessor` instance. `bind_current_processor()` sets it on entry and clears it on exit. The subagent daemon thread checks `.is_set()` at delivery time — unlike an `isinstance()` check (which always returns True for a valid Python object), this correctly detects that the parent's `send()` has returned. The Event is thread-safe by design.
 
 **`SubagentReturnProcessor`** is a `UserMessageProcessor` subclass (`ROLE='subagent_return'`, `SKIP_INPUT_ROW=True`) defined in `backend/services/user_message_processor.py`. It inherits all UMP behaviour — `ALWAYS_AVAILABLE`, `DISCOVERABLE`, system prompt, `postTurn` fan-out. `SKIP_INPUT_ROW=True` suppresses the input row (the raw subagent envelope never enters the user-channel transcript) while `store()` still writes the synthesized assistant response. `_uid` stays `None` for the turn — all downstream code guards on `_uid is not None`.
 
-**`_pending_steers`** is a `list[str]` field on every `MessageProcessor` instance (base class `__init__`). Only `UserMessageProcessor.getUserPrompt()` drains it. Background processors that do not call `getUserPrompt()` never drain pending steers — subagents targeting those channels always fall through to Case B.
+**`_pending_steers`** is a `list[str]` field on every `MessageProcessor` instance (base class `__init__`). Only `UserMessageProcessor.get_user_prompt()` drains it. Background processors that do not call `get_user_prompt()` never drain pending steers — subagents targeting those channels always fall through to Case B.
 
 **Sync mode (`wait=true`):** `_run_sync()` constructs `SubagentProcessor` inline and calls `.send()` directly from the parent ACT loop iteration. Budget is capped per-type via `wait_cap` (web_surfer=1800s, others=300s). The parent iteration blocks until the subagent returns.
 
@@ -176,7 +176,7 @@ Two loading tiers stack on every user turn and are merged first-seen, so the unc
 
 **Tool scope lives on each `MessageProcessor` subclass**, not on the `Ability` ABC. Every processor declares two `ClassVar` lists:
 
-- `ALWAYS_AVAILABLE` — ability names pre-injected as native tools on every ACT iteration via `getTools()`.
+- `ALWAYS_AVAILABLE` — ability names pre-injected as native tools on every ACT iteration via `get_tools()`.
 - `DISCOVERABLE` — ability names that `find_tools` may surface for this processor at runtime. The SQL query inside `find_tools` filters candidates to `WHERE name IN (DISCOVERABLE)`, so a processor can never discover anything outside its own list.
 
 `UserMessageProcessor` sets `ALWAYS_AVAILABLE` to the nine core cognitive abilities (`document`, `find_tools`, `list`, `memory`, `read`, `review_tool_calls`, `review_transcript`, `schedule`, `timer`) and `DISCOVERABLE` to eleven abilities (`browser`, `calendar`, `code_eval`, `contacts`, `email`, `home`, `news`, `programming_docs_search`, `search`, `subagent`, `weather`). `ScheduledPromptProcessor` inherits UMP's full tool surface — it IS a UMP with hidden input and a clean context window. `calendar`, `contacts`, `email`, and `home` are capability-backed personal-data tools — DISCOVERABLE in UMP, ScheduledPromptProcessor, and DMN but excluded from `SubagentProcessor` (headless processor that should not access personal data without explicit user intent). Other processors narrow both lists to match their scope — `PatternMatchProcessor`, for example, sets `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` and `DISCOVERABLE = []`. `SubagentProcessor` sets `ALWAYS_AVAILABLE` per-instance from `SUBAGENT_TYPES[agent_type]['native_tools']` and `DISCOVERABLE` to the full external set minus a blocklist (`subagent`, `save_graph`, `detect_pattern`) and capability tools (`email`, `calendar`, `contacts`).
@@ -201,7 +201,7 @@ Every ability result uses the canonical tag block format from `backend/services/
 
 This is the single source of truth — no ability constructs its own format string. See `docs/09-TOOLS.md` and `docs/15-INTERFACES.md`.
 
-**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall) with `_auto=True` so `_handle_recall` skips its `document.search` delegation (the auto-seed runs every turn — it must not pollute the ACT trail with a tool result the LLM never requested). Stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `getUserPrompt()` to inject verbatim.
+**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall) with `_auto=True` so `_handle_recall` skips its `document.search` delegation (the auto-seed runs every turn — it must not pollute the ACT trail with a tool result the LLM never requested). Stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `get_user_prompt()` to inject verbatim.
 
 ---
 
@@ -252,7 +252,7 @@ Per-ability implementation notes:
 
 ### Pattern-match helpers — plain classes, not Ability subclasses
 
-`abilities/save_pattern.py` (`SavePattern`) and `abilities/save_graph.py` (`SaveGraph`) are processor-internal helpers used only by `PatternMatchProcessor`. They live at the top level of `abilities/` and are indexed by `abilities.sqlite` — but they are intentionally **plain Python classes** (no `Ability` inheritance) so they are never instantiated by the registry walk and never surface through `find_tools`. Scoping is enforced by `PatternMatchProcessor`'s `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` / `DISCOVERABLE = []` — no other processor lists them, so no other channel can reach them. Each helper exposes a `TOOL_SCHEMA` consumed directly by `PatternMatchProcessor.getTools()` (via the `ALWAYS_AVAILABLE` path in `MessageProcessor.getTools()`) and an `execute(args, processor)` method that reads/writes processor state.
+`abilities/save_pattern.py` (`SavePattern`) and `abilities/save_graph.py` (`SaveGraph`) are processor-internal helpers used only by `PatternMatchProcessor`. They live at the top level of `abilities/` and are indexed by `abilities.sqlite` — but they are intentionally **plain Python classes** (no `Ability` inheritance) so they are never instantiated by the registry walk and never surface through `find_tools`. Scoping is enforced by `PatternMatchProcessor`'s `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` / `DISCOVERABLE = []` — no other processor lists them, so no other channel can reach them. Each helper exposes a `TOOL_SCHEMA` consumed directly by `PatternMatchProcessor.get_tools()` (via the `ALWAYS_AVAILABLE` path in `MessageProcessor.get_tools()`) and an `execute(args, processor)` method that reads/writes processor state.
 
 ### Registry (`backend/abilities/_registry.py`)
 
@@ -264,7 +264,7 @@ Singleton with an `RLock`. Exposes only `get(name)` and `all()`. Lazily walks `b
 
 When a WebSocket `chat` frame carries a `files` array, the frontend has already read each file as base64 and included it in the payload (`{name, data, content_type}`). No separate upload endpoint is called for chat-attached files.
 
-`_handle_chat()` in `backend/api/websocket.py` extracts `files` (capped at 5) and passes them via `metadata['files']` to the processor. `UserMessageProcessor._process_file_attachments()` iterates each file and dispatches two tool calls through `handleTool()`:
+`_handle_chat()` in `backend/api/websocket.py` extracts `files` (capped at 5) and passes them via `metadata['files']` to the processor. `UserMessageProcessor._process_file_attachments()` iterates each file and dispatches two tool calls through `handle_tool()`:
 
 1. `document(action='upload', name=..., data=..., content_type=...)` — decodes base64, persists to disk, runs text extraction synchronously, returns a document ID.
 2. `document(action='view', id=<doc_id>)` — retrieves the extracted content.
