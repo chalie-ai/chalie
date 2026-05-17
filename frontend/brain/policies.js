@@ -54,17 +54,12 @@ const PanelPolicies = (() => {
     'memory.store': 'Store memory',
     'news': 'Search news',
     'read': 'Read content',
-    'review_tool_calls': 'Review tool calls',
-    'review_transcript': 'Review transcript',
-    'save_graph': 'Save to knowledge graph',
-    'save_pattern': 'Save pattern',
     'schedule.cancel': 'Cancel schedule',
     'schedule.create': 'Create schedule',
     'schedule.list': 'List schedules',
     'schedule.search': 'Search schedules',
     'search': 'Web search',
     'subagent': 'Spawn subagent',
-    'timer': 'Set timer',
     'weather': 'Weather lookup',
     'programming_docs_search': 'Search programming docs',
   };
@@ -83,7 +78,6 @@ const PanelPolicies = (() => {
     'Scheduling': ['schedule.list', 'schedule.search', 'schedule.create', 'schedule.cancel'],
     'Search & Tools': ['search', 'find_tools', 'read', 'programming_docs_search'],
     'Subagent': ['subagent'],
-    'System': ['timer', 'review_tool_calls', 'review_transcript', 'save_graph', 'save_pattern'],
   };
 
   const CONTEXT_MAP = { chat: 'chat', subagent: 'subagent', background: 'subconscious', external: 'external_agent' };

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class ReviewToolCallsAbility(Ability):
     NAME = "review_tool_calls"
+    SYSTEM = True
     SUMMARY = "Retrieve raw tool call records within ±5 minutes of a timestamp to inspect details not captured in turn synthesis."
     EXAMPLES = [
         "what tools did you use at 2pm yesterday",

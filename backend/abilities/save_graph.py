@@ -24,6 +24,7 @@ _BUDGET_CAP = 50
 
 class SaveGraph(Ability):
     NAME = "save_graph"
+    SYSTEM = True
     SUMMARY = (
         "Record a durable fact about the user that is NOT a repeating "
         "behaviour (preferences, identity, relationships, places, "

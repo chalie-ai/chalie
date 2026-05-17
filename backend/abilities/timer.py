@@ -45,6 +45,7 @@ _MIN_DURATION_SECONDS = 1
 
 class TimerAbility(Ability):
     NAME = "timer"
+    SYSTEM = True
     SUMMARY = "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."
     EXAMPLES = [
         "start a 25 minute focus timer",

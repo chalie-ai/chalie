@@ -30,6 +30,22 @@ USAGE_CLASS_TO_CONTEXT: dict[str, Context] = {
     "external_agent": "external_agent",
 }
 
+# ── System tools — always allowed, invisible to PolicyManager UI ─────────────
+# Derived from abilities with SYSTEM = True at first access.
+_system_tools_cache: frozenset[str] | None = None
+
+
+def _get_system_tools() -> frozenset[str]:
+    global _system_tools_cache
+    if _system_tools_cache is not None:
+        return _system_tools_cache
+    from abilities._registry import AbilityRegistry
+    _system_tools_cache = frozenset(
+        a.NAME for a in AbilityRegistry.all()
+        if getattr(a, 'SYSTEM', False) or getattr(a, 'INTERNAL', False)
+    )
+    return _system_tools_cache
+
 # ── Default policy matrix ────────────────────────────────────────────────────
 #
 # Keys: action_id → {context: state}.  Missing context = "deny" for
@@ -52,7 +68,6 @@ _CHAT_ALLOW: dict[str, State] = {
     "news": "allow",
     "programming_docs_search": "allow",
     "read": "allow",
-    "review_tool_calls": "allow", "review_transcript": "allow",
     "code_eval": "allow",
     "document.upload": "allow",
     "schedule.cancel": "allow", "schedule.create": "allow", "schedule.list": "allow", "schedule.search": "allow",
@@ -64,9 +79,7 @@ _CHAT_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
-    "save_graph": "allow", "save_pattern": "allow",
     "subagent": "allow",
-    "timer": "allow",
 }
 
 _CHAT_ASK: dict[str, State] = {
@@ -98,7 +111,6 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "news": "allow",
     "programming_docs_search": "allow",
     "read": "allow",
-    "review_tool_calls": "allow", "review_transcript": "allow",
     "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
     "weather": "allow",
@@ -107,8 +119,6 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
-    "save_graph": "allow", "save_pattern": "allow",
-    "timer": "allow",
 }
 
 _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
@@ -128,7 +138,6 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "news": "allow",
     "programming_docs_search": "allow",
     "read": "allow",
-    "review_tool_calls": "allow", "review_transcript": "allow",
     "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
     "weather": "allow",
@@ -137,8 +146,6 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
-    "save_graph": "allow", "save_pattern": "allow",
-    "timer": "allow",
 }
 
 _EXTERNAL_AGENT_DENY: dict[str, State] = {
@@ -169,6 +176,8 @@ def _build_defaults() -> dict[str, dict[Context, State]]:
     all_action_ids: list[str] = []
     for ability in AbilityRegistry.all():
         if getattr(ability, 'INTERNAL', False):
+            continue
+        if getattr(ability, 'SYSTEM', False):
             continue
         schema = ability.INPUT_SCHEMA
         actions = schema.get("properties", {}).get("action", {}).get("enum", [])
@@ -241,6 +250,8 @@ class PolicyService:
 
         Falls back to defaults if no DB row exists.
         """
+        if action_id in _get_system_tools():
+            return "allow"
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -269,6 +280,8 @@ class PolicyService:
             cursor.execute("SELECT action_id, context, state FROM policy_rules")
             for row in cursor.fetchall():
                 aid, ctx, state = row[0], row[1], row[2]
+                if aid in _get_system_tools():
+                    continue
                 if aid not in result:
                     result[aid] = {}
                 result[aid][ctx] = state
