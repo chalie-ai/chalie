@@ -61,7 +61,6 @@ def _run_chat_background(
 ) -> None:
     """Background thread: process user message via UMP and broadcast response."""
     broker = WebSocketBroker()
-    _set_active_request_id(request_id)
     proc = None
     try:
         from services.user_message_processor import UserMessageProcessor
@@ -153,6 +152,7 @@ def _start_turn(text: str, source: str, attachments: list) -> str:
     except Exception as exc:
         logger.debug("[Chat API] world_state.absorb failed: %s", exc)
 
+    _set_active_request_id(request_id)
     WebSocketBroker().broadcast({"type": "status", "stage": "processing"})
 
     thread = threading.Thread(

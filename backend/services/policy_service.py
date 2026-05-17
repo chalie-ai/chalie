@@ -168,6 +168,8 @@ def _build_defaults() -> dict[str, dict[Context, State]]:
 
     all_action_ids: list[str] = []
     for ability in AbilityRegistry.all():
+        if getattr(ability, 'INTERNAL', False):
+            continue
         schema = ability.INPUT_SCHEMA
         actions = schema.get("properties", {}).get("action", {}).get("enum", [])
         if actions:

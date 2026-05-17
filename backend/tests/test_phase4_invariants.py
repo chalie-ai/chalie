@@ -98,7 +98,7 @@ def test_abilities_sqlite_indexes_save_pattern_and_save_graph():
 
 
 # ---------------------------------------------------------------------------
-# Test 3 — abilities/ disk layout has exactly 17 non-underscore top-level modules
+# Test 3 — abilities/ disk layout has exactly the expected non-underscore modules
 # ---------------------------------------------------------------------------
 
 _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
