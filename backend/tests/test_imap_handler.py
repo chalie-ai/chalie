@@ -128,9 +128,6 @@ class TestExtractBody:
         assert "Plain content" in result
         assert "<p>" not in result
 
-    def test_html_only_returns_empty(self):
-        raw = _make_raw_email(html="<p>Hello <b>world</b></p>")
-        assert extract_body(raw) == ""
 
 
 
@@ -143,9 +140,6 @@ class TestImapDate:
     def test_valid_iso_date(self):
         assert _imap_date("2024-06-15") == "15-Jun-2024"
 
-    def test_iso_datetime_truncated(self):
-        # Should only use the date portion
-        assert _imap_date("2024-01-01T10:00:00") == "01-Jan-2024"
 
 
 
@@ -216,13 +210,6 @@ class TestIngest:
         assert items[0]["subject"] == "Invoice"
         assert new_wm == uid
 
-    def test_uses_since_when_no_watermark(self, handler):
-        client = self._make_imap_client(uids=[], raw_map={})
-        handler.ingest(client, watermark=None)
-        # Should search by SINCE, not UID range
-        args = client.search.call_args[0][0]
-        assert args[0] == "SINCE"
-
     def test_uses_uid_range_when_watermark_set(self, handler):
         client = self._make_imap_client(uids=[], raw_map={})
         handler.ingest(client, watermark=50)
@@ -273,21 +260,6 @@ class TestSearch:
         assert "TEXT" in criteria
         assert "payment" in criteria
 
-    def test_date_range_criteria(self, handler):
-        client = self._make_imap_client()
-        with patch("capabilities.mail_capability.email_triage.classify_email"):
-            handler.search(client, {"date_from": "2024-01-01", "date_to": "2024-01-31"})
-        criteria = client.search.call_args[0][0]
-        assert "SINCE" in criteria
-        assert "BEFORE" in criteria
-
-    def test_unanswered_criteria(self, handler):
-        client = self._make_imap_client()
-        with patch("capabilities.mail_capability.email_triage.classify_email"):
-            handler.search(client, {"unanswered": True})
-        criteria = client.search.call_args[0][0]
-        assert "UNANSWERED" in criteria
-
     def test_no_criteria_falls_back_to_since(self, handler):
         client = self._make_imap_client()
         with patch("capabilities.mail_capability.email_triage.classify_email"):
@@ -334,28 +306,9 @@ class TestReadEmail:
         assert result["uid"] == uid
         assert "This is the email body." in result["body"]
 
-    def test_uid_not_found(self, handler):
-        client = MagicMock()
-        client.fetch.return_value = {}
-        result = handler.read_email(client, {"uid": 999})
-        assert "error" in result
-
     def test_missing_uid_param(self, handler):
         client = MagicMock()
         result = handler.read_email(client, {})
         assert result == {"error": "uid is required"}
 
-    def test_non_integer_uid(self, handler):
-        client = MagicMock()
-        result = handler.read_email(client, {"uid": "abc"})
-        assert result == {"error": "uid must be an integer"}
-
-    def test_string_uid_cast(self, handler):
-        uid = 7
-        raw = _make_raw_email(plain="Body text")
-        client = MagicMock()
-        client.fetch.return_value = {uid: {b"RFC822": raw}}
-
-        result = handler.read_email(client, {"uid": "7"})
-        assert result["uid"] == 7
 

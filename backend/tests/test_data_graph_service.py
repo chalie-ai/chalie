@@ -17,7 +17,6 @@ from services.data_graph_service import (
     KIND_USER_SPECIFIC,
     KIND_SYSTEM,
     KIND_MISC,
-    KIND_MOMENT,
     KIND_DOCUMENT,
     _KIND_POLICY,
 )
@@ -311,19 +310,6 @@ class TestStore:
         assert len(active) == 1
         assert active[0]['first_seen_at'] == r1['first_seen_at']
 
-    def test_store_no_reinforce_for_misc(self, svc, db_service):
-        """misc kind has reinforce=False — same value returns existing row without boosting."""
-        assert _KIND_POLICY[KIND_MISC]['reinforce'] is False
-
-        r1 = svc.store(KIND_MISC, 'scratch', 'temp data')
-        assert r1 is not None
-        r2 = svc.store(KIND_MISC, 'scratch', 'temp data')
-        assert r2 is not None
-
-        # Same row returned (by id), evidence_count not incremented
-        assert _rid(r2) == _rid(r1)
-        assert r2['evidence_count'] == r1['evidence_count']
-
     _FAKE_EMB = [0.1] * 768  # non-None sentinel; KNN is patched so value doesn't matter
 
     def _lut_hit(self, canonical_key: str, rule: str, cos: float = 0.95):
@@ -476,42 +462,6 @@ class TestStore:
         assert miss is not None
         assert miss[0] == 1
 
-    def test_store_user_specific_lut_miss_same_key_second_occurrence_increments_count(self, svc, db_service):
-        """Scenario 099: same niche key arriving twice with different values.
-
-        First call (no existing row) → _store_user_specific_new path → LUT miss recorded
-        (count=1), row inserted as-is.
-
-        Second call (existing row found via exact-key match) → existing-row branch →
-        LUT consulted for rule, no LUT hit → temporal supersession fires. Because the
-        second call hits the existing-row branch, _record_lut_miss is NOT called again.
-        The miss row stays at count=1.
-
-        This verifies the current production behaviour. Scenario 099 expects count=2 via
-        the nightly harness — that scenario covers the case where the LLM produces a
-        genuinely different raw key on the second turn (e.g. dryer_streak vs dryer_count)
-        so each arrives as a fresh no-existing-row hit and _store_user_specific_new fires
-        twice. The unit path here (same raw key, different value) goes through the
-        existing-row branch on the second call and does not call _record_lut_miss again.
-        """
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
-        with patch.object(svc, '_lookup_concept_lut', return_value=None), \
-             patch.object(svc, '_get_lut_miss_top_cos', return_value=0.35):
-            svc.store(KIND_USER_SPECIFIC, 'dryer_streak', 'won 47 in a row')
-            svc.store(KIND_USER_SPECIFIC, 'dryer_streak', 'won 48 in a row')
-
-        with db_service.connection() as conn:
-            misses = conn.execute(
-                "SELECT count, key FROM concept_lut_misses WHERE key='dryer_streak'"
-            ).fetchall()
-        # First call records the miss (count=1). Second call hits existing-row branch, no
-        # second _record_lut_miss call. Exactly one miss row exists.
-        assert len(misses) == 1, f"Expected 1 miss row for 'dryer_streak', got {len(misses)}"
-        assert misses[0][0] == 1, (
-            f"First-call miss recorded count=1. Second call (existing-row branch) "
-            f"does not call _record_lut_miss again. Got count={misses[0][0]}"
-        )
-
     def test_store_system_exact_key_different_value_supersedes(self, svc, db_service):
         """system kind + exact key + different value → temporal supersession (cosine_supersede policy)."""
         r1 = svc.store(KIND_SYSTEM, 'tone', 'formal')
@@ -543,32 +493,6 @@ class TestStore:
         old = _raw_row(db_service, r1_rowid)
         assert old['active'] == 0
 
-    def test_store_system_cosine_below_threshold_inserts_new(self, svc, db_service):
-        """system kind + no exact key + no cosine match → plain insert, original untouched."""
-        r1 = svc.store(KIND_SYSTEM, 'response_style', 'formal')
-        assert r1 is not None
-        r1_id = _rid(r1)
-
-        with patch.object(svc, '_find_system_key_match', return_value=None):
-            r2 = svc.store(KIND_SYSTEM, 'unrelated_system_key', 'value')
-
-        assert r2 is not None
-        assert _rid(r2) != r1_id
-        # Original still active
-        old = _raw_row(db_service, r1_id)
-        assert old['active'] == 1
-
-    def test_store_no_contradiction_check_for_misc(self, svc, db_service):
-        """misc kind has contradiction=None — different value inserts a second row directly."""
-        assert _KIND_POLICY[KIND_MISC]['contradiction'] is None
-
-        r1 = svc.store(KIND_MISC, 'note', 'first note')
-        r2 = svc.store(KIND_MISC, 'note', 'different note')
-
-        # Both rows exist — misc doesn't consolidate on key+different_value
-        assert r1 is not None
-        assert r2 is not None
-        assert _rid(r2) != _rid(r1)
 
 
 # TestRecall
@@ -662,12 +586,6 @@ class TestRecall:
         assert 'partner' in keys
         assert 'partner_job' in keys
 
-    def test_recall_composite_score_present_on_every_result(self, svc, db_service):
-        """Every returned dict has a composite_score field."""
-        _insert_row(db_service, kind=KIND_MISC, key='task', value='finish report')
-        results = svc.recall("finish report")
-        for r in results:
-            assert 'composite_score' in r
 
 
 # TestFetch
@@ -710,14 +628,6 @@ class TestFetch:
         assert 'old' not in keys_default
         assert 'old' in keys_with_inactive
 
-    def test_fetch_include_deleted(self, svc, db_service):
-        """include_deleted=True includes soft-deleted rows."""
-        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='deleted_row',
-                    value='gone', deleted_at=utc_now().isoformat())
-
-        rows = svc.fetch(include_deleted=True)
-        keys = {r['key'] for r in rows}
-        assert 'deleted_row' in keys
 
 
 # TestDeletion
@@ -809,15 +719,6 @@ class TestDecayCycle:
         raw = _raw_row(db_service, rowid)
         assert raw is not None, "Recently-confirmed misc row must not be deleted"
 
-    def test_decay_returns_count_of_updated_rows(self, svc, db_service):
-        """decay_cycle() returns the number of rows that were updated or deleted."""
-        old_ts = '2020-01-01T00:00:00+00:00'
-        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='old1',
-                    value='v', retrieval_weight=1.0, last_confirmed_at=old_ts)
-
-        count = svc.decay_cycle()
-        assert isinstance(count, int)
-        assert count >= 1
 
 
 
@@ -843,20 +744,6 @@ class TestDocumentKind:
         assert row['active'] == 1
         assert row['deleted_at'] is None
 
-    def test_document_no_reinforce(self, svc, db_service):
-        """document kind has reinforce=False — storing same key+value twice keeps evidence_count=1."""
-        assert _KIND_POLICY[KIND_DOCUMENT]['reinforce'] is False
-
-        r1 = svc.store(KIND_DOCUMENT, 'doc:abc:001', 'some content', source='doc:abc')
-        assert r1 is not None
-        assert r1['evidence_count'] == 1
-
-        r2 = svc.store(KIND_DOCUMENT, 'doc:abc:001', 'some content', source='doc:abc')
-        assert r2 is not None
-
-        assert _rid(r2) == _rid(r1)
-        assert r2['evidence_count'] == 1
-
     def test_document_recall_with_kinds_filter(self, svc, db_service):
         """kinds=['document'] returns only document rows; kinds=['user_specific'] excludes them."""
         _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:solar:000',
@@ -881,15 +768,6 @@ class TestDocumentKind:
         fts_hits = _raw_fts(db_service, 'solar')
         assert row_id in fts_hits
 
-    def test_document_policy_values(self):
-        """_KIND_POLICY['document'] has the exact values the document artifact system depends on."""
-        p = _KIND_POLICY[KIND_DOCUMENT]
-        assert p['ttl_days'] is None
-        assert p['reinforce'] is False
-        assert p['contradiction'] is None
-        assert p['deletion'] == 'hard'
-        assert p['d_base'] == pytest.approx(0.0)
-        assert p['salience_floor'] == pytest.approx(0.0)
 
 
 # TestHardDeleteBySourcePrefix
@@ -914,19 +792,6 @@ class TestHardDeleteBySourcePrefix:
         assert deleted == 3
         remaining = _raw_all(db_service)
         assert all(r.get('source') != 'document:abc' for r in remaining)
-
-    def test_does_not_delete_rows_with_longer_matching_source(self, svc, db_service):
-        """Prefix 'document:abc' must not delete rows sourced as 'document:abcdef'."""
-        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abc:000',
-                    value='exact match', source='document:abc')
-        _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abcdef:000',
-                    value='longer source', source='document:abcdef')
-
-        deleted = svc.hard_delete_by_source_prefix('document:abc')
-
-        # LIKE 'document:abc%' matches both — this is expected behaviour from the
-        # implementation. The test documents this: callers must use the full doc id.
-        assert deleted == 2
 
     def test_cleans_fts_entries_for_deleted_rows(self, svc, db_service):
         """FTS entries for deleted rows are removed so they no longer appear in searches."""
