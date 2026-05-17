@@ -763,6 +763,19 @@ input[type="checkbox"]:checked::after {
 /* ── World state ──────────────────────────────────────────────── */
 .world-state-grid { display: flex; flex-direction: column; gap: 20px; }
 .world-section h4 { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--text-primary); }
+.world-sees-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.world-sees-header h4 { margin: 0; }
+.world-formatted { font-size: 13px; line-height: 1.7; }
+.world-formatted h3 { font-size: 14px; font-weight: 600; margin: 12px 0 6px; color: var(--violet); }
+.world-formatted h3:first-child { margin-top: 0; }
+.world-formatted ul { list-style: none; padding: 0; margin: 4px 0 12px; }
+.world-formatted li { padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
+.world-formatted li:last-child { border-bottom: none; }
+.world-formatted strong { color: var(--text-primary); font-weight: 600; }
+.world-tag {
+  display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600;
+  background: rgba(138,92,255,0.12); color: var(--violet); vertical-align: middle;
+}
 
 /* ── Code block ───────────────────────────────────────────────── */
 .code-block {

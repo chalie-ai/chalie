@@ -76,10 +76,23 @@ const PanelCognition = (() => {
 
   // ── World State ──
   let _worldState = {};
+  let _worldViewMode = 'formatted';
   async function _fetchWorld() {
     const res = await BrainApp.apiFetch('/system/observability/world-state');
     if (!res.ok) throw new Error('fetch failed');
     _worldState = await res.json();
+  }
+
+  function _mdToHtml(md) {
+    return BrainApp.escapeHtml(md)
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/^\* (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`)
+      .replace(/\[([^\]]+)\]/g, '<span class="world-tag">$1</span>')
+      .replace(/\n{2,}/g, '<br>')
+      .replace(/\n/g, '\n');
   }
 
   // ── Personality ──
@@ -229,10 +242,25 @@ const PanelCognition = (() => {
         </table>
       </div>` : '<div class="world-section"><h4>Background Processes</h4><p class="panel-desc">None running.</p></div>'}
       ${_worldState.rendered ? `<div class="world-section">
-        <h4>What Chalie Sees</h4>
-        <div class="code-block"><pre><code>${BrainApp.escapeHtml(_worldState.rendered)}</code></pre></div>
+        <div class="world-sees-header">
+          <h4>What Chalie Sees</h4>
+          <div class="segmented" id="worldViewToggle">
+            <button class="seg-btn${_worldViewMode === 'formatted' ? ' active' : ''}" data-mode="formatted">Formatted</button>
+            <button class="seg-btn${_worldViewMode === 'raw' ? ' active' : ''}" data-mode="raw">Raw</button>
+          </div>
+        </div>
+        ${_worldViewMode === 'raw'
+          ? `<div class="code-block"><pre><code>${BrainApp.escapeHtml(_worldState.rendered)}</code></pre></div>`
+          : `<div class="doc-content world-formatted">${_mdToHtml(_worldState.rendered)}</div>`}
       </div>` : ''}
     </div>`;
+
+    el.querySelector('#worldViewToggle')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-mode]');
+      if (!btn || btn.dataset.mode === _worldViewMode) return;
+      _worldViewMode = btn.dataset.mode;
+      _renderWorld(el);
+    });
   }
 
   function _renderPersonality(el) {
