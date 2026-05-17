@@ -9,7 +9,6 @@ critic evaluation.
 """
 
 import contextvars
-import json
 import time
 import uuid
 from typing import Dict, Any
