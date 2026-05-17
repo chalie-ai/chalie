@@ -171,8 +171,8 @@ def _deliver_envelope(envelope: str, parent_ref: object) -> None:
 
     Case B — parent idle (turn finished, or non-UMP):
       Spawn a daemon thread that runs SubagentReturnProcessor(envelope).send()
-      which produces a normal user-channel ACT turn and publishes via
-      OutputService.
+      which produces a normal user-channel ACT turn and broadcasts via
+      WebSocketBroker.
 
     The discriminator is ``parent_ref._turn_active.is_set()`` — a thread-safe
     Event that bind_current_processor sets on entry and clears on exit.
@@ -207,12 +207,13 @@ def _deliver_envelope(envelope: str, parent_ref: object) -> None:
 def _spawn_return_processor(envelope: str) -> None:
     """Spawn a daemon thread that runs SubagentReturnProcessor with the envelope.
 
-    After the ACT loop completes, publishes the response to the WebSocket
-    via OutputService — the same pattern as scheduler_service.py.
+    After the ACT loop completes, writes the response to the user transcript
+    and broadcasts it directly via WebSocketBroker.
     """
 
     def _run():
-        from services.output_service import OutputService
+        from services.markup import sanitize
+        from services.websocket_broker import WebSocketBroker
 
         try:
             from services.user_message_processor import SubagentReturnProcessor
@@ -228,11 +229,10 @@ def _spawn_return_processor(envelope: str) -> None:
             response_text = f"Subagent synthesis failed: {exc}"
 
         try:
-            OutputService().enqueue_proactive(
-                topic='user',
-                response=response_text,
-                source='subagent_return',
-            )
+            WebSocketBroker().broadcast({
+                'type': 'task',
+                'content': sanitize(response_text),
+            })
             logger.info("%s SubagentReturnProcessor completed and delivered", LOG_PREFIX)
         except Exception as exc:
             logger.error(

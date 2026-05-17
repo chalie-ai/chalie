@@ -2,7 +2,7 @@
 Scheduler Service — Background poller for scheduled items in SQLite.
 
 Polls scheduled_items table every 60 seconds. Fires due items either as
-direct notifications (OutputService) or through ScheduledPromptProcessor
+direct WebSocket broadcasts (WebSocketBroker) or through ScheduledPromptProcessor
 for prompt-type items that need LLM execution with full tool access.
 
 SQLite's WAL mode provides implicit locking — no explicit row locks needed.
@@ -241,7 +241,8 @@ def _fire_item(item: dict):
             _PROMPT_SEMAPHORE.acquire()
             try:
                 from services.user_message_processor import ScheduledPromptProcessor
-                from services.output_service import OutputService
+                from services.markup import sanitize
+                from services.websocket_broker import WebSocketBroker
 
                 response_text = ScheduledPromptProcessor(
                     raw_input=message,
@@ -251,21 +252,25 @@ def _fire_item(item: dict):
                 if not response_text:
                     response_text = "Scheduled task completed but produced no output."
 
-                OutputService().enqueue_proactive(
-                    topic='user',
-                    response=response_text,
-                    source='scheduled_prompt',
-                )
+                WebSocketBroker().broadcast({
+                    'type': 'task',
+                    'content': sanitize(response_text),
+                })
                 logger.info(f"{LOG_PREFIX} Scheduled prompt {item_id} complete")
+
+                try:
+                    from api.push import send_push_to_all
+                    send_push_to_all(title='Chalie', body=response_text[:200])
+                except Exception as _push_err:
+                    logger.warning(f"{LOG_PREFIX} Web push failed: {_push_err}")
             except Exception as exc:
                 logger.error(f"{LOG_PREFIX} Scheduled prompt {item_id} failed: {exc}")
                 try:
-                    from services.output_service import OutputService
-                    OutputService().enqueue_proactive(
-                        topic='user',
-                        response="A scheduled task could not be completed.",
-                        source='scheduled_prompt',
-                    )
+                    from services.websocket_broker import WebSocketBroker
+                    WebSocketBroker().broadcast({
+                        'type': 'task',
+                        'content': 'A scheduled task could not be completed.',
+                    })
                 except Exception:
                     pass
             finally:
@@ -275,18 +280,21 @@ def _fire_item(item: dict):
         t.start()
         logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
     else:
-        # Direct delivery — bypass LLM, publish straight to output events
-        from services.output_service import OutputService
+        # Direct delivery — bypass LLM, broadcast straight to WebSocket
+        from services.markup import sanitize
+        from services.websocket_broker import WebSocketBroker
 
-        OutputService().enqueue_text(
-            topic=item.get("channel", item.get("topic", "general")),
-            response=message,
-            mode=source.upper(),
-            confidence=1.0,
-            generation_time=0.0,
-            original_metadata={"source": source},
-        )
+        WebSocketBroker().broadcast({
+            'type': source,
+            'content': sanitize(message),
+        })
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
+
+        try:
+            from api.push import send_push_to_all
+            send_push_to_all(title='Chalie', body=message[:200])
+        except Exception as _push_err:
+            logger.warning(f"{LOG_PREFIX} Web push failed: {_push_err}")
 
 
 _RECURRENCE_MAP = {

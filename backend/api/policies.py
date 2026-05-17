@@ -2,7 +2,6 @@
 Policies blueprint — per-action permission control (allow / ask / deny).
 """
 
-import json
 import logging
 
 from flask import Blueprint, jsonify, request
@@ -107,10 +106,11 @@ def reset_policies():
 @policies_bp.route('/respond', methods=['POST'])
 @require_session
 def respond_permission():
-    """Write the user's allow/deny decision to Redis for the blocked dispatch thread.
+    """Wake the blocked ACT dispatch thread with the user's allow/deny decision.
 
-    The chat WebSocket receive loop is blocked during chat processing, so the
-    frontend sends permission responses via this REST endpoint instead.
+    The ACT loop thread is parked on threading.Event.wait() inside
+    ActDispatcherService._request_permission().  This handler resolves the
+    gate so the thread wakes instantly with zero CPU overhead.
     """
     body = request.get_json(silent=True) or {}
     request_id = body.get('request_id', '')
@@ -118,13 +118,18 @@ def respond_permission():
     if not request_id:
         return jsonify(error='request_id required'), 400
     try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-        store.setex(f'policy:response:{request_id}', 60, json.dumps({'approved': approved}))
+        from services.act_dispatcher_service import _permission_gates
+        gate = _permission_gates.get(request_id)
+        if gate is None:
+            # Gate already resolved or request_id unknown — respond gracefully
+            logger.warning("[POLICIES API] No gate found for request_id=%s", request_id)
+            return jsonify(ok=True), 200
+        gate['result'] = 'approved' if approved else 'denied'
+        gate['event'].set()
         return jsonify(ok=True), 200
     except Exception as exc:
         logger.error("[POLICIES API] Respond failed: %s", exc)
-        return jsonify(error='Failed to write response'), 500
+        return jsonify(error='Failed to resolve permission gate'), 500
 
 
 @policies_bp.route('/blocked', methods=['GET'])

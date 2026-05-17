@@ -177,8 +177,9 @@ class ExternalAgentMessageProcessor(MessageProcessor):
         )
 
         def _run():
-            from services.output_service import OutputService
             from services.user_message_processor import UserMessageProcessor
+            from services.markup import sanitize
+            from services.websocket_broker import WebSocketBroker
 
             try:
                 proc = UserMessageProcessor(raw_input=disclosure_input)
@@ -198,15 +199,20 @@ class ExternalAgentMessageProcessor(MessageProcessor):
                 )
 
             try:
-                OutputService().enqueue_proactive(
-                    topic='user',
-                    response=response_text,
-                    source='external_agent',
-                )
+                WebSocketBroker().broadcast({
+                    'type': 'task',
+                    'content': sanitize(response_text),
+                })
                 logger.info(
                     "[EAMP] loop_in_human: disclosure delivered for agent=%s project=%s",
                     self._agent_name, self._project_or_task_name,
                 )
+
+                try:
+                    from api.push import send_push_to_all
+                    send_push_to_all(title='Chalie', body=response_text[:200])
+                except Exception as _push_err:
+                    logger.warning("[EAMP] Web push failed: %s", _push_err)
             except Exception as exc:
                 logger.warning("[EAMP] Disclosure delivery failed: %s", exc, exc_info=True)
 

@@ -1,8 +1,7 @@
 """Persistent WebSocket client for Home Assistant event subscriptions.
 
 Runs in a dedicated daemon thread. Subscribes to state_changed events and
-forwards matching entity changes to Redis output:events for the Chalie
-WebSocket to pick up.
+broadcasts matching entity changes to the Chalie WebSocket via WebSocketBroker.
 """
 
 import json
@@ -136,15 +135,13 @@ class HaWebSocketHandler:
 
         new_state = data.get("new_state", {})
         try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            payload = {
+            from services.websocket_broker import WebSocketBroker
+            WebSocketBroker().broadcast({
                 "type": "home_state_changed",
                 "entity_id": entity_id,
                 "state": new_state.get("state"),
                 "friendly_name": new_state.get("attributes", {}).get("friendly_name", entity_id),
                 "attributes": new_state.get("attributes", {}),
-            }
-            store.publish("output:events", json.dumps(payload))
+            })
         except Exception as exc:
-            logger.debug("[ha-ws] failed to publish state change: %s", exc)
+            logger.debug("[ha-ws] failed to broadcast state change: %s", exc)

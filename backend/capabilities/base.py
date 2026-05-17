@@ -290,6 +290,7 @@ class AbstractCapability(ABC):
         try:
             import json
             from services.memory_client import MemoryClientService
+            from services.websocket_broker import WebSocketBroker
             store = MemoryClientService.create_connection()
             payload = {
                 "type": "capability_alert",
@@ -298,7 +299,7 @@ class AbstractCapability(ABC):
                 "error": err,
                 "recovered": False,
             }
-            store.publish("output:events", json.dumps(payload))
+            WebSocketBroker().broadcast(payload)
             store.setex(
                 f"capability:alert:{cap_id}",
                 1800,
@@ -312,8 +313,8 @@ class AbstractCapability(ABC):
         cap_id = self.get_id()
         cap_name = self.get_manifest().get("name", cap_id)
         try:
-            import json
             from services.memory_client import MemoryClientService
+            from services.websocket_broker import WebSocketBroker
             store = MemoryClientService.create_connection()
             payload = {
                 "type": "capability_alert",
@@ -321,7 +322,7 @@ class AbstractCapability(ABC):
                 "cap_name": cap_name,
                 "recovered": True,
             }
-            store.publish("output:events", json.dumps(payload))
+            WebSocketBroker().broadcast(payload)
             store.delete(f"capability:alert:{cap_id}")
         except Exception as exc:
             logger.debug("recovery alert push: %s", exc)

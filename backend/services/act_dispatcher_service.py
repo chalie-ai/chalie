@@ -18,6 +18,12 @@ import logging
 
 from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINISTIC_ACTIONS, READ_ACTIONS as _READ_ACTIONS
 
+# Module-level permission gate registry.
+# Maps request_id → {'event': threading.Event, 'result': str}
+# The REST handler POST /api/policies/respond resolves the gate by calling
+# gate['event'].set() after writing gate['result'] = 'approved'|'denied'.
+_permission_gates: Dict[str, dict] = {}
+
 
 def _load_tool_telemetry() -> dict | None:
     """Pull a flattened telemetry dict for tool dispatch.
@@ -554,41 +560,37 @@ class ActDispatcherService:
         return None  # Approved — proceed with execution
 
     def _request_permission(self, action_id, action, context):
-        """Publish a permission_request via Redis and poll for response.
+        """Broadcast a permission_request and wait indefinitely for user response.
 
-        Polls indefinitely (2s interval) until the user responds via the
-        REST endpoint or the WebSocket disconnects.  Returns one of:
+        Uses threading.Event.wait() — zero CPU, OS-parked thread.  The REST
+        endpoint POST /api/policies/respond calls gate.set() to wake this thread.
+
+        Returns one of:
           'approved'  — user clicked Allow
           'denied'    — user clicked Deny
-          'timeout'   — poll exhausted (should not happen with indefinite wait,
-                        but kept as a safety net at 1 hour)
         """
+        import threading as _threading
         try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-
             request_id = str(uuid.uuid4())
-            event = json.dumps({
+
+            gate_entry = {'event': _threading.Event(), 'result': None}
+            _permission_gates[request_id] = gate_entry
+
+            from services.websocket_broker import WebSocketBroker
+            WebSocketBroker().broadcast({
                 'type': 'permission_request',
                 'request_id': request_id,
                 'action_id': action_id,
                 'context': context,
                 'description': _build_action_description(action_id, action),
             })
-            store.publish('output:events', event)
 
-            response_key = f'policy:response:{request_id}'
-            deadline = time.monotonic() + 3600  # 1-hour safety net
-            while time.monotonic() < deadline:
-                raw = store.get(response_key)
-                if raw:
-                    store.delete(response_key)
-                    resp = json.loads(raw)
-                    return 'approved' if resp.get('approved', False) else 'denied'
-                time.sleep(2)
+            gate_entry['event'].wait()  # parks here, zero CPU, until REST handler fires
 
-            return 'timeout'
+            result = gate_entry.get('result', 'denied')
+            _permission_gates.pop(request_id, None)
+            return result
         except Exception as e:
             logging.warning(f"[ACT DISPATCH] Permission request failed: {e}")
-            return 'approved'  # Fail open on Redis errors
+            return 'approved'  # Fail open on unexpected errors
 
