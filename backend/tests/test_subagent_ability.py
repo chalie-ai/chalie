@@ -349,134 +349,94 @@ class TestDeliverEnvelopeDiscriminator:
 
 
 # ---------------------------------------------------------------------------
-# AD2. _spawn_return_processor wires OutputService
+# AD2. _spawn_return_processor — direct envelope extraction + delivery
 #
-# Regression: _spawn_return_processor used to call
-# SubagentReturnProcessor.send() and discard the return value. The response
-# never reached the WebSocket. Fix: call OutputService.enqueue_proactive()
-# after send() — same pattern as scheduler_service.py.
+# _spawn_return_processor now extracts the inner text from the envelope
+# and delivers it via write_assistant_row + OutputService.enqueue_proactive
+# without a second ACT loop. These tests verify the extraction logic and
+# delivery calls for success, empty-body, and failure envelopes.
 # ---------------------------------------------------------------------------
 
 
 class TestSpawnReturnProcessorOutput:
-    def test_enqueue_proactive_called_with_response(self):
-        """_spawn_return_processor must call OutputService.enqueue_proactive()
-        with the response text after SubagentReturnProcessor.send() returns."""
+    def test_success_envelope_extracts_inner_text_and_delivers(self):
+        """Success envelope: inner text after 'Subagent's response:' is delivered
+        to both write_assistant_row and OutputService.enqueue_proactive."""
         from unittest.mock import patch, MagicMock
-        import threading
         from abilities.subagent import _spawn_return_processor
 
-        envelope = "[subagent.complete(type=web_surfer)]\nResult text\n[end:subagent.complete]"
+        inner = "Here is what I found from the subagent."
+        envelope = (
+            "[subagent.complete(type=web_surfer)]\n"
+            "The subagent has completed the task. Subagent's response:\n\n"
+            f"{inner}\n"
+            "[end:subagent.complete]"
+        )
 
         mock_output_svc = MagicMock()
-        mock_proc_instance = MagicMock()
-        mock_proc_instance.send.return_value = "Here is what I found from the subagent."
 
-        with patch(
-            'services.user_message_processor.SubagentReturnProcessor',
-            return_value=mock_proc_instance,
-        ), patch(
-            'services.output_service.OutputService',
-            return_value=mock_output_svc,
-        ):
+        with patch('abilities.subagent.write_assistant_row') as mock_write, \
+             patch('abilities.subagent.OutputService', return_value=mock_output_svc):
             _spawn_return_processor(envelope)
 
-            # Join inside the patch context so the thread resolves mocked imports
-            for t in threading.enumerate():
-                if t.name == "subagent-return":
-                    t.join(timeout=5)
+        mock_write.assert_called_once_with('user', inner)
+        mock_output_svc.enqueue_proactive.assert_called_once_with(
+            topic='user',
+            response=inner,
+            source='subagent_return',
+        )
 
-            mock_proc_instance.send.assert_called_once()
-            mock_output_svc.enqueue_proactive.assert_called_once_with(
-                topic='user',
-                response="Here is what I found from the subagent.",
-                source='subagent_return',
-            )
-
-    def test_enqueue_proactive_called_with_fallback_on_empty_response(self):
-        """If SubagentReturnProcessor.send() returns empty, deliver a fallback
-        message — never silently drop the result."""
+    def test_empty_body_delivers_fallback_to_both_outputs(self):
+        """Envelope with no text between introducer and footer delivers the
+        fallback message to write_assistant_row and enqueue_proactive."""
         from unittest.mock import patch, MagicMock
-        import threading
         from abilities.subagent import _spawn_return_processor
 
-        envelope = "[subagent.complete(type=web_surfer)]\n\n[end:subagent.complete]"
+        envelope = (
+            "[subagent.complete(type=web_surfer)]\n"
+            "The subagent has completed the task. Subagent's response:\n\n"
+            "[end:subagent.complete]"
+        )
 
         mock_output_svc = MagicMock()
-        mock_proc_instance = MagicMock()
-        mock_proc_instance.send.return_value = ""
 
-        # Drain leaked threads from TestAsyncDispatch before patching.
-        for t in threading.enumerate():
-            if t.name.startswith("subagent"):
-                t.join(timeout=5)
-
-        with patch(
-            'services.user_message_processor.SubagentReturnProcessor',
-            return_value=mock_proc_instance,
-        ), patch(
-            'services.output_service.OutputService',
-            return_value=mock_output_svc,
-        ):
+        with patch('abilities.subagent.write_assistant_row') as mock_write, \
+             patch('abilities.subagent.OutputService', return_value=mock_output_svc):
             _spawn_return_processor(envelope)
 
-            for t in threading.enumerate():
-                if t.name == "subagent-return":
-                    t.join(timeout=5)
+        mock_write.assert_called_once()
+        delivered = mock_write.call_args.args[1]
+        assert "no usable text" in delivered.lower()
 
-            mock_output_svc.enqueue_proactive.assert_called_once()
-            response = mock_output_svc.enqueue_proactive.call_args.kwargs['response']
-            assert "no output" in response.lower()
+        mock_output_svc.enqueue_proactive.assert_called_once()
+        response = mock_output_svc.enqueue_proactive.call_args.kwargs['response']
+        assert "no usable text" in response.lower()
 
-    def test_enqueue_proactive_called_with_error_on_send_exception(self):
-        """If SubagentReturnProcessor.send() raises, deliver the error — never
-        silently swallow it."""
+    def test_failure_envelope_delivers_reason_to_both_outputs(self):
+        """Failure envelope: extracted Reason string appears in both deliveries."""
         from unittest.mock import patch, MagicMock
-        import threading
         from abilities.subagent import _spawn_return_processor
 
-        envelope = "[subagent.complete(type=web_surfer)]\nResult\n[end:subagent.complete]"
+        reason = "Connection timed out after 3 attempts"
+        envelope = (
+            f"[subagent.complete(type=web_surfer, status=failure)]\n"
+            f"The subagent failed. Reason: {reason}.\n\n"
+            "Decide whether to retry, escalate to the user, or fall back.\n"
+            "[end:subagent.complete]"
+        )
 
         mock_output_svc = MagicMock()
-        mock_proc_instance = MagicMock()
-        mock_proc_instance.send.side_effect = RuntimeError("provider timeout")
 
-        for t in threading.enumerate():
-            if t.name.startswith("subagent"):
-                t.join(timeout=5)
-
-        with patch(
-            'services.user_message_processor.SubagentReturnProcessor',
-            return_value=mock_proc_instance,
-        ), patch(
-            'services.output_service.OutputService',
-            return_value=mock_output_svc,
-        ):
+        with patch('abilities.subagent.write_assistant_row') as mock_write, \
+             patch('abilities.subagent.OutputService', return_value=mock_output_svc):
             _spawn_return_processor(envelope)
 
-            for t in threading.enumerate():
-                if t.name == "subagent-return":
-                    t.join(timeout=5)
+        mock_write.assert_called_once()
+        delivered = mock_write.call_args.args[1]
+        assert "failed" in delivered.lower()
+        assert reason in delivered
 
-            mock_output_svc.enqueue_proactive.assert_called_once()
-            response = mock_output_svc.enqueue_proactive.call_args.kwargs['response']
-            assert "provider timeout" in response
-
-
-# ---------------------------------------------------------------------------
-# SubagentReturnProcessor isolation contract
-# ---------------------------------------------------------------------------
-
-
-class TestSubagentReturnProcessorIsolation:
-    def test_skip_input_row_is_true(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.SKIP_INPUT_ROW is True
-
-    def test_channel_is_user(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.CHANNEL == 'user'
-
-    def test_skip_transcript_write_is_false(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.SKIP_TRANSCRIPT_WRITE is False
+        mock_output_svc.enqueue_proactive.assert_called_once()
+        response = mock_output_svc.enqueue_proactive.call_args.kwargs['response']
+        assert "failed" in response.lower()
+        assert reason in response

@@ -7,8 +7,9 @@ Three types, each with its own tool surface, system prompt, and default timeout:
   general_purpose (30m): parallelise different long-running work.
 
 Default is fire-and-forget (wait=false). When the subagent finishes it steers
-the parent agent's ACT loop (Case A: parent mid-turn) or spawns a fresh
-user-channel turn via SubagentReturnProcessor (Case B: parent idle).
+the parent agent's ACT loop (Case A: parent mid-turn) or writes the extracted
+response text directly to the user-channel transcript and publishes via
+OutputService (Case B: parent idle) — no inner ACT loop.
 
 When wait=true the parent ACT iteration blocks until the subagent finishes,
 capped per-type by ``wait_cap``: web_surfer caps at 30 min (web research is
@@ -24,7 +25,9 @@ import uuid
 
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
+from services.output_service import OutputService
 from services.rich_media_parser import strip_spans
+from services.transcript_service import write_assistant_row
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SUBAGENT SKILL]"
@@ -170,9 +173,9 @@ def _deliver_envelope(envelope: str, parent_ref: object) -> None:
       getUserPrompt() drains _pending_steers into _act_trail.
 
     Case B — parent idle (turn finished, or non-UMP):
-      Spawn a daemon thread that runs SubagentReturnProcessor(envelope).send()
-      which produces a normal user-channel ACT turn and publishes via
-      OutputService.
+      Extract the response text from the envelope, write it synchronously to
+      the user-channel transcript, and publish via OutputService. No inner
+      ACT loop.
 
     The discriminator is ``parent_ref._turn_active.is_set()`` — a thread-safe
     Event that bind_current_processor sets on entry and clears on exit.
@@ -200,47 +203,72 @@ def _deliver_envelope(envelope: str, parent_ref: object) -> None:
             _spawn_return_processor(envelope)
         return
 
-    # Case B: parent idle — synthetic user-channel turn
+    # Case B: parent idle — direct write to user-channel transcript + WS publish
     _spawn_return_processor(envelope)
 
 
 def _spawn_return_processor(envelope: str) -> None:
-    """Spawn a daemon thread that runs SubagentReturnProcessor with the envelope.
+    """Extract the subagent response from the envelope and deliver it directly.
 
-    After the ACT loop completes, publishes the response to the WebSocket
-    via OutputService — the same pattern as scheduler_service.py.
+    Success envelopes: strips the header, introducer, and footer lines; delivers
+    the inner response text verbatim.
+    Failure envelopes: extracts the Reason line and emits a short user-facing
+    message — the retry/escalate hint is dropped (it was for an inner ACT loop
+    that no longer exists).
+    Falls back to a generic message if extraction yields empty text.
+
+    Writes the transcript row synchronously then publishes via OutputService.
+    No inner thread — caller is already executing inside a daemon thread (_run_async).
     """
+    def _extract(env: str) -> str:
+        lines = env.splitlines()
+        if not lines:
+            return ""
+        header = lines[0]
+        if "status=failure" in header:
+            for line in lines[1:]:
+                marker = "Reason: "
+                idx = line.find(marker)
+                if idx != -1:
+                    reason = line[idx + len(marker):].rstrip(".")
+                    return f"Subagent failed: {reason.strip()}"
+            return "Subagent failed."
+        # Success: strip header, "The subagent has completed..." line, blank, and footer
+        inner_lines = []
+        body_started = False
+        for line in lines[1:]:
+            if line.strip() == "[end:subagent.complete]":
+                break
+            if not body_started:
+                # Skip the introducer line and the blank line after it
+                if "Subagent's response:" in line:
+                    body_started = True
+                continue
+            inner_lines.append(line)
+        # Strip leading blank from body
+        while inner_lines and not inner_lines[0].strip():
+            inner_lines.pop(0)
+        return "\n".join(inner_lines).strip()
 
-    def _run():
-        from services.output_service import OutputService
+    response_text = _extract(envelope)
+    if not response_text:
+        response_text = "Subagent returned a result but produced no usable text."
 
-        try:
-            from services.user_message_processor import SubagentReturnProcessor
+    try:
+        write_assistant_row('user', response_text)
+        logger.info("%s Subagent return written to transcript", LOG_PREFIX)
+    except Exception as exc:
+        logger.error("%s Transcript write failed: %s", LOG_PREFIX, exc, exc_info=True)
 
-            response_text = SubagentReturnProcessor(raw_input=envelope).send()
-            response_text = (response_text or '').strip()
-            if not response_text:
-                response_text = "Subagent returned a result but synthesis produced no output."
-        except Exception as exc:
-            logger.error(
-                "%s SubagentReturnProcessor failed: %s", LOG_PREFIX, exc, exc_info=True
-            )
-            response_text = f"Subagent synthesis failed: {exc}"
-
-        try:
-            OutputService().enqueue_proactive(
-                topic='user',
-                response=response_text,
-                source='subagent_return',
-            )
-            logger.info("%s SubagentReturnProcessor completed and delivered", LOG_PREFIX)
-        except Exception as exc:
-            logger.error(
-                "%s SubagentReturnProcessor delivery failed: %s", LOG_PREFIX, exc, exc_info=True
-            )
-
-    t = threading.Thread(target=_run, daemon=True, name="subagent-return")
-    t.start()
+    try:
+        OutputService().enqueue_proactive(
+            topic='user',
+            response=response_text,
+            source='subagent_return',
+        )
+        logger.info("%s Subagent return delivered via OutputService", LOG_PREFIX)
+    except Exception as exc:
+        logger.error("%s OutputService delivery failed: %s", LOG_PREFIX, exc, exc_info=True)
 
 
 # ── Ability ───────────────────────────────────────────────────────────────────

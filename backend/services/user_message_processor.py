@@ -528,32 +528,6 @@ class UserMessageProcessor(MessageProcessor):
         return self._mode_state_cached
 
 
-class SubagentReturnProcessor(UserMessageProcessor):
-    """Synthesize a subagent's result via a fresh user-channel ACT loop.
-
-    Flow (isolation contract):
-    1. SubagentProcessor (CHANNEL='subagent') does the work in its own
-       isolated transcript.
-    2. On completion, a daemon thread constructs this processor with the
-       subagent's result as ``raw_input`` and calls ``.send()``.
-    3. SKIP_INPUT_ROW=True — the raw subagent result is NEVER written to
-       the user transcript.  The user channel stays clean.
-    4. The ACT loop synthesizes the result.  The synthesized response is
-       written to transcript (``store()``) and delivered via WS — this is
-       what the user sees.
-    5. On subagent failure, the same flow runs — the ACT loop sees the
-       error envelope and synthesizes a user-friendly response.
-
-    Why CHANNEL='user': the output of this ACT loop is a normal
-    user-channel assistant message — fully visible, rich-media-capable.
-    Do NOT add a CHANNEL='subagent_return' constant — it would break
-    rich-media card injection for tool calls in this loop.
-    """
-
-    ROLE = 'subagent_return'
-    SKIP_INPUT_ROW = True
-
-
 class ScheduledPromptProcessor(UserMessageProcessor):
     """Scheduled prompt — UMP with hidden input and clean context window."""
 

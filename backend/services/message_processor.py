@@ -182,7 +182,7 @@ class MessageProcessor:
     # When True, send() skips write_input_row() but store() still writes
     # the assistant row.  self._uid stays None (tool calls get transcript_id
     # NULL — safe, all downstream code guards on _uid is not None).
-    # Used by SubagentReturnProcessor: the subagent envelope must never
+    # Used by ScheduledPromptProcessor: the raw scheduler prompt must never
     # appear in the user channel transcript, but the synthesized assistant
     # response must.
     SKIP_INPUT_ROW: bool = False
@@ -238,7 +238,7 @@ class MessageProcessor:
         # Thread-safe liveness flag: set while send() is on the call stack
         # (inside bind_current_processor). Async subagent delivery checks
         # this to distinguish a live parent (steer into _pending_steers)
-        # from a finished parent (spawn SubagentReturnProcessor).
+        # from a finished parent (write extracted response direct to user channel).
         self._turn_active = threading.Event()
         # Per-instance deadline (seconds from epoch) for processors that want a
         # hard wall-clock cap (e.g. SubagentProcessor). None means no deadline.
@@ -662,7 +662,7 @@ class MessageProcessor:
             # Skipped for internal processors (SKIP_TRANSCRIPT_WRITE=True) so
             # they leave no trace in the transcript table.
             # SKIP_INPUT_ROW suppresses only the input row — store() still
-            # writes the assistant row (SubagentReturnProcessor isolation).
+            # writes the assistant row (used by ScheduledPromptProcessor).
             if not self.SKIP_TRANSCRIPT_WRITE and not self.SKIP_INPUT_ROW:
                 self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
 
