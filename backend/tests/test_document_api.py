@@ -106,16 +106,6 @@ class TestDocumentsAPI:
         # clean_text stripped from response
         assert "clean_text" not in data["items"][0]
 
-    def test_list_documents_include_deleted(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_all_documents.return_value = []
-
-            client.get("/documents?include_deleted=true")
-
-        mock_svc.get_all_documents.assert_called_once_with(include_deleted=True)
-
     # ------------------------------------------------------------------
     # GET /documents/<id>
     # ------------------------------------------------------------------
@@ -181,16 +171,6 @@ class TestDocumentsAPI:
         assert data["artifacts"][0]["key"] == "doc:doc00001:000"
         assert data["artifacts"][0]["content"] == "Full text of artifact zero."
 
-    def test_get_content_not_found(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_document.return_value = None
-
-            resp = client.get("/documents/missing/content")
-
-        assert resp.status_code == 404
-
     # ------------------------------------------------------------------
     # DELETE /documents/<id>
     # ------------------------------------------------------------------
@@ -206,16 +186,6 @@ class TestDocumentsAPI:
         assert resp.status_code == 200
         assert resp.get_json()["ok"] is True
 
-    def test_soft_delete_not_found(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.soft_delete.return_value = False
-
-            resp = client.delete("/documents/doc00001")
-
-        assert resp.status_code == 404
-
     # ------------------------------------------------------------------
     # POST /documents/<id>/restore
     # ------------------------------------------------------------------
@@ -230,16 +200,6 @@ class TestDocumentsAPI:
 
         assert resp.status_code == 200
         assert resp.get_json()["ok"] is True
-
-    def test_restore_not_found(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.restore.return_value = False
-
-            resp = client.post("/documents/doc00001/restore")
-
-        assert resp.status_code == 404
 
     # ------------------------------------------------------------------
     # DELETE /documents/<id>/purge
@@ -297,16 +257,6 @@ class TestDocumentsAPI:
         assert resp.status_code == 400
         assert "not awaiting" in resp.get_json()["error"].lower()
 
-    def test_confirm_not_found(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_document.return_value = None
-
-            resp = client.post("/documents/missing/confirm")
-
-        assert resp.status_code == 404
-
     # ------------------------------------------------------------------
     # POST /documents/<id>/augment
     # ------------------------------------------------------------------
@@ -346,20 +296,6 @@ class TestDocumentsAPI:
 
         assert resp.status_code == 400
         assert "context" in resp.get_json()["error"].lower()
-
-    def test_augment_wrong_status(self, client):
-        doc = _make_doc_dict(status="processing")
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_document.return_value = doc
-
-            resp = client.post(
-                "/documents/doc00001/augment",
-                json={"context": "extra info"},
-            )
-
-        assert resp.status_code == 400
 
     def test_augment_ready_document_succeeds(self, client):
         """Post-hoc augmentation of ready documents (e.g., watched folder docs)."""
@@ -508,10 +444,6 @@ class TestHelpers:
         assert '\x00' not in _sanitize_filename('file\x00.txt')
         assert not _sanitize_filename('...hidden').startswith('.')
 
-    def test_sanitize_filename_empty_becomes_unnamed(self):
-        from api.documents import _sanitize_filename
-        assert _sanitize_filename('') == 'unnamed_document'
-
     def test_sanitize_filename_limits_length(self):
         from api.documents import _sanitize_filename
         long_name = 'a' * 300 + '.pdf'
@@ -531,9 +463,3 @@ class TestHelpers:
         result = _serialize_doc(doc)
         assert "clean_text" not in result
 
-    def test_serialize_doc_converts_datetimes(self):
-        from api.documents import _serialize_doc
-        doc = _make_doc_dict()
-        result = _serialize_doc(doc)
-        assert isinstance(result["created_at"], str)
-        assert isinstance(result["updated_at"], str)

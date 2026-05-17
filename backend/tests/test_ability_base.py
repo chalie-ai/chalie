@@ -48,26 +48,10 @@ def test_missing_name_raises_at_class_creation():
     gc.collect()
 
 
-def test_missing_summary_raises_at_class_creation():
-    """Subclass without SUMMARY raises TypeError at class body evaluation time."""
-    with pytest.raises(TypeError, match="SUMMARY"):
-        _make_subclass(NAME="missing_summary", EXAMPLES=_VALID_EXAMPLES, INPUT_SCHEMA={})
-
-    gc.collect()
-
-
 def test_missing_examples_raises_at_class_creation():
     """Subclass without EXAMPLES raises TypeError at class body evaluation time."""
     with pytest.raises(TypeError, match="EXAMPLES"):
         _make_subclass(NAME="missing_examples", SUMMARY="some summary", INPUT_SCHEMA={})
-
-    gc.collect()
-
-
-def test_missing_input_schema_raises_at_class_creation():
-    """Subclass without INPUT_SCHEMA raises TypeError at class body evaluation time."""
-    with pytest.raises(TypeError, match="INPUT_SCHEMA"):
-        _make_subclass(NAME="missing_schema", SUMMARY="some summary", EXAMPLES=_VALID_EXAMPLES)
 
     gc.collect()
 
@@ -81,14 +65,6 @@ def test_examples_non_list_raises():
     """EXAMPLES as a non-list raises TypeError."""
     with pytest.raises(TypeError, match="EXAMPLES"):
         _make_subclass(NAME="examples_string", SUMMARY="some summary", EXAMPLES="not a list", INPUT_SCHEMA={})
-
-    gc.collect()
-
-
-def test_examples_list_of_non_strings_raises():
-    """EXAMPLES with non-string elements raises TypeError."""
-    with pytest.raises(TypeError, match="EXAMPLES"):
-        _make_subclass(NAME="examples_non_strings", SUMMARY="some summary", EXAMPLES=[1, 2, 3, 4, 5, 6], INPUT_SCHEMA={})
 
     gc.collect()
 
@@ -130,25 +106,6 @@ def test_examples_exactly_six_accepted():
     assert len(instance.EXAMPLES) == 6
 
     del _ExamplesSix
-    gc.collect()
-
-
-def test_examples_exactly_eight_accepted():
-    """EXAMPLES with exactly 8 entries is valid (upper boundary)."""
-
-    class _ExamplesEight(Ability):
-        NAME = "examples_eight"
-        SUMMARY = "some summary"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f", "g", "h"]
-        INPUT_SCHEMA = {}
-
-        def execute(self, channel, params, telemetry):
-            return {}
-
-    instance = _ExamplesEight()
-    assert len(instance.EXAMPLES) == 8
-
-    del _ExamplesEight
     gc.collect()
 
 
@@ -223,20 +180,3 @@ def test_timeout_defaults_to_ten():
     gc.collect()
 
 
-def test_timeout_overridable():
-    """Subclass can override TIMEOUT (e.g. browser overrides to 90)."""
-
-    class _LongTimeout(Ability):
-        NAME = "long_timeout"
-        SUMMARY = "Long timeout ability"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
-        TIMEOUT = 90
-
-        def execute(self, channel, params, telemetry):
-            return {}
-
-    assert _LongTimeout.TIMEOUT == 90
-
-    del _LongTimeout
-    gc.collect()

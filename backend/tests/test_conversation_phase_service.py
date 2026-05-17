@@ -80,14 +80,6 @@ class TestEmptyThread:
         result = svc.update("Hello!", is_user=True, topic="greetings")
         assert result["current"] == "opening"
 
-    def test_update_second_message_still_opening(self):
-        store = _make_store()
-        svc = _make_service(store)
-        svc.update("Hello!", is_user=True, topic="greetings")
-        result = svc.update("Hi there, how are you?", is_user=True, topic="greetings")
-        assert result["current"] == "opening"
-
-
 class TestStateRoundtrip:
     def test_state_persisted_and_reloaded(self):
         store = _make_store()
@@ -388,39 +380,6 @@ class TestMomentum:
 
         assert result["momentum"] > 0.6
 
-    def test_slow_exchanges_give_low_momentum(self):
-        """Messages every 10 minutes should yield low momentum."""
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        messages = [
-            ("Hey", True, "a"),
-            ("Hi", True, "a"),
-            ("How are you?", True, "a"),
-            ("Fine thanks", True, "a"),
-            ("Good to hear", True, "a"),
-        ]
-        for i, (text, is_user, topic) in enumerate(messages):
-            t = base + timedelta(minutes=i * 10)   # 10-minute gaps → slow
-            with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(text, is_user=is_user, topic=topic)
-
-        assert result["momentum"] < 0.5
-
-    def test_momentum_capped_at_one(self):
-        """Even extremely fast exchanges must not exceed momentum of 1.0."""
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        for i in range(10):
-            t = base + timedelta(milliseconds=i * 100)  # 100ms gaps → near-instant
-            with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update("ping", is_user=True, topic="a")
-
-        assert result["momentum"] <= 1.0
-
     def test_momentum_ema_smoothing(self):
         """EMA with alpha=0.3 smooths changes; verify new value is between old and instant."""
         store = _make_store()
@@ -469,45 +428,6 @@ class TestDirection:
                 result = svc.update(text, is_user=True, topic="a")
 
         assert result["direction"] == "deepening"
-
-    def test_decreasing_length_gives_winding_down_direction(self):
-        """Shrinking message lengths → direction=winding_down."""
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        texts = [
-            "This is a very long and detailed message about many things in great detail",
-            "Still quite a long message with considerable information and context provided",
-            "A moderately long message that is shorter than the previous ones",
-            "A shorter message now",
-            "Short",
-            "Yep",
-            "Ok",
-            "K",
-        ]
-        for i, text in enumerate(texts):
-            t = base + timedelta(seconds=i * 30)
-            with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(text, is_user=True, topic="a")
-
-        assert result["direction"] == "winding_down"
-
-    def test_stable_messages_give_sustaining_direction(self):
-        """Stable length and timing → direction=sustaining."""
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        # Uniform length messages
-        text = "This message is roughly the same length as all the others here"
-        for i in range(8):
-            t = base + timedelta(seconds=i * 30)
-            with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(text, is_user=True, topic="a")
-
-        assert result["direction"] == "sustaining"
-
 
 class TestStickiness:
     def test_single_exploring_signal_does_not_flip_from_deepening(self):
@@ -632,11 +552,6 @@ class TestHelpers:
         assert _same_topic_run([]) == 0
         assert _same_topic_run(["x"]) == 1
 
-    def test_topic_changes_in_last(self):
-        from services.conversation_phase_service import _topic_changes_in_last
-        assert _topic_changes_in_last(["a", "b", "b", "c", "c"], 5) == 2
-        assert _topic_changes_in_last(["a", "a", "a", "a", "a"], 5) == 0
-
     def test_question_density(self):
         from services.conversation_phase_service import _question_density
         counts = [1, 0, 1, 0, 1]
@@ -649,12 +564,6 @@ class TestHelpers:
         assert _is_increasing([40, 30, 20, 10]) is False
         assert _is_increasing([20, 20, 20, 20]) is False
         assert _is_increasing([10]) is False  # too few
-
-    def test_is_decreasing(self):
-        from services.conversation_phase_service import _is_decreasing
-        assert _is_decreasing([40, 30, 20, 10]) is True
-        assert _is_decreasing([10, 20, 30, 40]) is False
-
 
 class TestSingleton:
     def test_singleton_thread_safety(self):

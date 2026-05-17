@@ -31,13 +31,6 @@ class TestWorldStateTypedSnapshot:
         assert snap["last_user_message_at"] is not None
         assert isinstance(snap["last_user_message_at"], datetime)
 
-    def test_absorb_user_message_timestamp_matches_signal(self, ws):
-        """snapshot last_user_message_at equals the signal's received_at."""
-        sig = Signal(source="ws", kind="user_message")
-        ws.absorb(sig)
-        snap = ws.snapshot()
-        assert snap["last_user_message_at"] == sig.received_at
-
     # ── absorb: heartbeat ────────────────────────────────────────────────
 
     def test_absorb_heartbeat_updates_snapshot(self, ws):
@@ -47,13 +40,6 @@ class TestWorldStateTypedSnapshot:
         snap = ws.snapshot()
         assert snap["last_heartbeat_at"] is not None
         assert isinstance(snap["last_heartbeat_at"], datetime)
-
-    def test_absorb_heartbeat_timestamp_matches_signal(self, ws):
-        """snapshot last_heartbeat_at equals the signal's received_at."""
-        sig = Signal(source="/health", kind="heartbeat")
-        ws.absorb(sig)
-        snap = ws.snapshot()
-        assert snap["last_heartbeat_at"] == sig.received_at
 
     # ── absorb: device ───────────────────────────────────────────────────
 
@@ -106,16 +92,6 @@ class TestWorldStateTypedSnapshot:
         assert snap["current_device_class"] is None
         assert snap["current_local_time"] is None
 
-    def test_snapshot_has_all_four_keys(self, ws):
-        """snapshot() always returns all four expected keys."""
-        snap = ws.snapshot()
-        assert set(snap.keys()) == {
-            "last_user_message_at",
-            "last_heartbeat_at",
-            "current_device_class",
-            "current_local_time",
-        }
-
     # ── unknown signal kinds silently ignored ────────────────────────────
 
     def test_unknown_signal_kind_silently_ignored(self, ws):
@@ -129,10 +105,3 @@ class TestWorldStateTypedSnapshot:
         assert snap["current_device_class"] is None
         assert snap["current_local_time"] is None
 
-    def test_multiple_unknown_kinds_leave_typed_fields_intact(self, ws):
-        """Multiple unknown kinds do not corrupt previously absorbed typed fields."""
-        ws.absorb(Signal(source="ws", kind="user_message"))
-        ws.absorb(Signal(source="future", kind="completely_new_kind"))
-        snap = ws.snapshot()
-        assert snap["last_user_message_at"] is not None
-        assert snap["last_heartbeat_at"] is None

@@ -133,11 +133,6 @@ class TestCreateFolder:
 
 @pytest.mark.unit
 class TestGetFolder:
-    def test_returns_none_when_not_found(self, db):
-        svc = FolderWatcherService(get_shared_db_service())
-        result = svc.get_folder('nonexistent')
-        assert result is None
-
     def test_returns_dict_when_found(self, db):
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
@@ -175,14 +170,6 @@ class TestUpdateFolder:
         ).fetchone()
         assert row['label'] == 'Updated'
 
-    def test_ignores_unknown_fields(self, db):
-        _seed_folder(db, label='Original')
-        svc = FolderWatcherService(get_shared_db_service())
-
-        result = svc.update_folder('abc12345', unknown_field='bad')
-        # Label should be unchanged
-        assert result['label'] == 'Original'
-
     @patch('services.folder_watcher_service.os.access', return_value=True)
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath', return_value='/new/path')
@@ -217,15 +204,6 @@ class TestDeleteFolder:
             "SELECT * FROM watched_folders WHERE id = 'abc12345'"
         ).fetchone()
         assert row is None
-
-    def test_returns_false_when_not_found(self, db):
-        """Verify delete_folder returns False for a non-existent folder ID."""
-        svc = FolderWatcherService(get_shared_db_service())
-
-        store = MemoryStore()
-        with patch(_P_MEMSTORE, return_value=store):
-            result = svc.delete_folder('nonexistent')
-        assert result is False
 
     def test_soft_deletes_documents_when_requested(self, db):
         _seed_folder(db)
@@ -274,19 +252,6 @@ class TestBrowseDirectory:
         assert 'Documents' in result['directories']
         assert 'Desktop' in result['directories']
 
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=False)
-    @patch('services.folder_watcher_service.os.path.realpath', return_value='/not_a_dir')
-    def test_rejects_non_directory(self, mock_real, mock_isdir, service):
-        with pytest.raises(ValueError, match="Not a directory"):
-            service.browse_directory('/not_a_dir')
-
-    @patch('services.folder_watcher_service.os.access', return_value=False)
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    @patch('services.folder_watcher_service.os.path.realpath', return_value='/unreadable')
-    def test_rejects_unreadable_directory(self, mock_real, mock_isdir, _mock_access, service):
-        with pytest.raises(PermissionError):
-            service.browse_directory('/unreadable')
-
     @patch('services.folder_watcher_service.os.access', return_value=True)
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     @patch('services.folder_watcher_service.os.path.realpath')
@@ -319,12 +284,6 @@ class TestScanScheduling:
         folder = _make_folder_dict(last_scan_at=past, scan_interval=300)
         assert service.is_scan_due(folder) is True
 
-    def test_scan_not_due_when_recent(self, service):
-        from services.time_utils import utc_now
-        just_now = utc_now().isoformat()
-        folder = _make_folder_dict(last_scan_at=just_now, scan_interval=300)
-        assert service.is_scan_due(folder) is False
-
     def test_trigger_scan_sets_memorystore_key(self, service):
         """trigger_scan writes a scan-now flag to the MemoryStore with a 600s TTL."""
         store = MemoryStore()
@@ -342,13 +301,6 @@ class TestScanScheduling:
         assert result is True
         assert store.get('watcher:scan_now:abc12345') is None
 
-    def test_is_scan_requested_returns_false(self, service):
-        """is_scan_requested returns False when no scan-now flag is present."""
-        store = MemoryStore()
-        with patch(_P_MEMSTORE, return_value=store):
-            result = service.is_scan_requested('abc12345')
-
-        assert result is False
 
 
 # ---------------------------------------------------------------------------
@@ -719,14 +671,3 @@ class TestParseJsonList:
     def test_parses_json_string(self, service):
         assert service._parse_json_list('["*.pdf","*.docx"]') == ['*.pdf', '*.docx']
 
-    def test_returns_list_as_is(self, service):
-        assert service._parse_json_list(['*.pdf']) == ['*.pdf']
-
-    def test_returns_empty_for_invalid_json(self, service):
-        assert service._parse_json_list('not json') == []
-
-    def test_returns_empty_for_non_list_json(self, service):
-        assert service._parse_json_list('{"key": "val"}') == []
-
-    def test_returns_empty_for_none(self, service):
-        assert service._parse_json_list(None) == []

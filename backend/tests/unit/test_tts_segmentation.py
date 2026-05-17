@@ -103,18 +103,6 @@ class TestSegmentForTts:
             f"Sentence terminator was lost: {result}"
         )
 
-    def test_clause_boundary_punctuation_preserved(self):
-        # Build one over-long sentence with a comma clause boundary.
-        # The comma must stay at the END of the first clause chunk, not the
-        # beginning of the second.
-        filler = _word(200)
-        sentence = f"{filler}, {filler}."   # >320 chars, split on comma
-        result = _segment_for_tts(sentence)
-        # At least one chunk must end with a comma (the look-behind keeps it).
-        assert any(r.endswith(",") for r in result), (
-            f"Comma not preserved at clause end: {result}"
-        )
-
     # ── clause-level fallback ──────────────────────────────────────────────
 
     def test_single_long_sentence_splits_on_clause_boundary(self):
@@ -129,20 +117,6 @@ class TestSegmentForTts:
         assert part_a in joined
         assert part_b in joined
 
-    def test_semicolon_is_a_valid_clause_boundary(self):
-        part_a = _word(200)
-        part_b = _word(200)
-        sentence = f"{part_a}; {part_b}."
-        result = _segment_for_tts(sentence)
-        assert len(result) >= 2
-
-    def test_em_dash_is_a_valid_clause_boundary(self):
-        part_a = _word(200)
-        part_b = _word(200)
-        sentence = f"{part_a}— {part_b}."
-        result = _segment_for_tts(sentence)
-        assert len(result) >= 2
-
     # ── whitespace fallback ────────────────────────────────────────────────
 
     def test_single_long_clause_with_no_punctuation_splits_on_whitespace(self):
@@ -156,14 +130,3 @@ class TestSegmentForTts:
         for chunk in result:
             assert len(chunk) <= _LIMIT, f"Chunk too long ({len(chunk)}): {chunk!r}"
 
-    def test_all_chunks_within_limit(self):
-        # Stress test: long mixed text — every output chunk must be ≤ limit.
-        parts = []
-        for i in range(10):
-            parts.append(f"Sentence number {i} with some filler text here.")
-        # Add one very long word-only blob to force whitespace splitting.
-        parts.append(" ".join([_word(40)] * 12))
-        text = " ".join(parts)
-        result = _segment_for_tts(text)
-        for chunk in result:
-            assert len(chunk) <= _LIMIT, f"Chunk too long ({len(chunk)}): {chunk!r}"

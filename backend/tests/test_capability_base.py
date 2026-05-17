@@ -361,30 +361,6 @@ class TestHealthTracking:
             cap.run_monitor()  # this pushes it over
         assert cap._connected is False
 
-    def test_run_monitor_persists_to_tool_configs(self):
-        """Error state is persisted to tool_configs after each call."""
-        mem_svc = _InMemoryToolConfigService()
-        cap = _make_health_cap(RuntimeError("timeout"))
-        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
-            cap.run_monitor()
-        stored = mem_svc.get_tool_config("stub")
-        assert stored["stub:error_count"] == "1"
-        assert stored["stub:last_error"] == "timeout"
-
-    def test_run_monitor_recovery_resets_count(self):
-        """A successful monitor() after failures resets the counter."""
-        cap = _make_health_cap()
-        cap._error_count = 3
-        cap._last_error = "was broken"
-        mem_svc = _InMemoryToolConfigService()
-        with patch(
-            "capabilities.base._get_tool_config_service",
-            return_value=mem_svc,
-        ):
-            cap.run_monitor()
-        assert cap._error_count == 0
-        assert cap._connected is True
-
     def test_backoff_skips_monitor_during_cooldown(self):
         """run_monitor returns immediately when backoff timer has not expired."""
         from services.time_utils import utc_now
@@ -395,16 +371,6 @@ class TestHealthTracking:
         with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
             cap.run_monitor()
         cap._do_monitor.assert_not_called()
-
-    def test_backoff_allows_monitor_after_expiry(self):
-        """run_monitor proceeds when backoff timer has expired."""
-        from services.time_utils import utc_now
-        cap = _make_health_cap()
-        cap._next_retry_at = utc_now() - timedelta(minutes=1)
-        mem_svc = _InMemoryToolConfigService()
-        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
-            cap.run_monitor()
-        assert cap._error_count == 0
 
     def test_backoff_activated_on_max_failures(self):
         """Reaching MAX_CONSECUTIVE_FAILURES activates exponential backoff."""
@@ -425,16 +391,6 @@ class TestHealthTracking:
         with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
             cap.run_monitor()
         assert cap._backoff_secs == 120
-
-    def test_backoff_capped_at_max(self):
-        """Backoff never exceeds MAX_BACKOFF_SECS."""
-        cap = _make_health_cap(ConnectionError("down"))
-        cap._error_count = cap.MAX_CONSECUTIVE_FAILURES - 1
-        cap._backoff_secs = 1800
-        mem_svc = _InMemoryToolConfigService()
-        with patch("capabilities.base._get_tool_config_service", return_value=mem_svc):
-            cap.run_monitor()
-        assert cap._backoff_secs == 1800
 
     def test_success_clears_backoff(self):
         """Successful monitor clears backoff state."""

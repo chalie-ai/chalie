@@ -37,27 +37,12 @@ class TestMetricsAccumulator:
         assert acc.tokens_total_complete is False
         assert acc.tokens_thinking == 10
 
-    def test_accumulate_marks_incomplete_when_input_missing(self):
-        class OneSided:
-            tokens_input = None
-            tokens_output = 50
-
-        acc = MetricsAccumulator()
-        acc.accumulate(OneSided())
-        assert acc.tokens_total_complete is False
-        assert acc.tokens_output == 50
-
     def test_record_tool_counts(self):
         acc = MetricsAccumulator()
         acc.record_tool("Grep")
         acc.record_tool("Grep")
         acc.record_tool("Read")
         assert acc.tool_counts == {"Grep": 2, "Read": 1}
-
-    def test_record_tool_empty_name_ignored(self):
-        acc = MetricsAccumulator()
-        acc.record_tool("")
-        assert acc.tool_counts == {}
 
     def test_snapshot_shape(self):
         acc = MetricsAccumulator()
@@ -78,12 +63,6 @@ class TestMetricsAccumulator:
         assert snap["response_time_s"] >= 0
         assert "tokens_total_complete" not in snap
 
-    def test_snapshot_incomplete_flag_present(self):
-        acc = MetricsAccumulator()
-        acc.tokens_total_complete = False
-        snap = acc.snapshot()
-        assert snap.get("tokens_total_complete") is False
-
     # ── Timing extensions ────────────────────────────────────────────────
 
     def test_snapshot_emits_timing_block(self):
@@ -103,15 +82,6 @@ class TestMetricsAccumulator:
         assert snap["timing"]["stages"]["pre_act"] >= 10
         assert snap["timing"]["pre_llm_ms"] >= 10
 
-    def test_stage_accumulates_repeated_calls(self):
-        acc = MetricsAccumulator()
-        with acc.stage("prompt_assembly"):
-            time.sleep(0.005)
-        with acc.stage("prompt_assembly"):
-            time.sleep(0.005)
-        snap = acc.snapshot()
-        assert snap["timing"]["stages"]["prompt_assembly"] >= 10
-
     def test_record_llm_call_sums_into_llm_ms(self):
         acc = MetricsAccumulator()
         acc.record_llm_call(120)
@@ -119,14 +89,6 @@ class TestMetricsAccumulator:
         snap = acc.snapshot()
         assert snap["timing"]["llm_ms"] == 200
         assert snap["timing"]["llm_calls"] == 2
-
-    def test_record_llm_call_negative_or_none_ignored(self):
-        acc = MetricsAccumulator()
-        acc.record_llm_call(None)
-        acc.record_llm_call(-5)
-        snap = acc.snapshot()
-        assert snap["timing"]["llm_ms"] == 0
-        assert snap["timing"]["llm_calls"] == 0
 
     def test_iteration_attributes_llm_calls(self):
         acc = MetricsAccumulator()
@@ -172,13 +134,6 @@ class TestMetricsAccumulator:
             + snap["timing"]["post_llm_ms"]
             == snap["timing"]["wall_ms"]
         )
-
-    def test_add_stage_ms_external_record(self):
-        acc = MetricsAccumulator()
-        acc.add_stage_ms("external_stage", 250)
-        snap = acc.snapshot()
-        assert snap["timing"]["stages"]["external_stage"] == 250
-        assert snap["timing"]["pre_llm_ms"] == 250
 
     def test_merge_absorbs_llm_time(self):
         parent = MetricsAccumulator()

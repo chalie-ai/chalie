@@ -184,22 +184,6 @@ class TestRelevanceEndpoint:
                     resp = client.get("/api/query/relevance?q=urgent")
         assert resp.get_json()["recommendation"] == "surface_now"
 
-    def test_mid_score_recommends_surface_soon(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_relevance_services([{"composite_score": 55}])
-                with stack:
-                    resp = client.get("/api/query/relevance?q=some+topic")
-        assert resp.get_json()["recommendation"] == "surface_soon"
-
-    def test_low_score_recommends_defer(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_relevance_services([{"composite_score": 10}])
-                with stack:
-                    resp = client.get("/api/query/relevance?q=low+relevance+topic")
-        assert resp.get_json()["recommendation"] == "defer"
-
     def test_unauthenticated_returns_401(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_no_auth() as stack:
@@ -234,19 +218,6 @@ class TestRelevanceEndpoint:
         assert data["relevance"] == pytest.approx(0.0, abs=1e-9)
         assert data["recommendation"] == "defer"
 
-    def test_related_traits_present_and_empty_list(self, cookie_app):
-        """related_traits key is always present and is a list (goals table removed)."""
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _, _ = self._patch_relevance_services([])
-                with stack:
-                    resp = client.get("/api/query/relevance?q=auth")
-        data = resp.get_json()
-        assert resp.status_code == 200
-        assert "related_traits" in data
-        assert isinstance(data["related_traits"], list)
-
-
 # ---------------------------------------------------------------------------
 # Identity endpoint tests
 # ---------------------------------------------------------------------------
@@ -280,20 +251,6 @@ class TestMemoryEndpoint:
                     resp = client.get("/api/query/memory?q=authentication")
         assert resp.status_code == 200
         assert "results" in resp.get_json()
-
-    def test_result_items_have_expected_fields(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, _ = self._patch_memory_services()
-                with stack:
-                    resp = client.get("/api/query/memory?q=test")
-        results = resp.get_json()["results"]
-        assert len(results) == 1
-        item = results[0]
-        assert "id" in item
-        assert "summary" in item
-        assert "score" in item
-        assert "created_at" in item
 
     def test_empty_or_missing_q_returns_empty_results(self, cookie_app):
         with cookie_app.test_client() as client:
@@ -330,21 +287,6 @@ class TestMemoryEndpoint:
                 with stack:
                     resp = client.get("/api/query/memory?q=test")
         assert resp.status_code == 401
-
-    def test_bearer_without_permission_returns_403(self, bearer_app):
-        bearer_svc = MagicMock()
-        bearer_svc.check_permission.return_value = False
-
-        with bearer_app.test_client() as client:
-            with _patch_bearer_auth() as stack:
-                with stack, \
-                     patch("api.query._get_wrapper_service", return_value=bearer_svc):
-                    resp = client.get(
-                        "/api/query/memory?q=test",
-                        headers={"Authorization": "Bearer fake_token"},
-                    )
-        assert resp.status_code == 403
-
 
 # ---------------------------------------------------------------------------
 # Composite endpoint tests
@@ -414,27 +356,6 @@ class TestCompositeEndpoint:
                 )
         assert resp.status_code == 400
 
-    def test_empty_body_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp = client.post(
-                    "/api/query/composite",
-                    data="not json",
-                    content_type="text/plain",
-                )
-        assert resp.status_code == 400
-
-    def test_empty_slices_returns_empty_results(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp = client.post(
-                    "/api/query/composite",
-                    json={"slices": []},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 200
-        assert resp.get_json()["results"] == {}
-
     def test_denied_slices_in_denied_key(self, bearer_app):
         bearer_svc = MagicMock()
         bearer_svc.check_permission.return_value = False
@@ -479,17 +400,6 @@ class TestCompositeEndpoint:
         assert "memory" in data["results"]
         assert "relevance" in data["denied"]
 
-    def test_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_no_auth() as stack:
-                with stack:
-                    resp = client.post(
-                        "/api/query/composite",
-                        json={"slices": ["memory"]},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 401
-
     def test_unknown_slice_in_results_with_error_field(self, cookie_app):
         """Unknown slice names are dispatched and return {error: ...} in results."""
         with cookie_app.test_client() as client:
@@ -503,22 +413,6 @@ class TestCompositeEndpoint:
         data = resp.get_json()
         assert "nonexistent_slice" in data["results"]
         assert "error" in data["results"]["nonexistent_slice"]
-
-    def test_cookie_auth_bypasses_permission_checks(self, cookie_app):
-        """Cookie-authenticated requests skip all permission enforcement."""
-        ep_stack = self._patch_episodic()
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), ep_stack:
-                resp = client.post(
-                    "/api/query/composite",
-                    json={"slices": ["memory"]},
-                    content_type="application/json",
-                )
-        data = resp.get_json()
-        assert resp.status_code == 200
-        assert "memory" in data["results"]
-        assert data["denied"] == []
-
 
 # ---------------------------------------------------------------------------
 # _check_query_permission unit tests

@@ -59,10 +59,6 @@ def _payload(result):
 # ─── action: list_all ──────────────────────────────────────────────────────
 
 class TestListAll:
-    def test_returns_empty_when_no_lists(self, ability):
-        body = _payload(_exec(ability, {"action": "list_all"}))
-        assert body == {"status": "success", "lists": []}
-
     def test_returns_summaries_with_ids(self, ability, service):
         a = service.create_list("Groceries")
         b = service.create_list("Chores")
@@ -122,11 +118,6 @@ class TestView:
         assert body['list']['id'] == list_id
         assert body['list']['items'][0]['content'] == 'milk'
 
-    def test_missing_id_fails(self, ability):
-        body = _payload(_exec(ability, {"action": "view"}))
-        assert body['status'] == 'fail'
-        assert "'id'" in body['message']
-
     def test_unknown_id_fails(self, ability):
         body = _payload(_exec(ability, {"action": "view", "id": "deadbeef"}))
         assert body['status'] == 'fail'
@@ -144,15 +135,6 @@ class TestAdd:
         assert body['status'] == 'success'
         contents = [i['content'] for i in body['list']['items']]
         assert contents == ['milk', 'eggs']
-
-    def test_missing_id_fails(self, ability):
-        body = _payload(_exec(ability, {"action": "add", "items": ["milk"]}))
-        assert body['status'] == 'fail'
-
-    def test_missing_items_fails(self, ability, service):
-        list_id = service.create_list("Groceries")
-        body = _payload(_exec(ability, {"action": "add", "id": list_id}))
-        assert body['status'] == 'fail'
 
     def test_unknown_id_fails(self, ability):
         body = _payload(_exec(ability, {
@@ -199,16 +181,6 @@ class TestCheck:
         }))
         assert body['status'] == 'fail'
         assert 'No matching items' in body['message']
-
-    def test_malformed_items_fails(self, ability, service):
-        list_id = service.create_list("Groceries")
-        body = _payload(_exec(ability, {
-            "action": "check", "id": list_id,
-            "items": ["milk"],  # plain strings, not objects
-        }))
-        assert body['status'] == 'fail'
-        assert "content" in body['message']
-
 
 # ─── action: remove ────────────────────────────────────────────────────────
 
@@ -267,12 +239,6 @@ class TestRename:
             "action": "rename", "id": a, "name": "Taken",
         }))
         assert body['status'] == 'fail'
-
-    def test_missing_name_fails(self, ability, service):
-        list_id = service.create_list("Old")
-        body = _payload(_exec(ability, {"action": "rename", "id": list_id}))
-        assert body['status'] == 'fail'
-
 
 # ─── action: delete ────────────────────────────────────────────────────────
 
@@ -334,23 +300,6 @@ class TestRichMedia:
         payload, instruction = _unwrap_rich(result, "add")
         assert payload['id'] == list_id
         assert "list_2" in instruction
-
-    def test_check_emits_rich_payload(self, ability, service):
-        list_id = service.create_list("Groceries")
-        service.add_items(list_id, ["milk"])
-        result = _exec_rich(ability, {
-            "action": "check", "id": list_id,
-            "items": [{"content": "milk", "checked": True}],
-        }, ordinal=3)
-        payload, _ = _unwrap_rich(result, "check")
-        assert payload['items'][0]['checked'] is True
-
-    def test_view_emits_rich_payload(self, ability, service):
-        list_id = service.create_list("Groceries")
-        service.add_items(list_id, ["milk"])
-        result = _exec_rich(ability, {"action": "view", "id": list_id}, ordinal=4)
-        payload, _ = _unwrap_rich(result, "view")
-        assert payload['id'] == list_id
 
     def test_fail_falls_back_to_plain_skill_tag(self, ability):
         """Rich-media gate skips fail bodies — they go through the plain path

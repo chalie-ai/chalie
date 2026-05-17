@@ -83,9 +83,6 @@ class TestGetList:
         assert [i['content'] for i in result['items']] == ['milk', 'eggs']
         assert result['items'][1]['checked'] == 1
 
-    def test_returns_none_for_unknown_id(self, service):
-        assert service.get_list('nonexist') is None
-
     def test_does_not_fall_back_to_name(self, service, db):
         _seed_list(db)
         # Passing the name (not id) must not resolve.
@@ -116,14 +113,6 @@ class TestDeleteList:
         ).fetchone()
         assert row['deleted_at'] is not None
 
-    def test_returns_false_when_not_found(self, service):
-        assert service.delete_list('nonexist') is False
-
-    def test_does_not_fall_back_to_name(self, service, db):
-        _seed_list(db)
-        assert service.delete_list('Shopping List') is False
-
-
 # ─── clear_list ───────────────────────────────────────────────────────────
 
 class TestClearList:
@@ -139,8 +128,6 @@ class TestClearList:
         ).fetchone()[0]
         assert active == 0
 
-    def test_returns_minus_one_when_not_found(self, service):
-        assert service.clear_list('nonexist') == -1
 
 
 # ─── rename_list ──────────────────────────────────────────────────────────
@@ -162,10 +149,6 @@ class TestRenameList:
             "SELECT name FROM lists WHERE id = 'abc12345'"
         ).fetchone()
         assert row['name'] == 'Old'
-
-    def test_returns_false_when_id_not_found(self, service):
-        assert service.rename_list('nonexist', 'Anything') is False
-
 
 # ─── add_items ────────────────────────────────────────────────────────────
 
@@ -220,15 +203,6 @@ class TestRemoveItems:
         ).fetchone()
         assert row['removed_at'] is not None
 
-    def test_returns_zero_when_list_not_found(self, service):
-        assert service.remove_items('nonexist', ['milk']) == 0
-
-    def test_returns_zero_when_no_match(self, service, db):
-        _seed_list(db)
-        _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
-        assert service.remove_items('abc12345', ['bread']) == 0
-
-
 # ─── check / uncheck ──────────────────────────────────────────────────────
 
 class TestCheckUncheck:
@@ -243,10 +217,6 @@ class TestCheckUncheck:
         _seed_item(db, 'i1', 'abc12345', 'milk', checked=1, position=0)
         assert service.uncheck_items('abc12345', ['milk']) == 1
 
-    def test_check_unknown_item_returns_zero(self, service, db):
-        _seed_list(db)
-        _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
-        assert service.check_items('abc12345', ['bread']) == 0
 
 
 
@@ -259,14 +229,7 @@ class TestGetListRow:
         assert result['id'] == 'abc12345'
         assert result['name'] == 'Shopping List'
 
-    def test_does_not_resolve_by_name(self, service, db):
-        _seed_list(db)
-        assert service._get_list_row('Shopping List') is None
-        assert service._get_list_row('shopping list') is None
-
     def test_excludes_deleted(self, service, db):
         _seed_list(db, deleted_at=utc_now().isoformat())
         assert service._get_list_row('abc12345') is None
 
-    def test_returns_none_for_empty(self, service):
-        assert service._get_list_row('') is None

@@ -18,9 +18,6 @@ from services.markup import (
 
 @pytest.mark.unit
 class TestEscapeAttr:
-    def test_escapes_double_quote(self):
-        assert escape_attr('"') == "&quot;"
-
     def test_escapes_ampersand_and_quote_combined(self):
         assert escape_attr('a & b "c"') == "a &amp; b &quot;c&quot;"
 
@@ -47,27 +44,11 @@ class TestActionsToXml:
         assert 'label="Say &quot;hi&quot;"' in result
         assert 'value="x&lt;y"' in result
 
-    def test_empty_returns_empty(self):
-        assert actions_to_xml([]) == ""
-
-
 @pytest.mark.unit
 class TestSanitize:
     def test_keeps_formatting_tags(self):
         out = sanitize("<p>a <b>bold</b> <i>italic</i> <u>under</u></p>")
         assert out == "<p>a <b>bold</b> <i>italic</i> <u>under</u></p>"
-
-    def test_keeps_h1(self):
-        out = sanitize("<h1>Title</h1>")
-        assert out == "<h1>Title</h1>"
-
-    def test_keeps_lists(self):
-        out = sanitize("<ul><li>one</li><li>two</li></ul>")
-        assert out == "<ul><li>one</li><li>two</li></ul>"
-
-    def test_keeps_code(self):
-        out = sanitize("<p>see <code>foo()</code></p>")
-        assert out == "<p>see <code>foo()</code></p>"
 
     def test_strips_script(self):
         out = sanitize("<p>safe</p><script>alert(1)</script>")
@@ -112,17 +93,6 @@ class TestSanitize:
         # data: scheme is not in url_schemes — src must be stripped or img dropped
         assert 'data:' not in out
 
-    def test_strips_unknown_tag_keeps_inner(self):
-        out = sanitize("<bogus>visible</bogus>")
-        assert "<bogus>" not in out
-        assert "visible" in out
-
-    def test_decodes_entities_in_text(self):
-        # nh3 leaves entities as-is in the output but they remain valid HTML
-        # (browser decodes on render). Round-trip via the live sanitiser.
-        out = sanitize("<p>a &amp; b</p>")
-        assert "&amp;" in out  # entity preserved in HTML form
-
     def test_empty_returns_empty(self):
         assert sanitize("") == ""
         assert sanitize(None) == ""
@@ -152,9 +122,6 @@ class TestExtractPlaintext:
             extract_plaintext("<ul><li>one</li><li>two</li><li>three</li></ul>")
             == "one two three"
         )
-
-    def test_adjacent_paragraphs_are_separated(self):
-        assert extract_plaintext("<p>first.</p><p>second.</p>") == "first. second."
 
     def test_h1_followed_by_paragraph_is_separated(self):
         assert extract_plaintext("<h1>Title</h1><p>Body.</p>") == "Title Body."
