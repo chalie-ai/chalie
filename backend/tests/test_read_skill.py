@@ -47,7 +47,9 @@ class TestSourceClassification:
 class TestHandleRead:
     def test_empty_source_returns_error(self):
         from abilities.read import ReadAbility
-        result = ReadAbility().execute('topic', {}, None)['text']
+        raw = ReadAbility().execute('topic', {}, None)
+        assert raw is not None, "ReadAbility.execute() returned None"
+        result = raw['text']
         assert '[read(' in result
         assert 'error=source-required' in result
         assert '[end:read]' in result

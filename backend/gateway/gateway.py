@@ -14,6 +14,7 @@ Routes:
     CRUD     /gw/<interface_id>/data — daemon file storage
 """
 
+import json
 import logging
 import os
 import threading
@@ -451,7 +452,7 @@ def proxy_render(interface_id: str):
             return jsonify(data), 200
         else:
             # SDK v1 legacy: raw HTML — inject CHALIE_GW_BASE global
-            script = f'<script>window.CHALIE_GW_BASE="{gw_base}";</script>'
+            script = f'<script>window.CHALIE_GW_BASE={json.dumps(gw_base)};</script>'
             html = script + resp.text
             return html, 200, {"Content-Type": "text/html; charset=utf-8"}
     except Exception as e:
@@ -488,13 +489,17 @@ def list_data_files(interface_id: str):
     if err:
         return err
     data_path = _daemon_data_dir(interface_id)
+    real_base = os.path.realpath(data_path)
     files = []
     for name in os.listdir(data_path):
         fpath = os.path.join(data_path, name)
-        if os.path.isfile(fpath):
+        real_fpath = os.path.realpath(fpath)
+        if not real_fpath.startswith(real_base + os.sep) and real_fpath != real_base:
+            continue
+        if os.path.isfile(real_fpath):
             files.append({
                 "name": name,
-                "size": os.path.getsize(fpath),
+                "size": os.path.getsize(real_fpath),
             })
     return jsonify(files), 200
 

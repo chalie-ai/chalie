@@ -154,13 +154,23 @@ def _fetch_one(provider: dict, query: str, limit: int) -> list:
 
     t0 = time.time()
     try:
-        response = requests.get(
-            url,
-            headers=headers,
-            timeout=timeout,
-            allow_redirects=True,
-            verify=False,
-        )
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=True,
+                verify=True,
+            )
+        except requests.exceptions.SSLError:
+            logger.debug('[SEARCH] SSL verify failed for %s, retrying without verification', name)
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=True,
+                verify=False,  # noqa: S501 — intentional fallback for providers with broken certs
+            )
         response.raise_for_status()
 
         latency_ms = int((time.time() - t0) * 1000)

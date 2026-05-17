@@ -587,7 +587,7 @@ class FolderWatcherService:
 
                 # Symlink safety: skip if target is outside watched folder
                 real_file = os.path.realpath(abs_path)
-                if not real_file.startswith(real_root):
+                if not real_file.startswith(real_root + os.sep):
                     continue
 
                 try:

@@ -93,15 +93,28 @@ def resolve_og_images(
 
 def _extract_one(url: str, timeout: float) -> dict:
     try:
-        with requests.get(
-            url,
-            timeout=timeout,
-            stream=True,
-            allow_redirects=True,
-            headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
-            cookies=_DEFAULT_COOKIES,
-            verify=False,
-        ) as resp:
+        try:
+            resp_ctx = requests.get(
+                url,
+                timeout=timeout,
+                stream=True,
+                allow_redirects=True,
+                headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+                cookies=_DEFAULT_COOKIES,
+                verify=True,
+            )
+        except requests.exceptions.SSLError:
+            logger.debug("og_image: SSL verify failed for %s, retrying without verification", url)
+            resp_ctx = requests.get(
+                url,
+                timeout=timeout,
+                stream=True,
+                allow_redirects=True,
+                headers={"User-Agent": _USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+                cookies=_DEFAULT_COOKIES,
+                verify=False,  # noqa: S501 — intentional fallback for sites with broken certs
+            )
+        with resp_ctx as resp:
             resp.raise_for_status()
             ct = (resp.headers.get("Content-Type") or "").lower()
             if "html" not in ct:

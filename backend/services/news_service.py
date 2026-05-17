@@ -39,7 +39,7 @@ _PUNCT_RE = re.compile(r"[^\w\s]")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 # RSS subdomain prefixes to strip when deriving domain for Google News site: filter
-_RSS_SUBDOMAIN_RE = re.compile(r"^(?:feeds?2?|rss(?:feeds?)?|rssfeeds?|feed|moxie|www\d*)\.", re.IGNORECASE)
+_RSS_SUBDOMAIN_RE = re.compile(r"^(?:feeds?2?|rss(?:feeds?)?|feed|moxie|www\d*)\.", re.IGNORECASE)
 _PROXY_HOSTS = {"rsshub.app", "hnrss.org", "feedburner.com", "feeds.feedburner.com"}
 
 

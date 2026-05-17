@@ -10,6 +10,7 @@ import math
 import logging
 
 from .config_service import ConfigService
+from .log_utils import safe
 
 
 logger = logging.getLogger(__name__)
@@ -24,12 +25,12 @@ class DecayEngineService:
             episodic_config = ConfigService.get_agent_config("episodic-memory")
             self.retrieval_decay_exponent = episodic_config.get('retrieval_decay_exponent', 0.5)
         except Exception as e:
-            logger.warning(f"[DECAY ENGINE] Failed to load decay rates from config, using defaults: {e}")
+            logger.warning("[DECAY ENGINE] Failed to load decay rates from config, using defaults: %s", e)
             self.retrieval_decay_exponent = 0.5
 
         logger.info(
-            f"[DECAY ENGINE] Initialized "
-            f"(retrieval_decay_exponent={self.retrieval_decay_exponent})"
+            "[DECAY ENGINE] Initialized (retrieval_decay_exponent=%s)",
+            safe(str(self.retrieval_decay_exponent)),
         )
 
     def run_once(self) -> None:
