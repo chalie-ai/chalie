@@ -1027,7 +1027,7 @@ class MessageProcessor:
           the channel history up to (but not including) the current turn.
         - On success:
             - Resets ``_current_iteration`` to 0.
-            - Clears ``_act_trail``, ``_discovered_tools``, ``_pending_tool_calls``.
+            - Clears ``_act_trail``, ``_discovered_tools``.
             - Clears ``_thinking_exploration`` so a large exploration block
               cannot re-inflate ``user_body`` on the next iteration.
             - Deletes ephemeral=1 tool_calls rows for this turn from the DB
@@ -1053,7 +1053,6 @@ class MessageProcessor:
         # Clear all per-turn ACT state so the restarted loop starts clean.
         self._act_trail = []
         self._discovered_tools = []
-        self._pending_tool_calls = []
         self._thinking_exploration = None
         self._current_iteration = 0
 

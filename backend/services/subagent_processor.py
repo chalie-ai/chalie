@@ -43,6 +43,7 @@ class SubagentProcessor(MessageProcessor):
 
     CHANNEL = 'subagent'
     ROLE = 'subagent'
+    LOG_LABEL = 'subagent'
     USAGE_CLASS = 'subagent'
     MAX_ITERATIONS = 50
     DISCOVERABLE: list[str] = [

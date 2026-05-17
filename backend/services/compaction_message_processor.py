@@ -34,6 +34,7 @@ from services.system_message_prompt import (
 
 class _CompactionProcessorBase(MessageProcessor):
     LOG_LABEL = 'compaction'
+    USAGE_CLASS = 'subconscious'
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []
     SKIP_TRANSCRIPT_WRITE = True
