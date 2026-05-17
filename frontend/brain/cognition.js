@@ -1,4 +1,4 @@
-// Cognition panel — 5 sub-views: memory, tools, personality, errors, usage.
+// Cognition panel — 7 sub-views: memory, tools, working, world, personality, errors, usage.
 const PanelCognition = (() => {
   let _root = null;
   let _sub = 'memory';
@@ -31,6 +31,8 @@ const PanelCognition = (() => {
         switch (targetSub) {
           case 'memory': await _fetchMemory(); break;
           case 'tools': await _fetchTools(); break;
+          case 'working': await _fetchWorking(); break;
+          case 'world': await _fetchWorld(); break;
           case 'personality': await _fetchPersonality(); break;
           case 'errors': await _fetchErrors(); break;
           case 'usage': await _fetchUsage(); break;
@@ -73,6 +75,23 @@ const PanelCognition = (() => {
   }
 
 
+  // ── Working On ──
+  let _tasks = [];
+  async function _fetchWorking() {
+    const res = await BrainApp.apiFetch('/system/observability/records?source=tasks');
+    if (!res.ok) throw new Error('fetch failed');
+    const data = await res.json();
+    _tasks = data.rows || [];
+  }
+
+  // ── World State ──
+  let _worldState = {};
+  async function _fetchWorld() {
+    const res = await BrainApp.apiFetch('/system/observability/world-state');
+    if (!res.ok) throw new Error('fetch failed');
+    _worldState = await res.json();
+  }
+
   // ── Personality ──
   let _personality = { warmth: 0, mood: 0, expressiveness: 0, curiosity: 0, humor: 0 };
   let _personalityVoice = '';
@@ -108,6 +127,8 @@ const PanelCognition = (() => {
     switch (_sub) {
       case 'memory': _renderMemory(el); break;
       case 'tools': _renderTools(el); break;
+      case 'working': _renderWorking(el); break;
+      case 'world': _renderWorld(el); break;
       case 'personality': _renderPersonality(el); break;
       case 'errors': _renderErrors(el); break;
       case 'usage': _renderUsage(el); break;
@@ -159,6 +180,78 @@ const PanelCognition = (() => {
     </table>`;
   }
 
+
+  function _renderWorking(el) {
+    if (_tasks.length === 0) { el.innerHTML = '<div class="empty-state"><p>No active tasks.</p></div>'; return; }
+    el.innerHTML = `<table class="records-table">
+      <thead><tr><th>Task</th><th>Details</th></tr></thead>
+      <tbody>${_tasks.map(t => `<tr>
+        <td class="key-cell">${BrainApp.escapeHtml(t.key || '')}</td>
+        <td class="val-cell">${BrainApp.escapeHtml(t.value || '')}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  }
+
+  function _renderWorld(el) {
+    const inputs = _worldState.inputs || {};
+    const telemetry = inputs.telemetry || {};
+    const schedule = inputs.schedule || [];
+    const signals = inputs.signals || {};
+    const bgProcs = inputs.bg_processes || [];
+
+    const deviceInfo = telemetry.device || {};
+    const battery = telemetry.battery || {};
+    const location = telemetry.location_name || '';
+    const localTime = telemetry.local_time || '';
+    const timezone = telemetry.timezone || '';
+    const prefs = telemetry.preferences || {};
+
+    const signalEntries = Object.entries(signals);
+    const pendingSched = schedule.filter(s => s.status === 'pending');
+
+    el.innerHTML = `<div class="world-state-grid">
+      <div class="world-section">
+        <h4>Device & Environment</h4>
+        <table class="records-table">
+          <tbody>
+            <tr><td class="key-cell">Location</td><td>${BrainApp.escapeHtml(location || '—')}</td></tr>
+            <tr><td class="key-cell">Local Time</td><td>${BrainApp.escapeHtml(localTime)} (${BrainApp.escapeHtml(timezone)})</td></tr>
+            <tr><td class="key-cell">Device</td><td>${BrainApp.escapeHtml(deviceInfo.class || '—')} · ${BrainApp.escapeHtml(deviceInfo.platform || '')} · ${deviceInfo.screen_w || '?'}×${deviceInfo.screen_h || '?'}</td></tr>
+            <tr><td class="key-cell">Battery</td><td>${Math.round((battery.level || 0) * 100)}%${battery.charging ? ' ⚡ charging' : ''}</td></tr>
+            <tr><td class="key-cell">Network</td><td>${BrainApp.escapeHtml(telemetry.connection || '—')}</td></tr>
+            <tr><td class="key-cell">Theme</td><td>${BrainApp.escapeHtml(prefs.color_scheme || '—')}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      ${pendingSched.length > 0 ? `<div class="world-section">
+        <h4>Pending Schedules</h4>
+        <table class="records-table">
+          <thead><tr><th>Message</th><th>Due</th><th>Recurrence</th></tr></thead>
+          <tbody>${pendingSched.map(s => `<tr>
+            <td class="key-cell">${BrainApp.escapeHtml(s.message || '')}</td>
+            <td>${BrainApp.formatDate(s.due_at)}</td>
+            <td>${BrainApp.escapeHtml(s.recurrence || '—')}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>` : ''}
+      ${signalEntries.length > 0 ? `<div class="world-section">
+        <h4>Active Signals</h4>
+        <table class="records-table">
+          <thead><tr><th>Signal</th><th>Label</th></tr></thead>
+          <tbody>${signalEntries.map(([k, v]) => `<tr>
+            <td class="key-cell">${BrainApp.escapeHtml(k)}</td>
+            <td>${BrainApp.escapeHtml(v.label || JSON.stringify(v))}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>` : ''}
+      ${bgProcs.length > 0 ? `<div class="world-section">
+        <h4>Background Processes</h4>
+        <table class="records-table">
+          <tbody>${bgProcs.map(p => `<tr><td>${BrainApp.escapeHtml(typeof p === 'string' ? p : JSON.stringify(p))}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>` : '<div class="world-section"><h4>Background Processes</h4><p class="panel-desc">None running.</p></div>'}
+    </div>`;
+  }
 
   function _renderPersonality(el) {
     const sliders = [

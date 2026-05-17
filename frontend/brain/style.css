@@ -760,6 +760,10 @@ input[type="checkbox"]:checked::after {
 .task-title { font-weight: 500; font-size: 14px; }
 .task-meta { font-size: 12px; color: var(--text-secondary); }
 
+/* ── World state ──────────────────────────────────────────────── */
+.world-state-grid { display: flex; flex-direction: column; gap: 20px; }
+.world-section h4 { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--text-primary); }
+
 /* ── Code block ───────────────────────────────────────────────── */
 .code-block {
   padding: 16px; border-radius: 10px;

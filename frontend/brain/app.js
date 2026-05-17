@@ -11,7 +11,7 @@ const BrainApp = (() => {
 
   const SUB_ROUTES = {
     providers: null,
-    cognition: ['memory', 'tools', 'personality', 'errors', 'usage'],
+    cognition: ['memory', 'tools', 'working', 'world', 'personality', 'errors', 'usage'],
     scheduler: ['all', 'pending', 'fired', 'failed', 'cancelled'],
     lists: null,
     documents: ['active', 'processing', 'uploads', 'deleted'],
@@ -24,7 +24,8 @@ const BrainApp = (() => {
     providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
     lists: 'Lists', documents: 'Documents', capabilities: 'Capabilities',
     policies: 'Policies', mcp: 'MCP Server',
-    memory: 'Memory', tools: 'Tools', personality: 'Personality', errors: 'Errors', usage: 'Usage',
+    memory: 'Memory', tools: 'Tools', working: 'Working on', world: 'World state',
+    personality: 'Personality', errors: 'Errors', usage: 'Usage',
     all: 'All', pending: 'Pending', fired: 'Fired', failed: 'Failed', cancelled: 'Cancelled',
     active: 'Active', processing: 'Processing', uploads: 'Uploads', deleted: 'Deleted',
     chat: 'Chat', subagent: 'Subagent', background: 'Background', external: 'External agent',
