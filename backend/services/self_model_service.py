@@ -330,6 +330,8 @@ class SelfModelService:
         try:
             from abilities._registry import AbilityRegistry
             for ability in AbilityRegistry.all():
+                if getattr(ability, 'INTERNAL', False) or getattr(ability, 'SYSTEM', False):
+                    continue
                 name = ability.NAME
                 tool_names.append(name)
                 text = (ability.SUMMARY or '').lower()
