@@ -1,4 +1,4 @@
-// Cognition panel — 7 sub-views: memory, tools, working, world, personality, errors, usage.
+// Cognition panel — 6 sub-views: memory, tools, world, personality, errors, usage.
 const PanelCognition = (() => {
   let _root = null;
   let _sub = 'memory';
@@ -31,7 +31,6 @@ const PanelCognition = (() => {
         switch (targetSub) {
           case 'memory': await _fetchMemory(); break;
           case 'tools': await _fetchTools(); break;
-          case 'working': await _fetchWorking(); break;
           case 'world': await _fetchWorld(); break;
           case 'personality': await _fetchPersonality(); break;
           case 'errors': await _fetchErrors(); break;
@@ -74,15 +73,6 @@ const PanelCognition = (() => {
     _tools = data.tools || [];
   }
 
-
-  // ── Working On ──
-  let _tasks = [];
-  async function _fetchWorking() {
-    const res = await BrainApp.apiFetch('/system/observability/records?source=tasks');
-    if (!res.ok) throw new Error('fetch failed');
-    const data = await res.json();
-    _tasks = data.rows || [];
-  }
 
   // ── World State ──
   let _worldState = {};
@@ -127,7 +117,6 @@ const PanelCognition = (() => {
     switch (_sub) {
       case 'memory': _renderMemory(el); break;
       case 'tools': _renderTools(el); break;
-      case 'working': _renderWorking(el); break;
       case 'world': _renderWorld(el); break;
       case 'personality': _renderPersonality(el); break;
       case 'errors': _renderErrors(el); break;
@@ -180,17 +169,6 @@ const PanelCognition = (() => {
     </table>`;
   }
 
-
-  function _renderWorking(el) {
-    if (_tasks.length === 0) { el.innerHTML = '<div class="empty-state"><p>No active tasks.</p></div>'; return; }
-    el.innerHTML = `<table class="records-table">
-      <thead><tr><th>Task</th><th>Details</th></tr></thead>
-      <tbody>${_tasks.map(t => `<tr>
-        <td class="key-cell">${BrainApp.escapeHtml(t.key || '')}</td>
-        <td class="val-cell">${BrainApp.escapeHtml(t.value || '')}</td>
-      </tr>`).join('')}</tbody>
-    </table>`;
-  }
 
   function _renderWorld(el) {
     const inputs = _worldState.inputs || {};
