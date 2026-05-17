@@ -96,6 +96,14 @@ class TestDefaults:
         defaults = get_defaults()
         assert defaults["code_eval"]["subconscious"] == "deny"
 
+    def test_defaults_schedule_create_is_allow_in_chat(self):
+        defaults = get_defaults()
+        assert defaults["schedule.create"]["chat"] == "allow"
+
+    def test_defaults_schedule_create_is_deny_in_subconscious(self):
+        defaults = get_defaults()
+        assert defaults["schedule.create"]["subconscious"] == "deny"
+
     def test_defaults_subagent_contexts_independent(self):
         defaults = get_defaults()
         assert defaults["email.manage"]["subagent"] == "ask"
