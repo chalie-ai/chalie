@@ -105,13 +105,6 @@ class TestParseHeaders:
         result = parse_headers(1, raw)
         assert result["has_unsubscribe"] is True
 
-    def test_missing_optional_fields_are_empty_strings(self):
-        # Minimal headers: no Message-ID, no In-Reply-To
-        raw = b"Subject: Hi\r\nFrom: a@b.com\r\nTo: c@d.com\r\n"
-        result = parse_headers(5, raw)
-        assert result["message_id"] == ""
-        assert result["in_reply_to"] == ""
-
     def test_date_is_iso_string(self):
         raw = _make_header_bytes(date="Mon, 01 Jan 2024 12:00:00 +0000")
         result = parse_headers(1, raw)

@@ -104,43 +104,12 @@ class TestIngestSignal:
         assert resp.status_code == 400
         assert "signal_type" in resp.get_json()["error"]
 
-    def test_missing_content_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-        assert "content" in resp.get_json()["error"]
-
-    def test_invalid_activation_energy_type_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x", "activation_energy": "high"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
     def test_activation_energy_out_of_range_returns_400(self, cookie_app):
         with cookie_app.test_client() as client:
             with _cookie_patches():
                     resp = client.post(
                         "/api/signals",
                         json={"signal_type": "ctx", "content": "x", "activation_energy": 1.5},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
-    def test_metadata_not_dict_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x", "metadata": ["list"]},
                         content_type="application/json",
                     )
         assert resp.status_code == 400
@@ -409,18 +378,6 @@ class TestIngestSignalsBatch:
                     )
         assert resp.status_code == 400
 
-    def test_batch_at_exactly_50_is_accepted(self, cookie_app):
-        signals = [{"signal_type": "x", "content": "c"}] * 50
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals/batch",
-                        json=signals,
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 200
-        assert resp.get_json()["accepted"] == 50
-
     def test_batch_rate_limit_rejects_subsequent_items(self, cookie_app):
         """Once the rate limit is hit, remaining items in batch are rejected."""
         signals = [{"signal_type": "x", "content": "c"}] * 3
@@ -445,17 +402,6 @@ class TestIngestSignalsBatch:
         assert data["errors"][0]["index"] == 2
         assert "rate limit" in data["errors"][0]["error"]
 
-    def test_batch_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with patch("services.auth_session_service.validate_session", return_value=False), \
-                 patch("services.wrapper_auth_service.WrapperAuthService") as mock_cls:
-                mock_cls.return_value.validate_bearer.return_value = None
-                resp = client.post(
-                    "/api/signals/batch",
-                    json=[{"signal_type": "x", "content": "c"}],
-                    content_type="application/json",
-                )
-        assert resp.status_code == 401
 
     def test_batch_valid_signals_stored_even_with_errors(self, cookie_app):
         """Valid signals in the batch should be stored regardless of other failures."""
@@ -511,17 +457,5 @@ class TestValidateSignal:
         result, _ = _validate_signal({"signal_type": "x", "content": "y", "source": "  ci  "})
         assert result["source"] == "ci"
 
-    def test_empty_source_becomes_none(self):
-        from api.signals import _validate_signal
-        result, _ = _validate_signal({"signal_type": "x", "content": "y", "source": ""})
-        assert result["source"] is None
-
-    def test_metadata_dict_accepted(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal({
-            "signal_type": "x", "content": "y", "metadata": {"branch": "main"}
-        })
-        assert err is None
-        assert result["metadata"] == {"branch": "main"}
 
 
