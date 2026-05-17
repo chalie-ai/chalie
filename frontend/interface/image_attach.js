@@ -1,7 +1,16 @@
 import { showToast } from './utils.js';
 
 /**
- * Image attachment — upload, preview strip, analysis tracking.
+ * File attachment — upload via POST /upload, preview strip, send as attachments.
+ *
+ * Replaces the old image-only flow (POST /chat/image + image_ids + base64 files).
+ * Images and documents both go through the same path:
+ *   1. User picks or drops a file.
+ *   2. POST /upload — saves to /tmp on the server, returns {tmp_path, filename,
+ *      content_type, size}.
+ *   3. A preview chip is rendered in the strip (image thumbnail or doc icon).
+ *   4. The send button is blocked while any upload is in progress.
+ *   5. On send, all tmp_paths are passed as the `attachments` array.
  */
 export class ImageAttach {
   /**
@@ -11,17 +20,11 @@ export class ImageAttach {
     this._getHost = getHost;
     this._onDocumentDrop = onDocumentDrop || null;
 
-    // [{id: string, element: HTMLElement}]
-    this._attachedImages = [];
+    // [{tmpPath: string, filename: string, element: HTMLElement}]
+    this._attachments = [];
 
-    // [{name: string, data: string, content_type: string}]
-    // Base64 file data collected alongside the /chat/image upload, consumed once
-    // per send by getPendingFiles() and forwarded in the WS payload.
-    this._pendingFiles = [];
-
-    // image_id → {element: HTMLElement, timeout: number}
-    // Populated by handleFile; cleared by handleImageReady or timeout.
-    this._pendingImageAnalysis = new Map();
+    // Number of uploads currently in-flight — send is blocked while > 0.
+    this._uploadsInProgress = 0;
   }
 
   // ---------------------------------------------------------------------------
@@ -39,143 +42,92 @@ export class ImageAttach {
   }
 
   /**
-   * Process one image file — upload, show preview, track analysis.
+   * Process one file — upload to /upload, show preview chip.
    *
-   * Uploads the file via REST, then keeps the spinner and `analyzing` CSS class
-   * on the thumbnail until the server pushes an `image_ready` WebSocket event.
-   * A 90-second safety-net timeout replaces the spinner with a warning badge if
-   * the event never arrives.
-   *
-   * The send button is enabled as soon as the server returns an `image_id` so
-   * the user is not blocked.
+   * The send button is disabled for the duration of the upload and re-evaluated
+   * once the upload completes (success or failure).  Images render as thumbnails;
+   * other file types render as a doc icon with the filename.
    *
    * @param {File} file
    */
   async handleFile(file) {
-    if (this._attachedImages.length >= 3) {
-      showToast('Maximum 3 images per message');
+    if (this._attachments.length >= 10) {
+      showToast('Maximum 10 attachments per message');
       return;
     }
-    const thumbEl = this._addImagePreview(file);
 
-    // Read file as base64 for the WS payload (in parallel with the REST upload).
-    const fileReader = new FileReader();
-    fileReader.onload = () => {
-      const base64 = fileReader.result.split(',')[1];
-      this._pendingFiles.push({
-        name: file.name,
-        data: base64,
-        content_type: file.type || 'application/octet-stream',
-      });
-    };
-    fileReader.readAsDataURL(file);
+    const isImage = file.type.startsWith('image/');
+    const chipEl = isImage
+      ? this._addImageChip(file)
+      : this._addDocChip(file.name);
+
+    this._uploadsInProgress++;
+    this._updateSendBtn();
 
     const formData = new FormData();
-    formData.append('image', file);
+    formData.append('file', file);
+
     try {
-      const res = await fetch('/chat/image', {
+      const res = await fetch('/upload', {
         method: 'POST',
         credentials: 'same-origin',
         body: formData,
       });
       const data = await res.json();
-      if (res.ok && data.image_id) {
-        this._attachedImages.push({ id: data.image_id, element: thumbEl });
-        // Keep the spinner and 'analyzing' class — they are cleared when the
-        // server sends an 'image_ready' WebSocket event after background
-        // analysis completes (see handleImageReady).  Do NOT remove them here;
-        // the previous behaviour removed them immediately (before analysis even
-        // started), which caused the LLM to silently miss image context.
-        document.getElementById('sendBtn').disabled = false;
 
-        // Safety net: if the 'image_ready' event does not arrive within 90 s,
-        // replace the spinner with a warning badge so the user knows analysis
-        // timed out.  The image remains attached.
-        const timeoutId = setTimeout(() => {
-          this._pendingImageAnalysis.delete(data.image_id);
-          thumbEl.classList.remove('analyzing');
-          thumbEl.querySelector('.image-preview__spinner')?.remove();
-          const warn = document.createElement('span');
-          warn.className = 'image-preview__warn';
-          warn.title = 'Image analysis timed out — context may be unavailable';
-          warn.textContent = '⚠';
-          thumbEl.appendChild(warn);
-        }, 90_000);
-
-        this._pendingImageAnalysis.set(data.image_id, { element: thumbEl, timeout: timeoutId });
+      if (res.ok && data.tmp_path) {
+        // Remove the in-progress spinner and mark as ready.
+        chipEl.classList.remove('analyzing');
+        chipEl.querySelector('.image-preview__spinner')?.remove();
+        this._attachments.push({ tmpPath: data.tmp_path, filename: data.filename, element: chipEl });
       } else {
-        thumbEl.remove();
+        chipEl.remove();
         this._updatePreviewVisibility();
-        showToast(data.error || 'Image upload failed');
+        showToast(data.error || 'Upload failed');
       }
     } catch {
-      thumbEl.remove();
+      chipEl.remove();
       this._updatePreviewVisibility();
-      showToast('Image upload failed');
+      showToast('Upload failed');
+    } finally {
+      this._uploadsInProgress--;
+      this._updateSendBtn();
     }
   }
 
   /**
-   * Called from the event router on WS `image_ready` events.
-   * Removes the analyzing spinner on success, or shows an error badge on failure.
-   *
-   * @param {{ image_id: string, status: string }} data
+   * Returns the list of tmp_paths for all successfully uploaded attachments.
+   * @returns {string[]}
    */
-  handleImageReady(data) {
-    const pending = this._pendingImageAnalysis.get(data.image_id);
-    if (pending) {
-      clearTimeout(pending.timeout);
-      this._pendingImageAnalysis.delete(data.image_id);
-      pending.element.classList.remove('analyzing');
-      pending.element.querySelector('.image-preview__spinner')?.remove();
-      if (data.status === 'failed') {
-        // Surface the failure with an error badge on the thumbnail.
-        const errBadge = document.createElement('span');
-        errBadge.className = 'image-preview__error';
-        errBadge.title = 'Image analysis failed — context unavailable';
-        errBadge.textContent = '✕';
-        pending.element.appendChild(errBadge);
-        showToast('Image analysis failed');
-      }
-    }
+  getAttachmentPaths() {
+    return this._attachments.map(a => a.tmpPath);
   }
 
   /**
-   * Returns array of attached image IDs (for message sending).
+   * Kept for backward compat — returns empty array since images now go through
+   * the unified attachments path, not a separate image_ids list.
    * @returns {string[]}
    */
   getImageIds() {
-    return this._attachedImages.map(a => a.id);
+    return [];
   }
 
   /**
-   * Returns base64 file entries collected since the last send, then clears the
-   * internal list.  Each entry is forwarded in the WS `files` payload field.
-   *
-   * @returns {Array<{name: string, data: string, content_type: string}>}
+   * Kept for backward compat — returns empty array since files now go through
+   * the unified attachments path, not a separate base64 files list.
+   * @returns {Array}
    */
   getPendingFiles() {
-    const files = [...this._pendingFiles];
-    this._pendingFiles = [];
-    return files;
+    return [];
   }
 
   /**
-   * Clears preview strip and cancels pending timeouts.
+   * Clears the preview strip.
    *
-   * Called when a message is sent or the user navigates away.  Cancels any
-   * in-flight safety-net timers so they do not fire after the preview strip
-   * has been cleared.
+   * Called when a message is sent or the user navigates away.
    */
   clear() {
-    // Cancel all pending 90 s safety-net timers before clearing the DOM.
-    for (const { timeout } of this._pendingImageAnalysis.values()) {
-      clearTimeout(timeout);
-    }
-    this._pendingImageAnalysis.clear();
-
-    this._attachedImages = [];
-    this._pendingFiles = [];
+    this._attachments = [];
     const strip = document.getElementById('imagePreview');
     if (strip) {
       strip.innerHTML = '';
@@ -184,24 +136,29 @@ export class ImageAttach {
   }
 
   /**
-   * Number of currently attached images.
+   * Number of currently attached files (uploaded or in-flight).
    * @returns {number}
    */
   get count() {
-    return this._attachedImages.length;
+    return this._attachments.length + this._uploadsInProgress;
   }
 
   /**
-   * Wire drag-and-drop and paste listeners for image attachment.
+   * True while at least one upload is in progress.
+   * @returns {boolean}
+   */
+  get isUploading() {
+    return this._uploadsInProgress > 0;
+  }
+
+  /**
+   * Wire drag-and-drop and paste listeners for file attachment.
    *
    * @param {{ dropzone: Element, pasteTarget: Element }} opts
-   *   dropzone   — the element that receives dragover/drop events (e.g. .input-dock)
-   *   pasteTarget — the element that receives paste events (e.g. #messageInput)
    */
   enableDropTargets({ dropzone, pasteTarget }) {
     if (!dropzone || !pasteTarget) return;
 
-    // Dragover — prevent default to allow drop, add visual class
     dropzone.addEventListener('dragenter', (ev) => {
       if (!ev.dataTransfer?.types?.includes('Files')) return;
       ev.preventDefault();
@@ -214,49 +171,39 @@ export class ImageAttach {
       dropzone.classList.add('dragover');
     });
 
-    // Dragleave — only remove class when leaving the dropzone entirely
     dropzone.addEventListener('dragleave', (ev) => {
       if (dropzone.contains(ev.relatedTarget)) return;
       dropzone.classList.remove('dragover');
     });
 
-    // Drop on the input-dock
     dropzone.addEventListener('drop', (ev) => {
-      ev.preventDefault(); // block browser navigation for dropped links/files
+      ev.preventDefault();
       dropzone.classList.remove('dragover');
       const files = ev.dataTransfer?.files;
       if (!files?.length) return;
-      let dropped = 0;
       for (const file of files) {
         if (file.type.startsWith('image/')) {
-          if (this._attachedImages.length + dropped >= 3) {
-            showToast('Maximum 3 images per message');
-            break;
-          }
           this.handleFile(file);
-          dropped++;
         } else if (this._onDocumentDrop) {
           this._onDocumentDrop(file);
         } else {
-          showToast('Drop an image here (documents: use + menu)');
+          showToast('Drop an image or document here');
         }
       }
     });
 
-    // Paste — only intercept when clipboard contains an image item
     pasteTarget.addEventListener('paste', (ev) => {
       const items = ev.clipboardData?.items;
       if (!items) return;
       for (const item of items) {
         if (item.type.startsWith('image/')) {
           const file = item.getAsFile();
-          if (!file) continue; // browser returned null (e.g. Firefox async) — try next item
+          if (!file) continue;
           ev.preventDefault();
           this.handleFile(file);
           return;
         }
       }
-      // Plain text — fall through to native paste behaviour
     });
   }
 
@@ -265,13 +212,13 @@ export class ImageAttach {
   // ---------------------------------------------------------------------------
 
   /**
-   * Create and insert a thumbnail element into the preview strip.
-   * The thumb starts with `analyzing` class and a spinner overlay.
+   * Add an image thumbnail chip to the preview strip.
+   * The chip starts with the `analyzing` class and a spinner while uploading.
    *
    * @param {File} file
-   * @returns {HTMLElement} thumb element
+   * @returns {HTMLElement}
    */
-  _addImagePreview(file) {
+  _addImageChip(file) {
     const strip = document.getElementById('imagePreview');
     strip.classList.remove('hidden');
 
@@ -283,35 +230,85 @@ export class ImageAttach {
     img.alt = file.name;
     thumb.appendChild(img);
 
-    // Spinner overlay (shown while upload/analysis in-flight)
     const spinner = document.createElement('div');
     spinner.className = 'image-preview__spinner';
     spinner.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93 2.83-2.83m8.48-8.48 2.83-2.83M2 12h4m12 0h4m-3.93 7.07-2.83-2.83M7.76 7.76 4.93 4.93"/></svg>';
     thumb.appendChild(spinner);
 
-    // Remove button
-    const removeBtn = document.createElement('button');
-    removeBtn.className = 'image-preview__remove';
-    removeBtn.setAttribute('aria-label', 'Remove image');
-    removeBtn.textContent = '\u00d7';
-    removeBtn.addEventListener('click', () => {
-      const idx = this._attachedImages.findIndex(a => a.element === thumb);
-      if (idx >= 0) this._attachedImages.splice(idx, 1);
-      thumb.remove();
-      this._updatePreviewVisibility();
-      if (!this._attachedImages.length) {
-        const textarea = document.getElementById('messageInput');
-        document.getElementById('sendBtn').disabled = !textarea?.value.trim();
-      }
-    });
-    thumb.appendChild(removeBtn);
-
+    thumb.appendChild(this._makeRemoveBtn(thumb));
     strip.appendChild(thumb);
     return thumb;
+  }
+
+  /**
+   * Add a document chip (icon + filename) to the preview strip.
+   *
+   * @param {string} filename
+   * @returns {HTMLElement}
+   */
+  _addDocChip(filename) {
+    const strip = document.getElementById('imagePreview');
+    strip.classList.remove('hidden');
+
+    const chip = document.createElement('div');
+    chip.className = 'image-preview__thumb image-preview__thumb--doc analyzing';
+
+    const icon = document.createElement('div');
+    icon.className = 'image-preview__doc-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = '📄';
+    chip.appendChild(icon);
+
+    const label = document.createElement('span');
+    label.className = 'image-preview__doc-name';
+    label.textContent = filename.length > 20 ? filename.slice(0, 18) + '…' : filename;
+    chip.appendChild(label);
+
+    const spinner = document.createElement('div');
+    spinner.className = 'image-preview__spinner';
+    spinner.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93 2.83-2.83m8.48-8.48 2.83-2.83M2 12h4m12 0h4m-3.93 7.07-2.83-2.83M7.76 7.76 4.93 4.93"/></svg>';
+    chip.appendChild(spinner);
+
+    chip.appendChild(this._makeRemoveBtn(chip));
+    strip.appendChild(chip);
+    return chip;
+  }
+
+  /**
+   * Build a × remove button that removes the chip and its attachment entry.
+   *
+   * @param {HTMLElement} chipEl
+   * @returns {HTMLButtonElement}
+   */
+  _makeRemoveBtn(chipEl) {
+    const btn = document.createElement('button');
+    btn.className = 'image-preview__remove';
+    btn.setAttribute('aria-label', 'Remove attachment');
+    btn.textContent = '×';
+    btn.addEventListener('click', () => {
+      const idx = this._attachments.findIndex(a => a.element === chipEl);
+      if (idx >= 0) this._attachments.splice(idx, 1);
+      chipEl.remove();
+      this._updatePreviewVisibility();
+      this._updateSendBtn();
+    });
+    return btn;
   }
 
   _updatePreviewVisibility() {
     const strip = document.getElementById('imagePreview');
     if (strip && !strip.children.length) strip.classList.add('hidden');
+  }
+
+  /**
+   * Enable the send button when there is text OR ready attachments AND no
+   * upload is in progress.  Disabled while any upload is in-flight.
+   */
+  _updateSendBtn() {
+    const sendBtn = document.getElementById('sendBtn');
+    const textarea = document.getElementById('messageInput');
+    if (!sendBtn) return;
+    const hasContent = !!(textarea?.value.trim()) || this._attachments.length > 0;
+    sendBtn.disabled = !hasContent || this._uploadsInProgress > 0;
   }
 }

@@ -95,13 +95,12 @@ export class Chat {
     const textarea = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
     const text = textarea.value.trim();
-    const imageIds = this._imageAttach ? this._imageAttach.getImageIds() : [];
-    const pendingFiles = [
-      ...(this._imageAttach ? this._imageAttach.getPendingFiles() : []),
-      ...(this._documentUpload ? this._documentUpload.getPendingFiles() : []),
-    ];
+    const attachments = this._imageAttach ? this._imageAttach.getAttachmentPaths() : [];
 
-    if (!text && !imageIds.length && !pendingFiles.length) return;
+    if (!text && !attachments.length) return;
+
+    // Block send while any upload is still in-flight.
+    if (this._imageAttach?.isUploading) return;
 
     // Only route as steer when the ACT loop is actively narrating.
     // This prevents normal replies (e.g. to clarifications) from being
@@ -117,15 +116,13 @@ export class Chat {
     this._presence.setState('processing');
     textarea.value = '';
     textarea.style.height = 'auto';
-    const pendingImageIds = [...imageIds];
     if (this._imageAttach) this._imageAttach.clear();
     sendBtn.disabled = true;
 
     // Capture timestamp for this exchange
     const exchangeTimestamp = new Date();
 
-    // Render user form with timestamp (pass imageIds so thumbnails are shown inline)
-    this._renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp, {}, pendingImageIds);
+    this._renderer.appendUserForm(text || '[File attached]', exchangeTimestamp, {});
 
     // ACT cycle host: blinking logo + (optional) narrative + cumulative tool list.
     // Persists for the entire turn; replaced wholesale by the final response.
@@ -135,7 +132,7 @@ export class Chat {
     let responseContent = '';
     let responseMeta = {};
 
-    this._ws.send(text || '[Image attached]', source, {
+    this._ws.send(text || '[File attached]', source, {
       onStatus: (stage) => {
         this._presence.setState(stage);
       },
@@ -175,7 +172,7 @@ export class Chat {
         this._onResponseReceivedCb?.();
         this._finaliseTurn(actEl, responseContent, responseMeta, data, exchangeTimestamp);
       },
-    }, pendingImageIds, pendingFiles);
+    }, attachments);
 
   }
 

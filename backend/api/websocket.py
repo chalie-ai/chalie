@@ -116,8 +116,8 @@ def _ws_handler(ws) -> None:
             msg_type = msg.get('type', '')
             if msg_type == 'chat':
                 logger.info(
-                    "[WS-DEBUG] recv chat: raw_len=%d, msg_keys=%s, has_files=%s",
-                    len(raw), list(msg.keys()), 'files' in msg,
+                    "[WS-DEBUG] recv chat: raw_len=%d, msg_keys=%s, attachments_count=%d",
+                    len(raw), list(msg.keys()), len(msg.get('attachments') or []),
                 )
 
             _dispatch_ws_message(ws, store, msg, active_request)

@@ -441,10 +441,6 @@ class ChalieApp {
       this._taskStrip.loadActiveTasks();
     });
 
-    this._eventRouter.onImageReady((data) => {
-      this._imageAttach.handleImageReady(data);
-    });
-
     this._eventRouter.onNotification(() => {
       this._notifications.playChime();
       this._taskStrip.loadActiveTasks();
@@ -626,7 +622,7 @@ class ChalieApp {
     textarea.addEventListener('input', () => {
       textarea.style.height = 'auto';
       textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-      sendBtn.disabled = !textarea.value.trim() && !this._imageAttach.count;
+      sendBtn.disabled = (!textarea.value.trim() && !this._imageAttach.count) || this._imageAttach.isUploading;
     });
 
     // Enter to send (Shift+Enter for newline)

@@ -9,7 +9,6 @@ export class EventRouter {
 
     this._onUpdate = null;
     this._onTask = null;
-    this._onImageReady = null;
     this._onNotification = null;
     this._onBackgroundContent = null;
     this._onCapabilityAlert = null;
@@ -23,9 +22,6 @@ export class EventRouter {
 
   /** Register handler for 'task' events. */
   onTaskEvent(cb) { this._onTask = cb; }
-
-  /** Register handler for 'image_ready' events. */
-  onImageReady(cb) { this._onImageReady = cb; }
 
   /** Register handler for 'notification' events. */
   onNotification(cb) { this._onNotification = cb; }
@@ -81,7 +77,7 @@ export class EventRouter {
   }
 
   /**
-   * Route event types that require no content — app_update, task, image_ready,
+   * Route event types that require no content — app_update, task,
    * capability_alert, permission_request, quick_tip.
    * Returns true when the event was handled.
    */
@@ -92,9 +88,6 @@ export class EventRouter {
         return true;
       case 'task':
         if (this._onTask) this._onTask(data);
-        return true;
-      case 'image_ready':
-        if (this._onImageReady) this._onImageReady(data);
         return true;
       case 'capability_alert':
         if (this._onCapabilityAlert) this._onCapabilityAlert(data);

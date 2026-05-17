@@ -20,6 +20,7 @@ callback, and get_system_prompt() override.
 """
 
 import logging
+import os
 from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
@@ -352,30 +353,41 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[USER MSG] Tool event callback failed: {e}")
 
-    def _drain_steering(self, request_id: str | None) -> list[str]:
-        """Drain mid-loop user steering messages from MemoryStore.
+    def _get_external_tool_calls(self, request_id: str | None) -> list[dict]:
+        """Drain steer tool_calls queued by POST /chat for the active ACT loop.
 
-        WebSocket /steer endpoint pushes user feedback to ``steer:{request_id}``
-        via ``rpush``. Without this override, the base no-op returns [] and
-        every steer is silently dropped — Commit 8 critic P0.
+        POST /chat writes synthetic steer tool_call dicts as JSON to
+        ``steer_queue:{request_id}`` via rpush. This method pops all queued
+        entries and returns them as a list of tool_call dicts that handle_tool()
+        can dispatch through SteerAbility.
 
-        Returns one string per queued steer (preserving rpush insertion order).
-        Deletes the key after draining. Errors are logged at DEBUG and return
-        [] — a missing or unreadable queue must not abort the turn.
+        Returns [] on any error — a missing or unreadable queue must not abort
+        the turn. Each steer lands in the tool_calls table via handle_tool(),
+        making steers fully auditable and traceable.
         """
         if not request_id:
             return []
         try:
+            import json as _json
             from services.memory_client import MemoryClientService
             _store = MemoryClientService.create_connection()
-            key = f"steer:{request_id}"
-            steers = _store.lrange(key, 0, -1)
-            if not steers:
+            key = f"steer_queue:{request_id}"
+            raw_items = _store.lrange(key, 0, -1)
+            if not raw_items:
                 return []
             _store.delete(key)
-            return [s.decode() if isinstance(s, bytes) else s for s in steers]
+            result = []
+            for raw in raw_items:
+                raw_str = raw.decode() if isinstance(raw, bytes) else raw
+                try:
+                    tc = _json.loads(raw_str)
+                    if isinstance(tc, dict):
+                        result.append(tc)
+                except (_json.JSONDecodeError, ValueError) as exc:
+                    logger.debug("[USER MSG] Steer tool_call parse failed: %s", exc)
+            return result
         except Exception as exc:
-            logger.debug(f"[USER MSG] Steer drain failed: {exc}")
+            logger.debug("[USER MSG] _get_external_tool_calls failed: %s", exc)
             return []
 
     def store(self, llm_response: str) -> None:
@@ -436,33 +448,59 @@ class UserMessageProcessor(MessageProcessor):
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _process_file_attachments(self) -> None:
-        """Dispatch document.upload + document.view for each attached file.
+        """Dispatch document.upload + document.view for each attachment.
 
-        Called after pre_act(). Uses handle_tool() so each call produces
-        audit rows, WS events, and policy enforcement via ActDispatcher.
+        Handles the ``attachments`` list of ``/tmp/chalie_*`` paths produced
+        by the POST /upload endpoint. For each path:
+          1. Path-traversal guard — rejects any path not under /tmp/chalie_.
+          2. Read the file from /tmp and base64-encode it for document.upload.
+          3. Dispatch document.upload then document.view via handle_tool() so
+             each call produces audit rows, WS events, and policy enforcement.
+          4. Delete the /tmp file after a successful upload (permanent storage
+             now owns it; /tmp is ephemeral and the cleanup worker removes
+             stragglers after 24 h anyway).
+
+        Called after pre_act(). No-op when metadata has no ``attachments`` key.
         """
-        files = self._metadata.get('files') or []
-        logger.info("[FILE-DEBUG] _process_file_attachments: metadata_keys=%s, files_count=%d", list(self._metadata.keys()), len(files))
-        if not files:
+        import base64
+        import mimetypes
+
+        attachments = self._metadata.get('attachments') or []
+        if not attachments:
             return
 
-        for file_info in files:
-            name = file_info.get('name', 'attachment')
-            data = file_info.get('data', '')
-            content_type = file_info.get('content_type', 'application/octet-stream')
-
-            if not data:
+        for tmp_path in attachments:
+            if not self._validate_tmp_path(tmp_path):
+                logger.warning('[UMP] Rejected attachment with unsafe tmp_path: %s', tmp_path)
                 continue
+
+            try:
+                with open(tmp_path, 'rb') as fh:
+                    file_bytes = fh.read()
+            except OSError as exc:
+                logger.warning('[UMP] Could not read attachment %s: %s', tmp_path, exc)
+                continue
+
+            filename = os.path.basename(tmp_path)
+            content_type, _ = mimetypes.guess_type(tmp_path)
+            content_type = content_type or 'application/octet-stream'
+            data_b64 = base64.b64encode(file_bytes).decode()
 
             upload_result = self.handle_tool({
                 'name': 'document',
                 'input': {
                     'action': 'upload',
-                    'name': name,
-                    'content': data,
+                    'name': filename,
+                    'content': data_b64,
                     'content_type': content_type,
                 },
             })
+
+            # Remove the /tmp file — permanent storage now owns the content.
+            try:
+                os.unlink(tmp_path)
+            except OSError as exc:
+                logger.debug('[UMP] Could not remove tmp file %s: %s', tmp_path, exc)
 
             doc_id = self._extract_doc_id_from_upload(upload_result)
             if doc_id:
@@ -470,6 +508,26 @@ class UserMessageProcessor(MessageProcessor):
                     'name': 'document',
                     'input': {'action': 'view', 'id': doc_id},
                 })
+
+    def _validate_tmp_path(self, path: str) -> bool:
+        """Return True only when path is a real file under /tmp/chalie_.
+
+        Uses os.path.realpath to resolve symlinks before the prefix check,
+        preventing directory-traversal attacks via symlink chains.
+
+        Args:
+            path: Candidate /tmp path from the client ``attachments`` array.
+
+        Returns:
+            True if the resolved path starts with '/tmp/chalie_' and the
+            file exists; False otherwise.
+        """
+        if not path:
+            return False
+        real = os.path.realpath(path)
+        if not real.startswith('/tmp/chalie_'):
+            return False
+        return os.path.isfile(real)
 
     def _extract_doc_id_from_upload(self, result_text: str) -> str | None:
         """Parse doc_id from upload result like '(id=abc123ef)'."""

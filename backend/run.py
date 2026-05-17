@@ -246,6 +246,9 @@ def _register_workers(manager, host: str, port: int) -> None:
     from services.subconscious_worker import subconscious_worker
     manager.register_service("subconscious-worker", subconscious_worker)
 
+    from workers.tmp_cleanup_worker import tmp_cleanup_worker
+    manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
+
     _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
