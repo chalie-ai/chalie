@@ -44,7 +44,7 @@ class TestWaitBlocks:
         DELAY = 0.5
         SENTINEL = "summary text from subagent"
 
-        def _fake_send(self_proc):
+        def _fake_send(_self_proc):
             time.sleep(DELAY)
             return SENTINEL
 
@@ -82,7 +82,7 @@ class TestWaitExceptionHandled:
         """
         from unittest.mock import patch
 
-        def _boom(self_proc):
+        def _boom(_self_proc):
             raise RuntimeError("boom — simulated processor failure")
 
         with patch("services.subagent_processor.SubagentProcessor.send", _boom):
