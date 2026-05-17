@@ -166,44 +166,22 @@ def _build_envelope(response_text: str, agent_type: str, status: str = "success"
 
 
 def _deliver_envelope(envelope: str, parent_ref: object) -> None:
-    """Deliver the subagent envelope to the parent agent.
+    """Deliver the subagent envelope to the user channel.
 
-    Case A — parent turn is still active (_turn_active Event is set):
-      Append the envelope to parent._pending_steers. The next iteration's
-      getUserPrompt() drains _pending_steers into _act_trail.
+    Fire-and-forget subagents (wait=false) always deliver as a separate
+    user-channel message — the parent already gave its final response after
+    dispatch (typically "Working on it, I'll notify you when done"), so there
+    is no iteration to fold the result into. Previously a "Case A" branch
+    appended the envelope to ``parent._pending_steers`` when the parent turn
+    was still active. This was racy: if the subagent finished after the parent
+    produced its final response but before ``_turn_active`` cleared, the steer
+    was stranded — nothing drained ``_pending_steers``. Always-direct-write
+    eliminates the race.
 
-    Case B — parent idle (turn finished, or non-UMP):
-      Extract the response text from the envelope, write it synchronously to
-      the user-channel transcript, and publish via OutputService. No inner
-      ACT loop.
-
-    The discriminator is ``parent_ref._turn_active.is_set()`` — a thread-safe
-    Event that bind_current_processor sets on entry and clears on exit.
-    Unlike isinstance() checks (which always return True for a valid Python
-    object), this correctly detects that the parent's send() has already
-    returned.
+    parent_ref is retained as a parameter for call-site compatibility but is
+    no longer consulted.
     """
-    from services.user_message_processor import UserMessageProcessor
-
-    if (
-        isinstance(parent_ref, UserMessageProcessor)
-        and parent_ref._turn_active.is_set()
-    ):
-        # Case A: mid-ACT injection via _pending_steers
-        try:
-            parent_ref._pending_steers.append(envelope)
-            logger.info(
-                "%s Delivered envelope to parent _pending_steers (iteration=%d)",
-                LOG_PREFIX, parent_ref._current_iteration,
-            )
-        except Exception as exc:
-            logger.error(
-                "%s Failed to append to parent _pending_steers: %s", LOG_PREFIX, exc
-            )
-            _spawn_return_processor(envelope)
-        return
-
-    # Case B: parent idle — direct write to user-channel transcript + WS publish
+    del parent_ref
     _spawn_return_processor(envelope)
 
 
