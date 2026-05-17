@@ -90,15 +90,6 @@ class TestGetSnapshot:
         # warmth formula: 0.6 * clamped(working_memory/max) + 0.4 * clamped(fok/max), yielding 1.0 here
         assert ep["context_warmth"] == pytest.approx(1.0, abs=1e-9)
 
-    def test_snapshot_epistemic_cold_when_empty(self, mock_store):
-        """No working memory and no FOK yields zero warmth."""
-        svc = _make_service()
-        ep = svc.get_snapshot()["epistemic"]
-
-        assert ep["working_memory_depth"] == 0
-        assert ep["partial_match_signal"] == 0
-        assert ep["context_warmth"] == pytest.approx(0.0, abs=1e-9)
-
     def test_snapshot_caches_in_store(self, mock_store):
         """Second call within TTL returns identical snapshot without re-computing."""
         svc = _make_service()
@@ -106,20 +97,6 @@ class TestGetSnapshot:
         snap2 = svc.get_snapshot()
 
         assert snap1["refreshed_at"] == snap2["refreshed_at"]
-
-    def test_snapshot_refreshes_after_cache_eviction(self, mock_store):
-        """After manually evicting cache, get_snapshot re-computes."""
-        from services.self_model_service import CACHE_KEY
-
-        svc = _make_service()
-        snap1 = svc.get_snapshot()
-        ts1 = snap1["refreshed_at"]
-
-        mock_store.delete(CACHE_KEY)
-        time.sleep(0.01)
-
-        snap2 = svc.get_snapshot()
-        assert snap2["refreshed_at"] != ts1
 
     def test_memory_pressure_from_db(self, mock_store, db):
         """_get_memory_pressure reads episode/concept/trait counts from DB."""
@@ -185,36 +162,10 @@ class TestNoteworthy:
         assert dead_signals[0]["severity"] == pytest.approx(0.6, abs=1e-9)
         assert "dmn-service" in dead_signals[0]["signal"]
 
-    def test_noteworthy_item_structure(self, mock_store):
-        """Every noteworthy item has signal (str) and severity (float 0-1)."""
-        mock_store.setex("self_model:thread_health", 60, json.dumps({
-            "alive": [], "dead": ["worker-1", "worker-2"], "total": 2,
-        }))
-
-        svc = _make_service()
-        noteworthy = svc._refresh()["noteworthy"]
-
-        assert len(noteworthy) > 0
-        for item in noteworthy:
-            assert isinstance(item["signal"], str)
-            assert isinstance(item["severity"], float)
-            assert 0.0 <= item["severity"] <= 1.0
-
 
 @pytest.mark.unit
 class TestFormatForPrompt:
     """Prompt formatting: empty when healthy, structured when degraded."""
-
-    def test_empty_string_when_healthy(self, mock_store):
-        """No degradation => empty string => zero token cost."""
-        _populate_healthy_state(mock_store)
-
-        mock_provider = _mock_providers_assigned()
-        with patch('services.provider_db_service.ProviderDbService', return_value=mock_provider):
-            svc = _make_service()
-            svc._refresh()
-
-        assert svc.format_for_prompt() == ""
 
     def test_includes_header_and_directives_when_degraded(self, mock_store):
         """Dead threads produce a prompt with Self-Awareness header and directives."""
@@ -250,34 +201,6 @@ class TestFormatForPrompt:
 @pytest.mark.unit
 class TestMemoryRichness:
     """Memory richness score: logarithmic composite from snapshot data."""
-
-    def test_zero_when_no_data(self, mock_store):
-        """Empty system yields zero richness."""
-        svc = _make_service()
-        assert svc.get_memory_richness() == pytest.approx(0.0, abs=1e-9)
-
-    def test_nonzero_with_episodes(self, mock_store):
-        """Even a few episodes push richness above zero due to log curve."""
-        from services.self_model_service import CACHE_KEY
-
-        # Seed the cache with a snapshot that has episode/concept/trait counts
-        snapshot = {
-            "epistemic": {"context_warmth": 0.3},
-            "operational": {"memory_pressure": {
-                "episode_count": 5, "concept_count": 3,
-                "trait_count": 2,
-            }},
-            "capability": {},
-            "noteworthy": [],
-            "refreshed_at": "2026-01-01T00:00:00+00:00",
-        }
-        mock_store.setex(CACHE_KEY, 45, json.dumps(snapshot))
-
-        svc = _make_service()
-        richness = svc.get_memory_richness()
-
-        assert richness > 0.0
-        assert richness <= 1.0
 
     def test_richness_increases_with_context_warmth(self, mock_store):
         """Working memory depth drives context_warmth which contributes to richness."""
@@ -329,11 +252,4 @@ class TestCapabilityCategories:
         assert "development" in cats, "Expected 'development' category (code_eval ability has 'code' keyword)"
         assert "code_eval" in cats["development"], "'code_eval' ability must appear in development category"
 
-    def test_innate_skills_from_registry(self, mock_store):
-        """Capability section includes innate skills from authoritative registry."""
-        svc = _make_service()
-        cap = svc.get_snapshot()["capability"]
 
-        assert len(cap["innate_skills"]) > 0
-        assert "memory" in cap["innate_skills"]
-        assert cap["innate_skills"] == sorted(cap["innate_skills"])

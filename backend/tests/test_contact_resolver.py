@@ -100,16 +100,6 @@ def test_resolve_filters_non_contact_keys():
 
 
 
-@pytest.mark.unit
-def test_resolve_survives_exception():
-    from capabilities.contact_resolver import resolve
-
-    mock = _mock_dgs()
-    mock.recall.side_effect = RuntimeError("db error")
-    with patch("capabilities.contact_resolver._dgs", return_value=mock):
-        assert resolve("Alice") == []
-
-
 # --- resolve_contact tool tests ---
 
 

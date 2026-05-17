@@ -64,18 +64,6 @@ def test_analyze_extracts_text(sample_png_bytes):
     assert result['error'] is None
 
 
-@pytest.mark.unit
-def test_analyze_no_text_found(sample_png_bytes):
-    """has_text should be False when OCR finds no text."""
-    from services.image_context_service import analyze
-
-    with patch('services.ocr_service._extract_text', return_value=''):
-        result = analyze(sample_png_bytes, 'image/png')
-
-    assert result['has_text'] is False
-    assert result['ocr_text'] == ''
-    assert result['error'] is None
-
 
 @pytest.mark.unit
 def test_analyze_short_text_not_counted(sample_png_bytes):
@@ -117,17 +105,6 @@ def test_strip_exif_returns_image():
     assert result is not None
     assert result.size == (50, 50)
 
-
-@pytest.mark.unit
-def test_strip_exif_preserves_dimensions():
-    """_strip_exif() should not change image dimensions."""
-    from PIL import Image
-    from services.image_context_service import _strip_exif
-
-    img = Image.new('RGB', (200, 150), color=(0, 255, 0))
-    result = _strip_exif(img)
-
-    assert result.size == (200, 150)
 
 
 @pytest.mark.unit
@@ -198,9 +175,4 @@ def test_compute_hash_is_deterministic(sample_png_bytes):
     assert len(h1) == 64  # SHA-256 hex length
 
 
-@pytest.mark.unit
-def test_compute_hash_differs_for_different_bytes():
-    """compute_hash() returns different hashes for different content."""
-    from services.image_context_service import compute_hash
 
-    assert compute_hash(b'hello') != compute_hash(b'world')

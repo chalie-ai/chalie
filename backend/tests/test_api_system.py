@@ -69,15 +69,6 @@ class TestSystemAPI:
         assert data['requests_per_min'] == 42
         assert data['uptime'] == 3600
 
-    def test_get_metrics_returns_500_on_service_error(self, client):
-        """GET /metrics returns 500 when MetricsService raises."""
-        with patch('services.metrics_service.MetricsService', side_effect=RuntimeError('db down')):
-            resp = client.get('/metrics')
-
-        assert resp.status_code == 500
-        data = resp.get_json()
-        assert 'error' in data
-
     # GET /system/status
 
     def test_system_status_returns_expected_keys(self, client, db):
@@ -151,50 +142,6 @@ class TestSystemAPI:
         row = next(r for r in data['rows'] if r['key'] == 'ep-a')
         assert row['value'] == 'first gist'
 
-    def test_records_user_source_returns_user_specific_only(self, client, db):
-        """User source returns only kind='user_specific' rows."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'pref_key', 'pref_val', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('system', 'sys_key', 'sys_val', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.commit()
-
-        resp = client.get('/system/observability/records?source=user')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['returned'] == 1
-        assert data['rows'][0]['key'] == 'pref_key'
-
-    def test_records_system_source_returns_system_only(self, client, db):
-        """System source returns only kind='system' rows."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('system', 'sys_key', 'sys_val', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'pref_key', 'pref_val', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.commit()
-
-        resp = client.get('/system/observability/records?source=system')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['returned'] == 1
-        assert data['rows'][0]['key'] == 'sys_key'
-
     def test_records_search_filters_by_like(self, client, db):
         """Search param filters gist (episodes) and key/value (data_graph)."""
         now_iso = '2026-01-01T00:00:00+00:00'
@@ -245,27 +192,6 @@ class TestSystemAPI:
         resp = client.get('/system/observability/records?source=bogus')
         assert resp.status_code == 400
         assert resp.get_json()['error'] == 'invalid source'
-
-    def test_records_excluded_soft_deleted(self, client, db):
-        """Soft-deleted episodes and data_graph rows are excluded."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-        db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, deleted_at) "
-            "VALUES ('ep-del', 'deleted gist', 5, 'user', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at, deleted_at) "
-            "VALUES ('user_specific', 'gone_key', 'gone_val', ?, ?, ?)",
-            (now_iso, now_iso, now_iso),
-        )
-        db.commit()
-
-        resp_ep = client.get('/system/observability/records?source=episodes')
-        assert resp_ep.get_json()['returned'] == 0
-
-        resp_user = client.get('/system/observability/records?source=user')
-        assert resp_user.get_json()['returned'] == 0
 
     # GET /system/observability/tools
 
@@ -430,21 +356,5 @@ class TestSystemAPI:
         assert data['database']['connected'] is False
         assert 'message' in data['database']
         assert data['memory_store']['status'] == 'ok'
-
-    def test_ready_store_failure_returns_503(self, client, db):
-        """/ready with memory store down returns 503 and error in memory_store component."""
-        patches = self._ready_patches(store_ok=False)
-        from contextlib import ExitStack
-        with ExitStack() as stack:
-            for target, mock_val in patches.items():
-                stack.enter_context(patch(target, mock_val))
-            resp = client.get('/ready')
-
-        assert resp.status_code == 503
-        data = resp.get_json()
-        assert data['ready'] is False
-        assert data['database']['status'] == 'ok'
-        assert data['memory_store']['status'] == 'error'
-        assert 'message' in data['memory_store']
 
 

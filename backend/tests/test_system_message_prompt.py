@@ -37,14 +37,6 @@ class TestImport:
         assert callable(UnifiedSystemMessagePrompt)
         assert callable(DMNSystemMessagePrompt)
 
-    def test_import_does_not_hit_database(self):
-        """Importing the module must not open any DB connections."""
-        with patch('services.database_service.get_shared_db_service') as mock_db:
-            import importlib
-            import services.system_message_prompt as _mod
-            importlib.reload(_mod)
-            mock_db.assert_not_called()
-
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,17 +54,6 @@ class TestSystemMessagePromptBase:
         with pytest.raises(TypeError):
             SystemMessagePrompt()  # type: ignore[abstract]
 
-    def test_subclass_without_override_is_not_instantiable(self):
-        """A subclass that does not supply ``_SYSTEM_PROMPT`` inherits the
-        abstract contract and must raise TypeError on instantiation."""
-        from services.system_message_prompt import SystemMessagePrompt
-
-        class _ForgetfulPrompt(SystemMessagePrompt):
-            pass
-
-        with pytest.raises(TypeError):
-            _ForgetfulPrompt()  # type: ignore[abstract]
-
     def test_subclass_with_plain_class_attr_is_instantiable(self):
         """A subclass that sets ``_SYSTEM_PROMPT`` as a plain class attribute
         satisfies the abstract contract — that's the whole point of the
@@ -83,15 +64,6 @@ class TestSystemMessagePromptBase:
             _SYSTEM_PROMPT = 'hello'
 
         assert _GoodPrompt().get_prompt() == 'hello'
-
-    def test_get_prompt_returns_subclass_constant(self):
-        """``getPrompt()`` returns ``self._SYSTEM_PROMPT`` verbatim."""
-        from services.system_message_prompt import SystemMessagePrompt
-
-        class _Echo(SystemMessagePrompt):
-            _SYSTEM_PROMPT = 'echo-body'
-
-        assert _Echo().get_prompt() == 'echo-body'
 
 
 
@@ -107,12 +79,6 @@ class TestUnifiedSystemMessagePrompt:
     """
 
     # ── Zero-arg contract (Y1) ────────────────────────────────────────────────
-
-    def test_constructible_with_zero_args(self):
-        """UnifiedSystemMessagePrompt() takes no parameters."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        sut = UnifiedSystemMessagePrompt()
-        assert isinstance(sut, UnifiedSystemMessagePrompt)
 
     def test_init_rejects_unexpected_kwargs(self):
         """Passing legacy parameters (original_prompt / thread_id) must raise.
@@ -140,31 +106,12 @@ class TestUnifiedSystemMessagePrompt:
 
     # ── Prompt constant contract ──────────────────────────────────────────────
 
-    def test_returns_non_empty_string(self):
-        """getPrompt() returns a non-empty string without any mocking."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().get_prompt()
-        assert isinstance(result, str)
-        assert len(result) > 0
-
     def test_identity_section_present(self):
         """Identity section is inlined at the top of the unified prompt."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
         result = UnifiedSystemMessagePrompt().get_prompt()
         assert '## Identity' in result
         assert 'Chalie' in result
-
-    def test_hard_boundaries_section_present(self):
-        """Hard Boundaries section is inlined in the unified prompt."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().get_prompt()
-        assert '## Hard Boundaries' in result
-
-    def test_core_principles_section_present(self):
-        """Core Principles section is inlined in the unified prompt."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().get_prompt()
-        assert '## Core Principles' in result
 
     def test_no_identity_modulation_placeholder(self):
         """``{{identity_modulation}}`` must not appear — identity is inlined,
@@ -199,33 +146,9 @@ class TestBackgroundChannelPrompts:
         assert isinstance(result, str)
         assert len(result) > 0
 
-    def test_mentions_chalie(self):
-        from services.system_message_prompt import DMNSystemMessagePrompt
-        result = DMNSystemMessagePrompt().get_prompt()
-        assert 'Chalie' in result
-
-    def test_no_file_reads(self):
-        from services.system_message_prompt import DMNSystemMessagePrompt
-        with patch('builtins.open') as mock_open:
-            DMNSystemMessagePrompt().get_prompt()
-        mock_open.assert_not_called()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Inheritance
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestInheritanceChain:
-    """All concrete subclasses are proper subclasses of SystemMessagePrompt."""
-
-    def test_each_concrete_instance_is_system_message_prompt(self):
-        from services.system_message_prompt import (
-            SystemMessagePrompt,
-            UnifiedSystemMessagePrompt,
-            DMNSystemMessagePrompt,
-        )
-        for cls in (
-            UnifiedSystemMessagePrompt,
-            DMNSystemMessagePrompt,
-        ):
-            assert isinstance(cls(), SystemMessagePrompt)

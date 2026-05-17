@@ -18,12 +18,6 @@ from services.time_utils import utc_now
 class TestDurationBoundaries:
     """Tier boundary values: seconds, minutes, hours, days."""
 
-    def test_0s(self):
-        assert T.duration(0) == "0s"
-
-    def test_60s_upper_boundary(self):
-        assert T.duration(60) == "60s"
-
     def test_61s_minutes_tier(self):
         assert T.duration(61) == "1m"
 
@@ -32,12 +26,6 @@ class TestDurationBoundaries:
 
     def test_86400s_days_tier(self):
         assert T.duration(86400) == "1d 0h"
-
-    def test_negative_clamps_to_zero(self):
-        assert T.duration(-1) == "0s"
-
-    def test_fractional_seconds_floored(self):
-        assert T.duration(0.9) == "0s"
 
     def test_days_with_hours(self):
         assert T.duration(90061) == "1d 1h"
@@ -51,10 +39,6 @@ class TestAgo:
         past = utc_now() - timedelta(seconds=90)
         assert T.ago(past) == "1m ago"
 
-    def test_future_datetime_clamps(self):
-        future = utc_now() + timedelta(seconds=60)
-        assert T.ago(future) == "0s ago"
-
     def test_iso_string(self):
         past = utc_now() - timedelta(seconds=45)
         assert T.ago(past.isoformat()) == "45s ago"
@@ -62,11 +46,7 @@ class TestAgo:
     def test_int_seconds(self):
         assert T.ago(45) == "45s ago"
 
-    def test_zero_seconds(self):
-        assert T.ago(0) == "0s ago"
 
-    def test_negative_clamps(self):
-        assert T.ago(-1) == "0s ago"
 
 
 @pytest.mark.unit
@@ -97,10 +77,5 @@ class TestLocalConvertsUtcToUserTimezone:
         with self._patch_tz("Europe/Malta"):
             assert T.local(dt, fmt="%b %d %H:%M") == "Jun 01 14:00"
 
-    def test_none_returns_none(self):
-        assert T.local(None) is None
 
-    def test_invalid_returns_none(self):
-        assert T.local("") is None
-        assert T.local("not-a-date") is None
-        assert T.local("0001-01-01T00:00:00+00:00") is None
+

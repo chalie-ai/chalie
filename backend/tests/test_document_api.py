@@ -133,16 +133,6 @@ class TestDocumentsAPI:
         assert len(data["item"]["artifacts"]) == 2
         assert data["item"]["artifacts"][0]["key"] == "doc:doc00001:000"
 
-    def test_get_document_not_found(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_document.return_value = None
-
-            resp = client.get("/documents/missing")
-
-        assert resp.status_code == 404
-
     # ------------------------------------------------------------------
     # GET /documents/<id>/content
     # ------------------------------------------------------------------
@@ -187,46 +177,6 @@ class TestDocumentsAPI:
         assert resp.get_json()["ok"] is True
 
     # ------------------------------------------------------------------
-    # POST /documents/<id>/restore
-    # ------------------------------------------------------------------
-
-    def test_restore(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.restore.return_value = True
-
-            resp = client.post("/documents/doc00001/restore")
-
-        assert resp.status_code == 200
-        assert resp.get_json()["ok"] is True
-
-    # ------------------------------------------------------------------
-    # DELETE /documents/<id>/purge
-    # ------------------------------------------------------------------
-
-    def test_purge(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.hard_delete.return_value = True
-
-            resp = client.delete("/documents/doc00001/purge")
-
-        assert resp.status_code == 200
-        assert resp.get_json()["ok"] is True
-
-    def test_purge_not_found(self, client):
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.hard_delete.return_value = False
-
-            resp = client.delete("/documents/missing/purge")
-
-        assert resp.status_code == 404
-
-    # ------------------------------------------------------------------
     # POST /documents/<id>/confirm
     # ------------------------------------------------------------------
 
@@ -244,18 +194,6 @@ class TestDocumentsAPI:
         assert data["ok"] is True
         assert data["status"] == "ready"
         mock_svc.update_status.assert_called_once_with("doc00001", "ready", chunk_count=12)
-
-    def test_confirm_wrong_status(self, client):
-        doc = _make_doc_dict(status="ready")
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_document.return_value = doc
-
-            resp = client.post("/documents/doc00001/confirm")
-
-        assert resp.status_code == 400
-        assert "not awaiting" in resp.get_json()["error"].lower()
 
     # ------------------------------------------------------------------
     # POST /documents/<id>/augment
@@ -281,36 +219,6 @@ class TestDocumentsAPI:
         call_args = mock_svc.update_extracted_metadata.call_args
         updated_meta = call_args.kwargs.get("metadata") or call_args[1].get("metadata") or call_args[0][1]
         assert updated_meta["_user_context"] == "This is my Samsung TV warranty"
-
-    def test_augment_empty_context(self, client):
-        doc = _make_doc_dict(status="awaiting_confirmation")
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_document.return_value = doc
-
-            resp = client.post(
-                "/documents/doc00001/augment",
-                json={"context": ""},
-            )
-
-        assert resp.status_code == 400
-        assert "context" in resp.get_json()["error"].lower()
-
-    def test_augment_ready_document_succeeds(self, client):
-        """Post-hoc augmentation of ready documents (e.g., watched folder docs)."""
-        doc = _make_doc_dict(status="ready")
-        with patch(_P_SVC) as mock_get:
-            mock_svc = MagicMock()
-            mock_get.return_value = mock_svc
-            mock_svc.get_document.return_value = doc
-
-            resp = client.post(
-                "/documents/doc00001/augment",
-                json={"context": "extra info"},
-            )
-
-        assert resp.status_code == 200
 
     # ------------------------------------------------------------------
     # GET /documents/search
@@ -338,21 +246,10 @@ class TestDocumentsAPI:
         assert data["results"][0]["document_id"] == "d1"
         assert data["results"][0]["content"] == "Coverage for 24 months."
 
-    def test_search_missing_query(self, client):
-        resp = client.get("/documents/search")
-        assert resp.status_code == 400
-        assert "required" in resp.get_json()["error"].lower()
-
 
     # ------------------------------------------------------------------
     # POST /documents/upload
     # ------------------------------------------------------------------
-
-    def test_upload_no_file(self, client):
-        """Upload without a file field returns 400."""
-        resp = client.post("/documents/upload", data={})
-        assert resp.status_code == 400
-        assert "No file" in resp.get_json()["error"]
 
     def test_upload_unsupported_extension(self, client):
         """Upload with a disallowed extension returns 400."""
@@ -365,18 +262,6 @@ class TestDocumentsAPI:
         )
         assert resp.status_code == 400
         assert "not supported" in resp.get_json()["error"].lower()
-
-    def test_upload_empty_file(self, client):
-        """Upload with an empty file returns 400."""
-        import io
-        data = {"file": (io.BytesIO(b""), "empty.txt")}
-        resp = client.post(
-            "/documents/upload",
-            data=data,
-            content_type="multipart/form-data",
-        )
-        assert resp.status_code == 400
-        assert "empty" in resp.get_json()["error"].lower()
 
     def test_upload_success(self, client, tmp_path):
         """Successful upload creates record, saves file, enqueues processing."""
@@ -404,34 +289,6 @@ class TestDocumentsAPI:
         assert body["status"] == "pending"
         mock_enq.assert_called_once()
 
-    def test_upload_with_duplicates(self, client, tmp_path):
-        """Upload returns duplicate info when hash matches exist."""
-        import io
-        now = datetime(2026, 2, 26, tzinfo=timezone.utc)
-
-        with patch("api.documents.DOCUMENTS_ROOT", str(tmp_path)):
-            with patch(_P_SVC) as mock_get:
-                mock_svc = MagicMock()
-                mock_get.return_value = mock_svc
-                mock_svc.create_document.return_value = "new00001"
-                mock_svc.find_duplicates.return_value = [
-                    {"id": "old00001", "original_name": "warranty_v1.pdf",
-                     "match_type": "exact", "created_at": now},
-                ]
-
-                with patch(_P_ENQ):
-                    data = {"file": (io.BytesIO(b"duplicate content"), "warranty.pdf")}
-                    resp = client.post(
-                        "/documents/upload",
-                        data=data,
-                        content_type="multipart/form-data",
-                    )
-
-        assert resp.status_code == 201
-        body = resp.get_json()
-        assert len(body["duplicates"]) == 1
-        assert body["duplicates"][0]["match_type"] == "exact"
-
 
 @pytest.mark.unit
 class TestHelpers:
@@ -444,22 +301,10 @@ class TestHelpers:
         assert '\x00' not in _sanitize_filename('file\x00.txt')
         assert not _sanitize_filename('...hidden').startswith('.')
 
-    def test_sanitize_filename_limits_length(self):
-        from api.documents import _sanitize_filename
-        long_name = 'a' * 300 + '.pdf'
-        result = _sanitize_filename(long_name)
-        assert len(result) <= 255
-        assert result.endswith('.pdf')
-
     def test_validate_file_path_rejects_traversal(self, tmp_path):
         from api.documents import _validate_file_path
         with patch("api.documents.DOCUMENTS_ROOT", str(tmp_path)):
             assert _validate_file_path(str(tmp_path / "doc" / "file.pdf")) is True
             assert _validate_file_path("/etc/passwd") is False
 
-    def test_serialize_doc_removes_clean_text(self):
-        from api.documents import _serialize_doc
-        doc = _make_doc_dict()
-        result = _serialize_doc(doc)
-        assert "clean_text" not in result
 

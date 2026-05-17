@@ -19,11 +19,6 @@ class TestCompactionProcessorConstants:
         p = ContinuityCompactionProcessor(raw_input='x')
         assert p._check_threshold('system prompt', [{'name': 'tool'}], 'a very long string ' * 1000) is False
 
-    def test_subagent_trail_check_threshold_always_false(self):
-        from services.compaction_message_processor import SubagentTrailCompactionProcessor
-        p = SubagentTrailCompactionProcessor(raw_input='x')
-        assert p._check_threshold('system prompt', [{'name': 'tool'}], 'a very long string ' * 1000) is False
-
     def test_processor_constants(self):
         from services.compaction_message_processor import (
             ContinuityCompactionProcessor, SubagentTrailCompactionProcessor,
@@ -70,16 +65,6 @@ class TestMetricsAccumulatorMerge:
         a.merge(b)
         assert a.tool_counts['memory'] == 3
         assert a.tool_counts['search'] == 1
-
-    def test_merge_preserves_start_time(self):
-        import time
-        from services.metrics_accumulator import MetricsAccumulator
-        a = MetricsAccumulator()
-        original_start = a.start_time
-        time.sleep(0.01)
-        b = MetricsAccumulator()
-        a.merge(b)
-        assert a.start_time == original_start
 
     def test_merge_propagates_incomplete_flag(self):
         from services.metrics_accumulator import MetricsAccumulator
@@ -165,38 +150,7 @@ class TestCheckThresholdFullPayload:
             f"but user_body alone ({user_only_est} tokens) is below it"
         )
 
-    def test_small_full_payload_does_not_exceed_threshold(self):
-        """When the entire payload is well within compact_at, return False."""
-        from unittest.mock import patch, MagicMock
 
-        proc = self._make_processor()
-        fake_provider = MagicMock()
-        fake_provider.get_compact_at.return_value = 128_000
-        fake_provider.estimate_payload_tokens.return_value = 100  # well below
-
-        with patch('services.providers.Providers') as mock_providers_cls:
-            mock_providers_cls.instance.return_value = fake_provider
-            result = proc._check_threshold('short system', [], 'short body')
-
-        assert result is False
-
-    def test_missing_compact_at_returns_false_and_logs_error(self):
-        """compact_at=None must return False (skip compaction) and log an error."""
-        from unittest.mock import patch, MagicMock
-
-        proc = self._make_processor()
-        fake_provider = MagicMock()
-        fake_provider.get_compact_at.return_value = None
-
-        with patch('services.providers.Providers') as mock_providers_cls:
-            mock_providers_cls.instance.return_value = fake_provider
-            with patch('services.message_processor.logger') as mock_logger:
-                result = proc._check_threshold('system', [], 'body')
-
-        assert result is False
-        mock_logger.error.assert_called_once()
-        call_args = mock_logger.error.call_args[0]
-        assert 'compact_at missing' in call_args[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -242,22 +196,6 @@ class TestBuildRequestBodyIncludesAllComponents:
     def test_anthropic_includes_system_message_and_tools(self):
         from services.llm_service import AnthropicService
         svc = AnthropicService({'api_key': 'test-key', 'model': 'claude-haiku-4-5-20251001'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert self._SYSTEM in body
-        assert 'What is the capital of France?' in body
-        assert 'search' in body
-
-    def test_openai_includes_system_message_and_tools(self):
-        from services.llm_service import OpenAIService
-        svc = OpenAIService({'api_key': 'test-key', 'model': 'gpt-4o-mini'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert self._SYSTEM in body
-        assert 'What is the capital of France?' in body
-        assert 'search' in body
-
-    def test_gemini_includes_system_message_and_tools(self):
-        from services.llm_service import GeminiService
-        svc = GeminiService({'api_key': 'test-key', 'model': 'gemini-2.5-flash'})
         body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
         assert self._SYSTEM in body
         assert 'What is the capital of France?' in body

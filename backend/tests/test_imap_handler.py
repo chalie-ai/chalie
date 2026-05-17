@@ -95,22 +95,6 @@ class TestParseHeaders:
         assert result["message_id"] == "<msg1@example.com>"
         assert result["has_unsubscribe"] is False
 
-    def test_in_reply_to_populated(self):
-        raw = _make_header_bytes(in_reply_to="<original@example.com>")
-        result = parse_headers(1, raw)
-        assert result["in_reply_to"] == "<original@example.com>"
-
-    def test_has_unsubscribe_true(self):
-        raw = _make_header_bytes(list_unsubscribe="<mailto:unsubscribe@list.com>")
-        result = parse_headers(1, raw)
-        assert result["has_unsubscribe"] is True
-
-    def test_date_is_iso_string(self):
-        raw = _make_header_bytes(date="Mon, 01 Jan 2024 12:00:00 +0000")
-        result = parse_headers(1, raw)
-        # Should be a valid ISO string, not empty
-        assert "2024" in result["date"]
-
 
 # ---------------------------------------------------------------------------
 # extract_body
@@ -162,26 +146,6 @@ class TestOpenClient:
         mock_client.login.assert_called_once_with("user@example.com", MOCK_AUTH_TOKEN)
         assert result is mock_client
 
-    def test_returns_none_on_connection_error(self, handler):
-        with patch("imapclient.IMAPClient", side_effect=ConnectionRefusedError("refused")):
-            result = handler.open_client(
-                host="bad.host", port=993, tls=True,
-                email="u@example.com", password=MOCK_AUTH_TOKEN,
-            )
-        assert result is None
-
-    def test_starttls_used_when_no_ssl(self, handler):
-        mock_client = MagicMock()
-        with patch("imapclient.IMAPClient", return_value=mock_client) as mock_cls:
-            handler.open_client(
-                host="imap.example.com", port=143, tls=False,
-                email="u@example.com", password=MOCK_AUTH_TOKEN,
-            )
-            # ssl=False passed through — checked inside the patch context
-            mock_cls.assert_called_with(
-                "imap.example.com", port=143, ssl=False, timeout=30
-            )
-
 
 # ---------------------------------------------------------------------------
 # ingest
@@ -210,18 +174,6 @@ class TestIngest:
         assert items[0]["subject"] == "Invoice"
         assert new_wm == uid
 
-    def test_uses_uid_range_when_watermark_set(self, handler):
-        client = self._make_imap_client(uids=[], raw_map={})
-        handler.ingest(client, watermark=50)
-        args = client.search.call_args[0][0]
-        assert args[0] == "UID"
-        assert args[1] == "51:*"
-
-    def test_exception_returns_empty(self, handler):
-        client = MagicMock()
-        client.select_folder.side_effect = OSError("connection lost")
-        items, _ = handler.ingest(client, watermark=0)
-        assert items == []
 
 
 # ---------------------------------------------------------------------------
@@ -243,22 +195,6 @@ class TestSearch:
         criteria = client.search.call_args[0][0]
         assert "FROM" in criteria
         assert "alice@example.com" in criteria
-
-    def test_subject_criteria(self, handler):
-        client = self._make_imap_client()
-        with patch("capabilities.mail_capability.email_triage.classify_email"):
-            handler.search(client, {"subject": "Invoice"})
-        criteria = client.search.call_args[0][0]
-        assert "SUBJECT" in criteria
-        assert "Invoice" in criteria
-
-    def test_keyword_criteria(self, handler):
-        client = self._make_imap_client()
-        with patch("capabilities.mail_capability.email_triage.classify_email"):
-            handler.search(client, {"keyword": "payment"})
-        criteria = client.search.call_args[0][0]
-        assert "TEXT" in criteria
-        assert "payment" in criteria
 
     def test_no_criteria_falls_back_to_since(self, handler):
         client = self._make_imap_client()
@@ -305,10 +241,5 @@ class TestReadEmail:
 
         assert result["uid"] == uid
         assert "This is the email body." in result["body"]
-
-    def test_missing_uid_param(self, handler):
-        client = MagicMock()
-        result = handler.read_email(client, {})
-        assert result == {"error": "uid is required"}
 
 

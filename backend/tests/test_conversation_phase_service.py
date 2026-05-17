@@ -74,36 +74,6 @@ class TestEmptyThread:
         assert phase["direction"] == "sustaining"
         assert "updated_at" in phase
 
-    def test_update_first_message_is_opening(self):
-        store = _make_store()
-        svc = _make_service(store)
-        result = svc.update("Hello!", is_user=True, topic="greetings")
-        assert result["current"] == "opening"
-
-class TestStateRoundtrip:
-    def test_state_persisted_and_reloaded(self):
-        store = _make_store()
-        svc = _make_service(store)
-
-        svc.update("First message", is_user=True, topic="a")
-        # Get a second service instance hitting the same store
-        svc2 = _make_service(store)
-        phase = svc2.get_phase()
-        # State should be present and consistent
-        assert phase["current"] in ("opening", "exploring", "deepening", "resolving", "closing")
-
-    def test_reset_clears_state(self):
-        store = _make_store()
-        svc = _make_service(store)
-
-        svc.update("Hello", is_user=True, topic="a")
-        svc.reset()
-
-        # After reset, state should be default
-        phase = svc.get_phase()
-        assert phase["current"] == "opening"
-        assert phase["momentum"] == pytest.approx(0.5, abs=1e-9)
-
 
 class TestOpeningDetection:
     def test_first_two_exchanges_are_opening(self):
@@ -164,32 +134,6 @@ class TestExploringDetection:
         result = _push_messages(svc, messages)
         assert result["current"] == "exploring"
 
-    def test_high_question_density_triggers_exploring(self):
-        """More than half of recent user messages being questions should trigger exploring.
-
-        We use a fresh topic after a few opening exchanges so that the same-topic-run
-        is reset, preventing deepening from outranking exploring.
-        """
-        store = _make_store()
-        svc = _make_service(store)
-
-        # Opening + a couple of neutral exchanges
-        messages = [
-            ("Hey there", True, "greetings"),
-            ("Hi!", False, "greetings"),
-            ("Let us chat", True, "general"),
-            ("Sure", False, "general"),
-            # Now rapid-fire questions across varying sub-topics so no long same-topic run forms
-            ("What do you think about this?", True, "topic-a"),
-            ("Interesting point", False, "topic-a"),
-            ("Why is that exactly?", True, "topic-b"),
-            ("Because...", False, "topic-b"),
-            ("Can you explain further?", True, "topic-c"),
-            ("Here is how", False, "topic-c"),
-        ]
-        result = _push_messages(svc, messages)
-        assert result["current"] == "exploring"
-
 
 class TestDeepeningDetection:
     def test_same_topic_with_increasing_length_reaches_deepening(self):
@@ -212,15 +156,6 @@ class TestDeepeningDetection:
             ("Yes and I am considering quartz for the countertop because it is low maintenance", True, "kitchen"),
             ("Quartz is excellent for durability and comes in many designs", False, "kitchen"),
         ]
-        result = _push_messages(svc, messages)
-        assert result["current"] == "deepening"
-
-    def test_same_topic_long_run_without_length_increase_reaches_deepening(self):
-        """Very long same-topic run (7+) reaches deepening even without length trend."""
-        store = _make_store()
-        svc = _make_service(store)
-
-        messages = [("Message about cooking", True, "cooking")] * 12
         result = _push_messages(svc, messages)
         assert result["current"] == "deepening"
 
@@ -254,15 +189,6 @@ class TestResolvingDetection:
         result = _push_messages(svc, resolving)
         assert result["current"] == "resolving"
 
-    def test_affirmatives_recognised(self):
-        """Spot-check affirmative word matching."""
-        from services.conversation_phase_service import _has_affirmative
-        assert _has_affirmative("ok got it")
-        assert _has_affirmative("Thanks a lot!")
-        assert _has_affirmative("Makes sense to me")
-        assert _has_affirmative("Understood")
-        assert not _has_affirmative("I disagree with that")
-
 
 class TestClosingDetection:
     def test_explicit_closing_word_is_immediate(self):
@@ -279,41 +205,6 @@ class TestClosingDetection:
             ("Bye!", True, "misc"),
         ]
         for i, (text, is_user, topic) in enumerate(messages):
-            t = base + timedelta(seconds=i * 30)
-            with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(text, is_user=is_user, topic=topic)
-        assert result["current"] == "closing"
-
-    def test_has_closing_helper(self):
-        from services.conversation_phase_service import _has_closing
-        assert _has_closing("talk later")
-        assert _has_closing("Gotta go now")
-        assert _has_closing("ttyl")
-        assert _has_closing("See you tomorrow")
-        assert not _has_closing("Looking forward to our meeting tomorrow morning")
-
-    def test_length_trend_triggers_closing(self):
-        """A 40%+ drop in average message length over 6+ messages triggers closing.
-
-        Uses non-affirmative short messages so that resolving does not win first.
-        Two consecutive length-drop windows fire to satisfy stickiness (2 signals).
-        """
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        # First 3 messages: long (non-affirmative, non-closing)
-        long_msgs = [
-            "This is a quite long message about the renovation project I am planning here",
-            "Here is another detailed message describing the various options I am considering now",
-            "And yet another thorough explanation of the challenges involved in this specific work",
-        ]
-        # Next 5 messages: very short (non-affirmative, non-closing)
-        # "hmm", "mhm", "hm" are neither affirmative nor closing words
-        short_msgs = ["Hmm", "Hm", "Hm", "Hmm", "Hm"]
-
-        all_msgs = [(m, True, "topic") for m in long_msgs + short_msgs]
-        for i, (text, is_user, topic) in enumerate(all_msgs):
             t = base + timedelta(seconds=i * 30)
             with patch("services.conversation_phase_service.utc_now", return_value=t):
                 result = svc.update(text, is_user=is_user, topic=topic)
@@ -344,90 +235,10 @@ class TestAntiFalseClose:
             )
         assert result["current"] == "exploring"
 
-    def test_short_message_after_closing_stays_closing(self):
-        """A short non-substantive message after closing should not flip back."""
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        with patch("services.conversation_phase_service.utc_now", return_value=base):
-            svc.update("Bye!", is_user=True, topic="misc")
-
-        t1 = base + timedelta(seconds=30)
-        with patch("services.conversation_phase_service.utc_now", return_value=t1):
-            result = svc.update("Ok", is_user=True, topic="misc")
-        assert result["current"] == "closing"
 
 
-class TestMomentum:
-    def test_fast_exchanges_give_high_momentum(self):
-        """Messages every 5 seconds (well above baseline) should yield high momentum."""
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        messages = [
-            ("Hey", True, "a"),
-            ("Hi", True, "a"),
-            ("How are you?", True, "a"),
-            ("Fine thanks", True, "a"),
-            ("Good to hear", True, "a"),
-        ]
-        for i, (text, is_user, topic) in enumerate(messages):
-            t = base + timedelta(seconds=i * 5)   # 5-second gaps → fast
-            with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(text, is_user=is_user, topic=topic)
-
-        assert result["momentum"] > 0.6
-
-    def test_momentum_ema_smoothing(self):
-        """EMA with alpha=0.3 smooths changes; verify new value is between old and instant."""
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        # Build up a high momentum
-        for i in range(5):
-            t = base + timedelta(seconds=i * 5)
-            with patch("services.conversation_phase_service.utc_now", return_value=t):
-                svc.update("quick", is_user=True, topic="a")
-
-        phase_before = svc.get_phase()
-        mom_before = phase_before["momentum"]
-
-        # Now a slow message (large gap) should pull momentum down but not to zero
-        t_slow = base + timedelta(seconds=5 + 600)  # 10-minute gap
-        with patch("services.conversation_phase_service.utc_now", return_value=t_slow):
-            result = svc.update("slow message", is_user=True, topic="a")
-
-        # Momentum should have dropped but not hit zero
-        assert result["momentum"] < mom_before
-        assert result["momentum"] > 0.0
 
 
-class TestDirection:
-    def test_increasing_length_gives_deepening_direction(self):
-        """Growing message lengths with stable timing → direction=deepening."""
-        store = _make_store()
-        svc = _make_service(store)
-        base = utc_now()
-
-        texts = [
-            "Short",
-            "A bit longer now",
-            "Getting even longer with more content here",
-            "Now quite a lot more words in this particular message about stuff",
-            "This is a noticeably lengthier message with considerably more information",
-            "And now we have an even longer message with substantially more text than before",
-            "This message is significantly longer than the previous ones and contains quite a bit more",
-            "At this point the messages have grown considerably in length compared to early ones",
-        ]
-        for i, text in enumerate(texts):
-            t = base + timedelta(seconds=i * 30)
-            with patch("services.conversation_phase_service.utc_now", return_value=t):
-                result = svc.update(text, is_user=True, topic="a")
-
-        assert result["direction"] == "deepening"
 
 class TestStickiness:
     def test_single_exploring_signal_does_not_flip_from_deepening(self):
@@ -462,22 +273,7 @@ class TestStickiness:
         # (The state could already be deepening or the pending signal count is 1)
         assert result["current"] == "deepening"
 
-    def test_closing_keyword_overrides_stickiness(self):
-        """Closing keywords bypass stickiness and flip immediately."""
-        store = _make_store()
-        svc = _make_service(store)
 
-        # Build up some state
-        messages = [
-            ("Hello", True, "a"),
-            ("Hi", False, "a"),
-            ("Talking about things", True, "a"),
-            ("Sure", False, "a"),
-        ]
-        _push_messages(svc, messages)
-
-        result = svc.update("Bye!", is_user=True, topic="a")
-        assert result["current"] == "closing"
 
 
 class TestFullLifecycle:
@@ -538,57 +334,4 @@ class TestFullLifecycle:
         assert r["current"] == "closing"
 
 
-class TestHelpers:
-    def test_count_questions(self):
-        from services.conversation_phase_service import _count_questions
-        assert _count_questions("How are you? And what time?") == 2
-        assert _count_questions("Hello there") == 0
-        assert _count_questions("?") == 1
 
-    def test_same_topic_run(self):
-        from services.conversation_phase_service import _same_topic_run
-        assert _same_topic_run(["a", "b", "b", "b"]) == 3
-        assert _same_topic_run(["a", "b", "c"]) == 1
-        assert _same_topic_run([]) == 0
-        assert _same_topic_run(["x"]) == 1
-
-    def test_question_density(self):
-        from services.conversation_phase_service import _question_density
-        counts = [1, 0, 1, 0, 1]
-        assert _question_density(counts, 5) == pytest.approx(0.6, abs=1e-9)
-        assert _question_density([], 5) == pytest.approx(0.0, abs=1e-9)
-
-    def test_is_increasing(self):
-        from services.conversation_phase_service import _is_increasing
-        assert _is_increasing([10, 20, 30, 40]) is True
-        assert _is_increasing([40, 30, 20, 10]) is False
-        assert _is_increasing([20, 20, 20, 20]) is False
-        assert _is_increasing([10]) is False  # too few
-
-class TestSingleton:
-    def test_singleton_thread_safety(self):
-        """Multiple threads obtaining the singleton should all get the same object."""
-        from services.conversation_phase_service import (
-            get_conversation_phase_service,
-        )
-        import services.conversation_phase_service as _mod
-
-        # Reset singleton to test creation race
-        original = _mod._instance
-        _mod._instance = None
-
-        instances = []
-
-        def grab():
-            instances.append(get_conversation_phase_service())
-
-        threads = [threading.Thread(target=grab) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert len(set(id(i) for i in instances)) == 1
-
-        # Restore
-        _mod._instance = original

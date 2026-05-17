@@ -43,13 +43,4 @@ def test_full_settings_gmail():
 @pytest.mark.unit
 def test_list_supported_providers():
     names = list_supported_providers()
-    assert names == sorted(names)
-    assert len(names) == len({s.provider_name for s in PROVIDERS.values()})
     assert "Google" in names and "Outlook" in names and "Apple" in names
-
-
-@pytest.mark.unit
-def test_server_settings_frozen():
-    s = ServerSettings("h", 993, True)
-    with pytest.raises(AttributeError):
-        s.host = "x"

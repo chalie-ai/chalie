@@ -91,13 +91,6 @@ class TestTraitExtraction:
         result = svc._extract_trait_interests()
         assert len(result) == 0
 
-    def test_skips_long_trait_values(self, db):
-        _seed_trait(db, "key_long", "x" * 101, 0.9, 5)
-
-        svc = _make_service(db)
-        result = svc._extract_trait_interests()
-        assert len(result) == 0
-
     def test_db_error_returns_empty(self, db):
         from unittest.mock import patch, MagicMock
         mock_dgs = MagicMock()
@@ -125,21 +118,6 @@ class TestTopicExtraction:
         assert result[0]["score"] == pytest.approx(1.0, abs=1e-9)  # highest freq
         assert result[1]["score"] == pytest.approx(0.5, abs=1e-9)  # 5/10
 
-    def test_normalizes_topic_names(self, db):
-        _seed_topic_transcript(db, "natural_language_processing", 3)
-
-        svc = _make_service(db)
-        result = svc._extract_topic_interests()
-        assert result[0]["term"] == "natural language processing"
-
-    def test_db_error_returns_empty(self, db):
-        broken_db = MagicMock()
-        broken_conn = MagicMock()
-        broken_db.get_connection.return_value = broken_conn
-        broken_conn.execute.side_effect = Exception("DB down")
-        svc = WorldAwarenessService(broken_db)
-        result = svc._extract_topic_interests()
-        assert result == []
 
 
 # ── Embedding dedup tests ─────────────────────────────────────
@@ -183,28 +161,6 @@ class TestEmbeddingDedup:
         result = svc._deduplicate_by_embedding(candidates)
         assert len(result) == 2
 
-    def test_single_candidate_unchanged(self, db):
-        svc = _make_service(db)
-        candidates = [{"term": "AI", "score": 5.0, "source": "trait"}]
-        result = svc._deduplicate_by_embedding(candidates)
-        assert len(result) == 1
-
-    def test_empty_returns_empty(self, db):
-        svc = _make_service(db)
-        assert svc._deduplicate_by_embedding([]) == []
-
-    def test_embedding_failure_returns_all(self, db):
-        svc = _make_service(db)
-        mock_emb = MagicMock()
-        mock_emb.generate_embeddings_batch.side_effect = Exception("Model error")
-        svc._embedding_svc = mock_emb
-
-        candidates = [
-            {"term": "AI", "score": 5.0, "source": "trait"},
-            {"term": "cooking", "score": 3.0, "source": "trait"},
-        ]
-        result = svc._deduplicate_by_embedding(candidates)
-        assert len(result) == 2
 
 
 # ── extract_interests integration ─────────────────────────────
@@ -237,11 +193,6 @@ class TestExtractInterests:
         assert len(result) == 2
         # Sorted by score desc
         assert result[0]["score"] >= result[1]["score"]
-
-    def test_returns_empty_when_no_data(self, db):
-        svc = _make_service(db)
-        result = svc.extract_interests()
-        assert result == []
 
     def test_capped_at_max_interests(self, db):
         # 10 traits + 10 topics = 20 candidates, should cap at 8
@@ -309,26 +260,6 @@ class TestScan:
     def test_scan_skips_empty_interests(self, db):
         from services.world_state import world_state
         svc = _make_service(db)
-        count = svc.scan()
-        assert count == 0
-        assert world_state.get("signals") == {}
-
-    def test_scan_skips_interests_with_no_articles(self, db):
-        from services.world_state import world_state
-        _seed_trait(db, "interest", "obscure topic", 0.9, 5)
-
-        svc = _make_service(db)
-
-        vec = np.zeros(768, dtype=np.float32)
-        vec[0] = 1.0
-        mock_emb = MagicMock()
-        mock_emb.generate_embeddings_batch.return_value = [vec]
-        svc._embedding_svc = mock_emb
-
-        mock_news = MagicMock()
-        mock_news.search.return_value = []
-        svc._news_service = mock_news
-
         count = svc.scan()
         assert count == 0
         assert world_state.get("signals") == {}

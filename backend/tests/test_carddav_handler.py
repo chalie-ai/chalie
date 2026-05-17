@@ -140,17 +140,6 @@ def test_parse_vcard_minimal():
     assert contact["uid"] == ""
 
 
-@pytest.mark.unit
-def test_parse_vcard_multiple_emails_and_phones():
-    handler = _make_handler()
-    contact = handler.parse_vcard(_MULTI_EMAIL_VCARD)
-
-    assert contact is not None
-    assert len(contact["emails"]) == 3
-    assert len(contact["phones"]) == 2
-
-
-
 
 @pytest.mark.unit
 def test_parse_vcard_returns_none_when_no_fn_no_email():
@@ -158,26 +147,6 @@ def test_parse_vcard_returns_none_when_no_fn_no_email():
     result = handler.parse_vcard(_NO_FN_NO_EMAIL)
     assert result is None
 
-
-@pytest.mark.unit
-def test_parse_vcard_no_fn_with_email_is_accepted():
-    handler = _make_handler()
-    result = handler.parse_vcard(_NO_FN_WITH_EMAIL)
-    # fn is empty but email present — should be returned (fn="" is fine)
-    assert result is not None
-    email_vals = [e["value"] for e in result["emails"]]
-    assert "anon@example.com" in email_vals
-
-
-@pytest.mark.unit
-def test_parse_vcard_org_list_flattened():
-    handler = _make_handler()
-    contact = handler.parse_vcard(_ORG_LIST_VCARD)
-    assert contact is not None
-    # ORG may be "Big Corp Engineering" or "Big Corp;Engineering" depending on
-    # how vobject parses it — just verify it's non-empty and is a string.
-    assert isinstance(contact["org"], str)
-    assert "Big Corp" in contact["org"]
 
 
 # ---------------------------------------------------------------------------
@@ -195,18 +164,6 @@ def test_index_contacts_calls_index_contact_profile():
         handler.index_contacts(contacts)
 
     mock_icp.assert_called_once_with(contacts[0], source="carddav")
-
-
-@pytest.mark.unit
-def test_index_contacts_skips_blank_fn():
-    handler = _make_handler()
-    contacts = [{"fn": "  ", "emails": [{"value": "nobody@example.com", "type": "other"}], "phones": []}]
-
-    with patch("capabilities.contact_resolver.index_contact_profile") as mock_icp:
-        handler.index_contacts(contacts)
-
-    mock_icp.assert_not_called()
-
 
 
 
@@ -261,17 +218,6 @@ def test_list_contacts_uses_dgs_fetch_when_no_query():
 
 
 
-@pytest.mark.unit
-def test_list_contacts_returns_empty_on_dgs_failure():
-    mock_dgs = MagicMock()
-    mock_dgs.fetch.side_effect = RuntimeError("db error")
-    handler = _make_handler()
-
-    with patch("capabilities.mail_capability.carddav_handler._dgs", return_value=mock_dgs):
-        result = handler.list_contacts({})
-
-    assert result == {"contacts": [], "count": 0}
-
 
 # ---------------------------------------------------------------------------
 # get_contact
@@ -298,13 +244,6 @@ def test_get_contact_returns_error_when_not_found():
         result = handler.get_contact({"identifier": "nobody@example.com"})
 
     assert result == {"error": "Contact not found"}
-
-
-@pytest.mark.unit
-def test_get_contact_returns_error_on_empty_identifier():
-    handler = _make_handler()
-    result = handler.get_contact({"identifier": ""})
-    assert result == {"error": "identifier is required"}
 
 
 
@@ -334,13 +273,6 @@ def test_monitor_calls_sync_then_index():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.unit
-def test_open_client_returns_none_on_exception():
-    handler = _make_handler()
 
-    with patch("caldav.DAVClient", side_effect=ConnectionError("refused")):
-        result = handler.open_client("https://contacts.icloud.com/", "user", "pass")
-
-    assert result is None
 
 

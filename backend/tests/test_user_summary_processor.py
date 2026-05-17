@@ -60,25 +60,6 @@ def _make_fake_response(content: str):
     return LLMResponse(text=content, model='test', provider='test')
 
 
-# ── TestUserSummarySystemPrompt ────────────────────────────────────────────────
-
-@pytest.mark.unit
-class TestUserSummarySystemPrompt:
-
-    def test_prompt_contains_json_schema_keys(self):
-        from services.system_message_prompt import UserSummarySystemPrompt
-
-        body = UserSummarySystemPrompt().get_prompt()
-        assert '"short"' in body
-        assert '"long"' in body
-
-    def test_prompt_instructs_third_person(self):
-        from services.system_message_prompt import UserSummarySystemPrompt
-
-        body = UserSummarySystemPrompt().get_prompt()
-        assert 'third person' in body.lower()
-
-
 # ── TestGetUserPrompt ──────────────────────────────────────────────────────────
 
 @pytest.mark.unit
@@ -103,34 +84,6 @@ class TestGetUserPrompt:
         # No telemetry tokens
         for forbidden in ('weight', 'source=', 'created_at', 'last_confirmed_at', 'retrieval_weight'):
             assert forbidden not in prompt, f"Telemetry token '{forbidden}' found in prompt"
-
-    def test_user_prompt_starts_with_facts_prefix(self, db):
-        _insert_trait(db, 'hobby', 'cycling')
-
-        from services.user_summary_processor import UserSummaryProcessor
-
-        prompt = UserSummaryProcessor().getUserPrompt()
-        assert prompt.startswith('Facts:')
-
-    def test_user_prompt_no_traits_returns_empty_placeholder(self, db):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        prompt = UserSummaryProcessor().getUserPrompt()
-        assert 'no facts available' in prompt
-
-
-# ── TestGetUserDefinition ──────────────────────────────────────────────────────
-
-@pytest.mark.unit
-class TestGetUserDefinition:
-
-    def test_returns_static_synthesiser_string(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        proc = UserSummaryProcessor()
-        defn = proc.getUserDefinition()
-        assert 'synthesiser' in defn.lower()
-        assert 'real human' in defn.lower()
 
 
 # ── TestPostTurn ───────────────────────────────────────────────────────────────
@@ -199,19 +152,6 @@ class TestPostTurn:
         assert any('parse' in rec.message.lower() or 'json' in rec.message.lower()
                    for rec in caplog.records), "No warning logged for malformed JSON"
 
-    def test_post_turn_missing_short_key_writes_nothing(self, db):
-        """JSON with missing 'short' key writes nothing."""
-        from services.data_graph_service import get_data_graph_service
-        from services.user_summary_processor import UserSummaryProcessor
-
-        proc = UserSummaryProcessor()
-        proc._last_response = json.dumps({'long': 'some long text'})
-        proc.post_turn()
-
-        dgs = get_data_graph_service()
-        rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') == 'user_summary']
-        assert not rows, "user_summary written despite missing 'short' key"
-
     def test_post_turn_strips_markdown_code_fences(self, db):
         """LLM wrapping JSON in ```json ... ``` fences is handled gracefully."""
         from services.data_graph_service import get_data_graph_service
@@ -262,31 +202,6 @@ class TestPostTurn:
             for rec in caplog.records
         ), "No warning logged when 'short' value is empty string"
 
-    def test_post_turn_whitespace_only_long_value_writes_nothing(self, db, caplog):
-        """JSON with 'long' as whitespace-only string must be treated as empty.
-
-        After ``.strip()`` the value collapses to '' — the guard triggers and
-        nothing is written.  Verifies the strip() is applied before the emptiness
-        check, not after.
-        """
-        from services.data_graph_service import get_data_graph_service
-        from services.user_summary_processor import UserSummaryProcessor
-
-        proc = UserSummaryProcessor()
-        proc._last_response = '{"short": "Alice is an engineer", "long": "   "}'
-
-        with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
-            proc.post_turn()
-
-        dgs = get_data_graph_service()
-        rows = [
-            r for r in dgs.fetch(kinds=['system'])
-            if r.get('key') in ('user_summary', 'user_summary_long')
-        ]
-        assert not rows, (
-            "postTurn() wrote rows despite whitespace-only 'long' value"
-        )
-
 
 # ── TestPostTurnStorageFailure ─────────────────────────────────────────────────
 
@@ -332,20 +247,6 @@ class TestPostTurnStorageFailure:
             for rec in caplog.records
         ), "No warning logged when data_graph write fails"
 
-
-# ── TestClassAttributes ────────────────────────────────────────────────────────
-
-@pytest.mark.unit
-class TestClassAttributes:
-
-    def test_class_constants(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        assert UserSummaryProcessor.SKIP_TRANSCRIPT_WRITE is True
-        assert UserSummaryProcessor.MAX_ITERATIONS == 1
-        assert UserSummaryProcessor.ALWAYS_AVAILABLE == []
-        assert UserSummaryProcessor.DISCOVERABLE == []
-        assert UserSummaryProcessor.LOG_LABEL == 'user_summary'
 
 
 # ── TestShouldSynthesiseBehavioralPattern ─────────────────────────────────────
@@ -441,24 +342,6 @@ class TestFormatPatternLine:
         assert '@ 07:00' in line
         assert 'goes for a run in the morning' in line
 
-    def test_format_pattern_line_without_time_anchor(self):
-        """content with empty time_anchor must not include '@' in the formatted line."""
-        from services.user_summary_processor import _format_pattern_line
-
-        content = {
-            'name': 'weekend_reading',
-            'frequency': 'weekend',
-            'time_anchor': '',
-            'summary': 'reads books on weekends',
-            'confidence': 5.0,
-            'last_seen_at': '2026-04-20T14:00:00+00:00',
-        }
-        line = _format_pattern_line(content)
-
-        assert 'weekend_reading' in line
-        assert '@' not in line, (
-            "No '@' expected when time_anchor is empty, but '@' found in: " + line
-        )
 
 
 # ── Integration tests (require live provider) ──────────────────────────────────

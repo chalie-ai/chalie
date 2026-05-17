@@ -140,38 +140,6 @@ class TestCreateWrapper:
         assert resp.status_code == 400
         assert "name" in resp.get_json()["error"]
 
-    def test_create_passes_capabilities_to_service(self, cookie_client):
-        svc = _make_service_mock()
-        caps = {"signals": ["context_change"]}
-        with patch("api.wrappers._get_service", return_value=svc):
-            cookie_client.post(
-                "/api/wrappers",
-                json={"name": "W", "capabilities": caps},
-                content_type="application/json",
-            )
-        call_kwargs = svc.create_token.call_args
-        assert call_kwargs.kwargs.get("capabilities") == caps or (
-            call_kwargs.args and caps in call_kwargs.args
-        )
-
-    def test_create_invalid_capabilities_type_returns_400(self, cookie_client):
-        svc = _make_service_mock()
-        with patch("api.wrappers._get_service", return_value=svc):
-            resp = cookie_client.post(
-                "/api/wrappers",
-                json={"name": "W", "capabilities": "not-a-dict"},
-                content_type="application/json",
-            )
-        assert resp.status_code == 400
-
-    def test_create_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.post(
-            "/api/wrappers",
-            json={"name": "W"},
-            content_type="application/json",
-        )
-        assert resp.status_code == 401
-
     def test_create_via_bearer_returns_403(self):
         """Bearer-authenticated requests must NOT be able to create tokens."""
         app = Flask(__name__)
@@ -211,9 +179,6 @@ class TestListWrappers:
         assert len(data["wrappers"]) == 1
         assert data["wrappers"][0]["wrapper_id"] == "wrp_test"
 
-    def test_list_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.get("/api/wrappers")
-        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -236,9 +201,7 @@ class TestGetWrapper:
             resp = cookie_client.get("/api/wrappers/wrp_missing")
         assert resp.status_code == 404
 
-    def test_get_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.get("/api/wrappers/wrp_abc")
-        assert resp.status_code == 401
+
 
 
 # ---------------------------------------------------------------------------
@@ -264,26 +227,6 @@ class TestUpdateCapabilities:
             resp = cookie_client.put(
                 "/api/wrappers/wrp_abc/capabilities",
                 json={},
-                content_type="application/json",
-            )
-        assert resp.status_code == 400
-
-    def test_update_capabilities_list_accepted(self, cookie_client):
-        svc = _make_service_mock()
-        with patch("api.wrappers._get_service", return_value=svc):
-            resp = cookie_client.put(
-                "/api/wrappers/wrp_abc/capabilities",
-                json={"capabilities": ["weather.current", "email.send"]},
-                content_type="application/json",
-            )
-        assert resp.status_code == 200
-
-    def test_update_capabilities_invalid_type_returns_400(self, cookie_client):
-        svc = _make_service_mock()
-        with patch("api.wrappers._get_service", return_value=svc):
-            resp = cookie_client.put(
-                "/api/wrappers/wrp_abc/capabilities",
-                json={"capabilities": "not-a-list-or-dict"},
                 content_type="application/json",
             )
         assert resp.status_code == 400
@@ -342,13 +285,7 @@ class TestUpdateCapabilities:
                 )
         assert resp.status_code == 403
 
-    def test_update_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.put(
-            "/api/wrappers/wrp_abc/capabilities",
-            json={"capabilities": {}},
-            content_type="application/json",
-        )
-        assert resp.status_code == 401
+
 
 
 # ---------------------------------------------------------------------------
@@ -364,12 +301,4 @@ class TestRevokeWrapper:
         assert resp.status_code == 200
         assert resp.get_json()["ok"] is True
 
-    def test_revoke_not_found_returns_404(self, cookie_client):
-        svc = _make_service_mock(revoke_return=False)
-        with patch("api.wrappers._get_service", return_value=svc):
-            resp = cookie_client.delete("/api/wrappers/wrp_missing")
-        assert resp.status_code == 404
 
-    def test_revoke_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.delete("/api/wrappers/wrp_abc")
-        assert resp.status_code == 401

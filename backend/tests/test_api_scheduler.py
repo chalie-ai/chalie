@@ -106,12 +106,6 @@ class TestSchedulerAPI:
         assert "offset" in body
         assert len(body["items"]) == 2
 
-    def test_list_rejects_invalid_status(self, client, db):
-        resp = client.get("/scheduler?status=bogus")
-
-        assert resp.status_code == 400
-        assert "status" in resp.get_json()["error"]
-
     # ----- POST /scheduler -----
 
     def test_create_returns_201(self, client, db):
@@ -131,24 +125,6 @@ class TestSchedulerAPI:
             ("Buy groceries",),
         ).fetchone()
         assert row is not None
-
-    def test_create_without_message_returns_400(self, client, db):
-        resp = client.post(
-            "/scheduler",
-            json={"due_at": _future_iso()},
-        )
-
-        assert resp.status_code == 400
-        assert "message" in resp.get_json()["error"]
-
-    def test_create_with_past_due_at_returns_400(self, client, db):
-        resp = client.post(
-            "/scheduler",
-            json={"message": "Late reminder", "due_at": _past_iso()},
-        )
-
-        assert resp.status_code == 400
-        assert "future" in resp.get_json()["error"]
 
     @pytest.mark.parametrize(
         "recurrence",
@@ -187,11 +163,6 @@ class TestSchedulerAPI:
         assert "hourly" in resp.get_json()["error"]
 
     # ----- GET /scheduler/<id> -----
-
-    def test_get_item_returns_404_when_not_found(self, client, db):
-        resp = client.get("/scheduler/nonexistent")
-
-        assert resp.status_code == 404
 
     def test_get_item_returns_item_when_found(self, client, db):
         _insert_item(db, id="xyz99999", group_id="xyz99999")

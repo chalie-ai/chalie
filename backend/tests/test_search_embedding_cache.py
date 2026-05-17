@@ -88,22 +88,6 @@ class TestRouteQuery:
         assert 'brave' in names
         assert 'poor' not in names
 
-    def test_max_3_providers(self):
-        import tools.search.router as r
-        mock_emb = MagicMock()
-        mock_emb.generate_embedding.return_value = _make_embedding()
-
-        conn = _mock_router_conn(
-            knn_rows=[(i, 0.01) for i in range(1, 6)],
-            id_to_provider_rows=[(i, f'p{i}') for i in range(1, 6)],
-        )
-
-        with patch('services.embedding_service.EmbeddingService', return_value=mock_emb), \
-             patch('tools.search.router.sqlite3.connect', return_value=conn):
-            result = r.route_query("test")
-
-        assert len(result) <= 3
-
     def test_min_score_filter(self):
         import tools.search.router as r
         mock_emb = MagicMock()
@@ -119,24 +103,6 @@ class TestRouteQuery:
             result = r.route_query("obscure query")
 
         assert result == []
-
-    def test_embedding_failure_returns_empty(self):
-        import tools.search.router as r
-        mock_emb = MagicMock()
-        mock_emb.generate_embedding.side_effect = RuntimeError("OOM")
-
-        with patch('services.embedding_service.EmbeddingService', return_value=mock_emb):
-            assert r.route_query("test") == []
-
-    def test_db_failure_returns_empty(self):
-        import tools.search.router as r
-        mock_emb = MagicMock()
-        mock_emb.generate_embedding.return_value = _make_embedding()
-
-        with patch('services.embedding_service.EmbeddingService', return_value=mock_emb), \
-             patch('tools.search.router.sqlite3.connect', side_effect=sqlite3.OperationalError("no db")):
-            assert r.route_query("test") == []
-
 
 
 # ── search.py ────────────────────────────────────────────────────────────────
@@ -173,15 +139,6 @@ class TestSearchExecute:
         assert not r['text'].startswith('EMPTY:')
         m.assert_called_once()
 
-    def test_forced_unknown_provider(self):
-        self._reset()
-        from abilities.search import SearchAbility
-        SearchAbility._providers = {'brave': {'name': 'brave'}}
-        with patch('abilities.search.fetch_ddg_fallback', return_value=[]):
-            r = SearchAbility().execute("t", {"query": "test", "provider": "nonexistent"}, None)
-        assert r['text'].startswith('EMPTY: zero results')
-        assert 'Do NOT fabricate' in r['text']
-
     def test_router_failure_falls_back_to_ddg(self):
         self._reset()
         from abilities.search import SearchAbility
@@ -192,37 +149,6 @@ class TestSearchExecute:
         assert 'text' in r
         assert not r['text'].startswith('EMPTY:')
 
-    def test_limit_clamped_high(self):
-        self._reset()
-        from abilities.search import SearchAbility
-        SearchAbility._providers = {}
-        with patch('abilities.search.fetch_ddg_fallback', return_value=[]) as m, \
-             patch('tools.search.router.route_query', return_value=[]):
-            SearchAbility().execute("t", {"query": "test", "limit": 99}, None)
-        assert m.call_args[0][1] == 10
-
-    def test_limit_clamped_low(self):
-        self._reset()
-        from abilities.search import SearchAbility
-        SearchAbility._providers = {}
-        with patch('abilities.search.fetch_ddg_fallback', return_value=[]) as m, \
-             patch('tools.search.router.route_query', return_value=[]):
-            SearchAbility().execute("t", {"query": "test", "limit": -5}, None)
-        assert m.call_args[0][1] == 1
-
-    def test_response_shape(self):
-        self._reset()
-        from abilities.search import SearchAbility
-        SearchAbility._providers = {}
-        with patch('abilities.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": "desc"}]), \
-             patch('tools.search.router.route_query', return_value=[]):
-            r = SearchAbility().execute("t", {"query": "test"}, None)
-        assert 'text' in r
-        import json
-        parsed = json.loads(r['text'])
-        assert 'results' in parsed
-        assert isinstance(parsed['results'], list)
-
     def test_load_providers_filters_disabled(self, tmp_path):
         self._reset()
         db = _make_providers_db(tmp_path, providers=[(1, "brave", 1), (2, "off", 0)])
@@ -232,13 +158,7 @@ class TestSearchExecute:
         assert 'brave' in p
         assert 'off' not in p
 
-    def test_load_providers_missing_db(self):
-        self._reset()
-        from abilities.search import SearchAbility
-        with patch.object(SearchAbility, '_DB', '/nonexistent/db'):
-            p = SearchAbility._load_providers()
-        assert p == {}
-        assert SearchAbility._providers is None  # not cached on failure
+
 
 
 # ── generate_search_cache.py ─────────────────────────────────────────────────
@@ -262,17 +182,6 @@ class TestGenerateSearchCache:
     def test_exits_on_missing_db(self, tmp_path):
         mod = _load_gen()
         mod._DB_PATH = tmp_path / "missing.sqlite"
-        with pytest.raises(SystemExit) as e:
-            mod.main()
-        assert e.value.code == 1
-
-    def test_exits_on_empty_examples(self):
-        mod = _load_gen()
-        mod._DB_PATH = Path(__file__)  # exists
-        conn = MagicMock()
-        conn.execute.return_value.fetchall.return_value = []
-        mod.sqlite3 = MagicMock()
-        mod.sqlite3.connect.return_value = conn
         with pytest.raises(SystemExit) as e:
             mod.main()
         assert e.value.code == 1

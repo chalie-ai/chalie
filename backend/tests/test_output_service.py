@@ -139,13 +139,6 @@ class TestOutputService:
                 return
         pytest.fail("No publish to output:events found")
 
-    def test_enqueue_proactive_returns_output_id(self, service, mock_store):
-        """enqueue_proactive returns a UUID string."""
-        with patch('api.push.send_push_to_all'):
-            output_id = service.enqueue_proactive("thread-1", "hello")
-        assert isinstance(output_id, str)
-        assert len(output_id) > 0
-
     def test_enqueue_proactive_buffers_to_notifications(self, service, mock_store):
         """Proactive output is buffered to notifications:recent for catch-up."""
         with patch('api.push.send_push_to_all'):

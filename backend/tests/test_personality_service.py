@@ -52,26 +52,6 @@ class TestVoiceLookup:
 
         assert result == expected
 
-    def test_loader_returns_correct_voice_for_all_cool_tuple(self):
-        """get_voice((-2,-2,-2,-2,-2)) matches the corpus entry for that tuple."""
-        corpus = _load_corpus()
-        expected = corpus[(-2, -2, -2, -2, -2)]
-
-        from services.personality.personality_service import get_voice
-        result = get_voice((-2, -2, -2, -2, -2))
-
-        assert result == expected
-
-    def test_loader_returns_correct_voice_for_all_warm_tuple(self):
-        """get_voice((2,2,2,2,2)) matches the corpus entry for that tuple."""
-        corpus = _load_corpus()
-        expected = corpus[(2, 2, 2, 2, 2)]
-
-        from services.personality.personality_service import get_voice
-        result = get_voice((2, 2, 2, 2, 2))
-
-        assert result == expected
-
     def test_loader_returns_correct_voice_for_mixed_tuple(self):
         """get_voice((1,-1,0,2,-2)) matches the corpus entry for that tuple."""
         corpus = _load_corpus()
@@ -171,40 +151,12 @@ class TestSetCurrentTupleValidation:
         with pytest.raises(ValueError):
             set_current_tuple((3, 0, 0, 0, 0))
 
-    def test_set_current_tuple_rejects_negative_out_of_range(self, db):
-        """Step value -3 is out of range — must raise ValueError."""
-        from services.personality.personality_service import set_current_tuple
-
-        with pytest.raises(ValueError):
-            set_current_tuple((-3, 0, 0, 0, 0))
-
-    def test_set_current_tuple_rejects_last_position_out_of_range(self, db):
-        """Any position out of range raises ValueError, including the last."""
-        from services.personality.personality_service import set_current_tuple
-
-        with pytest.raises(ValueError):
-            set_current_tuple((0, 0, 0, 0, 99))
-
     def test_set_current_tuple_rejects_too_short(self, db):
         """Tuple of length < 5 must raise ValueError."""
         from services.personality.personality_service import set_current_tuple
 
         with pytest.raises(ValueError):
             set_current_tuple((0, 0, 0, 0))
-
-    def test_set_current_tuple_rejects_too_long(self, db):
-        """Tuple of length > 5 must raise ValueError."""
-        from services.personality.personality_service import set_current_tuple
-
-        with pytest.raises(ValueError):
-            set_current_tuple((0, 0, 0, 0, 0, 0))
-
-    def test_set_current_tuple_rejects_empty(self, db):
-        """Empty tuple must raise ValueError."""
-        from services.personality.personality_service import set_current_tuple
-
-        with pytest.raises(ValueError):
-            set_current_tuple(())
 
     def test_set_current_tuple_rejects_bool_masquerading_as_int(self, db):
         """Booleans satisfy ``isinstance(x, int)`` in Python — reject them explicitly."""

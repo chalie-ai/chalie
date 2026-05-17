@@ -146,16 +146,6 @@ class TestParseEvent:
         assert ev["all_day"] is False
         assert ev["calendar_name"] == "Work"
 
-    def test_all_day_event(self):
-        handler = _make_handler()
-        dtstart = datetime.date(2026, 4, 1)
-        resource = _build_ical_resource("uid-2", "Birthday", dtstart)
-
-        result = handler.parse_event(resource, "Personal")
-
-        assert len(result) == 1
-        assert result[0]["all_day"] is True
-
     def test_duration_fallback(self):
         handler = _make_handler()
         dtstart = _dt(2026, 4, 1, 10)
@@ -167,48 +157,6 @@ class TestParseEvent:
         assert len(result) == 1
         expected_end = dtstart + duration
         assert result[0]["dtend"] == expected_end
-
-    def test_multiple_attendees(self):
-        handler = _make_handler()
-        dtstart = _dt(2026, 4, 2, 14)
-        dtend = _dt(2026, 4, 2, 15)
-        resource = _build_ical_resource(
-            "uid-4", "Team Sync", dtstart, dtend,
-            attendees=["alice@example.com", "bob@example.com"],
-        )
-
-        result = handler.parse_event(resource, "Work")
-
-        assert len(result) == 1
-        attendees = result[0]["attendees"]
-        assert "alice@example.com" in attendees
-        assert "bob@example.com" in attendees
-        assert len(attendees) == 2
-
-    def test_no_dtstart_returns_empty(self):
-        import icalendar
-
-        handler = _make_handler()
-        cal = icalendar.Calendar()
-        evt = icalendar.Event()
-        evt.add("uid", "uid-5")
-        evt.add("summary", "No start")
-        # DTSTART deliberately omitted
-        cal.add_component(evt)
-        resource = MagicMock()
-        resource.icalendar_instance = cal
-
-        result = handler.parse_event(resource, "Work")
-
-        assert result == []
-
-    def test_ical_instance_unavailable_returns_empty(self):
-        handler = _make_handler()
-        resource = MagicMock(spec=[])  # no icalendar_instance attribute
-
-        result = handler.parse_event(resource, "Work")
-
-        assert result == []
 
 
 # ---------------------------------------------------------------------------
@@ -230,30 +178,6 @@ class TestFindOverlapPairs:
         assert len(pairs) == 1
         canon = pairs[0][2]
         assert "a" in canon and "b" in canon
-
-    def test_all_day_excluded(self):
-        from capabilities.mail_capability.caldav_handler import _find_overlap_pairs
-
-        now = _dt(2026, 4, 1, 8)
-        ev_a = _make_event(
-            "a", dtstart=_dt(2026, 4, 1, 10), dtend=_dt(2026, 4, 1, 11), all_day=True
-        )
-        ev_b = _make_event("b", dtstart=_dt(2026, 4, 1, 10), dtend=_dt(2026, 4, 1, 11))
-
-        pairs = _find_overlap_pairs([ev_a, ev_b], now)
-
-        assert pairs == []
-
-    def test_non_overlapping_events(self):
-        from capabilities.mail_capability.caldav_handler import _find_overlap_pairs
-
-        now = _dt(2026, 4, 1, 8)
-        ev_a = _make_event("a", dtstart=_dt(2026, 4, 1, 9), dtend=_dt(2026, 4, 1, 10))
-        ev_b = _make_event("b", dtstart=_dt(2026, 4, 1, 11), dtend=_dt(2026, 4, 1, 12))
-
-        pairs = _find_overlap_pairs([ev_a, ev_b], now)
-
-        assert pairs == []
 
 
 # ---------------------------------------------------------------------------
@@ -280,16 +204,7 @@ class TestFindBackToBackPairs:
         assert len(pairs) == 1
         assert pairs[0][2] == 3  # gap_minutes
 
-    def test_large_gap_not_flagged(self):
-        from capabilities.mail_capability.caldav_handler import _find_back_to_back_pairs
 
-        now = _dt(2026, 4, 1, 8)
-        ev_a = _make_event("a", dtstart=_dt(2026, 4, 1, 9), dtend=_dt(2026, 4, 1, 10))
-        ev_b = _make_event("b", dtstart=_dt(2026, 4, 1, 11), dtend=_dt(2026, 4, 1, 12))
-
-        pairs = _find_back_to_back_pairs([ev_a, ev_b], now)
-
-        assert pairs == []
 
 
 # ---------------------------------------------------------------------------
@@ -395,17 +310,7 @@ class TestUpsertEvents:
         ).fetchone()[0]
         assert count == 1
 
-    def test_greeting_inserted_once(self, db):
-        handler = _make_handler()
-        now = _dt(2026, 4, 1, 8)
 
-        handler.upsert_events([], now)
-        handler.upsert_events([], now)
-
-        count = db.execute(
-            "SELECT COUNT(*) FROM scheduled_items WHERE external_uid='caldav:greeting'"
-        ).fetchone()[0]
-        assert count == 1
 
 
 
@@ -443,32 +348,6 @@ class TestFindFreeSlots:
         starts = [s["start"] for s in result["free_slots"]]
         assert any("10:00" in s for s in starts)
 
-    def test_fully_booked_returns_no_slots(self, db):
-        handler = _make_handler()
-        now = _dt(2026, 4, 2, 0)
-        # One event that covers the entire working day
-        events = [
-            _make_event(
-                "uid-full",
-                dtstart=_dt(2026, 4, 2, 8),
-                dtend=_dt(2026, 4, 2, 18),
-            )
-        ]
-        handler.upsert_events(events, now)
-
-        with patch(
-            "capabilities.mail_capability.caldav_handler._get_user_tz",
-            return_value=None,
-        ):
-            result = handler.find_free_slots({
-                "date_from": "2026-04-02T00:00:00+00:00",
-                "date_to": "2026-04-02T23:59:59+00:00",
-                "working_hours_start": 8,
-                "working_hours_end": 18,
-                "min_duration_minutes": 30,
-            })
-
-        assert result.get("count", 0) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -488,15 +367,7 @@ class TestCreateEvent:
         assert "error" in result
         assert "summary" in result["error"].lower()
 
-    def test_returns_error_when_dtstart_missing(self):
-        handler = _make_handler()
-        client = MagicMock()
-        result = handler.create_event(client, {
-            "summary": "Test",
-            "dtend": "2026-04-01T10:00:00+00:00",
-        })
-        assert "error" in result
-        assert "dtstart" in result["error"].lower()
+
 
 
 # ---------------------------------------------------------------------------

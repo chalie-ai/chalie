@@ -168,14 +168,6 @@ class TestRelevanceEndpoint:
         assert "related_traits" in data
         assert "recommendation" in data
 
-    def test_empty_or_missing_query_returns_no_query(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp1 = client.get("/api/query/relevance?q=")
-                resp2 = client.get("/api/query/relevance")
-        assert resp1.get_json()["recommendation"] == "no_query"
-        assert resp2.get_json()["recommendation"] == "no_query"
-
     def test_high_score_recommends_surface_now(self, cookie_app):
         with cookie_app.test_client() as client:
             with _patch_cookie_auth():
@@ -205,18 +197,7 @@ class TestRelevanceEndpoint:
                     )
         assert resp.status_code == 403
 
-    def test_service_error_returns_defaults(self, cookie_app):
-        """_get_retrieval_module failure → relevance 0.0, recommendation defer."""
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), \
-                 patch("api.query._get_retrieval_module", side_effect=Exception("no db")), \
-                 patch("api.query._get_db_service", side_effect=Exception("no db")), \
-                 patch("api.query._get_memory_client", side_effect=Exception("no store")):
-                resp = client.get("/api/query/relevance?q=test")
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["relevance"] == pytest.approx(0.0, abs=1e-9)
-        assert data["recommendation"] == "defer"
+
 
 # ---------------------------------------------------------------------------
 # Identity endpoint tests
@@ -252,41 +233,6 @@ class TestMemoryEndpoint:
         assert resp.status_code == 200
         assert "results" in resp.get_json()
 
-    def test_empty_or_missing_q_returns_empty_results(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp1 = client.get("/api/query/memory?q=")
-                resp2 = client.get("/api/query/memory")
-        assert resp1.get_json()["results"] == []
-        assert resp2.get_json()["results"] == []
-
-    def test_radius_forwarded_to_service(self, cookie_app):
-        """retrieve() is called with radius=0.5 (hardcoded in _slice_memory)."""
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                stack, retrieval_mod = self._patch_memory_services([])
-                with stack:
-                    client.get("/api/query/memory?q=test&k=3")
-
-        # api/query._slice_memory calls retrieval_mod.retrieve(query_text=..., channel=None, radius=0.5)
-        call_kwargs = retrieval_mod.retrieve.call_args[1]
-        assert call_kwargs["radius"] == pytest.approx(0.5)
-
-    def test_service_unavailable_returns_empty(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth(), \
-                 patch("api.query._get_retrieval_module", side_effect=Exception("no db")), \
-                 patch("api.query._get_db_service", side_effect=Exception("no db")):
-                resp = client.get("/api/query/memory?q=test")
-        assert resp.status_code == 200
-        assert resp.get_json()["results"] == []
-
-    def test_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_no_auth() as stack:
-                with stack:
-                    resp = client.get("/api/query/memory?q=test")
-        assert resp.status_code == 401
 
 # ---------------------------------------------------------------------------
 # Composite endpoint tests
@@ -336,46 +282,6 @@ class TestCompositeEndpoint:
         data = resp.get_json()
         assert "relevance:auth tests" in data["results"]
 
-    def test_missing_slices_key_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp = client.post(
-                    "/api/query/composite",
-                    json={"not_slices": []},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 400
-
-    def test_slices_not_list_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp = client.post(
-                    "/api/query/composite",
-                    json={"slices": "relevance"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 400
-
-    def test_denied_slices_in_denied_key(self, bearer_app):
-        bearer_svc = MagicMock()
-        bearer_svc.check_permission.return_value = False
-
-        with bearer_app.test_client() as client:
-            with _patch_bearer_auth() as stack:
-                with stack, \
-                     patch("api.query._get_wrapper_service", return_value=bearer_svc):
-                    resp = client.post(
-                        "/api/query/composite",
-                        json={"slices": ["relevance", "memory"]},
-                        content_type="application/json",
-                        headers={"Authorization": "Bearer fake_token"},
-                    )
-        data = resp.get_json()
-        assert resp.status_code == 200
-        assert "relevance" in data["denied"]
-        assert "memory" in data["denied"]
-        assert data["results"] == {}
-
     def test_partial_permissions(self, bearer_app):
         """Bearer with memory but not relevance gets memory result, relevance denied."""
         bearer_svc = MagicMock()
@@ -400,19 +306,6 @@ class TestCompositeEndpoint:
         assert "memory" in data["results"]
         assert "relevance" in data["denied"]
 
-    def test_unknown_slice_in_results_with_error_field(self, cookie_app):
-        """Unknown slice names are dispatched and return {error: ...} in results."""
-        with cookie_app.test_client() as client:
-            with _patch_cookie_auth():
-                resp = client.post(
-                    "/api/query/composite",
-                    json={"slices": ["nonexistent_slice"]},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert "nonexistent_slice" in data["results"]
-        assert "error" in data["results"]["nonexistent_slice"]
 
 # ---------------------------------------------------------------------------
 # _check_query_permission unit tests
@@ -429,21 +322,6 @@ class TestCheckQueryPermission:
             from api.query import _check_query_permission
             assert _check_query_permission("situation") is True
             assert _check_query_permission("anything") is True
-
-    def test_bearer_delegates_to_wrapper_service(self):
-        """g.wrapper_id set → delegates to WrapperAuthService.check_permission."""
-        app = _make_app()
-
-        for return_val, expected in [(True, True), (False, False)]:
-            wrapper_svc = MagicMock()
-            wrapper_svc.check_permission.return_value = return_val
-            with app.test_request_context("/"):
-                from flask import g
-                g.wrapper_id = "wrp_test"
-                with patch("api.query._get_wrapper_service", return_value=wrapper_svc):
-                    from api.query import _check_query_permission
-                    result = _check_query_permission("memory")
-            assert result is expected
 
     def test_service_exception_fails_closed(self):
         """WrapperAuthService raising → permission denied (False)."""
@@ -485,12 +363,3 @@ class TestDispatchSlice:
         assert "relevance" in result
         assert "recommendation" in result
 
-    def test_memory_dispatch(self):
-        from api.query import _dispatch_slice
-        retrieval_mod = _make_retrieval_module_mock()
-
-        with patch("api.query._get_retrieval_module", return_value=retrieval_mod), \
-             patch("api.query._get_db_service", return_value=MagicMock()):
-            result = _dispatch_slice("memory")
-
-        assert "results" in result

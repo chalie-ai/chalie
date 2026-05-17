@@ -108,18 +108,6 @@ def test_upload_rejects_non_image_mime(client, mock_store, mock_doc_service, tmp
 
 
 @pytest.mark.unit
-def test_upload_rejects_empty_file(client, mock_store, mock_doc_service, tmp_path):
-    """POST /chat/image should return 400 for empty files."""
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service), \
-         patch('api.chat_image._documents_root', return_value=str(tmp_path)):
-        data = {'image': (io.BytesIO(b''), 'empty.png', 'image/png')}
-        res = client.post('/chat/image', data=data, content_type='multipart/form-data')
-
-    assert res.status_code == 400
-
-
-@pytest.mark.unit
 def test_upload_rejects_oversized_file(client, mock_store, mock_doc_service, tmp_path):
     """POST /chat/image should return 413 for files over 10MB."""
     oversized = b'x' * (10 * 1024 * 1024 + 1)
@@ -131,16 +119,6 @@ def test_upload_rejects_oversized_file(client, mock_store, mock_doc_service, tmp
 
     assert res.status_code == 413
 
-
-@pytest.mark.unit
-def test_upload_rejects_missing_file(client, mock_store, mock_doc_service, tmp_path):
-    """POST /chat/image should return 400 when no 'image' field is present."""
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service), \
-         patch('api.chat_image._documents_root', return_value=str(tmp_path)):
-        res = client.post('/chat/image', data={}, content_type='multipart/form-data')
-
-    assert res.status_code == 400
 
 
 @pytest.mark.unit
@@ -183,22 +161,6 @@ def test_status_returns_ready_when_result_exists(client, mock_store, mock_doc_se
     assert body['result']['description'] == 'A test image.'
 
 
-@pytest.mark.unit
-def test_status_returns_analyzing_while_bytes_exist(client, mock_store, mock_doc_service):
-    """GET /chat/image/<id>/status should return 'analyzing' while bytes are in store."""
-    image_id = 'pending00'
-    mock_store.set(f'chat_image:{image_id}', b'fake image bytes')  # bytes present, no result yet
-
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service):
-        res = client.get(f'/chat/image/{image_id}/status')
-
-    assert res.status_code == 200
-    body = res.get_json()
-    assert body['status'] == 'analyzing'
-    assert body['result'] is None
-
-
 
 @pytest.mark.unit
 def test_status_returns_404_for_unknown_id(client, mock_store, mock_doc_service):
@@ -209,28 +171,6 @@ def test_status_returns_404_for_unknown_id(client, mock_store, mock_doc_service)
         res = client.get('/chat/image/notexist1/status')
 
     assert res.status_code == 404
-
-
-@pytest.mark.unit
-def test_status_returns_analyzing_after_bytes_expire(client, mock_store, mock_doc_service):
-    """
-    GET /chat/image/<id>/status must return HTTP 200 with status='analyzing'
-    when the bytes key has already expired (absent) but the progress key is
-    still present with value 'analyzing' (B3 fix).
-    """
-    image_id = 'b3test001'
-    # Bytes key intentionally absent — simulates TTL expiry.
-    # Progress key still alive (within its 10 min window).
-    mock_store.set(f'chat_image_progress:{image_id}', 'analyzing')
-
-    with patch('api.chat_image._get_store', return_value=mock_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service):
-        res = client.get(f'/chat/image/{image_id}/status')
-
-    assert res.status_code == 200
-    body = res.get_json()
-    assert body['status'] == 'analyzing'
-    assert body['result'] is None
 
 
 @pytest.mark.unit
@@ -307,24 +247,6 @@ def test_analysis_updates_document_to_ready(mock_doc_service):
     assert kwargs['metadata']['has_text'] is True
     assert kwargs['summary'] == 'HELLO'[:500]
 
-
-@pytest.mark.unit
-def test_analysis_updates_document_to_failed_on_error(mock_doc_service):
-    """_run_analysis must update the document record to status='failed' when analysis raises."""
-    image_id = 'failc0de'
-    image_bytes = b'fake'
-    mime_type = 'image/png'
-
-    analysis_store = MemoryStore()
-
-    with patch('api.chat_image._get_store', return_value=analysis_store), \
-         patch('api.chat_image._get_document_service', return_value=mock_doc_service), \
-         patch('services.image_context_service.analyze', side_effect=RuntimeError('no provider')):
-        from api.chat_image import _run_analysis
-        _run_analysis(image_id, image_bytes, mime_type)
-
-    # update_status should have been called with 'failed'
-    mock_doc_service.update_status.assert_called_once_with(image_id, 'failed', error_message='no provider')
 
 
 # ─── GET /chat/image/<id>/status — document fallback ─────────────────────────

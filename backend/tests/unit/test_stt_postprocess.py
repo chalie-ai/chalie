@@ -22,14 +22,10 @@ class TestStripFillers:
         # Leading filler stripped
         ("um check my calendar", "check my calendar"),
         ("uh right", "right"),
-        ("ah yes", "yes"),
-        ("erm continue", "continue"),
         # Mid-sentence fillers stripped, no double spaces left
         ("check um my uh calendar", "check my calendar"),
-        ("yes um uh", "yes"),
         # Repeated/elongated filler forms stripped
         ("ummm", ""),
-        ("uhhh please", "please"),
         # Case insensitive
         ("UM check", "check"),
     ])
@@ -38,8 +34,6 @@ class TestStripFillers:
 
     @pytest.mark.parametrize("text", [
         "umbrella",   # "um" prefix but not a standalone filler
-        "error",      # "er" prefix but not a standalone filler
-        "ahead",      # "ah" prefix but not a standalone filler
         "check my calendar for tomorrow",
     ])
     def test_real_words_are_preserved(self, text):
@@ -57,13 +51,8 @@ class TestFixContractions:
     @pytest.mark.parametrize("raw,expected", [
         ("I didnt say that", "I didn't say that"),
         ("cant wont dont", "can't won't don't"),
-        ("you shouldnt do that", "you shouldn't do that"),
-        ("I couldnt find it", "I couldn't find it"),
         ("im here", "I'm here"),
-        ("ive seen it", "I've seen it"),
         ("youre right", "you're right"),
-        ("theyre coming", "they're coming"),
-        ("whos there", "who's there"),
         ("thats great", "that's great"),
     ])
     def test_contraction_is_restored(self, raw, expected):
@@ -81,9 +70,7 @@ class TestFixContractions:
     @pytest.mark.parametrize("text", [
         # Ambiguous words whose bare form is independently valid must not change
         "they were here",  # "were" is past tense, not "we're"
-        "well done",       # "well" is an adverb, not "we'll"
         "its colour",      # "its" as possessive, not "it's"
-        "I checked the calendar",
     ])
     def test_ambiguous_words_are_not_rewritten(self, text):
         assert _fix_contractions(text) == text

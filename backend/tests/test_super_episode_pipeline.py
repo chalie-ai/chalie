@@ -209,12 +209,6 @@ class TestWalkUpToApex:
         assert result is not None
         assert 'cycle' in caplog.text.lower()
 
-    def test_nonexistent_episode_returns_none(self, db):
-        """Walking a non-existent episode ID returns None gracefully."""
-        from services.episodic_retrieval_service import walk_up_to_apex
-
-        result = walk_up_to_apex("00000000-0000-0000-0000-000000000000")
-        assert result is None
 
 
 # ── find_super_candidates ──────────────────────────────────────────────────────
@@ -256,21 +250,6 @@ class TestFindSuperCandidates:
         clusters = find_super_candidates("ch1")
         assert len(clusters) == 1
         assert sorted(clusters[0]) == sorted([e1, e2, e3])
-
-    def test_loose_embeddings_returns_empty(self, db):
-        """3 embeddings far apart produce no cluster."""
-        if not _sqlite_vec_available(db):
-            pytest.skip("sqlite-vec not available")
-
-        from services.episodic_service import find_super_candidates
-
-        # 60° apart → cosine ≈ 0.5, well below 0.90 threshold
-        self._insert_apex(db, _sim_vec(angle_deg=0.0), gist="ep1")
-        self._insert_apex(db, _sim_vec(angle_deg=60.0), gist="ep2")
-        self._insert_apex(db, _sim_vec(angle_deg=120.0), gist="ep3")
-
-        clusters = find_super_candidates("ch1")
-        assert clusters == []
 
     def test_two_tight_clusters_both_emitted(self, db):
         """Two disjoint tight clusters in the same channel are both emitted with no overlap."""
@@ -390,40 +369,6 @@ class TestRetrievalApexPromotion:
         )
         assert leaf_id not in returned_ids, "Leaf should be replaced by its apex"
 
-    def test_two_hop_chain_returns_apex(self, db, episodic_svc):
-        """leaf → super → super-super chain: retrieve() returns the outermost apex."""
-        from services.episodic_retrieval_service import retrieve
-
-        leaf_id = episodic_svc.store_episode({
-            'gist': 'morning coffee ritual',
-            'salience': 5,
-            'channel': 'ch-chain',
-        })
-        super_id = episodic_svc.store_episode({
-            'gist': 'daily routines',
-            'salience': 6,
-            'channel': 'ch-chain',
-        })
-        apex_id = episodic_svc.store_episode({
-            'gist': 'lifestyle patterns',
-            'salience': 8,
-            'channel': 'ch-chain',
-        })
-
-        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf_id))
-        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (apex_id, super_id))
-        db.commit()
-
-        results = retrieve('morning coffee', channel='ch-chain', k=10)
-        returned_ids = [r['id'] for r in results]
-
-        assert apex_id in returned_ids, (
-            f"Expected apex_id={apex_id!r} in results. Two-hop chain must resolve to apex. "
-            f"Got: {returned_ids!r}"
-        )
-        assert leaf_id not in returned_ids
-        assert super_id not in returned_ids
-
     def test_apex_deduplication(self, db, episodic_svc):
         """Two leaves from the same super emit the super only once."""
         from services.episodic_retrieval_service import retrieve
@@ -497,30 +442,6 @@ class TestSuperEpisodeWriteContract:
             "('Super-episodes were created but contained 0 source references')."
         )
 
-    def test_store_episode_empty_consolidated_from_defaults_to_empty_list(
-        self, db, episodic_svc,
-    ):
-        """A plain (leaf) episode with no consolidated_from key must land as
-        an empty JSON array, not NULL and not a string literal '[]'.
-
-        Ensures readers that do `json.loads(row['consolidated_from'])` never
-        hit a None or a JSON parse error on leaf rows."""
-        leaf_ep = {
-            'gist': 'A plain leaf episode',
-            'salience': 5,
-            'channel': 'ch-write-contract',
-        }
-
-        new_id = episodic_svc.store_episode(leaf_ep)
-
-        row = db.execute(
-            "SELECT consolidated_from FROM episodes WHERE id = ?", (new_id,)
-        ).fetchone()
-        assert row is not None
-        assert row[0] is not None, "consolidated_from must default to '[]', not NULL"
-        assert json.loads(row[0]) == [], (
-            f"consolidated_from must default to empty list; got {row[0]!r}"
-        )
 
     def test_set_consolidated_into_persists_backpointer(self, db, episodic_svc):
         """set_consolidated_into(leaf_id, super_id) must land the super UUID

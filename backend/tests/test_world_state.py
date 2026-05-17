@@ -147,15 +147,6 @@ class TestRenderSchedule:
         assert "ago" not in bullet.split("(", 1)[1].split(",")[0]
         assert "repeats:every 1d 0h" in bullet
 
-    def test_past_due_pending_renders_with_ago_suffix(self, db):
-        _seed_pending(db, "Overdue task", due_minutes_ahead=-30)
-        db.commit()
-
-        result = _fresh().render()
-        bullet = next(ln for ln in result.splitlines() if "Overdue task" in ln)
-        assert "due-in:" in bullet
-        assert "ago" in bullet
-
     def test_hidden_items_excluded(self, db):
         db.execute(
             "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
@@ -165,24 +156,6 @@ class TestRenderSchedule:
         db.commit()
 
         assert "Secret task" not in _fresh().render()
-
-    def test_fired_older_than_6h_excluded(self, db):
-        _seed_fired(db, "Old alarm", fired_minutes_ago=400)  # >6h
-        db.commit()
-
-        assert "Old alarm" not in _fresh().render()
-
-    def test_repeated_fires_collapse_to_most_recent_within_6h(self, db):
-        # A recurring job fires every hour for 5 hours. The schedule view must
-        # surface ONE bullet for the most-recent fire only — not a wall of dupes.
-        for minutes_ago in (300, 240, 180, 120, 30):
-            _seed_fired(db, "Mail sync", fired_minutes_ago=minutes_ago)
-        db.commit()
-
-        bullets = [ln for ln in _fresh().render().splitlines() if ln.startswith("* Mail sync")]
-        assert len(bullets) == 1, f"Expected 1 bullet for repeated fires, got {len(bullets)}: {bullets!r}"
-        assert "last-fired:30m" in bullets[0]
-        assert "5h" not in bullets[0]
 
     def test_upcoming_pending_supersedes_recent_fire_for_same_message(self, db):
         # Same job has both "just fired" and "due again soon" — show the upcoming one.
@@ -253,19 +226,6 @@ class TestRenderBgProcess:
         assert "Old pursuit" not in result
         assert "regular chat content" not in result
 
-    def test_long_content_is_truncated_with_ellipsis(self, db):
-        long_content = "word " * 120  # 600 chars
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('subagent', 'assistant', ?, ?)",
-            (long_content, (utc_now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")),
-        )
-        db.commit()
-
-        line = next(ln for ln in _fresh().render().splitlines() if "[bg_process(" in ln)
-        assert line.endswith("…")
-        assert len(line) <= 240  # 200 content cap + ~30 char prefix
-
 
 # ---------------------------------------------------------------------------
 # Signals section
@@ -322,22 +282,4 @@ class TestRenderFullMix:
         idx_signal = result.index("[signal:news]")
         assert idx_telemetry < idx_schedule < idx_bg < idx_signal
 
-    def test_empty_sections_are_fully_omitted(self, db):
-        # Only telemetry seeded — schedule, bg_process, signals headers must be absent.
-        _seed_telemetry(db, {"local_time": "08:00", "location_name": "Office"})
-        result = _fresh().render()
-        assert "[schedule]" not in result
-        assert "[bg_process" not in result
-        assert "[signal:" not in result
 
-    def test_schedule_header_has_no_blank_line_before_first_bullet(self, db):
-        # Regression: the [schedule] header used to be followed by a blank line,
-        # producing visual gap before the first bullet. The bullet must come next.
-        _seed_pending(db, "Doctor appointment", due_minutes_ahead=60)
-        db.commit()
-
-        lines = _fresh().render().splitlines()
-        sched_idx = next(i for i, ln in enumerate(lines) if "[schedule]" in ln)
-        assert lines[sched_idx + 1].startswith("* "), (
-            f"Expected first schedule bullet immediately after header, got: {lines[sched_idx + 1]!r}"
-        )

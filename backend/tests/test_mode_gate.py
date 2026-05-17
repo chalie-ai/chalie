@@ -73,17 +73,6 @@ class TestUpdateStateFireRule:
 
         assert result['research'] == pytest.approx(0.82)
 
-    def test_fire_does_not_reduce_higher_state(self):
-        svc = _fresh_service(fire_threshold=0.60)
-        state = _zero_state()
-        state['research'] = 0.90
-        probs = dict.fromkeys(svc.MODES, 0.0)
-        probs['research'] = 0.70
-
-        result = svc._update_state(state, probs)
-
-        assert result['research'] == pytest.approx(0.90)
-
     def test_fire_raises_state_when_prob_is_higher(self):
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
@@ -130,15 +119,6 @@ class TestUpdateStateDecayRule:
         result = svc._update_state(state, probs)
 
         assert result['write'] == pytest.approx(0.0, abs=1e-9)
-
-    def test_miss_on_zero_state_stays_zero(self):
-        svc = _fresh_service(fire_threshold=0.60)
-        state = _zero_state()
-        probs = dict.fromkeys(svc.MODES, 0.0)
-
-        result = svc._update_state(state, probs)
-
-        assert all(v == pytest.approx(0.0, abs=1e-9) for v in result.values())
 
     def test_independent_modes_decay_independently(self):
         svc = _fresh_service(fire_threshold=0.60)

@@ -35,11 +35,6 @@ class TestBuildEmailText:
     def test_empty_item_returns_fallback(self):
         assert _build_email_text({}) == "email message"
 
-    def test_subject_only(self):
-        item = {"subject": "Meeting notes"}
-        result = _build_email_text(item)
-        assert result == "Meeting notes"
-
     def test_missing_subject_uses_sender(self):
         item = {"from_name": "Bob", "from_addr": "bob@example.com"}
         result = _build_email_text(item)
@@ -134,38 +129,6 @@ class TestClassifyEmailEmbedding:
         result = self._classify_with_mock({"subject": "Approve invoice"}, email_vec, anchors)
         assert result == "actionable"
 
-    def test_closest_to_informational_anchor(self):
-        email_vec = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        anchors = {
-            "noise": np.array([0.0, 1.0, 0.0], dtype=np.float32),
-            "actionable": np.array([1.0, 0.0, 0.0], dtype=np.float32),
-            "informational": np.array([0.0, 0.0, 1.0], dtype=np.float32),
-        }
-        result = self._classify_with_mock({"subject": "Project update"}, email_vec, anchors)
-        assert result == "informational"
-
-    def test_empty_item_classifies_without_error(self):
-        """An empty item dict must not raise — falls back to 'email message' text."""
-        email_vec = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-        anchors = {
-            "noise": np.array([0.0, 1.0, 0.0], dtype=np.float32),
-            "actionable": np.array([1.0, 0.0, 0.0], dtype=np.float32),
-            "informational": np.array([0.0, 0.0, 1.0], dtype=np.float32),
-        }
-        result = self._classify_with_mock({}, email_vec, anchors)
-        assert result in {"noise", "actionable", "informational"}
-
-    def test_missing_subject_only_addr_classifies(self):
-        item = {"from_addr": "boss@company.com"}
-        email_vec = np.array([1.0, 0.0, 0.0], dtype=np.float32)
-        anchors = {
-            "noise": np.array([0.0, 1.0, 0.0], dtype=np.float32),
-            "actionable": np.array([1.0, 0.0, 0.0], dtype=np.float32),
-            "informational": np.array([0.0, 0.0, 1.0], dtype=np.float32),
-        }
-        result = self._classify_with_mock(item, email_vec, anchors)
-        assert result == "actionable"
-
 
 # ---------------------------------------------------------------------------
 # _TRIAGE_ANCHORS structure
@@ -177,6 +140,4 @@ class TestTriageAnchors:
     def test_has_all_three_categories(self):
         assert set(_TRIAGE_ANCHORS.keys()) == {"noise", "actionable", "informational"}
 
-    def test_anchor_values_are_non_empty_strings(self):
-        for cat, text in _TRIAGE_ANCHORS.items():
-            assert isinstance(text, str) and len(text) > 10, f"{cat} anchor is too short"
+

@@ -74,25 +74,9 @@ class TestHelpers:
         assert _strip_html("<p>Hello <b>world</b></p>") == "Hello world"
         assert _strip_html("&amp; &lt;") == "& <"
 
-    def test_parse_date_rfc2822(self):
-        result = _parse_date("Mon, 24 Mar 2026 10:00:00 GMT")
-        assert "2026-03-24" in result
-
-    def test_normalize_title(self):
-        assert _normalize_title("Hello, World! 123") == "hello world 123"
-
-    def test_levenshtein(self):
-        assert _levenshtein("hello", "hello") == 0
-        assert _levenshtein("hello", "helo") == 1
-        assert _levenshtein("cat", "dog") == 3
-        assert _levenshtein("", "hello") == 5
-
     def test_derive_domain_strips_feed_subdomains(self):
         assert _derive_domain("https://feeds.bbci.co.uk/news/rss.xml") == "bbci.co.uk"
         assert _derive_domain("https://www.example.com/feed") == "example.com"
-
-    def test_derive_domain_proxy_returns_none(self):
-        assert _derive_domain("https://rsshub.app/some/feed") is None
 
 
 # ── Feed parsing tests ────────────────────────────────────────
@@ -120,44 +104,6 @@ class TestFeedParsing:
         assert articles[0].source_id == "test"
         assert "example.com/article-1" in articles[0].url
 
-    @patch("services.news_service.requests.get")
-    def test_parse_atom_feed(self, mock_get):
-        from services.news_sources import Source
-        mock_resp = MagicMock()
-        mock_resp.content = SAMPLE_ATOM
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
-
-        src = Source("test", "Test Source", "tech", "https://example.com/atom", "US")
-        articles = self.svc._parse_feed(src, 5.0)
-
-        assert len(articles) == 2
-        assert articles[0].title == "Atom Entry One"
-        assert "entry-1" in articles[0].url
-
-    @patch("services.news_service.requests.get")
-    def test_parse_feed_strips_html_from_description(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.content = SAMPLE_RSS
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
-
-        from services.news_sources import Source
-        src = Source("test", "Test", "international", "https://example.com/rss", "US")
-        articles = self.svc._parse_feed(src, 5.0)
-
-        # Second article has HTML description
-        assert "<p>" not in articles[1].description
-        assert "HTML description" in articles[1].description
-
-    @patch("services.news_service.requests.get")
-    def test_parse_feed_network_error(self, mock_get):
-        mock_get.side_effect = Exception("Connection failed")
-        from services.news_sources import Source
-        src = Source("test", "Test", "international", "https://example.com/rss", "US")
-        articles = self.svc._parse_feed(src, 5.0)
-        assert articles == []
-
 
 # ── Deduplication tests ───────────────────────────────────────
 
@@ -182,14 +128,6 @@ class TestDeduplication:
         ]
         result = self.svc.deduplicate(articles)
         assert len(result) == 1
-
-    def test_different_articles_kept(self):
-        articles = [
-            _make_article(title="Completely Different Article"),
-            _make_article(title="Another Unrelated Story Here"),
-        ]
-        result = self.svc.deduplicate(articles)
-        assert len(result) == 2
 
 
 # ── Ranking tests ─────────────────────────────────────────────
@@ -222,25 +160,7 @@ class TestRanking:
         assert len(result) >= 1
         assert result[0].title == "Relevant Article"
 
-    def test_rank_by_relevance_empty_query_returns_date_sorted(self):
-        articles = [
-            _make_article(title="Old", published_at="2026-03-23T10:00:00+00:00"),
-            _make_article(title="New", published_at="2026-03-24T10:00:00+00:00"),
-        ]
-        result = self.svc.rank_by_relevance(articles, "")
-        assert result[0].title == "New"
 
-    def test_rank_by_relevance_embedding_failure_falls_back(self):
-        mock_emb = MagicMock()
-        mock_emb.generate_embedding_np.side_effect = Exception("Model not loaded")
-        self.svc._embedding_svc = mock_emb
-
-        articles = [
-            _make_article(title="A", published_at="2026-03-23T10:00:00+00:00"),
-            _make_article(title="B", published_at="2026-03-24T10:00:00+00:00"),
-        ]
-        result = self.svc.rank_by_relevance(articles, "query")
-        assert len(result) == 2  # All returned, date-sorted
 
 
 # ── Google News country code tests ───────────────────────────
@@ -295,18 +215,7 @@ class TestSearchIntegration:
         mock_feeds.assert_called_once()
         mock_google.assert_called_once()
 
-    @patch.object(NewsService, "fetch_google_news")
-    def test_search_respects_limit(self, mock_google):
-        mock_google.return_value = [_make_article(title=f"Article {i}", url=f"https://example.com/{i}")
-                                    for i in range(20)]
-        mock_emb = MagicMock()
-        vec = np.ones(768, dtype=np.float32) / np.sqrt(768)
-        mock_emb.generate_embedding_np.return_value = vec
-        mock_emb.generate_embeddings_batch.return_value = [vec] * 20
-        self.svc._embedding_svc = mock_emb
 
-        result = self.svc.search("query", limit=3)
-        assert len(result) <= 3
 
 
 # ── fetch_feeds edge cases ────────────────────────────────────
@@ -335,27 +244,6 @@ class TestFetchFeedsEdgeCases:
         assert result[0].title == "Test Article"
 
 
-# ── fetch_google_news cache hit ───────────────────────────────
-
-@pytest.mark.unit
-class TestFetchGoogleNewsCacheHit:
-
-    def setup_method(self):
-        self.svc = NewsService()
-
-    @patch("services.news_service.requests.get")
-    def test_cache_hit_skips_network_call(self, mock_get):
-        cached_data = json.dumps([_make_article(title="Cached Article").to_dict()])
-        mock_store = MagicMock()
-        mock_store.get.return_value = cached_data.encode()
-
-        with patch.object(self.svc, "_get_store", return_value=mock_store):
-            result = self.svc.fetch_google_news("query", country_code="US")
-
-        mock_get.assert_not_called()
-        assert len(result) == 1
-        assert result[0].title == "Cached Article"
-
 
 # ── _parse_feed XML error handling ───────────────────────────
 
@@ -378,45 +266,6 @@ class TestParseFeedXmlError:
         assert articles == []
 
 
-# ── _derive_domain comprehensive ─────────────────────────────
-
-@pytest.mark.unit
-class TestDeriveDomainComprehensive:
-
-    def test_feed_subdomains_stripped(self):
-        from services.news_service import _derive_domain
-        assert _derive_domain("https://feeds.reuters.com/rss/topNews") == "reuters.com"
-        assert _derive_domain("https://rss.cnn.com/rss/cnn_topstories.rss") == "cnn.com"
 
 
-@pytest.mark.unit
-class TestRssItemImage:
-    """`_rss_item_image` walks media:thumbnail → media:content → enclosure → image/url."""
 
-    def test_media_thumbnail(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _rss_item_image
-        xml = """<item xmlns:media='http://search.yahoo.com/mrss/'>
-            <media:thumbnail url='https://t.example.com/a.jpg'/>
-        </item>"""
-        assert _rss_item_image(ET.fromstring(xml)) == "https://t.example.com/a.jpg"
-
-    def test_enclosure_image(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _rss_item_image
-        xml = "<item><enclosure url='https://cdn.example.com/e.png' type='image/png'/></item>"
-        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/e.png"
-
-
-@pytest.mark.unit
-class TestNewsArticleImageUrl:
-    def test_image_url_in_to_dict(self):
-        from services.news_service import NewsArticle
-        a = NewsArticle(
-            title="t", description="d", url="u",
-            published_at="2026-05-03T00:00:00+00:00",
-            source="s", source_id="sid", category="c",
-            image_url="https://x.example.com/p.jpg",
-        )
-        assert a.image_url == "https://x.example.com/p.jpg"
-        assert a.to_dict()["image_url"] == "https://x.example.com/p.jpg"

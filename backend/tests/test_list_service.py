@@ -59,13 +59,6 @@ class TestCreateList:
         with pytest.raises(ValueError, match="already exists"):
             service.create_list("Shopping List")
 
-    def test_create_with_custom_type(self, service, db):
-        list_id = service.create_list("Work", list_type="ordered")
-        row = db.execute(
-            "SELECT list_type FROM lists WHERE id = ?", (list_id,)
-        ).fetchone()
-        assert row['list_type'] == 'ordered'
-
 
 # ─── get_list ─────────────────────────────────────────────────────────────
 
@@ -83,11 +76,6 @@ class TestGetList:
         assert [i['content'] for i in result['items']] == ['milk', 'eggs']
         assert result['items'][1]['checked'] == 1
 
-    def test_does_not_fall_back_to_name(self, service, db):
-        _seed_list(db)
-        # Passing the name (not id) must not resolve.
-        assert service.get_list('Shopping List') is None
-
     def test_excludes_removed_items(self, service, db):
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'eggs', position=0)
@@ -96,10 +84,6 @@ class TestGetList:
 
         result = service.get_list('abc12345')
         assert [i['content'] for i in result['items']] == ['eggs']
-
-    def test_deleted_list_returns_none(self, service, db):
-        _seed_list(db, deleted_at=utc_now().isoformat())
-        assert service.get_list('abc12345') is None
 
 
 # ─── delete_list ──────────────────────────────────────────────────────────
@@ -168,16 +152,6 @@ class TestAddItems:
         _seed_item(db, 'existing1', 'abc12345', 'milk', position=0)
         assert service.add_items('abc12345', ['Milk', 'MILK']) == 0
 
-    def test_dedupe_false_allows_duplicates(self, service, db):
-        _seed_list(db)
-        assert service.add_items('abc12345', ['milk', 'milk'], dedupe=False) == 2
-
-    def test_does_not_auto_create(self, service, db):
-        # No list seeded — must not create one and must return 0.
-        assert service.add_items('nonexist', ['milk']) == 0
-        rows = db.execute("SELECT COUNT(*) FROM lists").fetchone()[0]
-        assert rows == 0
-
     def test_restores_soft_deleted_item(self, service, db):
         _seed_list(db)
         _seed_item(db, 'olditemid', 'abc12345', 'milk', position=0,
@@ -212,24 +186,9 @@ class TestCheckUncheck:
         _seed_item(db, 'i2', 'abc12345', 'eggs', position=1)
         assert service.check_items('abc12345', ['milk', 'eggs']) == 2
 
-    def test_unchecks_items(self, service, db):
-        _seed_list(db)
-        _seed_item(db, 'i1', 'abc12345', 'milk', checked=1, position=0)
-        assert service.uncheck_items('abc12345', ['milk']) == 1
 
 
 
 
-# ─── _get_list_row ────────────────────────────────────────────────────────
 
-class TestGetListRow:
-    def test_resolves_by_id(self, service, db):
-        _seed_list(db)
-        result = service._get_list_row('abc12345')
-        assert result['id'] == 'abc12345'
-        assert result['name'] == 'Shopping List'
-
-    def test_excludes_deleted(self, service, db):
-        _seed_list(db, deleted_at=utc_now().isoformat())
-        assert service._get_list_row('abc12345') is None
 

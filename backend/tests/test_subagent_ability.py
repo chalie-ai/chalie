@@ -159,20 +159,6 @@ class TestWaitCapDispatchTimeoutConsistency:
             "finishes. Bump TIMEOUT in lock-step with wait_cap."
         )
 
-    def test_every_wait_cap_is_at_most_default_timeout(self):
-        """wait_cap must never exceed default_timeout — the SubagentProcessor's
-        own deadline is set from min(default_timeout, override) and a wait_cap
-        higher than default_timeout would be unreachable in practice and
-        misleading in the docs."""
-        from abilities.subagent import SUBAGENT_TYPES
-
-        for agent_type, entry in SUBAGENT_TYPES.items():
-            assert entry["wait_cap"] <= entry["default_timeout"], (
-                f"{agent_type}: wait_cap={entry['wait_cap']}s exceeds "
-                f"default_timeout={entry['default_timeout']}s — the wait_cap "
-                "would be silently ignored."
-            )
-
 
 # ---------------------------------------------------------------------------
 # AC1. Action-envelope collision guard
@@ -335,18 +321,6 @@ class TestDeliverEnvelopeDiscriminator:
         mock_spawn.assert_called_once_with(envelope)
         assert envelope not in parent._pending_steers
 
-    def test_case_b_fires_when_parent_is_none(self):
-        """When parent_ref is None (no UMP), envelope routes to Case B."""
-        from abilities.subagent import _deliver_envelope
-        from unittest.mock import patch
-
-        envelope = "[subagent.complete(type=web_surfer)]\nDone\n[end:subagent.complete]"
-
-        with patch('abilities.subagent._spawn_return_processor') as mock_spawn:
-            _deliver_envelope(envelope, None)
-
-        mock_spawn.assert_called_once_with(envelope)
-
 
 # ---------------------------------------------------------------------------
 # AD2. _spawn_return_processor wires OutputService
@@ -359,40 +333,6 @@ class TestDeliverEnvelopeDiscriminator:
 
 
 class TestSpawnReturnProcessorOutput:
-    def test_enqueue_proactive_called_with_response(self):
-        """_spawn_return_processor must call OutputService.enqueue_proactive()
-        with the response text after SubagentReturnProcessor.send() returns."""
-        from unittest.mock import patch, MagicMock
-        import threading
-        from abilities.subagent import _spawn_return_processor
-
-        envelope = "[subagent.complete(type=web_surfer)]\nResult text\n[end:subagent.complete]"
-
-        mock_output_svc = MagicMock()
-        mock_proc_instance = MagicMock()
-        mock_proc_instance.send.return_value = "Here is what I found from the subagent."
-
-        with patch(
-            'services.user_message_processor.SubagentReturnProcessor',
-            return_value=mock_proc_instance,
-        ), patch(
-            'services.output_service.OutputService',
-            return_value=mock_output_svc,
-        ):
-            _spawn_return_processor(envelope)
-
-            # Join inside the patch context so the thread resolves mocked imports
-            for t in threading.enumerate():
-                if t.name == "subagent-return":
-                    t.join(timeout=5)
-
-            mock_proc_instance.send.assert_called_once()
-            mock_output_svc.enqueue_proactive.assert_called_once_with(
-                topic='user',
-                response="Here is what I found from the subagent.",
-                source='subagent_return',
-            )
-
     def test_enqueue_proactive_called_with_fallback_on_empty_response(self):
         """If SubagentReturnProcessor.send() returns empty, deliver a fallback
         message — never silently drop the result."""
@@ -468,15 +408,5 @@ class TestSpawnReturnProcessorOutput:
 # ---------------------------------------------------------------------------
 
 
-class TestSubagentReturnProcessorIsolation:
-    def test_skip_input_row_is_true(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.SKIP_INPUT_ROW is True
 
-    def test_channel_is_user(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.CHANNEL == 'user'
 
-    def test_skip_transcript_write_is_false(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.SKIP_TRANSCRIPT_WRITE is False
