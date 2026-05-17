@@ -258,13 +258,16 @@ class MessageProcessor:
         ``### Checkpoint`` / ``### Current State`` headers — those are added
         by send().
 
-        Subclasses should override this method. The camelCase alias
-        ``getUserPrompt`` is also resolved for backward compatibility.
+        Override this method or its camelCase alias getUserPrompt().
         """
-        return self.getUserPrompt()
+        if type(self).getUserPrompt is not MessageProcessor.getUserPrompt:
+            return self.getUserPrompt()
+        raise NotImplementedError
 
-    def getUserPrompt(self) -> str:
+    def getUserPrompt(self) -> str:  # noqa: N802
         """CamelCase alias — override either this or get_user_prompt()."""
+        if type(self).get_user_prompt is not MessageProcessor.get_user_prompt:
+            return self.get_user_prompt()
         raise NotImplementedError
 
     def get_user_definition(self) -> str:
@@ -275,13 +278,16 @@ class MessageProcessor:
           DMNMessageProcessor    → "The user is 'proactive_thought' — ..."
           SubagentProcessor      → "The user is 'subagent' — ..."
 
-        Subclasses should override this method. The camelCase alias
-        ``getUserDefinition`` is also resolved for backward compatibility.
+        Override this method or its camelCase alias getUserDefinition().
         """
-        return self.getUserDefinition()
+        if type(self).getUserDefinition is not MessageProcessor.getUserDefinition:
+            return self.getUserDefinition()
+        raise NotImplementedError
 
-    def getUserDefinition(self) -> str:
+    def getUserDefinition(self) -> str:  # noqa: N802
         """CamelCase alias — override either this or get_user_definition()."""
+        if type(self).get_user_definition is not MessageProcessor.get_user_definition:
+            return self.get_user_definition()
         raise NotImplementedError
 
     # ── Overridable hook ─────────────────────────────────────────────────────
@@ -633,6 +639,113 @@ class MessageProcessor:
         self._act_trail.append(rendered)
         return result_text
 
+    # ── send() helpers (extracted for S3776 cognitive complexity) ────────────
+
+    def _record_iteration_results(self, llm_response, request_id):
+        """Record narration, dispatch tools, and drain steering for one iteration.
+
+        Called after the LLM response when tool_calls are present. Records the
+        narration DTO, dispatches each tool call, and appends any user steers
+        that arrived during the iteration.
+        """
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
+
+        if llm_response.text:
+            rendered = ToolRenderAndRecordService(
+                tool_name='narration',
+                params={},
+                result=llm_response.text,
+                ephemeral=True,
+                transcript_id=self._uid,
+            ).renderAndRecord()
+            self._act_trail.append(rendered)
+            try:
+                self._emit_narration(llm_response.text, self._current_iteration)
+            except Exception as exc:
+                logger.error(
+                    "[MessageProcessor.send] _emit_narration raised: %s",
+                    exc, exc_info=True,
+                )
+
+        for tc in llm_response.tool_calls:
+            self.handle_tool(tc)  # never raises; appends DTO + trail
+
+        for steer in self._drain_steering(request_id):
+            rendered = ToolRenderAndRecordService(
+                tool_name='user_steer',
+                params={},
+                result=steer,
+                ephemeral=True,
+                transcript_id=self._uid,
+            ).renderAndRecord()
+            self._act_trail.append(rendered)
+
+    def _apply_overflow_guard(self, system_prompt, tools, user_body):
+        """Check payload size vs provider context and run compaction if needed.
+
+        Returns:
+            'continue' — compaction succeeded, restart iteration from 0.
+            None       — proceed with the LLM call (no overflow or already recovered).
+        """
+        if not self._check_threshold(system_prompt, tools, user_body):
+            return None
+
+        if self._overflow_recovered_this_turn:
+            logger.warning(
+                "[COMPACTION] %s: payload still exceeds compact_at "
+                "after one overflow recovery — sending anyway "
+                "(system_prompt + tools likely dominate)",
+                self.CHANNEL,
+            )
+            return None
+
+        logger.warning(
+            "[COMPACTION] %s: full payload exceeds compact_at — running overflow handler",
+            self.CHANNEL,
+        )
+        if self._handle_overflow():
+            self._overflow_recovered_this_turn = True
+            return 'continue'
+
+        logger.warning(
+            "[COMPACTION] %s: overflow handler returned False — "
+            "sending anyway (one-shot recovery exhausted)",
+            self.CHANNEL,
+        )
+        self._overflow_recovered_this_turn = True
+        return None
+
+    def _handle_413(self, exc):
+        """Handle PayloadTooLargeError from the provider.
+
+        Returns:
+            'continue' — compaction succeeded, restart iteration.
+            'break'    — unrecoverable, exit the ACT loop.
+        """
+        if self._overflow_recovered_this_turn:
+            logger.error(
+                "[COMPACTION] %s: PayloadTooLargeError after overflow "
+                "recovery — breaking to cap exit (final_text=''): %s",
+                self.CHANNEL, exc,
+            )
+            return 'break'
+
+        logger.warning(
+            "[COMPACTION] %s: PayloadTooLarge from provider — "
+            "running overflow handler (%s)",
+            self.CHANNEL, exc,
+        )
+        self._overflow_recovered_this_turn = True
+        if self._handle_overflow():
+            return 'continue'
+
+        logger.error(
+            "[COMPACTION] %s: overflow handler failed after "
+            "PayloadTooLarge — breaking to cap exit (final_text='')",
+            self.CHANNEL,
+        )
+        return 'break'
+
     def send(self, request_id: str | None = None) -> str:
         """Run the full turn: memory seed → ACT loop → store → post_turn.
 
@@ -763,50 +876,11 @@ class MessageProcessor:
                     # breaks to cap exit (final_text=''). The per-instance
                     # deadline (self._deadline) keeps ticking — compaction LLM
                     # calls count against the subagent's wall-clock budget.
-                    if self._check_threshold(system_prompt, tools, user_body):
-                        if self._overflow_recovered_this_turn:
-                            # One compaction has already run this turn; the
-                            # threshold trip on restart means the static
-                            # system_prompt + tools schema alone are over
-                            # compact_at. Re-running compaction would not
-                            # help — the user_body is already minimal. Send
-                            # anyway; if the wire payload genuinely overflows
-                            # the provider, the 413 path will break to cap
-                            # exit on the second strike.
-                            logger.warning(
-                                "[COMPACTION] %s: payload still exceeds compact_at "
-                                "after one overflow recovery — sending anyway "
-                                "(system_prompt + tools likely dominate)",
-                                self.CHANNEL,
-                            )
-                        else:
-                            logger.warning(
-                                "[COMPACTION] %s: full payload exceeds compact_at — running overflow handler",
-                                self.CHANNEL,
-                            )
-                            if self._handle_overflow():
-                                self._overflow_recovered_this_turn = True
-                                continue
-                            # Overflow handler returned False. Two cases:
-                            # 1. Subagent override on empty trail — nothing
-                            #    to compact yet (this is iter 0). Sending the
-                            #    original payload is the right move; the
-                            #    subagent then loops, populates trail, and
-                            #    next overflow has something to compress.
-                            # 2. User-channel compaction LLM error — sending
-                            #    the original payload may 413, but the 413
-                            #    path's second-strike rule will then break
-                            #    to cap exit.
-                            # Either way, mark recovery as attempted (one
-                            # shot) and fall through to the LLM call rather
-                            # than break here. Cap-exit is still the final
-                            # backstop via the 413 path.
-                            logger.warning(
-                                "[COMPACTION] %s: overflow handler returned False — "
-                                "sending anyway (one-shot recovery exhausted)",
-                                self.CHANNEL,
-                            )
-                            self._overflow_recovered_this_turn = True
+                    overflow_action = self._apply_overflow_guard(
+                        system_prompt, tools, user_body,
+                    )
+                    if overflow_action == 'continue':
+                        continue
 
                     # Single-element messages[] so the provider sees one user turn
                     # containing the full literal-text body (Previous Messages,
@@ -828,69 +902,18 @@ class MessageProcessor:
                             thinking_mode=self._get_thinking_mode_for_send(),
                         )
                     except PayloadTooLargeError as exc:
-                        if self._overflow_recovered_this_turn:
-                            logger.error(
-                                "[COMPACTION] %s: PayloadTooLargeError after overflow "
-                                "recovery — breaking to cap exit (final_text=''): %s",
-                                self.CHANNEL, exc,
-                            )
-                            break
-                        logger.warning(
-                            "[COMPACTION] %s: PayloadTooLarge from provider — "
-                            "running overflow handler (%s)",
-                            self.CHANNEL, exc,
-                        )
-                        self._overflow_recovered_this_turn = True
-                        if self._handle_overflow():
+                        action_413 = self._handle_413(exc)
+                        if action_413 == 'continue':
                             continue
-                        logger.error(
-                            "[COMPACTION] %s: overflow handler failed after "
-                            "PayloadTooLarge — breaking to cap exit (final_text='')",
-                            self.CHANNEL,
-                        )
-                        break
+                        break  # 'break' — unrecoverable
                     self._metrics.accumulate(llm_response)
 
                     if not llm_response.tool_calls:
                         loop_exited_cleanly = True
                         break
 
-                    # Narration text BEFORE tool dispatch — the LLM emitted the
-                    # narration in its response ahead of the tool_use block, so
-                    # the stored timeline must reflect that semantic order. The
-                    # transcript-timeline example in the north star § Storage
-                    # Model shows the narration DTO preceding the tool_call DTOs
-                    # for the same iteration.
                     with self._metrics.stage('post_tool_records'):
-                        if llm_response.text:
-                            rendered = ToolRenderAndRecordService(
-                                tool_name='narration',
-                                params={},
-                                result=llm_response.text,
-                                ephemeral=True,
-                                transcript_id=self._uid,
-                            ).renderAndRecord()
-                            self._act_trail.append(rendered)
-                            try:
-                                self._emit_narration(llm_response.text, self._current_iteration)
-                            except Exception as exc:
-                                logger.error(
-                                    "[MessageProcessor.send] _emit_narration raised: %s",
-                                    exc, exc_info=True,
-                                )
-
-                        for tc in llm_response.tool_calls:
-                            self.handle_tool(tc)  # never raises; appends DTO + trail
-
-                        for steer in self._drain_steering(request_id):
-                            rendered = ToolRenderAndRecordService(
-                                tool_name='user_steer',
-                                params={},
-                                result=steer,
-                                ephemeral=True,
-                                transcript_id=self._uid,
-                            ).renderAndRecord()
-                            self._act_trail.append(rendered)
+                        self._record_iteration_results(llm_response, request_id)
 
                     self._current_iteration += 1
 
