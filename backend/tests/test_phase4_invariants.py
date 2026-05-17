@@ -128,8 +128,8 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
 })
 
 
-def test_abilities_directory_has_exactly_21_non_underscore_modules():
-    """abilities/ contains exactly the 22 dispatchable top-level modules.
+def test_abilities_directory_has_expected_non_underscore_modules():
+    """abilities/ contains exactly the expected dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
@@ -157,7 +157,7 @@ def test_abilities_directory_has_exactly_21_non_underscore_modules():
         f"Expected ability modules are missing from abilities/: {sorted(removed)}. "
         "Remove them from _EXPECTED_ABILITY_MODULE_STEMS if intentional."
     )
-    assert len(walked) == 22
+    assert len(walked) == len(_EXPECTED_ABILITY_MODULE_STEMS)
 
 
 # ---------------------------------------------------------------------------

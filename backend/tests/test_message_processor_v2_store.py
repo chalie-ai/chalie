@@ -12,7 +12,7 @@ Uses real in-memory SQLite DB — no mocks for data path.
 """
 
 import logging as _logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -896,22 +896,20 @@ class TestActLoopOverflowEndToEnd:
 
 
 class TestActLoopCapExitOnOverflowFailure:
-    """When _handle_overflow fails (returns False) the ACT loop breaks to
-    cap exit and send() returns ''.  Without this test the regression is:
-    the loop either hangs, raises, or returns mid-loop narration text that
-    was not authored as a final answer.
+    """When _handle_overflow fails (returns False) the ACT loop falls through
+    to send_messages — the 413 handler is the true safety net.  The recovery
+    flag is set so a second threshold trip on the same turn skips the handler
+    and lets the send proceed.
     """
 
     _CHANNEL = 'test_cap_exit_channel'
 
-    def test_overflow_handler_failure_returns_empty_string(self, db):
-        """_run_full_compaction returning None must cause send() to return ''."""
+    def test_overflow_failure_falls_through_to_send(self, db):
+        """_handle_overflow returning False must set recovery flag and fall
+        through to send_messages (not break to cap exit)."""
         from services.message_processor import MessageProcessor
         from services.system_message_prompt import SystemMessagePrompt
 
-        # Seed no prior transcript rows — _run_full_compaction will find no
-        # entries and no prior checkpoint and will return None immediately
-        # without calling the LLM.  This is the real production failure path.
         input_uid = _compact_seed_transcript_row(
             db, self._CHANNEL, 'user', 'overflow me',
         )
@@ -940,16 +938,15 @@ class TestActLoopCapExitOnOverflowFailure:
         proc = _CapExitProcessor(raw_input='overflow me')
         proc._uid = input_uid
 
-        # estimate_payload_tokens always exceeds compact_at so the threshold
-        # fires on every iteration.  _run_full_compaction finds zero entries
-        # (only the current-turn row exists; exclude_id filters it out) so it
-        # returns None → _handle_overflow returns False → loop breaks.
         with patch('services.providers.Providers.instance') as mock_inst:
             mock_inst.return_value.get_compact_at.return_value = 10
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.estimate_payload_tokens.return_value = 9999
-            # get_compaction returns None (no prior), get_entries_since returns
-            # only the current-turn row which exclude_id will filter away.
+            mock_resp = MagicMock()
+            mock_resp.text = 'fallthrough answer'
+            mock_resp.tool_calls = []
+            mock_resp.usage = MagicMock(input_tokens=10, output_tokens=5)
+            mock_inst.return_value.send_messages.return_value = mock_resp
             with patch('services.compaction_persistence.get_compaction', return_value=None), \
                  patch('services.compaction_persistence.get_entries_since', return_value=[
                      {'id': input_uid, 'role': 'user', 'content': 'overflow me',
@@ -957,13 +954,10 @@ class TestActLoopCapExitOnOverflowFailure:
                  ]):
                 result = proc.send()
 
-        assert result == '', (
-            f"send() must return '' on cap exit but got {result!r}. "
-            "The loop may have fallen through to send_messages without compacting."
+        assert result == 'fallthrough answer', (
+            f"send() must fall through to send_messages but got {result!r}"
         )
-        # Confirm no success compaction row was written (compaction genuinely
-        # failed, not just skipped).
-        assert _compact_get_audit_row(db, self._CHANNEL) is None
+        assert proc._overflow_recovered_this_turn is True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
