@@ -40,7 +40,10 @@ CREATE INDEX IF NOT EXISTS idx_episodes_retrieval_weight ON episodes(retrieval_w
 CREATE INDEX IF NOT EXISTS idx_episodes_consolidated_into ON episodes(consolidated_into) WHERE consolidated_into IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_apex ON episodes(retrieval_weight DESC, created_at DESC) WHERE deleted_at IS NULL AND consolidated_into IS NULL;
 
--- FTS5 for full-text search on episodes (replaces GIN tsvector indexes)
+-- FTS5 for full-text search on episodes (replaces GIN tsvector indexes).
+-- content='episodes' and content_rowid='rowid' are intentionally repeated across
+-- all fts5 tables — each table binds to its own source table by name. Not a
+-- copy-paste error; SQLite FTS5 requires these per-table parameters.
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
     gist, content='episodes', content_rowid='rowid'
 );
@@ -218,7 +221,7 @@ CREATE TABLE IF NOT EXISTS scheduled_items (
     recurrence TEXT,
     window_start TEXT,
     window_end TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'pending',   -- 'pending' is the initial lifecycle state; intentionally repeated in documents.status
     channel TEXT,
     created_by_session TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -337,7 +340,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_path TEXT NOT NULL,
     file_hash TEXT,
     page_count INTEGER,
-    status TEXT DEFAULT 'pending',
+    status TEXT DEFAULT 'pending',            -- 'pending' initial state mirrors scheduled_items.status; same literal, different table
     error_message TEXT,
     chunk_count INTEGER DEFAULT 0,
     source_type TEXT DEFAULT 'upload',
@@ -366,7 +369,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_purge ON documents(purge_after) WHERE p
 -- idx_documents_watched_folder created by migration 001_watched_folders.sql
 CREATE INDEX IF NOT EXISTS idx_documents_folder_pending ON documents(watched_folder_id, status) WHERE deleted_at IS NULL AND watched_folder_id IS NOT NULL;
 
--- FTS5 for document search
+-- FTS5 for document search. content='documents' and content_rowid='rowid'
+-- follow the same per-table pattern as episodes_fts and data_graph_fts.
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
     original_name, summary, clean_text, content='documents', content_rowid='rowid'
 );
@@ -586,6 +590,9 @@ CREATE INDEX IF NOT EXISTS idx_data_graph_retrieval    ON data_graph(retrieval_w
 CREATE INDEX IF NOT EXISTS idx_data_graph_active       ON data_graph(kind, active) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_data_graph_confirmed    ON data_graph(last_confirmed_at);
 
+-- FTS5 for data_graph search. tokenize='porter unicode61' enables stemming for
+-- better recall on natural-language queries. content_rowid='rowid' is
+-- intentionally the same literal as in episodes_fts and documents_fts.
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_fts USING fts5(
     key, value, kind, search_queries,
     content='data_graph', content_rowid='rowid',

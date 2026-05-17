@@ -351,6 +351,91 @@ def list_models():
     return jsonify({"models": models, "error": None}), 200
 
 
+def _map_api_error(error_str: str, platform: str, model: str) -> str:
+    """Map a raw exception message to a user-facing error string."""
+    el = error_str.lower()
+    if any(k in el for k in ('authentication', 'auth_token', 'api_key', 'invalid_api', '401', 'unauthorized', 'invalid x-api-key')):
+        return "Invalid API key"
+    if any(k in el for k in ('model_not_found', 'not found', 'does not exist', 'no such model', '404')):
+        return f"Model '{model}' not found — check the model name"
+    if any(k in el for k in ('quota', 'rate_limit', 'rate limit', '429', 'too many')):
+        return "API quota exceeded or rate limited — try again later"
+    if any(k in el for k in ('timeout', 'timed out')):
+        return f"Connection to {platform} timed out after 10s"
+    if any(k in el for k in ('connectionerror', 'connection refused', 'connect')):
+        return f"Cannot connect to {platform} — is the service running?"
+    if any(k in el for k in ('network', 'ssl')):
+        return "Network error — check your internet connection"
+    return error_str[:300]
+
+
+def _test_ollama_provider(config: dict, model: str, start: float):
+    """Test an Ollama provider and return a JSON response tuple."""
+    import time
+    available, err = _fetch_ollama_models(config.get('host', ''))
+    latency_ms = int((time.time() - start) * 1000)
+
+    if err is not None:
+        return jsonify({"success": False, "error": err}), 200
+
+    available_names = [m['id'] for m in (available or [])]
+    model_base = model.split(':')[0]
+    model_found = any(
+        m == model or m.startswith(model + ':') or m.split(':')[0] == model_base
+        for m in available_names
+    )
+
+    if not model_found and not available_names:
+        return jsonify({
+            "success": True, "model": model, "latency_ms": latency_ms,
+            "message": "Connected to Ollama (no models installed yet)"
+        }), 200
+
+    if not model_found:
+        return jsonify({
+            "success": False,
+            "error": f"Model '{model}' not found on this Ollama instance.",
+            "hint": f"Run: ollama pull {model}  ·  Available: {', '.join(available_names[:5])}"
+        }), 200
+
+    return jsonify({
+        "success": True, "model": model, "latency_ms": latency_ms,
+        "message": f"Connected · {len(available_names)} model(s) available"
+    }), 200
+
+
+def _test_api_provider(config: dict, platform: str, model: str, start: float):
+    """Test an API-based provider (Anthropic, OpenAI, etc.) and return a JSON response tuple."""
+    import time
+    api_key = config.get('api_key')
+    if not api_key:
+        return jsonify({
+            "success": False,
+            "error": "API key is required to test this provider",
+            "hint": "Enter your API key in the field above"
+        }), 200
+
+    try:
+        test_config = {
+            'platform': platform, 'model': model,
+            'api_key': api_key, 'max_tokens': 1, 'timeout': 10,
+        }
+        host = config.get('host')
+        if host:
+            test_config['host'] = host
+        from services.llm_service import create_llm_service
+        llm = create_llm_service(test_config)
+        llm.send_message("You are a test assistant.", "Say: ok")
+        latency_ms = int((time.time() - start) * 1000)
+        return jsonify({
+            "success": True, "model": model, "latency_ms": latency_ms,
+            "message": "Connected successfully"
+        }), 200
+    except Exception as e:
+        error_msg = _map_api_error(str(e), platform, model)
+        return jsonify({"success": False, "error": error_msg}), 200
+
+
 @providers_bp.route('/test', methods=['POST'])
 @require_session
 def test_provider():
@@ -387,93 +472,9 @@ def test_provider():
         start = time.time()
 
         if platform == 'ollama':
-            available, err = _fetch_ollama_models(config.get('host', ''))
-            latency_ms = int((time.time() - start) * 1000)
-
-            if err is not None:
-                return jsonify({"success": False, "error": err}), 200
-
-            available_names = [m['id'] for m in (available or [])]
-            model_base = model.split(':')[0]
-            model_found = any(
-                m == model or m.startswith(model + ':') or m.split(':')[0] == model_base
-                for m in available_names
-            )
-
-            if not model_found and not available_names:
-                return jsonify({
-                    "success": True,
-                    "model": model,
-                    "latency_ms": latency_ms,
-                    "message": "Connected to Ollama (no models installed yet)"
-                }), 200
-
-            if not model_found:
-                return jsonify({
-                    "success": False,
-                    "error": f"Model '{model}' not found on this Ollama instance.",
-                    "hint": f"Run: ollama pull {model}  ·  Available: {', '.join(available_names[:5])}"
-                }), 200
-
-            return jsonify({
-                "success": True,
-                "model": model,
-                "latency_ms": latency_ms,
-                "message": f"Connected · {len(available_names)} model(s) available"
-            }), 200
-
+            return _test_ollama_provider(config, model, start)
         else:
-            # API-based providers (anthropic, openai, gemini)
-            api_key = config.get('api_key')
-            if not api_key:
-                return jsonify({
-                    "success": False,
-                    "error": "API key is required to test this provider",
-                    "hint": "Enter your API key in the field above"
-                }), 200
-
-            try:
-                test_config = {
-                    'platform': platform,
-                    'model': model,
-                    'api_key': api_key,
-                    'max_tokens': 1,
-                    'timeout': 10,
-                }
-                host = config.get('host')
-                if host:
-                    test_config['host'] = host
-                from services.llm_service import create_llm_service
-                llm = create_llm_service(test_config)
-                llm.send_message("You are a test assistant.", "Say: ok")
-                latency_ms = int((time.time() - start) * 1000)
-                return jsonify({
-                    "success": True,
-                    "model": model,
-                    "latency_ms": latency_ms,
-                    "message": "Connected successfully"
-                }), 200
-
-            except Exception as e:
-                error_str = str(e)
-                el = error_str.lower()
-                error_msg = error_str[:300]
-                if any(k in el for k in ('authentication', 'auth_token', 'api_key', 'invalid_api', '401', 'unauthorized', 'invalid x-api-key')):
-                    error_msg = "Invalid API key"
-                elif any(k in el for k in ('model_not_found', 'not found', 'does not exist', 'no such model', '404')):
-                    error_msg = f"Model '{model}' not found — check the model name"
-                elif any(k in el for k in ('quota', 'rate_limit', 'rate limit', '429', 'too many')):
-                    error_msg = "API quota exceeded or rate limited — try again later"
-                elif any(k in el for k in ('timeout', 'timed out')):
-                    error_msg = f"Connection to {platform} timed out after 10s"
-                elif any(k in el for k in ('connectionerror', 'connection refused', 'connect')):
-                    error_msg = f"Cannot connect to {platform} — is the service running?"
-                elif any(k in el for k in ('network', 'ssl')):
-                    error_msg = "Network error — check your internet connection"
-                return jsonify({
-                    "success": False,
-                    "error": error_msg,
-                }), 200
+            return _test_api_provider(config, platform, model, start)
 
     except Exception as e:
         logger.error(f"[REST API] Provider test failed unexpectedly: {e}")

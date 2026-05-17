@@ -96,6 +96,134 @@ def _documents_root() -> str:
     return DOCUMENTS_ROOT
 
 
+def _validate_upload(file) -> tuple:
+    """Validate the uploaded file object and read its bytes.
+
+    Returns:
+        (image_bytes, mime, None) on success.
+        (None, None, (error_dict, status_code)) on failure.
+    """
+    if not file or not file.filename:
+        return None, None, ({'error': 'No filename provided'}, 400)
+
+    content_type = file.content_type or 'application/octet-stream'
+    mime = content_type.split(';')[0].strip().lower()
+    if mime not in _ALLOWED_MIMES:
+        return None, None, ({'error': f'Unsupported image type: {mime}. Accepted: jpeg, png, webp, gif'}, 415)
+
+    image_bytes = file.read()
+    if len(image_bytes) == 0:
+        return None, None, ({'error': 'Empty file'}, 400)
+
+    if len(image_bytes) > _MAX_IMAGE_BYTES:
+        mb = _MAX_IMAGE_BYTES // 1024 // 1024
+        return None, None, ({'error': f'Image exceeds {mb}MB limit'}, 413)
+
+    return image_bytes, mime, None
+
+
+def _check_store_dedup(store, image_hash: str):
+    """Check MemoryStore for a previously uploaded image with the same hash.
+
+    Returns:
+        (image_id, status) if a duplicate is found, else (None, None).
+    """
+    hash_key = _KEY_HASH.format(hash=image_hash)
+    existing_id = store.get(hash_key)
+    if not existing_id:
+        return None, None
+
+    if isinstance(existing_id, bytes):
+        existing_id = existing_id.decode()
+    logger.debug(f'[CHAT IMAGE] Duplicate detected (MemoryStore) — returning existing image_id={existing_id}')
+
+    raw_dedup = store.get(_KEY_RESULT.format(image_id=existing_id))
+    if raw_dedup is not None:
+        try:
+            dedup_result = json.loads(raw_dedup)
+            dedup_status = 'failed' if dedup_result.get('error') else 'ready'
+        except Exception:
+            dedup_status = 'failed'
+    else:
+        dedup_status = 'analyzing'
+    return existing_id, dedup_status
+
+
+def _check_doc_dedup(store, image_hash: str):
+    """Check DocumentService for a cross-session duplicate by hash.
+
+    Returns:
+        (image_id, status) if a duplicate is found, else (None, None).
+    """
+    try:
+        doc_svc = _get_document_service()
+        existing_docs = doc_svc.find_duplicates(image_hash, None, 0)
+        if not existing_docs:
+            return None, None
+
+        existing_doc = existing_docs[0]
+        existing_id = existing_doc['id']
+        logger.debug(
+            f'[CHAT IMAGE] Duplicate detected (DocumentService) — '
+            f'returning existing image_id={existing_id}'
+        )
+        hash_key = _KEY_HASH.format(hash=image_hash)
+        store.set(hash_key, existing_id, ex=_TTL_HASH)
+
+        doc = doc_svc.get_document(existing_id)
+        if doc:
+            doc_status = doc.get('status', 'processing')
+            if doc_status == 'ready':
+                dedup_status = 'ready'
+            elif doc_status == 'failed':
+                dedup_status = 'failed'
+            else:
+                dedup_status = 'analyzing'
+        else:
+            dedup_status = 'analyzing'
+        return existing_id, dedup_status
+    except Exception as e:
+        logger.warning(f'[CHAT IMAGE] Document dedup check failed (non-fatal): {e}')
+        return None, None
+
+
+def _persist_new_image(image_bytes: bytes, mime: str, image_hash: str, original_filename: str) -> str:
+    """Create a document record on disk and in the database for a new image upload.
+
+    Returns the image_id (document ID). Falls back to a random hex ID if
+    document creation fails so the upload can still proceed ephemerally.
+    """
+    try:
+        doc_svc = _get_document_service()
+        doc_root = _documents_root()
+
+        import secrets as _secrets
+        image_id = _secrets.token_hex(4)
+        file_path_rel = f"{image_id}/{original_filename}"
+        dir_path = os.path.join(doc_root, image_id)
+        os.makedirs(dir_path, exist_ok=True)
+        full_path = os.path.join(dir_path, original_filename)
+
+        with open(full_path, 'wb') as fh:
+            fh.write(image_bytes)
+
+        doc_svc.create_document(
+            original_name=original_filename,
+            mime_type=mime,
+            file_size=len(image_bytes),
+            file_path=file_path_rel,
+            file_hash=image_hash,
+            source_type='chat_image',
+            doc_id=image_id,
+        )
+        logger.debug(f'[CHAT IMAGE] Created document record image_id={image_id}')
+        return image_id
+    except Exception as e:
+        logger.exception(f'[CHAT IMAGE] Failed to create document record: {e}')
+        import secrets as _secrets
+        return _secrets.token_hex(8)
+
+
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
 @chat_image_bp.route('/chat/image', methods=['POST'])
@@ -128,118 +256,29 @@ def upload_image():
         return jsonify({'error': 'No image file provided'}), 400
 
     file = request.files['image']
-    if not file.filename:
-        return jsonify({'error': 'No filename provided'}), 400
+    image_bytes, mime, err = _validate_upload(file)
+    if err is not None:
+        return jsonify(err[0]), err[1]
 
-    content_type = file.content_type or 'application/octet-stream'
-
-    # Normalize MIME from content-type header (strip charset etc.)
-    mime = content_type.split(';')[0].strip().lower()
-    if mime not in _ALLOWED_MIMES:
-        return jsonify({'error': f'Unsupported image type: {mime}. Accepted: jpeg, png, webp, gif'}), 415
-
-    image_bytes = file.read()
-
-    if len(image_bytes) == 0:
-        return jsonify({'error': 'Empty file'}), 400
-
-    if len(image_bytes) > _MAX_IMAGE_BYTES:
-        mb = _MAX_IMAGE_BYTES // 1024 // 1024
-        return jsonify({'error': f'Image exceeds {mb}MB limit'}), 413
-
-    # SHA-256 deduplication — check MemoryStore first (fast path)
     image_hash = hashlib.sha256(image_bytes).hexdigest()
     store = _get_store()
 
-    hash_key = _KEY_HASH.format(hash=image_hash)
-    existing_id = store.get(hash_key)
+    # SHA-256 deduplication — MemoryStore fast path
+    existing_id, dedup_status = _check_store_dedup(store, image_hash)
     if existing_id:
-        if isinstance(existing_id, bytes):
-            existing_id = existing_id.decode()
-        logger.debug(f'[CHAT IMAGE] Duplicate detected (MemoryStore) — returning existing image_id={existing_id}')
-        dedup_result_key = _KEY_RESULT.format(image_id=existing_id)
-        raw_dedup = store.get(dedup_result_key)
-        if raw_dedup is not None:
-            try:
-                dedup_result = json.loads(raw_dedup)
-                dedup_status = 'failed' if dedup_result.get('error') else 'ready'
-            except Exception:
-                dedup_status = 'failed'
-        else:
-            dedup_status = 'analyzing'
         return jsonify({'image_id': existing_id, 'status': dedup_status}), 200
 
-    # Cross-session dedup via document_service (hash check only — no embedding yet)
-    try:
-        doc_svc = _get_document_service()
-        existing_docs = doc_svc.find_duplicates(image_hash, None, 0)
-        # Filter to chat_image source only so we don't confuse with regular doc uploads
-        chat_dupes = [d for d in existing_docs if True]  # hash match is always exact
-        if chat_dupes:
-            existing_doc = chat_dupes[0]
-            existing_id = existing_doc['id']
-            logger.debug(
-                f'[CHAT IMAGE] Duplicate detected (DocumentService) — '
-                f'returning existing image_id={existing_id}'
-            )
-            # Re-populate MemoryStore hash key so same-session follow-ups are fast
-            store.set(hash_key, existing_id, ex=_TTL_HASH)
-            # Determine current status from document record
-            doc = doc_svc.get_document(existing_id)
-            if doc:
-                doc_status = doc.get('status', 'processing')
-                if doc_status == 'ready':
-                    dedup_status = 'ready'
-                elif doc_status == 'failed':
-                    dedup_status = 'failed'
-                else:
-                    dedup_status = 'analyzing'
-            else:
-                dedup_status = 'analyzing'
-            return jsonify({'image_id': existing_id, 'status': dedup_status}), 200
-    except Exception as e:
-        # Non-fatal — fall through and treat as new upload
-        logger.warning(f'[CHAT IMAGE] Document dedup check failed (non-fatal): {e}')
+    # Cross-session dedup via document_service
+    existing_id, dedup_status = _check_doc_dedup(store, image_hash)
+    if existing_id:
+        return jsonify({'image_id': existing_id, 'status': dedup_status}), 200
 
-    # New image — create document record and use its ID as image_id
+    # New image — persist to disk + database
     original_filename = _sanitize_image_filename(file.filename, mime)
-
-    try:
-        doc_svc = _get_document_service()
-        doc_root = _documents_root()
-
-        # We need the doc_id before writing to disk so the path is consistent.
-        # Reserve an ID by generating it here and passing it to create_document.
-        import secrets as _secrets
-        image_id = _secrets.token_hex(4)  # 8-char hex, same length as document IDs
-        file_path_rel = f"{image_id}/{original_filename}"
-        dir_path = os.path.join(doc_root, image_id)
-        os.makedirs(dir_path, exist_ok=True)
-        full_path = os.path.join(dir_path, original_filename)
-
-        # Persist bytes to disk
-        with open(full_path, 'wb') as fh:
-            fh.write(image_bytes)
-
-        # Create document record with the reserved ID
-        doc_svc.create_document(
-            original_name=original_filename,
-            mime_type=mime,
-            file_size=len(image_bytes),
-            file_path=file_path_rel,
-            file_hash=image_hash,
-            source_type='chat_image',
-            doc_id=image_id,
-        )
-        logger.debug(f'[CHAT IMAGE] Created document record image_id={image_id}')
-
-    except Exception as e:
-        logger.exception(f'[CHAT IMAGE] Failed to create document record: {e}')
-        # Fall back to a random hex ID so the upload still works ephemerally
-        import secrets as _secrets
-        image_id = _secrets.token_hex(8)
+    image_id = _persist_new_image(image_bytes, mime, image_hash, original_filename)
 
     bytes_key = _KEY_BYTES.format(image_id=image_id)
+    hash_key = _KEY_HASH.format(hash=image_hash)
     progress_key = _KEY_PROGRESS.format(image_id=image_id)
     store.set(bytes_key, image_bytes, ex=_TTL_BYTES)
     store.set(hash_key, image_id, ex=_TTL_HASH)

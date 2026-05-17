@@ -65,165 +65,161 @@ def _send_json(ws, data: dict):
         logger.debug(f"[WS] Send failed (connection likely closed): {e}")
 
 
+def _drain_buffered_notifications(ws, store) -> None:
+    """Drain and deliver all queued notifications from notifications:recent."""
+    while True:
+        item = store.lpop('notifications:recent')
+        if not item:
+            break
+        try:
+            data = json.loads(item)
+            seq = _next_seq()
+            data['seq'] = seq
+            _buffer_event(data)
+            _send_json(ws, data)
+        except Exception as e:
+            logger.debug(f"[WS] Failed to drain buffered notification: {e}")
+
+
+def _drain_capability_alerts(ws, store) -> None:
+    """Replay persisted capability alert keys and delete them after delivery."""
+    try:
+        alert_keys = store.keys('capability:alert:*')
+        for key in alert_keys:
+            raw = store.get(key)
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    seq = _next_seq()
+                    data['seq'] = seq
+                    _send_json(ws, data)
+                    store.delete(key)
+                except Exception as e:
+                    logger.debug(f"[WS] Failed to send persisted capability alert: {e}")
+    except Exception as e:
+        logger.debug(f"[WS] Failed to scan capability alerts: {e}")
+
+
+def _dispatch_ws_message(ws, store, msg, active_request) -> None:
+    """Route a parsed WebSocket message to the appropriate handler."""
+    msg_type = msg.get('type', '')
+    if msg_type == 'chat':
+        _handle_chat(ws, store, msg, active_request)
+    elif msg_type == 'action':
+        _handle_action(ws, msg)
+    elif msg_type == 'act_steer':
+        _handle_act_steer(store, msg, active_request)
+    elif msg_type == 'resume':
+        _handle_resume(ws, msg)
+    # 'pong' and 'permission_response' are intentionally no-ops here
+
+
+def _drift_sender(pubsub, ws, ws_open: threading.Event) -> None:
+    """Listen to output:events pub/sub and forward to WebSocket.
+
+    Runs in a daemon thread for the lifetime of a single WS connection.
+    Exits when ``ws_open`` is cleared (connection closed).
+    """
+    while ws_open.is_set():
+        try:
+            msg = pubsub.get_message(timeout=15)
+            if msg and msg['type'] == 'message':
+                try:
+                    data = json.loads(msg['data'])
+                    seq = _next_seq()
+                    data['seq'] = seq
+                    _buffer_event(data)
+                    _send_json(ws, data)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            else:
+                # Keepalive ping
+                _send_json(ws, {"type": "ping"})
+        except Exception as e:
+            logger.debug(f"[WS] Drift sender error: {e}")
+            if not ws_open.is_set():
+                break
+            time.sleep(1)
+
+    try:
+        pubsub.unsubscribe('output:events')
+        pubsub.close()
+    except Exception as e:
+        logger.debug(f"[WS] Drift sender pubsub cleanup failed: {e}")
+
+
+def _ws_handler(ws) -> None:
+    """Handle an individual WebSocket connection lifecycle.
+
+    Authenticates the upgrade request via session cookie, drains queued
+    notifications and capability alerts, starts the drift-sender thread,
+    then enters the main receive loop.
+    """
+    from flask import request as flask_request
+    from services.auth_session_service import validate_session
+
+    if not validate_session(flask_request):
+        _send_json(ws, {"type": "error", "message": "Unauthorized"})
+        try:
+            ws.close()
+        except Exception as e:
+            logger.debug(f"[WS] Close after auth failure failed: {e}")
+        return
+
+    request_id = str(uuid.uuid4())
+    set_correlation_id(request_id)
+    logger.debug("[WS] Connection established", extra={"connection_id": request_id})
+
+    from services.memory_client import MemoryClientService
+    store = MemoryClientService.create_connection()
+    pubsub = store.pubsub()
+    pubsub.subscribe('output:events')
+
+    _drain_buffered_notifications(ws, store)
+    _drain_capability_alerts(ws, store)
+
+    ws_open = threading.Event()
+    ws_open.set()
+
+    drift_thread = threading.Thread(
+        target=_drift_sender, args=(pubsub, ws, ws_open), daemon=True, name="ws-drift"
+    )
+    drift_thread.start()
+
+    active_request = {'id': None}
+
+    try:
+        while True:
+            raw = ws.receive(timeout=60)
+            if raw is None:
+                _send_json(ws, {"type": "ping"})
+                continue
+
+            try:
+                msg = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                logger.warning("[WS-DEBUG] JSON parse failed, raw_len=%d, raw_start=%s", len(raw) if raw else 0, repr(raw[:200]) if raw else 'None')
+                continue
+
+            msg_type = msg.get('type', '')
+            if msg_type == 'chat':
+                logger.info("[WS-DEBUG] recv chat: raw_len=%d, msg_keys=%s, has_files=%s", len(raw), list(msg.keys()), 'files' in msg)
+
+            _dispatch_ws_message(ws, store, msg, active_request)
+
+    except Exception as e:
+        logger.debug(f"[WS] Connection closed: {e}")
+    finally:
+        ws_open.clear()
+
+
 def register_websocket(sock):
     """Register the /ws endpoint on a flask-sock instance."""
 
     @sock.route('/ws')
     def ws_handler(ws):
-        """
-        Handle an individual WebSocket connection lifecycle.
-
-        Authenticates the upgrade request via session cookie, then:
-        - Subscribes to the ``output:events`` pub/sub channel for
-          drift/card/task push events.
-        - Drains any buffered notifications queued in ``notifications:recent``.
-        - Triggers the first-contact welcome flow when applicable.
-        - Spawns a daemon thread (``_drift_sender``) that forwards pub/sub
-          events to the client with monotonic sequence numbers.
-        - Enters the main receive loop, dispatching incoming messages to
-          :func:`_handle_chat`, :func:`_handle_action`, or
-          :func:`_handle_resume` based on the ``type`` field.
-
-        Args:
-            ws: The flask-sock WebSocket connection object for this connection.
-        """
-        from flask import request as flask_request
-        from services.auth_session_service import validate_session
-
-        # Auth: validate session cookie from the upgrade request
-        if not validate_session(flask_request):
-            _send_json(ws, {"type": "error", "message": "Unauthorized"})
-            # Explicitly close the WebSocket before returning. Without this, flask-sock's
-            # Werkzeug integration writes an HTTP 200 response into the already-upgraded TCP
-            # connection, causing the browser to see "Invalid frame header".
-            try:
-                ws.close()
-            except Exception as e:
-                logger.debug(f"[WS] Close after auth failure failed: {e}")
-            return
-
-        # Bind a connection-scoped correlation ID so all log lines emitted
-        # during this WebSocket session carry the same traceable identifier.
-        request_id = str(uuid.uuid4())
-        set_correlation_id(request_id)
-        logger.debug("[WS] Connection established", extra={"connection_id": request_id})
-
-        # Subscribe to output:events for drift/card/task push
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-        pubsub = store.pubsub()
-        pubsub.subscribe('output:events')
-
-        # Drain buffered notifications on connect
-        while True:
-            item = store.lpop('notifications:recent')
-            if not item:
-                break
-            try:
-                data = json.loads(item)
-                seq = _next_seq()
-                data['seq'] = seq
-                _buffer_event(data)
-                _send_json(ws, data)
-            except Exception as e:
-                logger.debug(f"[WS] Failed to drain buffered notification: {e}")
-
-        # Replay any persisted capability alerts so the banner shows after a page refresh.
-        # Keys are deleted after delivery — if the capability is still down, the next
-        # monitor cycle will recreate the key.
-        try:
-            alert_keys = store.keys('capability:alert:*')
-            for key in alert_keys:
-                raw = store.get(key)
-                if raw:
-                    try:
-                        data = json.loads(raw)
-                        seq = _next_seq()
-                        data['seq'] = seq
-                        _send_json(ws, data)
-                        store.delete(key)
-                    except Exception as e:
-                        logger.debug(f"[WS] Failed to send persisted capability alert: {e}")
-        except Exception as e:
-            logger.debug(f"[WS] Failed to scan capability alerts: {e}")
-
-        # Background thread: push drift/output events to the WebSocket
-        ws_open = threading.Event()
-        ws_open.set()
-
-        def _drift_sender():
-            """Listen to output:events pub/sub and forward to WebSocket."""
-            while ws_open.is_set():
-                try:
-                    msg = pubsub.get_message(timeout=15)
-                    if msg and msg['type'] == 'message':
-                        try:
-                            data = json.loads(msg['data'])
-                            seq = _next_seq()
-                            data['seq'] = seq
-                            _buffer_event(data)
-                            _send_json(ws, data)
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                    else:
-                        # Keepalive ping
-                        _send_json(ws, {"type": "ping"})
-                except Exception as e:
-                    logger.debug(f"[WS] Drift sender error: {e}")
-                    if not ws_open.is_set():
-                        break
-                    time.sleep(1)
-
-            try:
-                pubsub.unsubscribe('output:events')
-                pubsub.close()
-            except Exception as e:
-                logger.debug(f"[WS] Drift sender pubsub cleanup failed: {e}")
-
-        drift_thread = threading.Thread(
-            target=_drift_sender, daemon=True, name="ws-drift"
-        )
-        drift_thread.start()
-
-        # Track active request for user steering (set by _handle_chat)
-        active_request = {'id': None}
-
-        # Main loop: receive client messages
-        try:
-            while True:
-                raw = ws.receive(timeout=60)
-                if raw is None:
-                    # Client sent close or timeout — send a ping to probe
-                    _send_json(ws, {"type": "ping"})
-                    continue
-
-                try:
-                    msg = json.loads(raw)
-                except (json.JSONDecodeError, TypeError):
-                    logger.warning("[WS-DEBUG] JSON parse failed, raw_len=%d, raw_start=%s", len(raw) if raw else 0, repr(raw[:200]) if raw else 'None')
-                    continue
-
-                msg_type = msg.get('type', '')
-                if msg_type == 'chat':
-                    logger.info("[WS-DEBUG] recv chat: raw_len=%d, msg_keys=%s, has_files=%s", len(raw), list(msg.keys()), 'files' in msg)
-
-                if msg_type == 'chat':
-                    _handle_chat(ws, store, msg, active_request)
-                elif msg_type == 'action':
-                    _handle_action(ws, msg)
-                elif msg_type == 'act_steer':
-                    _handle_act_steer(store, msg, active_request)
-                elif msg_type == 'resume':
-                    _handle_resume(ws, msg)
-                elif msg_type == 'pong':
-                    pass  # Client keepalive response — no action needed
-                elif msg_type == 'permission_response':
-                    pass  # Handled via REST /api/policies/respond
-
-        except Exception as e:
-            logger.debug(f"[WS] Connection closed: {e}")
-        finally:
-            ws_open.clear()
+        """Delegate to module-level _ws_handler for connection lifecycle."""
+        _ws_handler(ws)
 
 
 def _parse_meta(meta) -> dict:
@@ -441,6 +437,226 @@ def _handle_act_steer(store, msg, active_request):
         logger.debug(f"[WS] Steer injected for {request_id}: {steer_text[:60]}")
 
 
+def _send_done(ws, start_time: float) -> None:
+    """Send a 'done' event with the elapsed duration."""
+    seq = _next_seq()
+    done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
+    _buffer_event(done_evt)
+    _send_json(ws, done_evt)
+
+
+def _build_message_evt(output: dict, turn_start: float) -> dict:
+    """Build a 'message' WS event dict from an OutputService output object."""
+    metadata = output.get("metadata", {})
+    original_meta = metadata.get("metadata", {})
+    content = metadata.get("content", "")
+    seq = _next_seq()
+    message_evt = {
+        "type": "message",
+        "content": content,
+        "topic": output.get("topic", ""),
+        "mode": metadata.get("mode", ""),
+        "confidence": metadata.get("confidence", 0),
+        "exchange_id": original_meta.get("exchange_id", ""),
+        "seq": seq,
+    }
+    msg_metrics = metadata.get("metrics")
+    if msg_metrics is not None:
+        try:
+            msg_metrics = dict(msg_metrics)
+            msg_metrics['response_time_s'] = round(time.time() - turn_start, 3)
+        except Exception:
+            pass
+        message_evt["metrics"] = msg_metrics
+    _attach_segments(message_evt, content, metadata.get("transcript_ids") or [])
+    return message_evt
+
+
+def _handle_ps_signal(ws, parsed: dict, start_time: float, partial_metrics: dict) -> bool:
+    """Handle error/close signals embedded as JSON in a pub/sub payload.
+
+    Returns True if the loop should break (signal was handled), False otherwise.
+    """
+    if 'error' in parsed:
+        seq = _next_seq()
+        evt = {"type": "error", "message": parsed['error'], "recoverable": True, "seq": seq}
+        if partial_metrics:
+            evt["metrics"] = partial_metrics
+        _buffer_event(evt)
+        _send_json(ws, evt)
+        _send_done(ws, start_time)
+        return True
+    if parsed.get('type') == 'close':
+        _send_done(ws, start_time)
+        return True
+    return False
+
+
+def _handle_ps_output(ws, store, output_id: str, turn_start: float, start_time: float,
+                      active_request) -> bool:
+    """Fetch and dispatch a single output_id from pub/sub.
+
+    Returns True if a final message was sent (loop should break).
+    """
+    output_data = store.get(f"output:{output_id}")
+    if not output_data:
+        return False
+    output = json.loads(output_data)
+
+    if output.get('type') == 'act_narration':
+        seq = _next_seq()
+        narr_evt = {"type": "act_narration", "text": output.get("text", ""), "step": output.get("step", 0), "seq": seq}
+        _buffer_event(narr_evt)
+        _send_json(ws, narr_evt)
+        return False
+
+    if output.get('type') in ('act_tool_start', 'act_tool_end'):
+        seq = _next_seq()
+        pill_evt = {**output, 'seq': seq}
+        _buffer_event(pill_evt)
+        _send_json(ws, pill_evt)
+        return False
+
+    message_evt = _build_message_evt(output, turn_start)
+    _buffer_event(message_evt)
+    _send_json(ws, message_evt)
+
+    if active_request is not None:
+        active_request['id'] = None
+
+    _send_done(ws, start_time)
+    return True
+
+
+def _handle_chat_fallback(ws, store, request_id: str, turn_start: float, start_time: float,
+                          bg_error: dict, partial_metrics: dict) -> None:
+    """Handle the case where the background thread finished but no pub/sub arrived."""
+    time.sleep(0.5)
+    fallback_data = store.get(f"output:{request_id}")
+    if fallback_data:
+        output = json.loads(fallback_data)
+        message_evt = _build_message_evt(output, turn_start)
+        _buffer_event(message_evt)
+        _send_json(ws, message_evt)
+    elif bg_error:
+        seq = _next_seq()
+        err = {"type": "error", "message": bg_error.get('message', 'Processing failed'), "recoverable": False, "seq": seq}
+        if partial_metrics:
+            err["metrics"] = partial_metrics
+        _buffer_event(err)
+        _send_json(ws, err)
+    else:
+        seq = _next_seq()
+        err = {"type": "error", "message": "No response received", "recoverable": True, "seq": seq}
+        if partial_metrics:
+            err["metrics"] = partial_metrics
+        _buffer_event(err)
+        _send_json(ws, err)
+    _send_done(ws, start_time)
+
+
+def _make_narration_publisher(store, request_id: str):
+    """Return a closure that publishes narration events to the per-request SSE channel."""
+    def _on_narration(text, step=0):
+        if not request_id or not text:
+            return
+        try:
+            from uuid import uuid4
+            import json as _json
+            narration_id = f"narr_{uuid4().hex[:12]}"
+            store.set(f"output:{narration_id}", _json.dumps({
+                'type': 'act_narration',
+                'text': sanitize(text),
+                'step': step,
+            }), ex=300)
+            store.publish(f"sse:{request_id}", narration_id)
+        except Exception as e:
+            logger.debug(f"[WS] Narration publish failed: {e}")
+    return _on_narration
+
+
+def _make_tool_event_publisher(store, request_id: str):
+    """Return a closure that publishes tool start/end events to the per-request SSE channel."""
+    def _on_tool_event(event):
+        if not request_id or not isinstance(event, dict):
+            return
+        evt_type = event.get('type')
+        if evt_type not in ('act_tool_start', 'act_tool_end'):
+            return
+        try:
+            from uuid import uuid4
+            import json as _json
+            evt_id = f"tool_{uuid4().hex[:12]}"
+            store.set(f"output:{evt_id}", _json.dumps(event), ex=300)
+            store.publish(f"sse:{request_id}", evt_id)
+        except Exception as e:
+            logger.debug(f"[WS] Tool event publish failed: {e}")
+    return _on_tool_event
+
+
+def _run_chat_background(store, text: str, source: str, image_ids: list, files: list,
+                         request_id: str, turn_start: float, sse_channel: str,
+                         bg_error: dict, bg_done: threading.Event, partial_metrics: dict) -> None:
+    """Background thread: process user message via UserMessageProcessor and publish response."""
+    try:
+        from services.user_message_processor import UserMessageProcessor
+        from services.output_service import OutputService
+
+        metadata = {
+            'uuid': request_id, 'exchange_id': request_id,
+            'source': source, 'image_ids': image_ids, 'files': files, 'channel': 'user',
+        }
+
+        proc = UserMessageProcessor(
+            raw_input=text,
+            metadata=metadata,
+            on_narration=_make_narration_publisher(store, request_id),
+            on_tool_event=_make_tool_event_publisher(store, request_id),
+        )
+        proc.set_turn_start(turn_start)
+        response = proc.send(request_id=request_id)
+
+        metrics = proc._metrics.snapshot()
+        partial_metrics.update(metrics)
+
+        _transcript_ids = [proc._uid] if getattr(proc, '_uid', None) is not None else None
+
+        OutputService().enqueue_text(
+            topic='user', response=response, mode='UNIFIED', confidence=1.0,
+            generation_time=0.0, original_metadata=metadata,
+            metrics=metrics, transcript_ids=_transcript_ids,
+        )
+
+        try:
+            _fb_content = sanitize(response or "")
+            fallback_output = {
+                "type": "TEXT", "topic": 'user',
+                "metadata": {
+                    "content": _fb_content, "mode": "UNIFIED", "confidence": 1.0,
+                    "metadata": metadata, "metrics": metrics,
+                },
+            }
+            store.setex(f"output:{request_id}", 300, json.dumps(fallback_output))
+        except Exception as fb_err:
+            logger.debug(f"[WS] Fallback store failed: {fb_err}")
+    except Exception as e:
+        logger.exception(f"[WS] UserMessageProcessor error for {request_id}: {e}")
+        bg_error['message'] = str(e)
+        try:
+            if 'proc' in locals() and getattr(proc, '_metrics', None) is not None:
+                partial_snap = proc._metrics.snapshot()
+                partial_snap['tokens_total_complete'] = False
+                partial_metrics.update(partial_snap)
+        except Exception as m_err:
+            logger.debug(f"[WS] Partial metrics snapshot failed: {m_err}")
+        try:
+            store.publish(sse_channel, json.dumps({"error": str(e)}))
+        except Exception as e2:
+            logger.debug(f"[WS] Failed to publish error to SSE channel: {e2}")
+    finally:
+        bg_done.set()
+
+
 def _handle_chat(ws, store, msg, active_request=None):
     """Process a chat message — replaces the POST /chat SSE endpoint."""
     text = (msg.get('text') or '').strip()
@@ -451,9 +667,6 @@ def _handle_chat(ws, store, msg, active_request=None):
     if not text and not image_ids and not files:
         return  # Nothing to process — silently drop
 
-    # If user sent only images with no text, provide a sensible fallback.
-    # Image resolution (polling MemoryStore for analysis results) is handled
-    # in UserMessageProcessor. The WS handler passes image_ids through in metadata.
     if not text and image_ids:
         text = '[Image attached]'
 
@@ -467,167 +680,32 @@ def _handle_chat(ws, store, msg, active_request=None):
     source = msg.get('source', 'text')
     request_id = str(uuid.uuid4())
 
-    # Track active request for user steering
     if active_request is not None:
         active_request['id'] = request_id
 
-    # Subscribe to per-request SSE channel (OutputService publishes here)
     pubsub = store.pubsub()
     sse_channel = f"sse:{request_id}"
     pubsub.subscribe(sse_channel)
 
-    # Send initial status
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "processing", "seq": seq})
 
-    # Measure wall-clock from before thread creation so thread startup overhead
-    # doesn't inflate response_time_s beyond what the user experiences.
     turn_start = time.time()
-
-    # Track background thread completion
-    bg_error = {}
+    bg_error: dict = {}
     bg_done = threading.Event()
-    # Shared dict for partial metrics — background thread writes, error path reads.
     partial_metrics: dict = {}
 
-    def _handle_chat_background():
-        """Background thread: process user message via UserMessageProcessor and publish response."""
-        try:
-            from services.user_message_processor import UserMessageProcessor
-            from services.output_service import OutputService
-
-            metadata = {
-                'uuid': request_id,
-                'exchange_id': request_id,
-                'source': source,
-                'image_ids': image_ids,
-                'files': files,
-                'channel': 'user',
-            }
-
-            def _on_narration(text, step=0):
-                """Publish per-iteration synthesis text to the per-request SSE channel."""
-                if not request_id or not text:
-                    return
-                try:
-                    from uuid import uuid4
-                    import json as _json
-                    narration_id = f"narr_{uuid4().hex[:12]}"
-                    # Reuse the outer `store` from ws_chat (line 113) — no need
-                    # to create a second MemoryClient connection per narration
-                    # (Commit 8 critic P2-1).
-                    # Run narration through the same nh3 chokepoint chat
-                    # bubbles use — the frontend renders this via innerHTML
-                    # and trusts the backend has already stripped anything
-                    # outside the LLM tag allowlist.
-                    store.set(f"output:{narration_id}", _json.dumps({
-                        'type': 'act_narration',
-                        'text': sanitize(text),
-                        'step': step,
-                    }), ex=300)
-                    store.publish(f"sse:{request_id}", narration_id)
-                except Exception as e:
-                    logger.debug(f"[WS] Narration publish failed: {e}")
-
-            def _on_tool_event(event):
-                """Publish per-tool start/end events to the per-request SSE channel.
-
-                event = {type: 'act_tool_start'|'act_tool_end', call_id, name?, iter?, ms?, ok?}
-                Mirrors _on_narration: stores blob to output:{evt_id}, publishes evt_id
-                on sse:{request_id}.
-                """
-                if not request_id or not isinstance(event, dict):
-                    return
-                evt_type = event.get('type')
-                if evt_type not in ('act_tool_start', 'act_tool_end'):
-                    return
-                try:
-                    from uuid import uuid4
-                    import json as _json
-                    evt_id = f"tool_{uuid4().hex[:12]}"
-                    store.set(f"output:{evt_id}", _json.dumps(event), ex=300)
-                    store.publish(f"sse:{request_id}", evt_id)
-                except Exception as e:
-                    logger.debug(f"[WS] Tool event publish failed: {e}")
-
-            proc = UserMessageProcessor(
-                raw_input=text,
-                metadata=metadata,
-                on_narration=_on_narration,
-                on_tool_event=_on_tool_event,
-            )
-            proc.set_turn_start(turn_start)
-            response = proc.send(request_id=request_id)
-
-            metrics = proc._metrics.snapshot()
-            partial_metrics.update(metrics)
-
-            # Thread the input transcript row ID so the WS handler can fetch
-            # tool_calls by exact ID rather than by recency heuristic (Fix 2).
-            # proc._uid is the user-input transcript row written at the top of
-            # send(); all ACT tool_calls for this turn are stored against it.
-            _transcript_ids = [proc._uid] if getattr(proc, '_uid', None) is not None else None
-
-            output_svc = OutputService()
-            output_svc.enqueue_text(
-                topic='user',
-                response=response,
-                mode='UNIFIED',
-                confidence=1.0,
-                generation_time=0.0,
-                original_metadata=metadata,
-                metrics=metrics,
-                transcript_ids=_transcript_ids,
-            )
-
-            # Store result at output:{request_id} so the fallback path can
-            # find it if the pub/sub message was missed.
-            try:
-                _fb_content = sanitize(response or "")
-                fallback_output = {
-                    "type": "TEXT",
-                    "topic": 'user',
-                    "metadata": {
-                        "content": _fb_content,
-                        "mode": "UNIFIED",
-                        "confidence": 1.0,
-                        "metadata": metadata,
-                        "metrics": metrics,
-                    },
-                }
-                store.setex(f"output:{request_id}", 300, json.dumps(fallback_output))
-            except Exception as fb_err:
-                logger.debug(f"[WS] Fallback store failed: {fb_err}")
-        except Exception as e:
-            logger.exception(f"[WS] UserMessageProcessor error for {request_id}: {e}")
-            bg_error['message'] = str(e)
-            # Capture any metrics accumulated before the failure so the
-            # error frame can surface them (spec contract #3).
-            try:
-                if 'proc' in locals() and getattr(proc, '_metrics', None) is not None:
-                    partial_snap = proc._metrics.snapshot()
-                    # Mark as incomplete — we failed mid-turn.
-                    partial_snap['tokens_total_complete'] = False
-                    partial_metrics.update(partial_snap)
-            except Exception as m_err:
-                logger.debug(f"[WS] Partial metrics snapshot failed: {m_err}")
-            try:
-                store.publish(sse_channel, json.dumps({"error": str(e)}))
-            except Exception as e2:
-                logger.debug(f"[WS] Failed to publish error to SSE channel: {e2}")
-        finally:
-            bg_done.set()
-
-    thread = threading.Thread(target=_handle_chat_background, daemon=True)
+    thread = threading.Thread(
+        target=_run_chat_background,
+        args=(store, text, source, image_ids, files, request_id, turn_start,
+              sse_channel, bg_error, bg_done, partial_metrics),
+        daemon=True,
+    )
     thread.start()
 
     seq = _next_seq()
     _send_json(ws, {"type": "status", "stage": "thinking", "seq": seq})
 
-    # Listen for pub/sub events until done, disconnected, or cancelled.
-    # The loop is unbounded — no wall-clock timeout on the chat request.
-    # Exit conditions: (a) 'done' event arrives, (b) background thread sets
-    # bg_done and no pub/sub message received, (c) WS disconnects.
     start_time = time.time()
     message_received = False
 
@@ -639,154 +717,21 @@ def _handle_chat(ws, store, msg, active_request=None):
             if isinstance(payload, bytes):
                 payload = payload.decode()
 
-            # Check for error or close signal
             try:
                 parsed = json.loads(payload)
-                if 'error' in parsed:
-                    seq = _next_seq()
-                    evt = {"type": "error", "message": parsed['error'], "recoverable": True, "seq": seq}
-                    if partial_metrics:
-                        evt["metrics"] = partial_metrics
-                    _buffer_event(evt)
-                    _send_json(ws, evt)
-                    seq = _next_seq()
-                    done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
-                    _buffer_event(done_evt)
-                    _send_json(ws, done_evt)
-                    break
-                if parsed.get('type') == 'close':
-                    seq = _next_seq()
-                    done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
-                    _buffer_event(done_evt)
-                    _send_json(ws, done_evt)
+                if _handle_ps_signal(ws, parsed, start_time, partial_metrics):
                     break
             except (json.JSONDecodeError, TypeError):
                 pass
 
-            # It's an output_id — fetch the full output
             output_id = payload.strip('"')
-            output_data = store.get(f"output:{output_id}")
-
-            if output_data:
-                output = json.loads(output_data)
-
-                # Act narration: forward to client as a progress update (not a final message)
-                if output.get('type') == 'act_narration':
-                    seq = _next_seq()
-                    narr_evt = {
-                        "type": "act_narration",
-                        "text": output.get("text", ""),
-                        "step": output.get("step", 0),
-                        "seq": seq,
-                    }
-                    _buffer_event(narr_evt)
-                    _send_json(ws, narr_evt)
-                    continue  # Keep listening — this isn't the final response
-
-                # Act tool events: forward pill start/end events to client
-                if output.get('type') in ('act_tool_start', 'act_tool_end'):
-                    seq = _next_seq()
-                    pill_evt = {**output, 'seq': seq}
-                    _buffer_event(pill_evt)
-                    _send_json(ws, pill_evt)
-                    continue
-
-                metadata = output.get("metadata", {})
-                original_meta = metadata.get("metadata", {})
-                _msg_content = metadata.get("content", "")
-                seq = _next_seq()
-                message_evt = {
-                    "type": "message",
-                    "content": _msg_content,
-                    "topic": output.get("topic", ""),
-                    "mode": metadata.get("mode", ""),
-                    "confidence": metadata.get("confidence", 0),
-                    "exchange_id": original_meta.get("exchange_id", ""),
-                    "seq": seq,
-                }
-                _msg_metrics = metadata.get("metrics")
-                if _msg_metrics is not None:
-                    # Stamp response_time_s at the actual dispatch moment so
-                    # the metric reflects user-perceived latency (spec contract).
-                    try:
-                        _msg_metrics = dict(_msg_metrics)
-                        _msg_metrics['response_time_s'] = round(time.time() - turn_start, 3)
-                    except Exception:
-                        pass
-                    message_evt["metrics"] = _msg_metrics
-                _attach_segments(
-                    message_evt,
-                    _msg_content,
-                    metadata.get("transcript_ids") or [],
-                )
-                _buffer_event(message_evt)
-                _send_json(ws, message_evt)
+            if _handle_ps_output(ws, store, output_id, turn_start, start_time, active_request):
                 message_received = True
-
-                # Clear active request when response is delivered
-                if active_request is not None:
-                    active_request['id'] = None
-
-                seq = _next_seq()
-                done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
-                _buffer_event(done_evt)
-                _send_json(ws, done_evt)
                 break
 
-        # Fallback: background thread done but no pub/sub arrived
         if bg_done.is_set() and not message_received:
-            time.sleep(0.5)  # Brief grace period
-            output_key = f"output:{request_id}"
-            fallback_data = store.get(output_key)
-            if fallback_data:
-                output = json.loads(fallback_data)
-                metadata = output.get("metadata", {})
-                original_meta = metadata.get("metadata", {})
-                _fb_content = metadata.get("content", "")
-                seq = _next_seq()
-                message_evt = {
-                    "type": "message",
-                    "content": _fb_content,
-                    "topic": output.get("topic", ""),
-                    "mode": metadata.get("mode", ""),
-                    "confidence": metadata.get("confidence", 0),
-                    "exchange_id": original_meta.get("exchange_id", ""),
-                    "seq": seq,
-                }
-                _fallback_metrics = metadata.get("metrics")
-                if _fallback_metrics is not None:
-                    try:
-                        _fallback_metrics = dict(_fallback_metrics)
-                        _fallback_metrics['response_time_s'] = round(time.time() - turn_start, 3)
-                    except Exception:
-                        pass
-                    message_evt["metrics"] = _fallback_metrics
-                _attach_segments(
-                    message_evt,
-                    _fb_content,
-                    metadata.get("transcript_ids") or [],
-                )
-                _buffer_event(message_evt)
-                _send_json(ws, message_evt)
-            elif bg_error:
-                seq = _next_seq()
-                err = {"type": "error", "message": bg_error.get('message', 'Processing failed'), "recoverable": False, "seq": seq}
-                if partial_metrics:
-                    err["metrics"] = partial_metrics
-                _buffer_event(err)
-                _send_json(ws, err)
-            else:
-                seq = _next_seq()
-                err = {"type": "error", "message": "No response received", "recoverable": True, "seq": seq}
-                if partial_metrics:
-                    err["metrics"] = partial_metrics
-                _buffer_event(err)
-                _send_json(ws, err)
-
-            seq = _next_seq()
-            done_evt = {"type": "done", "duration_ms": int((time.time() - start_time) * 1000), "seq": seq}
-            _buffer_event(done_evt)
-            _send_json(ws, done_evt)
+            _handle_chat_fallback(ws, store, request_id, turn_start, start_time, bg_error, partial_metrics)
             break
+
     pubsub.unsubscribe(sse_channel)
     pubsub.close()

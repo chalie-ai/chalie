@@ -51,6 +51,38 @@ def _normalize_hhmm(s: str) -> str | None:
     return f"{h:02d}:{m:02d}"
 
 
+def _validate_recurrence(recurrence: str | None) -> tuple:
+    """Validate and normalise the recurrence field.
+
+    Returns (normalised_recurrence, None) on success, or (None, error_str).
+    """
+    if recurrence is None:
+        return None, None
+    recurrence = recurrence.strip()
+    if recurrence in _VALID_RECURRENCES:
+        return recurrence, None
+    if recurrence.startswith(_INTERVAL_PREFIX):
+        try:
+            mins = int(recurrence[len(_INTERVAL_PREFIX):])
+            if not (1 <= mins <= 1440):
+                return None, "interval must be between 1 and 1440 minutes"
+            return f"interval:{mins}", None
+        except (ValueError, TypeError):
+            return None, "interval recurrence must be 'interval:N' where N is 1–1440"
+    return None, f"recurrence must be one of: {', '.join(sorted(_VALID_RECURRENCES))}, or 'interval:N'"
+
+
+def _validate_window(window_start: str | None, window_end: str | None, recurrence: str | None) -> str | None:
+    """Validate window_start/window_end consistency. Returns error string or None."""
+    if (window_start or window_end) and recurrence != "hourly":
+        return "window_start/window_end are only valid for 'hourly' recurrence"
+    if window_start and not window_end:
+        return "window_end is required when window_start is set"
+    if window_end and not window_start:
+        return "window_start is required when window_end is set"
+    return None
+
+
 def _validate_item(data: dict, require_future: bool = True) -> tuple:
     """
     Validate item fields.  Returns (clean_dict, None) on success,
@@ -80,34 +112,15 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
     if item_type not in _VALID_TYPES:
         return None, f"item_type must be one of: {', '.join(sorted(_VALID_TYPES))}"
 
-    recurrence = data.get("recurrence") or None
-    if recurrence is not None:
-        recurrence = recurrence.strip()
-        if recurrence not in _VALID_RECURRENCES:
-            # Allow interval:N (1–1440 minutes)
-            if recurrence.startswith(_INTERVAL_PREFIX):
-                try:
-                    mins = int(recurrence[len(_INTERVAL_PREFIX):])
-                    if not (1 <= mins <= 1440):
-                        return None, "interval must be between 1 and 1440 minutes"
-                    recurrence = f"interval:{mins}"
-                except (ValueError, TypeError):
-                    return None, "interval recurrence must be 'interval:N' where N is 1–1440"
-            else:
-                return None, f"recurrence must be one of: {', '.join(sorted(_VALID_RECURRENCES))}, or 'interval:N'"
+    recurrence, rec_err = _validate_recurrence(data.get("recurrence") or None)
+    if rec_err:
+        return None, rec_err
 
     window_start = _normalize_hhmm(data.get("window_start") or "")
     window_end = _normalize_hhmm(data.get("window_end") or "")
-
-    if (window_start or window_end) and recurrence != "hourly":
-        return None, "window_start/window_end are only valid for 'hourly' recurrence"
-
-    if window_start and not window_end:
-        return None, "window_end is required when window_start is set"
-    if window_end and not window_start:
-        return None, "window_start is required when window_end is set"
-
-    is_prompt = (item_type == "prompt")
+    win_err = _validate_window(window_start, window_end, recurrence)
+    if win_err:
+        return None, win_err
 
     return {
         "message": message,
@@ -116,7 +129,7 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
         "recurrence": recurrence,
         "window_start": window_start,
         "window_end": window_end,
-        "is_prompt": is_prompt,
+        "is_prompt": (item_type == "prompt"),
     }, None
 
 
