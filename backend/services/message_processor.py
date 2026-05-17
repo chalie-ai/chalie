@@ -463,7 +463,7 @@ class MessageProcessor:
         # Batch-load durable tool_calls for all transcript rows.
         # `include_ephemeral=False` enforces the north star rule: Previous
         # Messages must only surface ephemeral=0 rows (narration,
-        # user_steer, tool_compaction, act_restart, and batched LLM tool
+        # steer, tool_compaction, act_restart, and batched LLM tool
         # results are audit-only and never replay in future context).
         all_ids = [e['id'] for e in entries if e.get('id')]
         durable_by_id: dict[int, list] = {}
