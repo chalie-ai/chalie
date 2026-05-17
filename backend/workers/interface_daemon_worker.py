@@ -188,15 +188,62 @@ def interface_daemon_worker():
         time.sleep(_SCAN_INTERVAL)
 
 
-def _scan_and_reconcile(interfaces_dir: Path, gateway_url: str):
-    """Scan the directory and start/stop/restart daemons as needed."""
-    # Discover daemon directories
+def _discover_daemon_dirs(interfaces_dir: Path) -> dict:
+    """Return a mapping of daemon name → path for all valid daemon directories."""
     current_dirs: dict[str, Path] = {}
     if interfaces_dir.is_dir():
         for entry in interfaces_dir.iterdir():
             if entry.is_dir() and not entry.name.startswith((".", "_")):
                 if _find_entry_point(entry):
                     current_dirs[entry.name] = entry
+    return current_dirs
+
+
+def _health_check_daemon(name: str, state: dict, gateway_url: str) -> None:
+    """Check whether a running daemon has crashed and restart it when due.
+
+    Must be called while holding ``_lock``.
+    """
+    proc = state["proc"]
+    if proc.poll() is None:
+        return  # still running
+
+    exit_code = proc.returncode
+    logger.warning(
+        "[DaemonWatcher] '%s' exited (code=%s, restarts=%d)",
+        name, exit_code, state["restart_count"],
+    )
+
+    delay = _restart_delay(state)
+    now = time.time()
+    time_since_crash = now - state["last_crash"] if state["last_crash"] else delay
+
+    if time_since_crash < delay:
+        return  # Too soon — skip this cycle
+
+    _restart_daemon(name, state, gateway_url, now)
+
+
+def _restart_daemon(name: str, state: dict, gateway_url: str, now: float) -> None:
+    """Restart a crashed daemon.  Must be called while holding ``_lock``."""
+    daemon_dir = Path(state["dir"])
+    restart_count = state["restart_count"] + 1
+    del _daemons[name]
+
+    new_state = _start_daemon(name, daemon_dir, gateway_url)
+    if new_state:
+        new_state["restart_count"] = restart_count
+        new_state["last_crash"] = now
+        _daemons[name] = new_state
+        logger.info(
+            "[DaemonWatcher] Restarted '%s' (attempt #%d, next backoff=%.0fs)",
+            name, restart_count, _restart_delay(new_state),
+        )
+
+
+def _scan_and_reconcile(interfaces_dir: Path, gateway_url: str):
+    """Scan the directory and start/stop/restart daemons as needed."""
+    current_dirs = _discover_daemon_dirs(interfaces_dir)
 
     with _lock:
         # Stop daemons whose directories were removed
@@ -214,37 +261,7 @@ def _scan_and_reconcile(interfaces_dir: Path, gateway_url: str):
 
         # Check running daemons for crashes → restart
         for name in list(_daemons.keys()):
-            state = _daemons[name]
-            proc = state["proc"]
-            if proc.poll() is not None:
-                exit_code = proc.returncode
-                logger.warning(
-                    "[DaemonWatcher] '%s' exited (code=%s, restarts=%d)",
-                    name, exit_code, state["restart_count"],
-                )
-
-                delay = _restart_delay(state)
-                now = time.time()
-                time_since_crash = now - state["last_crash"] if state["last_crash"] else delay
-
-                if time_since_crash < delay:
-                    # Too soon — skip this cycle, retry next scan
-                    continue
-
-                # Restart
-                daemon_dir = Path(state["dir"])
-                restart_count = state["restart_count"] + 1
-                del _daemons[name]
-
-                new_state = _start_daemon(name, daemon_dir, gateway_url)
-                if new_state:
-                    new_state["restart_count"] = restart_count
-                    new_state["last_crash"] = now
-                    _daemons[name] = new_state
-                    logger.info(
-                        "[DaemonWatcher] Restarted '%s' (attempt #%d, next backoff=%.0fs)",
-                        name, restart_count, _restart_delay(new_state),
-                    )
+            _health_check_daemon(name, _daemons[name], gateway_url)
 
 
 def get_daemon_status() -> list[dict]:

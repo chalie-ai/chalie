@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 import requests
 
@@ -263,43 +263,49 @@ def fetch_providers(providers: list, query: str, limit: int = 5) -> list:
     return all_results
 
 
+def _enforce_ddg_cooldown() -> None:
+    """Enforce the per-call DDG rate-limit cooldown inside the global lock."""
+    global _ddg_last_call
+    with _ddg_lock:
+        elapsed = time.time() - _ddg_last_call
+        if elapsed < _DDG_COOLDOWN:
+            time.sleep(_DDG_COOLDOWN - elapsed)
+        _ddg_last_call = time.time()
+
+
+def _transform_ddg_results(raw: list) -> list:
+    """Convert raw DDG result dicts to the standard result format."""
+    results = []
+    seen: set = set()
+    for r in raw:
+        url = (r.get("href") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        snippet = re.sub(r"\s{2,}", " ", (r.get("body") or "").strip())[:300]
+        results.append({
+            'title': (r.get('title') or '').strip(),
+            'snippet': snippet,
+            'url': url,
+            'provider': 'ddg',
+            'date': None,
+        })
+    return results
+
+
 def fetch_ddg_fallback(query: str, limit: int = 5) -> list:
     """Fall back to DDG web search. Returns results in standard format."""
     try:
         from ddgs import DDGS
         from ddgs.exceptions import RatelimitException, DDGSException as DuckDuckGoSearchException
 
-        global _ddg_last_call
         limit = max(1, min(8, limit))
 
         for attempt in range(3):
-            with _ddg_lock:
-                elapsed = time.time() - _ddg_last_call
-                if elapsed < _DDG_COOLDOWN:
-                    time.sleep(_DDG_COOLDOWN - elapsed)
-                _ddg_last_call = time.time()
+            _enforce_ddg_cooldown()
             try:
                 raw = list(DDGS().text(query, max_results=limit))
-                results = []
-                seen = set()
-                for r in raw:
-                    url = (r.get("href") or "").strip()
-                    if not url or url in seen:
-                        continue
-                    seen.add(url)
-                    snippet = re.sub(r"\s{2,}", " ", (r.get("body") or "").strip())[:300]
-                    try:
-                        urlparse(url).netloc.lstrip("www.")
-                    except Exception:
-                        pass
-                    results.append({
-                        'title': (r.get('title') or '').strip(),
-                        'snippet': snippet,
-                        'url': url,
-                        'provider': 'ddg',
-                        'date': None,
-                    })
-                return results
+                return _transform_ddg_results(raw)
             except RatelimitException:
                 time.sleep(2 ** attempt * 3)
             except (DuckDuckGoSearchException, Exception) as e:

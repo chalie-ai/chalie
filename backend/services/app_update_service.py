@@ -240,6 +240,119 @@ class AppUpdateService:
 
     # ── Apply Update (Rename-Swap) ───────────────────────────────────────
 
+    def _rename_swap(self, source_dir: Path, tag: str) -> tuple:
+        """Move current backend/frontend aside and put new ones in place.
+
+        Returns (backend_old, frontend_old, renamed_backend, renamed_frontend).
+        Raises RuntimeError if the new release is missing required directories.
+        """
+        backend_dir = APP_ROOT / "backend"
+        frontend_dir = APP_ROOT / "frontend"
+        backend_old = APP_ROOT / f"backend.pre-{tag}"
+        frontend_old = APP_ROOT / f"frontend.pre-{tag}"
+
+        renamed_backend = False
+        renamed_frontend = False
+
+        logger.info("Performing rename-swap for %s", safe(tag))
+
+        if backend_dir.exists():
+            backend_dir.rename(backend_old)
+            renamed_backend = True
+
+        if frontend_dir.exists():
+            frontend_dir.rename(frontend_old)
+            renamed_frontend = True
+
+        new_backend = source_dir / "backend"
+        new_frontend = source_dir / "frontend"
+
+        if new_backend.exists():
+            shutil.move(str(new_backend), str(backend_dir))
+        else:
+            raise RuntimeError(f"Release {tag} has no backend/ directory")
+
+        if new_frontend.exists():
+            shutil.move(str(new_frontend), str(frontend_dir))
+        else:
+            raise RuntimeError(f"Release {tag} has no frontend/ directory")
+
+        return backend_old, frontend_old, renamed_backend, renamed_frontend
+
+    @staticmethod
+    def _preserve_tools(backend_old: Path) -> None:
+        """Copy user-installed tools from the old backend into the new one."""
+        old_tools = backend_old / "tools"
+        if not old_tools.exists():
+            return
+        new_tools = APP_ROOT / "backend" / "tools"
+        if new_tools.exists():
+            shutil.rmtree(str(new_tools))
+        shutil.copytree(str(old_tools), str(new_tools))
+        logger.info("Preserved tools/ directory")
+
+    @staticmethod
+    def _rollback_swap(backend_dir: Path, frontend_dir: Path,
+                       backend_old: Path, frontend_old: Path,
+                       renamed_backend: bool, renamed_frontend: bool) -> None:
+        """Reverse a rename-swap on failure."""
+        try:
+            if renamed_backend:
+                if backend_dir.exists():
+                    shutil.rmtree(str(backend_dir))
+                backend_old.rename(backend_dir)
+                logger.info("Rolled back backend/")
+            if renamed_frontend:
+                if frontend_dir.exists():
+                    shutil.rmtree(str(frontend_dir))
+                frontend_old.rename(frontend_dir)
+                logger.info("Rolled back frontend/")
+        except Exception as rollback_exc:
+            logger.critical("Rollback FAILED: %s — manual intervention required", rollback_exc)
+
+    def _apply_release_files(self, tag: str) -> tuple:
+        """Download, validate, swap, and copy release files.
+
+        Returns (backend_old, frontend_old, renamed_backend, renamed_frontend, source_dir).
+        Raises on any failure.
+        """
+        logger.info("Starting update to %s — downloading release", safe(tag))
+        source_dir = self.download_and_validate(tag)
+
+        backend_old, frontend_old, renamed_backend, renamed_frontend = self._rename_swap(source_dir, tag)
+
+        if renamed_backend:
+            self._preserve_tools(backend_old)
+
+        for filename in ("run.sh", "VERSION"):
+            src = source_dir / filename
+            if src.exists():
+                shutil.copy2(str(src), str(APP_ROOT / filename))
+
+        for req_file in source_dir.glob("requirements*.txt"):
+            shutil.copy2(str(req_file), str(APP_ROOT / req_file.name))
+
+        deps_stamp = APP_ROOT / ".deps-installed"
+        if deps_stamp.exists():
+            deps_stamp.unlink()
+            logger.info("Removed .deps-installed stamp")
+
+        return backend_old, frontend_old, renamed_backend, renamed_frontend, source_dir
+
+    def _cleanup_after_update(self, backend_old, frontend_old, source_dir: Path) -> None:
+        """Remove old backup directories and the temporary release directory."""
+        for old_dir in filter(None, (backend_old, frontend_old)):
+            if old_dir.exists():
+                try:
+                    shutil.rmtree(str(old_dir))
+                    logger.info("Cleaned up %s", old_dir.name)
+                except OSError as exc:
+                    logger.warning("Could not remove %s: %s", old_dir, exc)
+
+        tmp_root = source_dir.parent
+        if tmp_root.exists():
+            shutil.rmtree(str(tmp_root), ignore_errors=True)
+
     def apply_update(self, tag: str) -> dict:
         """Orchestrate the full in-place update.
 
@@ -277,7 +390,6 @@ class AppUpdateService:
 
         store = MemoryClientService.create_connection()
 
-        # Block concurrent updates
         if store.get(IN_PROGRESS_KEY):
             return {
                 "ok": False,
@@ -289,92 +401,25 @@ class AppUpdateService:
 
         backend_dir = APP_ROOT / "backend"
         frontend_dir = APP_ROOT / "frontend"
-        backend_old = APP_ROOT / f"backend.pre-{tag}"
-        frontend_old = APP_ROOT / f"frontend.pre-{tag}"
-
-        # Track what we have renamed so we can roll back precisely
+        backend_old = None
+        frontend_old = None
         renamed_backend = False
         renamed_frontend = False
+        source_dir = None  # set on success by _apply_release_files
 
         try:
-            # Step 1: Download and validate
-            logger.info("Starting update to %s — downloading release", safe(tag))
-            source_dir = self.download_and_validate(tag)
-
-            # Step 2: Rename-swap
-            logger.info("Performing rename-swap for %s", safe(tag))
-
-            if backend_dir.exists():
-                backend_dir.rename(backend_old)
-                renamed_backend = True
-
-            if frontend_dir.exists():
-                frontend_dir.rename(frontend_old)
-                renamed_frontend = True
-
-            # Move new directories into place
-            new_backend = source_dir / "backend"
-            new_frontend = source_dir / "frontend"
-
-            if new_backend.exists():
-                shutil.move(str(new_backend), str(backend_dir))
-            else:
-                raise RuntimeError(f"Release {tag} has no backend/ directory")
-
-            if new_frontend.exists():
-                shutil.move(str(new_frontend), str(frontend_dir))
-            else:
-                raise RuntimeError(f"Release {tag} has no frontend/ directory")
-
-            # Step 3: Preserve user-installed tools from old backend.
-            # data/ and resources/ live at APP_ROOT and are untouched by the
-            # backend/ rename-swap, so they don't need preservation here.
-            if renamed_backend:
-                old_tools = backend_old / "tools"
-                if old_tools.exists():
-                    new_tools = backend_dir / "tools"
-                    if new_tools.exists():
-                        shutil.rmtree(str(new_tools))
-                    shutil.copytree(str(old_tools), str(new_tools))
-                    logger.info("Preserved tools/ directory")
-
-            # Step 4: Copy root-level files from the release
-            for filename in ("run.sh", "VERSION"):
-                src = source_dir / filename
-                if src.exists():
-                    shutil.copy2(str(src), str(APP_ROOT / filename))
-
-            for req_file in source_dir.glob("requirements*.txt"):
-                shutil.copy2(str(req_file), str(APP_ROOT / req_file.name))
-
-            # Step 5: Delete .deps-installed stamp so dependencies are re-synced
-            deps_stamp = APP_ROOT / ".deps-installed"
-            if deps_stamp.exists():
-                deps_stamp.unlink()
-                logger.info("Removed .deps-installed stamp")
-
+            backend_old, frontend_old, renamed_backend, renamed_frontend, source_dir = (
+                self._apply_release_files(tag)
+            )
         except Exception as exc:
             logger.error("Update to %s failed: %s — rolling back", safe(tag), exc)
-
-            # Rollback: reverse renames
-            try:
-                if renamed_backend:
-                    # Remove partially-placed new backend if it exists
-                    if backend_dir.exists():
-                        shutil.rmtree(str(backend_dir))
-                    backend_old.rename(backend_dir)
-                    logger.info("Rolled back backend/")
-
-                if renamed_frontend:
-                    if frontend_dir.exists():
-                        shutil.rmtree(str(frontend_dir))
-                    frontend_old.rename(frontend_dir)
-                    logger.info("Rolled back frontend/")
-            except Exception as rollback_exc:
-                logger.critical(
-                    "Rollback FAILED: %s — manual intervention required", rollback_exc
+            if backend_old is not None or frontend_old is not None:
+                self._rollback_swap(
+                    backend_dir, frontend_dir,
+                    backend_old or APP_ROOT / f"backend.pre-{tag}",
+                    frontend_old or APP_ROOT / f"frontend.pre-{tag}",
+                    renamed_backend, renamed_frontend,
                 )
-
             store.delete(IN_PROGRESS_KEY)
             return {
                 "ok": False,
@@ -382,19 +427,8 @@ class AppUpdateService:
                 "message": f"Update to {tag} failed: {exc}",
             }
 
-        # Success — clean up old directories and temp files
-        for old_dir in (backend_old, frontend_old):
-            if old_dir.exists():
-                try:
-                    shutil.rmtree(str(old_dir))
-                    logger.info("Cleaned up %s", old_dir.name)
-                except OSError as exc:
-                    logger.warning("Could not remove %s: %s", old_dir, exc)
-
-        # Clean up the temp download directory (parent of source_dir)
-        tmp_root = source_dir.parent
-        if tmp_root.exists():
-            shutil.rmtree(str(tmp_root), ignore_errors=True)
+        if source_dir is not None:
+            self._cleanup_after_update(backend_old, frontend_old, source_dir)
 
         store.delete(IN_PROGRESS_KEY)
         logger.info("Update to %s completed successfully", safe(tag))

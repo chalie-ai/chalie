@@ -531,6 +531,56 @@ class CaldavHandler:
             logger.error("[caldav_handler] create_event failed: %s", exc)
             return {"error": str(exc)}
 
+    @staticmethod
+    def _find_event_by_uid(client, uid: str):
+        """Search all calendars for an event matching ``uid``. Returns the event or None."""
+        principal = client.principal()
+        for calendar in principal.calendars():
+            try:
+                results = calendar.search(uid=uid)
+                if results:
+                    return results[0]
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _parse_ical_from_event(found_event):
+        """Parse the icalendar Calendar object from a CalDAV event."""
+        try:
+            ical_data = (
+                found_event.data if isinstance(found_event.data, str)
+                else found_event.data.decode("utf-8")
+            )
+            return _icalendar_lib.Calendar.from_ical(ical_data)
+        except AttributeError:
+            return found_event.icalendar_instance
+
+    @staticmethod
+    def _apply_event_updates(ical, params: dict) -> None:
+        """Apply field updates from ``params`` onto the VEVENT component in-place."""
+        for component in ical.walk():
+            if component.name != "VEVENT":
+                continue
+            if "summary" in params and params["summary"] is not None:
+                component.pop("SUMMARY", None)
+                component.add("summary", str(params["summary"]))
+            if "dtstart" in params and params["dtstart"] is not None:
+                component.pop("DTSTART", None)
+                component.add("dtstart", parse_utc(params["dtstart"]))
+            if "dtend" in params and params["dtend"] is not None:
+                component.pop("DTEND", None)
+                component.add("dtend", parse_utc(params["dtend"]))
+            if "location" in params:
+                component.pop("LOCATION", None)
+                if params["location"]:
+                    component.add("location", str(params["location"]))
+            if "description" in params:
+                component.pop("DESCRIPTION", None)
+                if params["description"]:
+                    component.add("description", str(params["description"]))
+            break
+
     def update_event(self, client, params: dict) -> dict:
         """Update an existing CalDAV event by UID.
 
@@ -547,50 +597,12 @@ class CaldavHandler:
             return {"error": "Parameter 'uid' is required."}
 
         try:
-            principal = client.principal()
-            found_event = None
-            for calendar in principal.calendars():
-                try:
-                    results = calendar.search(uid=uid)
-                    if results:
-                        found_event = results[0]
-                        break
-                except Exception:
-                    continue
-
+            found_event = self._find_event_by_uid(client, uid)
             if found_event is None:
                 return {"error": f"Event not found (UID: {uid})"}
 
-            try:
-                ical_data = (
-                    found_event.data if isinstance(found_event.data, str)
-                    else found_event.data.decode("utf-8")
-                )
-                ical = _icalendar_lib.Calendar.from_ical(ical_data)
-            except AttributeError:
-                ical = found_event.icalendar_instance
-
-            for component in ical.walk():
-                if component.name != "VEVENT":
-                    continue
-                if "summary" in params and params["summary"] is not None:
-                    component.pop("SUMMARY", None)
-                    component.add("summary", str(params["summary"]))
-                if "dtstart" in params and params["dtstart"] is not None:
-                    component.pop("DTSTART", None)
-                    component.add("dtstart", parse_utc(params["dtstart"]))
-                if "dtend" in params and params["dtend"] is not None:
-                    component.pop("DTEND", None)
-                    component.add("dtend", parse_utc(params["dtend"]))
-                if "location" in params:
-                    component.pop("LOCATION", None)
-                    if params["location"]:
-                        component.add("location", str(params["location"]))
-                if "description" in params:
-                    component.pop("DESCRIPTION", None)
-                    if params["description"]:
-                        component.add("description", str(params["description"]))
-                break
+            ical = self._parse_ical_from_event(found_event)
+            self._apply_event_updates(ical, params)
 
             found_event.data = ical.to_ical().decode("utf-8")
             found_event.save()

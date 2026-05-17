@@ -64,43 +64,44 @@ def execute_steps(page, steps: list[dict]) -> list[dict]:
     return results
 
 
-def _execute_one(page, action: str, selector: str, value: str, timeout: int):
-    """Execute a single interaction step.  Raises on failure."""
-    if action == "click":
-        page.click(selector, timeout=timeout)
+# ── Action handler helpers ──────────────────────────────────────────────────
 
-    elif action == "fill":
-        page.fill(selector, value, timeout=timeout)
+def _handle_check(page, selector: str, timeout: int) -> None:
+    """Wait for a checkbox element and check it if not already checked."""
+    el = page.wait_for_selector(selector, timeout=timeout)
+    if el and not el.is_checked():
+        el.check()
 
-    elif action == "select":
-        page.select_option(selector, value, timeout=timeout)
 
-    elif action == "check":
-        el = page.wait_for_selector(selector, timeout=timeout)
-        if el:
-            if not el.is_checked():
-                el.check()
+def _handle_scroll(page, selector: str, timeout: int) -> None:
+    """Scroll an element into view."""
+    el = page.wait_for_selector(selector, timeout=timeout)
+    if el:
+        el.scroll_into_view_if_needed()
 
-    elif action == "wait":
-        page.wait_for_selector(selector, state="visible", timeout=timeout)
 
-    elif action == "scroll":
-        el = page.wait_for_selector(selector, timeout=timeout)
-        if el:
-            el.scroll_into_view_if_needed()
-
-    elif action == "press":
-        if selector:
-            page.press(selector, value, timeout=timeout)
-        else:
-            page.keyboard.press(value)
-
-    elif action == "hover":
-        page.hover(selector, timeout=timeout)
-
-    elif action == "type":
-        # Type character-by-character (for sites that watch keydown events)
-        page.type(selector, value, timeout=timeout)
-
+def _handle_press(page, selector: str, value: str, timeout: int) -> None:
+    """Press a key on a selector, or on the keyboard when no selector given."""
+    if selector:
+        page.press(selector, value, timeout=timeout)
     else:
+        page.keyboard.press(value)
+
+
+def _execute_one(page, action: str, selector: str, value: str, timeout: int) -> None:
+    """Execute a single interaction step.  Raises on failure."""
+    _ACTION_HANDLERS = {
+        "click":  lambda: page.click(selector, timeout=timeout),
+        "fill":   lambda: page.fill(selector, value, timeout=timeout),
+        "select": lambda: page.select_option(selector, value, timeout=timeout),
+        "check":  lambda: _handle_check(page, selector, timeout),
+        "wait":   lambda: page.wait_for_selector(selector, state="visible", timeout=timeout),
+        "scroll": lambda: _handle_scroll(page, selector, timeout),
+        "press":  lambda: _handle_press(page, selector, value, timeout),
+        "hover":  lambda: page.hover(selector, timeout=timeout),
+        "type":   lambda: page.type(selector, value, timeout=timeout),
+    }
+    handler = _ACTION_HANDLERS.get(action)
+    if handler is None:
         raise ValueError(f"Unknown action: {action}")
+    handler()

@@ -170,124 +170,121 @@ class HomeCapability(AbstractCapability):
 
     # ── Tools ────────────────────────────────────────────────────────
 
+    def _require_connection(self) -> dict | None:
+        """Return an error dict when not connected, else None."""
+        if not self.is_connected():
+            return {"error": "Home capability not connected. Configure it in the Brain dashboard."}
+        return None
+
+    def _tool_list_devices(self, topic, params, config=None, telemetry=None) -> dict:
+        err = self._require_connection()
+        if err:
+            return err
+        return rest.list_devices(
+            self._url, self._token, self._verify_ssl,
+            domain=params.get("domain"),
+            area=params.get("area"),
+            limit=int(params.get("limit", 50)),
+        )
+
+    def _tool_get_state(self, topic, params, config=None, telemetry=None) -> dict:
+        err = self._require_connection()
+        if err:
+            return err
+        eid = params.get("entity_id")
+        if not eid:
+            return {"error": "entity_id is required"}
+        return rest.get_state(self._url, self._token, self._verify_ssl, eid)
+
+    def _tool_control(self, topic, params, config=None, telemetry=None) -> dict:
+        err = self._require_connection()
+        if err:
+            return err
+        eid = params.get("entity_id")
+        svc = params.get("service")
+        if not eid or not svc:
+            return {"error": "entity_id and service are required"}
+        return rest.control(
+            self._url, self._token, self._verify_ssl,
+            eid, svc, params.get("service_data"),
+        )
+
+    def _tool_list_automations(self, topic, params, config=None, telemetry=None) -> dict:
+        err = self._require_connection()
+        if err:
+            return err
+        return rest.list_automations(self._url, self._token, self._verify_ssl)
+
+    def _tool_trigger_automation(self, topic, params, config=None, telemetry=None) -> dict:
+        err = self._require_connection()
+        if err:
+            return err
+        aid = params.get("automation_id")
+        if not aid:
+            return {"error": "automation_id is required"}
+        return rest.trigger_automation(self._url, self._token, self._verify_ssl, aid)
+
+    def _tool_subscribe_events(self, topic, params, config=None, telemetry=None) -> dict:
+        err = self._require_connection()
+        if err:
+            return err
+        eid = params.get("entity_id")
+        if not eid:
+            return {"error": "entity_id is required"}
+        ws_url = self._url.replace("http://", "ws://").replace("https://", "wss://")
+        ws_url = f"{ws_url}/api/websocket"
+        self._ws_handler.start(ws_url, self._token)
+        self._ws_handler.subscribe(eid)
+        return {"status": "subscribed", "entity_id": eid}
+
     def get_tools(self) -> list:
         """Return tool definitions for all 6 home actions.
-
-        Handlers are closures capturing ``self`` (bound to ``cap``).
 
         Returns:
             list[dict]: Tool dicts with ``name``, ``description``, ``parameters``,
             ``handler``, and ``timeout`` keys.
         """
-        cap = self
-
-        def _check() -> dict | None:
-            if not cap.is_connected():
-                return {"error": "Home capability not connected. Configure it in the Brain dashboard."}
-            return None
-
-        def _list_devices(topic, params, config=None, telemetry=None) -> dict:
-            err = _check()
-            if err:
-                return err
-            return rest.list_devices(
-                cap._url, cap._token, cap._verify_ssl,
-                domain=params.get("domain"),
-                area=params.get("area"),
-                limit=int(params.get("limit", 50)),
-            )
-
-        def _get_state(topic, params, config=None, telemetry=None) -> dict:
-            err = _check()
-            if err:
-                return err
-            eid = params.get("entity_id")
-            if not eid:
-                return {"error": "entity_id is required"}
-            return rest.get_state(cap._url, cap._token, cap._verify_ssl, eid)
-
-        def _control(topic, params, config=None, telemetry=None) -> dict:
-            err = _check()
-            if err:
-                return err
-            eid = params.get("entity_id")
-            svc = params.get("service")
-            if not eid or not svc:
-                return {"error": "entity_id and service are required"}
-            return rest.control(
-                cap._url, cap._token, cap._verify_ssl,
-                eid, svc, params.get("service_data"),
-            )
-
-        def _list_automations(topic, params, config=None, telemetry=None) -> dict:
-            err = _check()
-            if err:
-                return err
-            return rest.list_automations(cap._url, cap._token, cap._verify_ssl)
-
-        def _trigger_automation(topic, params, config=None, telemetry=None) -> dict:
-            err = _check()
-            if err:
-                return err
-            aid = params.get("automation_id")
-            if not aid:
-                return {"error": "automation_id is required"}
-            return rest.trigger_automation(cap._url, cap._token, cap._verify_ssl, aid)
-
-        def _subscribe_events(topic, params, config=None, telemetry=None) -> dict:
-            err = _check()
-            if err:
-                return err
-            eid = params.get("entity_id")
-            if not eid:
-                return {"error": "entity_id is required"}
-            ws_url = cap._url.replace("http://", "ws://").replace("https://", "wss://")
-            ws_url = f"{ws_url}/api/websocket"
-            cap._ws_handler.start(ws_url, cap._token)
-            cap._ws_handler.subscribe(eid)
-            return {"status": "subscribed", "entity_id": eid}
-
         return [
             {
                 "name": "list_devices",
                 "description": "List smart home entities, optionally filtered by domain or area.",
                 "parameters": {},
-                "handler": _list_devices,
+                "handler": self._tool_list_devices,
                 "timeout": 30,
             },
             {
                 "name": "get_state",
                 "description": "Get the current state and attributes of a single entity.",
                 "parameters": {},
-                "handler": _get_state,
+                "handler": self._tool_get_state,
                 "timeout": 15,
             },
             {
                 "name": "control",
                 "description": "Call a service on an entity (e.g. turn_on, turn_off).",
                 "parameters": {},
-                "handler": _control,
+                "handler": self._tool_control,
                 "timeout": 15,
             },
             {
                 "name": "list_automations",
                 "description": "List all automation entities with their enabled state.",
                 "parameters": {},
-                "handler": _list_automations,
+                "handler": self._tool_list_automations,
                 "timeout": 30,
             },
             {
                 "name": "trigger_automation",
                 "description": "Manually trigger an automation by automation_id.",
                 "parameters": {},
-                "handler": _trigger_automation,
+                "handler": self._tool_trigger_automation,
                 "timeout": 15,
             },
             {
                 "name": "subscribe_events",
                 "description": "Subscribe to real-time state_changed events for an entity.",
                 "parameters": {},
-                "handler": _subscribe_events,
+                "handler": self._tool_subscribe_events,
                 "timeout": 15,
             },
         ]
