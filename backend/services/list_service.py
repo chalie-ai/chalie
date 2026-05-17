@@ -69,7 +69,7 @@ class ListService:
         Raises:
             ValueError: If a list with that name already exists
         """
-        existing = self._find_by_name(name)
+        existing = self.find_by_name(name)
         if existing:
             raise ValueError(f"A list named '{name}' already exists.")
 
@@ -117,7 +117,7 @@ class ListService:
 
             updated = self._write_queue.submit_sync(_soft_delete) > 0
             if updated:
-                logger.info(f"[LISTS] Deleted list '{list_row['name']}' (id={list_id})")
+                logger.info("[LISTS] Deleted list '%s' (id=%s)", safe(list_row['name']), list_id)
             return True
 
         except Exception as e:
@@ -158,7 +158,7 @@ class ListService:
         if not list_row:
             return False
 
-        existing = self._find_by_name(new_name)
+        existing = self.find_by_name(new_name)
         if existing and existing['id'] != list_id:
             logger.warning(f"[LISTS] Cannot rename to '{new_name}' — name already in use")
             return False
@@ -451,8 +451,8 @@ class ListService:
             logger.error(f"[LISTS] _get_list_row failed: {e}")
             return None
 
-    def _find_by_name(self, name: str) -> Optional[Dict[str, Any]]:
-        """Resolve an active list by case-insensitive name. Used only for create/rename collision checks."""
+    def find_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+        """Resolve an active list by case-insensitive name match. Returns the list row or None."""
         if not name:
             return None
         try:
@@ -472,7 +472,7 @@ class ListService:
             return None
 
         except Exception as e:
-            logger.error(f"[LISTS] _find_by_name failed: {e}")
+            logger.error(f"[LISTS] find_by_name failed: {e}")
             return None
 
     def _touch_list(self, list_id: str) -> None:

@@ -1,8 +1,10 @@
 """
 ListAbility — Manage deterministic lists via the ACT loop.
 
-Strict CRUD interface. Existing lists are addressed by ``id``; ``name`` is
-used only for ``create`` and ``rename``. ``list_all`` returns ids to reuse.
+Strict CRUD interface. Existing lists are addressed by ``id`` or ``name``
+(case-insensitive exact match) for view/add/check/remove/clear/delete.
+``name`` on rename means the NEW name — id is always required there.
+``list_all`` returns ids to reuse.
 
 Actions: list_all, create, view, add, check, remove, clear, rename, delete
 
@@ -37,6 +39,7 @@ class ListAbility(Ability):
         "show me all my lists",
         "add bananas to list abc12345",
         "check off milk on list abc12345",
+        "check off milk on my grocery list",
         "rename list abc12345 to weekend chores",
         "delete list abc12345",
     ]
@@ -65,13 +68,20 @@ class ListAbility(Ability):
             "id": {
                 "type": "string",
                 "description": (
-                    "List id (8-char hex). Required for view/add/check/remove/clear/rename/delete. "
+                    "List id (8-char hex). "
+                    "For view/add/check/remove/clear/delete: pass either id OR name — both work. "
+                    "For rename: id is required (name field is the new name). "
                     "Reuse the id returned by create or list_all."
                 ),
             },
             "name": {
                 "type": "string",
-                "description": "List name. Required for create and rename.",
+                "description": (
+                    "List name. Required for create. "
+                    "For rename: the new name. "
+                    "For view/add/check/remove/clear/delete: optional — resolves to id by "
+                    "case-insensitive exact match if id not provided."
+                ),
             },
             "items": {
                 "type": "array",
@@ -197,11 +207,26 @@ def _normalize_string_items(params: dict) -> list:
     return [i.strip() for i in items if isinstance(i, str) and i.strip()]
 
 
-def _require_id(params: dict) -> tuple[Optional[str], Optional[str]]:
+def _resolve_list_id(service, params: dict) -> tuple[Optional[str], Optional[str]]:
+    """Return (list_id, None) on success or (None, error_json) on failure.
+
+    Accepts either ``id`` (used verbatim) or ``name`` (case-insensitive exact
+    match via ListService.find_by_name).  For rename, ``name`` means the new
+    name — callers that do not want name-fallback must pass id directly.
+    """
     list_id = (params.get("id") or "").strip()
-    if not list_id:
-        return None, _fail("'id' is required. Use the id returned by create or list_all.")
-    return list_id, None
+    if list_id:
+        return list_id, None
+    name = (params.get("name") or "").strip()
+    if name:
+        row = service.find_by_name(name)
+        if row:
+            return row["id"], None
+        return None, _fail(f"No list named '{name}' found.")
+    return None, _fail(
+        "'id' or 'name' is required. "
+        "Use the id returned by create/list_all, or pass the list's name."
+    )
 
 
 def _require_name(params: dict) -> tuple[Optional[str], Optional[str]]:
@@ -256,7 +281,7 @@ def _handle_create(service, params: dict) -> str:
 
 
 def _handle_view(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_list_id(service, params)
     if err:
         return err
 
@@ -268,7 +293,7 @@ def _handle_view(service, params: dict) -> str:
 
 
 def _handle_add(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_list_id(service, params)
     if err:
         return err
 
@@ -291,7 +316,7 @@ def _handle_add(service, params: dict) -> str:
 
 
 def _handle_check(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_list_id(service, params)
     if err:
         return err
 
@@ -331,7 +356,7 @@ def _split_check_items(raw_items: list) -> tuple[list, list]:
 
 
 def _handle_remove(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_list_id(service, params)
     if err:
         return err
 
@@ -355,7 +380,7 @@ def _handle_remove(service, params: dict) -> str:
 
 
 def _handle_clear(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_list_id(service, params)
     if err:
         return err
 
@@ -367,9 +392,9 @@ def _handle_clear(service, params: dict) -> str:
 
 
 def _handle_rename(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
+    list_id = (params.get("id") or "").strip()
+    if not list_id:
+        return _fail("'id' is required for rename. (name is the new name, not a lookup key.)")
 
     new_name, err = _require_name(params)
     if err:
@@ -383,7 +408,7 @@ def _handle_rename(service, params: dict) -> str:
 
 
 def _handle_delete(service, params: dict) -> str:
-    list_id, err = _require_id(params)
+    list_id, err = _resolve_list_id(service, params)
     if err:
         return err
 

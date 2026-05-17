@@ -1,9 +1,10 @@
 """
 Feature tests for ListAbility — strict CRUD interface.
 
-Existing lists are addressed by ``id`` (8-char hex). ``name`` is used only
-for ``create`` and ``rename``. The LLM discovers ids by calling
-``list_all`` first.
+Existing lists are addressed by ``id`` (8-char hex) or ``name`` for most
+actions. ``name`` is used only for ``create`` and as the NEW name for
+``rename``. The LLM discovers ids by calling ``list_all`` first, or can
+pass the list name directly.
 
 Actions: list_all, create, view, add, check, remove, clear, rename, delete
 
@@ -132,6 +133,24 @@ class TestView:
         assert body['status'] == 'fail'
         assert 'not found' in body['message']
 
+    def test_resolves_by_name(self, ability, service):
+        list_id = service.create_list("Grocery List")
+        service.add_items(list_id, ["milk"])
+        body = _payload(_exec(ability, {"action": "view", "name": "Grocery List"}))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == list_id
+
+    def test_resolves_by_name_case_insensitive(self, ability, service):
+        list_id = service.create_list("Grocery List")
+        body = _payload(_exec(ability, {"action": "view", "name": "grocery list"}))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == list_id
+
+    def test_name_not_found_fails(self, ability):
+        body = _payload(_exec(ability, {"action": "view", "name": "No Such List"}))
+        assert body['status'] == 'fail'
+        assert 'No list named' in body['message']
+
 
 # ─── action: add ───────────────────────────────────────────────────────────
 
@@ -209,6 +228,16 @@ class TestCheck:
         assert body['status'] == 'fail'
         assert "content" in body['message']
 
+    def test_resolves_by_name(self, ability, service):
+        list_id = service.create_list("Groceries")
+        service.add_items(list_id, ["milk"])
+        body = _payload(_exec(ability, {
+            "action": "check", "name": "Groceries",
+            "items": [{"content": "milk", "checked": True}],
+        }))
+        assert body['status'] == 'success'
+        assert body['list']['items'][0]['checked'] is True
+
 
 # ─── action: remove ────────────────────────────────────────────────────────
 
@@ -273,6 +302,13 @@ class TestRename:
         body = _payload(_exec(ability, {"action": "rename", "id": list_id}))
         assert body['status'] == 'fail'
 
+    def test_rename_requires_id_not_name(self, ability, service):
+        """rename must require id — name is the new name, not a lookup key."""
+        service.create_list("Old")
+        body = _payload(_exec(ability, {"action": "rename", "name": "New"}))
+        assert body['status'] == 'fail'
+        assert "'id'" in body['message']
+
 
 # ─── action: delete ────────────────────────────────────────────────────────
 
@@ -287,6 +323,17 @@ class TestDelete:
         body = _payload(_exec(ability, {"action": "delete", "id": "deadbeef"}))
         assert body['status'] == 'fail'
         assert 'not found' in body['message']
+
+    def test_resolves_by_name(self, ability, service):
+        list_id = service.create_list("Groceries")
+        body = _payload(_exec(ability, {"action": "delete", "name": "Groceries"}))
+        assert body['status'] == 'success'
+        assert list_id in body['message']
+
+    def test_missing_id_and_name_fails(self, ability):
+        body = _payload(_exec(ability, {"action": "delete"}))
+        assert body['status'] == 'fail'
+        assert "'id' or 'name'" in body['message']
 
 
 # ─── unknown action ────────────────────────────────────────────────────────
