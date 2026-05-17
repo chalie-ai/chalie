@@ -1,11 +1,18 @@
 /**
- * WebSocket client — single bidirectional channel replacing both SSE streams.
+ * WebSocket client — receive-only server→client push channel.
  *
- * Handles:
- *   - Chat request/response (replaces POST-based SSEClient)
- *   - Drift events: cards, tasks, reminders, escalations (replaces EventSource)
- *   - Reconnect with sequence-based catch-up
- *   - Keepalive ping/pong
+ * All client→server requests use HTTP:
+ *   POST /chat    — user message (new turn or steer)
+ *   POST /action  — action button click
+ *   POST /upload  — file attachment
+ *
+ * The WebSocket delivers server-pushed events:
+ *   ← status, message, act_narration, act_tool_start, act_tool_end,
+ *     done, error, ping, drift/task/reminder/escalation/notification,
+ *     permission_request, intent, capability_alert
+ *
+ * The only client→server WS message is pong (keepalive response).
+ * On disconnect, the page reloads to re-establish state.
  */
 export class WSClient {
   /**
@@ -14,20 +21,15 @@ export class WSClient {
   constructor(getHost) {
     this._getHost = getHost;
     this._ws = null;
-    this._lastSeq = 0;
     this._reconnectDelay = 1000;
     this._maxReconnectDelay = 30000;
     this._reconnectTimer = null;
-    this._chatCallbacks = null;   // active chat request callbacks
-    this._driftHandler = null;    // drift event handler
+    this._chatCallbacks = null;
+    this._driftHandler = null;
     this._connected = false;
     this._intentionallyClosed = false;
-    this._seenSeqs = new Set();   // dedup on reconnect replay
   }
 
-  /**
-   * Build WebSocket URL from HTTP host.
-   */
   _buildWsUrl() {
     const host = this._getHost?.() || '';
     let base;
@@ -36,9 +38,19 @@ export class WSClient {
     } else {
       base = globalThis.location.origin;
     }
-    // Convert http(s) to ws(s)
     const wsBase = base.replace(/^http/, 'ws');
     return wsBase + '/ws';
+  }
+
+  _buildHttpUrl(path) {
+    const host = this._getHost?.() || '';
+    let base;
+    if (host) {
+      base = host.replace(/\/$/, '');
+    } else {
+      base = globalThis.location.origin;
+    }
+    return base + path;
   }
 
   /**
@@ -49,9 +61,6 @@ export class WSClient {
     this._driftHandler = handler;
   }
 
-  /**
-   * Connect to the WebSocket server.
-   */
   connect() {
     if (this._ws && (this._ws.readyState === WebSocket.OPEN || this._ws.readyState === WebSocket.CONNECTING)) {
       return;
@@ -71,11 +80,6 @@ export class WSClient {
     this._ws.onopen = () => {
       this._connected = true;
       this._reconnectDelay = 1000;
-
-      // If reconnecting, send resume with last sequence number
-      if (this._lastSeq > 0) {
-        this._send({ type: 'resume', last_seq: this._lastSeq });
-      }
     };
 
     this._ws.onmessage = (event) => {
@@ -85,19 +89,6 @@ export class WSClient {
       } catch {
         return;
       }
-
-      // Track sequence numbers and deduplicate replayed events
-      if (data.seq) {
-        if (this._seenSeqs.has(data.seq)) return; // already processed
-        this._seenSeqs.add(data.seq);
-        this._lastSeq = data.seq;
-        // Keep set bounded
-        if (this._seenSeqs.size > 500) {
-          const arr = [...this._seenSeqs];
-          this._seenSeqs = new Set(arr.slice(-250));
-        }
-      }
-
       this._dispatch(data);
     };
 
@@ -113,9 +104,6 @@ export class WSClient {
     };
   }
 
-  /**
-   * Close the WebSocket connection.
-   */
   close() {
     this._intentionallyClosed = true;
     if (this._reconnectTimer) {
@@ -129,16 +117,10 @@ export class WSClient {
     this._connected = false;
   }
 
-  /**
-   * Whether the WebSocket is currently open.
-   */
   get isConnected() {
     return this._connected && this._ws?.readyState === WebSocket.OPEN;
   }
 
-  /**
-   * Schedule a reconnect with exponential backoff.
-   */
   _scheduleReconnect() {
     if (this._intentionallyClosed) return;
     if (this._reconnectTimer) return;
@@ -148,29 +130,18 @@ export class WSClient {
       this.connect();
     }, this._reconnectDelay);
 
-    // Exponential backoff
     this._reconnectDelay = Math.min(this._reconnectDelay * 1.5, this._maxReconnectDelay);
   }
 
-  /**
-   * Send a JSON message.
-   */
-  _send(data) {
-    if (this._ws?.readyState === WebSocket.OPEN) {
-      this._ws.send(JSON.stringify(data));
-    }
-  }
-
-  /**
-   * Abort any in-flight chat request (clears callbacks).
-   */
   abort() {
     this._chatCallbacks = null;
   }
 
   /**
-   * Send a chat message via WebSocket.
-   * If an ACT loop is already in-flight, sends as a steer instead.
+   * Send a chat message via POST /chat. Response arrives via WS push.
+   *
+   * If a chat is already in-flight and this is a steer (empty callbacks),
+   * the server routes it as a steer injection into the active ACT loop.
    *
    * @param {string} text
    * @param {"text"|"voice"} source
@@ -178,26 +149,22 @@ export class WSClient {
    *   onStatus?:    (stage: string) => void,
    *   onMessage?:   (data: object) => void,
    *   onNarration?: (data: object) => void,
-   *   onCard?:      (data: object) => void,
    *   onError?:     (data: object) => void,
    *   onDone?:      (data: object) => void,
    *   onSteerSent?: (text: string) => void,
+   *   onToolStart?: (data: object) => void,
+   *   onToolEnd?:   (data: object) => void,
    * }} callbacks
    * @param {string[]} [attachments] - tmp_paths from POST /upload
    */
   send(text, source, callbacks = {}, attachments = []) {
-    // If a chat is already in-flight, check if this is a steer (empty callbacks = steer)
     if (this._chatCallbacks) {
       const isSteer = !callbacks.onMessage && !callbacks.onDone;
       if (isSteer) {
-        // Route as ACT steer — caller (app.js) already verified narrating state
-        if (this.isConnected && text) {
-          this._send({ type: 'act_steer', text });
-          this._chatCallbacks.onSteerSent?.(text);
-        }
+        this._postChat(text, source, []);
+        this._chatCallbacks.onSteerSent?.(text);
         return;
       }
-      // Not a steer — abort old request and start fresh
       this._chatCallbacks = null;
     }
 
@@ -210,13 +177,11 @@ export class WSClient {
       return;
     }
 
-    const payload = { type: 'chat', text, source };
-    if (attachments?.length) payload.attachments = attachments;
-    this._send(payload);
+    this._postChat(text, source, attachments);
   }
 
   /**
-   * Send a deterministic action (button click) — bypasses LLM routing.
+   * Send a deterministic action (button click) via POST /action.
    *
    * @param {object} payload — action payload from the button
    * @param {{
@@ -236,22 +201,44 @@ export class WSClient {
       return;
     }
 
-    this._send({ type: 'action', payload });
+    fetch(this._buildHttpUrl('/action'), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {
+      callbacks.onError?.({ message: 'Action request failed.', recoverable: true });
+      callbacks.onDone?.({ duration_ms: 0 });
+      this._chatCallbacks = null;
+    });
   }
 
-  /**
-   * Dispatch incoming messages to appropriate handlers.
-   */
+  _postChat(text, source, attachments) {
+    const body = { text, source };
+    if (attachments?.length) body.attachments = attachments;
+
+    fetch(this._buildHttpUrl('/chat'), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).catch(() => {
+      this._chatCallbacks?.onError?.({ message: 'Chat request failed.', recoverable: true });
+      this._chatCallbacks?.onDone?.({ duration_ms: 0 });
+      this._chatCallbacks = null;
+    });
+  }
+
   _dispatch(data) {
     const type = data.type;
 
-    // Ping/pong keepalive
     if (type === 'ping') {
-      this._send({ type: 'pong' });
+      if (this._ws?.readyState === WebSocket.OPEN) {
+        this._ws.send(JSON.stringify({ type: 'pong' }));
+      }
       return;
     }
 
-    // Chat response events (while a chat is in-flight)
     if (this._chatCallbacks) {
       switch (type) {
         case 'status':
@@ -279,7 +266,6 @@ export class WSClient {
       }
     }
 
-    // Drift/push events → delegate to drift handler
     if (this._driftHandler) {
       this._driftHandler(data);
     }
