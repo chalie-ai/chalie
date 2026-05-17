@@ -1,0 +1,216 @@
+"""
+Locale Service — Single chokepoint for ALL localisation in Chalie.
+
+RULES (enforced by code review):
+  - ALL dates/times stored in the DB MUST pass through this service and be UTC.
+  - ALL dates/times shown to users or used in triggers MUST pass through this
+    service and be converted to the user's local timezone.
+  - ALL locale-sensitive values (currency, language, location) MUST be read
+    from this service — never directly from telemetry, settings, or env.
+
+The backing store is the ``telemetry`` table (populated by the frontend
+heartbeat via ClientContextService.save()).  This service is the exclusive
+read interface for locale fields.
+"""
+
+import logging
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
+from services.database_service import get_shared_db_service
+from services.time_utils import utc_now, parse_utc
+
+logger = logging.getLogger(__name__)
+
+_LOCALE_KEYS = frozenset({
+    "timezone", "locale", "language", "currency",
+    "location.lat", "location.lon", "location_name",
+})
+
+
+def _read_locale_fields() -> dict:
+    """Read locale-relevant rows from the telemetry table.
+
+    Returns a flat dict with keys like 'timezone', 'locale', 'location.lat'.
+    Returns empty dict gracefully when the table doesn't exist (fresh boot,
+    test harness) or when no heartbeat has been received yet.
+    """
+    import json
+
+    try:
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            try:
+                placeholders = ",".join(f"'{k}'" for k in _LOCALE_KEYS)
+                cursor.execute(f"SELECT key, value FROM telemetry WHERE key IN ({placeholders})")
+                rows = cursor.fetchall()
+            finally:
+                cursor.close()
+    except Exception:
+        return {}
+
+    result = {}
+    for key, raw_value in rows:
+        try:
+            result[key] = json.loads(raw_value)
+        except (TypeError, ValueError):
+            result[key] = raw_value
+    return result
+
+
+def get_timezone() -> ZoneInfo:
+    """Return the user's IANA timezone as a ZoneInfo object.
+
+    Falls back to UTC when no heartbeat has been received yet.
+    """
+    fields = _read_locale_fields()
+    tz_name = fields.get("timezone")
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            logger.debug("[LOCALE] Invalid timezone '%s', falling back to UTC", tz_name)
+    return ZoneInfo("UTC")
+
+
+def get_timezone_name() -> str:
+    """Return the user's IANA timezone name string (e.g. 'Europe/Malta')."""
+    fields = _read_locale_fields()
+    return fields.get("timezone") or "UTC"
+
+
+def get_locale() -> str:
+    """Return the user's BCP-47 locale tag (e.g. 'en-MT').
+
+    Falls back to 'en-US' when unavailable.
+    """
+    fields = _read_locale_fields()
+    return fields.get("locale") or "en-US"
+
+
+def get_language() -> str:
+    """Return the user's preferred language (e.g. 'en-GB').
+
+    Falls back to 'en' when unavailable.
+    """
+    fields = _read_locale_fields()
+    return fields.get("language") or "en"
+
+
+def get_currency() -> str:
+    """Return the user's ISO 4217 currency code (e.g. 'EUR').
+
+    Falls back to 'USD' when unavailable.
+    """
+    fields = _read_locale_fields()
+    return fields.get("currency") or "USD"
+
+
+def get_location() -> dict:
+    """Return the user's last known location.
+
+    Returns:
+        Dict with keys 'lat', 'lon', 'name' (any may be None).
+    """
+    fields = _read_locale_fields()
+    return {
+        "lat": fields.get("location.lat"),
+        "lon": fields.get("location.lon"),
+        "name": fields.get("location_name"),
+    }
+
+
+# ── Formatting helpers ────────────────────────────────────────────────────
+
+
+def format_date(dt, fmt: str = "%Y-%m-%d %H:%M", for_ui: bool = False) -> str | None:
+    """Format a datetime for storage or display.
+
+    This is THE chokepoint for all date/time formatting in the system.
+
+    Args:
+        dt: A datetime (naive or aware), ISO string, or None.
+            Naive datetimes are assumed UTC.
+        fmt: strftime format string.
+        for_ui: If True, converts to user's local timezone before formatting.
+                If False, formats as UTC (for DB storage, logs, internal use).
+
+    Returns:
+        Formatted string, or None if dt is None/unparseable.
+    """
+    if dt is None:
+        return None
+    if isinstance(dt, str):
+        if not dt.strip():
+            return None
+        dt = parse_utc(dt)
+    elif isinstance(dt, datetime):
+        dt = parse_utc(dt)
+    else:
+        return None
+
+    if dt.year <= 1:
+        return None
+
+    if for_ui:
+        dt = dt.astimezone(get_timezone())
+    else:
+        dt = dt.astimezone(timezone.utc)
+
+    return dt.strftime(fmt)
+
+
+def to_utc(dt) -> datetime:
+    """Ensure a datetime is timezone-aware UTC.
+
+    Use this before ANY database write involving a timestamp.
+
+    Args:
+        dt: A datetime (naive or aware), or ISO string.
+
+    Returns:
+        Timezone-aware UTC datetime.
+    """
+    return parse_utc(dt)
+
+
+def to_local(dt) -> datetime:
+    """Convert a datetime to the user's local timezone.
+
+    Use this before displaying any timestamp to the user or evaluating
+    triggers (e.g. 'is it past 10am for the user?').
+
+    Args:
+        dt: A datetime (naive or aware), or ISO string.
+
+    Returns:
+        Timezone-aware datetime in the user's local timezone.
+    """
+    parsed = parse_utc(dt)
+    return parsed.astimezone(get_timezone())
+
+
+def local_now() -> datetime:
+    """Return the current time in the user's local timezone.
+
+    Use for trigger evaluation, 'today/tomorrow' resolution, etc.
+    """
+    return utc_now().astimezone(get_timezone())
+
+
+def format_currency(amount: float | int, symbol: bool = True) -> str:
+    """Format a monetary amount using the user's currency.
+
+    Args:
+        amount: Numeric amount.
+        symbol: If True, prefix with currency code.
+
+    Returns:
+        Formatted string like 'EUR 1,234.56' or '1,234.56'.
+    """
+    currency_code = get_currency()
+    formatted = f"{amount:,.2f}"
+    if symbol:
+        return f"{currency_code} {formatted}"
+    return formatted

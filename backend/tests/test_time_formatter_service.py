@@ -153,7 +153,7 @@ class TestLocalConvertsUtcToUserTimezone:
 
     def _patch_tz(self, tz_name: str):
         return patch(
-            "services.time_formatter_service.get_user_tz",
+            "services.locale_service.get_timezone",
             return_value=ZoneInfo(tz_name),
         )
 

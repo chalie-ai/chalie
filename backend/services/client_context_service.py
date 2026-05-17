@@ -15,8 +15,10 @@ Side concerns that stay in MemoryStore (NOT telemetry):
   - culture-seeding cookie
 
 Side concerns persisted elsewhere:
-  - timezone → settings table (survives restarts, used by scheduler/CalDAV)
   - demographic traits → data_graph
+
+Locale fields (timezone, locale, language, currency, location) are read
+exclusively via ``services.locale_service`` — never directly from this service.
 """
 
 import json
@@ -205,9 +207,6 @@ class ClientContextService:
                 if "location_name" in cached_ctx:
                     ctx["location_name"] = cached_ctx["location_name"]
 
-        # Persist timezone to settings (survives restarts, enables CalDAV/scheduler)
-        if tz_name := ctx.get("timezone"):
-            self._persist_timezone(tz_name, cached_ctx.get("timezone"))
 
         # Persist the heartbeat to the telemetry table — replace-all so deleted
         # FE keys disappear from the next render.
@@ -285,30 +284,6 @@ class ClientContextService:
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to push history: {e}")
 
-    def _persist_timezone(self, tz_name: str, previous_tz: str | None):
-        """Write user_timezone to settings if it changed.
-
-        Only writes on actual change to avoid unnecessary DB churn on every
-        heartbeat (sent every 5 minutes).
-        """
-        if tz_name == previous_tz:
-            return
-        try:
-            from zoneinfo import ZoneInfo
-            ZoneInfo(tz_name)  # validate IANA name
-        except Exception:
-            logging.debug(f"[CLIENT CONTEXT] Invalid timezone '{tz_name}', not persisting")
-            return
-        try:
-            from services.database_service import get_shared_db_service
-            from services.settings_service import SettingsService
-            SettingsService(get_shared_db_service()).set(
-                "user_timezone", tz_name, "string",
-                "User IANA timezone (auto-detected from client heartbeat)"
-            )
-            logging.debug(f"[CLIENT CONTEXT] Persisted user_timezone={tz_name}")
-        except Exception as e:
-            logging.debug(f"[CLIENT CONTEXT] Failed to persist timezone: {e}")
 
     # ── Demographic Trait Seeding ──────────────────────────────────────
 

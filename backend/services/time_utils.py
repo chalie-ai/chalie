@@ -53,30 +53,7 @@ def parse_utc(value) -> datetime:
 def get_user_tz() -> ZoneInfo:
     """Return the user's IANA timezone as a ZoneInfo object.
 
-    Resolution order:
-    1. ClientContextService (live heartbeat — most fresh)
-    2. SettingsService "user_timezone" (persistent across restarts)
-    3. Falls back to UTC
+    Delegates to locale_service.get_timezone() — the single source of truth.
     """
-    # 1. Live heartbeat context (MemoryStore, TTL 1h)
-    try:
-        from services.client_context_service import ClientContextService
-        ctx = ClientContextService().get()
-        tz_name = ctx.get("timezone")
-        if tz_name:
-            return ZoneInfo(tz_name)
-    except Exception:
-        pass
-
-    # 2. Persistent setting (survives restarts, no heartbeat needed)
-    try:
-        from services.database_service import get_shared_db_service
-        from services.settings_service import SettingsService
-        tz_name = SettingsService(get_shared_db_service()).get("user_timezone")
-        if tz_name:
-            return ZoneInfo(tz_name)
-    except Exception:
-        pass
-
-    # 3. UTC fallback
-    return ZoneInfo("UTC")
+    from services.locale_service import get_timezone
+    return get_timezone()

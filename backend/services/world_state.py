@@ -225,15 +225,14 @@ def _order_schedule_messages(pending: dict, fired: dict) -> list[str]:
     return ordered
 
 
-def _compute_local_time(timezone_name: str | None) -> str | None:
-    """Render the user's wall-clock time as ``Sat 02 May 2026 11:35`` for the given IANA zone."""
-    if not timezone_name:
-        return None
+def _compute_local_time() -> str | None:
+    """Render the user's wall-clock time as ``Sat 02 May 2026 11:35``."""
     try:
-        from zoneinfo import ZoneInfo
-        return utc_now().astimezone(ZoneInfo(timezone_name)).strftime(_LOCAL_TIME_FORMAT)
+        from services.locale_service import format_date
+        from services.time_utils import utc_now
+        return format_date(utc_now(), _LOCAL_TIME_FORMAT, for_ui=True)
     except Exception as exc:
-        logger.debug("[WorldState] local_time compute failed for %r: %s", timezone_name, exc)
+        logger.debug("[WorldState] local_time compute failed: %s", exc)
         return None
 
 
@@ -411,7 +410,7 @@ class WorldState:
         if not ctx:
             return []
 
-        fresh_local_time = _compute_local_time(ctx.get("timezone"))
+        fresh_local_time = _compute_local_time()
         if fresh_local_time:
             ctx["local_time"] = fresh_local_time
 
