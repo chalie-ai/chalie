@@ -12,10 +12,11 @@ Entry point: scheduler_worker() registered in run.py.
 import logging
 import threading
 import time
+import uuid
 
 from services.embedding_utils import pack_embedding
 from utils.logger import Logger
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -159,36 +160,41 @@ def _poll_and_fire():
                     if not current or current[0] != "pending":
                         continue
 
-                    _fire_item(item)
+                    # Skip execution during quiet hours or weekends (for weekday schedules)
+                    skip = _in_quiet_hours(item)
+                    if item["recurrence"] == "weekdays":
+                        from services.locale_service import local_now
+                        if local_now().weekday() >= 5:
+                            skip = True
+
+                    if skip:
+                        logger.debug(f"{LOG_PREFIX} Skipping {item['id']} — quiet hours / weekend")
+                    else:
+                        _fire_item(item)
                     cursor.execute(
                         "UPDATE scheduled_items SET status='fired', last_fired_at=? WHERE id=?",
                         (now_iso, item["id"])
                     )
 
-                    if item["recurrence"]:
-                        next_item = _build_recurrence(item)
-                        if next_item:
-                            cursor.execute("""
-                                INSERT INTO scheduled_items
-                                  (id, item_type, message, due_at, recurrence,
-                                   window_start, window_end, status, channel,
-                                   created_by_session, created_at, group_id, is_prompt)
-                                VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?)
-                            """, (
-                                next_item["id"],
-                                next_item["item_type"],
-                                next_item["message"],
-                                next_item["due_at"].isoformat() if isinstance(next_item["due_at"], datetime) else next_item["due_at"],
-                                next_item["recurrence"],
-                                next_item.get("window_start"),
-                                next_item.get("window_end"),
-                                next_item["channel"],
-                                next_item["created_by_session"],
-                                now_iso,
-                                next_item.get("group_id"),
-                                1 if next_item.get("is_prompt", False) else 0,
-                            ))
-                            embed_scheduled_item(next_item["id"], next_item["message"])
+                    # Generate next occurrence
+                    next_due = _next_due(item)
+                    if next_due is not None:
+                        next_id = uuid.uuid4().hex[:8]
+                        cursor.execute("""
+                            INSERT INTO scheduled_items
+                              (id, item_type, message, due_at, recurrence,
+                               window_start, window_end, status, channel,
+                               created_by_session, created_at, group_id, is_prompt)
+                            VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?)
+                        """, (
+                            next_id, item["item_type"], item["message"],
+                            next_due.isoformat(),
+                            item["recurrence"], item.get("window_start"), item.get("window_end"),
+                            item.get("channel"), item.get("created_by_session"),
+                            now_iso, item.get("group_id") or item["id"],
+                            1 if item.get("is_prompt") else 0,
+                        ))
+                        embed_scheduled_item(next_id, item["message"])
 
                 except Exception as e:
                     logger.error(f"{LOG_PREFIX} Failed to fire {item['id']}: {e}")
@@ -283,115 +289,56 @@ def _fire_item(item: dict):
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
 
 
-def _build_recurrence(item: dict, _fired_at: object = None) -> dict:
-    """
-    Build the next occurrence for a recurring schedule.
-    Returns new row dict with fresh 8-char hex id, or None if one-time.
-    """
-    import uuid
+_RECURRENCE_MAP = {
+    "daily": ("day", 1),
+    "weekly": ("day", 7),
+    "weekdays": ("day", 1),
+    "hourly": ("hour", 1),
+}
+
+
+def _in_quiet_hours(item: dict) -> bool:
+    """Check if now is outside the item's active window (quiet hours)."""
+    ws, we = item.get("window_start"), item.get("window_end")
+    if not ws or not we:
+        return False
+    from services.locale_service import local_now
+    now_local = local_now()
+    current = (now_local.hour, now_local.minute)
+    return not (tuple(map(int, ws.split(":"))) <= current < tuple(map(int, we.split(":"))))
+
+
+def _next_due(item: dict) -> datetime | None:
+    """Return the next UTC due datetime for a recurring item, or None."""
+    import calendar
+    from services.locale_service import calculate_interval
+    from services.time_utils import parse_utc
 
     recurrence = item.get("recurrence")
     if not recurrence:
         return None
 
     try:
-        from services.time_utils import parse_utc
         due_at = parse_utc(item["due_at"])
-
     except Exception:
         return None
 
-    next_due = _calculate_next_due(due_at, recurrence, item.get("window_start"), item.get("window_end"))
-    if next_due is None:
-        return None
+    if recurrence in _RECURRENCE_MAP:
+        next_utc, _ = calculate_interval(due_at, *_RECURRENCE_MAP[recurrence])
+        return next_utc
 
-    return {
-        "id": uuid.uuid4().hex[:8],
-        "item_type": item.get("item_type", "notification"),
-        "message": item.get("message", ""),
-        "due_at": next_due,
-        "recurrence": recurrence,
-        "window_start": item.get("window_start"),
-        "window_end": item.get("window_end"),
-        "channel": item.get("channel", item.get("topic")),
-        "created_by_session": item.get("created_by_session"),
-        "group_id": item.get("group_id") or item.get("id"),  # inherit group, fall back to own id
-        "is_prompt": item.get("item_type", "notification") == "prompt",
-    }
-
-
-def _calculate_next_due(
-    due_at: datetime,
-    recurrence: str,
-    window_start: str = None,
-    window_end: str = None,
-) -> datetime:
-    """
-    Calculate next due datetime for a recurrence rule.
-    Handles hourly windows and drift prevention.
-    """
-    import calendar
-
-    if recurrence == "daily":
-        return due_at + timedelta(days=1)
-
-    elif recurrence == "weekly":
-        return due_at + timedelta(weeks=1)
-
-    elif recurrence == "monthly":
-        month = due_at.month + 1
-        year = due_at.year
+    if recurrence == "monthly":
+        year, month = due_at.year, due_at.month + 1
         if month > 12:
-            month = 1
-            year += 1
-        last_day = calendar.monthrange(year, month)[1]
-        day = min(due_at.day, last_day)
+            month, year = 1, year + 1
+        day = min(due_at.day, calendar.monthrange(year, month)[1])
         return due_at.replace(year=year, month=month, day=day)
 
-    elif recurrence == "weekdays":
-        next_dt = due_at + timedelta(days=1)
-        while next_dt.weekday() >= 5:  # Skip Sat (5) and Sun (6)
-            next_dt += timedelta(days=1)
-        return next_dt
-
-    elif recurrence == "hourly":
-        next_dt = due_at + timedelta(hours=1)
-
-        # If window_start/window_end set, enforce the window
-        # Windows are in user-local time — convert for comparison
-        if window_start and window_end:
-            start_hour, start_min = map(int, window_start.split(":"))
-            end_hour, end_min = map(int, window_end.split(":"))
-
-            from services.time_utils import get_user_tz
-            tz = get_user_tz()
-
-            # Cascade prevention: loop up to 48 times to find next valid hour within window
-            for _ in range(48):
-                local_dt = next_dt.astimezone(tz)
-                current_time = (local_dt.hour, local_dt.minute)
-                window_start_time = (start_hour, start_min)
-                window_end_time = (end_hour, end_min)
-
-                if window_start_time <= current_time < window_end_time:
-                    return next_dt
-
-                # Outside window: advance in local time, convert back to UTC
-                if current_time >= window_end_time:
-                    local_next = (local_dt + timedelta(days=1)).replace(
-                        hour=start_hour, minute=start_min
-                    )
-                else:
-                    local_next = local_dt.replace(hour=start_hour, minute=start_min)
-                next_dt = local_next.astimezone(timezone.utc)
-            return None
-
-        return next_dt
-
-    elif recurrence.startswith("interval:"):
+    if recurrence.startswith("interval:"):
         try:
             mins = int(recurrence.split(":", 1)[1])
-            return due_at + timedelta(minutes=mins)
+            next_utc, _ = calculate_interval(due_at, "minute", mins)
+            return next_utc
         except (ValueError, IndexError):
             return None
 

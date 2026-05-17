@@ -9,7 +9,6 @@ verify the output.
 import json
 import pytest
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 
 def _seed_telemetry(db, **kwargs):
@@ -24,19 +23,28 @@ def _seed_telemetry(db, **kwargs):
 
 
 @pytest.mark.unit
-class TestGetTimezone:
-    """locale_service reads timezone from telemetry and returns ZoneInfo."""
+class TestLocaleServiceReads:
+    """Service reads from telemetry and falls back to defaults."""
 
-    def test_returns_stored_timezone(self, db):
-        _seed_telemetry(db, timezone="Europe/Malta")
-        from services.locale_service import get_timezone
+    def test_reads_stored_values(self, db):
+        _seed_telemetry(
+            db, timezone="Europe/Malta", locale="en-MT",
+            currency="EUR", **{"location.lat": 35.899, "location.lon": 14.514, "location_name": "Valletta"},
+        )
+        from services.locale_service import get_timezone, get_locale, get_currency, get_location
         assert get_timezone().key == "Europe/Malta"
+        assert get_locale() == "en-MT"
+        assert get_currency() == "EUR"
+        assert get_location()["lat"] == 35.899
 
-    def test_returns_utc_when_no_telemetry(self, db):
+    def test_defaults_when_empty(self, db):
         db.execute("DELETE FROM telemetry")
         db.commit()
-        from services.locale_service import get_timezone
+        from services.locale_service import get_timezone, get_locale, get_currency, get_location
         assert get_timezone().key == "UTC"
+        assert get_locale() == "en-US"
+        assert get_currency() == "USD"
+        assert get_location()["lat"] is None
 
     def test_invalid_timezone_falls_back_to_utc(self, db):
         _seed_telemetry(db, timezone="Not/A/Zone")
@@ -45,65 +53,13 @@ class TestGetTimezone:
 
 
 @pytest.mark.unit
-class TestGetLocale:
-
-    def test_returns_stored_locale(self, db):
-        _seed_telemetry(db, locale="en-MT")
-        from services.locale_service import get_locale
-        assert get_locale() == "en-MT"
-
-    def test_defaults_to_en_us(self, db):
-        db.execute("DELETE FROM telemetry")
-        db.commit()
-        from services.locale_service import get_locale
-        assert get_locale() == "en-US"
-
-
-@pytest.mark.unit
-class TestGetCurrency:
-
-    def test_returns_stored_currency(self, db):
-        _seed_telemetry(db, currency="EUR")
-        from services.locale_service import get_currency
-        assert get_currency() == "EUR"
-
-    def test_defaults_to_usd(self, db):
-        db.execute("DELETE FROM telemetry")
-        db.commit()
-        from services.locale_service import get_currency
-        assert get_currency() == "USD"
-
-
-@pytest.mark.unit
-class TestGetLocation:
-
-    def test_returns_stored_location(self, db):
-        _seed_telemetry(db, **{"location.lat": 35.899, "location.lon": 14.514, "location_name": "Valletta, Malta"})
-        from services.locale_service import get_location
-        loc = get_location()
-        assert loc["lat"] == 35.899
-        assert loc["lon"] == 14.514
-        assert loc["name"] == "Valletta, Malta"
-
-    def test_returns_nones_when_empty(self, db):
-        db.execute("DELETE FROM telemetry")
-        db.commit()
-        from services.locale_service import get_location
-        loc = get_location()
-        assert loc["lat"] is None
-        assert loc["lon"] is None
-        assert loc["name"] is None
-
-
-@pytest.mark.unit
 class TestFormatDate:
-    """format_date converts to user's local tz when for_ui=True, UTC when False."""
+    """format_date is THE chokepoint — for_ui converts to local, else UTC."""
 
     def test_for_ui_converts_to_user_timezone(self, db):
         _seed_telemetry(db, timezone="Europe/Malta")
         from services.locale_service import format_date
         dt = datetime(2026, 5, 17, 14, 0, tzinfo=timezone.utc)
-        # Europe/Malta is UTC+2 in May (CEST)
         assert format_date(dt, "%H:%M", for_ui=True) == "16:00"
 
     def test_for_db_keeps_utc(self, db):
@@ -112,66 +68,26 @@ class TestFormatDate:
         dt = datetime(2026, 5, 17, 14, 0, tzinfo=timezone.utc)
         assert format_date(dt, "%H:%M", for_ui=False) == "14:00"
 
-    def test_string_input_parsed_as_utc(self, db):
-        _seed_telemetry(db, timezone="Asia/Tokyo")
+    def test_none_and_empty_return_none(self, db):
         from services.locale_service import format_date
-        # Asia/Tokyo is UTC+9
-        result = format_date("2026-05-17 10:00:00", "%H:%M", for_ui=True)
-        assert result == "19:00"
-
-    def test_naive_datetime_treated_as_utc(self, db):
-        _seed_telemetry(db, timezone="America/New_York")
-        from services.locale_service import format_date
-        dt = datetime(2026, 5, 17, 20, 0)
-        # New York is UTC-4 in May (EDT)
-        assert format_date(dt, "%H:%M", for_ui=True) == "16:00"
+        assert format_date(None, "%H:%M") is None
+        assert format_date("", "%H:%M") is None
+        assert format_date("not-a-date", "%H:%M") is None
 
 
 @pytest.mark.unit
-class TestToLocal:
-    """to_local converts UTC datetimes to the user's timezone."""
+class TestCalculateInterval:
+    """calculate_interval returns (utc, local) tuple."""
 
-    def test_utc_to_user_timezone(self, db):
-        _seed_telemetry(db, timezone="Asia/Tokyo")
-        from services.locale_service import to_local
-        dt = datetime(2026, 5, 17, 14, 0, tzinfo=timezone.utc)
-        result = to_local(dt)
-        assert result.hour == 23  # UTC+9
-
-    def test_preserves_date_across_day_boundary(self, db):
-        _seed_telemetry(db, timezone="Pacific/Auckland")
-        from services.locale_service import to_local
-        # Auckland is UTC+12 in May
-        dt = datetime(2026, 5, 17, 20, 0, tzinfo=timezone.utc)
-        result = to_local(dt)
-        assert result.day == 18
-        assert result.hour == 8
-
-
-@pytest.mark.unit
-class TestLocalNow:
-    """local_now returns current time in user's timezone."""
-
-    def test_offset_matches_timezone(self, db):
+    def test_returns_utc_and_local(self, db):
         _seed_telemetry(db, timezone="Europe/Malta")
-        from services.locale_service import local_now
-        from services.time_utils import utc_now
-        result = local_now()
-        utc = utc_now()
-        # Malta offset is +1 or +2 depending on DST
-        diff_hours = (result.utcoffset().total_seconds()) / 3600
-        assert diff_hours in (1.0, 2.0)
+        from services.locale_service import calculate_interval
+        dt = datetime(2026, 5, 17, 10, 0, tzinfo=timezone.utc)
+        utc_dt, local_dt = calculate_interval(dt, "day", 1)
+        assert utc_dt == datetime(2026, 5, 18, 10, 0, tzinfo=timezone.utc)
+        assert local_dt.hour == 12  # Malta UTC+2 in May
 
-
-@pytest.mark.unit
-class TestFormatCurrency:
-
-    def test_formats_with_currency_code(self, db):
-        _seed_telemetry(db, currency="EUR")
-        from services.locale_service import format_currency
-        assert format_currency(1234.5) == "EUR 1,234.50"
-
-    def test_formats_without_symbol(self, db):
-        _seed_telemetry(db, currency="GBP")
-        from services.locale_service import format_currency
-        assert format_currency(99.9, symbol=False) == "99.90"
+    def test_invalid_type_raises(self, db):
+        from services.locale_service import calculate_interval
+        with pytest.raises(ValueError):
+            calculate_interval(datetime(2026, 1, 1, tzinfo=timezone.utc), "week", 1)

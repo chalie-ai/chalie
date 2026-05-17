@@ -199,6 +199,43 @@ def local_now() -> datetime:
     return utc_now().astimezone(get_timezone())
 
 
+def calculate_interval(
+    date_time,
+    interval_type: str,
+    interval: int,
+) -> tuple[datetime, datetime]:
+    """Calculate the next recurrence from a UTC base datetime.
+
+    Pure arithmetic — adds the interval to the base datetime and returns
+    both UTC and local representations. No quiet-hours logic; that belongs
+    at execution time.
+
+    Args:
+        date_time: Base datetime (naive or aware) or ISO string. Parsed as UTC.
+        interval_type: One of 'day', 'hour', 'minute'.
+        interval: Number of units to add.
+
+    Returns:
+        Tuple of (utc_datetime, local_datetime).
+    """
+    from datetime import timedelta
+
+    base = parse_utc(date_time)
+
+    deltas = {
+        "day": timedelta(days=interval),
+        "hour": timedelta(hours=interval),
+        "minute": timedelta(minutes=interval),
+    }
+    delta = deltas.get(interval_type)
+    if delta is None:
+        raise ValueError(f"Unknown interval_type: {interval_type!r}. Use 'day', 'hour', or 'minute'.")
+
+    next_utc = base + delta
+    next_local = next_utc.astimezone(get_timezone())
+    return next_utc, next_local
+
+
 def format_currency(amount: float | int, symbol: bool = True) -> str:
     """Format a monetary amount using the user's currency.
 
