@@ -15,7 +15,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    pass
+    pass  # No forward-reference type hints needed at this time.
 
 logger = logging.getLogger(__name__)
 

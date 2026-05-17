@@ -234,7 +234,7 @@ def upload_image():
         logger.debug(f'[CHAT IMAGE] Created document record image_id={image_id}')
 
     except Exception as e:
-        logger.error(f'[CHAT IMAGE] Failed to create document record: {e}', exc_info=True)
+        logger.exception(f'[CHAT IMAGE] Failed to create document record: {e}')
         # Fall back to a random hex ID so the upload still works ephemerally
         import secrets as _secrets
         image_id = _secrets.token_hex(8)
@@ -363,7 +363,7 @@ def image_file(image_id):
         # Redirect to the existing document preview endpoint
         return redirect(f'/documents/{image_id}/preview')
     except Exception as e:
-        logger.error(f'[CHAT IMAGE] image_file error for {image_id}: {e}', exc_info=True)
+        logger.exception(f'[CHAT IMAGE] image_file error for {image_id}: {e}')
         return jsonify({'error': 'Internal server error'}), 500
 
 
@@ -438,7 +438,7 @@ def _run_analysis(image_id: str, image_bytes: bytes, mime_type: str):
             f'time={result.get("analysis_time_ms")}ms'
         )
     except Exception as e:
-        logger.error(f'[CHAT IMAGE] Analysis failed image_id={image_id}: {e}', exc_info=True)
+        logger.exception(f'[CHAT IMAGE] Analysis failed image_id={image_id}: {e}')
         error_result = {'error': str(e), 'ocr_text': '', 'has_text': False}
         store = _get_store()
         store.set(result_key, json.dumps(error_result), ex=_TTL_RESULT)

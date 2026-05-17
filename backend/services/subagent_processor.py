@@ -148,9 +148,9 @@ class SubagentProcessor(MessageProcessor):
                 reason = "compaction LLM returned empty output"
         except Exception as exc:
             reason = str(exc)
-            logger.error(
+            logger.exception(
                 "[COMPACTION] subagent: trail compaction failure — reason=%s",
-                reason, exc_info=True,
+                reason,
             )
         finally:
             self._metrics.merge(proc._metrics)
@@ -226,4 +226,4 @@ class SubagentProcessor(MessageProcessor):
             m.record_counter('requests_total')
             m.record_counter('subagent_turns_total')
         except Exception as e:
-            logger.debug("[Subagent.postTurn] Metrics failed: %s", e, exc_info=True)
+            logger.debug("[Subagent.postTurn] Metrics failed: %s", e)

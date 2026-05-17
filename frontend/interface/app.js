@@ -46,7 +46,6 @@ class ChalieApp {
     this.presence = null;
     this.renderer = null;
 
-    this._init();
   }
 
   async _init() {
@@ -983,6 +982,7 @@ class ChalieApp {
 }
 
 // Boot
-new ChalieApp();
+const app = new ChalieApp();
+app._init();
 
 if (typeof lucide !== 'undefined') lucide.createIcons();

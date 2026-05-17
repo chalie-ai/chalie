@@ -39,7 +39,7 @@ def rest_api_worker():
     except KeyboardInterrupt:
         logger.info("[REST API] Shutting down...")
     except Exception as e:
-        logger.error(f"[REST API] Fatal error: {e}", exc_info=True)
+        logger.exception(f"[REST API] Fatal error: {e}")
         sys.exit(1)
 
 

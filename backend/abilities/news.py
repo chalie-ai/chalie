@@ -114,7 +114,7 @@ class NewsAbility(Ability):
 
             return _serialise_rich(top, ordinal)
         except Exception as e:
-            logger.error(f"[news-tool] failed: {e}", exc_info=True)
+            logger.exception(f"[news-tool] failed: {e}")
             return {"text": "", "error": str(e)}
 
     @classmethod

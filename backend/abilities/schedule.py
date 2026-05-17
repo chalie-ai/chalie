@@ -416,7 +416,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Create failed: {e}", exc_info=True)
+        logger.exception(f"{LOG_PREFIX} Create failed: {e}")
         return {"status": "error", "error": f"Create failed: {e}"}
 
 
@@ -479,7 +479,7 @@ def _search(params: dict) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Search failed: {e}", exc_info=True)
+        logger.exception(f"{LOG_PREFIX} Search failed: {e}")
         return {"status": "error", "error": f"Search failed: {e}"}
 
 
@@ -515,7 +515,7 @@ def _list(params: dict) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} List failed: {e}", exc_info=True)
+        logger.exception(f"{LOG_PREFIX} List failed: {e}")
         return {"status": "error", "error": f"List failed: {e}"}
 
 
@@ -656,7 +656,7 @@ def _cancel(params: dict) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Cancel failed: {e}", exc_info=True)
+        logger.exception(f"{LOG_PREFIX} Cancel failed: {e}")
         return {"status": "error", "error": f"Cancel failed: {e}"}
 
 

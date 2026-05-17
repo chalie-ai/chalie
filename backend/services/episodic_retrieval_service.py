@@ -133,7 +133,7 @@ def walk_up_to_apex(episode_id: str, db=None) -> Optional[dict]:
 
     for _ in range(_MAX_TRAVERSAL_DEPTH):
         if current_id in seen:
-            logger.error(f"[retrieval] consolidation cycle at id={current_id}")
+            logger.exception(f"[retrieval] consolidation cycle at id={current_id}")
             return _get_episode_raw(current_id, db=db)
         seen.add(current_id)
 
@@ -666,7 +666,7 @@ def retrieve(
         return ranked
 
     except Exception as exc:
-        logger.error(f"[RETRIEVAL] retrieve failed: {exc}", exc_info=True)
+        logger.error(f"[RETRIEVAL] retrieve failed: {exc}")
         if return_telemetry:
             return [], telemetry
         return []

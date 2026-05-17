@@ -169,7 +169,7 @@ class EmailAbility(Ability):
             else:
                 result = {"status": "ok", "data": raw}
         except Exception as exc:
-            logger.error(f"{LOG_PREFIX} action={action} failed: {exc}", exc_info=True)
+            logger.exception(f"{LOG_PREFIX} action={action} failed: {exc}")
             result = {"status": "error", "error": str(exc)}
 
         return {"text": _skill_tag("email", json.dumps(result), action=action)}

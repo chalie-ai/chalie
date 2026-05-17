@@ -63,5 +63,5 @@ def memory_search():
         return jsonify({"results": results}), 200
 
     except Exception as e:
-        logger.error(f"[REST API] memory/search error: {e}", exc_info=True)
+        logger.exception(f"[REST API] memory/search error: {e}")
         return jsonify({"error": "Failed to search memory"}), 500

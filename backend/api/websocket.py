@@ -412,7 +412,7 @@ def _handle_action(ws, msg):
         _send_json(ws, done_evt)
 
     except Exception as e:
-        logger.error(f"[WS] Action handler error: {e}", exc_info=True)
+        logger.exception(f"[WS] Action handler error: {e}")
         seq = _next_seq()
         _send_json(ws, {
             "type": "error",
@@ -599,7 +599,7 @@ def _handle_chat(ws, store, msg, active_request=None):
             except Exception as fb_err:
                 logger.debug(f"[WS] Fallback store failed: {fb_err}")
         except Exception as e:
-            logger.error(f"[WS] UserMessageProcessor error for {request_id}: {e}", exc_info=True)
+            logger.exception(f"[WS] UserMessageProcessor error for {request_id}: {e}")
             bg_error['message'] = str(e)
             # Capture any metrics accumulated before the failure so the
             # error frame can surface them (spec contract #3).

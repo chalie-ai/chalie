@@ -112,7 +112,7 @@ class ContactsAbility(Ability):
             else:
                 result = {"status": "ok", "data": raw}
         except Exception as exc:
-            logger.error(f"{LOG_PREFIX} action={action} failed: {exc}", exc_info=True)
+            logger.exception(f"{LOG_PREFIX} action={action} failed: {exc}")
             result = {"status": "error", "error": str(exc)}
 
         if ordinal is not None and "error" not in result:

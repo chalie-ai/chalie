@@ -97,7 +97,7 @@ def scheduler_worker():
             logger.info(f"{LOG_PREFIX} Shutting down")
             break
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} Poll cycle error: {e}")
+            logger.exception(f"{LOG_PREFIX} Poll cycle error: {e}")
             next_tick = time.monotonic() + _POLL_INTERVAL
 
 
@@ -251,7 +251,7 @@ def _fire_item(item: dict):
                 )
                 logger.info(f"{LOG_PREFIX} Scheduled prompt {item_id} complete")
             except Exception as exc:
-                logger.error(f"{LOG_PREFIX} Scheduled prompt {item_id} failed: {exc}", exc_info=True)
+                logger.error(f"{LOG_PREFIX} Scheduled prompt {item_id} failed: {exc}")
                 try:
                     from services.output_service import OutputService
                     OutputService().enqueue_proactive(

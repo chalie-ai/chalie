@@ -131,7 +131,7 @@ class MemoryAbility(Ability):
                     valid="store,recall,reflect,forget",
                 )
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} Error in {action}: {e}", exc_info=True)
+            logger.exception(f"{LOG_PREFIX} Error in {action}: {e}")
             text = _tag("memory", action=action, error=str(e)[:200])
 
         return {"text": text}

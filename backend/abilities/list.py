@@ -100,7 +100,7 @@ class ListAbility(Ability):
             service = ListService(db)
             body = _dispatch(service, action, params)
         except Exception as e:
-            logger.error(f"[LIST SKILL] Error: {e}", exc_info=True)
+            logger.exception(f"[LIST SKILL] Error: {e}")
             body = _fail(str(e))
 
         if ordinal is not None and action in ("create", "add", "check", "view"):

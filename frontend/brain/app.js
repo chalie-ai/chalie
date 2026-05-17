@@ -271,10 +271,10 @@ const BrainApp = (() => {
 
   function _renderPanel() {
     const root = document.getElementById('panelRoot');
-    if (_activePanel && _activePanel.unmount) _activePanel.unmount(root);
+    _activePanel?.unmount?.(root);
 
     const panel = PANELS[_route.section];
-    if (panel && panel.mount) {
+    if (panel?.mount) {
       panel.mount(root, _route.sub);
       _activePanel = panel;
     } else {

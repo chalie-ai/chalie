@@ -120,7 +120,7 @@ def list_capabilities():
         return jsonify({"capabilities": result}), 200
 
     except Exception as exc:
-        logger.error("[capabilities] list_capabilities error: %s", exc, exc_info=True)
+        logger.exception("[capabilities] list_capabilities error: %s", exc)
         return jsonify({"error": "Failed to list capabilities"}), 500
 
 
@@ -164,7 +164,7 @@ def get_capability(cap_id: str):
         }), 200
 
     except Exception as exc:
-        logger.error("[capabilities] get_capability('%s') error: %s", cap_id, exc, exc_info=True)
+        logger.exception("[capabilities] get_capability('%s') error: %s", cap_id, exc)
         return jsonify({"error": "Internal error fetching capability"}), 500
 
 
@@ -237,7 +237,7 @@ def setup_capability(cap_id: str):
         logger.warning("[capabilities] setup '%s' failed: vault is locked", cap_id)
         return jsonify({"error": "Vault is locked — please log out and log back in"}), 401
     except Exception as exc:
-        logger.error("[capabilities] setup_capability('%s') error: %s", cap_id, exc, exc_info=True)
+        logger.exception("[capabilities] setup_capability('%s') error: %s", cap_id, exc)
         return jsonify({"error": "Internal error during capability setup"}), 500
 
 
@@ -272,7 +272,7 @@ def disconnect_capability(cap_id: str):
         return jsonify({"status": "disconnected"}), 200
 
     except Exception as exc:
-        logger.error("[capabilities] disconnect_capability('%s') error: %s", cap_id, exc, exc_info=True)
+        logger.exception("[capabilities] disconnect_capability('%s') error: %s", cap_id, exc)
         return jsonify({"error": "Internal error during capability disconnect"}), 500
 
 
@@ -333,5 +333,5 @@ def capability_status(cap_id: str):
         }), 200
 
     except Exception as exc:
-        logger.error("[capabilities] capability_status('%s') error: %s", cap_id, exc, exc_info=True)
+        logger.exception("[capabilities] capability_status('%s') error: %s", cap_id, exc)
         return jsonify({"error": "Internal error fetching capability status"}), 500

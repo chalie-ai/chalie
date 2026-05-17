@@ -79,8 +79,14 @@ def _deferred_chalie_register(dashboard_iface_id: str, name: str, host: str, por
 
 
 def _daemon_data_dir(interface_id: str) -> str:
-    """Return the data directory for a daemon, creating it if needed."""
-    path = os.path.join(_data_dir, "interfaces", interface_id)
+    """Return the data directory for a daemon, creating it if needed.
+
+    Raises ValueError if interface_id would escape the base directory.
+    """
+    base = os.path.realpath(os.path.join(_data_dir, "interfaces"))
+    path = os.path.realpath(os.path.join(base, interface_id))
+    if not path.startswith(base + os.sep) and path != base:
+        raise ValueError("Invalid interface_id")
     os.makedirs(path, exist_ok=True)
     return path
 

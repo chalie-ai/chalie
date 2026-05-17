@@ -515,7 +515,7 @@ class BrowserAbility(Ability):
                 return {"error": f"Browser unavailable: {e}", "text": ""}
             return {"error": str(e), "text": ""}
         except Exception as e:
-            logger.error("[BROWSER] Unexpected error: %s", e, exc_info=True)
+            logger.exception("[BROWSER] Unexpected error: %s", e)
             return {"error": f"Browser error: {str(e)[:300]}", "text": ""}
 
     def _parse_wait(self, wait_for) -> str:

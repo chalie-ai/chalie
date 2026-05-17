@@ -144,7 +144,7 @@ def list_moments():
         rows = dg.fetch(kinds=[KIND_MOMENT], order_by='first_seen_at DESC')
         return jsonify({"items": [_serialize_moment(r) for r in rows]})
     except Exception as e:
-        logger.error(f"[MOMENTS API] list_moments error: {e}", exc_info=True)
+        logger.exception(f"[MOMENTS API] list_moments error: {e}")
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
@@ -163,7 +163,7 @@ def forget_moment(transcript_id):
         dg.soft_delete_by_id(match['id'])
         return jsonify({"ok": True})
     except Exception as e:
-        logger.error(f"[MOMENTS API] forget_moment error: {e}", exc_info=True)
+        logger.exception(f"[MOMENTS API] forget_moment error: {e}")
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
@@ -181,5 +181,5 @@ def search_moments():
         results = dg.recall(query, kinds=[KIND_MOMENT])
         return jsonify({"items": [_serialize_moment(r) for r in results]})
     except Exception as e:
-        logger.error(f"[MOMENTS API] search_moments error: {e}", exc_info=True)
+        logger.exception(f"[MOMENTS API] search_moments error: {e}")
         return jsonify({"error": _ERR_INTERNAL}), 500

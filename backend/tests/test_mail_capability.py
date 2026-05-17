@@ -21,6 +21,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+MOCK_AUTH_TOKEN = "fake-token-for-test"
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers: in-memory vault + tool-config service
@@ -86,14 +88,6 @@ def _make_capability(vault=None, tcs=None):
     _vault = vault or _MockVault()
     _tcs = tcs or _InMemoryTCS()
 
-    def _patch_cred_helpers():
-        with patch(
-            "capabilities.base._get_tool_config_service", return_value=_tcs
-        ), patch(
-            "services.vault_service.get_vault_service", return_value=_vault
-        ):
-            pass
-
     # Bind mocked helpers directly so round-trips work in tests
     cap._tcs = _tcs
     cap._vault = _vault
@@ -155,7 +149,7 @@ class TestMailCapabilityConfigure:
         cap, vault, tcs = _make_capability()
         with pytest.raises(ValueError, match="email"):
             with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
-                cap.configure({"password": "secret"})
+                cap.configure({"password": MOCK_AUTH_TOKEN})
 
     def test_configure_missing_password_raises(self):
         cap, vault, tcs = _make_capability()
@@ -167,7 +161,7 @@ class TestMailCapabilityConfigure:
         cap, vault, tcs = _make_capability()
         with pytest.raises(ValueError, match="imap_host"):
             with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
-                cap.configure({"email": "user@unknown-corp.io", "password": "x"})
+                cap.configure({"email": "user@unknown-corp.io", "password": MOCK_AUTH_TOKEN})
 
     def test_configure_custom_provider_with_imap_host(self):
         cap, vault, tcs = _make_capability()
@@ -179,7 +173,7 @@ class TestMailCapabilityConfigure:
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.configure({
                 "email": "test@example.com",
-                "password": "test@example.com",
+                "password": MOCK_AUTH_TOKEN,
                 "imap_host": "greenmail",
                 "imap_port": 3143,
                 "imap_tls": False,
@@ -204,7 +198,7 @@ class TestMailCapabilityConfigure:
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.configure({
                 "email": "test@example.com",
-                "password": "test@example.com",
+                "password": MOCK_AUTH_TOKEN,
                 "imap_host": "greenmail",
                 "imap_port": 3143,
                 "imap_tls": False,
@@ -228,7 +222,7 @@ class TestMailCapabilityConfigure:
 
         with pytest.raises(ValueError, match="All protocol probes failed"):
             with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
-                cap.configure({"email": "user@gmail.com", "password": "app-pw"})
+                cap.configure({"email": "user@gmail.com", "password": MOCK_AUTH_TOKEN})
 
         # Credentials must be wiped
         assert tcs.get_tool_config("mail") == {}
@@ -244,7 +238,7 @@ class TestMailCapabilityConfigure:
         cap.connect = MagicMock(return_value=True)
 
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
-            cap.configure({"email": "user@outlook.com", "password": "app-pw"})
+            cap.configure({"email": "user@outlook.com", "password": MOCK_AUTH_TOKEN})
 
         # Outlook only has IMAP
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
@@ -260,7 +254,7 @@ class TestMailCapabilityConfigure:
         cap.connect = MagicMock(return_value=True)
 
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
-            cap.configure({"email": "user@gmail.com", "password": "app-pw"})
+            cap.configure({"email": "user@gmail.com", "password": MOCK_AUTH_TOKEN})
             raw = cap.load_credential("mail:protocols")
 
         protocols = json.loads(raw)
@@ -275,7 +269,7 @@ class TestMailCapabilityConfigure:
 
         with pytest.raises(ValueError, match="Post-configure connect"):
             with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
-                cap.configure({"email": "user@gmail.com", "password": "app-pw"})
+                cap.configure({"email": "user@gmail.com", "password": MOCK_AUTH_TOKEN})
 
         assert tcs.get_tool_config("mail") == {}
 
@@ -329,7 +323,7 @@ class TestMailCapabilityConnect:
         cap, vault, tcs = _make_capability()
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.store_credential("mail:email", "user@gmail.com")
-            cap.store_credential("mail:password", "pw")
+            cap.store_credential("mail:password", MOCK_AUTH_TOKEN)
             cap.store_credential("mail:protocols", json.dumps([]))
             result = cap.connect()
         assert result is False
@@ -342,7 +336,7 @@ class TestMailCapabilityConnect:
 
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.store_credential("mail:email", "user@gmail.com")
-            cap.store_credential("mail:password", "pw")
+            cap.store_credential("mail:password", MOCK_AUTH_TOKEN)
             cap.store_credential("mail:protocols", json.dumps(["imap"]))
             result = cap.connect()
 
@@ -361,7 +355,7 @@ class TestMailCapabilityConnect:
 
         with _patches(tcs, vault)[0], _patches(tcs, vault)[1]:
             cap.store_credential("mail:email", "user@gmail.com")
-            cap.store_credential("mail:password", "pw")
+            cap.store_credential("mail:password", MOCK_AUTH_TOKEN)
             cap.store_credential("mail:protocols", json.dumps(["imap", "caldav", "carddav"]))
             result = cap.connect()
 
@@ -514,7 +508,7 @@ class TestMailCapabilityMonitorCadence:
         # Patch credential loads to return minimal values
         cap.load_credential = MagicMock(side_effect=lambda k: {
             "mail:email": "user@gmail.com",
-            "mail:password": "pw",
+            "mail:password": MOCK_AUTH_TOKEN,
             "mail:imap_watermark": None,
         }.get(k))
         cap.store_credential = MagicMock()

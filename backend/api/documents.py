@@ -205,7 +205,7 @@ def _process_upload(doc_id: str):
         try:
             _run_upload_extraction(doc_id)
         except Exception as e:
-            logger.error(f"[DOCS API] Failed to process upload {doc_id}: {e}")
+            logger.exception(f"[DOCS API] Failed to process upload {doc_id}: {e}")
             _mark_upload_failed(doc_id, str(e))
 
     threading.Thread(target=_run, daemon=True, name=f"doc-upload-{doc_id[:8]}").start()
@@ -305,7 +305,7 @@ def upload_document():
         return jsonify(response), 201
 
     except Exception as e:
-        logger.error(f"[DOCS API] upload error: {e}", exc_info=True)
+        logger.error(f"[DOCS API] upload error: {e}")
         return jsonify({"error": "Upload failed"}), 500
 
 

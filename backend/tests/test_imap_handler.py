@@ -6,6 +6,8 @@ and search criteria building.
 
 from __future__ import annotations
 
+MOCK_AUTH_TOKEN = "fake-token-for-test"
+
 import email as _email_mod
 import email.mime.multipart
 import email.mime.text
@@ -173,19 +175,19 @@ class TestOpenClient:
         with patch("imapclient.IMAPClient", return_value=mock_client) as mock_cls:
             result = handler.open_client(
                 host="imap.example.com", port=993, tls=True,
-                email="user@example.com", password="secret",
+                email="user@example.com", password=MOCK_AUTH_TOKEN,
             )
         mock_cls.assert_called_once_with(
             "imap.example.com", port=993, ssl=True, timeout=30
         )
-        mock_client.login.assert_called_once_with("user@example.com", "secret")
+        mock_client.login.assert_called_once_with("user@example.com", MOCK_AUTH_TOKEN)
         assert result is mock_client
 
     def test_returns_none_on_connection_error(self, handler):
         with patch("imapclient.IMAPClient", side_effect=ConnectionRefusedError("refused")):
             result = handler.open_client(
                 host="bad.host", port=993, tls=True,
-                email="u@example.com", password="pw",
+                email="u@example.com", password=MOCK_AUTH_TOKEN,
             )
         assert result is None
 
@@ -194,7 +196,7 @@ class TestOpenClient:
         with patch("imapclient.IMAPClient", return_value=mock_client) as mock_cls:
             handler.open_client(
                 host="imap.example.com", port=143, tls=False,
-                email="u@example.com", password="pw",
+                email="u@example.com", password=MOCK_AUTH_TOKEN,
             )
             # ssl=False passed through — checked inside the patch context
             mock_cls.assert_called_with(

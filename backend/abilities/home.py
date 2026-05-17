@@ -105,7 +105,7 @@ class HomeAbility(Ability):
             raw = handler(topic="", params=action_params, telemetry=telemetry)
             result = raw if isinstance(raw, dict) else {"status": "ok", "data": raw}
         except Exception as exc:
-            logger.error("[HOME] action=%s failed: %s", action, exc, exc_info=True)
+            logger.exception("[HOME] action=%s failed: %s", action, exc)
             result = {"status": "error", "error": str(exc)}
 
         return {"text": _skill_tag("home", json.dumps(result), action=action)}

@@ -131,7 +131,7 @@ class DecayEngineService:
                     return updated
 
             except Exception as e:
-                logger.error(f"[DECAY ENGINE] Episodic decay failed: {e}")
+                logger.exception(f"[DECAY ENGINE] Episodic decay failed: {e}")
                 return 0
             finally:
                 db_service.close_pool()
@@ -152,7 +152,7 @@ class DecayEngineService:
             finally:
                 db.close_pool()
         except Exception as e:
-            logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}", exc_info=True)
+            logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}")
             return 0
 
     def _cleanup_transcript(self) -> int:

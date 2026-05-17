@@ -562,7 +562,7 @@ class MessageProcessor:
         except Exception as exc:
             ok = False
             result_text = f"ERROR: {tool_name} failed: {exc}"
-            logger.error(
+            logger.exception(
                 "[MessageProcessor.handleTool] tool=%s raised: %s",
                 tool_name, exc, exc_info=True,
             )
@@ -1127,7 +1127,7 @@ class MessageProcessor:
             return None, proc
         except Exception as exc:
             reason = f"LLM error: {exc}"
-            logger.error(_COMPACTION_FAILURE_FMT, self.CHANNEL, reason, exc_info=True)
+            logger.error(_COMPACTION_FAILURE_FMT, self.CHANNEL, reason)
             self._write_compaction_audit_row(
                 watermark=watermark, status='failure', summary='', reason=reason
             )

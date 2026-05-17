@@ -179,7 +179,7 @@ body.speaker-user   #ambientBloom {
   border: 1px solid rgba(220, 130, 40, 0.35);
   border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
-  color: #e89c50;
+  color: var(--warning-banner-text);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   animation: fadeSlideDown var(--duration-normal) var(--ease-out);
@@ -188,7 +188,7 @@ body.speaker-user   #ambientBloom {
 .banner-dismiss {
   background: none;
   border: none;
-  color: rgba(232, 156, 80, 0.55);
+  color: color-mix(in srgb, var(--warning-banner-text) 55%, transparent);
   cursor: pointer;
   padding: 0 2px;
   font-size: 1rem;
@@ -199,7 +199,7 @@ body.speaker-user   #ambientBloom {
 }
 
 .banner-dismiss:hover {
-  color: #e89c50;
+  color: var(--warning-banner-text);
 }
 
 /* --------------------------------------------------------------------------
@@ -273,7 +273,7 @@ body.speaker-user   #ambientBloom {
 .vault-reinit-banner {
   background: rgba(240, 160, 32, 0.10);
   border-color: rgba(240, 160, 32, 0.35);
-  color: #f0a020;
+  color: var(--warning-banner-text);
   max-width: 640px;
 }
 

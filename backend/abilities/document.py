@@ -86,7 +86,7 @@ class DocumentAbility(Ability):
             service = DocumentService(db)
             body = _dispatch(service, action, params)
         except Exception as e:
-            logger.error(f"[DOCUMENT SKILL] Error: {e}", exc_info=True)
+            logger.exception(f"[DOCUMENT SKILL] Error: {e}")
             body = str(e)
             return {"text": _skill_tag("document", action=action, error=body[:200])}
 
@@ -190,7 +190,7 @@ def _handle_search(service, params: dict) -> str:
         return "\n".join(lines)
 
     except Exception as e:
-        logger.error(f"[DOCUMENT SKILL] Search failed: {e}", exc_info=True)
+        logger.exception(f"[DOCUMENT SKILL] Search failed: {e}")
         return f"[DOCUMENT] Search failed: {e}"
 
 
@@ -468,7 +468,7 @@ def _handle_upload(service, params: dict) -> str:
             f"Call document(action='view', id='{doc_id}') to read contents."
         )
     except Exception as e:
-        logger.error(f"[DOCUMENT SKILL] Upload failed: {e}", exc_info=True)
+        logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
         return f"[DOCUMENT] Failed to upload document: {e}"
 
 
@@ -506,5 +506,5 @@ def _handle_create(service, params: dict) -> str:
         )
 
     except Exception as e:
-        logger.error(f"[DOCUMENT SKILL] Create failed: {e}", exc_info=True)
+        logger.exception(f"[DOCUMENT SKILL] Create failed: {e}")
         return f"[DOCUMENT] Failed to create document: {e}"

@@ -71,6 +71,7 @@
   --success:                #34d399;
   --error:                  #fb7185;
   --warning:                #fbbf24;
+  --warning-banner-text:    #e89c50;
   --ease-out:               cubic-bezier(0.16, 1, 0.3, 1);
 
   /* Effects */
@@ -154,6 +155,7 @@
   --success:                #0F9D6E;
   --error:                  #DC3654;
   --warning:                #B47B00;
+  --warning-banner-text:    #8B5E00;
 
   /* Effects */
   --shadow-card:            none;

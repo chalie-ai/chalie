@@ -120,7 +120,7 @@ def data_summary():
         return jsonify(result), 200
 
     except Exception as e:
-        logger.error(f"[REST API] privacy/data-summary error: {e}", exc_info=True)
+        logger.exception(f"[REST API] privacy/data-summary error: {e}")
         return jsonify({"error": "Failed to retrieve data summary"}), 500
 
 
@@ -293,5 +293,5 @@ def delete_all():
         return jsonify(result), 200
 
     except Exception as e:
-        logger.error(f"[REST API] privacy/delete-all error: {e}", exc_info=True)
+        logger.exception(f"[REST API] privacy/delete-all error: {e}")
         return jsonify({"error": "Failed to delete data"}), 500
