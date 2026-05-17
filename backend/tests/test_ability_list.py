@@ -132,6 +132,80 @@ class TestView:
         assert body['status'] == 'fail'
         assert 'not found' in body['message']
 
+    def test_view_by_name_happy_path(self, ability, service):
+        list_id = service.create_list("Groceries")
+        service.add_items(list_id, ["milk", "eggs"])
+
+        body = _payload(_exec(ability, {"action": "view", "name": "Groceries"}))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == list_id
+        assert body['list']['name'] == 'Groceries'
+
+    def test_view_by_name_case_insensitive(self, ability, service):
+        list_id = service.create_list("Groceries")
+
+        body = _payload(_exec(ability, {"action": "view", "name": "groceries"}))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == list_id
+
+    def test_view_by_name_not_found(self, ability):
+        body = _payload(_exec(ability, {"action": "view", "name": "nonexistent"}))
+        assert body['status'] == 'fail'
+        assert 'not found' in body['message']
+
+    def test_view_id_takes_precedence_over_name(self, ability, service):
+        real_id = service.create_list("RealList")
+        service.create_list("OtherList")
+
+        body = _payload(_exec(ability, {"action": "view", "id": real_id, "name": "OtherList"}))
+        assert body['status'] == 'success'
+        assert body['list']['id'] == real_id
+        assert body['list']['name'] == 'RealList'
+
+
+# ─── TKT-538 regression: id-only actions must not accept name alone ─────────
+
+class TestIdOnlyRegression:
+    """Mutation actions (add/check/remove/clear/rename/delete) remain id-only.
+
+    Passing only a name must return fail with 'id' in the message.
+    Guards against re-introducing the TKT-538 blanket name-fallback regression.
+    """
+
+    def test_add_name_only_fails(self, ability):
+        body = _payload(_exec(ability, {"action": "add", "name": "Groceries", "items": ["milk"]}))
+        assert body['status'] == 'fail'
+        assert 'id' in body['message']
+
+    def test_check_name_only_fails(self, ability):
+        body = _payload(_exec(ability, {
+            "action": "check",
+            "name": "Groceries",
+            "items": [{"content": "milk", "checked": True}],
+        }))
+        assert body['status'] == 'fail'
+        assert 'id' in body['message']
+
+    def test_remove_name_only_fails(self, ability):
+        body = _payload(_exec(ability, {"action": "remove", "name": "Groceries", "items": ["milk"]}))
+        assert body['status'] == 'fail'
+        assert 'id' in body['message']
+
+    def test_clear_name_only_fails(self, ability):
+        body = _payload(_exec(ability, {"action": "clear", "name": "Groceries"}))
+        assert body['status'] == 'fail'
+        assert 'id' in body['message']
+
+    def test_rename_name_only_fails(self, ability):
+        body = _payload(_exec(ability, {"action": "rename", "name": "Groceries"}))
+        assert body['status'] == 'fail'
+        assert 'id' in body['message']
+
+    def test_delete_name_only_fails(self, ability):
+        body = _payload(_exec(ability, {"action": "delete", "name": "Groceries"}))
+        assert body['status'] == 'fail'
+        assert 'id' in body['message']
+
 
 # ─── action: add ───────────────────────────────────────────────────────────
 

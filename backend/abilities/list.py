@@ -39,6 +39,7 @@ class ListAbility(Ability):
         "check off milk on list abc12345",
         "rename list abc12345 to weekend chores",
         "delete list abc12345",
+        "view my grocery list",  # name-based lookup for view
     ]
     INPUT_SCHEMA = {
         "type": "object",
@@ -53,7 +54,7 @@ class ListAbility(Ability):
                 "description": (
                     "list_all: return all lists. "
                     "create: make a new list. "
-                    "view: read a list. "
+                    "view: read a list — pass id or name (name saves a separate list_all call). "
                     "add: append items. "
                     "check: toggle checked state per item. "
                     "remove: remove specific items. "
@@ -65,13 +66,18 @@ class ListAbility(Ability):
             "id": {
                 "type": "string",
                 "description": (
-                    "List id (8-char hex). Required for view/add/check/remove/clear/rename/delete. "
+                    "List id (8-char hex). Required for add/check/remove/clear/rename/delete. "
+                    "Optional for view — you may pass name instead. "
                     "Reuse the id returned by create or list_all."
                 ),
             },
             "name": {
                 "type": "string",
-                "description": "List name. Required for create and rename.",
+                "description": (
+                    "List name. Required for create and rename. "
+                    "For view: use name (case-insensitive fuzzy match) when you know the list's "
+                    "name but not its id — saves a separate list_all call."
+                ),
             },
             "items": {
                 "type": "array",
@@ -256,9 +262,15 @@ def _handle_create(service, params: dict) -> str:
 
 
 def _handle_view(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
+    list_id = (params.get("id") or "").strip()
+    if not list_id:
+        name = (params.get("name") or "").strip()
+        if not name:
+            return _fail("'id' is required (or pass 'name' for view to resolve by list name).")
+        match = service._find_by_name(name)
+        if not match:
+            return _fail(f"List with name '{name}' not found.")
+        list_id = match["id"]
 
     lst_data = _list_json(service, list_id)
     if lst_data is None:
