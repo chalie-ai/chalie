@@ -31,33 +31,31 @@ def get_context():
     result = {}
 
     try:
+        from services.locale_service import (
+            get_timezone_name, get_location, format_date,
+        )
+        from services.time_utils import utc_now
+
+        # Location (city-level, never raw GPS)
+        location = get_location()
+        if location.get("lat") is not None:
+            result["location"] = location
+
+        # Timezone
+        tz_name = get_timezone_name()
+        if tz_name != "UTC":
+            result["timezone"] = {
+                "timezone": tz_name,
+                "local_time": format_date(utc_now(), "%Y-%m-%dT%H:%M:%S", for_ui=True),
+            }
+
+        # Device (non-locale — reads from telemetry directly)
         from services.client_context_service import ClientContextService
-
-        ctx_svc = ClientContextService()
-        raw_ctx = ctx_svc.get()
-
+        raw_ctx = ClientContextService().get()
         if raw_ctx:
-            # Location (city-level, never raw GPS)
-            location = raw_ctx.get("location")
-            if location and isinstance(location, dict):
-                result["location"] = {
-                    "lat": location.get("lat"),
-                    "lon": location.get("lon"),
-                    "name": location.get("name", location.get("display_name", "")),
-                }
-
-            # Timezone
-            tz = raw_ctx.get("timezone")
-            if tz:
-                from services.time_utils import utc_now
-                result["timezone"] = {
-                    "timezone": tz,
-                    "local_time": utc_now().isoformat(),
-                }
-
-            # Device
-            device_class = raw_ctx.get("device_class")
-            platform = raw_ctx.get("platform")
+            device = raw_ctx.get("device") or {}
+            device_class = device.get("class")
+            platform = device.get("platform")
             if device_class or platform:
                 result["device"] = {
                     "class": device_class or "desktop",

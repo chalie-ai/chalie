@@ -20,20 +20,36 @@ from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINIST
 
 
 def _load_tool_telemetry() -> dict | None:
-    """Pull a flattened telemetry dict for the active client context.
+    """Pull a flattened telemetry dict for tool dispatch.
 
     Returns ``None`` when no client context is stored yet (fresh boot, no
-    heartbeat) so abilities can fall back gracefully. Any failure is logged
-    and treated as no-telemetry rather than raising — abilities must remain
-    callable even when the telemetry table is empty or malformed.
+    heartbeat) so abilities can fall back gracefully.
     """
     try:
-        from services.client_context_service import ClientContextService
-        from services.tool_output_utils import build_tool_telemetry
-        ctx = ClientContextService().get()
-        if not ctx:
-            return None
-        return build_tool_telemetry(ctx)
+        from services.locale_service import (
+            get_timezone_name, get_locale, get_language,
+            get_currency, get_location, format_date,
+        )
+        from services.time_utils import utc_now
+
+        location = get_location()
+        loc_name = location.get("name") or ""
+        city, country = "", ""
+        if "," in loc_name:
+            city, country = [p.strip() for p in loc_name.split(",", 1)]
+
+        return {
+            "lat": location.get("lat"),
+            "lon": location.get("lon"),
+            "location_name": loc_name,
+            "city": city,
+            "country": country,
+            "time": format_date(utc_now(), "%H:%M:%S", for_ui=True) or "",
+            "timezone": get_timezone_name(),
+            "locale": get_locale(),
+            "language": get_language(),
+            "currency": get_currency(),
+        }
     except Exception as e:
         logging.warning(f"[ACT DISPATCH] telemetry load failed: {e}")
         return None

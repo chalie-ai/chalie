@@ -170,8 +170,8 @@ def _effective_date(row: dict) -> str:
 
 def _add_supersession_edges(conn: sqlite3.Connection, winner_id: int, loser_id: int) -> None:
     """Insert supersedes/superseded_by edges between winner and loser."""
-    from datetime import timezone, datetime
-    now_iso = datetime.now(timezone.utc).isoformat()
+    from services.time_utils import utc_now
+    now_iso = utc_now().isoformat()
     for from_id, to_id, edge_type in (
         (winner_id, loser_id, 'supersedes'),
         (loser_id, winner_id, 'superseded_by'),

@@ -9,9 +9,9 @@ user's local wall-clock time, never raw UTC.
 """
 
 import logging
-from datetime import datetime
 
-from services.time_utils import utc_now, parse_utc, get_user_tz
+from services.time_utils import utc_now, parse_utc
+from services.locale_service import format_date
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +90,8 @@ class TimeFormatterService:
     def local(value, fmt: str = "%Y-%m-%d %H:%M") -> str | None:
         """Format *value* in the user's local timezone.
 
-        Single chokepoint for any absolute timestamp the LLM will see — Previous
-        Messages, compaction entries, tool results, scheduler confirmations, etc.
-        Storing UTC and rendering local is the rule; surfacing raw UTC to the
-        model is the bug this method exists to prevent.
+        Delegates to locale_service.format_date(for_ui=True) — the single
+        chokepoint for all user-facing timestamp formatting.
 
         Args:
             value: A datetime (naive or aware), an ISO-8601 string, or a SQLite
@@ -106,16 +104,4 @@ class TimeFormatterService:
             Formatted local-time string, or ``None`` if *value* is missing or
             unparseable.
         """
-        if value is None:
-            return None
-        if isinstance(value, str) and not value.strip():
-            return None
-        try:
-            dt = value if isinstance(value, datetime) else parse_utc(value)
-            dt = parse_utc(dt)  # normalise tz to UTC
-            if dt.year <= 1:
-                return None
-            return dt.astimezone(get_user_tz()).strftime(fmt)
-        except Exception as e:
-            logger.debug("[TimeFormatter] local() unparseable %r: %s", value, e)
-            return None
+        return format_date(value, fmt, for_ui=True)

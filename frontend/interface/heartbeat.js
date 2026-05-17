@@ -7,6 +7,45 @@
  * client context without per-request overhead.
  */
 
+/**
+ * Derive ISO 4217 currency code from the user's locale using Intl.NumberFormat.
+ */
+function _detectCurrency(locale) {
+  try {
+    const parts = new Intl.NumberFormat(locale, { style: 'currency', currency: 'USD' })
+      .resolvedOptions();
+    // Try to get the actual locale's default currency via a fresh formatter
+    const fmt = new Intl.NumberFormat(locale, { style: 'currency', currencyDisplay: 'code', currency: 'USD' });
+    // The reliable way: use locale-to-currency mapping from the browser
+    const regionMatch = locale.match(/[-_]([A-Z]{2})$/i);
+    if (regionMatch) {
+      const region = regionMatch[1].toUpperCase();
+      // Use Intl to format with the locale's natural currency
+      try {
+        const test = new Intl.NumberFormat(locale, { style: 'currency', currency: 'XTS' });
+      } catch (e) {
+        // Expected — XTS may not be supported
+      }
+      // Map common regions to currencies
+      const regionCurrencyMap = {
+        US: 'USD', GB: 'GBP', MT: 'EUR', DE: 'EUR', FR: 'EUR', IT: 'EUR',
+        ES: 'EUR', NL: 'EUR', BE: 'EUR', AT: 'EUR', IE: 'EUR', PT: 'EUR',
+        FI: 'EUR', GR: 'EUR', LU: 'EUR', CY: 'EUR', SK: 'EUR', SI: 'EUR',
+        EE: 'EUR', LV: 'EUR', LT: 'EUR', HR: 'EUR',
+        JP: 'JPY', CN: 'CNY', KR: 'KRW', IN: 'INR', AU: 'AUD', CA: 'CAD',
+        CH: 'CHF', SE: 'SEK', NO: 'NOK', DK: 'DKK', PL: 'PLN', CZ: 'CZK',
+        HU: 'HUF', RO: 'RON', BG: 'BGN', RU: 'RUB', BR: 'BRL', MX: 'MXN',
+        ZA: 'ZAR', TR: 'TRY', NZ: 'NZD', SG: 'SGD', HK: 'HKD', TW: 'TWD',
+        TH: 'THB', MY: 'MYR', PH: 'PHP', ID: 'IDR', VN: 'VND', AE: 'AED',
+        SA: 'SAR', IL: 'ILS', EG: 'EGP', NG: 'NGN', KE: 'KES', AR: 'ARS',
+        CL: 'CLP', CO: 'COP', PE: 'PEN',
+      };
+      if (regionCurrencyMap[region]) return regionCurrencyMap[region];
+    }
+  } catch (e) { /* fall through */ }
+  return 'USD';
+}
+
 export class ClientHeartbeat {
   constructor(getHost) {
     this._getHost = getHost || (() => '');
@@ -213,10 +252,12 @@ export class ClientHeartbeat {
    */
   async _sendContext() {
     try {
+      const resolvedLocale = Intl.NumberFormat().resolvedOptions().locale;
       const ctx = {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        locale: Intl.NumberFormat().resolvedOptions().locale,     // e.g., "en-MT"
-        language: navigator.language,                              // e.g., "en-GB"
+        locale: resolvedLocale,
+        language: navigator.language,
+        currency: _detectCurrency(resolvedLocale),
         local_time: new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }),
       };
 

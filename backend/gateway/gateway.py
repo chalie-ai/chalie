@@ -19,7 +19,6 @@ import os
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 
 import requests
 
@@ -210,7 +209,8 @@ def register_daemon():
 
     # New daemon — create interface record
     interface_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    from services.time_utils import utc_now
+    now = utc_now().isoformat()
 
     scopes = body.get("scopes", {})
 

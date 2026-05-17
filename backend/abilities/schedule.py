@@ -522,16 +522,8 @@ def _list(params: dict) -> dict:
 def _resolve_time_range(time_range: str):
     now_utc = utc_now()
 
-    try:
-        from services.client_context_service import ClientContextService
-        from zoneinfo import ZoneInfo
-        ctx = ClientContextService().get()
-        tz_name = ctx.get("timezone", "UTC")
-        tz = ZoneInfo(tz_name)
-        client_now = now_utc.astimezone(tz)
-    except Exception:
-        tz = timezone.utc
-        client_now = now_utc
+    from services.locale_service import local_now
+    client_now = local_now()
 
     def _start_of_day(dt):
         return dt.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -705,21 +697,15 @@ def _fetch_same_day_items(new_record: dict) -> list:
 
     try:
         from services.database_service import get_shared_db_service
-        from services.client_context_service import ClientContextService
         from services.time_formatter_service import TimeFormatterService
         from services.time_utils import parse_utc
-        from zoneinfo import ZoneInfo
-
-        try:
-            tz = ZoneInfo(ClientContextService().get().get("timezone", "UTC"))
-        except Exception:
-            tz = timezone.utc
+        from services.locale_service import to_local
 
         new_due_utc = parse_utc(new_due_local)
         if new_due_utc == datetime.min.replace(tzinfo=timezone.utc):
             return []
 
-        local_dt = new_due_utc.astimezone(tz)
+        local_dt = to_local(new_due_utc)
         start_local = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
         start_utc = start_local.astimezone(timezone.utc)
         end_utc = start_utc + timedelta(days=1)

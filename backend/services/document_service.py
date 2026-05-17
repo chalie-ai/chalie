@@ -15,7 +15,7 @@ import logging
 import os
 import secrets
 import shutil
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from typing import Optional, List, Dict, Any
 
 import paths
@@ -558,7 +558,8 @@ class DocumentService:
             ``True`` if the document was found and deleted, ``False`` otherwise.
         """
         try:
-            purge_after = datetime.now(timezone.utc) + timedelta(days=PURGE_WINDOW_DAYS)
+            from services.time_utils import utc_now
+            purge_after = utc_now() + timedelta(days=PURGE_WINDOW_DAYS)
 
             def _soft_delete(did=doc_id, pa=purge_after, db=self.db):
                 """Set deleted_at and schedule purge; return rowcount."""

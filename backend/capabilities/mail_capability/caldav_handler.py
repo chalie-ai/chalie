@@ -15,7 +15,7 @@ import uuid
 from datetime import timedelta
 from itertools import combinations
 
-from services.time_utils import utc_now, parse_utc, get_user_tz
+from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +109,11 @@ def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
 def _get_user_tz():
     """Return user's ZoneInfo timezone or None.
 
-    Delegates to the centralised ``get_user_tz()`` in time_utils.
+    Delegates to locale_service.get_timezone().
     Returns None when the result is plain UTC (no user timezone detected).
     """
-    tz = get_user_tz()
+    from services.locale_service import get_timezone
+    tz = get_timezone()
     if tz.key == "UTC":
         return None
     return tz
@@ -120,17 +121,12 @@ def _get_user_tz():
 
 def _next_morning_8am() -> _dt_module.datetime:
     """Return the next 08:00 in the user's local timezone (UTC fallback)."""
-    now = utc_now()
-    tz = _get_user_tz()
-    if tz:
-        local_now = now.astimezone(tz)
-        local_8am = local_now.replace(hour=8, minute=0, second=0, microsecond=0)
-        if local_8am <= local_now:
-            local_8am += timedelta(days=1)
-        from datetime import timezone as _tz
-        return local_8am.astimezone(_tz.utc)
-    tomorrow = now + timedelta(days=1)
-    return tomorrow.replace(hour=8, minute=0, second=0, microsecond=0)
+    from services.locale_service import local_now, to_utc
+    now = local_now()
+    local_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if local_8am <= now:
+        local_8am += timedelta(days=1)
+    return to_utc(local_8am)
 
 
 # ---------------------------------------------------------------------------

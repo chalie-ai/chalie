@@ -12,7 +12,7 @@ Routes (all require session auth):
 
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
@@ -66,13 +66,12 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
     if not due_at_raw:
         return None, "due_at is required"
     try:
-        due_at = datetime.fromisoformat(str(due_at_raw).replace("Z", "+00:00"))
-        if due_at.tzinfo is None:
-            due_at = due_at.replace(tzinfo=timezone.utc)
+        from services.time_utils import parse_utc, utc_now
+        due_at = parse_utc(str(due_at_raw))
     except (ValueError, TypeError):
         return None, "due_at must be a valid ISO 8601 datetime"
 
-    if require_future and due_at <= datetime.now(timezone.utc):
+    if require_future and due_at <= utc_now():
         return None, "due_at must be in the future"
 
     item_type = (data.get("item_type") or "notification").strip()
@@ -219,7 +218,8 @@ def create_scheduler():
         return jsonify({"error": err}), 400
 
     item_id = uuid.uuid4().hex[:8]
-    now = datetime.now(timezone.utc)
+    from services.time_utils import utc_now
+    now = utc_now()
 
     try:
         from services.database_service import get_shared_db_service
