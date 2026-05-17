@@ -1,10 +1,10 @@
-"""Feature tests — personality voice in UserMessageProcessor.getSystemPrompt().
+"""Feature tests — personality voice in UserMessageProcessor.get_system_prompt().
 
 All tests are @pytest.mark.unit — real SQLite via the ``db`` fixture,
 real voices.jsonl corpus, zero mocks for service internals.
 
 Verifies:
-  - UserMessageProcessor.getSystemPrompt() starts with the personality voice line.
+  - UserMessageProcessor.get_system_prompt() starts with the personality voice line.
   - Background processors (DMN, Subagent, Scheduled, UserSummary,
     EpisodeEncoder, SuperEpisodeEncoder) do NOT emit the personality voice.
 """
@@ -42,7 +42,7 @@ def _load_corpus() -> dict:
 
 @pytest.mark.unit
 class TestUserMessageProcessorVoiceLine:
-    """getSystemPrompt() for UserMessageProcessor includes the personality voice line."""
+    """get_system_prompt() for UserMessageProcessor includes the personality voice line."""
 
     def test_user_system_prompt_starts_with_personality_voice_line(self, db):
         """Set personality to all-cool; system prompt starts with 'When responding; <voice>\\n\\n'."""
@@ -56,7 +56,7 @@ class TestUserMessageProcessorVoiceLine:
         set_current_tuple(target)
 
         proc = UserMessageProcessor(raw_input='hello')
-        result = proc.getSystemPrompt()
+        result = proc.get_system_prompt()
 
         expected_prefix = f"When responding; {expected_voice}\n\n"
         assert result.startswith(expected_prefix), (
@@ -73,7 +73,7 @@ class TestUserMessageProcessorVoiceLine:
         from services.user_message_processor import UserMessageProcessor
 
         proc = UserMessageProcessor(raw_input='hello')
-        result = proc.getSystemPrompt()
+        result = proc.get_system_prompt()
 
         expected_prefix = f"When responding; {neutral_voice}\n\n"
         assert result.startswith(expected_prefix), (
@@ -91,7 +91,7 @@ class TestUserMessageProcessorVoiceLine:
         set_current_tuple((2, 2, 2, 2, 2))
 
         proc = UserMessageProcessor(raw_input='hello')
-        result = proc.getSystemPrompt()
+        result = proc.get_system_prompt()
 
         # The static fallback should not be present as content in the system prompt.
         # Note: the fallback string only appears inside personality_service.py as a
@@ -158,10 +158,10 @@ class TestBackgroundProcessorsExcludePersonality:
         cls = getattr(mod, cls_name)
         proc = cls(**init_kwargs)
 
-        result = proc.getSystemPrompt()
+        result = proc.get_system_prompt()
 
         assert 'When responding;' not in result, (
-            f"{cls_name}.getSystemPrompt() contains 'When responding;' — "
+            f"{cls_name}.get_system_prompt() contains 'When responding;' — "
             f"personality voice line must only appear in UserMessageProcessor"
         )
 
@@ -170,6 +170,6 @@ class TestBackgroundProcessorsExcludePersonality:
         for offset in range(0, len(all_warm_voice) - 39, 20):
             fragment = all_warm_voice[offset:offset + 40]
             assert fragment not in result, (
-                f"{cls_name}.getSystemPrompt() contains a fragment of the all-warm voice: "
+                f"{cls_name}.get_system_prompt() contains a fragment of the all-warm voice: "
                 f"{fragment!r}"
             )

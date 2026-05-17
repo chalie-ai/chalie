@@ -210,16 +210,16 @@ def _build_test_processor_class():
             super().__init__(raw_input, metadata)
             self.full_compaction_calls = 0
 
-        def getUserDefinition(self) -> str:
+        def get_user_definition(self) -> str:
             return 'test channel'
 
-        def getUserPrompt(self) -> str:
+        def get_user_prompt(self) -> str:
             return 'short body'
 
-        def getSystemPrompt(self) -> str:
+        def get_system_prompt(self) -> str:
             return 'system prompt'
 
-        def getTools(self) -> list[dict]:
+        def get_tools(self) -> list[dict]:
             return []
 
         def _run_full_compaction(self, exclude_id=None) -> 'str | None':

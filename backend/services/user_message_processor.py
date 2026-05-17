@@ -15,8 +15,8 @@ called as:
                                 on_narration=_on_narration)
     response = proc.send(request_id=request_id)
 
-Implements the full postTurn() four-step fan-out, memory seeding, narration
-callback, and getSystemPrompt() override.
+Implements the full post_turn() four-step fan-out, memory seeding, narration
+callback, and get_system_prompt() override.
 """
 
 import logging
@@ -34,7 +34,7 @@ class UserMessageProcessor(MessageProcessor):
 
     Hardcodes CHANNEL='user', ROLE='user', uses UnifiedSystemMessagePrompt.
     Adds on_narration callback for real-time ACT narration streaming.
-    Overrides postTurn() with the four-step fan-out.
+    Overrides post_turn() with the four-step fan-out.
     """
 
     CHANNEL = 'user'
@@ -86,10 +86,10 @@ class UserMessageProcessor(MessageProcessor):
         self._on_tool_event = on_tool_event
         # Numeric radius used for the pre-act seed recall (stored for drift calc).
         self._memory_seed_radius: float | None = None
-        # Set by store() — the final LLM response text, needed by postTurn()
+        # Set by store() — the final LLM response text, needed by post_turn()
         # for interaction logging and phase updates (call AFTER store()).
         self._last_response: str = ''
-        # Cached user synthesis string. getSystemPrompt() runs every ACT iteration;
+        # Cached user synthesis string. get_system_prompt() runs every ACT iteration;
         # without this cache each iteration would re-read user_summary from data_graph.
         # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
@@ -97,15 +97,15 @@ class UserMessageProcessor(MessageProcessor):
         # _get_mode_gate() on first access; the gate is ticked exactly once
         # per turn (classify + state update + persist), and the resulting
         # state dict is cached so converse-driven branching in
-        # getUserDefinition() does not re-read MemoryStore on every ACT
+        # get_user_definition() does not re-read MemoryStore on every ACT
         # iteration. The instance is reused for get_system_prompt_additions()
-        # in getSystemPrompt().
+        # in get_system_prompt().
         self._mode_gate_cached = None  # ModeGateService | None — lazy import
         self._mode_state_cached: dict[str, float] | None = None
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         """One-sentence synthesis of the real human user for the system prompt.
 
         Reads the user_summary record (kind='system', key='user_summary') from data_graph
@@ -117,7 +117,7 @@ class UserMessageProcessor(MessageProcessor):
         UserSummaryProcessor is driven exclusively by SubconsciousWorker._step_synthesis()
         on each idle tick — no lazy fallback here.
 
-        Per-turn cached: getSystemPrompt() runs on every ACT iteration; without this
+        Per-turn cached: get_system_prompt() runs on every ACT iteration; without this
         cache each iteration would re-query the knowledge table.
         """
         _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -152,22 +152,22 @@ class UserMessageProcessor(MessageProcessor):
                 return self._user_definition_cached
 
         except Exception as e:
-            logger.warning(f"[USER MSG] getUserDefinition failed: {e}")
+            logger.warning(f"[USER MSG] get_user_definition failed: {e}")
 
         self._user_definition_cached = _FALLBACK
         return self._user_definition_cached
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         """Build the user-message body for one ACT iteration.
 
         Section order:
           1. User definition (user_summary short) — placed at the top of the
              user prompt so the model sees identity in the same recency window
              as the current turn line. The base-class system-prompt slot for
-             user_definition is suppressed in getSystemPrompt() below.
+             user_definition is suppressed in get_system_prompt() below.
           2. World State block
           3. System Awareness block
-          4. ## Previous Messages block (via getPreviousMessages())
+          4. ## Previous Messages block (via get_previous_messages())
           (blank line separator)
           5. Memory seed block (canonical tag block set by pre_act(), injected verbatim)
           6. Current turn line: user: <raw_input> [nudge_tag]
@@ -179,7 +179,7 @@ class UserMessageProcessor(MessageProcessor):
         parts = []
 
         # 1. User definition (identity anchor)
-        user_def = self.getUserDefinition()
+        user_def = self.get_user_definition()
         if user_def:
             parts.append(user_def)
 
@@ -198,7 +198,7 @@ class UserMessageProcessor(MessageProcessor):
             parts.append(f"## System Awareness\n{self_awareness}")
 
         # 3. Previous Messages
-        prev = self.getPreviousMessages()
+        prev = self.get_previous_messages()
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
 
@@ -219,7 +219,7 @@ class UserMessageProcessor(MessageProcessor):
         # 6. Drain pending steers from async subagent completions into the trail.
         # These are envelopes queued by _deliver_envelope() while compaction
         # or an earlier iteration was in progress. Draining here (before
-        # getActLoopTrail()) is compaction-safe: compaction mutates _act_trail
+        # get_act_loop_trail()) is compaction-safe: compaction mutates _act_trail
         # directly; this drain fires before the next iteration's prompt
         # assembly, so steers are never mid-compaction when appended.
         if self._pending_steers:
@@ -229,7 +229,7 @@ class UserMessageProcessor(MessageProcessor):
                 self._act_trail.append(steer)
 
         # 7. ACT loop trail (empty on iteration 1)
-        trail = self.getActLoopTrail()
+        trail = self.get_act_loop_trail()
         if trail:
             parts.append(trail)
 
@@ -237,7 +237,7 @@ class UserMessageProcessor(MessageProcessor):
 
     # ── Overridable hooks ─────────────────────────────────────────────────────
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         """Build the final system prompt for this turn.
 
         Assembly order:
@@ -247,7 +247,7 @@ class UserMessageProcessor(MessageProcessor):
           2. Template — UnifiedSystemMessagePrompt body.
 
         The user_definition (user_summary short) is intentionally NOT emitted
-        here — it is prepended at the top of getUserPrompt() instead so it
+        here — it is prepended at the top of get_user_prompt() instead so it
         sits in the same recency window as the current turn line. This
         overrides the base-class behaviour which would otherwise prepend the
         user_definition to the system prompt body.
@@ -280,7 +280,7 @@ class UserMessageProcessor(MessageProcessor):
         Calls handle_memory directly so the result is a canonical tag block,
         records the row via ToolRenderAndRecordService (ephemeral=False) — same
         storage path as any other durable tool call — and stores the block on
-        self._memory_seed for getUserPrompt() to inject verbatim.
+        self._memory_seed for get_user_prompt() to inject verbatim.
         """
         from abilities._registry import AbilityRegistry
         from abilities.memory import MemoryAbility
@@ -379,16 +379,16 @@ class UserMessageProcessor(MessageProcessor):
             return []
 
     def store(self, llm_response: str) -> None:
-        """Persist the turn atomically, then capture _last_response for postTurn().
+        """Persist the turn atomically, then capture _last_response for post_turn().
 
         Calls base store() (which sets self._uid and writes all rows), then
-        captures the response text so postTurn() can reference it without
+        captures the response text so post_turn() can reference it without
         send() needing to pass it explicitly.
         """
         super().store(llm_response)
         self._last_response = llm_response
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """Two-step fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
@@ -400,7 +400,7 @@ class UserMessageProcessor(MessageProcessor):
         The on_turn() hook is therefore not needed here.
 
         Compaction is intentionally NOT here: per the north star
-        (message-processing.md § "What does NOT go in postTurn()"),
+        (message-processing.md § "What does NOT go in post_turn()"),
         compaction is a send()-loop responsibility driven by context
         pressure, not a post-turn consequence. Mid-ACT Stage 1/2 in
         send() owns it.
@@ -438,7 +438,7 @@ class UserMessageProcessor(MessageProcessor):
     def _process_file_attachments(self) -> None:
         """Dispatch document.upload + document.view for each attached file.
 
-        Called after pre_act(). Uses handleTool() so each call produces
+        Called after pre_act(). Uses handle_tool() so each call produces
         audit rows, WS events, and policy enforcement via ActDispatcher.
         """
         files = self._metadata.get('files') or []
@@ -454,7 +454,7 @@ class UserMessageProcessor(MessageProcessor):
             if not data:
                 continue
 
-            upload_result = self.handleTool({
+            upload_result = self.handle_tool({
                 'name': 'document',
                 'input': {
                     'action': 'upload',
@@ -466,7 +466,7 @@ class UserMessageProcessor(MessageProcessor):
 
             doc_id = self._extract_doc_id_from_upload(upload_result)
             if doc_id:
-                self.handleTool({
+                self.handle_tool({
                     'name': 'document',
                     'input': {'action': 'view', 'id': doc_id},
                 })
@@ -480,7 +480,7 @@ class UserMessageProcessor(MessageProcessor):
     def _get_self_awareness(self) -> str:
         """Get system health degradation signals from SelfModelService.
 
-        Returns empty string when the system is healthy — getUserPrompt()
+        Returns empty string when the system is healthy — get_user_prompt()
         skips the section. Only populates when degradation is detected.
         """
         try:
@@ -514,7 +514,7 @@ class UserMessageProcessor(MessageProcessor):
         """Return the per-mode activation state for this turn (cached).
 
         Wraps ``_get_mode_gate().get_state()`` with a per-turn cache so
-        getUserDefinition() does not re-read MemoryStore on every ACT
+        get_user_definition() does not re-read MemoryStore on every ACT
         iteration. On any failure an empty dict is cached so callers see a
         deterministic miss without retry storms.
         """
@@ -560,5 +560,5 @@ class ScheduledPromptProcessor(UserMessageProcessor):
     USAGE_CLASS = 'subconscious'
     SKIP_INPUT_ROW = True
 
-    def getPreviousMessages(self, token_budget: int | None = None) -> str:
+    def get_previous_messages(self, token_budget: int | None = None) -> str:
         return ''

@@ -10,10 +10,10 @@
 SystemMessagePrompt — abstract base and concrete subclasses for the stable
 system-message body sent to the LLM on every turn.
 
-The `getUserDefinition()` line is prepended by `MessageProcessor.getSystemPrompt()`;
+The `get_user_definition()` line is prepended by `MessageProcessor.get_system_prompt()`;
 these classes only build the *body* that follows it.
 
-Lifecycle: per-turn instance — `MessageProcessor.getSystemPrompt()` constructs a
+Lifecycle: per-turn instance — `MessageProcessor.get_system_prompt()` constructs a
 fresh subclass instance, calls `getPrompt()`, and lets it go out of scope.
 No singletons.
 

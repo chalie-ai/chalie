@@ -68,8 +68,8 @@ class ProviderCacheService:
             for p in db_providers:
                 # Include 'name' in the entry so downstream consumers
                 # (Providers.get_compact_at, ProviderCacheService.get_job_assignment,
-                # any code calling ConfigService.resolve_agent_config) can read
-                # the provider name from the resolved config dict directly.
+                # Providers._resolve) can read the provider name from the resolved
+                # config dict directly.
                 # Without this, the resolved config has no way to identify
                 # which provider row backs it, breaking DB lookups keyed by
                 # provider name (e.g. compact_at threshold queries).

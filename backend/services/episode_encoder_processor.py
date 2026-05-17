@@ -44,13 +44,13 @@ class EpisodeEncoderProcessor(MessageProcessor):
         self._window = transcript_window
         self._referenced = referenced_episodes
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return (
             "The user is 'episode_encoder' — a background process that "
             "summarises transcript windows into memory snapshots."
         )
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         parts = [
             "Transcript window — each line is `[id] (timestamp) role: content`:",
             "",
@@ -65,6 +65,6 @@ class EpisodeEncoderProcessor(MessageProcessor):
             ])
         return "\n".join(parts)
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """No post-turn fan-out — caller owns all downstream work."""
         pass

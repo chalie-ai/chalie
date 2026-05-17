@@ -14,9 +14,9 @@ Do not add `.instance()` / singleton accessors.
 
 Each input channel (WebSocket, DMN timer, goal pursuit, scheduled prompt, …)
 constructs its own MessageProcessor subclass directly. The subclass hardcodes
-its CHANNEL and ROLE, implements getUserDefinition() and getUserPrompt(), and
-fans out post-turn services via postTurn(). The base class provides the ACT
-loop (send()), atomic persistence (store()), tool dispatch (handleTool()), and
+its CHANNEL and ROLE, implements get_user_definition() and get_user_prompt(), and
+fans out post-turn services via post_turn(). The base class provides the ACT
+loop (send()), atomic persistence (store()), tool dispatch (handle_tool()), and
 compaction primitives.
 """
 
@@ -86,7 +86,7 @@ def _sanitize_llm_args(value):
 # MessageProcessor instance for the turn they are running inside (e.g. to
 # append to ``_memory_query_history`` or read ``_memory_seed``). The
 # MessageProcessor instance is not part of any tool signature — skills are
-# dispatched by name via ``handleTool()`` and must not receive the
+# dispatched by name via ``handle_tool()`` and must not receive the
 # processor as an argument.
 #
 # We expose an async-safe ``ContextVar`` + a context manager so that
@@ -133,8 +133,8 @@ class MessageProcessor:
     Subclasses must:
     - Set `CHANNEL` (str) — fixed transcript channel for this processor.
     - Set `ROLE` (str) — transcript role for the input row (e.g. 'user').
-    - Implement `getUserPrompt() -> str`
-    - Implement `getUserDefinition() -> str`
+    - Implement `get_user_prompt() -> str`
+    - Implement `get_user_definition() -> str`
 
     Subclasses may:
     - Override `SYSTEM_PROMPT_CLASS` with a concrete `SystemMessagePrompt` subclass.
@@ -142,8 +142,8 @@ class MessageProcessor:
       innate tools every iteration.
     - Override `DISCOVERABLE` with a list of ability names that ``find_tools``
       may surface for this processor at runtime.
-    - Override `getDynamicTools()` to filter or augment discovered tools.
-    - Override `postTurn()` to fan out per-channel post-turn services.
+    - Override `get_dynamic_tools()` to filter or augment discovered tools.
+    - Override `post_turn()` to fan out per-channel post-turn services.
     """
 
     # ── Class constants (overridable by subclasses) ───────────────────────────
@@ -163,7 +163,7 @@ class MessageProcessor:
     MAX_ITERATIONS: int = 30
     ITERATION_TIMEOUT: int = 1800  # seconds — per-iteration safety wall (independent of ACT loop budget)
     THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
-    # Ceiling for a single getPreviousMessages() pull. Commit 7's compaction
+    # Ceiling for a single get_previous_messages() pull. Commit 7's compaction
     # budget assumes a row count this low — if a channel ever exceeds it we
     # want compaction to kick in, not an unbounded fetch.
     _TRANSCRIPT_FETCH_LIMIT: int = 2000
@@ -197,7 +197,7 @@ class MessageProcessor:
         # (which is the formatted tag block) so recall_episodes() can embed
         # the original query for drift computation rather than the block string.
         self._memory_seed_query: str | None = None
-        # Tracks the current ACT loop iteration so handleTool() can include
+        # Tracks the current ACT loop iteration so handle_tool() can include
         # it in emitted tool events without thread-local indirection.
         self._current_iteration: int = 0
         # Per-turn log of memory recall queries (seed + llm_recall).
@@ -232,7 +232,7 @@ class MessageProcessor:
         # Per-turn pending steers from async subagent completions.
         # A subagent finishing mid-ACT appends its envelope here instead of
         # directly to _act_trail so compaction cannot race the append.
-        # Drained into _act_trail at the start of getUserPrompt() (or equivalent
+        # Drained into _act_trail at the start of get_user_prompt() (or equivalent
         # prompt-assembly point) on each ACT iteration.
         self._pending_steers: list[str] = []
         # Thread-safe liveness flag: set while send() is on the call stack
@@ -251,28 +251,42 @@ class MessageProcessor:
 
     # ── Abstract — subclass implements ───────────────────────────────────────
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         """Build the body of the user-message for the current ACT iteration.
 
         Called once per ACT iteration inside send(). Does NOT emit the
         ``### Checkpoint`` / ``### Current State`` headers — those are added
         by send().
+
+        Subclasses should override this method. The camelCase alias
+        ``getUserPrompt`` is also resolved for backward compatibility.
         """
+        return self.getUserPrompt()
+
+    def getUserPrompt(self) -> str:
+        """CamelCase alias — override either this or get_user_prompt()."""
         raise NotImplementedError
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         """One-sentence description of who the 'user' is for this processor.
 
         Injected as the first line of the system prompt. Examples:
           UserMessageProcessor   → user synthesis string (real human)
           DMNMessageProcessor    → "The user is 'proactive_thought' — ..."
           SubagentProcessor      → "The user is 'subagent' — ..."
+
+        Subclasses should override this method. The camelCase alias
+        ``getUserDefinition`` is also resolved for backward compatibility.
         """
+        return self.getUserDefinition()
+
+    def getUserDefinition(self) -> str:
+        """CamelCase alias — override either this or get_user_definition()."""
         raise NotImplementedError
 
     # ── Overridable hook ─────────────────────────────────────────────────────
 
-    def getDynamicTools(self) -> list[dict]:
+    def get_dynamic_tools(self) -> list[dict]:
         """Return tool schemas discovered during this turn via find_tools.
 
         Default returns self._discovered_tools directly (identity — subclasses
@@ -283,10 +297,10 @@ class MessageProcessor:
 
     # ── Final (concrete on base) ──────────────────────────────────────────────
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         """Build the full system prompt for this turn.
 
-        Prepends getUserDefinition() to the body produced by SYSTEM_PROMPT_CLASS.
+        Prepends get_user_definition() to the body produced by SYSTEM_PROMPT_CLASS.
         A fresh SYSTEM_PROMPT_CLASS instance is created, used, and discarded —
         no caching; this is called once per turn by send().
 
@@ -304,14 +318,14 @@ class MessageProcessor:
         That keeps this base-class call site pure — no knowledge of
         subclass-specific args leaks up. Subclasses of `MessageProcessor` that
         need richer system-prompt inputs (personality voice, …) override
-        `getSystemPrompt()` themselves and weave in the extra context around the
+        `get_system_prompt()` themselves and weave in the extra context around the
         template returned by `SYSTEM_PROMPT_CLASS().getPrompt()`.
         """
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.
         body = self.SYSTEM_PROMPT_CLASS().getPrompt()
         body = self._substitute_provider_placeholders(body)
-        return f"{self.getUserDefinition()}\n\n{body}"
+        return f"{self.get_user_definition()}\n\n{body}"
 
     def _substitute_provider_placeholders(self, body: str) -> str:
         """Replace per-provider placeholders in a system-prompt body.
@@ -336,14 +350,14 @@ class MessageProcessor:
             return body
         return body.replace("{{provider_content_field_name}}", label)
 
-    def getTools(self) -> list[dict]:
+    def get_tools(self) -> list[dict]:
         """Return the full tool list for the current ACT iteration.
 
         Resolution order (first-seen wins on duplicates):
         1. ALWAYS_AVAILABLE — innate tier (resolved via AbilityRegistry).
            Base is []; subclasses set the explicit list of ability names that
            are pre-injected on every iteration.
-        2. getDynamicTools() — abilities discovered this turn via find_tools.
+        2. get_dynamic_tools() — abilities discovered this turn via find_tools.
            Gated by ``DISCOVERABLE`` inside ``find_tools`` itself.
 
         Schema shape: {name, description, input_schema} — pulled from each
@@ -366,11 +380,11 @@ class MessageProcessor:
                     })
                 except KeyError:
                     logger.warning(
-                        "[MessageProcessor.getTools] No ability registered for '%s'",
+                        "[MessageProcessor.get_tools] No ability registered for '%s'",
                         tool_name,
                     )
 
-        dynamic = self.getDynamicTools()
+        dynamic = self.get_dynamic_tools()
 
         seen: set[str] = set()
         result: list[dict] = []
@@ -382,7 +396,7 @@ class MessageProcessor:
 
         return result
 
-    def getActLoopTrail(self) -> str:
+    def get_act_loop_trail(self) -> str:
         """Return the ACT loop trail as a single string for prompt injection.
 
         Returns '' on the first iteration (empty list). On subsequent
@@ -390,7 +404,7 @@ class MessageProcessor:
         """
         return '\n'.join(self._act_trail)
 
-    def getPreviousMessages(self, token_budget: int | None = None) -> str:
+    def get_previous_messages(self, token_budget: int | None = None) -> str:
         """Assemble the ## Previous Messages block for this channel.
 
         Format (locked by the north star § "Literal format"):
@@ -485,9 +499,34 @@ class MessageProcessor:
 
         return '\n'.join(lines)
 
+    # ── CamelCase backward-compat shims ──────────────────────────────────────
+    # Test suite calls these names directly. Each shim delegates to the
+    # snake_case override so subclass method resolution works correctly.
+
+    def getSystemPrompt(self) -> str:  # noqa: N802
+        return self.get_system_prompt()
+
+    def getTools(self) -> list[dict]:  # noqa: N802
+        return self.get_tools()
+
+    def getDynamicTools(self) -> list[dict]:  # noqa: N802
+        return self.get_dynamic_tools()
+
+    def getActLoopTrail(self) -> str:  # noqa: N802
+        return self.get_act_loop_trail()
+
+    def getPreviousMessages(self, token_budget: int | None = None) -> str:  # noqa: N802
+        return self.get_previous_messages(token_budget)
+
+    def handleTool(self, tc: dict) -> str:  # noqa: N802
+        return self.handle_tool(tc)
+
+    def postTurn(self) -> None:  # noqa: N802
+        self.post_turn()
+
     # ── Tool dispatch ──────────────────────────────────────────────────────────
 
-    def handleTool(self, tc: dict) -> str:
+    def handle_tool(self, tc: dict) -> str:
         """Dispatch a single LLM tool call, record it, and add to context.
 
         Uses self._dispatcher (created once per turn in send()) so that
@@ -563,7 +602,7 @@ class MessageProcessor:
             ok = False
             result_text = f"ERROR: {tool_name} failed: {exc}"
             logger.exception(
-                "[MessageProcessor.handleTool] tool=%s raised: %s",
+                "[MessageProcessor.handle_tool] tool=%s raised: %s",
                 tool_name, exc, exc_info=True,
             )
         finally:
@@ -586,7 +625,7 @@ class MessageProcessor:
         except Exception as exc:
             rendered = f"[{tool_name}()] {result_text}"
             logger.error(
-                "[MessageProcessor.handleTool] renderAndRecord failed tool=%s: %s",
+                "[MessageProcessor.handle_tool] renderAndRecord failed tool=%s: %s",
                 tool_name, exc, exc_info=True,
             )
 
@@ -595,7 +634,7 @@ class MessageProcessor:
         return result_text
 
     def send(self, request_id: str | None = None) -> str:
-        """Run the full turn: memory seed → ACT loop → store → postTurn.
+        """Run the full turn: memory seed → ACT loop → store → post_turn.
 
         Single-path overflow handling (north star § Context Compaction):
         - At the start of every iteration, the rebuilt user-message body
@@ -634,12 +673,12 @@ class MessageProcessor:
         - Compaction LLM errors are trapped inside the helpers and logged;
           Stage 1 degrades silently (loop continues with uncompacted trail);
           Stage 2 returns False so the loop breaks to cap exit.
-        - handleTool() errors are already trapped inside handleTool().
+        - handle_tool() errors are already trapped inside handle_tool().
         - _emit_narration() errors are logged and swallowed — never kill
           the ACT loop (north star § ACT Loop step 4).
-        - store() errors propagate. If store() raises, postTurn() is NOT
+        - store() errors propagate. If store() raises, post_turn() is NOT
           called and the exception surfaces to the caller.
-        - postTurn() errors are caught and logged. The turn is already
+        - post_turn() errors are caught and logged. The turn is already
           stored; the caller still receives the final response.
 
         Final-text semantics:
@@ -708,11 +747,11 @@ class MessageProcessor:
                 iter_start = time.time()
                 with self._metrics.iteration(self._current_iteration):
                     with self._metrics.stage('prompt_assembly'):
-                        user_body = self.getUserPrompt()
+                        user_body = self.get_user_prompt()
                         user_body = _wrap_with_exploration(self.CHANNEL, user_body)
                         user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
-                        system_prompt = self.getSystemPrompt()
-                        tools = self.getTools()
+                        system_prompt = self.get_system_prompt()
+                        tools = self.get_tools()
 
                     # Single-path overflow handling: triggered when the full
                     # assembled payload (system_prompt + tools schema + user_body)
@@ -773,7 +812,7 @@ class MessageProcessor:
                     # containing the full literal-text body (Previous Messages,
                     # memory seed, raw input, ACT trail). The provider's multi-turn
                     # interface is intentionally NOT used — history lives in the
-                    # getUserPrompt() text block, not in the messages array.
+                    # get_user_prompt() text block, not in the messages array.
                     messages = [{'role': 'user', 'content': user_body}]
 
                     # Provider errors propagate here. store() is not called if
@@ -841,7 +880,7 @@ class MessageProcessor:
                                 )
 
                         for tc in llm_response.tool_calls:
-                            self.handleTool(tc)  # never raises; appends DTO + trail
+                            self.handle_tool(tc)  # never raises; appends DTO + trail
 
                         for steer in self._drain_steering(request_id):
                             rendered = ToolRenderAndRecordService(
@@ -891,7 +930,7 @@ class MessageProcessor:
                 self.store(final_text)
             try:
                 with self._metrics.stage('post_turn'):
-                    self.postTurn()
+                    self.post_turn()
             except Exception as e:
                 logger.error(
                     "[POSTTURN] Failed (turn already stored): %s", e, exc_info=True
@@ -977,7 +1016,7 @@ class MessageProcessor:
 
         Note: ``_pending_steers`` draining is intentionally NOT done here.
         Steers are drained automatically at the top of each iteration by
-        ``getUserPrompt()`` in UserMessageProcessor — that path fires
+        ``get_user_prompt()`` in UserMessageProcessor — that path fires
         naturally on the next iter=0 iteration after a successful overflow.
         """
         summary = self._run_full_compaction(exclude_id=self._uid)
@@ -1335,10 +1374,10 @@ class MessageProcessor:
         )
 
         try:
-            user_body = self.getUserPrompt()
+            user_body = self.get_user_prompt()
             user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
-            system_prompt = self.getSystemPrompt()
-            tools = self.getTools()
+            system_prompt = self.get_system_prompt()
+            tools = self.get_tools()
 
             response = Providers.instance().send_messages(
                 system_prompt,
@@ -1402,7 +1441,7 @@ class MessageProcessor:
                 "[THINKING] failed to persist exploration to tool_calls (%s)", exc
             )
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """Per-channel post-turn service fan-out.
 
         Base is a no-op. UserMessageProcessor overrides in Commit 8 with the

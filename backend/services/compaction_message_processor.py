@@ -38,13 +38,13 @@ class _CompactionProcessorBase(MessageProcessor):
     DISCOVERABLE: list[str] = []
     SKIP_TRANSCRIPT_WRITE = True
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return ''
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         return self._raw_input
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         # Compaction has no human user — skip the empty user-definition prefix
         # that the base would otherwise stitch on with a leading '\n\n'.
         return self.SYSTEM_PROMPT_CLASS().getPrompt()

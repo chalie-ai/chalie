@@ -140,10 +140,10 @@ class TestCheckThresholdFullPayload:
             SKIP_TRANSCRIPT_WRITE = True
             SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return 'hi'
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return 'test user'
 
         return _MinimalProcessor(raw_input='hi')

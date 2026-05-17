@@ -302,11 +302,11 @@ def _handle_recall(channel: str, params: dict) -> str:
 
             proc = current_processor()
             if proc is not None and proc._uid is not None:
-                proc.handleTool({
+                proc.handle_tool({
                     'name': 'document',
                     'input': {'action': 'search', 'query': query},
                 })
-                proc.handleTool({
+                proc.handle_tool({
                     'name': 'schedule',
                     'input': {'action': 'search', 'query': query},
                 })

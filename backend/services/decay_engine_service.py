@@ -19,15 +19,11 @@ logger = logging.getLogger(__name__)
 class DecayEngineService:
     """Applies decay to every memory type in one cycle."""
 
-    def __init__(self):
-        """Load the retrieval-decay exponent from ``episodic-memory`` config."""
-        try:
-            episodic_config = ConfigService.get_agent_config("episodic-memory")
-            self.retrieval_decay_exponent = episodic_config.get('retrieval_decay_exponent', 0.5)
-        except Exception as e:
-            logger.warning("[DECAY ENGINE] Failed to load decay rates from config, using defaults: %s", e)
-            self.retrieval_decay_exponent = 0.5
+    RETRIEVAL_DECAY_EXPONENT = 0.5
 
+    def __init__(self):
+        """Initialize with built-in retrieval-decay exponent."""
+        self.retrieval_decay_exponent = self.RETRIEVAL_DECAY_EXPONENT
         logger.info(
             "[DECAY ENGINE] Initialized (retrieval_decay_exponent=%s)",
             safe(str(self.retrieval_decay_exponent)),

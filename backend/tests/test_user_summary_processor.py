@@ -155,7 +155,7 @@ class TestPostTurn:
 
         proc = UserSummaryProcessor()
         proc._last_response = payload
-        proc.postTurn()
+        proc.post_turn()
 
         dgs = get_data_graph_service()
 
@@ -185,7 +185,7 @@ class TestPostTurn:
         proc._last_response = 'this is definitely not json }{{'
 
         with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
-            proc.postTurn()
+            proc.post_turn()
 
         dgs = get_data_graph_service()
 
@@ -214,7 +214,7 @@ class TestPostTurn:
 
         proc = UserSummaryProcessor()
         proc._last_response = json.dumps({'long': 'some long text'})
-        proc.postTurn()
+        proc.post_turn()
 
         dgs = get_data_graph_service()
         rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') == 'user_summary']
@@ -226,7 +226,7 @@ class TestPostTurn:
 
         proc = UserSummaryProcessor()
         proc._last_response = ''
-        proc.postTurn()
+        proc.post_turn()
 
         dgs = get_data_graph_service()
         rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') in ('user_summary', 'user_summary_long')]
@@ -241,7 +241,7 @@ class TestPostTurn:
 
         proc = UserSummaryProcessor()
         proc._last_response = fenced
-        proc.postTurn()
+        proc.post_turn()
 
         dgs = get_data_graph_service()
         rows = [
@@ -266,7 +266,7 @@ class TestPostTurn:
         proc._last_response = '{"short": "", "long": "a thorough description"}'
 
         with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
-            proc.postTurn()
+            proc.post_turn()
 
         dgs = get_data_graph_service()
         rows = [
@@ -296,7 +296,7 @@ class TestPostTurn:
         proc._last_response = '{"short": "Alice is an engineer", "long": "   "}'
 
         with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
-            proc.postTurn()
+            proc.post_turn()
 
         dgs = get_data_graph_service()
         rows = [
@@ -340,7 +340,7 @@ class TestPostTurnStorageFailure:
         # Must not raise — caller must never see the storage error.
         with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
             try:
-                proc.postTurn()
+                proc.post_turn()
             except Exception as exc:
                 raise AssertionError(
                     f"postTurn() must not propagate storage exceptions to callers, "

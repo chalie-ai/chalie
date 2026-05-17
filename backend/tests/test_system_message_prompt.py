@@ -147,15 +147,15 @@ class TestUnifiedSystemMessagePrompt:
             UnifiedSystemMessagePrompt(thread_id='t1')  # type: ignore[call-arg]
 
     def test_no_identity_or_adaptive_helper_methods(self):
-        """Y1: weaving has moved up to UserMessageProcessor.getSystemPrompt()."""
+        """Y1: weaving has moved up to UserMessageProcessor.get_system_prompt()."""
         from services.system_message_prompt import UnifiedSystemMessagePrompt
         assert not hasattr(UnifiedSystemMessagePrompt, '_get_identity_modulation'), (
             "_get_identity_modulation should have been removed — weaving now "
-            "lives in UserMessageProcessor.getSystemPrompt()"
+            "lives in UserMessageProcessor.get_system_prompt()"
         )
         assert not hasattr(UnifiedSystemMessagePrompt, '_get_adaptive_directives'), (
             "_get_adaptive_directives should have been removed — weaving now "
-            "lives in UserMessageProcessor.getSystemPrompt()"
+            "lives in UserMessageProcessor.get_system_prompt()"
         )
 
     # ── Prompt constant contract ──────────────────────────────────────────────

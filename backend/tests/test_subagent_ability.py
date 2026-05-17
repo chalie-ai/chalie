@@ -248,10 +248,10 @@ class TestHandleToolDispatchCollisionGuard:
             ROLE = "test"
             SKIP_TRANSCRIPT_WRITE = True
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return "test"
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return "test user"
 
         proc = _BareProcessor(raw_input="test")
@@ -272,7 +272,7 @@ class TestHandleToolDispatchCollisionGuard:
             },
         }
 
-        result_text = proc.handleTool(tc)
+        result_text = proc.handle_tool(tc)
 
         assert not result_text.startswith("Unknown action type"), (
             f"Dispatcher received wrong action_type — collision guard failed. "

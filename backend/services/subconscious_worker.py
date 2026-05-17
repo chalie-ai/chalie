@@ -81,9 +81,7 @@ class SubconsciousWorker:
         self.idle_window = timedelta(seconds=idle_window_sec)
         self._lock = threading.Lock()
         self._cached_last_fired: Optional[datetime] = None
-        # Single DecayEngineService instance — the engine reads
-        # ``ConfigService.get_agent_config('episodic-memory')`` in __init__,
-        # so re-instantiating per tick would burn a config read every 5 min.
+        # Single DecayEngineService instance — shared across ticks.
         # Lazy-built on first use so import failures surface as a step error.
         self._decay_engine = None
         # Hydrate from durable state on construction so the first tick after a
@@ -243,8 +241,7 @@ class SubconsciousWorker:
         tool_calls purge + behavioural-pattern stale flips. Engine logic
         unchanged; only the trigger surface lives here now.
 
-        The engine is cached on the worker instance so we avoid the
-        ``ConfigService.get_agent_config`` read on every 5-minute tick.
+        The engine is cached on the worker instance to reuse the same instance across ticks.
         """
         if self._decay_engine is None:
             from services.decay_engine_service import DecayEngineService

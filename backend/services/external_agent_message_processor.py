@@ -77,13 +77,13 @@ class ExternalAgentMessageProcessor(MessageProcessor):
         prefix = f"{wrapper_id}:" if wrapper_id else ""
         self.CHANNEL = f"external-agent:{prefix}{agent_name}"
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return (
             f"The user is {self._agent_name}, an external agent. "
             f"This conversation is about: {self._project_or_task_name}."
         )
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         """Build user-message body for one ACT iteration.
 
         Stripped compared to UMP: no world state, no system awareness,
@@ -93,7 +93,7 @@ class ExternalAgentMessageProcessor(MessageProcessor):
         parts = []
 
         # Previous Messages
-        prev = self.getPreviousMessages()
+        prev = self.get_previous_messages()
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
 
@@ -114,13 +114,13 @@ class ExternalAgentMessageProcessor(MessageProcessor):
                 self._act_trail.append(steer)
 
         # ACT loop trail
-        trail = self.getActLoopTrail()
+        trail = self.get_act_loop_trail()
         if trail:
             parts.append(trail)
 
         return '\n'.join(parts)
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         """Build system prompt with template variables substituted."""
         body = self.SYSTEM_PROMPT_CLASS().getPrompt()
         body = self._substitute_provider_placeholders(body)
@@ -133,7 +133,7 @@ class ExternalAgentMessageProcessor(MessageProcessor):
             .replace("{agent_name}", self._agent_name)
             .replace("{project_or_task_name}", self._project_or_task_name)
         )
-        return f"{self.getUserDefinition()}\n\n{body}"
+        return f"{self.get_user_definition()}\n\n{body}"
 
     def store(self, llm_response: str) -> None:
         """Capture the final response text before delegating to the base store."""
@@ -156,7 +156,7 @@ class ExternalAgentMessageProcessor(MessageProcessor):
             logger.debug("[EAMP] _resolve_user_name failed: %s", e)
         return 'the user'
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """After ACT loop completes, optionally trigger user disclosure.
 
         When loop_in_human=True, spawns a ScheduledPromptProcessor (UMP with

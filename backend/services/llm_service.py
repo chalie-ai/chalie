@@ -353,8 +353,8 @@ def create_llm_service(config: dict):
     """Create an LLM service based on the platform field in config.
 
     If the config contains a '_job_name' key (injected by
-    ConfigService.resolve_agent_config via Providers._resolve), the returned
-    service is wrapped with LoggingLLMService so every call is logged.
+    Providers._resolve), the returned service is wrapped with LoggingLLMService
+    so every call is logged.
 
     An optional '_usage_class' key ('chat', 'subagent', 'subconscious')
     distinguishes traffic sources in llm_call_log. Injected by Providers._resolve

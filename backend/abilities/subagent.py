@@ -167,7 +167,7 @@ def _deliver_envelope(envelope: str, parent_ref: object) -> None:
 
     Case A — parent turn is still active (_turn_active Event is set):
       Append the envelope to parent._pending_steers. The next iteration's
-      getUserPrompt() drains _pending_steers into _act_trail.
+      get_user_prompt() drains _pending_steers into _act_trail.
 
     Case B — parent idle (turn finished, or non-UMP):
       Spawn a daemon thread that runs SubagentReturnProcessor(envelope).send()

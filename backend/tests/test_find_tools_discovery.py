@@ -59,10 +59,10 @@ class _StubProcessor(MessageProcessor):
         self.ALWAYS_AVAILABLE = []
         self._turn_active = __import__('threading').Event()
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return ""
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         return ""
 
 

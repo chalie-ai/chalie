@@ -36,10 +36,10 @@ class TestIterationTimeout:
             SKIP_TRANSCRIPT_WRITE = True
             SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return "test"
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return "test user"
 
         # Fake LLM call sleeps 1.5s > ITERATION_TIMEOUT=0.5s. Without the safety
@@ -161,10 +161,10 @@ class TestSkipInputRow:
             SKIP_TRANSCRIPT_WRITE = False
             SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return "test"
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return "test user"
 
         fake_response = MagicMock()
