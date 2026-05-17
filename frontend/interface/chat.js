@@ -102,10 +102,10 @@ export class Chat {
     // Block send while any upload is still in-flight.
     if (this._imageAttach?.isUploading) return;
 
-    // Only route as steer when the ACT loop is actively narrating.
-    // This prevents normal replies (e.g. to clarifications) from being
-    // misrouted as steering commands.
-    if (this._ws._chatCallbacks && this._presence.state === 'narrating') {
+    // Turn in-flight — route to server, which decides steer vs new turn.
+    // Server returns {routed: "steer"|"turn"} and _postChat fires
+    // onSteerSent on the active callbacks if it was a steer.
+    if (this._ws._chatCallbacks) {
       textarea.value = '';
       textarea.style.height = 'auto';
       this._ws.send(text, source, {});

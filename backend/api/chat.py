@@ -221,10 +221,10 @@ def post_chat():
     active_id = _get_active_request_id()
     if active_id:
         _inject_steer(active_id, text)
+        return jsonify({"status": "accepted", "routed": "steer"}), 202
     else:
         _start_turn(text, source, attachments)
-
-    return jsonify({"status": "accepted"}), 202
+        return jsonify({"status": "accepted", "routed": "turn"}), 202
 
 
 @chat_bp.route("/action", methods=["POST"])
