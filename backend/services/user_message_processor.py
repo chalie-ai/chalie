@@ -353,42 +353,6 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[USER MSG] Tool event callback failed: {e}")
 
-    def _get_external_tool_calls(self, request_id: str | None) -> list[dict]:
-        """Drain steer tool_calls queued by POST /chat for the active ACT loop.
-
-        POST /chat writes synthetic steer tool_call dicts as JSON to
-        ``steer_queue:{request_id}`` via rpush. This method pops all queued
-        entries and returns them as a list of tool_call dicts that handle_tool()
-        can dispatch through SteerAbility.
-
-        Returns [] on any error — a missing or unreadable queue must not abort
-        the turn. Each steer lands in the tool_calls table via handle_tool(),
-        making steers fully auditable and traceable.
-        """
-        if not request_id:
-            return []
-        try:
-            import json as _json
-            from services.memory_client import MemoryClientService
-            _store = MemoryClientService.create_connection()
-            key = f"steer_queue:{request_id}"
-            raw_items = _store.lrange(key, 0, -1)
-            if not raw_items:
-                return []
-            _store.delete(key)
-            result = []
-            for raw in raw_items:
-                raw_str = raw.decode() if isinstance(raw, bytes) else raw
-                try:
-                    tc = _json.loads(raw_str)
-                    if isinstance(tc, dict):
-                        result.append(tc)
-                except (_json.JSONDecodeError, ValueError) as exc:
-                    logger.debug("[USER MSG] Steer tool_call parse failed: %s", exc)
-            return result
-        except Exception as exc:
-            logger.debug("[USER MSG] _get_external_tool_calls failed: %s", exc)
-            return []
 
     def store(self, llm_response: str) -> None:
         """Persist the turn atomically, then capture _last_response for post_turn().

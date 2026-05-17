@@ -159,9 +159,7 @@ export class WSClient {
    */
   send(text, source, callbacks = {}, attachments = []) {
     if (this._chatCallbacks) {
-      // Turn in-flight — post to server, let it decide routing.
-      // Do NOT replace callbacks — the active turn owns them.
-      // _postChat fires onSteerSent on server confirmation.
+      this._chatCallbacks.onSteerSent?.(text);
       this._postChat(text, source, []);
       return;
     }
@@ -221,12 +219,6 @@ export class WSClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-      .then(r => r.json())
-      .then(data => {
-        if (data.routed === 'steer') {
-          this._chatCallbacks?.onSteerSent?.(text);
-        }
-      })
       .catch(() => {
         this._chatCallbacks?.onError?.({ message: 'Chat request failed.', recoverable: true });
         this._chatCallbacks?.onDone?.({ duration_ms: 0 });

@@ -641,38 +641,26 @@ class MessageProcessor:
 
     # ── send() helpers (extracted for S3776 cognitive complexity) ────────────
 
-    def _record_iteration_results(self, llm_response, request_id, pending_tool_calls: list | None = None):
-        """Record narration and dispatch tools for one iteration.
-
-        Accepts the pre-computed ``pending_tool_calls`` list (LLM tool_calls +
-        externally-injected steers from _get_external_tool_calls). When not
-        supplied, falls back to llm_response.tool_calls for callers that have
-        not yet been updated (backward-compatible default).
-
-        Called after the LLM response when pending work exists. Records the
-        narration DTO and dispatches each tool call.
-        """
-        if llm_response.text:
-            from services.tool_render_and_record_service import ToolRenderAndRecordService
-            rendered = ToolRenderAndRecordService(
-                tool_name='narration',
-                params={},
-                result=llm_response.text,
-                ephemeral=True,
-                transcript_id=self._uid,
-            ).render_and_record()
-            self._act_trail.append(rendered)
-            try:
-                self._emit_narration(llm_response.text, self._current_iteration)
-            except Exception as exc:
-                logger.error(
-                    "[MessageProcessor.send] _emit_narration raised: %s",
-                    exc, exc_info=True,
-                )
-
-        tool_calls = pending_tool_calls if pending_tool_calls is not None else list(llm_response.tool_calls or [])
-        for tc in tool_calls:
-            self.handle_tool(tc)  # never raises; appends DTO + trail
+    def _record_iteration_narration(self, llm_response):
+        """Record mid-loop narration for the current iteration."""
+        if not llm_response.text:
+            return
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        rendered = ToolRenderAndRecordService(
+            tool_name='narration',
+            params={},
+            result=llm_response.text,
+            ephemeral=True,
+            transcript_id=self._uid,
+        ).render_and_record()
+        self._act_trail.append(rendered)
+        try:
+            self._emit_narration(llm_response.text, self._current_iteration)
+        except Exception as exc:
+            logger.error(
+                "[MessageProcessor.send] _emit_narration raised: %s",
+                exc, exc_info=True,
+            )
 
     def _apply_overflow_guard(self, system_prompt, tools, user_body):
         """Check payload size vs provider context and run compaction if needed.
@@ -901,14 +889,17 @@ class MessageProcessor:
                         break  # 'break' — unrecoverable
                     self._metrics.accumulate(llm_response)
 
-                    pending_tool_calls = list(llm_response.tool_calls or [])
-                    pending_tool_calls += self._get_external_tool_calls(request_id)
-                    if not pending_tool_calls:
+                    trail_before = len(self._act_trail)
+
+                    with self._metrics.stage('post_tool_records'):
+                        for tc in list(llm_response.tool_calls or []):
+                            self.handle_tool(tc)
+
+                    if len(self._act_trail) == trail_before:
                         loop_exited_cleanly = True
                         break
 
-                    with self._metrics.stage('post_tool_records'):
-                        self._record_iteration_results(llm_response, request_id, pending_tool_calls)
+                    self._record_iteration_narration(llm_response)
 
                     self._current_iteration += 1
 
@@ -966,19 +957,6 @@ class MessageProcessor:
         attribute."""
         pass
 
-    def _get_external_tool_calls(self, request_id: str | None) -> list[dict]:
-        """Return externally-injected tool_calls queued for this request.
-
-        Base implementation returns []. UserMessageProcessor overrides this to
-        drain ``steer_queue:{request_id}`` from MemoryStore, returning synthetic
-        steer tool_call dicts that handle_tool() dispatches through SteerAbility.
-
-        The ACT loop calls this after accumulating LLM tool_calls. When the
-        combined list is empty the loop exits cleanly; when steers are present
-        the loop continues for another iteration even if the LLM returned no
-        tool_calls (solving the final-synthesis message-lost edge case).
-        """
-        return []
 
     # ── Single-path overflow + continuity compaction ─────────────────────────
 

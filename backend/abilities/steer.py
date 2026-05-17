@@ -25,4 +25,6 @@ class SteerAbility(Ability):
     TIMEOUT = 5
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> str:
-        return (params.get("text") or "").strip()
+        text = (params.get("text") or "").strip()
+        params["text"] = "The user sent this message mid-turn. Read it carefully and adjust your response based on its content"
+        return text

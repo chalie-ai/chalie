@@ -15,7 +15,6 @@ Design:
   dispatches a steer tool_call; otherwise it starts a new turn.
 """
 
-import json
 import logging
 import threading
 import time
@@ -34,66 +33,32 @@ chat_bp = Blueprint("chat", __name__)
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
 
-_active_ump_request_id: str | None = None
+_active_ump: "UserMessageProcessor | None" = None
 _ump_lock = threading.Lock()
 
 
-def _get_active_request_id() -> str | None:
+def _get_active_ump():
     with _ump_lock:
-        return _active_ump_request_id
+        return _active_ump
 
 
-def _set_active_request_id(request_id: str | None) -> None:
-    global _active_ump_request_id
+def _set_active_ump(proc) -> None:
+    global _active_ump
     with _ump_lock:
-        _active_ump_request_id = request_id
+        _active_ump = proc
 
 
 # ── Background helpers ────────────────────────────────────────────────────────
 
 
 def _run_chat_background(
-    text: str,
-    source: str,
-    attachments: list,
+    proc,
     request_id: str,
     turn_start: float,
 ) -> None:
     """Background thread: process user message via UMP and broadcast response."""
     broker = WebSocketBroker()
-    proc = None
     try:
-        from services.user_message_processor import UserMessageProcessor
-
-        metadata = {
-            "uuid": request_id,
-            "exchange_id": request_id,
-            "source": source,
-            "attachments": attachments,
-            "channel": "user",
-        }
-
-        broker.broadcast({"type": "status", "stage": "thinking"})
-
-        def _on_narration(text_val, step=0):
-            if text_val:
-                broker.broadcast({
-                    "type": "act_narration",
-                    "text": sanitize(text_val),
-                    "step": step,
-                })
-
-        def _on_tool_event(event):
-            if isinstance(event, dict) and event.get("type") in ("act_tool_start", "act_tool_end"):
-                broker.broadcast(event)
-
-        proc = UserMessageProcessor(
-            raw_input=text,
-            metadata=metadata,
-            on_narration=_on_narration,
-            on_tool_event=_on_tool_event,
-        )
-        proc.set_turn_start(turn_start)
         response = proc.send(request_id=request_id)
 
         metrics = proc._metrics.snapshot()
@@ -138,11 +103,13 @@ def _run_chat_background(
             **({"metrics": partial_metrics} if partial_metrics else {}),
         })
     finally:
-        _set_active_request_id(None)
+        _set_active_ump(None)
 
 
 def _start_turn(text: str, source: str, attachments: list) -> str:
     """Start a new UMP turn in a background thread. Returns the new request_id."""
+    from services.user_message_processor import UserMessageProcessor
+
     request_id = str(uuid.uuid4())
     turn_start = time.time()
 
@@ -152,41 +119,46 @@ def _start_turn(text: str, source: str, attachments: list) -> str:
     except Exception as exc:
         logger.debug("[Chat API] world_state.absorb failed: %s", exc)
 
-    _set_active_request_id(request_id)
-    WebSocketBroker().broadcast({"type": "status", "stage": "processing"})
+    broker = WebSocketBroker()
+    broker.broadcast({"type": "status", "stage": "processing"})
+
+    def _on_narration(text_val, step=0):
+        if text_val:
+            broker.broadcast({
+                "type": "act_narration",
+                "text": sanitize(text_val),
+                "step": step,
+            })
+
+    def _on_tool_event(event):
+        if isinstance(event, dict) and event.get("type") in ("act_tool_start", "act_tool_end"):
+            broker.broadcast(event)
+
+    metadata = {
+        "uuid": request_id,
+        "exchange_id": request_id,
+        "source": source,
+        "attachments": attachments,
+        "channel": "user",
+    }
+
+    proc = UserMessageProcessor(
+        raw_input=text,
+        metadata=metadata,
+        on_narration=_on_narration,
+        on_tool_event=_on_tool_event,
+    )
+    proc.set_turn_start(turn_start)
+    _set_active_ump(proc)
 
     thread = threading.Thread(
         target=_run_chat_background,
-        args=(text, source, attachments, request_id, turn_start),
+        args=(proc, request_id, turn_start),
         daemon=True,
         name=f"chat-{request_id[:8]}",
     )
     thread.start()
     return request_id
-
-
-def _inject_steer(request_id: str, text: str) -> None:
-    """Queue a steer tool_call for the active ACT loop.
-
-    Writes a synthetic tool_call dict to ``steer_queue:{request_id}`` in
-    MemoryStore. The ACT loop's ``_get_external_tool_calls()`` pops from
-    this list and feeds the steer into ``handle_tool()`` via the steer
-    ability, making it fully traceable in the tool_calls table.
-    """
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-        steer_tc = json.dumps({
-            "name": "steer",
-            "input": {"text": text},
-            "id": f"steer_{uuid.uuid4().hex[:12]}",
-        })
-        key = f"steer_queue:{request_id}"
-        store.rpush(key, steer_tc)
-        store.expire(key, 300)
-        logger.debug("[Chat API] Steer queued for %s: %s", request_id, text[:60])
-    except Exception as exc:
-        logger.warning("[Chat API] Steer queue failed: %s", exc)
 
 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
@@ -218,13 +190,12 @@ def post_chat():
     if not text and attachments:
         text = "[File attached]"
 
-    active_id = _get_active_request_id()
-    if active_id:
-        _inject_steer(active_id, text)
-        return jsonify({"status": "accepted", "routed": "steer"}), 202
+    proc = _get_active_ump()
+    if proc:
+        proc.handle_tool({'name': 'steer', 'input': {'text': text}, 'id': f'steer_{uuid.uuid4().hex[:12]}'})
     else:
         _start_turn(text, source, attachments)
-        return jsonify({"status": "accepted", "routed": "turn"}), 202
+    return jsonify({"status": "accepted"}), 202
 
 
 @chat_bp.route("/action", methods=["POST"])
