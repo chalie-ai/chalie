@@ -24,7 +24,6 @@ import contextlib
 import contextvars
 import logging
 import re
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
@@ -114,16 +113,11 @@ def bind_current_processor(processor: "MessageProcessor"):
 
     Wrap the body of ``MessageProcessor.send()`` with this. Resets the
     ContextVar on exit regardless of success / exception path.
-
-    Also sets/clears ``processor._turn_active`` so async subagent delivery
-    threads can distinguish a live parent (mid-turn) from a finished one.
     """
     token = _CURRENT_PROCESSOR.set(processor)
-    processor._turn_active.set()
     try:
         yield processor
     finally:
-        processor._turn_active.clear()
         _CURRENT_PROCESSOR.reset(token)
 
 
@@ -182,9 +176,6 @@ class MessageProcessor:
     # When True, send() skips write_input_row() but store() still writes
     # the assistant row.  self._uid stays None (tool calls get transcript_id
     # NULL — safe, all downstream code guards on _uid is not None).
-    # Used by SubagentReturnProcessor: the subagent envelope must never
-    # appear in the user channel transcript, but the synthesized assistant
-    # response must.
     SKIP_INPUT_ROW: bool = False
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -229,17 +220,6 @@ class MessageProcessor:
         self._overflow_recovered_this_turn: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
-        # Per-turn pending steers from async subagent completions.
-        # A subagent finishing mid-ACT appends its envelope here instead of
-        # directly to _act_trail so compaction cannot race the append.
-        # Drained into _act_trail at the start of get_user_prompt() (or equivalent
-        # prompt-assembly point) on each ACT iteration.
-        self._pending_steers: list[str] = []
-        # Thread-safe liveness flag: set while send() is on the call stack
-        # (inside bind_current_processor). Async subagent delivery checks
-        # this to distinguish a live parent (steer into _pending_steers)
-        # from a finished parent (spawn SubagentReturnProcessor).
-        self._turn_active = threading.Event()
         # Per-instance deadline (seconds from epoch) for processors that want a
         # hard wall-clock cap (e.g. SubagentProcessor). None means no deadline.
         # Set by subclasses in __init__ after calling super().__init__().
@@ -795,7 +775,7 @@ class MessageProcessor:
             # Skipped for internal processors (SKIP_TRANSCRIPT_WRITE=True) so
             # they leave no trace in the transcript table.
             # SKIP_INPUT_ROW suppresses only the input row — store() still
-            # writes the assistant row (SubagentReturnProcessor isolation).
+            # writes the assistant row (hidden_input isolation).
             if not self.SKIP_TRANSCRIPT_WRITE and not self.SKIP_INPUT_ROW:
                 self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
 
@@ -1012,11 +992,6 @@ class MessageProcessor:
             - Returns True (caller re-enters the loop at iter 0).
         - On failure (LLM error, empty output, parse failure):
             - Returns False (caller breaks to cap exit, returns final_text='').
-
-        Note: ``_pending_steers`` draining is intentionally NOT done here.
-        Steers are drained automatically at the top of each iteration by
-        ``get_user_prompt()`` in UserMessageProcessor — that path fires
-        naturally on the next iter=0 iteration after a successful overflow.
         """
         summary = self._run_full_compaction(exclude_id=self._uid)
         if summary is None:

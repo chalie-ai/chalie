@@ -106,13 +106,6 @@ class ExternalAgentMessageProcessor(MessageProcessor):
         # Current turn line
         parts.append(f"user: {self._raw_input}")
 
-        # Drain pending steers from async subagent completions
-        if self._pending_steers:
-            steers = self._pending_steers[:]
-            self._pending_steers.clear()
-            for steer in steers:
-                self._act_trail.append(steer)
-
         # ACT loop trail
         trail = self.get_act_loop_trail()
         if trail:
@@ -159,14 +152,11 @@ class ExternalAgentMessageProcessor(MessageProcessor):
     def post_turn(self) -> None:
         """After ACT loop completes, optionally trigger user disclosure.
 
-        When loop_in_human=True, spawns a ScheduledPromptProcessor (UMP with
-        hidden input + full personality) so the disclosure goes through the
-        normal Chalie voice — not a raw dump.
+        When loop_in_human=True, dispatches the disclosure through the chat
+        chokepoint so it goes through the normal Chalie voice — not a raw dump.
         """
         if not self._loop_in_human:
             return
-
-        import threading
 
         disclosure_input = (
             f"An external agent called '{self._agent_name}' just contacted you "
@@ -176,44 +166,5 @@ class ExternalAgentMessageProcessor(MessageProcessor):
             f"Let the user know about this exchange in your own words."
         )
 
-        def _run():
-            from services.user_message_processor import UserMessageProcessor
-            from services.markup import sanitize
-            from services.websocket_broker import WebSocketBroker
-
-            try:
-                proc = UserMessageProcessor(raw_input=disclosure_input)
-                proc.SKIP_INPUT_ROW = True
-                response_text = proc.send()
-                response_text = (response_text or '').strip()
-                if not response_text:
-                    response_text = (
-                        f"{self._agent_name} reached out about "
-                        f"'{self._project_or_task_name}' — check your transcript."
-                    )
-            except Exception as exc:
-                logger.warning("[EAMP] Disclosure UMP failed: %s", exc, exc_info=True)
-                response_text = (
-                    f"{self._agent_name} sent a message about "
-                    f"'{self._project_or_task_name}' but I couldn't summarize it."
-                )
-
-            try:
-                WebSocketBroker().broadcast({
-                    'type': 'task',
-                    'content': sanitize(response_text),
-                })
-                logger.info(
-                    "[EAMP] loop_in_human: disclosure delivered for agent=%s project=%s",
-                    self._agent_name, self._project_or_task_name,
-                )
-
-                try:
-                    from api.push import send_push_to_all
-                    send_push_to_all(title='Chalie', body=response_text[:200])
-                except Exception as _push_err:
-                    logger.warning("[EAMP] Web push failed: %s", _push_err)
-            except Exception as exc:
-                logger.warning("[EAMP] Disclosure delivery failed: %s", exc, exc_info=True)
-
-        threading.Thread(target=_run, daemon=True, name="eamp-disclosure").start()
+        from api.chat import dispatch_message
+        dispatch_message(disclosure_input, source='external_agent', hidden_input=True)

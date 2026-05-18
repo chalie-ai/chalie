@@ -2,7 +2,7 @@
 Scheduler Service — Background poller for scheduled items in SQLite.
 
 Polls scheduled_items table every 60 seconds. Fires due items either as
-direct WebSocket broadcasts (WebSocketBroker) or through ScheduledPromptProcessor
+direct WebSocket broadcasts (WebSocketBroker) or through the chat chokepoint
 for prompt-type items that need LLM execution with full tool access.
 
 SQLite's WAL mode provides implicit locking — no explicit row locks needed.
@@ -10,7 +10,6 @@ Entry point: scheduler_worker() registered in run.py.
 """
 
 import logging
-import threading
 import time
 import uuid
 
@@ -22,9 +21,6 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SCHEDULER]"
 _POLL_INTERVAL = 60  # seconds
-
-# Cap concurrent scheduled prompt executions to prevent resource exhaustion
-_PROMPT_SEMAPHORE = threading.Semaphore(3)
 
 # System handler registry — capabilities register callbacks for item_type='system'
 _SYSTEM_HANDLERS: dict[str, callable] = {}
@@ -103,7 +99,7 @@ def scheduler_worker():
 
 
 def _poll_and_fire():
-    """Poll for due items and fire them — direct delivery or ScheduledPromptProcessor."""
+    """Poll for due items and fire them — direct delivery or chat chokepoint."""
     try:
         from services.database_service import get_shared_db_service
 
@@ -236,48 +232,8 @@ def _fire_item(item: dict):
             return
 
         item_id = item.get('id', 'unknown')
-
-        def _run():
-            _PROMPT_SEMAPHORE.acquire()
-            try:
-                from services.user_message_processor import ScheduledPromptProcessor
-                from services.markup import sanitize
-                from services.websocket_broker import WebSocketBroker
-
-                response_text = ScheduledPromptProcessor(
-                    raw_input=message,
-                    metadata={'item_id': item_id},
-                ).send()
-                response_text = (response_text or '').strip()
-                if not response_text:
-                    response_text = "Scheduled task completed but produced no output."
-
-                WebSocketBroker().broadcast({
-                    'type': 'task',
-                    'content': sanitize(response_text),
-                })
-                logger.info(f"{LOG_PREFIX} Scheduled prompt {item_id} complete")
-
-                try:
-                    from api.push import send_push_to_all
-                    send_push_to_all(title='Chalie', body=response_text[:200])
-                except Exception as _push_err:
-                    logger.warning(f"{LOG_PREFIX} Web push failed: {_push_err}")
-            except Exception as exc:
-                logger.error(f"{LOG_PREFIX} Scheduled prompt {item_id} failed: {exc}")
-                try:
-                    from services.websocket_broker import WebSocketBroker
-                    WebSocketBroker().broadcast({
-                        'type': 'task',
-                        'content': 'A scheduled task could not be completed.',
-                    })
-                except Exception:
-                    pass
-            finally:
-                _PROMPT_SEMAPHORE.release()
-
-        t = threading.Thread(target=_run, daemon=True, name=f"scheduled-prompt-{item_id}")
-        t.start()
+        from api.chat import dispatch_message
+        dispatch_message(message, source='scheduled', hidden_input=True)
         logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
     else:
         # Direct delivery — bypass LLM, broadcast straight to WebSocket

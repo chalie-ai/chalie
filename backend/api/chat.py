@@ -106,7 +106,41 @@ def _run_chat_background(
         _set_active_ump(None)
 
 
-def _start_turn(text: str, source: str, attachments: list) -> str:
+def dispatch_message(
+    text: str,
+    source: str = "text",
+    attachments: list | None = None,
+    hidden_input: bool = False,
+    intercept: bool = False,
+) -> None:
+    """Single chokepoint for all message sources entering the user channel.
+
+    Args:
+        text: Message content.
+        source: Origin identifier (``"text"``, ``"voice"``, ``"subagent"``,
+                ``"scheduled"``, ``"external_agent"``).
+        attachments: Optional file paths from POST /upload.
+        hidden_input: When True the input row is NOT written to the transcript
+                      (the synthesized assistant response still is).
+        intercept: When True, steers into the active UMP if one exists.
+                   When False, always starts a fresh UMP turn.
+    """
+    attachments = attachments or []
+
+    if intercept:
+        proc = _get_active_ump()
+        if proc:
+            proc.handle_tool({
+                'name': 'steer',
+                'input': {'text': text},
+                'id': f'steer_{uuid.uuid4().hex[:12]}',
+            })
+            return
+
+    _start_turn(text, source, attachments, hidden_input)
+
+
+def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = False) -> str:
     """Start a new UMP turn in a background thread. Returns the new request_id."""
     from services.user_message_processor import UserMessageProcessor
 
@@ -140,6 +174,7 @@ def _start_turn(text: str, source: str, attachments: list) -> str:
         "source": source,
         "attachments": attachments,
         "channel": "user",
+        "hidden_input": hidden_input,
     }
 
     proc = UserMessageProcessor(
@@ -190,11 +225,7 @@ def post_chat():
     if not text and attachments:
         text = "[File attached]"
 
-    proc = _get_active_ump()
-    if proc:
-        proc.handle_tool({'name': 'steer', 'input': {'text': text}, 'id': f'steer_{uuid.uuid4().hex[:12]}'})
-    else:
-        _start_turn(text, source, attachments)
+    dispatch_message(text, source=source, attachments=attachments, intercept=True)
     return jsonify({"status": "accepted"}), 202
 
 

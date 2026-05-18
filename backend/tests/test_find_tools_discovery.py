@@ -57,7 +57,6 @@ class _StubProcessor(MessageProcessor):
         # Set only the attrs the gate path reads.
         self.DISCOVERABLE = discoverable
         self.ALWAYS_AVAILABLE = []
-        self._turn_active = __import__('threading').Event()
 
     def get_user_definition(self) -> str:
         return ""

@@ -482,7 +482,6 @@ class TestSaveGraphBudgetCapAt50:
         # duration of the test so the counter persists across 51 calls.
         class _StubProcessor:
             _save_graph_calls = 0
-            _turn_active = __import__('threading').Event()
 
         stub_processor = _StubProcessor()
         instance = SaveGraph()

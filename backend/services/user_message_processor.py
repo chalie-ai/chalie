@@ -83,6 +83,8 @@ class UserMessageProcessor(MessageProcessor):
         on_tool_event: Callable[[dict], None] | None = None,
     ):
         super().__init__(raw_input, metadata)
+        if self._metadata.get('hidden_input'):
+            self.SKIP_INPUT_ROW = True
         self._on_narration = on_narration
         self._on_tool_event = on_tool_event
         # Numeric radius used for the pre-act seed recall (stored for drift calc).
@@ -217,19 +219,7 @@ class UserMessageProcessor(MessageProcessor):
             turn_line += ' ' + nudge_tag
         parts.append(turn_line)
 
-        # 6. Drain pending steers from async subagent completions into the trail.
-        # These are envelopes queued by _deliver_envelope() while compaction
-        # or an earlier iteration was in progress. Draining here (before
-        # get_act_loop_trail()) is compaction-safe: compaction mutates _act_trail
-        # directly; this drain fires before the next iteration's prompt
-        # assembly, so steers are never mid-compaction when appended.
-        if self._pending_steers:
-            steers = self._pending_steers[:]
-            self._pending_steers.clear()
-            for steer in steers:
-                self._act_trail.append(steer)
-
-        # 7. ACT loop trail (empty on iteration 1)
+        # 6. ACT loop trail (empty on iteration 1)
         trail = self.get_act_loop_trail()
         if trail:
             parts.append(trail)
@@ -550,37 +540,3 @@ class UserMessageProcessor(MessageProcessor):
         return self._mode_state_cached
 
 
-class SubagentReturnProcessor(UserMessageProcessor):
-    """Synthesize a subagent's result via a fresh user-channel ACT loop.
-
-    Flow (isolation contract):
-    1. SubagentProcessor (CHANNEL='subagent') does the work in its own
-       isolated transcript.
-    2. On completion, a daemon thread constructs this processor with the
-       subagent's result as ``raw_input`` and calls ``.send()``.
-    3. SKIP_INPUT_ROW=True — the raw subagent result is NEVER written to
-       the user transcript.  The user channel stays clean.
-    4. The ACT loop synthesizes the result.  The synthesized response is
-       written to transcript (``store()``) and delivered via WS — this is
-       what the user sees.
-    5. On subagent failure, the same flow runs — the ACT loop sees the
-       error envelope and synthesizes a user-friendly response.
-
-    Why CHANNEL='user': the output of this ACT loop is a normal
-    user-channel assistant message — fully visible, rich-media-capable.
-    Do NOT add a CHANNEL='subagent_return' constant — it would break
-    rich-media card injection for tool calls in this loop.
-    """
-
-    ROLE = 'subagent_return'
-    SKIP_INPUT_ROW = True
-
-
-class ScheduledPromptProcessor(UserMessageProcessor):
-    """Scheduled prompt — UMP with hidden input and clean context window."""
-
-    USAGE_CLASS = 'subconscious'
-    SKIP_INPUT_ROW = True
-
-    def get_previous_messages(self, token_budget: int | None = None) -> str:
-        return ''

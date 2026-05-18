@@ -211,9 +211,6 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     # — background reflection needs access to personal data context.
     "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
                                    _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent", "home"}),
-    # ScheduledPromptProcessor — same tool surface as UMP. Scheduled prompts
-    # act on the user's behalf with full capabilities.
-    "ScheduledPromptProcessor": (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
     # the class-level attribute is [] (empty). The per-instance value is
     # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
@@ -253,13 +250,12 @@ def test_per_processor_tool_scope_matches_spec():
     from services.pattern_match_processor import PatternMatchProcessor
     from services.subagent_processor import SubagentProcessor
     from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
-    from services.user_message_processor import ScheduledPromptProcessor, UserMessageProcessor
+    from services.user_message_processor import UserMessageProcessor
     from services.user_summary_processor import UserSummaryProcessor
 
     processors = {
         "UserMessageProcessor": UserMessageProcessor,
         "DMNMessageProcessor": DMNMessageProcessor,
-        "ScheduledPromptProcessor": ScheduledPromptProcessor,
         "SubagentProcessor": SubagentProcessor,
         "PatternMatchProcessor": PatternMatchProcessor,
         "ContinuityCompactionProcessor": ContinuityCompactionProcessor,

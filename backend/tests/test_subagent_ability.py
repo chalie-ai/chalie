@@ -269,57 +269,6 @@ class TestHandleToolDispatchCollisionGuard:
         )
 
 
-# ---------------------------------------------------------------------------
-# AD1. _deliver_envelope discriminator — turn_active Event
-#
-# Regression for the fire-and-forget delivery bug: _deliver_envelope used to
-# check isinstance(parent_ref, UserMessageProcessor) which always returned True
-# even after the parent's turn was over (it's just a Python object reference).
-# The result was silently appended to a dead processor's _pending_steers and
-# never reached the user. Fix: check parent_ref._turn_active.is_set().
-# ---------------------------------------------------------------------------
-
-
-class TestDeliverEnvelopeDiscriminator:
-    def test_case_a_delivers_to_pending_steers_when_parent_active(self):
-        """When parent _turn_active is set, envelope goes to _pending_steers."""
-        import threading
-        from abilities.subagent import _deliver_envelope
-        from services.user_message_processor import UserMessageProcessor
-
-        envelope = "[subagent.complete(type=web_surfer)]\nTest result\n[end:subagent.complete]"
-
-        # Build a real UMP instance (SKIP_TRANSCRIPT_WRITE avoids DB)
-        parent = UserMessageProcessor.__new__(UserMessageProcessor)
-        parent._pending_steers = []
-        parent._turn_active = threading.Event()
-        parent._turn_active.set()
-        parent._current_iteration = 3
-
-        _deliver_envelope(envelope, parent)
-
-        assert envelope in parent._pending_steers
-
-    def test_case_b_fires_when_parent_turn_finished(self):
-        """When parent _turn_active is cleared, envelope routes to Case B."""
-        import threading
-        from abilities.subagent import _deliver_envelope
-        from services.user_message_processor import UserMessageProcessor
-        from unittest.mock import patch
-
-        envelope = "[subagent.complete(type=web_surfer)]\nDone\n[end:subagent.complete]"
-
-        parent = UserMessageProcessor.__new__(UserMessageProcessor)
-        parent._pending_steers = []
-        parent._turn_active = threading.Event()
-        parent._turn_active.clear()  # turn is over
-        parent._current_iteration = 5
-
-        with patch('abilities.subagent._spawn_return_processor') as mock_spawn:
-            _deliver_envelope(envelope, parent)
-
-        mock_spawn.assert_called_once_with(envelope)
-        assert envelope not in parent._pending_steers
 
 
 
