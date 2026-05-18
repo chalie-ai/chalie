@@ -67,8 +67,13 @@ class SaveGraph(Ability):
         if not value:
             return {"error": "empty_value"}
 
+        dedup_key = (kind, key.lower().strip(), value.lower().strip())
+        seen: set | None = getattr(proc, "_save_graph_seen", None) if proc else None
+        if seen is not None and dedup_key in seen:
+            return {"already_stored": True, "key": key}
+
         try:
-            get_data_graph_service().store(
+            result = get_data_graph_service().store(
                 kind=kind,
                 key=key,
                 value=value,
@@ -79,4 +84,11 @@ class SaveGraph(Ability):
 
         if proc is not None:
             proc._save_graph_calls = count + 1
+            if seen is None:
+                proc._save_graph_seen = set()
+            proc._save_graph_seen.add(dedup_key)
+
+        if result and result.get("status") == "reinforced":
+            return {"already_stored": True, "key": key}
+
         return {"ok": True}

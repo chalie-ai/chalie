@@ -49,6 +49,7 @@ class PatternMatchProcessor(MessageProcessor):
         # current_processor() + getattr.
         self._save_pattern_calls: int = 0
         self._save_graph_calls: int = 0
+        self._save_graph_seen: set[tuple] = set()
         self._touched_pattern_ids: set[int] = set()
 
     # ── Required MessageProcessor overrides ────────────────────────────────
