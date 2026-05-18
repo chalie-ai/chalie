@@ -309,10 +309,11 @@ const PanelCognition = (() => {
     const rawSummary = _usage.summary || {};
     const entries = _usage.entries || [];
 
+    const windowLabels = { hour: 'Last Hour', day: 'Last 24h', week: 'Last 7 Days', month: 'Last 30 Days', lifetime: 'All Time' };
     const summary = [
-      { value: _fmtTokens(rawSummary.total_tokens || 0), label: 'Total Tokens' },
-      { value: `${rawSummary.cache_hit_pct || 0}%`, label: 'Cache Hit Rate' },
-      { value: _fmtTokens(rawSummary.tokens_today || 0), label: 'Tokens Today' },
+      { value: _fmtTokens(rawSummary.total_tokens || 0), label: windowLabels[_usageWindow] || 'Total Tokens' },
+      { value: rawSummary.cache_hit_pct != null ? `${rawSummary.cache_hit_pct}%` : 'N/A', label: 'Cache Hit Rate' },
+      { value: _fmtTokens(rawSummary.tokens_today || 0), label: 'Today (UTC)' },
       { value: rawSummary.most_active_model || '—', label: 'Top Model' },
     ];
 

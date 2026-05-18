@@ -137,10 +137,10 @@ def _compute_summary(entries: list) -> dict:
     total_thinking = sum(e['tokens_thinking'] for e in entries)
     total_tokens = total_input + total_output + total_cache_read + total_cache_create + total_thinking
 
-    # Cache hit %: cache_read / (cache_read + tokens_input) when both > 0.
-    # In Anthropic context: tokens_input = uncached input, cache_read = cached portion.
+    # Cache hit %: null when no provider reported cache data (e.g. Ollama).
+    has_cache_data = (total_cache_read + total_cache_create) > 0
     prompt_total = total_input + total_cache_read
-    cache_hit_pct = round(total_cache_read / prompt_total * 100, 1) if prompt_total > 0 else 0.0
+    cache_hit_pct = round(total_cache_read / prompt_total * 100, 1) if has_cache_data and prompt_total > 0 else None if not has_cache_data else 0.0
 
     # Tokens today — re-query the DB for the current UTC day.
     try:
