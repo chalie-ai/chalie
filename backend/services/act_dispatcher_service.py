@@ -584,10 +584,13 @@ class ActDispatcherService:
                 'description': _build_action_description(action_id, action),
             })
 
-            gate_entry['event'].wait()  # parks here, zero CPU, until REST handler fires
+            answered = gate_entry['event'].wait(timeout=90)
 
             result = gate_entry.get('result', 'denied')
             _permission_gates.pop(request_id, None)
+            if not answered:
+                logger.warning("[ACT DISPATCH] Permission request %s timed out after 90s — denying", request_id)
+                return 'denied'
             return result
         except Exception as e:
             logging.warning(f"[ACT DISPATCH] Permission request failed: {e}")
