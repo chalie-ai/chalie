@@ -8,8 +8,7 @@ import pytest
 
 from services.news_service import (
     NewsService, NewsArticle,
-    _strip_html, _parse_date, _normalize_title, _levenshtein,
-    _derive_domain,
+    _strip_html, _derive_domain,
 )
 
 SAMPLE_RSS = b'''<?xml version="1.0" encoding="UTF-8"?>

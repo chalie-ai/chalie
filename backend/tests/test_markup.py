@@ -10,7 +10,6 @@ import pytest
 
 from services.markup import (
     actions_to_xml,
-    escape_attr,
     extract_plaintext,
     sanitize,
 )

@@ -9,9 +9,7 @@ from unittest.mock import MagicMock, patch
 from services.memory_store import MemoryStore
 from services.folder_watcher_service import (
     FolderWatcherService,
-    MAX_ENQUEUE_PER_SCAN,
     MISSING_THRESHOLD,
-    MIN_SCAN_INTERVAL,
 )
 from services.database_service import get_shared_db_service
 

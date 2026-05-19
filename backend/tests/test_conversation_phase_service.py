@@ -17,7 +17,6 @@ Covers:
 - Stickiness: single signal does not flip phase (except closing keywords)
 """
 
-import threading
 from datetime import timedelta
 from unittest.mock import patch
 

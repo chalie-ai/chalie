@@ -2,7 +2,7 @@
 
 import pytest
 from capabilities.provider_autodiscovery import (
-    PROVIDERS, ServerSettings, discover_email_settings, list_supported_providers,
+    ServerSettings, discover_email_settings, list_supported_providers,
 )
 
 

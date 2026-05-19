@@ -3,7 +3,7 @@
 import time
 import pytest
 
-from services.act_dispatcher_service import ActDispatcherService, _estimate_confidence
+from services.act_dispatcher_service import ActDispatcherService
 
 
 pytestmark = pytest.mark.unit

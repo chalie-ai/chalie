@@ -5,7 +5,6 @@ Tests run(), run_interactive() with mocked subprocess calls.
 """
 
 import json
-import base64
 import subprocess
 from unittest.mock import patch, MagicMock
 

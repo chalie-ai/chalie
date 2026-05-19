@@ -1,6 +1,5 @@
 """Tests for WrapperAuthService — bearer token auth lifecycle."""
 
-import hashlib
 import json
 
 import pytest

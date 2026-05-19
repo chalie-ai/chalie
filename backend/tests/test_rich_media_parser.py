@@ -7,7 +7,7 @@ prose-only (no spans), mixed prose+spans, double-quoted id, empty input.
 
 import pytest
 
-from services.rich_media_parser import parse, _find_payload, _extract_data
+from services.rich_media_parser import parse, _find_payload
 
 pytestmark = pytest.mark.unit
 

@@ -14,7 +14,6 @@ constant with an inlined Python string literal. No file I/O, no fallbacks.
 """
 
 import pytest
-from unittest.mock import patch
 
 pytestmark = pytest.mark.unit
 

@@ -3,7 +3,7 @@
 import pytest
 from services.news_sources import (
     SOURCES, Source,
-    get_source_by_id, get_sources_by_category,
+    get_source_by_id,
 )
 
 

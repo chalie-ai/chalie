@@ -7,7 +7,6 @@ logic, noteworthy detection, caching/TTL, memory richness, and prompt formatting
 """
 
 import json
-import time
 from unittest.mock import patch, MagicMock
 
 import pytest
