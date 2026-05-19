@@ -33,7 +33,7 @@ chat_bp = Blueprint("chat", __name__)
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
 
-_active_ump: "UserMessageProcessor | None" = None
+_active_ump = None
 _ump_lock = threading.Lock()
 
 

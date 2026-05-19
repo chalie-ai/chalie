@@ -128,7 +128,6 @@ class IntentService:
         target = intent.target_wrapper or _BROADCAST_KEY
         list_key = f"intents:{target}"
         id_key = f"intent:{intent.intent_id}"
-        channel = f"intents:{target}"
 
         serialized = intent.to_json()
 
