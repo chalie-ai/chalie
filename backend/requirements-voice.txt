@@ -5,3 +5,9 @@ kokoro-onnx>=0.5.0
 useful-moonshine-onnx>=20251121
 soundfile>=0.13.0
 numpy>=1.24.0
+# STT audio preprocessing: VAD (ONNX, no PyTorch) + spectral noise reduction.
+# noisereduce declares matplotlib as a package dep even though the core
+# reduce_noise() path never imports it — matplotlib installs (~30 MB) as a
+# side-effect of `pip install noisereduce`.
+silero-vad-lite>=0.2.1
+noisereduce>=3.0.3

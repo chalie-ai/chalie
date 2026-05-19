@@ -3,15 +3,16 @@
  */
 export class Chat {
   /**
-   * @param {{ api, ws, renderer, presence, notifications, imageAttach }} deps
+   * @param {{ api, ws, renderer, presence, notifications, imageAttach, documentUpload }} deps
    */
-  constructor({ api, ws, renderer, presence, notifications, imageAttach }) {
+  constructor({ api, ws, renderer, presence, notifications, imageAttach, documentUpload }) {
     this._api = api;
     this._ws = ws;
     this._renderer = renderer;
     this._presence = presence;
     this._notifications = notifications;
     this._imageAttach = imageAttach || null;
+    this._documentUpload = documentUpload || null;
 
     // Send state
     this._isSending = false;
@@ -94,14 +95,17 @@ export class Chat {
     const textarea = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
     const text = textarea.value.trim();
-    const imageIds = this._imageAttach ? this._imageAttach.getImageIds() : [];
+    const attachments = this._imageAttach ? this._imageAttach.getAttachmentPaths() : [];
 
-    if (!text && !imageIds.length) return;
+    if (!text && !attachments.length) return;
 
-    // Only route as steer when the ACT loop is actively narrating.
-    // This prevents normal replies (e.g. to clarifications) from being
-    // misrouted as steering commands.
-    if (this._ws._chatCallbacks && this._presence.state === 'narrating') {
+    // Block send while any upload is still in-flight.
+    if (this._imageAttach?.isUploading) return;
+
+    // Turn in-flight — route to server, which decides steer vs new turn.
+    // Server returns {routed: "steer"|"turn"} and _postChat fires
+    // onSteerSent on the active callbacks if it was a steer.
+    if (this._ws._chatCallbacks) {
       textarea.value = '';
       textarea.style.height = 'auto';
       this._ws.send(text, source, {});
@@ -112,15 +116,13 @@ export class Chat {
     this._presence.setState('processing');
     textarea.value = '';
     textarea.style.height = 'auto';
-    const pendingImageIds = [...imageIds];
     if (this._imageAttach) this._imageAttach.clear();
     sendBtn.disabled = true;
 
     // Capture timestamp for this exchange
     const exchangeTimestamp = new Date();
 
-    // Render user form with timestamp (pass imageIds so thumbnails are shown inline)
-    this._renderer.appendUserForm(text || '[Image attached]', exchangeTimestamp, {}, pendingImageIds);
+    this._renderer.appendUserForm(text || '[File attached]', exchangeTimestamp, {});
 
     // ACT cycle host: blinking logo + (optional) narrative + cumulative tool list.
     // Persists for the entire turn; replaced wholesale by the final response.
@@ -130,7 +132,7 @@ export class Chat {
     let responseContent = '';
     let responseMeta = {};
 
-    this._ws.send(text || '[Image attached]', source, {
+    this._ws.send(text || '[File attached]', source, {
       onStatus: (stage) => {
         this._presence.setState(stage);
       },
@@ -168,30 +170,9 @@ export class Chat {
       },
       onDone: (data) => {
         this._onResponseReceivedCb?.();
-        if (responseContent) {
-          responseMeta.duration_ms = data.duration_ms;
-          responseMeta.ts = exchangeTimestamp;
-          // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
-          this._renderer.replaceActWithResponse(actEl, responseContent, responseMeta);
-          this._pendingForm = null;
-          // Notify if user switched away while waiting for the response
-          if (!document.hasFocus()) {
-            // Import extractPlaintext lazily for background notification text
-            import('./markup_extract.js').then(({ extractPlaintext }) => {
-              const notifText = extractPlaintext(responseContent);
-              if (notifText) this._notifications.notifyBackground(notifText);
-            }).catch(() => {});
-          }
-        } else {
-          // No content response — remove the ACT placeholder
-          if (actEl.isConnected) actEl.remove();
-          this._pendingForm = null;
-        }
-        this._presence.setState('resting');
-        this._isSending = false;
-        this._onSendCompleteCb?.();
+        this._finaliseTurn(actEl, responseContent, responseMeta, data, exchangeTimestamp);
       },
-    }, pendingImageIds);
+    }, attachments);
 
   }
 
@@ -259,6 +240,40 @@ export class Chat {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
+
+  /**
+   * Finalise a completed send turn: swap or remove the ACT placeholder,
+   * fire background notification if needed, then reset send state.
+   */
+  _finaliseTurn(actEl, responseContent, responseMeta, doneData, exchangeTimestamp) {
+    if (responseContent) {
+      responseMeta.duration_ms = doneData.duration_ms;
+      responseMeta.ts = exchangeTimestamp;
+      // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
+      this._renderer.replaceActWithResponse(actEl, responseContent, responseMeta);
+      this._pendingForm = null;
+      this._notifyBackgroundIfUnfocused(responseContent);
+    } else {
+      // No content response — remove the ACT placeholder
+      if (actEl.isConnected) actEl.remove();
+      this._pendingForm = null;
+    }
+    this._presence.setState('resting');
+    this._isSending = false;
+    this._onSendCompleteCb?.();
+  }
+
+  /**
+   * Fire a background (tab-unfocused) notification for the given text,
+   * extracting plaintext from the XML response markup first.
+   */
+  _notifyBackgroundIfUnfocused(responseContent) {
+    if (document.hasFocus()) return;
+    import('./markup_extract.js').then(({ extractPlaintext }) => {
+      const notifText = extractPlaintext(responseContent);
+      if (notifText) this._notifications.notifyBackground(notifText);
+    }).catch(() => {});
+  }
 
   _appendMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {

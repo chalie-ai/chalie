@@ -114,7 +114,7 @@ class ReadAbility(Ability):
             else:
                 return {"text": _read_file(source, max_chars)}
         except Exception as e:
-            logger.error(f"[READ SKILL] Unexpected error for source={source!r}: {e}", exc_info=True)
+            logger.exception(f"[READ SKILL] Unexpected error for source={source!r}: {e}")
             return {"text": _skill_tag("read", source=source, error=str(e)[:200])}
 
 

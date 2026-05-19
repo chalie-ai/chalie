@@ -1,10 +1,9 @@
 """
-Unit tests for WS6 — Chat UI wrapper contract integration.
+Unit tests for Chat UI wrapper contract integration.
 
 Covers:
-  - IntentService intent delivery via _drift_sender intent poll
+  - IntentService intent delivery via __chat_ui__ wrapper
   - __chat_ui__ auto-registration via WrapperAuthService.create_token with wrapper_id_override
-  - CognitiveIntent emission in OutputService.enqueue_text
 """
 
 import pytest

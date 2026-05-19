@@ -102,7 +102,7 @@
 
   <script>
     // Populate ?next= from URL params
-    const nextUrl = new URLSearchParams(window.location.search).get('next');
+    const nextUrl = new URLSearchParams(globalThis.location.search).get('next');
     if (nextUrl && nextUrl.startsWith('/')) {
       document.getElementById('next').value = nextUrl;
     }
@@ -140,7 +140,7 @@
         if (res.ok) {
           // Redirect to next (or home)
           const dest = document.getElementById('next').value || '/';
-          window.location.replace(dest);
+          globalThis.location.replace(dest);
         } else {
           errorEl.textContent = res.status === 401 ? 'Invalid credentials.' : 'Login failed.';
           btn.disabled = false;

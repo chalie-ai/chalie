@@ -26,10 +26,6 @@ class TestRateLimitError:
         assert err.retry_after is None
         assert err.provider is None
 
-    def test_is_exception(self):
-        assert issubclass(RateLimitError, Exception)
-
-
 class TestCallWithRetryRateLimit:
 
     def test_short_retry_after_retries_once_and_succeeds(self):

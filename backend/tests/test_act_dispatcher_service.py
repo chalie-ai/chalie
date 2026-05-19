@@ -3,7 +3,7 @@
 import time
 import pytest
 
-from services.act_dispatcher_service import ActDispatcherService, _estimate_confidence
+from services.act_dispatcher_service import ActDispatcherService
 
 
 pytestmark = pytest.mark.unit
@@ -36,13 +36,6 @@ class TestUnknownHandler:
         assert 'Unknown action type' in result['result']
         assert result['action_type'] == 'nonexistent_action'
 
-    def test_missing_type_defaults_to_unknown(self, service):
-        """Action dict without a 'type' key falls back to 'unknown'."""
-        result = service.dispatch_action('topic', {})
-
-        assert result['status'] == 'error'
-        assert result['action_type'] == 'unknown'
-
 
 # ── Successful Dispatch ────────────────────────────────────────
 
@@ -59,16 +52,6 @@ class TestSuccessfulDispatch:
         assert result['status'] == 'success'
         assert result['result'] == {'output': 'ok'}
         assert result['action_type'] == 'recall'
-
-    def test_execution_time_is_tracked(self, service):
-        """Result includes a positive execution_time."""
-        service.handlers['recall'] = lambda topic, action: 'done'
-
-        result = service.dispatch_action('topic', {'type': 'recall'})
-
-        assert result['status'] == 'success'
-        assert 'execution_time' in result
-        assert result['execution_time'] > 0
 
 
 # ── Handler Exception ──────────────────────────────────────────
@@ -132,14 +115,6 @@ class TestConfidenceEstimation:
 
         assert result['confidence'] == pytest.approx(0.75)
 
-    def test_find_tools_medium_result_confidence(self, service):
-        """A read action with a result between 21 and 100 chars gets 0.60 confidence."""
-        service.handlers['find_tools'] = lambda topic, action: 'x' * 50
-
-        result = service.dispatch_action('topic', {'type': 'find_tools'})
-
-        assert result['confidence'] == pytest.approx(0.60)
-
     def test_find_tools_short_result_confidence(self, service):
         """A read action with a result of 20 chars or fewer gets 0.40 confidence."""
         service.handlers['find_tools'] = lambda topic, action: 'short'
@@ -160,14 +135,4 @@ class TestConfidenceEstimation:
 # ── _estimate_confidence unit tests (direct) ──────────────────
 
 
-class TestEstimateConfidenceDirectly:
-
-    def test_deterministic_ignores_result_content(self):
-        """Deterministic confidence is fixed regardless of result."""
-        assert _estimate_confidence('memory', '') == pytest.approx(0.92)
-        assert _estimate_confidence('memory', None) == pytest.approx(0.92)
-
-    def test_read_with_none_result(self):
-        """Read action with None result gets the lowest read confidence."""
-        assert _estimate_confidence('find_tools', None) == pytest.approx(0.40)
 

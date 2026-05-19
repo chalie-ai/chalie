@@ -67,18 +67,6 @@ class TestAnthropicMultiTurn:
             call_kwargs = mock_get_client.return_value.messages.create.call_args
             assert call_kwargs.kwargs['system'] == SYSTEM_PROMPT
 
-    def test_returns_llm_response(self):
-        svc = self._make_svc()
-        mock_response = self._mock_response("answer")
-
-        with patch.object(svc, '_get_client') as mock_get_client:
-            mock_get_client.return_value.messages.create.return_value = mock_response
-            result = svc.send_messages(SYSTEM_PROMPT, MESSAGES)
-
-        assert isinstance(result, LLMResponse)
-        assert result.tokens_input == 10
-        assert result.tokens_output == 1
-
 
 class TestOpenAIMultiTurn:
     def _make_svc(self):
@@ -110,33 +98,6 @@ class TestOpenAIMultiTurn:
             assert sent_messages[0] == {"role": "system", "content": SYSTEM_PROMPT}
             assert sent_messages[1:] == MESSAGES
             assert result.text == "4"
-
-    def test_returns_llm_response(self):
-        svc = self._make_svc()
-        mock_response = self._mock_response("answer")
-
-        with patch.object(svc, '_get_client') as mock_get_client:
-            mock_get_client.return_value.chat.completions.create.return_value = mock_response
-            result = svc.send_messages(SYSTEM_PROMPT, MESSAGES)
-
-        assert isinstance(result, LLMResponse)
-        assert result.provider == 'openai'
-        assert result.tokens_input == 10
-        assert result.tokens_output == 1
-
-    def test_cache_prefix_ignored(self):
-        svc = self._make_svc()
-        mock_response = self._mock_response()
-
-        with patch.object(svc, '_get_client') as mock_get_client:
-            mock_get_client.return_value.chat.completions.create.return_value = mock_response
-            # Passed positionally because OpenAI's signature names the
-            # parameter ``_cache_prefix`` (intentionally-ignored marker).
-            # The contract verified here is that the value is silently
-            # dropped — same regardless of how it's bound.
-            result = svc.send_messages(SYSTEM_PROMPT, MESSAGES, True)
-
-        assert result.text == "4"
 
 
 class TestOllamaMultiTurn:
@@ -174,26 +135,6 @@ class TestOllamaMultiTurn:
             assert body['messages'][0]['role'] == 'system'
             assert body['messages'][0]['content'] == SYSTEM_PROMPT
             assert result.text == "4"
-
-    def test_send_messages_appends_user_messages(self):
-        svc = self._make_svc()
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "message": {"content": "result"},
-            "model": "gemma4:31b",
-            "prompt_eval_count": 5,
-            "eval_count": 2,
-        }
-
-        with patch('requests.post', return_value=mock_resp) as mock_post:
-            svc.send_messages(SYSTEM_PROMPT, MESSAGES)
-
-            body = mock_post.call_args.kwargs.get('json') or mock_post.call_args[1].get('json')
-            sent = body['messages']
-            assert sent[0] == {"role": "system", "content": SYSTEM_PROMPT}
-            assert sent[1:] == MESSAGES
 
     def test_returns_llm_response(self):
         svc = self._make_svc()

@@ -27,7 +27,6 @@ from typing import List, Optional
 
 import numpy as np
 
-from services.config_service import ConfigService
 from services.onnx_session import CPU_PROVIDER, build_session, choose_providers
 
 logger = logging.getLogger(__name__)
@@ -298,7 +297,7 @@ def _get_store():
 # ── Inference queue ─────────────────────────────────────────────────────────
 #
 # A single daemon worker serializes ALL ORT inference calls.  Multiple
-# EmbeddingService instances (list_service, search router, api/chat_image, …)
+# EmbeddingService instances (list_service, search router, …)
 # all share this one queue via the module-level globals, preventing concurrent
 # session.run() calls that otherwise allocate 500 MB+ each and OOM under bulk
 # ingestion.
@@ -389,12 +388,7 @@ class EmbeddingService:
     """
 
     def __init__(self, config: dict = None):
-        if config is None:
-            try:
-                config = ConfigService.resolve_agent_config("semantic-memory")
-            except FileNotFoundError:
-                config = {}
-        self.config = config
+        self.config = config or {}
         self.embedding_dimensions = self.config.get('embedding_dimensions', 768)
 
     def _cache_get(self, text: str) -> Optional[list]:

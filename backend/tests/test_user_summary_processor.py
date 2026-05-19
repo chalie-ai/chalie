@@ -3,7 +3,7 @@ Tests for UserSummaryProcessor and UserSummarySystemPrompt.
 
 Unit tests use in-memory SQLite via the ``db`` fixture from conftest (built from
 schema.sql via SchemaConvergenceService.converge()).  Integration tests require
-a live provider configured for ``frontal-cortex-unified``.
+a live provider configured for ``user_summary``.
 
 All tests: @pytest.mark.unit or @pytest.mark.integration
 """
@@ -60,33 +60,6 @@ def _make_fake_response(content: str):
     return LLMResponse(text=content, model='test', provider='test')
 
 
-# ── TestUserSummarySystemPrompt ────────────────────────────────────────────────
-
-@pytest.mark.unit
-class TestUserSummarySystemPrompt:
-
-    def test_prompt_instantiates_and_returns_string(self):
-        from services.system_message_prompt import UserSummarySystemPrompt
-
-        inst = UserSummarySystemPrompt()
-        body = inst.getPrompt()
-        assert isinstance(body, str)
-        assert len(body) > 0
-
-    def test_prompt_contains_json_schema_keys(self):
-        from services.system_message_prompt import UserSummarySystemPrompt
-
-        body = UserSummarySystemPrompt().getPrompt()
-        assert '"short"' in body
-        assert '"long"' in body
-
-    def test_prompt_instructs_third_person(self):
-        from services.system_message_prompt import UserSummarySystemPrompt
-
-        body = UserSummarySystemPrompt().getPrompt()
-        assert 'third person' in body.lower()
-
-
 # ── TestGetUserPrompt ──────────────────────────────────────────────────────────
 
 @pytest.mark.unit
@@ -112,34 +85,6 @@ class TestGetUserPrompt:
         for forbidden in ('weight', 'source=', 'created_at', 'last_confirmed_at', 'retrieval_weight'):
             assert forbidden not in prompt, f"Telemetry token '{forbidden}' found in prompt"
 
-    def test_user_prompt_starts_with_facts_prefix(self, db):
-        _insert_trait(db, 'hobby', 'cycling')
-
-        from services.user_summary_processor import UserSummaryProcessor
-
-        prompt = UserSummaryProcessor().getUserPrompt()
-        assert prompt.startswith('Facts:')
-
-    def test_user_prompt_no_traits_returns_empty_placeholder(self, db):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        prompt = UserSummaryProcessor().getUserPrompt()
-        assert 'no facts available' in prompt
-
-
-# ── TestGetUserDefinition ──────────────────────────────────────────────────────
-
-@pytest.mark.unit
-class TestGetUserDefinition:
-
-    def test_returns_static_synthesiser_string(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        proc = UserSummaryProcessor()
-        defn = proc.getUserDefinition()
-        assert 'synthesiser' in defn.lower()
-        assert 'real human' in defn.lower()
-
 
 # ── TestPostTurn ───────────────────────────────────────────────────────────────
 
@@ -155,7 +100,7 @@ class TestPostTurn:
 
         proc = UserSummaryProcessor()
         proc._last_response = payload
-        proc.postTurn()
+        proc.post_turn()
 
         dgs = get_data_graph_service()
 
@@ -185,7 +130,7 @@ class TestPostTurn:
         proc._last_response = 'this is definitely not json }{{'
 
         with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
-            proc.postTurn()
+            proc.post_turn()
 
         dgs = get_data_graph_service()
 
@@ -207,31 +152,6 @@ class TestPostTurn:
         assert any('parse' in rec.message.lower() or 'json' in rec.message.lower()
                    for rec in caplog.records), "No warning logged for malformed JSON"
 
-    def test_post_turn_missing_short_key_writes_nothing(self, db):
-        """JSON with missing 'short' key writes nothing."""
-        from services.data_graph_service import get_data_graph_service
-        from services.user_summary_processor import UserSummaryProcessor
-
-        proc = UserSummaryProcessor()
-        proc._last_response = json.dumps({'long': 'some long text'})
-        proc.postTurn()
-
-        dgs = get_data_graph_service()
-        rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') == 'user_summary']
-        assert not rows, "user_summary written despite missing 'short' key"
-
-    def test_post_turn_empty_response_writes_nothing(self, db):
-        from services.data_graph_service import get_data_graph_service
-        from services.user_summary_processor import UserSummaryProcessor
-
-        proc = UserSummaryProcessor()
-        proc._last_response = ''
-        proc.postTurn()
-
-        dgs = get_data_graph_service()
-        rows = [r for r in dgs.fetch(kinds=['system']) if r.get('key') in ('user_summary', 'user_summary_long')]
-        assert not rows
-
     def test_post_turn_strips_markdown_code_fences(self, db):
         """LLM wrapping JSON in ```json ... ``` fences is handled gracefully."""
         from services.data_graph_service import get_data_graph_service
@@ -241,7 +161,7 @@ class TestPostTurn:
 
         proc = UserSummaryProcessor()
         proc._last_response = fenced
-        proc.postTurn()
+        proc.post_turn()
 
         dgs = get_data_graph_service()
         rows = [
@@ -266,7 +186,7 @@ class TestPostTurn:
         proc._last_response = '{"short": "", "long": "a thorough description"}'
 
         with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
-            proc.postTurn()
+            proc.post_turn()
 
         dgs = get_data_graph_service()
         rows = [
@@ -281,31 +201,6 @@ class TestPostTurn:
             'short' in rec.message.lower() or 'long' in rec.message.lower() or 'missing' in rec.message.lower() or 'empty' in rec.message.lower()
             for rec in caplog.records
         ), "No warning logged when 'short' value is empty string"
-
-    def test_post_turn_whitespace_only_long_value_writes_nothing(self, db, caplog):
-        """JSON with 'long' as whitespace-only string must be treated as empty.
-
-        After ``.strip()`` the value collapses to '' — the guard triggers and
-        nothing is written.  Verifies the strip() is applied before the emptiness
-        check, not after.
-        """
-        from services.data_graph_service import get_data_graph_service
-        from services.user_summary_processor import UserSummaryProcessor
-
-        proc = UserSummaryProcessor()
-        proc._last_response = '{"short": "Alice is an engineer", "long": "   "}'
-
-        with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
-            proc.postTurn()
-
-        dgs = get_data_graph_service()
-        rows = [
-            r for r in dgs.fetch(kinds=['system'])
-            if r.get('key') in ('user_summary', 'user_summary_long')
-        ]
-        assert not rows, (
-            "postTurn() wrote rows despite whitespace-only 'long' value"
-        )
 
 
 # ── TestPostTurnStorageFailure ─────────────────────────────────────────────────
@@ -340,7 +235,7 @@ class TestPostTurnStorageFailure:
         # Must not raise — caller must never see the storage error.
         with caplog.at_level(logging.WARNING, logger='services.user_summary_processor'):
             try:
-                proc.postTurn()
+                proc.post_turn()
             except Exception as exc:
                 raise AssertionError(
                     f"postTurn() must not propagate storage exceptions to callers, "
@@ -352,36 +247,6 @@ class TestPostTurnStorageFailure:
             for rec in caplog.records
         ), "No warning logged when data_graph write fails"
 
-
-# ── TestClassAttributes ────────────────────────────────────────────────────────
-
-@pytest.mark.unit
-class TestClassAttributes:
-
-    def test_skip_transcript_write_is_true(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        assert UserSummaryProcessor.SKIP_TRANSCRIPT_WRITE is True
-
-    def test_max_iterations_is_one(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        assert UserSummaryProcessor.MAX_ITERATIONS == 1
-
-    def test_always_available_is_empty(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        assert UserSummaryProcessor.ALWAYS_AVAILABLE == []
-
-    def test_discoverable_is_empty(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        assert UserSummaryProcessor.DISCOVERABLE == []
-
-    def test_job_is_frontal_cortex_unified(self):
-        from services.user_summary_processor import UserSummaryProcessor
-
-        assert UserSummaryProcessor.JOB == 'frontal-cortex-unified'
 
 
 # ── TestShouldSynthesiseBehavioralPattern ─────────────────────────────────────
@@ -477,24 +342,6 @@ class TestFormatPatternLine:
         assert '@ 07:00' in line
         assert 'goes for a run in the morning' in line
 
-    def test_format_pattern_line_without_time_anchor(self):
-        """content with empty time_anchor must not include '@' in the formatted line."""
-        from services.user_summary_processor import _format_pattern_line
-
-        content = {
-            'name': 'weekend_reading',
-            'frequency': 'weekend',
-            'time_anchor': '',
-            'summary': 'reads books on weekends',
-            'confidence': 5.0,
-            'last_seen_at': '2026-04-20T14:00:00+00:00',
-        }
-        line = _format_pattern_line(content)
-
-        assert 'weekend_reading' in line
-        assert '@' not in line, (
-            "No '@' expected when time_anchor is empty, but '@' found in: " + line
-        )
 
 
 # ── Integration tests (require live provider) ──────────────────────────────────

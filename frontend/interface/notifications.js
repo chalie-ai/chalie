@@ -13,7 +13,7 @@ export class Notifications {
    */
   unlockAudio() {
     if (!this._audioCtx) {
-      this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      this._audioCtx = new (globalThis.AudioContext || globalThis.webkitAudioContext)();
     }
     if (this._audioCtx.state === 'suspended') {
       this._audioCtx.resume();
@@ -26,7 +26,7 @@ export class Notifications {
   playChime() {
     try {
       if (!this._audioCtx) {
-        this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        this._audioCtx = new (globalThis.AudioContext || globalThis.webkitAudioContext)();
       }
       const ctx = this._audioCtx;
       if (ctx.state === 'suspended') ctx.resume();
@@ -78,7 +78,7 @@ export class Notifications {
    * Requests notification permission and subscribes to push via VAPID.
    */
   async requestPushSubscription() {
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in globalThis)) return;
 
     try {
       const reg = await navigator.serviceWorker.ready;
@@ -146,7 +146,7 @@ export class Notifications {
     const raw = atob(base64);
     const output = new Uint8Array(raw.length);
     for (let i = 0; i < raw.length; i++) {
-      output[i] = raw.charCodeAt(i);
+      output[i] = raw.codePointAt(i);
     }
     return output;
   }

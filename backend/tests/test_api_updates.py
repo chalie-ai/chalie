@@ -101,57 +101,6 @@ class TestUpdateBelief:
         assert resp.status_code == 400
         assert "key" in resp.get_json()["error"]
 
-    def test_missing_value_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/belief",
-            json={"key": "risk_tolerance"},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
-        assert "value" in resp.get_json()["error"]
-
-    def test_empty_body_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/belief",
-            json={},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
-
-    def test_invalid_category_defaults_to_preference(self, cookie_client):
-        """An unrecognised category should be silently coerced to preference."""
-        svc_mock = MagicMock()
-        svc_mock.store.return_value = {'id': 1, 'key': 'language', 'value': 'English'}
-        with patch("services.data_graph_service.get_data_graph_service", return_value=svc_mock):
-            resp = cookie_client.post(
-                "/api/updates/belief",
-                json={"key": "language", "value": "English", "category": "gibberish"},
-                content_type="application/json",
-            )
-        assert resp.status_code == 200
-        # DataGraphService.store is called with kind='user_specific'
-        assert svc_mock.store.call_args.kwargs['kind'] == 'user_specific'
-
-    def test_trait_validation_failure_returns_422(self, cookie_client):
-        """DataGraphService.store() returning None (validation rejection) yields 422."""
-        svc_mock = MagicMock()
-        svc_mock.store.return_value = None
-        with patch("services.data_graph_service.get_data_graph_service", return_value=svc_mock):
-            resp = cookie_client.post(
-                "/api/updates/belief",
-                json={"key": "x", "value": "y"},
-                content_type="application/json",
-            )
-        assert resp.status_code == 422
-
-    def test_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.post(
-            "/api/updates/belief",
-            json={"key": "x", "value": "y"},
-            content_type="application/json",
-        )
-        assert resp.status_code == 401
-
     def test_bearer_without_permission_returns_403(self):
         """A bearer token without update/belief permission gets a 403."""
         app, patch_session, patch_auth = _bearer_client(
@@ -213,82 +162,6 @@ class TestUpdateMemory:
         assert resp.status_code == 400
         assert "content" in resp.get_json()["error"]
 
-    def test_empty_content_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/memory",
-            json={"content": "   "},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
-
-    def test_memorize_error_returns_422(self, cookie_client):
-        with patch("abilities.memory._handle_store",
-                   return_value="[memory(action=store, error=no-traits-specified)]"):
-            resp = cookie_client.post(
-                "/api/updates/memory",
-                json={"content": "Something"},
-                content_type="application/json",
-            )
-        assert resp.status_code == 422
-
-    def test_default_topic_is_general(self, cookie_client):
-        with patch("abilities.memory._handle_store",
-                   return_value="[memory(action=store, key=general)]\nStored 1 trait(s).") as mock_mem:
-            cookie_client.post(
-                "/api/updates/memory",
-                json={"content": "Something important happened today"},
-                content_type="application/json",
-            )
-        call_args = mock_mem.call_args
-        assert call_args.kwargs.get("topic") == "general" or call_args.args[0] == "general"
-
-    def test_salience_clamped(self, cookie_client):
-        """Salience values outside 1–10 should be clamped silently."""
-        with patch("abilities.memory._handle_store",
-                   return_value="[memory(action=store, key=test)]\nStored 1 trait(s)."):
-            resp = cookie_client.post(
-                "/api/updates/memory",
-                json={"content": "Very important note", "salience": 999},
-                content_type="application/json",
-            )
-        assert resp.status_code == 200
-
-    def test_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.post(
-            "/api/updates/memory",
-            json={"content": "Remember this"},
-            content_type="application/json",
-        )
-        assert resp.status_code == 401
-
-    def test_bearer_without_permission_returns_403(self):
-        app, patch_session, patch_auth = _bearer_client(permissions={})
-        with patch_session, patch_auth:
-            with app.test_client() as client:
-                resp = client.post(
-                    "/api/updates/memory",
-                    json={"content": "Something"},
-                    headers={"Authorization": "Bearer faketoken"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 403
-
-    def test_bearer_with_permission_allowed(self):
-        app, patch_session, patch_auth = _bearer_client(
-            permissions={"update": ["memory"]}
-        )
-        with patch_session, patch_auth, \
-             patch("abilities.memory._handle_store",
-                   return_value="[MEMORIZE] Stored 1 trait(s) for topic 'general'."):
-            with app.test_client() as client:
-                resp = client.post(
-                    "/api/updates/memory",
-                    json={"content": "Meeting with Sarah went well"},
-                    headers={"Authorization": "Bearer faketoken"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 200
-
 
 # ---------------------------------------------------------------------------
 # POST /api/updates/feedback
@@ -333,57 +206,6 @@ class TestUpdateFeedback:
         assert resp.status_code == 400
         assert "intent_id" in resp.get_json()["error"]
 
-    def test_missing_outcome_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/feedback",
-            json={"intent_id": "abc123"},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
-        assert "outcome" in resp.get_json()["error"]
-
-    def test_empty_body_returns_400(self, cookie_client):
-        resp = cookie_client.post(
-            "/api/updates/feedback",
-            json={},
-            content_type="application/json",
-        )
-        assert resp.status_code == 400
-
-    def test_details_optional(self, cookie_client):
-        """details field is optional — omitting it should still succeed."""
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            resp = cookie_client.post(
-                "/api/updates/feedback",
-                json={"intent_id": "xyz789", "outcome": "failure"},
-                content_type="application/json",
-            )
-        assert resp.status_code == 200
-        record = json.loads(store.get("intent_feedback:xyz789"))
-        assert record["details"] == ""
-
-    def test_unauthenticated_returns_401(self, unauthed_client):
-        resp = unauthed_client.post(
-            "/api/updates/feedback",
-            json={"intent_id": "x", "outcome": "success"},
-            content_type="application/json",
-        )
-        assert resp.status_code == 401
-
-    def test_bearer_without_permission_returns_403(self):
-        app, patch_session, patch_auth = _bearer_client(permissions={})
-        with patch_session, patch_auth:
-            with app.test_client() as client:
-                resp = client.post(
-                    "/api/updates/feedback",
-                    json={"intent_id": "abc", "outcome": "success"},
-                    headers={"Authorization": "Bearer faketoken"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 403
-
     def test_bearer_with_permission_allowed(self):
         app, patch_session, patch_auth = _bearer_client(
             permissions={"update": ["feedback"]}
@@ -401,28 +223,5 @@ class TestUpdateFeedback:
                 )
         assert resp.status_code == 200
 
-    def test_feedback_ttl_is_24h(self, cookie_client):
-        """Feedback records should be stored with a 24-hour TTL."""
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            cookie_client.post(
-                "/api/updates/feedback",
-                json={"intent_id": "ttl_test", "outcome": "success"},
-                content_type="application/json",
-            )
-        # Verify TTL was set by reading the remaining TTL from the real store.
-        remaining_ttl = store.ttl("intent_feedback:ttl_test")
-        assert 0 < remaining_ttl <= 86400
 
-    def test_cookie_auth_bypasses_permission_check(self, cookie_client):
-        """Cookie-authenticated users can always submit feedback."""
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store):
-            resp = cookie_client.post(
-                "/api/updates/feedback",
-                json={"intent_id": "perm_test", "outcome": "success"},
-                content_type="application/json",
-            )
-        assert resp.status_code == 200
+

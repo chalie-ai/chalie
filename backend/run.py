@@ -44,22 +44,8 @@ logger = logging.getLogger(__name__)
 
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
-    parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    args = parser.parse_args()
-
-    port = args.port
-    host = args.host
-
-    # Store in runtime_config so any module can access these values
-    import runtime_config
-    runtime_config.set({"port": port, "host": host})
-
-    # Preload models in a single background thread so Flask starts immediately.
-    # Models are loaded sequentially to avoid concurrent memory spikes that
-    # exceed the Docker VM limit (embedding + ONNX loaded in parallel = OOM).
+def _start_model_preload():
+    """Kick off background model preloading (embedding + ONNX classifiers)."""
     def _preload_models():
         try:
             logger.info("[System] Preloading embedding model (background)...")
@@ -77,19 +63,12 @@ def main():
             logger.info("[System] Registering ONNX classifier heads (background)...")
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
-            # Trigger task registration now so boot markers ([CLASSIFIER BOOT] ...)
-            # fire before any user request arrives. The encoder session is already
-            # warm (loaded by embedding preload above), so registration is fast.
-            # _get_head() calls _register_task() which emits the boot marker and
-            # validates the sha256 pin — any mismatch raises RuntimeError here.
             from services.onnx_inference_service import MODEL_REGISTRY as _CLASSIFIER_REGISTRY
             _failures: list[tuple[str, str]] = []
             for _task, _ in _CLASSIFIER_REGISTRY:
                 try:
                     svc._get_head(_task)
                 except RuntimeError as _reg_err:
-                    # sha256 gate refused this task. Surface this loudly — silent
-                    # fallback in production would defeat the boot-pin invariant.
                     logger.error(
                         f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
                         f"reason={_reg_err}"
@@ -106,9 +85,6 @@ def main():
             else:
                 logger.info("[System] ONNX classifier heads registered")
         except Exception as e:
-            # Surface failure metadata on the singleton so /health can explain the
-            # degraded state. If get_onnx_inference_service() itself raised, svc
-            # is None and there is no singleton to annotate — skip in that case.
             if svc is not None:
                 svc._failed_registrations = [("preload", str(e))]
                 svc._ready = True
@@ -118,17 +94,23 @@ def main():
     _threading.stack_size(2 * 1024 * 1024)
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
-    # Initialize SQLite database — declarative convergence
+
+def _init_database():
+    """Initialize SQLite database via declarative convergence and return the service."""
     from services.database_service import get_shared_db_service
     from services.schema_convergence_service import SchemaConvergenceService
 
     database_service = get_shared_db_service()
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
+    return database_service
 
-    # Persist providers.max_tokens / compact_at for every provider (active
-    # and inactive). Per-row try/except inside backfill_one — a single
-    # unreachable provider never kills startup.
+
+def _run_startup_migrations(database_service) -> None:
+    """Run all one-time startup migrations and data backfills."""
+    import os as _os
+
+    # Token-limit backfill
     try:
         from services.provider_token_limits import backfill_all
         with database_service.connection() as _conn:
@@ -141,23 +123,21 @@ def main():
     except Exception as _bf_err:
         logger.warning(f"[Startup] providers max_tokens/compact_at backfill skipped: {_bf_err}")
 
-    # One-time transcript rebuild (runs exactly once; sentinel file prevents re-runs)
+    # One-time transcript rebuild
     try:
         from migrate_transcript_rebuild import run_once_on_boot
         run_once_on_boot(db_path=database_service.db_path)
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
 
-    # Drop zombie `invoked_by` column from tool_calls (NOT NULL, never populated by new code)
+    # Drop zombie invoked_by column
     try:
-        import os as _os
         _drop_sentinel = _os.path.join(
             _os.path.dirname(database_service.db_path),
             '.tool-calls-drop-invoked-by-v1.done',
         )
         if not _os.path.exists(_drop_sentinel):
             with database_service.connection() as _conn:
-                # Check if column still exists before attempting drop
                 _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
                 if 'invoked_by' in _cols:
                     _conn.execute("ALTER TABLE tool_calls DROP COLUMN invoked_by")
@@ -168,7 +148,7 @@ def main():
     except Exception as _drop_err:
         logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
 
-    # One-time episodes FTS rebuild — external-content FTS5 was never synced on insert
+    # One-time episodes FTS rebuild
     try:
         _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
         if not _os.path.exists(_sentinel):
@@ -181,9 +161,7 @@ def main():
     except Exception as _fts_err:
         logger.warning(f"[Startup] episodes FTS rebuild skipped: {_fts_err}")
 
-    # Purge stale AdaptiveLayer data_graph rows (v0.5.0 §4.3 — idempotent)
-    # AdaptiveLayerService was removed in v0.5.0. These keys have no remaining
-    # consumer and become stale rows after the rip.
+    # Purge stale AdaptiveLayer data_graph rows
     try:
         _adaptive_keys = (
             'prefers_concise', 'prefers_depth', 'enjoys_challenge',
@@ -199,18 +177,26 @@ def main():
     except Exception as _adl_err:
         logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
 
-    # Clean up expired auth sessions from SQLite
+
+def _init_services(database_service) -> None:
+    """Initialize singleton services and seed default configuration."""
+    # Clean up expired auth sessions
     try:
         from services.auth_session_service import cleanup_expired_sessions
         cleanup_expired_sessions()
     except Exception:
         pass
 
+    # Seed default policy rules
+    try:
+        from services.policy_service import PolicyService
+        _policy_svc = PolicyService(database_service)
+        _seeded = _policy_svc.seed_defaults()
+        if _seeded:
+            logger.info(f"[Startup] Policy rules seeded: {_seeded} new defaults")
+    except Exception as _pol_err:
+        logger.warning(f"[Startup] Policy seed skipped: {_pol_err}")
 
-    # Encryption key initialisation and capability reconnection are deferred to
-    # the post-login hook in user_auth.py (_reconnect_capabilities).  The vault
-    # requires an interactive password to unseal, so neither step can run at
-    # boot time in vault mode.
     logger.info("[Startup] Encryption key deferred to post-login (vault mode)")
     logger.info("[Startup] Capability reconnection deferred to post-login (vault mode)")
 
@@ -223,34 +209,21 @@ def main():
     except Exception as e:
         logger.warning(f"Settings initialization failed: {e}")
 
-    # Start the write-queue singleton so its daemon drain thread is running before
-    # any service worker tries to submit writes.  The singleton is created here
-    # (rather than lazily on first use) so the background thread is alive for the
-    # full lifetime of the process.
     from services.write_queue_service import get_write_queue as _get_write_queue
     _get_write_queue()
     logger.info("[Startup] WriteQueueService started")
 
-    # Initialise the telemetry collector singleton before any service worker
-    # starts emitting events.  Services call get_telemetry_collector().record()
-    # directly (thread-safe), so the singleton must exist first to ensure the
-    # ring buffer and per-type counters are ready from boot.
     from services.telemetry_service import get_telemetry_collector as _get_telemetry_collector
     _get_telemetry_collector()
     logger.info("[Startup] TelemetryCollector initialized")
 
-    # Import consumer's WorkerManager and all services
-    from consumer import WorkerManager
 
-    # Import worker functions
+def _register_workers(manager, host: str, port: int) -> None:
+    """Register all service workers with the WorkerManager."""
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
 
-    # Initialize worker manager
-    manager = WorkerManager()
-
-    # Register service workers
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)
@@ -264,29 +237,34 @@ def main():
     from workers.interface_daemon_worker import interface_daemon_worker
     manager.register_service("interface-daemon-watcher", interface_daemon_worker)
 
-    # Moment context enrichment service (6h worker)
     from services.moment_context_service import moment_context_worker
     manager.register_service("moment-context-service", moment_context_worker)
 
-    # Self-model service (interoception — epistemic, operational, capability awareness)
     from services.self_model_service import self_model_worker
     manager.register_service("self-model-service", self_model_worker)
 
-    # Subconscious worker (v0.5.0 §5 — idle-gated 5-minute cognition tick:
-    # super-episode consolidation → decay → pattern extraction → user synthesis).
     from services.subconscious_worker import subconscious_worker
     manager.register_service("subconscious-worker", subconscious_worker)
 
-    # Capability sync — bootstrap connected capabilities into scheduler system handlers
-    _bootstrap_capability_sync()
+    from workers.tmp_cleanup_worker import tmp_cleanup_worker
+    manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
 
-    # SearchExpanderService: centralised doc2query + embedding daemon.
-    # Replaces fire-and-forget _schedule_doc2query / _schedule_embeddings threads
-    # in DataGraphService. Falls back gracefully when the doc2query ONNX model files are absent.
+    _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
+    _try_register(manager, "mcp-server", "mcp_server.server", "run_mcp_server")
 
-    # Verify search routing embeddings are present
+    def _flask_worker():
+        from api import create_app
+        app = create_app()
+        logger.info(f"[Chalie] Starting on http://{host}:{port}")
+        app.run(host=host, port=port, debug=False, threaded=True)
+
+    manager.register_service("rest-api-worker-1", _flask_worker)
+
+
+def _check_asset_caches() -> None:
+    """Verify search routing and concept LUT assets are present."""
     try:
         import os as _os
         import sqlite3 as _sql
@@ -306,8 +284,9 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Search cache check failed: {e}")
 
-    # Verify concept LUT is present and has embeddings
     try:
+        import os as _os
+        import sqlite3 as _sql
         _lut_db = _os.path.join(
             _os.path.dirname(__file__), "services", "data_graph", "assets", "concept_lut.sqlite"
         )
@@ -324,43 +303,57 @@ def main():
     except Exception as e:
         logger.warning(f"[Startup] Concept LUT check failed: {e}")
 
-    # Warm up large ONNX models in background daemon threads. Each loader is
-    # already self-locking + idempotent — these calls just kick off the same
-    # download/init paths the first request would, so by the time the user
-    # sends a message the models are usually live. Failure is non-fatal: the
-    # lazy paths still cover it.
-    def _warmup():
-        import threading as _t
-        try:
-            from api.voice import _ensure_models as _voice_warm
-            _t.Thread(target=_voice_warm, name="voice-warmup", daemon=True).start()
-        except Exception as e:
-            logger.warning(f"[Startup] Voice warm-up skipped: {e}")
-        try:
-            from services.embedding_service import _get_session_and_tokenizer as _embed_warm
-            _t.Thread(target=_embed_warm, name="embed-warmup", daemon=True).start()
-        except Exception as e:
-            logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
-    _warmup()
 
-    # Register the Flask API worker (this is the main thread's HTTP server)
-    def _flask_worker():
-        from api import create_app
-        app = create_app()
-        logger.info(f"[Chalie] Starting on http://{host}:{port}")
-        app.run(host=host, port=port, debug=False, threaded=True)
+def _warmup_models() -> None:
+    """Warm up voice and embedding models in background daemon threads."""
+    import threading as _t
+    try:
+        from api.voice import _ensure_models as _voice_warm
+        _t.Thread(target=_voice_warm, name="voice-warmup", daemon=True).start()
+    except Exception as e:
+        logger.warning(f"[Startup] Voice warm-up skipped: {e}")
+    try:
+        from services.embedding_service import _get_session_and_tokenizer as _embed_warm
+        _t.Thread(target=_embed_warm, name="embed-warmup", daemon=True).start()
+    except Exception as e:
+        logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
 
-    manager.register_service("rest-api-worker-1", _flask_worker)
 
-    # Start everything
+def main():
+    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
+    parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    args = parser.parse_args()
+
+    port = args.port
+    host = args.host
+
+    import runtime_config
+    runtime_config.set({"port": port, "host": host})
+
+    _start_model_preload()
+
+    database_service = _init_database()
+    _run_startup_migrations(database_service)
+    _init_services(database_service)
+
+    _check_asset_caches()
+    _warmup_models()
+
+    from consumer import WorkerManager
+    manager = WorkerManager()
+    _register_workers(manager, host, port)
+
     manager.run()
 
 
 def _bootstrap_capability_sync():
-    """Bootstrap connected capabilities into the scheduler's system handler registry.
+    """Bootstrap connected capabilities at startup.
 
     For each capability, call connect() — it checks credentials internally and
     registers its sync handler + ensures recurring scheduled_items exist.
+    Capability tools are surfaced to the LLM via Ability subclasses (email,
+    calendar, contacts) which are auto-discovered by AbilityRegistry.
     """
     try:
         from capabilities import load_capabilities
@@ -371,19 +364,6 @@ def _bootstrap_capability_sync():
                     cap.connect()
                 if cap.is_connected():
                     logger.info("[bootstrap] Auto-connected capability: %s", cap_id)
-                    # Re-register dynamic tools so find_tools can discover them after restart
-                    from services.tool_library_service import register_tool
-                    for tool_def in cap.get_tools():
-                        tool_name = tool_def["name"]
-                        handler = tool_def.get("handler")
-                        if handler is None:
-                            continue
-                        metadata = {k: v for k, v in tool_def.items() if k != "handler"}
-                        try:
-                            register_tool(tool_name, handler, metadata)
-                            logger.info("[bootstrap] Registered tool '%s' for capability '%s'", tool_name, cap_id)
-                        except Exception as reg_exc:
-                            logger.warning("[bootstrap] Failed to register tool '%s': %s", tool_name, reg_exc)
             except Exception as exc:
                 logger.warning("[bootstrap] Failed to auto-connect %s: %s", cap_id, exc)
     except Exception as exc:

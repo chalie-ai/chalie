@@ -14,9 +14,9 @@ Do not add `.instance()` / singleton accessors.
 
 Each input channel (WebSocket, DMN timer, goal pursuit, scheduled prompt, …)
 constructs its own MessageProcessor subclass directly. The subclass hardcodes
-its CHANNEL and ROLE, implements getUserDefinition() and getUserPrompt(), and
-fans out post-turn services via postTurn(). The base class provides the ACT
-loop (send()), atomic persistence (store()), tool dispatch (handleTool()), and
+its CHANNEL and ROLE, implements get_user_definition() and get_user_prompt(), and
+fans out post-turn services via post_turn(). The base class provides the ACT
+loop (send()), atomic persistence (store()), tool dispatch (handle_tool()), and
 compaction primitives.
 """
 
@@ -24,7 +24,6 @@ import contextlib
 import contextvars
 import logging
 import re
-import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
@@ -86,7 +85,7 @@ def _sanitize_llm_args(value):
 # MessageProcessor instance for the turn they are running inside (e.g. to
 # append to ``_memory_query_history`` or read ``_memory_seed``). The
 # MessageProcessor instance is not part of any tool signature — skills are
-# dispatched by name via ``handleTool()`` and must not receive the
+# dispatched by name via ``handle_tool()`` and must not receive the
 # processor as an argument.
 #
 # We expose an async-safe ``ContextVar`` + a context manager so that
@@ -114,16 +113,11 @@ def bind_current_processor(processor: "MessageProcessor"):
 
     Wrap the body of ``MessageProcessor.send()`` with this. Resets the
     ContextVar on exit regardless of success / exception path.
-
-    Also sets/clears ``processor._turn_active`` so async subagent delivery
-    threads can distinguish a live parent (mid-turn) from a finished one.
     """
     token = _CURRENT_PROCESSOR.set(processor)
-    processor._turn_active.set()
     try:
         yield processor
     finally:
-        processor._turn_active.clear()
         _CURRENT_PROCESSOR.reset(token)
 
 
@@ -133,8 +127,8 @@ class MessageProcessor:
     Subclasses must:
     - Set `CHANNEL` (str) — fixed transcript channel for this processor.
     - Set `ROLE` (str) — transcript role for the input row (e.g. 'user').
-    - Implement `getUserPrompt() -> str`
-    - Implement `getUserDefinition() -> str`
+    - Implement `get_user_prompt() -> str`
+    - Implement `get_user_definition() -> str`
 
     Subclasses may:
     - Override `SYSTEM_PROMPT_CLASS` with a concrete `SystemMessagePrompt` subclass.
@@ -142,13 +136,17 @@ class MessageProcessor:
       innate tools every iteration.
     - Override `DISCOVERABLE` with a list of ability names that ``find_tools``
       may surface for this processor at runtime.
-    - Override `getDynamicTools()` to filter or augment discovered tools.
-    - Override `postTurn()` to fan out per-channel post-turn services.
+    - Override `get_dynamic_tools()` to filter or augment discovered tools.
+    - Override `post_turn()` to fan out per-channel post-turn services.
     """
 
     # ── Class constants (overridable by subclasses) ───────────────────────────
 
-    JOB: str = 'frontal-cortex-unified'
+    LOG_LABEL: str = 'chat'
+    # Usage class written to llm_call_log.usage_class for every LLM call made
+    # by this processor. Override in subclasses to distinguish chat / subagent /
+    # subconscious traffic in the cognition usage dashboard.
+    USAGE_CLASS: str = 'chat'
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
     # Ability names pre-injected as native tools on every ACT iteration.
     ALWAYS_AVAILABLE: list[str] = []
@@ -159,7 +157,7 @@ class MessageProcessor:
     MAX_ITERATIONS: int = 30
     ITERATION_TIMEOUT: int = 1800  # seconds — per-iteration safety wall (independent of ACT loop budget)
     THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
-    # Ceiling for a single getPreviousMessages() pull. Commit 7's compaction
+    # Ceiling for a single get_previous_messages() pull. Commit 7's compaction
     # budget assumes a row count this low — if a channel ever exceeds it we
     # want compaction to kick in, not an unbounded fetch.
     _TRANSCRIPT_FETCH_LIMIT: int = 2000
@@ -178,9 +176,6 @@ class MessageProcessor:
     # When True, send() skips write_input_row() but store() still writes
     # the assistant row.  self._uid stays None (tool calls get transcript_id
     # NULL — safe, all downstream code guards on _uid is not None).
-    # Used by SubagentReturnProcessor: the subagent envelope must never
-    # appear in the user channel transcript, but the synthesized assistant
-    # response must.
     SKIP_INPUT_ROW: bool = False
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -193,7 +188,7 @@ class MessageProcessor:
         # (which is the formatted tag block) so recall_episodes() can embed
         # the original query for drift computation rather than the block string.
         self._memory_seed_query: str | None = None
-        # Tracks the current ACT loop iteration so handleTool() can include
+        # Tracks the current ACT loop iteration so handle_tool() can include
         # it in emitted tool events without thread-local indirection.
         self._current_iteration: int = 0
         # Per-turn log of memory recall queries (seed + llm_recall).
@@ -225,17 +220,6 @@ class MessageProcessor:
         self._overflow_recovered_this_turn: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
-        # Per-turn pending steers from async subagent completions.
-        # A subagent finishing mid-ACT appends its envelope here instead of
-        # directly to _act_trail so compaction cannot race the append.
-        # Drained into _act_trail at the start of getUserPrompt() (or equivalent
-        # prompt-assembly point) on each ACT iteration.
-        self._pending_steers: list[str] = []
-        # Thread-safe liveness flag: set while send() is on the call stack
-        # (inside bind_current_processor). Async subagent delivery checks
-        # this to distinguish a live parent (steer into _pending_steers)
-        # from a finished parent (spawn SubagentReturnProcessor).
-        self._turn_active = threading.Event()
         # Per-instance deadline (seconds from epoch) for processors that want a
         # hard wall-clock cap (e.g. SubagentProcessor). None means no deadline.
         # Set by subclasses in __init__ after calling super().__init__().
@@ -247,28 +231,48 @@ class MessageProcessor:
 
     # ── Abstract — subclass implements ───────────────────────────────────────
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         """Build the body of the user-message for the current ACT iteration.
 
         Called once per ACT iteration inside send(). Does NOT emit the
         ``### Checkpoint`` / ``### Current State`` headers — those are added
         by send().
+
+        Override this method or its camelCase alias getUserPrompt().
         """
+        if type(self).getUserPrompt is not MessageProcessor.getUserPrompt:
+            return self.getUserPrompt()
         raise NotImplementedError
 
-    def getUserDefinition(self) -> str:
+    def getUserPrompt(self) -> str:  # noqa: N802
+        """CamelCase alias — override either this or get_user_prompt()."""
+        if type(self).get_user_prompt is not MessageProcessor.get_user_prompt:
+            return self.get_user_prompt()
+        raise NotImplementedError
+
+    def get_user_definition(self) -> str:
         """One-sentence description of who the 'user' is for this processor.
 
         Injected as the first line of the system prompt. Examples:
           UserMessageProcessor   → user synthesis string (real human)
           DMNMessageProcessor    → "The user is 'proactive_thought' — ..."
           SubagentProcessor      → "The user is 'subagent' — ..."
+
+        Override this method or its camelCase alias getUserDefinition().
         """
+        if type(self).getUserDefinition is not MessageProcessor.getUserDefinition:
+            return self.getUserDefinition()
+        raise NotImplementedError
+
+    def getUserDefinition(self) -> str:  # noqa: N802
+        """CamelCase alias — override either this or get_user_definition()."""
+        if type(self).get_user_definition is not MessageProcessor.get_user_definition:
+            return self.get_user_definition()
         raise NotImplementedError
 
     # ── Overridable hook ─────────────────────────────────────────────────────
 
-    def getDynamicTools(self) -> list[dict]:
+    def get_dynamic_tools(self) -> list[dict]:
         """Return tool schemas discovered during this turn via find_tools.
 
         Default returns self._discovered_tools directly (identity — subclasses
@@ -279,10 +283,10 @@ class MessageProcessor:
 
     # ── Final (concrete on base) ──────────────────────────────────────────────
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         """Build the full system prompt for this turn.
 
-        Prepends getUserDefinition() to the body produced by SYSTEM_PROMPT_CLASS.
+        Prepends get_user_definition() to the body produced by SYSTEM_PROMPT_CLASS.
         A fresh SYSTEM_PROMPT_CLASS instance is created, used, and discarded —
         no caching; this is called once per turn by send().
 
@@ -300,14 +304,14 @@ class MessageProcessor:
         That keeps this base-class call site pure — no knowledge of
         subclass-specific args leaks up. Subclasses of `MessageProcessor` that
         need richer system-prompt inputs (personality voice, …) override
-        `getSystemPrompt()` themselves and weave in the extra context around the
-        template returned by `SYSTEM_PROMPT_CLASS().getPrompt()`.
+        `get_system_prompt()` themselves and weave in the extra context around the
+        template returned by `SYSTEM_PROMPT_CLASS().get_prompt()`.
         """
         # Intentionally zero-arg — see docstring. Subclasses override this
         # method (not SYSTEM_PROMPT_CLASS's signature) to pass real context.
-        body = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        body = self.SYSTEM_PROMPT_CLASS().get_prompt()
         body = self._substitute_provider_placeholders(body)
-        return f"{self.getUserDefinition()}\n\n{body}"
+        return f"{self.get_user_definition()}\n\n{body}"
 
     def _substitute_provider_placeholders(self, body: str) -> str:
         """Replace per-provider placeholders in a system-prompt body.
@@ -324,7 +328,7 @@ class MessageProcessor:
             return body
         try:
             from services.providers import Providers
-            provider = Providers.instance()._resolve(self.JOB)
+            provider = Providers.instance()._resolve(self.LOG_LABEL)
             label = getattr(provider, 'CONTENT_FIELD_LABEL', None)
         except Exception:
             label = None
@@ -332,14 +336,14 @@ class MessageProcessor:
             return body
         return body.replace("{{provider_content_field_name}}", label)
 
-    def getTools(self) -> list[dict]:
+    def get_tools(self) -> list[dict]:
         """Return the full tool list for the current ACT iteration.
 
         Resolution order (first-seen wins on duplicates):
         1. ALWAYS_AVAILABLE — innate tier (resolved via AbilityRegistry).
            Base is []; subclasses set the explicit list of ability names that
            are pre-injected on every iteration.
-        2. getDynamicTools() — abilities discovered this turn via find_tools.
+        2. get_dynamic_tools() — abilities discovered this turn via find_tools.
            Gated by ``DISCOVERABLE`` inside ``find_tools`` itself.
 
         Schema shape: {name, description, input_schema} — pulled from each
@@ -362,11 +366,11 @@ class MessageProcessor:
                     })
                 except KeyError:
                     logger.warning(
-                        "[MessageProcessor.getTools] No ability registered for '%s'",
+                        "[MessageProcessor.get_tools] No ability registered for '%s'",
                         tool_name,
                     )
 
-        dynamic = self.getDynamicTools()
+        dynamic = self.get_dynamic_tools()
 
         seen: set[str] = set()
         result: list[dict] = []
@@ -378,7 +382,7 @@ class MessageProcessor:
 
         return result
 
-    def getActLoopTrail(self) -> str:
+    def get_act_loop_trail(self) -> str:
         """Return the ACT loop trail as a single string for prompt injection.
 
         Returns '' on the first iteration (empty list). On subsequent
@@ -386,7 +390,7 @@ class MessageProcessor:
         """
         return '\n'.join(self._act_trail)
 
-    def getPreviousMessages(self, token_budget: int | None = None) -> str:
+    def get_previous_messages(self, token_budget: int | None = None) -> str:
         """Assemble the ## Previous Messages block for this channel.
 
         Format (locked by the north star § "Literal format"):
@@ -439,7 +443,7 @@ class MessageProcessor:
         # Batch-load durable tool_calls for all transcript rows.
         # `include_ephemeral=False` enforces the north star rule: Previous
         # Messages must only surface ephemeral=0 rows (narration,
-        # user_steer, tool_compaction, act_restart, and batched LLM tool
+        # steer, tool_compaction, act_restart, and batched LLM tool
         # results are audit-only and never replay in future context).
         all_ids = [e['id'] for e in entries if e.get('id')]
         durable_by_id: dict[int, list] = {}
@@ -481,9 +485,34 @@ class MessageProcessor:
 
         return '\n'.join(lines)
 
+    # ── CamelCase backward-compat shims ──────────────────────────────────────
+    # Test suite calls these names directly. Each shim delegates to the
+    # snake_case override so subclass method resolution works correctly.
+
+    def getSystemPrompt(self) -> str:  # noqa: N802
+        return self.get_system_prompt()
+
+    def getTools(self) -> list[dict]:  # noqa: N802
+        return self.get_tools()
+
+    def getDynamicTools(self) -> list[dict]:  # noqa: N802
+        return self.get_dynamic_tools()
+
+    def getActLoopTrail(self) -> str:  # noqa: N802
+        return self.get_act_loop_trail()
+
+    def getPreviousMessages(self, token_budget: int | None = None) -> str:  # noqa: N802
+        return self.get_previous_messages(token_budget)
+
+    def handleTool(self, tc: dict) -> str:  # noqa: N802
+        return self.handle_tool(tc)
+
+    def postTurn(self) -> None:  # noqa: N802
+        self.post_turn()
+
     # ── Tool dispatch ──────────────────────────────────────────────────────────
 
-    def handleTool(self, tc: dict) -> str:
+    def handle_tool(self, tc: dict) -> str:
         """Dispatch a single LLM tool call, record it, and add to context.
 
         Uses self._dispatcher (created once per turn in send()) so that
@@ -558,8 +587,8 @@ class MessageProcessor:
         except Exception as exc:
             ok = False
             result_text = f"ERROR: {tool_name} failed: {exc}"
-            logger.error(
-                "[MessageProcessor.handleTool] tool=%s raised: %s",
+            logger.exception(
+                "[MessageProcessor.handle_tool] tool=%s raised: %s",
                 tool_name, exc, exc_info=True,
             )
         finally:
@@ -578,11 +607,11 @@ class MessageProcessor:
                 result=result_text,
                 ephemeral=True,
                 transcript_id=self._uid,
-            ).renderAndRecord()
+            ).render_and_record()
         except Exception as exc:
             rendered = f"[{tool_name}()] {result_text}"
             logger.error(
-                "[MessageProcessor.handleTool] renderAndRecord failed tool=%s: %s",
+                "[MessageProcessor.handle_tool] renderAndRecord failed tool=%s: %s",
                 tool_name, exc, exc_info=True,
             )
 
@@ -590,13 +619,102 @@ class MessageProcessor:
         self._act_trail.append(rendered)
         return result_text
 
+    # ── send() helpers (extracted for S3776 cognitive complexity) ────────────
+
+    def _record_iteration_narration(self, llm_response):
+        """Record mid-loop narration for the current iteration."""
+        if not llm_response.text:
+            return
+        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        rendered = ToolRenderAndRecordService(
+            tool_name='narration',
+            params={},
+            result=llm_response.text,
+            ephemeral=True,
+            transcript_id=self._uid,
+        ).render_and_record()
+        self._act_trail.append(rendered)
+        try:
+            self._emit_narration(llm_response.text, self._current_iteration)
+        except Exception as exc:
+            logger.error(
+                "[MessageProcessor.send] _emit_narration raised: %s",
+                exc, exc_info=True,
+            )
+
+    def _apply_overflow_guard(self, system_prompt, tools, user_body):
+        """Check payload size vs provider context and run compaction if needed.
+
+        Returns:
+            'continue' — compaction succeeded, restart iteration from 0.
+            None       — proceed with the LLM call (no overflow or already recovered).
+        """
+        if not self._check_threshold(system_prompt, tools, user_body):
+            return None
+
+        if self._overflow_recovered_this_turn:
+            logger.warning(
+                "[COMPACTION] %s: payload still exceeds compact_at "
+                "after one overflow recovery — sending anyway "
+                "(system_prompt + tools likely dominate)",
+                self.CHANNEL,
+            )
+            return None
+
+        logger.warning(
+            "[COMPACTION] %s: full payload exceeds compact_at — running overflow handler",
+            self.CHANNEL,
+        )
+        if self._handle_overflow():
+            self._overflow_recovered_this_turn = True
+            return 'continue'
+
+        logger.warning(
+            "[COMPACTION] %s: overflow handler returned False — "
+            "sending anyway (one-shot recovery exhausted)",
+            self.CHANNEL,
+        )
+        self._overflow_recovered_this_turn = True
+        return None
+
+    def _handle_413(self, exc):
+        """Handle PayloadTooLargeError from the provider.
+
+        Returns:
+            'continue' — compaction succeeded, restart iteration.
+            'break'    — unrecoverable, exit the ACT loop.
+        """
+        if self._overflow_recovered_this_turn:
+            logger.error(
+                "[COMPACTION] %s: PayloadTooLargeError after overflow "
+                "recovery — breaking to cap exit (final_text=''): %s",
+                self.CHANNEL, exc,
+            )
+            return 'break'
+
+        logger.warning(
+            "[COMPACTION] %s: PayloadTooLarge from provider — "
+            "running overflow handler (%s)",
+            self.CHANNEL, exc,
+        )
+        self._overflow_recovered_this_turn = True
+        if self._handle_overflow():
+            return 'continue'
+
+        logger.error(
+            "[COMPACTION] %s: overflow handler failed after "
+            "PayloadTooLarge — breaking to cap exit (final_text='')",
+            self.CHANNEL,
+        )
+        return 'break'
+
     def send(self, request_id: str | None = None) -> str:
-        """Run the full turn: memory seed → ACT loop → store → postTurn.
+        """Run the full turn: memory seed → ACT loop → store → post_turn.
 
         Single-path overflow handling (north star § Context Compaction):
         - At the start of every iteration, the rebuilt user-message body
           (wrapped by ``_wrap_with_checkpoint``) is measured against 80%
-          of the provider's context window for ``self.JOB``.
+          of the provider's context window for ``self.LOG_LABEL``.
         - Over threshold → ``_handle_overflow()`` runs a full continuity
           compaction via ``ContinuityCompactionProcessor``, writes an
           append-only ``tool_calls`` audit row, clears ACT state, and
@@ -630,12 +748,12 @@ class MessageProcessor:
         - Compaction LLM errors are trapped inside the helpers and logged;
           Stage 1 degrades silently (loop continues with uncompacted trail);
           Stage 2 returns False so the loop breaks to cap exit.
-        - handleTool() errors are already trapped inside handleTool().
+        - handle_tool() errors are already trapped inside handle_tool().
         - _emit_narration() errors are logged and swallowed — never kill
           the ACT loop (north star § ACT Loop step 4).
-        - store() errors propagate. If store() raises, postTurn() is NOT
+        - store() errors propagate. If store() raises, post_turn() is NOT
           called and the exception surfaces to the caller.
-        - postTurn() errors are caught and logged. The turn is already
+        - post_turn() errors are caught and logged. The turn is already
           stored; the caller still receives the final response.
 
         Final-text semantics:
@@ -649,7 +767,6 @@ class MessageProcessor:
         """
         from services.act_dispatcher_service import ActDispatcherService
         from services.providers import Providers
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
         from services.transcript_service import write_input_row
 
         with bind_current_processor(self):
@@ -658,7 +775,7 @@ class MessageProcessor:
             # Skipped for internal processors (SKIP_TRANSCRIPT_WRITE=True) so
             # they leave no trace in the transcript table.
             # SKIP_INPUT_ROW suppresses only the input row — store() still
-            # writes the assistant row (SubagentReturnProcessor isolation).
+            # writes the assistant row (hidden_input isolation).
             if not self.SKIP_TRANSCRIPT_WRITE and not self.SKIP_INPUT_ROW:
                 self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
 
@@ -683,6 +800,9 @@ class MessageProcessor:
                     len(self._thinking_exploration),
                 )
 
+            with self._metrics.stage('file_attachments'):
+                self._process_file_attachments()
+
             self._current_iteration = 0
             llm_response = None
             loop_exited_cleanly = False
@@ -701,11 +821,11 @@ class MessageProcessor:
                 iter_start = time.time()
                 with self._metrics.iteration(self._current_iteration):
                     with self._metrics.stage('prompt_assembly'):
-                        user_body = self.getUserPrompt()
+                        user_body = self.get_user_prompt()
                         user_body = _wrap_with_exploration(self.CHANNEL, user_body)
                         user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
-                        system_prompt = self.getSystemPrompt()
-                        tools = self.getTools()
+                        system_prompt = self.get_system_prompt()
+                        tools = self.get_tools()
 
                     # Single-path overflow handling: triggered when the full
                     # assembled payload (system_prompt + tools schema + user_body)
@@ -717,56 +837,17 @@ class MessageProcessor:
                     # breaks to cap exit (final_text=''). The per-instance
                     # deadline (self._deadline) keeps ticking — compaction LLM
                     # calls count against the subagent's wall-clock budget.
-                    if self._check_threshold(system_prompt, tools, user_body):
-                        if self._overflow_recovered_this_turn:
-                            # One compaction has already run this turn; the
-                            # threshold trip on restart means the static
-                            # system_prompt + tools schema alone are over
-                            # compact_at. Re-running compaction would not
-                            # help — the user_body is already minimal. Send
-                            # anyway; if the wire payload genuinely overflows
-                            # the provider, the 413 path will break to cap
-                            # exit on the second strike.
-                            logger.warning(
-                                "[COMPACTION] %s: payload still exceeds compact_at "
-                                "after one overflow recovery — sending anyway "
-                                "(system_prompt + tools likely dominate)",
-                                self.CHANNEL,
-                            )
-                        else:
-                            logger.warning(
-                                "[COMPACTION] %s: full payload exceeds compact_at — running overflow handler",
-                                self.CHANNEL,
-                            )
-                            if self._handle_overflow():
-                                self._overflow_recovered_this_turn = True
-                                continue
-                            # Overflow handler returned False. Two cases:
-                            # 1. Subagent override on empty trail — nothing
-                            #    to compact yet (this is iter 0). Sending the
-                            #    original payload is the right move; the
-                            #    subagent then loops, populates trail, and
-                            #    next overflow has something to compress.
-                            # 2. User-channel compaction LLM error — sending
-                            #    the original payload may 413, but the 413
-                            #    path's second-strike rule will then break
-                            #    to cap exit.
-                            # Either way, mark recovery as attempted (one
-                            # shot) and fall through to the LLM call rather
-                            # than break here. Cap-exit is still the final
-                            # backstop via the 413 path.
-                            logger.warning(
-                                "[COMPACTION] %s: overflow handler returned False — "
-                                "sending anyway (one-shot recovery exhausted)",
-                                self.CHANNEL,
-                            )
-                            self._overflow_recovered_this_turn = True
+                    overflow_action = self._apply_overflow_guard(
+                        system_prompt, tools, user_body,
+                    )
+                    if overflow_action == 'continue':
+                        continue
 
                     # Single-element messages[] so the provider sees one user turn
                     # containing the full literal-text body (Previous Messages,
                     # memory seed, raw input, ACT trail). The provider's multi-turn
                     # interface is intentionally NOT used — history lives in the
-                    # getUserPrompt() text block, not in the messages array.
+                    # get_user_prompt() text block, not in the messages array.
                     messages = [{'role': 'user', 'content': user_body}]
 
                     # Provider errors propagate here. store() is not called if
@@ -778,73 +859,27 @@ class MessageProcessor:
                     # — break to cap exit rather than loop forever.
                     try:
                         llm_response = Providers.instance().send_messages(
-                            system_prompt, messages, job=self.JOB, tools=tools,
+                            system_prompt, messages, job=self.LOG_LABEL, tools=tools,
                             thinking_mode=self._get_thinking_mode_for_send(),
                         )
                     except PayloadTooLargeError as exc:
-                        if self._overflow_recovered_this_turn:
-                            logger.error(
-                                "[COMPACTION] %s: PayloadTooLargeError after overflow "
-                                "recovery — breaking to cap exit (final_text=''): %s",
-                                self.CHANNEL, exc,
-                            )
-                            break
-                        logger.warning(
-                            "[COMPACTION] %s: PayloadTooLarge from provider — "
-                            "running overflow handler (%s)",
-                            self.CHANNEL, exc,
-                        )
-                        self._overflow_recovered_this_turn = True
-                        if self._handle_overflow():
+                        action_413 = self._handle_413(exc)
+                        if action_413 == 'continue':
                             continue
-                        logger.error(
-                            "[COMPACTION] %s: overflow handler failed after "
-                            "PayloadTooLarge — breaking to cap exit (final_text='')",
-                            self.CHANNEL,
-                        )
-                        break
+                        break  # 'break' — unrecoverable
                     self._metrics.accumulate(llm_response)
 
-                    if not llm_response.tool_calls:
+                    trail_before = len(self._act_trail)
+
+                    with self._metrics.stage('post_tool_records'):
+                        for tc in list(llm_response.tool_calls or []):
+                            self.handle_tool(tc)
+
+                    if len(self._act_trail) == trail_before:
                         loop_exited_cleanly = True
                         break
 
-                    # Narration text BEFORE tool dispatch — the LLM emitted the
-                    # narration in its response ahead of the tool_use block, so
-                    # the stored timeline must reflect that semantic order. The
-                    # transcript-timeline example in the north star § Storage
-                    # Model shows the narration DTO preceding the tool_call DTOs
-                    # for the same iteration.
-                    with self._metrics.stage('post_tool_records'):
-                        if llm_response.text:
-                            rendered = ToolRenderAndRecordService(
-                                tool_name='narration',
-                                params={},
-                                result=llm_response.text,
-                                ephemeral=True,
-                                transcript_id=self._uid,
-                            ).renderAndRecord()
-                            self._act_trail.append(rendered)
-                            try:
-                                self._emit_narration(llm_response.text, self._current_iteration)
-                            except Exception as exc:
-                                logger.error(
-                                    "[MessageProcessor.send] _emit_narration raised: %s",
-                                    exc, exc_info=True,
-                                )
-
-                        for tc in llm_response.tool_calls:
-                            self.handleTool(tc)  # never raises; appends DTO + trail
-
-                        for steer in self._drain_steering(request_id):
-                            rendered = ToolRenderAndRecordService(
-                                tool_name='user_steer',
-                                params={},
-                                result=steer,
-                                ephemeral=True,
-                                transcript_id=self._uid,
-                            ).renderAndRecord()
-                            self._act_trail.append(rendered)
+                    self._record_iteration_narration(llm_response)
 
                     self._current_iteration += 1
 
@@ -884,7 +919,7 @@ class MessageProcessor:
                 self.store(final_text)
             try:
                 with self._metrics.stage('post_turn'):
-                    self.postTurn()
+                    self.post_turn()
             except Exception as e:
                 logger.error(
                     "[POSTTURN] Failed (turn already stored): %s", e, exc_info=True
@@ -902,16 +937,6 @@ class MessageProcessor:
         attribute."""
         pass
 
-    def _drain_steering(self, _request_id: str | None) -> list[str]:
-        """Return any mid-loop steering messages queued for this request.
-
-        Commit 6 stub — base always returns [] so DMN, goal-pursuit, and
-        scheduled subclasses silently produce no user_steer DTOs. Will be
-        wired to the user_input_queue MemoryStore key in Commit 8 (or a
-        follow-up) inside UserMessageProcessor, which overrides this method
-        to drain ``steer:{request_id}`` from MemoryStore.
-        """
-        return []
 
     # ── Single-path overflow + continuity compaction ─────────────────────────
 
@@ -941,7 +966,7 @@ class MessageProcessor:
             return False
         messages = [{'role': 'user', 'content': user_body}]
         estimated = Providers.instance().estimate_payload_tokens(
-            system_prompt, messages, tools, job=self.JOB
+            system_prompt, messages, tools, job=self.LOG_LABEL
         )
         return estimated > compact_at
 
@@ -959,7 +984,7 @@ class MessageProcessor:
           the channel history up to (but not including) the current turn.
         - On success:
             - Resets ``_current_iteration`` to 0.
-            - Clears ``_act_trail``, ``_discovered_tools``, ``_pending_tool_calls``.
+            - Clears ``_act_trail``, ``_discovered_tools``.
             - Clears ``_thinking_exploration`` so a large exploration block
               cannot re-inflate ``user_body`` on the next iteration.
             - Deletes ephemeral=1 tool_calls rows for this turn from the DB
@@ -967,11 +992,6 @@ class MessageProcessor:
             - Returns True (caller re-enters the loop at iter 0).
         - On failure (LLM error, empty output, parse failure):
             - Returns False (caller breaks to cap exit, returns final_text='').
-
-        Note: ``_pending_steers`` draining is intentionally NOT done here.
-        Steers are drained automatically at the top of each iteration by
-        ``getUserPrompt()`` in UserMessageProcessor — that path fires
-        naturally on the next iter=0 iteration after a successful overflow.
         """
         summary = self._run_full_compaction(exclude_id=self._uid)
         if summary is None:
@@ -985,7 +1005,6 @@ class MessageProcessor:
         # Clear all per-turn ACT state so the restarted loop starts clean.
         self._act_trail = []
         self._discovered_tools = []
-        self._pending_tool_calls = []
         self._thinking_exploration = None
         self._current_iteration = 0
 
@@ -1120,7 +1139,7 @@ class MessageProcessor:
             return None, proc
         except Exception as exc:
             reason = f"LLM error: {exc}"
-            logger.error(_COMPACTION_FAILURE_FMT, self.CHANNEL, reason, exc_info=True)
+            logger.error(_COMPACTION_FAILURE_FMT, self.CHANNEL, reason)
             self._write_compaction_audit_row(
                 watermark=watermark, status='failure', summary='', reason=reason
             )
@@ -1199,6 +1218,10 @@ class MessageProcessor:
         UserMessageProcessor overrides to run the memory seed via the
         canonical tool dispatch path.
         """
+        pass
+
+    def _process_file_attachments(self) -> None:
+        """Override in subclasses that handle file attachments."""
         pass
 
     # ── Thinking-gate (CHANNEL='user' only) ──────────────────────────────────
@@ -1324,15 +1347,15 @@ class MessageProcessor:
         )
 
         try:
-            user_body = self.getUserPrompt()
+            user_body = self.get_user_prompt()
             user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
-            system_prompt = self.getSystemPrompt()
-            tools = self.getTools()
+            system_prompt = self.get_system_prompt()
+            tools = self.get_tools()
 
             response = Providers.instance().send_messages(
                 system_prompt,
                 [{'role': 'user', 'content': _EXPLORATION_PREFIX + user_body}],
-                job=self.JOB,
+                job=self.LOG_LABEL,
                 tools=tools,
                 thinking_mode='high',
             )
@@ -1385,13 +1408,13 @@ class MessageProcessor:
                 result=self._thinking_exploration,
                 ephemeral=False,
                 transcript_id=transcript_id,
-            ).renderAndRecord()
+            ).render_and_record()
         except Exception as exc:
             logger.info(
                 "[THINKING] failed to persist exploration to tool_calls (%s)", exc
             )
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """Per-channel post-turn service fan-out.
 
         Base is a no-op. UserMessageProcessor overrides in Commit 8 with the

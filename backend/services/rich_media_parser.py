@@ -276,7 +276,7 @@ def _find_payload(tag: str, tool_calls: list[dict]) -> tuple[dict | str, dict] |
 
         <json payload>
 
-        This tool supports rich-media rendering. ... <span id='tag'>
+        You MUST present this result by wrapping your synthesis in <span id='tag'>
 
     So the span tag is always in the trailer section.  A search snippet or
     document body containing a literal span would be part of the JSON payload

@@ -34,5 +34,8 @@ nltk>=3.8
 nh3>=0.2.0
 markdown-it-py>=3.0.0
 
+mcp>=1.24.0
+uvicorn>=0.34.0
+
 # ── Test dependencies (not needed in production) ──
 pytest>=8.0.0

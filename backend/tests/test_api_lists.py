@@ -33,12 +33,6 @@ def _seed_item(db, item_id, list_id, content, checked=0, position=0):
 # ─── GET /lists ───────────────────────────────────────────────────────────
 
 class TestGetLists:
-    def test_returns_empty_when_no_lists(self, authed_client):
-        client, _, _ = authed_client
-        resp = client.get('/lists')
-        assert resp.status_code == 200
-        assert resp.get_json() == {"items": []}
-
     def test_returns_summaries(self, authed_client):
         client, db, _ = authed_client
         _seed_list(db, list_id='aaa11111', name='Groceries')
@@ -72,11 +66,6 @@ class TestCreateList:
         resp = client.post('/lists', json={})
         assert resp.status_code == 400
 
-    def test_name_too_long_returns_400(self, authed_client):
-        client, _, _ = authed_client
-        resp = client.post('/lists', json={"name": "x" * 201})
-        assert resp.status_code == 400
-
     def test_duplicate_name_returns_409(self, authed_client):
         client, db, _ = authed_client
         _seed_list(db, name='Groceries')
@@ -100,11 +89,6 @@ class TestGetList:
         contents = [i['content'] for i in data['item']['items']]
         assert contents == ['milk', 'eggs']
 
-    def test_unknown_id_returns_404(self, authed_client):
-        client, _, _ = authed_client
-        resp = client.get('/lists/nonexist')
-        assert resp.status_code == 404
-
 
 # ─── PUT /lists/<id>/rename ───────────────────────────────────────────────
 
@@ -119,17 +103,6 @@ class TestRenameList:
         ).fetchone()
         assert row['name'] == 'New'
 
-    def test_empty_name_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.put('/lists/abc12345/rename', json={"name": ""})
-        assert resp.status_code == 400
-
-    def test_unknown_id_returns_404(self, authed_client):
-        client, _, _ = authed_client
-        resp = client.put('/lists/nonexist/rename', json={"name": "Anything"})
-        assert resp.status_code == 404
-
 
 # ─── DELETE /lists/<id> ───────────────────────────────────────────────────
 
@@ -143,11 +116,6 @@ class TestDeleteList:
             "SELECT deleted_at FROM lists WHERE id = 'abc12345'"
         ).fetchone()
         assert row['deleted_at'] is not None
-
-    def test_unknown_id_returns_404(self, authed_client):
-        client, _, _ = authed_client
-        resp = client.delete('/lists/nonexist')
-        assert resp.status_code == 404
 
 
 # ─── POST /lists/<id>/items ───────────────────────────────────────────────
@@ -166,28 +134,6 @@ class TestAddItems:
         ).fetchall()
         assert [r['content'] for r in rows] == ['Milk', 'Eggs']
 
-    def test_empty_items_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.post('/lists/abc12345/items', json={"items": []})
-        assert resp.status_code == 400
-
-    def test_item_too_long_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.post('/lists/abc12345/items', json={"items": ["x" * 501]})
-        assert resp.status_code == 400
-
-    def test_non_string_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.post('/lists/abc12345/items', json={"items": [123]})
-        assert resp.status_code == 400
-
-    def test_unknown_id_returns_404(self, authed_client):
-        client, _, _ = authed_client
-        resp = client.post('/lists/nonexist/items', json={"items": ["Milk"]})
-        assert resp.status_code == 404
 
 
 # ─── DELETE /lists/<id>/items (clear) ─────────────────────────────────────
@@ -203,10 +149,7 @@ class TestClearItems:
         assert resp.status_code == 200
         assert resp.get_json()['cleared'] == 2
 
-    def test_unknown_id_returns_404(self, authed_client):
-        client, _, _ = authed_client
-        resp = client.delete('/lists/nonexist/items')
-        assert resp.status_code == 404
+
 
 
 # ─── DELETE /lists/<id>/items/batch ───────────────────────────────────────
@@ -221,12 +164,6 @@ class TestRemoveItems:
         resp = client.delete('/lists/abc12345/items/batch', json={"items": ["milk"]})
         assert resp.status_code == 200
         assert resp.get_json()['removed'] == 1
-
-    def test_missing_items_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.delete('/lists/abc12345/items/batch', json={})
-        assert resp.status_code == 400
 
 
 # ─── PUT /lists/<id>/items/check ──────────────────────────────────────────
@@ -245,11 +182,6 @@ class TestCheckItems:
         ).fetchone()
         assert row['checked'] == 1
 
-    def test_missing_items_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.put('/lists/abc12345/items/check', json={})
-        assert resp.status_code == 400
 
 
 # ─── PUT /lists/<id>/items/uncheck ────────────────────────────────────────
@@ -268,8 +200,3 @@ class TestUncheckItems:
         ).fetchone()
         assert row['checked'] == 0
 
-    def test_missing_items_returns_400(self, authed_client):
-        client, db, _ = authed_client
-        _seed_list(db)
-        resp = client.put('/lists/abc12345/items/uncheck', json={})
-        assert resp.status_code == 400

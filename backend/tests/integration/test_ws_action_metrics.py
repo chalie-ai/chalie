@@ -42,16 +42,14 @@ class _FakeWS:
 def test_handle_action_unknown_skill_emits_error(db):
     """Unknown skill → error frame + done frame are emitted via _handle_action."""
     from api import websocket as ws_mod
-    from services.memory_client import MemoryClientService
 
-    store = MemoryClientService.create_connection()
     ws = _FakeWS()
 
     msg = {
         "type": "action",
         "payload": {"skill": "__definitely_nonexistent_skill__", "args": {}},
     }
-    ws_mod._handle_action(ws, store, msg)
+    ws_mod._handle_action(ws, msg)
 
     errs = ws.frames_of('error')
     msgs = ws.frames_of('message')
@@ -64,9 +62,7 @@ def test_handle_action_exception_path_carries_metrics(db, monkeypatch):
     (tokens_total=0, tokens_total_complete=False, response_time_s)."""
     from api import websocket as ws_mod
     from abilities import _registry as reg_mod
-    from services.memory_client import MemoryClientService
 
-    store = MemoryClientService.create_connection()
     ws = _FakeWS()
 
     class _RaisingAbility:
@@ -81,7 +77,7 @@ def test_handle_action_exception_path_carries_metrics(db, monkeypatch):
     )
 
     msg = {"type": "action", "payload": {"skill": "anything"}}
-    ws_mod._handle_action(ws, store, msg)
+    ws_mod._handle_action(ws, msg)
 
     errs = ws.frames_of('error')
     assert errs, f"Expected error frame, got: {ws.sent}"
@@ -101,9 +97,7 @@ def test_handle_action_message_frame_marks_tokens_incomplete(db, monkeypatch):
     tokens_total_complete=False (the skill didn't run the LLM)."""
     from api import websocket as ws_mod
     from abilities import _registry as reg_mod
-    from services.memory_client import MemoryClientService
 
-    store = MemoryClientService.create_connection()
     ws = _FakeWS()
 
     class _OkAbility:
@@ -120,7 +114,7 @@ def test_handle_action_message_frame_marks_tokens_incomplete(db, monkeypatch):
     monkeypatch.setattr(reg_mod.AbilityRegistry, 'get', staticmethod(_fake_get))
 
     ws_mod._handle_action(
-        ws, store,
+        ws,
         {"type": "action", "payload": {"skill": "__test_skill__"}},
     )
 

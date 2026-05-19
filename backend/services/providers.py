@@ -9,8 +9,7 @@
 """
 Providers — thin singleton wrapping provider resolution and LLM send.
 
-Resolves the correct LLM provider for a given job (e.g. 'frontal-cortex-unified'),
-sends messages, and returns a raw LLMResponse. No response parsing here.
+Resolves the active DB provider, sends messages, returns a raw LLMResponse.
 """
 
 import json
@@ -150,10 +149,27 @@ class Providers:
         )
 
     def _resolve(self, job):
-        """Resolve LLM provider for a job. Uses ConfigService → create_llm_service."""
-        from services.config_service import ConfigService
+        """Resolve the active DB provider and wrap it as an LLM service.
+
+        Injects _job_name (for LoggingLLMService) and _usage_class (for
+        llm_call_log tagging) into the config dict before calling
+        create_llm_service.
+        """
+        from services.provider_cache_service import ProviderCacheService
         from services.llm_service import create_llm_service
-        config = ConfigService.resolve_agent_config(job)
+        from services.message_processor import current_processor
+        config = ProviderCacheService.get_selected_provider()
+        if not config:
+            providers = ProviderCacheService.get_providers()
+            if providers:
+                config = dict(next(iter(providers.values())))
+            else:
+                config = {}
+        config = dict(config)  # don't mutate the cached dict
+        config['_job_name'] = job
+        proc = current_processor()
+        if proc is not None:
+            config['_usage_class'] = proc.USAGE_CLASS
         return create_llm_service(config)
 
     def _get_tools(self):
@@ -170,7 +186,7 @@ class Providers:
         proc = current_processor()
         if proc is None:
             return []
-        return proc.getTools()
+        return proc.get_tools()
 
     def get_context_limit(self, job='unified'):
         """Delegate to resolved provider."""

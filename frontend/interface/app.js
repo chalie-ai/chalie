@@ -21,7 +21,8 @@ import { Notifications } from './notifications.js';
 import { ImageAttach } from './image_attach.js';
 import { DocumentUpload } from './document_upload.js';
 import { UpdateSystem } from './update_system.js';
-import { AppsPanel } from './apps_panel.js';
+import { PermissionNotifications } from './permission_notifications.js';
+import { QuickTipCard } from './quick_tip_card.js';
 import { showToast, lsGet, lsSet } from './utils.js';
 
 // Disable the browser's scroll-restoration so a refresh never lands the
@@ -45,7 +46,6 @@ class ChalieApp {
     this.presence = null;
     this.renderer = null;
 
-    this._init();
   }
 
   async _init() {
@@ -83,6 +83,10 @@ class ChalieApp {
     // Voice player (speaker button → overlay audio player)
     this._voicePlayer = new VoicePlayer({ getHost: () => this._backendHost });
 
+    // Document upload module (must be constructed before Chat so the reference is live)
+    this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
+    this._docUpload.init();
+
     // Chat module (send + history)
     this._chat = new Chat({
       api: this.api,
@@ -91,6 +95,7 @@ class ChalieApp {
       presence: this.presence,
       notifications: this._notifications,
       imageAttach: this._imageAttach,
+      documentUpload: this._docUpload,
     });
     this._chat.onAuthFailure(() => this._handleAuthFailure());
 
@@ -102,16 +107,18 @@ class ChalieApp {
     // (server restart that locks the vault, session expiry, etc.)
     this.heartbeat.onAuthFailure(() => this._handleAuthFailure());
 
-    // Document upload module
-    this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
-    this._docUpload.init();
-
-    // Apps panel module
-    this._appsPanel = new AppsPanel({ getHost: () => this._backendHost });
-
     // Update system module
     this._updateSystem = new UpdateSystem({ getHost: () => this._backendHost });
     this._updateSystem.init();
+
+    // Permission notifications module
+    const permNotifications = new PermissionNotifications();
+    permNotifications.init();
+    this._permNotifications = permNotifications;
+
+    // Quick tip card module
+    this._quickTipCard = new QuickTipCard({ getHost: () => this._backendHost });
+    this._quickTipCard.init();
 
     // Event router — dispatches WS drift events to modules
     this._eventRouter = new EventRouter({ ws: this.ws, renderer: this.renderer });
@@ -132,7 +139,7 @@ class ChalieApp {
     // thought card after 2 seconds, enabling visual testing without a backend.
     // The event is fed directly into the event router's internal handler so it
     // exercises the full thought → renderer pipeline.
-    if (new URLSearchParams(window.location.search).has('debug_thought')) {
+    if (new URLSearchParams(globalThis.location.search).has('debug_thought')) {
       setTimeout(() => {
         this._eventRouter._handleEvent({
           type: 'thought',
@@ -229,12 +236,12 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   _initInstallPrompt() {
-    window.addEventListener('beforeinstallprompt', (e) => {
+    globalThis.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       this._deferredInstallPrompt = e;
       document.getElementById('installBtn')?.classList.remove('hidden');
     });
-    window.addEventListener('appinstalled', () => {
+    globalThis.addEventListener('appinstalled', () => {
       this._deferredInstallPrompt = null;
       document.getElementById('installBtn')?.classList.add('hidden');
     });
@@ -312,18 +319,15 @@ class ChalieApp {
       // Task strip — init + 60s safety-net polling
       this._taskStrip.init();
 
-      // Apps panel
-      this._appsPanel.init();
-
       // Settings button → brain dashboard
       document.getElementById('settingsBtn')?.addEventListener('click', () => {
-        window.open('/brain/', '_blank');
+        globalThis.open('/brain/', 'chalie-brain');
       });
 
       // Connect WebSocket and drift event router
       this._eventRouter.init();
 
-      window.addEventListener('beforeunload', () => {
+      globalThis.addEventListener('beforeunload', () => {
         this.ws.close();
         this._taskStrip.destroy();
         this._voiceRecorder.destroy();
@@ -437,10 +441,6 @@ class ChalieApp {
       this._taskStrip.loadActiveTasks();
     });
 
-    this._eventRouter.onImageReady((data) => {
-      this._imageAttach.handleImageReady(data);
-    });
-
     this._eventRouter.onNotification(() => {
       this._notifications.playChime();
       this._taskStrip.loadActiveTasks();
@@ -456,6 +456,14 @@ class ChalieApp {
       } else {
         this._addCapabilityAlert(data.cap_id, data.cap_name, data.error);
       }
+    });
+
+    this._eventRouter.onPermissionRequest((data) => {
+      this._permNotifications.handleRequest(data);
+    });
+
+    this._eventRouter.onQuickTip((data) => {
+      this._quickTipCard.handleTip(data);
     });
   }
 
@@ -614,7 +622,7 @@ class ChalieApp {
     textarea.addEventListener('input', () => {
       textarea.style.height = 'auto';
       textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-      sendBtn.disabled = !textarea.value.trim() && !this._imageAttach.count;
+      sendBtn.disabled = (!textarea.value.trim() && !this._imageAttach.count) || this._imageAttach.isUploading;
     });
 
     // Enter to send (Shift+Enter for newline)
@@ -678,7 +686,7 @@ class ChalieApp {
     // Safety net — dragend always fires even if the drop is cancelled,
     // preventing a stuck overlay on drag-out-of-window.
     document.addEventListener('dragend', hideOverlay);
-    window.addEventListener('blur', hideOverlay);
+    globalThis.addEventListener('blur', hideOverlay);
 
     overlay.addEventListener('drop', (ev) => {
       ev.preventDefault();
@@ -723,6 +731,14 @@ class ChalieApp {
       }
     });
 
+    // Close on chat scroll (body/window scroll, not a container element)
+    globalThis.addEventListener('scroll', () => {
+      if (!menu.classList.contains('hidden')) {
+        menu.classList.add('hidden');
+        attachBtn.classList.remove('active');
+      }
+    }, { passive: true });
+
     // "Attach Document" → upload dialog
     menu.querySelector('[data-action="document"]')?.addEventListener('click', () => {
       menu.classList.add('hidden');
@@ -743,7 +759,7 @@ class ChalieApp {
   // ---------------------------------------------------------------------------
 
   _handleSharedContent() {
-    const params = new URLSearchParams(window.location.search);
+    const params = new URLSearchParams(globalThis.location.search);
     const shared = params.get('shared');
     if (!shared) return;
 
@@ -758,8 +774,8 @@ class ChalieApp {
     }
 
     // Clean URL without reload
-    const cleanUrl = window.location.pathname;
-    window.history.replaceState({}, '', cleanUrl);
+    const cleanUrl = globalThis.location.pathname;
+    globalThis.history.replaceState({}, '', cleanUrl);
   }
 
   // ---------------------------------------------------------------------------
@@ -836,10 +852,10 @@ class ChalieApp {
       this._hideConnectionBanner();
       // Version-change detection (post-restart cache bust)
       if (data?.version) {
-        if (!window.__chalieVersion) {
-          window.__chalieVersion = data.version;
-        } else if (data.version !== window.__chalieVersion) {
-          window.__chalieVersion = data.version;
+        if (!globalThis.__chalieVersion) {
+          globalThis.__chalieVersion = data.version;
+        } else if (data.version !== globalThis.__chalieVersion) {
+          globalThis.__chalieVersion = data.version;
           location.reload();
           return;
         }
@@ -915,7 +931,7 @@ class ChalieApp {
 
   _handleAuthFailure() {
     this._taskStrip?.destroy();
-    window.location.replace('/login/');
+    globalThis.location.replace('/login/');
   }
 
   // ---------------------------------------------------------------------------
@@ -947,7 +963,7 @@ class ChalieApp {
 
   _showPwaDialogIfNeeded() {
     // Already installed as PWA
-    if (window.matchMedia('(display-mode: standalone)').matches) return;
+    if (globalThis.matchMedia('(display-mode: standalone)').matches) return;
     // Already dismissed by user
     if (lsGet('chalie_pwa_dismissed')) return;
 
@@ -962,6 +978,7 @@ class ChalieApp {
 }
 
 // Boot
-new ChalieApp();
+const app = new ChalieApp();
+app._init();
 
 if (typeof lucide !== 'undefined') lucide.createIcons();

@@ -3,7 +3,7 @@ DMNMessageProcessor — Background DMN execution driven by SubconsciousWorker st
 
 MessageProcessor v2 subclass. Hardcodes CHANNEL='dmn', ROLE='proactive_thought'.
 Builds its own context from data_graph (user synthesis) and the episodes table.
-All findings are saved via the memory tool — no UI broadcast, no OutputService call.
+All findings are saved via the memory tool — no UI broadcast.
 
 """
 
@@ -39,6 +39,8 @@ class DMNMessageProcessor(MessageProcessor):
 
     CHANNEL = 'dmn'
     ROLE = 'proactive_thought'
+    LOG_LABEL = 'dmn'
+    USAGE_CLASS = 'subconscious'
     MAX_ITERATIONS = 15
     SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
@@ -53,23 +55,27 @@ class DMNMessageProcessor(MessageProcessor):
         "news",
         "read",
         "review_tool_calls",
+        "review_transcript",
         "schedule",
         "search",
     ]
     DISCOVERABLE: list[str] = [
+        "calendar",
         "code_eval",
+        "contacts",
+        "email",
         "programming_docs_search",
         "weather",
     ]
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         """DMN runs as a background process — no human user definition needed."""
         return (
             "The user is 'proactive_thought' — a special background process "
             "that represents your own reflections on recent activity."
         )
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         """Build the DMN user-message from user synthesis + filtered recent episodes.
 
         Template:
@@ -80,7 +86,7 @@ class DMNMessageProcessor(MessageProcessor):
             {numbered episode list}
 
         The SubconsciousWorker._step_dmn() skips this step entirely when no
-        user_summary row exists, so by the time getUserPrompt() runs the
+        user_summary row exists, so by the time get_user_prompt() runs the
         synthesis is guaranteed to be present.
         """
         parts = []
@@ -93,16 +99,16 @@ class DMNMessageProcessor(MessageProcessor):
         if episodes_text:
             parts.append(f"## Episodes\n{episodes_text}")
 
-        trail = self.getActLoopTrail()
+        trail = self.get_act_loop_trail()
         if trail:
             parts.append(trail)
 
         return '\n\n'.join(parts)
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """DMN post-turn: metrics only.
 
-        No OutputService.enqueue_proactive call. No UI broadcast.
+        No UI broadcast.
         DMN's sole side effect is memory-tool writes to data_graph.
         """
         try:
@@ -111,7 +117,7 @@ class DMNMessageProcessor(MessageProcessor):
             m.record_counter('requests_total')
             m.record_counter('dmn_turns_total')
         except Exception as e:
-            logger.debug("[DMN.postTurn] Metrics failed: %s", e, exc_info=True)
+            logger.debug("[DMN.post_turn] Metrics failed: %s", e, exc_info=True)
 
     # ── Private context helpers ───────────────────────────────────────────────
 

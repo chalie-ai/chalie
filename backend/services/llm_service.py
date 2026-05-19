@@ -318,20 +318,25 @@ def _build_service(config: dict):
 
 
 class LoggingLLMService:
-    """Thin wrapper that logs every LLM call to the persistent call log."""
+    """Thin wrapper that logs every LLM call to the persistent call log.
 
-    def __init__(self, service, job_name: str):
+    Depends on: services.llm_call_log_service — writes per-call token rows.
+    Consumed by: create_llm_service (wraps any LLM backend when _job_name is set).
+    """
+
+    def __init__(self, service, job_name: str, usage_class: str = 'chat'):
         self._service = service
         self._job_name = job_name
+        self._usage_class = usage_class
 
     def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         result = self._service.send_message(system_prompt, user_message)
-        _log_llm_call(self._job_name, result)
+        _log_llm_call(self._job_name, result, self._usage_class)
         return result
 
     def send_messages(self, system_prompt: str, messages: list, cache_prefix: bool = False, tools: list = None, thinking_mode: str = None) -> LLMResponse:
         result = self._service.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
-        _log_llm_call(self._job_name, result)
+        _log_llm_call(self._job_name, result, self._usage_class)
         return result
 
     def build_request_body(self, system_prompt: str, messages: list, tools: list = None, **kwargs) -> str:
@@ -345,26 +350,18 @@ class LoggingLLMService:
 
 
 def create_llm_service(config: dict):
-    """
-    Create an LLM service based on the platform field in config.
+    """Create an LLM service based on the platform field in config.
 
-    If the config contains a '_job_name' key (injected by
-    ConfigService.resolve_agent_config), the returned service is wrapped
-    with LoggingLLMService so every call is logged to the persistent store.
-
-    Args:
-        config: Dict with at least 'platform' (defaults to 'ollama').
-
-    Returns:
-        LLM service instance.
+    If the config contains a '_job_name' key, the returned service is wrapped
+    with LoggingLLMService so every call is logged. '_usage_class' distinguishes
+    traffic sources in llm_call_log.
     """
     primary = _build_service(config)
     fallback_name = config.get('fallback_provider')
     if fallback_name:
-        # Get fallback provider from config service
         try:
-            from services.config_service import ConfigService
-            providers = ConfigService.get_providers()
+            from services.provider_cache_service import ProviderCacheService
+            providers = ProviderCacheService.get_providers()
             if fallback_name in providers:
                 fallback_config = dict(providers[fallback_name])
                 fallback_config['platform'] = providers[fallback_name].get('platform', 'ollama')
@@ -375,11 +372,12 @@ def create_llm_service(config: dict):
 
     job_name = config.get('_job_name')
     if job_name:
-        return LoggingLLMService(primary, job_name)
+        usage_class = config.get('_usage_class', 'chat')
+        return LoggingLLMService(primary, job_name, usage_class)
     return primary
 
 
-def _log_llm_call(job_name: str, response: LLMResponse):
+def _log_llm_call(job_name: str, response: LLMResponse, usage_class: str = 'chat'):
     """Fire-and-forget logging of LLM call to persistent store."""
     try:
         from services.llm_call_log_service import log_call
@@ -389,7 +387,11 @@ def _log_llm_call(job_name: str, response: LLMResponse):
             model=response.model or 'unknown',
             tokens_input=response.tokens_input or 0,
             tokens_output=response.tokens_output or 0,
+            tokens_cache_read=response.tokens_cache_read or 0,
+            tokens_cache_create=response.tokens_cache_create or 0,
+            tokens_thinking=response.tokens_thinking or 0,
             latency_ms=response.latency_ms or 0,
+            usage_class=usage_class,
         )
     except Exception as e:
         logger.debug(f"[LLM] _log_llm_call: persistent log write failed (non-fatal): {e}")

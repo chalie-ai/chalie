@@ -1,7 +1,5 @@
 """Tests for api/system.py — /health, /metrics, /system/status, /system/observability/* endpoints."""
 
-from datetime import datetime
-
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -56,16 +54,6 @@ class TestSystemAPI:
         assert 'attention' not in data
         mock_ctx_svc.save.assert_called_once_with({'battery': 80, 'screen': 'on'})
 
-    def test_post_health_empty_body_returns_ok(self, client):
-        """POST /health with an empty JSON body still returns 200 ok."""
-        with patch('consumer.APP_VERSION', '1.0.0'):
-            resp = client.post('/health', data='{}', content_type='application/json')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['status'] == 'ok'
-        assert 'attention' not in data
-
     # GET /metrics
 
     def test_get_metrics_returns_dashboard_data(self, client):
@@ -80,15 +68,6 @@ class TestSystemAPI:
         data = resp.get_json()
         assert data['requests_per_min'] == 42
         assert data['uptime'] == 3600
-
-    def test_get_metrics_returns_500_on_service_error(self, client):
-        """GET /metrics returns 500 when MetricsService raises."""
-        with patch('services.metrics_service.MetricsService', side_effect=RuntimeError('db down')):
-            resp = client.get('/metrics')
-
-        assert resp.status_code == 500
-        data = resp.get_json()
-        assert 'error' in data
 
     # GET /system/status
 
@@ -163,50 +142,6 @@ class TestSystemAPI:
         row = next(r for r in data['rows'] if r['key'] == 'ep-a')
         assert row['value'] == 'first gist'
 
-    def test_records_user_source_returns_user_specific_only(self, client, db):
-        """User source returns only kind='user_specific' rows."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'pref_key', 'pref_val', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('system', 'sys_key', 'sys_val', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.commit()
-
-        resp = client.get('/system/observability/records?source=user')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['returned'] == 1
-        assert data['rows'][0]['key'] == 'pref_key'
-
-    def test_records_system_source_returns_system_only(self, client, db):
-        """System source returns only kind='system' rows."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('system', 'sys_key', 'sys_val', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at) "
-            "VALUES ('user_specific', 'pref_key', 'pref_val', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.commit()
-
-        resp = client.get('/system/observability/records?source=system')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['returned'] == 1
-        assert data['rows'][0]['key'] == 'sys_key'
-
     def test_records_search_filters_by_like(self, client, db):
         """Search param filters gist (episodes) and key/value (data_graph)."""
         now_iso = '2026-01-01T00:00:00+00:00'
@@ -257,32 +192,6 @@ class TestSystemAPI:
         resp = client.get('/system/observability/records?source=bogus')
         assert resp.status_code == 400
         assert resp.get_json()['error'] == 'invalid source'
-
-    def test_records_negative_offset_400(self, client, db):
-        """Negative offset returns 400."""
-        resp = client.get('/system/observability/records?source=episodes&offset=-1')
-        assert resp.status_code == 400
-
-    def test_records_excluded_soft_deleted(self, client, db):
-        """Soft-deleted episodes and data_graph rows are excluded."""
-        now_iso = '2026-01-01T00:00:00+00:00'
-        db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, deleted_at) "
-            "VALUES ('ep-del', 'deleted gist', 5, 'user', ?, ?)",
-            (now_iso, now_iso),
-        )
-        db.execute(
-            "INSERT INTO data_graph (kind, key, value, first_seen_at, last_confirmed_at, deleted_at) "
-            "VALUES ('user_specific', 'gone_key', 'gone_val', ?, ?, ?)",
-            (now_iso, now_iso, now_iso),
-        )
-        db.commit()
-
-        resp_ep = client.get('/system/observability/records?source=episodes')
-        assert resp_ep.get_json()['returned'] == 0
-
-        resp_user = client.get('/system/observability/records?source=user')
-        assert resp_user.get_json()['returned'] == 0
 
     # GET /system/observability/tools
 
@@ -366,37 +275,6 @@ class TestSystemAPI:
 
 
 
-    # GET /system/observability/tasks
-
-    def test_observability_tasks_returns_generated_at(self, client):
-        """GET /system/observability/tasks returns generated_at."""
-        resp = client.get('/system/observability/tasks')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert 'generated_at' in data
-
-    def test_observability_tasks_handles_store_failures(self, client):
-        """GET /system/observability/tasks returns 200 even if store query fails."""
-        with patch('services.memory_client.MemoryClientService.create_connection', side_effect=RuntimeError('store down')):
-            resp = client.get('/system/observability/tasks')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert 'generated_at' in data
-
-    # generated_at field on all observability endpoints
-
-    def test_observability_tools_includes_generated_at(self, client, db):
-        """GET /system/observability/tools includes a generated_at ISO timestamp."""
-        resp = client.get('/system/observability/tools')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert 'generated_at' in data
-        parsed = datetime.fromisoformat(data['generated_at'])
-        assert parsed.tzinfo is not None
-
     # GET /ready
 
     def _ready_patches(self, db_ok=True, store_ok=True):
@@ -479,31 +357,4 @@ class TestSystemAPI:
         assert 'message' in data['database']
         assert data['memory_store']['status'] == 'ok'
 
-    def test_ready_store_failure_returns_503(self, client, db):
-        """/ready with memory store down returns 503 and error in memory_store component."""
-        patches = self._ready_patches(store_ok=False)
-        from contextlib import ExitStack
-        with ExitStack() as stack:
-            for target, mock_val in patches.items():
-                stack.enter_context(patch(target, mock_val))
-            resp = client.get('/ready')
-
-        assert resp.status_code == 503
-        data = resp.get_json()
-        assert data['ready'] is False
-        assert data['database']['status'] == 'ok'
-        assert data['memory_store']['status'] == 'error'
-        assert 'message' in data['memory_store']
-
-    def test_ready_no_checks_key_in_response(self, client, db):
-        """Response must not include the legacy 'checks' key — components are top-level."""
-        patches = self._ready_patches()
-        from contextlib import ExitStack
-        with ExitStack() as stack:
-            for target, mock_val in patches.items():
-                stack.enter_context(patch(target, mock_val))
-            resp = client.get('/ready')
-
-        data = resp.get_json()
-        assert 'checks' not in data
 

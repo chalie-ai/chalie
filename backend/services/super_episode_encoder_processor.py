@@ -155,7 +155,8 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
 
     CHANNEL = 'super_episode_encoder'
     ROLE = 'super_episode_encoder'
-    JOB = 'frontal-cortex-unified'
+    USAGE_CLASS = 'subconscious'
+    LOG_LABEL = 'super_episode_encoder'
     SYSTEM_PROMPT_CLASS = SuperEpisodeEncoderSystemPrompt
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []
@@ -173,20 +174,20 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
         self._sources: list[dict] = []
         self._spans: str = ''
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return (
             "The user is 'super_episode_encoder' — a background process that "
             "consolidates clusters of related episodes into a single super-episode."
         )
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         src = "\n\n".join(f"[{e['id']}] {e['gist']}" for e in self._sources)
         return (
             f"Source episodes:\n\n{src}\n\n"
             f"Raw transcript spans covering these episodes:\n\n{self._spans}"
         )
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """No post-turn fan-out — orchestration lives in send()."""
         pass
 
@@ -218,7 +219,6 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
         )
         from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER
         from services.salience_service import compute_salience
-        from services.config_service import ConfigService
         from services.embedding_service import get_embedding_service
 
         try:
@@ -232,12 +232,7 @@ class SuperEpisodeEncoderProcessor(MessageProcessor):
 
         db = get_shared_db_service()
 
-        try:
-            episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-        except Exception:
-            episodic_config = {}
-
-        episodic_svc = EpisodicService(db, episodic_config)
+        episodic_svc = EpisodicService(db)
         emb_svc = get_embedding_service()
 
         # Hoisted once — minor staleness between clusters is acceptable.

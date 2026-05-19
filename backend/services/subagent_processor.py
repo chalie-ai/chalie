@@ -43,6 +43,8 @@ class SubagentProcessor(MessageProcessor):
 
     CHANNEL = 'subagent'
     ROLE = 'subagent'
+    LOG_LABEL = 'subagent'
+    USAGE_CLASS = 'subagent'
     MAX_ITERATIONS = 50
     DISCOVERABLE: list[str] = [
         "browser",
@@ -81,29 +83,29 @@ class SubagentProcessor(MessageProcessor):
         )
         self._deadline = time.time() + timeout_seconds
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         """Build the subagent system prompt from the per-type prompt + guardrails."""
         from abilities.subagent import _SHARED_GUARDRAILS
         type_prompt = SUBAGENT_TYPES[self.agent_type]["system_prompt"]
         body = f"{type_prompt}\n\n{_SHARED_GUARDRAILS}"
-        return f"{self.getUserDefinition()}\n\n{body}"
+        return f"{self.get_user_definition()}\n\n{body}"
 
-    def getDynamicTools(self) -> list[dict]:
+    def get_dynamic_tools(self) -> list[dict]:
         """Filter blocklist from runtime-discovered tools."""
         return [
             t for t in self._discovered_tools
             if t.get('name') not in _BLOCKED
         ]
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return (
             "The user is 'subagent' — a focused subagent executing a task "
             "delegated by the parent agent."
         )
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         """Task prompt is the raw input; prepend role prefix."""
-        trail = self.getActLoopTrail()
+        trail = self.get_act_loop_trail()
         parts = [f"subagent: {self._raw_input}"]
         if trail:
             parts.append(trail)
@@ -147,9 +149,9 @@ class SubagentProcessor(MessageProcessor):
                 reason = "compaction LLM returned empty output"
         except Exception as exc:
             reason = str(exc)
-            logger.error(
+            logger.exception(
                 "[COMPACTION] subagent: trail compaction failure — reason=%s",
-                reason, exc_info=True,
+                reason,
             )
         finally:
             self._metrics.merge(proc._metrics)
@@ -217,7 +219,7 @@ class SubagentProcessor(MessageProcessor):
                 "[COMPACTION] subagent: failed to write trail audit row: %s", exc
             )
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """Subagent post-turn: metrics only."""
         try:
             from services.metrics_service import MetricsService
@@ -225,4 +227,4 @@ class SubagentProcessor(MessageProcessor):
             m.record_counter('requests_total')
             m.record_counter('subagent_turns_total')
         except Exception as e:
-            logger.debug("[Subagent.postTurn] Metrics failed: %s", e, exc_info=True)
+            logger.debug("[Subagent.post_turn] Metrics failed: %s", e)

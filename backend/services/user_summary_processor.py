@@ -3,7 +3,7 @@ UserSummaryProcessor — one-shot internal processor for user-profile synthesis.
 
 Reads up to 200 active ``kind='user_specific'`` rows from data_graph (ordered
 by retrieval_weight DESC) and asks the LLM to return a JSON object with a
-``short`` and a ``long`` synopsis.  ``postTurn()`` parses the response and
+``short`` and a ``long`` synopsis.  ``post_turn()`` parses the response and
 writes both synopses back to data_graph as ``kind='system'`` rows.
 
 ``send()`` self-skips via ``_should_synthesise()`` when no new traits have
@@ -43,7 +43,7 @@ class UserSummaryProcessor(MessageProcessor):
     """Internal processor that synthesises user traits into a short + long profile.
 
     One-shot: MAX_ITERATIONS=1, no tools, no transcript writes.
-    The caller does not need to do any downstream work — postTurn() handles
+    The caller does not need to do any downstream work — post_turn() handles
     all storage.
 
     Usage::
@@ -53,7 +53,8 @@ class UserSummaryProcessor(MessageProcessor):
 
     CHANNEL = 'user_summary'
     ROLE = 'user_summary'
-    JOB = 'frontal-cortex-unified'
+    USAGE_CLASS = 'subconscious'
+    LOG_LABEL = 'user_summary'
     SYSTEM_PROMPT_CLASS = UserSummarySystemPrompt
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []
@@ -62,7 +63,7 @@ class UserSummaryProcessor(MessageProcessor):
 
     def __init__(self, metadata: dict | None = None):
         super().__init__(raw_input='', metadata=metadata)
-        # Capture the LLM response text so postTurn() can parse it.
+        # Capture the LLM response text so post_turn() can parse it.
         self._last_response: str = ''
 
     def _should_synthesise(self) -> bool:
@@ -151,10 +152,10 @@ class UserSummaryProcessor(MessageProcessor):
             return ''
         return super().send(request_id=request_id)
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return "You are a synthesiser. The user is a real human whose traits you are distilling."
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         """Assemble the synthesis prompt from user traits and active behavioural patterns.
 
         Section 1 — Facts (key: value pairs, up to _MAX_TRAIT_ROWS).
@@ -173,7 +174,7 @@ class UserSummaryProcessor(MessageProcessor):
                 order_by='retrieval_weight DESC',
             )
         except Exception as exc:
-            logger.warning("[USER SUMMARY] getUserPrompt: trait fetch failed: %s", exc)
+            logger.warning("[USER SUMMARY] get_user_prompt: trait fetch failed: %s", exc)
             rows = []
 
         if not rows:
@@ -229,11 +230,11 @@ class UserSummaryProcessor(MessageProcessor):
         return facts_section + "\n\n" + patterns_section
 
     def store(self, llm_response: str) -> None:
-        """Capture the LLM response for postTurn(), then call base (no-op for SKIP_TRANSCRIPT_WRITE)."""
+        """Capture the LLM response for post_turn(), then call base (no-op for SKIP_TRANSCRIPT_WRITE)."""
         self._last_response = llm_response
         super().store(llm_response)
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """Parse the LLM JSON response and write both synopsis rows to data_graph.
 
         Expected response shape::
@@ -246,7 +247,7 @@ class UserSummaryProcessor(MessageProcessor):
         """
         text = (self._last_response or '').strip()
         if not text:
-            logger.warning("[USER SUMMARY] postTurn: empty LLM response — skipping write")
+            logger.warning("[USER SUMMARY] post_turn: empty LLM response — skipping write")
             return
 
         # Strip markdown code fences if the model wrapped the JSON.
@@ -258,7 +259,7 @@ class UserSummaryProcessor(MessageProcessor):
             parsed = json.loads(stripped)
         except json.JSONDecodeError as exc:
             logger.warning(
-                "[USER SUMMARY] postTurn: JSON parse failed (%s) — skipping write. raw=%r",
+                "[USER SUMMARY] post_turn: JSON parse failed (%s) — skipping write. raw=%r",
                 exc,
                 text[:200],
             )
@@ -266,7 +267,7 @@ class UserSummaryProcessor(MessageProcessor):
 
         if not isinstance(parsed, dict):
             logger.warning(
-                "[USER SUMMARY] postTurn: parsed value is not a dict — skipping write"
+                "[USER SUMMARY] post_turn: parsed value is not a dict — skipping write"
             )
             return
 
@@ -275,7 +276,7 @@ class UserSummaryProcessor(MessageProcessor):
 
         if not short or not long_:
             logger.warning(
-                "[USER SUMMARY] postTurn: 'short' or 'long' missing/empty — skipping write"
+                "[USER SUMMARY] post_turn: 'short' or 'long' missing/empty — skipping write"
             )
             return
 
@@ -304,10 +305,10 @@ class UserSummaryProcessor(MessageProcessor):
                 source='user_summary_processor',
             )
             logger.info(
-                "[USER SUMMARY] postTurn: wrote user_summary (%d chars) and "
+                "[USER SUMMARY] post_turn: wrote user_summary (%d chars) and "
                 "user_summary_long (%d chars)",
                 len(short),
                 len(long_),
             )
         except Exception as exc:
-            logger.warning("[USER SUMMARY] postTurn: data_graph write failed: %s", exc)
+            logger.warning("[USER SUMMARY] post_turn: data_graph write failed: %s", exc)

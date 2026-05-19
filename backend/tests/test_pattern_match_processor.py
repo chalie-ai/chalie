@@ -39,7 +39,7 @@ def _tool_call(tool_name, **kwargs):
     return {"name": tool_name, "input": kwargs}
 
 
-def _seed_transcripts(db, count, start_id=None):
+def _seed_transcripts(db, count):
     """Seed `count` transcript rows and return the list of inserted IDs.
 
     SQLite auto-increments, so we rely on SELECT after INSERT to get IDs.
@@ -482,7 +482,6 @@ class TestSaveGraphBudgetCapAt50:
         # duration of the test so the counter persists across 51 calls.
         class _StubProcessor:
             _save_graph_calls = 0
-            _turn_active = __import__('threading').Event()
 
         stub_processor = _StubProcessor()
         instance = SaveGraph()

@@ -75,7 +75,7 @@ def vapid_public_key():
         keys = _get_vapid_keys()
         return jsonify({'publicKey': keys['public']}), 200
     except Exception as e:
-        logger.error(f"[Push] Failed to get VAPID key: {e}", exc_info=True)
+        logger.exception(f"[Push] Failed to get VAPID key: {e}")
         return jsonify({'error': 'Failed to get VAPID key'}), 500
 
 
@@ -95,7 +95,7 @@ def push_subscribe():
         logger.info("[Push] Stored subscription: %s...", safe(subscription['endpoint'][:60]))
         return jsonify({'ok': True}), 201
     except Exception as e:
-        logger.error(f"[Push] Subscribe error: {e}", exc_info=True)
+        logger.exception(f"[Push] Subscribe error: {e}")
         return jsonify({'error': 'Failed to store subscription'}), 500
 
 
@@ -113,7 +113,7 @@ def push_unsubscribe():
         store.srem(SUBSCRIPTIONS_KEY, json.dumps(subscription))
         return jsonify({'ok': True}), 200
     except Exception as e:
-        logger.error(f"[Push] Unsubscribe error: {e}", exc_info=True)
+        logger.exception(f"[Push] Unsubscribe error: {e}")
         return jsonify({'error': 'Failed to remove subscription'}), 500
 
 

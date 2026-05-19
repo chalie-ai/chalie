@@ -1,0 +1,22 @@
+id: home
+name: Home
+version: 1.0.0
+entry_class: HomeCapability
+description: Control smart home devices and automations via Home Assistant.
+providers:
+  - local
+  - cloud
+fields:
+  - name: url
+    label: Home Assistant URL
+    type: text
+    placeholder: "http://homeassistant.local:8123"
+    required: true
+  - name: token
+    label: Long-Lived Access Token
+    type: password
+    required: true
+  - name: verify_ssl
+    label: Verify SSL
+    type: checkbox
+    default: true

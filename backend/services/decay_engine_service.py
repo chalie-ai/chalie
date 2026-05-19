@@ -9,7 +9,7 @@ cadence is owned by the caller.
 import math
 import logging
 
-from .config_service import ConfigService
+from .log_utils import safe
 
 
 logger = logging.getLogger(__name__)
@@ -18,18 +18,14 @@ logger = logging.getLogger(__name__)
 class DecayEngineService:
     """Applies decay to every memory type in one cycle."""
 
-    def __init__(self):
-        """Load the retrieval-decay exponent from ``episodic-memory`` config."""
-        try:
-            episodic_config = ConfigService.get_agent_config("episodic-memory")
-            self.retrieval_decay_exponent = episodic_config.get('retrieval_decay_exponent', 0.5)
-        except Exception as e:
-            logger.warning(f"[DECAY ENGINE] Failed to load decay rates from config, using defaults: {e}")
-            self.retrieval_decay_exponent = 0.5
+    RETRIEVAL_DECAY_EXPONENT = 0.5
 
+    def __init__(self):
+        """Initialize with built-in retrieval-decay exponent."""
+        self.retrieval_decay_exponent = self.RETRIEVAL_DECAY_EXPONENT
         logger.info(
-            f"[DECAY ENGINE] Initialized "
-            f"(retrieval_decay_exponent={self.retrieval_decay_exponent})"
+            "[DECAY ENGINE] Initialized (retrieval_decay_exponent=%s)",
+            safe(str(self.retrieval_decay_exponent)),
         )
 
     def run_once(self) -> None:
@@ -131,7 +127,7 @@ class DecayEngineService:
                     return updated
 
             except Exception as e:
-                logger.error(f"[DECAY ENGINE] Episodic decay failed: {e}")
+                logger.exception(f"[DECAY ENGINE] Episodic decay failed: {e}")
                 return 0
             finally:
                 db_service.close_pool()
@@ -152,7 +148,7 @@ class DecayEngineService:
             finally:
                 db.close_pool()
         except Exception as e:
-            logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}", exc_info=True)
+            logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}")
             return 0
 
     def _cleanup_transcript(self) -> int:

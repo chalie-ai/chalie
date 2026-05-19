@@ -98,7 +98,7 @@ def _check_signal_capability(wrapper_id: str, signal_type: str) -> bool:
     return "*" in allowed_signals or signal_type in allowed_signals
 
 
-def _validate_signal(body: dict) -> tuple[dict | None, str | None]:
+def _validate_signal(body: dict | None) -> tuple[dict | None, str | None]:
     """Validate a single signal payload.
 
     Args:
@@ -286,7 +286,7 @@ def ingest_signals_batch():
             _build_and_emit(validated, wrapper_id)
             accepted += 1
         except Exception as exc:
-            logger.error("[Signals API] Batch emit error at index %d: %s", idx, exc, exc_info=True)
+            logger.exception("[Signals API] Batch emit error at index %d: %s", idx, exc)
             rejected += 1
             errors.append({"index": idx, "error": "internal error during signal emission"})
 

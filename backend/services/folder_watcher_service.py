@@ -285,6 +285,11 @@ class FolderWatcherService:
         if not path:
             path = os.path.expanduser("~")
 
+        if "\x00" in path:
+            raise ValueError("Path contains null bytes")
+        if not os.path.isabs(path):
+            raise ValueError(f"Path must be absolute: {path}")
+        path = os.path.normpath(path)
         real_path = os.path.realpath(path)
 
         if not os.path.isdir(real_path):
@@ -368,6 +373,83 @@ class FolderWatcherService:
         finally:
             store.delete(lock_key)
 
+    def _categorize_existing_file(self, doc_svc, folder, abs_path: str, mtime: float,
+                                   existing: dict, cached: dict, scan_cache: dict,
+                                   result: dict, enqueued: int) -> int:
+        """Handle a discovered file that already has a document record.
+
+        Returns the updated enqueued count.
+        """
+        cached_mtime = cached.get('mtime')
+
+        if existing.get('status') == 'failed':
+            if cached_mtime is None or abs(mtime - cached_mtime) < 1:
+                scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
+                result['skipped'] += 1
+                return enqueued
+
+        elif existing.get('status') in ('pending', 'processing'):
+            scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
+            result['skipped'] += 1
+            return enqueued
+
+        elif cached_mtime and abs(mtime - cached_mtime) < 1:
+            result['skipped'] += 1
+            cached.pop('missing_count', None)
+            scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
+            return enqueued
+
+        file_hash = self._compute_hash(abs_path)
+        if file_hash == existing.get('file_hash'):
+            result['skipped'] += 1
+            scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
+            return enqueued
+
+        if enqueued < MAX_ENQUEUE_PER_SCAN:
+            new_doc_id = self._create_watched_document(doc_svc, folder, abs_path, file_hash)
+            doc_svc.set_supersedes(new_doc_id, existing['id'])
+            try:
+                from services.data_graph_service import get_data_graph_service
+                get_data_graph_service().hard_delete_by_source_prefix(f'document:{existing["id"]}')
+            except Exception as exc:
+                logger.warning("[WATCHER] Failed to cascade-delete old artifacts for %s: %s", existing['id'], exc)
+            doc_svc.soft_delete(existing['id'])
+            self._process_watched_document(new_doc_id, abs_path)
+            scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
+            result['updated'] += 1
+            enqueued += 1
+        else:
+            result['skipped'] += 1
+        return enqueued
+
+    def _categorize_new_file(self, doc_svc, folder, abs_path: str, mtime: float,
+                              discovered: dict, existing_by_hash: dict,
+                              scan_cache: dict, result: dict, enqueued: int) -> int:
+        """Handle a discovered file with no existing document record.
+
+        Returns the updated enqueued count.
+        """
+        file_hash = self._compute_hash(abs_path)
+
+        renamed_doc = existing_by_hash.get(file_hash)
+        if renamed_doc and renamed_doc['file_path'] not in discovered:
+            doc_svc.update_file_path(renamed_doc['id'], abs_path)
+            old_path = renamed_doc['file_path']
+            scan_cache.pop(old_path, None)
+            scan_cache[abs_path] = {'mtime': mtime, 'doc_id': renamed_doc['id']}
+            result['renamed'] += 1
+            return enqueued
+
+        if enqueued < MAX_ENQUEUE_PER_SCAN:
+            new_doc_id = self._create_watched_document(doc_svc, folder, abs_path, file_hash)
+            self._process_watched_document(new_doc_id, abs_path)
+            scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
+            result['new'] += 1
+            enqueued += 1
+        else:
+            result['skipped'] += 1
+        return enqueued
+
     def _do_scan(self, folder: Dict, store) -> Dict[str, int]:
         """Execute the folder scan, comparing discovered files against the database.
 
@@ -385,31 +467,25 @@ class FolderWatcherService:
         folder_id = folder['id']
         result = {'new': 0, 'updated': 0, 'deleted': 0, 'renamed': 0, 'skipped': 0, 'errors': []}
 
-        # Validate folder still exists
         if not os.path.isdir(folder_path):
             msg = f"Folder no longer accessible: {folder_path}"
             logger.warning(f"[WATCHER] {msg}")
             self._update_scan_error(folder_id, msg)
             return result
 
-        # Parse patterns
         file_patterns = self._parse_json_list(folder.get('file_patterns', '["*"]'))
         ignore_patterns = self._parse_json_list(folder.get('ignore_patterns', '[]'))
         recursive = bool(folder.get('recursive', 1))
 
-        # 1. Walk and collect discovered files
-        discovered = {}  # {abs_path: mtime}
+        discovered: dict = {}
         for abs_path, mtime in self._walk_folder(folder_path, recursive, file_patterns, ignore_patterns):
             discovered[abs_path] = mtime
 
-        # 2. Get existing documents for this folder
         doc_svc = DocumentService(self.db)
         existing_docs = doc_svc.get_documents_by_watched_folder(folder_id)
 
-        # Build lookups — include failed docs to prevent infinite retry loops.
-        # Failed docs are only retried when their file is modified on disk.
-        existing_by_path = {}  # {file_path: doc_dict}
-        existing_by_hash = {}  # {file_hash: doc_dict} (for rename detection)
+        existing_by_path: dict = {}
+        existing_by_hash: dict = {}
         for doc in existing_docs:
             if doc.get('deleted_at'):
                 continue
@@ -417,120 +493,42 @@ class FolderWatcherService:
             if doc.get('file_hash'):
                 existing_by_hash[doc['file_hash']] = doc
 
-        # Load scan state cache (for missing_count tracking)
         scan_cache = self._load_scan_cache(store, folder_id)
-
         enqueued = 0
 
-        # 3. Check discovered files for new/modified
         for abs_path, mtime in discovered.items():
             try:
                 cached = scan_cache.get(abs_path, {})
                 existing = existing_by_path.get(abs_path)
 
                 if existing:
-                    # File exists in DB — check if modified
-                    cached_mtime = cached.get('mtime')
-
-                    # Failed docs: only retry if the file was actually modified
-                    if existing.get('status') == 'failed':
-                        if cached_mtime is None or abs(mtime - cached_mtime) < 1:
-                            # No cached mtime (cold start) or file unchanged — skip
-                            scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
-                            result['skipped'] += 1
-                            continue
-                        # File was modified since failure — fall through to supersede
-
-                    # Pending/processing docs: skip (already queued)
-                    elif existing.get('status') in ('pending', 'processing'):
-                        scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
-                        result['skipped'] += 1
-                        continue
-
-                    elif cached_mtime and abs(mtime - cached_mtime) < 1:
-                        # mtime unchanged — skip
-                        result['skipped'] += 1
-                        if 'missing_count' in cached:
-                            del cached['missing_count']
-                        scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
-                        continue
-
-                    # mtime changed — check hash
-                    file_hash = self._compute_hash(abs_path)
-                    if file_hash == existing.get('file_hash'):
-                        # Content unchanged (touch only) — update cache, skip
-                        result['skipped'] += 1
-                        scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
-                        continue
-
-                    # Content changed — supersede
-                    if enqueued < MAX_ENQUEUE_PER_SCAN:
-                        new_doc_id = self._create_watched_document(
-                            doc_svc, folder, abs_path, file_hash)
-                        doc_svc.set_supersedes(new_doc_id, existing['id'])
-                        # Cascade-delete old artifacts — stale content must not
-                        # surface alongside the new version.
-                        try:
-                            from services.data_graph_service import get_data_graph_service
-                            get_data_graph_service().hard_delete_by_source_prefix(f'document:{existing["id"]}')
-                        except Exception as exc:
-                            logger.warning("[WATCHER] Failed to cascade-delete old artifacts for %s: %s", existing['id'], exc)
-                        doc_svc.soft_delete(existing['id'])
-                        self._process_watched_document(new_doc_id, abs_path)
-                        scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
-                        result['updated'] += 1
-                        enqueued += 1
-                    else:
-                        result['skipped'] += 1
-
+                    enqueued = self._categorize_existing_file(
+                        doc_svc, folder, abs_path, mtime, existing,
+                        cached, scan_cache, result, enqueued,
+                    )
                 else:
-                    # File not in DB — new or renamed?
-                    file_hash = self._compute_hash(abs_path)
-
-                    # Check for rename (same hash, different path)
-                    renamed_doc = existing_by_hash.get(file_hash)
-                    if renamed_doc and renamed_doc['file_path'] not in discovered:
-                        # Rename detected — update path, no reprocessing
-                        doc_svc.update_file_path(renamed_doc['id'], abs_path)
-                        old_path = renamed_doc['file_path']
-                        scan_cache.pop(old_path, None)
-                        scan_cache[abs_path] = {'mtime': mtime, 'doc_id': renamed_doc['id']}
-                        result['renamed'] += 1
-                        continue
-
-                    # New file
-                    if enqueued < MAX_ENQUEUE_PER_SCAN:
-                        new_doc_id = self._create_watched_document(
-                            doc_svc, folder, abs_path, file_hash)
-                        self._process_watched_document(new_doc_id, abs_path)
-                        scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
-                        result['new'] += 1
-                        enqueued += 1
-                    else:
-                        result['skipped'] += 1
-
+                    enqueued = self._categorize_new_file(
+                        doc_svc, folder, abs_path, mtime, discovered,
+                        existing_by_hash, scan_cache, result, enqueued,
+                    )
             except Exception as e:
                 logger.warning(f"[WATCHER] Error processing {abs_path}: {e}")
                 result['errors'].append(f"{os.path.basename(abs_path)}: {e}")
 
-        # 4. Check for deleted files (in DB but not on disk)
+        # Check for deleted files
         for abs_path, doc in existing_by_path.items():
             if abs_path not in discovered:
                 cached = scan_cache.get(abs_path, {})
                 missing_count = cached.get('missing_count', 0) + 1
-
                 if missing_count >= MISSING_THRESHOLD:
-                    # File confirmed missing — soft-delete
                     doc_svc.soft_delete(doc['id'])
                     scan_cache.pop(abs_path, None)
                     result['deleted'] += 1
                     logger.info(f"[WATCHER] Soft-deleted missing file: {os.path.basename(abs_path)}")
                 else:
-                    # Tolerate temporary absence
                     cached['missing_count'] = missing_count
                     scan_cache[abs_path] = cached
 
-        # 5. Save scan state
         self._save_scan_cache(store, folder_id, scan_cache)
         self._update_scan_stats(folder_id, len(discovered))
 
@@ -587,7 +585,7 @@ class FolderWatcherService:
 
                 # Symlink safety: skip if target is outside watched folder
                 real_file = os.path.realpath(abs_path)
-                if not real_file.startswith(real_root):
+                if not real_file.startswith(real_root + os.sep):
                     continue
 
                 try:

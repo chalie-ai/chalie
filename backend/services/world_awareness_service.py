@@ -223,4 +223,4 @@ def world_awareness_worker():
             logger.info(f"{LOG_PREFIX} Shutting down")
             break
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} Scan failed: {e}", exc_info=True)
+            logger.exception(f"{LOG_PREFIX} Scan failed: {e}")

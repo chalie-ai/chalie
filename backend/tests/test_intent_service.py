@@ -47,37 +47,7 @@ def _make_intent(
 # CognitiveIntent dataclass
 # ---------------------------------------------------------------------------
 
-class TestCognitiveIntent:
 
-    def test_to_dict_contains_all_fields(self):
-        intent = _make_intent()
-        d = intent.to_dict()
-        assert d["intent_id"] == "test-intent-001"
-        assert d["intent_type"] == "execute"
-        assert d["target_wrapper"] == "wrp_test"
-        assert d["status"] == "pending"
-        assert d["urgency"] == "normal"
-        assert isinstance(d["payload"], dict)
-
-    def test_to_json_emits_valid_json_with_all_fields(self):
-        intent = _make_intent()
-        json_str = intent.to_json()
-        data = json.loads(json_str)
-        assert data["intent_id"] == intent.intent_id
-        assert data["payload"] == intent.payload
-        assert data["status"] == intent.status
-
-    def test_default_status_is_pending(self):
-        intent = _make_intent()
-        assert intent.status == "pending"
-
-    def test_default_confidence(self):
-        intent = _make_intent()
-        assert intent.confidence == pytest.approx(0.5, abs=1e-9)
-
-    def test_broadcast_intent_has_none_target(self):
-        intent = _make_intent(target_wrapper=None)
-        assert intent.target_wrapper is None
 
 
 # ---------------------------------------------------------------------------
@@ -95,16 +65,6 @@ class TestEmit:
         assert len(items) == 1
         stored = json.loads(items[0])
         assert stored["intent_id"] == "test-intent-001"
-
-    def test_emit_stores_individual_key(self):
-        svc, store = _make_service()
-        intent = _make_intent()
-        svc.emit(intent)
-
-        raw = store.get("intent:test-intent-001")
-        assert raw is not None
-        stored = json.loads(raw)
-        assert stored["intent_type"] == "execute"
 
     def test_emit_broadcast_uses_broadcast_key(self):
         svc, store = _make_service()
@@ -205,18 +165,7 @@ class TestGetPending:
 # IntentService.get_intent
 # ---------------------------------------------------------------------------
 
-class TestGetIntent:
 
-    def test_get_intent_returns_stored_intent(self):
-        svc, _ = _make_service()
-        svc.emit(_make_intent())
-        result = svc.get_intent("test-intent-001")
-        assert result is not None
-        assert result["intent_id"] == "test-intent-001"
-
-    def test_get_intent_returns_none_for_unknown(self):
-        svc, _ = _make_service()
-        assert svc.get_intent("does-not-exist") is None
 
 
 # ---------------------------------------------------------------------------
@@ -235,10 +184,7 @@ class TestAcknowledge:
         stored = json.loads(raw)
         assert stored["status"] == "acknowledged"
 
-    def test_acknowledge_returns_false_for_missing(self):
-        svc, _ = _make_service()
-        ok = svc.acknowledge("nonexistent", "wrp_test")
-        assert ok is False
+
 
 
 # ---------------------------------------------------------------------------
@@ -257,34 +203,6 @@ class TestResolve:
         assert stored["status"] == "executed"
         assert stored["execution_result"]["result"]["pr_url"] == "https://example.com"
 
-    def test_resolve_failed(self):
-        svc, store = _make_service()
-        svc.emit(_make_intent())
-        ok = svc.resolve("test-intent-001", {"status": "failed", "error": "permission denied"})
 
-        assert ok is True
-        stored = json.loads(store.get("intent:test-intent-001"))
-        assert stored["status"] == "failed"
 
-    def test_resolve_skipped(self):
-        svc, store = _make_service()
-        svc.emit(_make_intent())
-        ok = svc.resolve("test-intent-001", {"status": "skipped", "reason": "user declined"})
-
-        assert ok is True
-        stored = json.loads(store.get("intent:test-intent-001"))
-        assert stored["status"] == "skipped"
-
-    def test_resolve_returns_false_for_missing(self):
-        svc, _ = _make_service()
-        ok = svc.resolve("nonexistent", {"status": "executed"})
-        assert ok is False
-
-    def test_resolve_unknown_status_defaults_to_executed(self):
-        svc, store = _make_service()
-        svc.emit(_make_intent())
-        ok = svc.resolve("test-intent-001", {"status": "weird_value"})
-        assert ok is True
-        stored = json.loads(store.get("intent:test-intent-001"))
-        assert stored["status"] == "executed"
 

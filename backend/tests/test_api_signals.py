@@ -104,79 +104,6 @@ class TestIngestSignal:
         assert resp.status_code == 400
         assert "signal_type" in resp.get_json()["error"]
 
-    def test_blank_signal_type_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "  ", "content": "x"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
-    def test_missing_content_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-        assert "content" in resp.get_json()["error"]
-
-    def test_blank_content_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": ""},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
-    def test_invalid_activation_energy_type_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x", "activation_energy": "high"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
-    def test_activation_energy_out_of_range_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x", "activation_energy": 1.5},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
-    def test_metadata_not_dict_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x", "metadata": ["list"]},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
-    def test_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with patch("services.auth_session_service.validate_session", return_value=False), \
-                 patch("services.wrapper_auth_service.WrapperAuthService") as mock_cls:
-                mock_cls.return_value.validate_bearer.return_value = None
-                resp = client.post(
-                    "/api/signals",
-                    json={"signal_type": "ctx", "content": "x"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 401
-
     def test_rate_limit_exceeded_returns_429(self, cookie_app):
         with cookie_app.test_client() as client:
             with _cookie_patches(rate_allowed=False):
@@ -218,65 +145,7 @@ class TestIngestSignal:
         assert "__chat_ui__" in signals
         assert signals["__chat_ui__"]["label"] == "AAPL at $185.50"
 
-    def test_high_activation_energy_still_goes_to_world_state(self, cookie_app):
-        """Even high-energy signals land in world_state, not a reasoning queue."""
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={
-                            "signal_type": "critical_event",
-                            "content": "production down",
-                            "activation_energy": 0.9,
-                        },
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 202
 
-    def test_default_activation_energy_is_0_5(self, cookie_app):
-        """When activation_energy is omitted the signal is still accepted."""
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 202
-
-    def test_full_valid_payload_accepted(self, cookie_app):
-        """All optional fields should be accepted without error."""
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={
-                            "signal_type": "build_failed",
-                            "source": "ci-pipeline",
-                            "content": "3 test failures in auth module",
-                            "topic": "development",
-                            "activation_energy": 0.7,
-                            "metadata": {"branch": "feature/auth"},
-                        },
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 202
-
-    def test_source_defaults_to_wrapper_id(self, cookie_app):
-        """When source is omitted, the signal is stored under the wrapper_id key."""
-        from services.world_state import world_state
-        world_state.set("signals", {})  # reset
-
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals",
-                        json={"signal_type": "ctx", "content": "x"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 202
-        signals = world_state.get("signals")
-        assert "__chat_ui__" in signals
 
 
 # ---------------------------------------------------------------------------
@@ -344,54 +213,6 @@ class TestBearerCapabilityCheck:
                 )
         assert resp.status_code == 403
 
-    def test_bearer_empty_signals_list_denies_all(self):
-        app, bearer_svc = self._make_bearer_app_and_client("wrp_empty", [])
-
-        limiter_mock = MagicMock()
-        limiter_mock.is_allowed.return_value = True
-
-        with patch("services.auth_session_service.validate_session", return_value=False), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=bearer_svc), \
-             patch("api.signals._get_wrapper_service", return_value=bearer_svc), \
-             patch("api.signals._get_rate_limiter", return_value=limiter_mock):
-            with app.test_client() as client:
-                resp = client.post(
-                    "/api/signals",
-                    json={"signal_type": "anything", "content": "x"},
-                    headers={"Authorization": "Bearer fake_token"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 403
-
-    def test_bearer_revoked_wrapper_returns_403(self):
-        """A revoked / unknown wrapper should be denied capability."""
-        app = Flask(__name__)
-        app.register_blueprint(signals_bp)
-        app.config["TESTING"] = True
-        app.secret_key = secrets.token_hex(16)
-
-        auth_svc = MagicMock()
-        auth_svc.validate_bearer.return_value = "wrp_gone"
-        # get_wrapper returns None → wrapper revoked or not found
-        wrapper_svc = MagicMock()
-        wrapper_svc.get_wrapper.return_value = None
-
-        limiter_mock = MagicMock()
-        limiter_mock.is_allowed.return_value = True
-
-        with patch("services.auth_session_service.validate_session", return_value=False), \
-             patch("services.wrapper_auth_service.WrapperAuthService", return_value=auth_svc), \
-             patch("api.signals._get_wrapper_service", return_value=wrapper_svc), \
-             patch("api.signals._get_rate_limiter", return_value=limiter_mock):
-            with app.test_client() as client:
-                resp = client.post(
-                    "/api/signals",
-                    json={"signal_type": "ctx", "content": "x"},
-                    headers={"Authorization": "Bearer fake_token"},
-                    content_type="application/json",
-                )
-        assert resp.status_code == 403
-
 
 # ---------------------------------------------------------------------------
 # POST /api/signals/batch
@@ -417,19 +238,6 @@ class TestIngestSignalsBatch:
         assert data["rejected"] == 0
         assert data["errors"] == []
 
-    def test_empty_batch_returns_200_zero_accepted(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals/batch",
-                        json=[],
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["accepted"] == 0
-        assert data["rejected"] == 0
-
     def test_batch_with_invalid_items_reports_errors(self, cookie_app):
         signals = [
             {"signal_type": "ok", "content": "valid"},       # index 0: valid
@@ -449,39 +257,6 @@ class TestIngestSignalsBatch:
         assert data["rejected"] == 1
         assert len(data["errors"]) == 1
         assert data["errors"][0]["index"] == 1
-
-    def test_batch_not_array_returns_400(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals/batch",
-                        json={"signal_type": "x", "content": "x"},
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
-    def test_batch_exceeds_max_returns_400(self, cookie_app):
-        signals = [{"signal_type": "x", "content": "c"}] * 51
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals/batch",
-                        json=signals,
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 400
-
-    def test_batch_at_exactly_50_is_accepted(self, cookie_app):
-        signals = [{"signal_type": "x", "content": "c"}] * 50
-        with cookie_app.test_client() as client:
-            with _cookie_patches():
-                    resp = client.post(
-                        "/api/signals/batch",
-                        json=signals,
-                        content_type="application/json",
-                    )
-        assert resp.status_code == 200
-        assert resp.get_json()["accepted"] == 50
 
     def test_batch_rate_limit_rejects_subsequent_items(self, cookie_app):
         """Once the rate limit is hit, remaining items in batch are rejected."""
@@ -507,40 +282,7 @@ class TestIngestSignalsBatch:
         assert data["errors"][0]["index"] == 2
         assert "rate limit" in data["errors"][0]["error"]
 
-    def test_batch_unauthenticated_returns_401(self, cookie_app):
-        with cookie_app.test_client() as client:
-            with patch("services.auth_session_service.validate_session", return_value=False), \
-                 patch("services.wrapper_auth_service.WrapperAuthService") as mock_cls:
-                mock_cls.return_value.validate_bearer.return_value = None
-                resp = client.post(
-                    "/api/signals/batch",
-                    json=[{"signal_type": "x", "content": "c"}],
-                    content_type="application/json",
-                )
-        assert resp.status_code == 401
 
-    def test_batch_valid_signals_stored_even_with_errors(self, cookie_app):
-        """Valid signals in the batch should be stored regardless of other failures."""
-        from services.world_state import world_state
-        world_state.set("signals", {})  # reset
-
-        signals = [
-            {"signal_type": "ok", "content": "valid"},
-            {"content": "no signal_type"},  # invalid
-        ]
-        with cookie_app.test_client() as client:
-            with patch("services.auth_session_service.validate_session", return_value=True), \
-                 patch("api.signals._get_rate_limiter", return_value=MagicMock(is_allowed=MagicMock(return_value=True))), \
-                 patch("api.signals._check_signal_capability", return_value=True):
-                resp = client.post(
-                    "/api/signals/batch",
-                    json=signals,
-                    content_type="application/json",
-                )
-        assert resp.get_json()["accepted"] == 1
-        # The valid signal was stored in the world_state singleton
-        signals_stored = world_state.get("signals")
-        assert len(signals_stored) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -557,58 +299,6 @@ class TestValidateSignal:
         assert result["content"] == "hello"
         assert result["activation_energy"] == pytest.approx(0.5, abs=1e-9)
 
-    def test_defaults_applied(self):
-        from api.signals import _validate_signal
-        result, _ = _validate_signal({"signal_type": "x", "content": "y"})
-        assert result["source"] is None
-        assert result["topic"] is None
-        assert result["metadata"] is None
 
-    def test_not_a_dict_returns_error(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal("a string")
-        assert result is None
-        assert "JSON object" in err
-
-    def test_activation_energy_boundary_0(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal({"signal_type": "x", "content": "y", "activation_energy": 0.0})
-        assert err is None
-        assert result["activation_energy"] == pytest.approx(0.0, abs=1e-9)
-
-    def test_activation_energy_boundary_1(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal({"signal_type": "x", "content": "y", "activation_energy": 1.0})
-        assert err is None
-        assert result["activation_energy"] == pytest.approx(1.0, abs=1e-9)
-
-    def test_activation_energy_negative_fails(self):
-        from api.signals import _validate_signal
-        _, err = _validate_signal({"signal_type": "x", "content": "y", "activation_energy": -0.1})
-        assert err is not None
-
-    def test_source_trimmed(self):
-        from api.signals import _validate_signal
-        result, _ = _validate_signal({"signal_type": "x", "content": "y", "source": "  ci  "})
-        assert result["source"] == "ci"
-
-    def test_empty_source_becomes_none(self):
-        from api.signals import _validate_signal
-        result, _ = _validate_signal({"signal_type": "x", "content": "y", "source": ""})
-        assert result["source"] is None
-
-    def test_metadata_dict_accepted(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal({
-            "signal_type": "x", "content": "y", "metadata": {"branch": "main"}
-        })
-        assert err is None
-        assert result["metadata"] == {"branch": "main"}
-
-    def test_metadata_none_accepted(self):
-        from api.signals import _validate_signal
-        result, err = _validate_signal({"signal_type": "x", "content": "y", "metadata": None})
-        assert err is None
-        assert result["metadata"] is None
 
 

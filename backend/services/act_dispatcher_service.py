@@ -10,28 +10,51 @@ critic evaluation.
 
 import contextvars
 import time
+import uuid
 from typing import Dict, Any
 from threading import Thread
 import logging
 
 from services.act_action_categories import DETERMINISTIC_ACTIONS as _DETERMINISTIC_ACTIONS, READ_ACTIONS as _READ_ACTIONS
 
+# Module-level permission gate registry.
+# Maps request_id → {'event': threading.Event, 'result': str}
+# The REST handler POST /api/policies/respond resolves the gate by calling
+# gate['event'].set() after writing gate['result'] = 'approved'|'denied'.
+_permission_gates: Dict[str, dict] = {}
+
 
 def _load_tool_telemetry() -> dict | None:
-    """Pull a flattened telemetry dict for the active client context.
+    """Pull a flattened telemetry dict for tool dispatch.
 
     Returns ``None`` when no client context is stored yet (fresh boot, no
-    heartbeat) so abilities can fall back gracefully. Any failure is logged
-    and treated as no-telemetry rather than raising — abilities must remain
-    callable even when the telemetry table is empty or malformed.
+    heartbeat) so abilities can fall back gracefully.
     """
     try:
-        from services.client_context_service import ClientContextService
-        from services.tool_output_utils import build_tool_telemetry
-        ctx = ClientContextService().get()
-        if not ctx:
-            return None
-        return build_tool_telemetry(ctx)
+        from services.locale_service import (
+            get_timezone_name, get_locale, get_language,
+            get_currency, get_location, format_date,
+        )
+        from services.time_utils import utc_now
+
+        location = get_location()
+        loc_name = location.get("name") or ""
+        city, country = "", ""
+        if "," in loc_name:
+            city, country = [p.strip() for p in loc_name.split(",", 1)]
+
+        return {
+            "lat": location.get("lat"),
+            "lon": location.get("lon"),
+            "location_name": loc_name,
+            "city": city,
+            "country": country,
+            "time": format_date(utc_now(), "%H:%M:%S", for_ui=True) or "",
+            "timezone": get_timezone_name(),
+            "locale": get_locale(),
+            "language": get_language(),
+            "currency": get_currency(),
+        }
     except Exception as e:
         logging.warning(f"[ACT DISPATCH] telemetry load failed: {e}")
         return None
@@ -92,8 +115,92 @@ def _extract_notes(action_type: str, action: Dict[str, Any], raw_result: Any) ->
     return '; '.join(notes_parts) if notes_parts else ''
 
 
+def _summarize_params(action: dict, max_keys: int = 4) -> dict:
+    """Extract a small preview of action params for the permission card."""
+    skip = {'type', 'action', '_rich_media_ordinal'}
+    preview = {}
+    for k, v in action.items():
+        if k in skip:
+            continue
+        if len(preview) >= max_keys:
+            break
+        if isinstance(v, str) and len(v) > 80:
+            v = v[:77] + '...'
+        preview[k] = v
+    return preview
+
+
+def _build_action_description(action_id: str, action: dict) -> str:
+    """Build a human-readable one-liner describing the action for the permission card."""
+    _VERBS = {
+        'email.read': 'Reading an email',
+        'email.search': 'Searching emails',
+        'email.draft': 'Drafting an email',
+        'email.send': 'Sending an email',
+        'email.reply': 'Replying to an email',
+        'email.forward': 'Forwarding an email',
+        'email.manage': 'Managing an email',
+        'calendar.update_event': 'Updating a calendar event',
+        'calendar.create_event': 'Creating a calendar event',
+        'schedule.create': 'Creating a scheduled task',
+        'schedule.cancel': 'Cancelling a scheduled task',
+        'browser.interact': 'Interacting with a webpage',
+        'browser.render': 'Reading a webpage',
+        'document.delete': 'Deleting a document',
+        'document.create': 'Creating a document',
+        'list.delete': 'Deleting a list',
+        'memory.forget': 'Forgetting a memory',
+        'code_eval': 'Running code',
+    }
+
+    # Pick the first available context param in priority order per action.
+    _CONTEXT_KEYS = {
+        'email.manage': ['operation'],
+        'email.draft': ['to', 'subject'],
+        'email.send': ['to', 'subject'],
+        'email.reply': ['uid'],
+        'email.forward': ['uid', 'to'],
+        'email.search': ['sender', 'subject', 'keyword'],
+        'schedule.create': ['description'],
+        'schedule.cancel': ['description'],
+        'browser.interact': ['url'],
+        'browser.render': ['url'],
+        'document.delete': ['name'],
+        'document.create': ['name'],
+        'list.delete': ['list_name'],
+        'calendar.update_event': ['summary'],
+        'calendar.create_event': ['summary'],
+    }
+
+    base = _VERBS.get(action_id)
+    if not base:
+        # Fallback: "Email read" → "Email Read"
+        base = action_id.replace('.', ' ').replace('_', ' ').title()
+
+    # Special case: email.manage uses operation as the verb
+    if action_id == 'email.manage':
+        op = action.get('operation', '')
+        if op:
+            base = op.replace('_', ' ').title() + ' an email'
+
+    # Append first meaningful context value
+    context_keys = _CONTEXT_KEYS.get(action_id, [])
+    for key in context_keys:
+        val = action.get(key)
+        if val and isinstance(val, str) and key != 'operation':
+            if len(val) > 60:
+                val = val[:57] + '...'
+            return f"{base} — {val}"
+    return base
+
+
 class ActDispatcherService:
     """Dispatches internal cognitive actions with timeout enforcement."""
+
+    _POLICY_DENY_MSG = "POLICY BLOCK: This action ({action_id}) is permanently blocked by the user's policy settings (state=deny). Do NOT retry — the user must change this in Brain → Policies before it can run."
+    _POLICY_UNAVAILABLE_MSG = "POLICY BLOCK: This action ({action_id}) requires explicit user approval but cannot be requested during background processing. It has been logged for the user to review."
+    _POLICY_USER_DENIED_MSG = "POLICY BLOCK: The user was shown a permission prompt for this action ({action_id}) and explicitly denied it. Do NOT retry this action in this conversation."
+    _POLICY_TIMEOUT_MSG = "POLICY BLOCK: This action ({action_id}) requires user approval. A permission prompt was shown but the user did not respond. Do NOT retry this action unless the user asks."
 
     def __init__(self, timeout: float = 10.0):
         """Initialize dispatcher with ability handlers.
@@ -181,6 +288,14 @@ class ActDispatcherService:
                 'notes': '',
             }
 
+        # ── Policy enforcement ──────────────────────────────────────────
+        try:
+            policy_result = self._enforce_policy(action_type, action, channel)
+            if policy_result is not None:
+                return policy_result
+        except Exception as _pol_err:
+            logging.warning(f"[ACT DISPATCH] Policy check failed, allowing: {_pol_err}")
+
         # Determine effective timeout: ability TIMEOUT ClassVar overrides the default.
         # Falls back to self.timeout when the action type is not a registered ability.
         effective_timeout = self.timeout
@@ -212,7 +327,9 @@ class ActDispatcherService:
         with a fresh context and current_processor() returns None.
         """
         try:
-            result_container = {'result': None, 'error': None}
+            from services.vault_service import VaultLockedError
+
+            result_container = {'result': None, 'error': None, 'exc': None}
             ctx = contextvars.copy_context()
 
             def target():
@@ -221,6 +338,7 @@ class ActDispatcherService:
                     result_container['result'] = handler(channel, action)
                 except Exception as e:
                     result_container['error'] = str(e)
+                    result_container['exc'] = e
 
             thread = Thread(target=ctx.run, args=(target,))
             thread.daemon = True
@@ -234,6 +352,16 @@ class ActDispatcherService:
                     'action_type': action_type,
                     'status': 'timeout',
                     'result': f"Action exceeded {effective_timeout}s timeout",
+                    'execution_time': execution_time,
+                    'confidence': 0.0,
+                    'notes': '',
+                }
+
+            if result_container['exc'] is not None and isinstance(result_container['exc'], VaultLockedError):
+                return {
+                    'action_type': action_type,
+                    'status': 'error',
+                    'result': "This function is currently unavailable. The vault is locked. Notify the user that you could not complete this action because they where logged out",
                     'execution_time': execution_time,
                     'confidence': 0.0,
                     'notes': '',
@@ -365,4 +493,103 @@ class ActDispatcherService:
         except Exception as e:
             logging.debug(f"[ACT DISPATCH] Wrapper intent routing failed: {e}")
             return None
+
+    def _enforce_policy(self, action_type, action, channel):
+        """Check policy and return a result dict if blocked, or None to proceed."""
+        from services.policy_service import PolicyService, get_defaults, USAGE_CLASS_TO_CONTEXT
+        from services.message_processor import current_processor
+
+        action_id = PolicyService.resolve_action_id(action_type, action)
+
+        # Unknown actions (not in default matrix) skip enforcement
+        if action_id not in get_defaults():
+            return None
+
+        # Resolve context from the current processor's USAGE_CLASS
+        proc = current_processor()
+        usage_class = getattr(proc, 'USAGE_CLASS', 'chat') if proc else 'chat'
+        context = USAGE_CLASS_TO_CONTEXT.get(usage_class, 'chat')
+
+        from services.database_service import get_shared_db_service
+        svc = PolicyService(get_shared_db_service())
+        state = svc.check(action_id, context)
+
+        if state == 'allow':
+            return None
+
+        if state == 'deny':
+            svc.log_blocked(action_id, context, 'policy_deny', _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': self._POLICY_DENY_MSG.format(action_id=action_id),
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_id}/{context}=deny',
+            }
+
+        # state == 'ask'
+        if context == 'subconscious':
+            svc.log_blocked(action_id, context, 'user_unavailable', _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': self._POLICY_UNAVAILABLE_MSG.format(action_id=action_id),
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_id}/{context}=ask(auto-reject)',
+            }
+
+        # Chat / subagent: request user permission via REST → Redis
+        verdict = self._request_permission(action_id, action, context)
+        if verdict != 'approved':
+            reason = 'user_denied' if verdict == 'denied' else 'timeout'
+            msg = (self._POLICY_USER_DENIED_MSG if verdict == 'denied'
+                   else self._POLICY_TIMEOUT_MSG).format(action_id=action_id)
+            svc.log_blocked(action_id, context, reason, _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': msg,
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_id}/{context}=ask({verdict})',
+            }
+
+        return None  # Approved — proceed with execution
+
+    def _request_permission(self, action_id, action, context):
+        """Broadcast a permission_request and wait indefinitely for user response.
+
+        Uses threading.Event.wait() — zero CPU, OS-parked thread.  The REST
+        endpoint POST /api/policies/respond calls gate.set() to wake this thread.
+
+        Returns one of:
+          'approved'  — user clicked Allow
+          'denied'    — user clicked Deny
+        """
+        import threading as _threading
+        try:
+            request_id = str(uuid.uuid4())
+
+            gate_entry = {'event': _threading.Event(), 'result': None}
+            _permission_gates[request_id] = gate_entry
+
+            from services.websocket_broker import WebSocketBroker
+            WebSocketBroker().broadcast({
+                'type': 'permission_request',
+                'request_id': request_id,
+                'action_id': action_id,
+                'context': context,
+                'description': _build_action_description(action_id, action),
+            })
+
+            gate_entry['event'].wait()  # parks here, zero CPU, until REST handler fires
+
+            result = gate_entry.get('result', 'denied')
+            _permission_gates.pop(request_id, None)
+            return result
+        except Exception as e:
+            logging.warning(f"[ACT DISPATCH] Permission request failed: {e}")
+            return 'approved'  # Fail open on unexpected errors
 

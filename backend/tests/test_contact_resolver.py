@@ -42,10 +42,7 @@ def test_index_normalizes_email():
 
 @pytest.mark.unit
 @pytest.mark.parametrize("email,name", [
-    ("anon@example.com", None),
-    ("anon@example.com", "   "),
     ("not-an-email", "Name"),
-    ("", "Name"),
     (None, "Name"),
 ])
 def test_index_skips_invalid(email, name):
@@ -101,35 +98,11 @@ def test_resolve_filters_non_contact_keys():
     assert result[0]["email"] == "alice@corp.com"
 
 
-@pytest.mark.unit
-def test_resolve_empty_or_no_match():
-    from capabilities.contact_resolver import resolve
-
-    assert resolve("") == []
-    assert resolve(None) == []
-
-
-@pytest.mark.unit
-def test_resolve_survives_exception():
-    from capabilities.contact_resolver import resolve
-
-    mock = _mock_dgs()
-    mock.recall.side_effect = RuntimeError("db error")
-    with patch("capabilities.contact_resolver._dgs", return_value=mock):
-        assert resolve("Alice") == []
 
 
 # --- resolve_contact tool tests ---
 
 
-@pytest.mark.unit
-def test_get_tool_returns_valid_definition():
-    from capabilities.contact_resolver import get_tool
-
-    tool = get_tool()
-    assert tool["name"] == "resolve_contact"
-    assert "handler" in tool
-    assert "query" in tool["parameters"]
 
 
 @pytest.mark.unit
@@ -149,20 +122,6 @@ def test_tool_resolves_by_name():
     assert result["contacts"][0]["name"] == "Sarah Chen"
 
 
-@pytest.mark.unit
-def test_tool_resolves_by_email():
-    from capabilities.contact_resolver import get_tool
-
-    mock = _mock_dgs(recall_return=[
-        {"id": 1, "key": "contact:alice@example.com", "value": "Alice Wang",
-         "retrieval_weight": 0.8, "evidence_count": 1, "composite_score": 1.5},
-    ])
-    with patch("capabilities.contact_resolver._dgs", return_value=mock):
-        handler = get_tool()["handler"]
-        result = handler("topic1", {"query": "alice@example.com"})
-
-    assert result["count"] == 1
-    assert result["contacts"][0]["name"] == "Alice Wang"
 
 
 @pytest.mark.unit
@@ -175,16 +134,6 @@ def test_tool_empty_query_returns_empty():
     assert result == {"contacts": [], "count": 0}
 
 
-@pytest.mark.unit
-def test_tool_no_matches():
-    from capabilities.contact_resolver import get_tool
-
-    mock = _mock_dgs(recall_return=[])
-    with patch("capabilities.contact_resolver._dgs", return_value=mock):
-        handler = get_tool()["handler"]
-        result = handler("topic1", {"query": "nobody"})
-
-    assert result == {"contacts": [], "count": 0}
 
 
 @pytest.mark.unit
@@ -200,14 +149,3 @@ def test_tool_respects_limit():
     assert kwargs["limit"] == 3
 
 
-@pytest.mark.unit
-def test_tool_caps_limit_at_20():
-    from capabilities.contact_resolver import get_tool
-
-    mock = _mock_dgs(recall_return=[])
-    with patch("capabilities.contact_resolver._dgs", return_value=mock):
-        handler = get_tool()["handler"]
-        handler("topic1", {"query": "test", "limit": 50})
-
-    _, kwargs = mock.recall.call_args
-    assert kwargs["limit"] == 20

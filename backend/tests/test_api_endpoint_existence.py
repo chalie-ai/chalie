@@ -1,8 +1,8 @@
 """
 API endpoint existence tests.
 
-Absorbs nightly scenarios 070, 074 — those scenarios validated
-endpoint availability against a live running server.  Route-registration tests
+Absorbs nightly scenario 070 — that scenario validated endpoint
+availability against a live running server.  Route-registration tests
 catch the same regressions on every commit without requiring a running instance.
 """
 
@@ -16,7 +16,6 @@ class TestAPIEndpointExistence:
 
     Absorbs nightly scenarios:
       070 — /system/status endpoint exists and returns 200 with a status field
-      074 — /system/observability/tasks endpoint exists and accepts GET
     """
 
     @pytest.fixture
@@ -70,28 +69,5 @@ class TestAPIEndpointExistence:
         assert data is not None, "/system/status did not return JSON"
         assert 'status' in data, (
             f"/system/status JSON missing 'status' key; got keys: {list(data.keys())}"
-        )
-
-    # ------------------------------------------------------------------
-    # scenario 074 — /system/observability/tasks
-    # ------------------------------------------------------------------
-
-    def test_observability_tasks_route_registered(self, registered_routes):
-        """Absorbs scenario 074: /system/observability/tasks must be a registered GET route."""
-        assert '/system/observability/tasks' in registered_routes, (
-            "/system/observability/tasks is not registered in Flask's URL map"
-        )
-        assert 'GET' in registered_routes['/system/observability/tasks'], (
-            "/system/observability/tasks does not accept GET requests"
-        )
-
-    def test_observability_tasks_endpoint_reachable(self, authed_client):
-        """Absorbs scenario 074 (reachability): endpoint must not 404."""
-        client, _db, _mock_store = authed_client
-
-        response = client.get('/system/observability/tasks')
-
-        assert response.status_code != 404, (
-            "/system/observability/tasks returned 404 — blueprint not registered"
         )
 

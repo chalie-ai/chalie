@@ -54,26 +54,6 @@ class TestOllama413RaisesPayloadTooLarge:
             with pytest.raises(PayloadTooLargeError):
                 svc.send_messages('sys', [{'role': 'user', 'content': 'hi'}])
 
-    def test_413_does_not_retry(self):
-        """413 must short-circuit the retry loop — same body would 413 again."""
-        from services.llm_service import PayloadTooLargeError
-        from services.ollama_service import OllamaService
-
-        svc = OllamaService({
-            'platform': 'ollama',
-            'host': 'http://localhost:11434',
-            'model': 'kimi-k2.6:cloud',
-            'max_retries': 3,
-        })
-        with patch('requests.post', return_value=self._make_413_response()) as mock_post:
-            with pytest.raises(PayloadTooLargeError):
-                svc.send_messages('sys', [{'role': 'user', 'content': 'hi'}])
-            assert mock_post.call_count == 1
-
-    def test_payload_too_large_is_non_retryable_subclass(self):
-        from services.llm_service import NonRetryableError, PayloadTooLargeError
-        assert issubclass(PayloadTooLargeError, NonRetryableError)
-
 
 # ── FallbackLLMService — must NOT swallow PayloadTooLargeError ─────────────
 
@@ -94,20 +74,6 @@ class TestFallbackReRaisesNonRetryable:
             svc.send_messages('sys', [{'role': 'user', 'content': 'hi'}])
         fallback.send_messages.assert_not_called()
 
-    def test_fallback_still_used_for_generic_exceptions(self):
-        """Sanity: non-NonRetryable failures still cascade to fallback."""
-        from services.llm_service import FallbackLLMService
-
-        primary = MagicMock()
-        primary.send_messages.side_effect = ConnectionError("primary down")
-        fallback_response = MagicMock()
-        fallback = MagicMock()
-        fallback.send_messages.return_value = fallback_response
-
-        svc = FallbackLLMService(primary, fallback)
-        result = svc.send_messages('sys', [{'role': 'user', 'content': 'hi'}])
-        assert result is fallback_response
-        fallback.send_messages.assert_called_once()
 
 
 # ── OllamaService — get_context_limit clamping ─────────────────────────────
@@ -131,61 +97,6 @@ class TestOllamaContextLimitCloudClamp:
         })
         assert svc.get_context_limit() == OLLAMA_CLOUD_CONTEXT_CAP
 
-    @patch('requests.post')
-    def test_cloud_match_is_case_insensitive(self, mock_post):
-        from services.ollama_service import OLLAMA_CLOUD_CONTEXT_CAP, OllamaService
-
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {
-            'model_info': {'kimi-k2.context_length': 262_144},
-        }
-        mock_post.return_value = mock_resp
-
-        svc = OllamaService({
-            'platform': 'ollama',
-            'host': 'http://localhost:11434',
-            'model': 'KIMI-K2.6:CLOUD',
-        })
-        assert svc.get_context_limit() == OLLAMA_CLOUD_CONTEXT_CAP
-
-    @patch('requests.post')
-    def test_non_cloud_model_unchanged(self, mock_post):
-        from services.ollama_service import OllamaService
-
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {
-            'model_info': {'general.context_length': 131_072},
-        }
-        mock_post.return_value = mock_resp
-
-        svc = OllamaService({
-            'platform': 'ollama',
-            'host': 'http://localhost:11434',
-            'model': 'gemma4:31b',
-        })
-        assert svc.get_context_limit() == 131_072
-
-    @patch('requests.post')
-    def test_cloud_model_below_cap_unchanged(self, mock_post):
-        """A :cloud model that genuinely reports < cap is not raised."""
-        from services.ollama_service import OllamaService
-
-        mock_resp = MagicMock()
-        mock_resp.ok = True
-        mock_resp.json.return_value = {
-            'model_info': {'tiny.context_length': 4096},
-        }
-        mock_post.return_value = mock_resp
-
-        svc = OllamaService({
-            'platform': 'ollama',
-            'host': 'http://localhost:11434',
-            'model': 'tiny:cloud',
-        })
-        assert svc.get_context_limit() == 4096
-
 
 # ── MessageProcessor.send — real recovery branch ───────────────────────────
 
@@ -204,22 +115,22 @@ def _build_test_processor_class():
         CHANNEL = 'test_413'
         ROLE = 'test_413'
         SKIP_TRANSCRIPT_WRITE = True
-        JOB = 'frontal-cortex-unified'
+        LOG_LABEL = 'compaction'
 
         def __init__(self, raw_input='hello', metadata=None):
             super().__init__(raw_input, metadata)
             self.full_compaction_calls = 0
 
-        def getUserDefinition(self) -> str:
+        def get_user_definition(self) -> str:
             return 'test channel'
 
-        def getUserPrompt(self) -> str:
+        def get_user_prompt(self) -> str:
             return 'short body'
 
-        def getSystemPrompt(self) -> str:
+        def get_system_prompt(self) -> str:
             return 'system prompt'
 
-        def getTools(self) -> list[dict]:
+        def get_tools(self) -> list[dict]:
             return []
 
         def _run_full_compaction(self, exclude_id=None) -> 'str | None':

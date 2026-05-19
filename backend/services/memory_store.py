@@ -11,13 +11,15 @@ Data structures:
 
 Thread safety: one RLock per keyspace.
 TTL management: lazy eviction on read + background reaper every 60s.
+
+Note: pub/sub (publish/subscribe/pubsub/_channels) has been removed.
+WebSocketBroker.broadcast() is the authoritative push path.
 """
 
 import logging
 import re
 import threading
 import time
-from collections import defaultdict
 from typing import Any, Dict, Optional, Tuple
 
 
@@ -28,7 +30,7 @@ class MemoryStore:
     """Thread-safe in-memory store with MemoryStore-compatible API."""
 
     def __init__(self):
-        """Initialise all keyspace dicts, per-keyspace locks, pub/sub state, and the background reaper thread."""
+        """Initialise all keyspace dicts, per-keyspace locks, and the background reaper thread."""
         # Keyspaces
         self._strings: Dict[str, Tuple[Any, Optional[float]]] = {}
         self._lists: Dict[str, Tuple[list, Optional[float]]] = {}
@@ -41,10 +43,6 @@ class MemoryStore:
         self._list_lock = threading.RLock()
         self._zset_lock = threading.RLock()
         self._set_lock = threading.RLock()
-
-        # Pub/Sub
-        self._pubsub_lock = threading.RLock()
-        self._channels: Dict[str, list] = defaultdict(list)  # channel → [queue.Queue, ...]
 
         # Background reaper
         self._reaper = threading.Thread(target=self._reap_loop, daemon=True, name="memory-store-reaper")
@@ -621,28 +619,6 @@ class MemoryStore:
         matched = self.keys(match)
         return (0, matched)
 
-    # ── PUB/SUB ────────────────────────────────────────────────
-
-    def publish(self, channel: str, message: str) -> int:
-        """Publish a message to all subscribers of a channel."""
-        import queue as queue_module
-        with self._pubsub_lock:
-            subscribers = self._channels.get(channel, [])
-            for q in subscribers:
-                try:
-                    q.put_nowait({
-                        "type": "message",
-                        "channel": channel,
-                        "data": message
-                    })
-                except queue_module.Full:
-                    pass  # Drop if subscriber is backed up
-            return len(subscribers)
-
-    def pubsub(self, **kwargs) -> 'PubSubProxy':
-        """Create a pub/sub subscriber."""
-        return PubSubProxy(self)
-
     # ── PIPELINE ───────────────────────────────────────────────
 
     def pipeline(self, _transaction: bool = True) -> 'PipelineProxy':
@@ -723,67 +699,6 @@ class MemoryStore:
             if key in self._sets:
                 return "set"
         return "none"
-
-
-class PubSubProxy:
-    """PubSub interface (Redis-compatible API) using queue.Queue per subscriber."""
-
-    def __init__(self, store: MemoryStore):
-        """Initialise the proxy with a private message queue and an empty channel subscription set.
-
-        Args:
-            store: The :class:`MemoryStore` instance that owns the channel registry.
-        """
-        import queue as queue_module
-        self._store = store
-        self._queue = queue_module.Queue(maxsize=1000)
-        self._subscribed_channels: set = set()
-
-    def subscribe(self, *channels):
-        """Subscribe to one or more ``channels`` so that published messages are delivered to this proxy.
-
-        Idempotent — subscribing to an already-subscribed channel is a no-op.
-
-        Args:
-            *channels: Channel names to subscribe to.
-        """
-        with self._store._pubsub_lock:
-            for ch in channels:
-                if ch not in self._subscribed_channels:
-                    self._store._channels[ch].append(self._queue)
-                    self._subscribed_channels.add(ch)
-
-    def unsubscribe(self, *channels):
-        """Unsubscribe from one or more ``channels``, stopping future message delivery.
-
-        Silently ignores channels that are not currently subscribed.
-
-        Args:
-            *channels: Channel names to unsubscribe from.
-        """
-        with self._store._pubsub_lock:
-            for ch in channels:
-                if ch in self._subscribed_channels:
-                    try:
-                        self._store._channels[ch].remove(self._queue)
-                    except ValueError:
-                        pass
-                    self._subscribed_channels.discard(ch)
-
-    def get_message(self, timeout: float = None) -> Optional[dict]:
-        """Get next message. Blocks up to timeout seconds."""
-        import queue as queue_module
-        try:
-            if timeout is not None:
-                return self._queue.get(timeout=timeout)
-            else:
-                return self._queue.get_nowait()
-        except queue_module.Empty:
-            return None
-
-    def close(self):
-        """Unsubscribe from all channels and release this proxy's queue from the store."""
-        self.unsubscribe(*list(self._subscribed_channels))
 
 
 class PipelineProxy:

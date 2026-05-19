@@ -196,7 +196,6 @@ def _init_dashboard_gateway(app):
     """
     from gateway import db as dashboard_db
     from gateway.gateway import gateway_bp, init_gateway
-    from gateway.interfaces import interfaces_bp as apps_bp, init_interfaces
     from gateway.chalie_client import ChalieClient
 
     from runtime_config import get as rc_get
@@ -232,12 +231,10 @@ def _init_dashboard_gateway(app):
         client.token = boot_token
 
     init_gateway(client, port, data_dir)
-    init_interfaces(client, port, data_dir)
 
     app.register_blueprint(gateway_bp)
-    app.register_blueprint(apps_bp)
 
-    logger.info("[Dashboard] Gateway + app management blueprints registered")
+    logger.info("[Dashboard] Gateway blueprint registered")
 
 
 def _register_blueprints(app: Flask) -> None:
@@ -262,64 +259,41 @@ def _register_blueprints(app: Flask) -> None:
             logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
 
 
-def create_app():
-    """Create and configure Flask application with all blueprints."""
-    app = Flask(__name__)
+def _serve_spa(directory: Path, filename: str) -> Response:
+    """Serve a static file, or fall back to a versioned index.html.
 
-    # Set secret key for cookie signing.
-    # Auto-generated on first run and persisted to data/.session_secret (mode 0600).
-    # Override with SESSION_SECRET_KEY env var only if you need cross-instance session sharing.
+    Incoming paths may carry the `-{VERSION}` suffix injected by the HTML
+    rewriter; strip it so the request resolves to the real on-disk file.
+    """
+    real = _strip_version_from_path(filename)
+    filepath = directory / real
+    if filepath.is_file():
+        if filepath.suffix.lower() in ('.html', '.htm'):
+            return _serve_versioned_html(directory, real)
+        return send_from_directory(str(directory), real)
+    return _serve_versioned_html(directory)
+
+
+def _configure_app(app: Flask) -> None:
+    """Apply Flask config, proxy middleware, and CORS to a new app instance."""
     app.secret_key = _get_or_generate_session_secret()
-
-    # Upload limit (50MB for document uploads)
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-
-    # Static assets: force browser to revalidate on every request via ETag/Last-Modified.
-    # Flask returns 304 when unchanged, so bandwidth cost is minimal, but a simple
-    # refresh always picks up redeployed assets. Paired with a no-cache Service Worker.
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
-    # Reverse proxy support: trust X-Forwarded-For, X-Forwarded-Proto, etc.
-    # This ensures request.remote_addr, request.host, and request.scheme
-    # reflect the client's values when behind nginx/caddy/cloudflare.
     from werkzeug.middleware.proxy_fix import ProxyFix
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-    # CORS — allow all origins (single-user personal assistant)
     CORS(app)
 
-    _register_blueprints(app)
 
-    # ── Dashboard gateway (interface daemons) ─────────────────────
-    _init_dashboard_gateway(app)
-
-    # WebSocket endpoint (replaces SSE for chat + drift)
-    from flask_sock import Sock
-    sock = Sock(app)
-    from .websocket import register_websocket
-    register_websocket(sock)
-
-    # ── Static file serving (replaces nginx) ─────────────────────────
+def _register_static_routes(app: Flask) -> None:
+    """Register all static-file and SPA routes on the Flask app."""
 
     @app.route('/shared/<path:filename>', methods=["GET"])
     def shared_static(filename):
         """Serve shared frontend assets (theme.css, etc.)."""
         real = _strip_version_from_path(filename)
         return send_from_directory(str(_SHARED_DIR), real)
-
-    def _serve_spa(directory: Path, filename: str):
-        """Serve a static file, or fall back to a versioned index.html.
-
-        Incoming paths may carry the `-{VERSION}` suffix injected by the HTML
-        rewriter; strip it so the request resolves to the real on-disk file.
-        """
-        real = _strip_version_from_path(filename)
-        filepath = directory / real
-        if filepath.is_file():
-            if filepath.suffix.lower() in ('.html', '.htm'):
-                return _serve_versioned_html(directory, real)
-            return send_from_directory(str(directory), real)
-        return _serve_versioned_html(directory)
 
     @app.route('/brain/<path:filename>', methods=["GET"])
     def brain_static(filename):
@@ -380,6 +354,26 @@ def create_app():
     def interface_index():
         """Serve main interface index."""
         return _serve_versioned_html(_INTERFACE_DIR)
+
+
+def create_app():
+    """Create and configure Flask application with all blueprints."""
+    app = Flask(__name__)
+
+    _configure_app(app)
+    _register_blueprints(app)
+
+    # ── Dashboard gateway (interface daemons) ─────────────────────
+    _init_dashboard_gateway(app)
+
+    # WebSocket endpoint (replaces SSE for chat + drift)
+    from flask_sock import Sock
+    sock = Sock(app)
+    from .websocket import register_websocket
+    register_websocket(sock)
+
+    # ── Static file serving (replaces nginx) ─────────────────────────
+    _register_static_routes(app)
 
     logger.info("[REST API] All blueprints + WebSocket + static serving registered")
     return app

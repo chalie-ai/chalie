@@ -290,6 +290,7 @@ class AbstractCapability(ABC):
         try:
             import json
             from services.memory_client import MemoryClientService
+            from services.websocket_broker import WebSocketBroker
             store = MemoryClientService.create_connection()
             payload = {
                 "type": "capability_alert",
@@ -298,7 +299,7 @@ class AbstractCapability(ABC):
                 "error": err,
                 "recovered": False,
             }
-            store.publish("output:events", json.dumps(payload))
+            WebSocketBroker().broadcast(payload)
             store.setex(
                 f"capability:alert:{cap_id}",
                 1800,
@@ -312,8 +313,8 @@ class AbstractCapability(ABC):
         cap_id = self.get_id()
         cap_name = self.get_manifest().get("name", cap_id)
         try:
-            import json
             from services.memory_client import MemoryClientService
+            from services.websocket_broker import WebSocketBroker
             store = MemoryClientService.create_connection()
             payload = {
                 "type": "capability_alert",
@@ -321,7 +322,7 @@ class AbstractCapability(ABC):
                 "cap_name": cap_name,
                 "recovered": True,
             }
-            store.publish("output:events", json.dumps(payload))
+            WebSocketBroker().broadcast(payload)
             store.delete(f"capability:alert:{cap_id}")
         except Exception as exc:
             logger.debug("recovery alert push: %s", exc)
@@ -343,14 +344,17 @@ class AbstractCapability(ABC):
 
     @abstractmethod
     def get_tools(self) -> list:
-        """Return tool definitions for dynamic registration.
+        """Return tool definitions exposed by this capability.
 
         Each entry in the returned list must be a dict with at minimum the
-        keys ``name`` (str), ``handler`` (callable), and ``metadata`` (dict).
+        keys ``name`` (str), ``handler`` (callable), and ``parameters`` (dict).
+        Handlers are closures that check connection state and dispatch to the
+        appropriate protocol handler. Ability subclasses (email, calendar,
+        contacts) call ``get_tools()`` to obtain and invoke these handlers.
 
         Returns:
-            list[dict]: Tool definitions suitable for passing to
-            :func:`~services.tool_library_service.register_tool`.
+            list[dict]: Tool definition dicts with ``name``, ``handler``,
+            ``parameters``, ``description``, and ``timeout`` keys.
         """
 
     # ------------------------------------------------------------------
@@ -424,13 +428,8 @@ class AbstractCapability(ABC):
             from services.vault_service import get_vault_service, VaultLockedError
             raw = base64.b64decode(encrypted.encode())
             return get_vault_service().decrypt_str(raw)
-        except VaultLockedError as exc:
-            logger.warning(
-                "[%s] load_credential(%r) failed — vault is "
-                "locked (returning None): %s",
-                self.get_id(), key, exc,
-            )
-            return None
+        except VaultLockedError:
+            raise
         except Exception as exc:
             logger.warning(
                 "[%s] load_credential(%r) failed (returning None): %s",

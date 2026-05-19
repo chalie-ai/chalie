@@ -6,7 +6,7 @@ rows are written for audit but filtered out by the canonical lookup so they
 never poison the prompt.
 
 Callers:
-  - MessageProcessor.getPreviousMessages  (watermark + prepend)
+  - MessageProcessor.get_previous_messages  (watermark + prepend)
   - MessageProcessor._wrap_with_checkpoint (checkpoint envelope)
   - MessageProcessor._run_full_compaction  (orchestrator reads prior state)
 """

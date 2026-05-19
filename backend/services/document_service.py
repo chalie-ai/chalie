@@ -15,7 +15,7 @@ import logging
 import os
 import secrets
 import shutil
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from typing import Optional, List, Dict, Any
 
 import paths
@@ -338,6 +338,18 @@ class DocumentService:
             logger.error("[DOCS] update_status failed for %s: %s", safe(doc_id), e)
             raise
 
+    def update_clean_text(self, doc_id: str, clean_text: str) -> None:
+        try:
+            def _update(did=doc_id, txt=clean_text, db=self.db):
+                with db.connection() as conn:
+                    conn.execute(
+                        "UPDATE documents SET clean_text = ?, updated_at = datetime('now') WHERE id = ?",
+                        (txt, did),
+                    )
+            self._write_queue.submit_sync(_update)
+        except Exception as e:
+            logger.error(f"[DOCS] update_clean_text failed: {e}")
+
     def update_summary(self, doc_id: str, summary: str) -> None:
         try:
             def _update(did=doc_id, s=summary, db=self.db):
@@ -546,7 +558,8 @@ class DocumentService:
             ``True`` if the document was found and deleted, ``False`` otherwise.
         """
         try:
-            purge_after = datetime.now(timezone.utc) + timedelta(days=PURGE_WINDOW_DAYS)
+            from services.time_utils import utc_now
+            purge_after = utc_now() + timedelta(days=PURGE_WINDOW_DAYS)
 
             def _soft_delete(did=doc_id, pa=purge_after, db=self.db):
                 """Set deleted_at and schedule purge; return rowcount."""

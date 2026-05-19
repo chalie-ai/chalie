@@ -150,26 +150,6 @@ def mock_store(store):
     yield store
 
 
-@pytest.fixture
-def mock_config():
-    """Test config — no file I/O."""
-    agent_configs = {
-        'frontal-cortex': {
-            'model': 'test-model',
-            'cost_base': 1.0,
-            'cost_growth_factor': 1.5,
-        },
-    }
-    connections = {
-        'memory': {},
-        'rest_api': {'host': '0.0.0.0', 'port': 8081},
-        'voice': {'enabled': False},
-    }
-
-    with patch('services.config_service.ConfigService.get_agent_config', side_effect=lambda name: agent_configs.get(name, {})), \
-         patch('services.config_service.ConfigService.connections', return_value=connections):
-        yield agent_configs
-
 
 @pytest.fixture
 def mock_ollama():

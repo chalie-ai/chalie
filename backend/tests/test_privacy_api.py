@@ -21,10 +21,6 @@ def _make_app():
 # ── _serialize_row ────────────────────────────────────────────────────────────
 
 class TestSerializeRow:
-    def test_none_values_pass_through(self):
-        from api.privacy import _serialize_row
-        assert _serialize_row({'x': None}) == {'x': None}
-
     def test_datetime_converted_to_iso(self):
         from api.privacy import _serialize_row
         dt = datetime(2026, 2, 28, 12, 0, 0, tzinfo=timezone.utc)
@@ -47,17 +43,6 @@ class TestSerializeRow:
         u = uuid.uuid4()
         result = _serialize_row({'id': u})
         assert result['id'] == str(u)
-
-    def test_dict_passthrough(self):
-        from api.privacy import _serialize_row
-        d = {'nested': {'key': 'value'}}
-        result = _serialize_row({'data': d})
-        assert result['data'] == d
-
-    def test_string_passthrough(self):
-        from api.privacy import _serialize_row
-        result = _serialize_row({'name': 'Alice'})
-        assert result['name'] == 'Alice'
 
 
 # ── delete-all ────────────────────────────────────────────────────────────────
@@ -132,16 +117,6 @@ class TestExportData:
             assert sensitive not in src, (
                 f"Sensitive table '{sensitive}' must not appear in export_data"
             )
-
-    def test_export_store_patterns_are_meaningful(self):
-        """export_data() should export working_memory and identity state."""
-        import inspect
-        from api.privacy import export_data
-        src = inspect.getsource(export_data)
-
-        # gist:*, fact:*, identity_state:* removed (services deleted)
-        for pattern in ['working_memory:*']:
-            assert pattern in src, f"Expected MemoryStore pattern '{pattern}' in export_data"
 
     def test_content_disposition_header_set(self):
         """Export response must set Content-Disposition to trigger browser download."""

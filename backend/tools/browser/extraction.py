@@ -133,14 +133,10 @@ def extract_html(page, selector: str | None = None, max_chars: int = 8000) -> st
     return html
 
 
-def extract_links(page, base_url: str, max_links: int = 15) -> list[dict]:
-    """Extract navigable page links from rendered DOM.
-
-    Returns list of {"text": str, "url": str} dicts.
-    Filters noise (social media, login/privacy pages, fragments).
-    """
+def _query_dom_links(page) -> list:
+    """Query all anchor hrefs and text from the live DOM via Playwright."""
     try:
-        raw_links = page.evaluate("""() => {
+        return page.evaluate("""() => {
             const links = [];
             const seen = new Set();
             for (const a of document.querySelectorAll('a[href]')) {
@@ -156,34 +152,44 @@ def extract_links(page, base_url: str, max_links: int = 15) -> list[dict]:
     except Exception:
         return []
 
+
+def _is_valid_link(url: str, text: str, base_url: str, seen: set) -> bool:
+    """Return True if the link should be included in the result set."""
+    if not url or not text or url in seen:
+        return False
+    if not url.startswith(("http://", "https://")):
+        return False
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if any(domain == d or domain.endswith('.' + d) for d in _SKIP_DOMAINS):
+            return False
+        if _SKIP_PATH_RE.search(parsed.path):
+            return False
+        base_parsed = urlparse(base_url)
+        if parsed.netloc == base_parsed.netloc and parsed.path == base_parsed.path:
+            return False
+    except Exception:
+        return False
+    return True
+
+
+def extract_links(page, base_url: str, max_links: int = 15) -> list[dict]:
+    """Extract navigable page links from rendered DOM.
+
+    Returns list of {"text": str, "url": str} dicts.
+    Filters noise (social media, login/privacy pages, fragments).
+    """
+    raw_links = _query_dom_links(page)
+
     result = []
-    seen = set()
+    seen: set = set()
     for link in raw_links:
         url = link.get("url", "")
         text = link.get("text", "").strip()
-        if not url or not text or url in seen:
+        if not _is_valid_link(url, text, base_url, seen):
             continue
-
-        # Filter schemes
-        if not url.startswith(("http://", "https://")):
-            continue
-
-        # Filter social media domains
-        try:
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            domain = parsed.netloc.lower()
-            if any(domain == d or domain.endswith('.' + d) for d in _SKIP_DOMAINS):
-                continue
-            if _SKIP_PATH_RE.search(parsed.path):
-                continue
-            # Skip same-page links
-            base_parsed = urlparse(base_url)
-            if parsed.netloc == base_parsed.netloc and parsed.path == base_parsed.path:
-                continue
-        except Exception:
-            continue
-
         seen.add(url)
         result.append({"text": text, "url": url})
         if len(result) >= max_links:

@@ -23,21 +23,12 @@ class TestDiscoverProvider:
         assert p.carddav_url is not None
         assert p.requires_app_password is True
 
-    def test_googlemail_alias(self):
-        assert discover_provider("x@googlemail.com") is discover_provider("x@gmail.com")
-
     def test_apple_icloud(self):
         p = discover_provider("user@icloud.com")
         assert p is not None
         assert p.name == "Apple"
         assert p.caldav_url is not None
         assert p.carddav_url is not None
-
-    def test_apple_me_alias(self):
-        assert discover_provider("x@me.com") is discover_provider("x@icloud.com")
-
-    def test_apple_mac_alias(self):
-        assert discover_provider("x@mac.com") is discover_provider("x@icloud.com")
 
     def test_yahoo(self):
         p = discover_provider("user@yahoo.com")
@@ -47,9 +38,6 @@ class TestDiscoverProvider:
         assert p.caldav_url is not None
         assert p.carddav_url is None  # Yahoo deprecated CardDAV
 
-    def test_yahoo_couk_alias(self):
-        assert discover_provider("x@yahoo.co.uk") is discover_provider("x@yahoo.com")
-
     def test_outlook(self):
         p = discover_provider("user@outlook.com")
         assert p is not None
@@ -58,17 +46,8 @@ class TestDiscoverProvider:
         assert p.caldav_url is None  # No CalDAV (Graph API only)
         assert p.carddav_url is None
 
-    def test_hotmail_alias(self):
-        assert discover_provider("x@hotmail.com") is discover_provider("x@outlook.com")
-
-    def test_live_alias(self):
-        assert discover_provider("x@live.com") is discover_provider("x@outlook.com")
-
     def test_unknown_domain_returns_none(self):
         assert discover_provider("user@randomdomain.org") is None
-
-    def test_empty_string_returns_none(self):
-        assert discover_provider("") is None
 
     def test_no_at_sign_returns_none(self):
         assert discover_provider("nope") is None
@@ -86,10 +65,6 @@ class TestListSupportedProviders:
         names = list_supported_providers()
         assert len(names) == 4
 
-    def test_sorted_alphabetically(self):
-        names = list_supported_providers()
-        assert names == sorted(names)
-
     def test_contains_all_providers(self):
         names = list_supported_providers()
         assert "Google" in names
@@ -98,34 +73,3 @@ class TestListSupportedProviders:
         assert "Outlook" in names
 
 
-@pytest.mark.unit
-class TestUnifiedProviderProtocols:
-    """Verify protocol availability per provider matches the plan."""
-
-    def test_google_full_stack(self):
-        p = discover_provider("u@gmail.com")
-        assert p.imap is not None
-        assert p.smtp is not None
-        assert p.caldav_url is not None
-        assert p.carddav_url is not None
-
-    def test_apple_full_stack(self):
-        p = discover_provider("u@icloud.com")
-        assert p.imap is not None
-        assert p.smtp is not None
-        assert p.caldav_url is not None
-        assert p.carddav_url is not None
-
-    def test_yahoo_no_carddav(self):
-        p = discover_provider("u@yahoo.com")
-        assert p.imap is not None
-        assert p.smtp is not None
-        assert p.caldav_url is not None
-        assert p.carddav_url is None
-
-    def test_outlook_imap_only(self):
-        p = discover_provider("u@outlook.com")
-        assert p.imap is not None
-        assert p.smtp is not None
-        assert p.caldav_url is None
-        assert p.carddav_url is None

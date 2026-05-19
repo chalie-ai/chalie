@@ -27,6 +27,7 @@ _BUDGET_CAP = 20
 
 class SavePattern(Ability):
     NAME = "save_pattern"
+    SYSTEM = True
     SUMMARY = (
         "Record a repeating behavioural pattern observed in the user's "
         "transcripts. Use snake_case names; reuse existing names exactly "

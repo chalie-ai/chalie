@@ -24,18 +24,11 @@ def _reconnect_capabilities() -> None:
     """
     try:
         from capabilities import load_capabilities
-        from services.tool_library_service import register_tool
 
         capabilities = load_capabilities()
         reconnected = 0
         for cap in capabilities.values():
             if cap.connect():
-                for tool in cap.get_tools():
-                    register_tool(
-                        tool['name'],
-                        tool['handler'],
-                        {k: v for k, v in tool.items() if k != 'handler'},
-                    )
                 reconnected += 1
         logger.info(
             "[Auth] Post-unlock capability reconnect: %d/%d capabilities active",

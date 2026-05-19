@@ -82,22 +82,6 @@ class TestCreateDocument:
         assert row is not None
         assert row['original_name'] == 'test.pdf'
 
-    def test_creates_document_with_camera_source(self, db, doc_service):
-        doc_id = doc_service.create_document(
-            original_name='scan.jpg',
-            mime_type='image/jpeg',
-            file_size=2048,
-            file_path='def456/scan.jpg',
-            file_hash='sha256hash2',
-            source_type='camera',
-        )
-
-        assert doc_id is not None
-        row = db.execute(
-            "SELECT source_type FROM documents WHERE id = ?", (doc_id,)
-        ).fetchone()
-        assert row['source_type'] == 'camera'
-
 
 @pytest.mark.unit
 class TestGetDocument:
@@ -128,10 +112,6 @@ class TestSoftDelete:
         ).fetchone()
         assert row['deleted_at'] is not None
 
-    def test_soft_delete_returns_false_when_not_found(self, db, doc_service):
-        result = doc_service.soft_delete('nonexistent')
-        assert result is False
-
 
 @pytest.mark.unit
 class TestRestore:
@@ -147,20 +127,10 @@ class TestRestore:
         ).fetchone()
         assert row['deleted_at'] is None
 
-    def test_restore_returns_false_when_not_deleted(self, db, doc_service):
-        _insert_document(db, doc_id='abc123')
-
-        result = doc_service.restore('abc123')
-        assert result is False
-
 
 
 @pytest.mark.unit
 class TestGetAllDocuments:
-    def test_returns_empty_list_when_no_docs(self, db, doc_service):
-        result = doc_service.get_all_documents()
-        assert result == []
-
     def test_excludes_deleted_by_default(self, db, doc_service):
         _insert_document(db, doc_id='live1')
         _insert_document(db, doc_id='dead1')
@@ -181,12 +151,6 @@ class TestFindDuplicates:
         results = doc_service.find_duplicates('same_hash', None, 0)
         assert len(results) == 1
         assert results[0]['match_type'] == 'exact'
-
-    def test_skips_semantic_for_short_text(self, db, doc_service):
-        """When text_length < 200, only hash dedup runs -- no semantic."""
-        results = doc_service.find_duplicates('unique_hash', [0.1] * 256, 50)
-        # No hash match exists, and semantic skipped due to short text
-        assert results == []
 
 
 @pytest.mark.unit

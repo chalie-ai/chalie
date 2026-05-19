@@ -2,8 +2,7 @@
 ListAbility — Manage deterministic lists via the ACT loop.
 
 Strict CRUD interface. Existing lists are addressed by ``id``; ``name`` is
-used only for ``create`` and ``rename``. The LLM discovers ids by calling
-``list_all`` first.
+used only for ``create`` and ``rename``. ``list_all`` returns ids to reuse.
 
 Actions: list_all, create, view, add, check, remove, clear, rename, delete
 
@@ -23,8 +22,7 @@ from services.innate_skills._tag import tag as _skill_tag
 logger = logging.getLogger(__name__)
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a checklist card; without it, the user sees only "
     "plain text. Write a brief acknowledgement. Example: "
     "\"<span id='{tag}'>Added milk and eggs to your grocery list.</span>\""
@@ -33,7 +31,7 @@ _RICH_MEDIA_INSTRUCTION = (
 
 class ListAbility(Ability):
     NAME = "list"
-    SUMMARY = "Create and manage named lists — shopping, to-do, chores — addressed by id (call list_all first)."
+    SUMMARY = "Create and manage named lists — shopping, to-do, chores — addressed by id."
     EXAMPLES = [
         "create a grocery list and add milk, eggs, and bread",
         "show me all my lists",
@@ -68,7 +66,7 @@ class ListAbility(Ability):
                 "type": "string",
                 "description": (
                     "List id (8-char hex). Required for view/add/check/remove/clear/rename/delete. "
-                    "Call list_all first to discover existing list ids."
+                    "Reuse the id returned by create or list_all."
                 ),
             },
             "name": {
@@ -102,7 +100,7 @@ class ListAbility(Ability):
             service = ListService(db)
             body = _dispatch(service, action, params)
         except Exception as e:
-            logger.error(f"[LIST SKILL] Error: {e}", exc_info=True)
+            logger.exception(f"[LIST SKILL] Error: {e}")
             body = _fail(str(e))
 
         if ordinal is not None and action in ("create", "add", "check", "view"):
@@ -202,7 +200,7 @@ def _normalize_string_items(params: dict) -> list:
 def _require_id(params: dict) -> tuple[Optional[str], Optional[str]]:
     list_id = (params.get("id") or "").strip()
     if not list_id:
-        return None, _fail("'id' is required. Call list_all to discover list ids.")
+        return None, _fail("'id' is required. Use the id returned by create or list_all.")
     return list_id, None
 
 

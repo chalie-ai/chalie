@@ -40,7 +40,10 @@ CREATE INDEX IF NOT EXISTS idx_episodes_retrieval_weight ON episodes(retrieval_w
 CREATE INDEX IF NOT EXISTS idx_episodes_consolidated_into ON episodes(consolidated_into) WHERE consolidated_into IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_episodes_apex ON episodes(retrieval_weight DESC, created_at DESC) WHERE deleted_at IS NULL AND consolidated_into IS NULL;
 
--- FTS5 for full-text search on episodes (replaces GIN tsvector indexes)
+-- FTS5 for full-text search on episodes (replaces GIN tsvector indexes).
+-- content='episodes' and content_rowid='rowid' are intentionally repeated across
+-- all fts5 tables — each table binds to its own source table by name. Not a
+-- copy-paste error; SQLite FTS5 requires these per-table parameters.
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
     gist, content='episodes', content_rowid='rowid'
 );
@@ -218,7 +221,7 @@ CREATE TABLE IF NOT EXISTS scheduled_items (
     recurrence TEXT,
     window_start TEXT,
     window_end TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL DEFAULT 'pending',   -- 'pending' is the initial lifecycle state; intentionally repeated in documents.status
     channel TEXT,
     created_by_session TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -337,7 +340,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_path TEXT NOT NULL,
     file_hash TEXT,
     page_count INTEGER,
-    status TEXT DEFAULT 'pending',
+    status TEXT DEFAULT 'pending',            -- 'pending' initial state mirrors scheduled_items.status; same literal, different table
     error_message TEXT,
     chunk_count INTEGER DEFAULT 0,
     source_type TEXT DEFAULT 'upload',
@@ -366,7 +369,8 @@ CREATE INDEX IF NOT EXISTS idx_documents_purge ON documents(purge_after) WHERE p
 -- idx_documents_watched_folder created by migration 001_watched_folders.sql
 CREATE INDEX IF NOT EXISTS idx_documents_folder_pending ON documents(watched_folder_id, status) WHERE deleted_at IS NULL AND watched_folder_id IS NOT NULL;
 
--- FTS5 for document search
+-- FTS5 for document search. content='documents' and content_rowid='rowid'
+-- follow the same per-table pattern as episodes_fts and data_graph_fts.
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
     original_name, summary, clean_text, content='documents', content_rowid='rowid'
 );
@@ -443,12 +447,18 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
     model TEXT NOT NULL,
     tokens_input INTEGER NOT NULL DEFAULT 0,
     tokens_output INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_read INTEGER NOT NULL DEFAULT 0,
+    tokens_cache_create INTEGER NOT NULL DEFAULT 0,
+    tokens_thinking INTEGER NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,
+    usage_class TEXT NOT NULL DEFAULT 'chat',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_created
     ON llm_call_log (job_name, created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_usage_class
+    ON llm_call_log (usage_class, created_at);
 
 -- ────────────────────────────────────────────────────────────────
 -- MEMORY RECALL LOG — telemetry for dynamic memory radius tuning
@@ -580,6 +590,9 @@ CREATE INDEX IF NOT EXISTS idx_data_graph_retrieval    ON data_graph(retrieval_w
 CREATE INDEX IF NOT EXISTS idx_data_graph_active       ON data_graph(kind, active) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_data_graph_confirmed    ON data_graph(last_confirmed_at);
 
+-- FTS5 for data_graph search. tokenize='porter unicode61' enables stemming for
+-- better recall on natural-language queries. content_rowid='rowid' is
+-- intentionally the same literal as in episodes_fts and documents_fts.
 CREATE VIRTUAL TABLE IF NOT EXISTS data_graph_fts USING fts5(
     key, value, kind, search_queries,
     content='data_graph', content_rowid='rowid',
@@ -639,6 +652,29 @@ CREATE TRIGGER IF NOT EXISTS expanded_semantic_vec_sync
     AFTER DELETE ON expanded_semantic BEGIN
     DELETE FROM expanded_semantic_vec WHERE rowid = OLD.id;
 END;
+
+-- ============================================================================
+-- POLICY — per-action permission control (allow / ask / deny).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS policy_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id TEXT NOT NULL,
+    context TEXT NOT NULL,
+    state TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(action_id, context)
+);
+
+CREATE TABLE IF NOT EXISTS policy_blocked_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    action_id TEXT NOT NULL,
+    context TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    params_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_policy_blocked_log_created ON policy_blocked_log(created_at DESC);
 
 -- ============================================================================
 -- TELEMETRY — flat key/value store for the latest client heartbeat.

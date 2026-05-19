@@ -13,12 +13,12 @@ Three subclasses, all sharing ``_CompactionProcessorBase``:
       summary, no ``<summary>`` tags.
 
 Both share ``_CompactionProcessorBase``:
-  - JOB = 'frontal-cortex-unified' (same as parent message type)
+  - LOG_LABEL = 'compaction' (labels LLM calls for observability)
   - ALWAYS_AVAILABLE / DISCOVERABLE = [] (compaction never calls tools)
   - SKIP_TRANSCRIPT_WRITE = True   (no transcript pollution)
   - _check_threshold returns False (compaction never compacts itself — recursion guard)
-  - getUserDefinition returns ''   (no human user)
-  - getUserPrompt returns self._raw_input (caller pre-formats the input)
+  - get_user_definition returns '' (no human user)
+  - get_user_prompt returns self._raw_input (caller pre-formats the input)
 
 Callers:
   MessageProcessor._run_full_compaction → ContinuityCompactionProcessor
@@ -33,21 +33,22 @@ from services.system_message_prompt import (
 
 
 class _CompactionProcessorBase(MessageProcessor):
-    JOB = 'frontal-cortex-unified'
+    LOG_LABEL = 'compaction'
+    USAGE_CLASS = 'subconscious'
     ALWAYS_AVAILABLE: list[str] = []
     DISCOVERABLE: list[str] = []
     SKIP_TRANSCRIPT_WRITE = True
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return ''
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         return self._raw_input
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         # Compaction has no human user — skip the empty user-definition prefix
         # that the base would otherwise stitch on with a leading '\n\n'.
-        return self.SYSTEM_PROMPT_CLASS().getPrompt()
+        return self.SYSTEM_PROMPT_CLASS().get_prompt()
 
     def _check_threshold(self, _system_prompt: str, _tools: list, _user_body: str) -> bool:
         # Compaction never compacts itself. Hard-disable the gate so a large

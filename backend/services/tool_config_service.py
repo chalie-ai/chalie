@@ -79,7 +79,7 @@ class ToolConfigService:
                 cursor.close()
             return True
         except Exception as e:
-            logger.error(f"[TOOL CONFIG] _set_enabled_flag('{tool_name}', {enabled}): {e}", exc_info=True)
+            logger.exception(f"[TOOL CONFIG] _set_enabled_flag('{tool_name}', {enabled}): {e}")
             return False
 
     def _set_source_metadata(self, tool_name: str, source_type: str, source_url: str, installed_tag: str) -> bool:
@@ -105,7 +105,7 @@ class ToolConfigService:
                 cursor.close()
             return True
         except Exception as e:
-            logger.error(f"[TOOL CONFIG] _set_source_metadata('{tool_name}'): {e}", exc_info=True)
+            logger.exception(f"[TOOL CONFIG] _set_source_metadata('{tool_name}'): {e}")
             return False
 
     def set_tool_config(self, tool_name: str, config: dict) -> bool:
@@ -142,7 +142,7 @@ class ToolConfigService:
                 cursor.close()
             return True
         except Exception as e:
-            logger.error(f"[TOOL CONFIG] set_tool_config('{tool_name}'): {e}", exc_info=True)
+            logger.exception(f"[TOOL CONFIG] set_tool_config('{tool_name}'): {e}")
             return False
 
     def delete_tool_config_key(self, tool_name: str, key: str) -> bool:

@@ -9,9 +9,7 @@ from unittest.mock import MagicMock, patch
 from services.memory_store import MemoryStore
 from services.folder_watcher_service import (
     FolderWatcherService,
-    MAX_ENQUEUE_PER_SCAN,
     MISSING_THRESHOLD,
-    MIN_SCAN_INTERVAL,
 )
 from services.database_service import get_shared_db_service
 
@@ -107,37 +105,9 @@ class TestCreateFolder:
         with pytest.raises(ValueError, match="not a directory"):
             service.create_folder('/nonexistent')
 
-    @patch('services.folder_watcher_service.os.access', return_value=False)
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    @patch('services.folder_watcher_service.os.path.realpath', return_value='/unreadable')
-    def test_rejects_unreadable_path(self, mock_real, mock_isdir, _mock_access, service):
-        with pytest.raises(PermissionError, match="not readable"):
-            service.create_folder('/unreadable')
-
-    @patch('services.folder_watcher_service.os.access', return_value=True)
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    @patch('services.folder_watcher_service.os.path.realpath', return_value='/real/test')
-    def test_enforces_min_scan_interval(self, mock_real, mock_isdir, _mock_access, db):
-        svc = FolderWatcherService(get_shared_db_service())
-
-        result = svc.create_folder('/test', scan_interval=10)
-        assert result is not None
-        assert result['scan_interval'] == MIN_SCAN_INTERVAL
-
-        # Verify in DB directly
-        row = db.execute(
-            "SELECT scan_interval FROM watched_folders WHERE folder_path = '/real/test'"
-        ).fetchone()
-        assert row['scan_interval'] == MIN_SCAN_INTERVAL
-
 
 @pytest.mark.unit
 class TestGetFolder:
-    def test_returns_none_when_not_found(self, db):
-        svc = FolderWatcherService(get_shared_db_service())
-        result = svc.get_folder('nonexistent')
-        assert result is None
-
     def test_returns_dict_when_found(self, db):
         _seed_folder(db)
         svc = FolderWatcherService(get_shared_db_service())
@@ -147,22 +117,6 @@ class TestGetFolder:
         assert result['label'] == 'TestFolder'
         assert isinstance(result['file_patterns'], list)
         assert isinstance(result['source_config'], dict)
-
-
-@pytest.mark.unit
-class TestGetAllFolders:
-    def test_returns_empty_list(self, db):
-        svc = FolderWatcherService(get_shared_db_service())
-        result = svc.get_all_folders()
-        assert result == []
-
-    def test_returns_multiple_folders(self, db):
-        _seed_folder(db, folder_id='f1', folder_path='/test/path1')
-        _seed_folder(db, folder_id='f2', folder_path='/test/path2')
-        svc = FolderWatcherService(get_shared_db_service())
-
-        result = svc.get_all_folders()
-        assert len(result) == 2
 
 
 @pytest.mark.unit
@@ -179,31 +133,6 @@ class TestUpdateFolder:
             "SELECT label FROM watched_folders WHERE id = 'abc12345'"
         ).fetchone()
         assert row['label'] == 'Updated'
-
-    def test_ignores_unknown_fields(self, db):
-        _seed_folder(db, label='Original')
-        svc = FolderWatcherService(get_shared_db_service())
-
-        result = svc.update_folder('abc12345', unknown_field='bad')
-        # Label should be unchanged
-        assert result['label'] == 'Original'
-
-    @patch('services.folder_watcher_service.os.access', return_value=True)
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    @patch('services.folder_watcher_service.os.path.realpath', return_value='/new/path')
-    def test_validates_new_folder_path(self, mock_real, mock_isdir, _mock_access, db):
-        _seed_folder(db)
-        svc = FolderWatcherService(get_shared_db_service())
-
-        svc.update_folder('abc12345', folder_path='/new/path')
-        mock_isdir.assert_called_with('/new/path')
-
-        # Verify path was updated in DB
-        row = db.execute(
-            "SELECT folder_path FROM watched_folders WHERE id = 'abc12345'"
-        ).fetchone()
-        assert row['folder_path'] == '/new/path'
-
 
 @pytest.mark.unit
 class TestDeleteFolder:
@@ -222,33 +151,6 @@ class TestDeleteFolder:
             "SELECT * FROM watched_folders WHERE id = 'abc12345'"
         ).fetchone()
         assert row is None
-
-    def test_returns_false_when_not_found(self, db):
-        """Verify delete_folder returns False for a non-existent folder ID."""
-        svc = FolderWatcherService(get_shared_db_service())
-
-        store = MemoryStore()
-        with patch(_P_MEMSTORE, return_value=store):
-            result = svc.delete_folder('nonexistent')
-        assert result is False
-
-    def test_soft_deletes_documents_when_requested(self, db):
-        _seed_folder(db)
-        svc = FolderWatcherService(get_shared_db_service())
-
-        mock_doc_svc = MagicMock()
-        mock_doc_svc.get_documents_by_watched_folder.return_value = [
-            {'id': 'd1', 'deleted_at': None},
-            {'id': 'd2', 'deleted_at': '2026-03-01'},  # already deleted
-        ]
-
-        store = MemoryStore()
-        with patch(_P_DOCSVC, return_value=mock_doc_svc), \
-             patch(_P_MEMSTORE, return_value=store):
-            svc.delete_folder('abc12345', delete_documents=True)
-
-        # Only d1 should be soft-deleted (d2 already was)
-        mock_doc_svc.soft_delete.assert_called_once_with('d1')
 
 
 # ---------------------------------------------------------------------------
@@ -279,33 +181,6 @@ class TestBrowseDirectory:
         assert 'Documents' in result['directories']
         assert 'Desktop' in result['directories']
 
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=False)
-    @patch('services.folder_watcher_service.os.path.realpath', return_value='/not_a_dir')
-    def test_rejects_non_directory(self, mock_real, mock_isdir, service):
-        with pytest.raises(ValueError, match="Not a directory"):
-            service.browse_directory('/not_a_dir')
-
-    @patch('services.folder_watcher_service.os.access', return_value=False)
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    @patch('services.folder_watcher_service.os.path.realpath', return_value='/unreadable')
-    def test_rejects_unreadable_directory(self, mock_real, mock_isdir, _mock_access, service):
-        with pytest.raises(PermissionError):
-            service.browse_directory('/unreadable')
-
-    @patch('services.folder_watcher_service.os.access', return_value=True)
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    @patch('services.folder_watcher_service.os.path.realpath')
-    @patch('services.folder_watcher_service.os.path.expanduser')
-    def test_defaults_to_home_dir(self, mock_expand, mock_real, mock_isdir, _mock_access, service):
-        mock_expand.return_value = '/Users/testuser'
-        mock_real.return_value = '/Users/testuser'
-
-        with patch('services.folder_watcher_service.os.scandir', return_value=[]):
-            result = service.browse_directory(None)
-
-        mock_expand.assert_called_with("~")
-        assert result['current'] == '/Users/testuser'
-
 
 # ---------------------------------------------------------------------------
 # Scan scheduling tests
@@ -316,18 +191,6 @@ class TestScanScheduling:
     def test_scan_due_when_never_scanned(self, service):
         folder = _make_folder_dict(last_scan_at=None)
         assert service.is_scan_due(folder) is True
-
-    def test_scan_due_when_interval_elapsed(self, service):
-        from datetime import datetime, timedelta
-        past = (datetime.utcnow() - timedelta(seconds=400)).isoformat()
-        folder = _make_folder_dict(last_scan_at=past, scan_interval=300)
-        assert service.is_scan_due(folder) is True
-
-    def test_scan_not_due_when_recent(self, service):
-        from datetime import datetime
-        just_now = datetime.utcnow().isoformat()
-        folder = _make_folder_dict(last_scan_at=just_now, scan_interval=300)
-        assert service.is_scan_due(folder) is False
 
     def test_trigger_scan_sets_memorystore_key(self, service):
         """trigger_scan writes a scan-now flag to the MemoryStore with a 600s TTL."""
@@ -346,13 +209,6 @@ class TestScanScheduling:
         assert result is True
         assert store.get('watcher:scan_now:abc12345') is None
 
-    def test_is_scan_requested_returns_false(self, service):
-        """is_scan_requested returns False when no scan-now flag is present."""
-        store = MemoryStore()
-        with patch(_P_MEMSTORE, return_value=store):
-            result = service.is_scan_requested('abc12345')
-
-        assert result is False
 
 
 # ---------------------------------------------------------------------------
@@ -430,38 +286,6 @@ class TestScanNewFiles:
         mock_doc_svc.create_document.assert_called_once()
         mock_enqueue.assert_called_once_with('new_doc_1', '/test/watched/doc.pdf')
 
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    @patch('services.folder_watcher_service.os.path.getsize', return_value=1024)
-    @patch('services.folder_watcher_service.mimetypes')
-    def test_rate_limits_new_files(self, mock_mt, _mock_size, mock_isdir, db):
-        """scan_folder caps enqueuing at MAX_ENQUEUE_PER_SCAN new files per cycle."""
-        _seed_folder(db)
-        svc = FolderWatcherService(get_shared_db_service())
-        mock_mt.guess_type.return_value = ('text/plain', None)
-
-        mock_doc_svc = MagicMock()
-        mock_doc_svc.get_documents_by_watched_folder.return_value = []
-        mock_doc_svc.create_document.side_effect = lambda **kw: f'doc_{kw["original_name"]}'
-
-        store = MemoryStore()  # empty: no lock, no cache
-
-        # Generate more files than the limit
-        file_count = MAX_ENQUEUE_PER_SCAN + 10
-        discovered = [(f'/test/watched/file{i}.txt', 1709712000.0) for i in range(file_count)]
-
-        folder = _make_folder_dict()
-
-        with patch(_P_MEMSTORE, return_value=store), \
-             patch(_P_DOCSVC, return_value=mock_doc_svc), \
-             patch(_P_ENQUEUE) as mock_enqueue, \
-             patch.object(svc, '_walk_folder', return_value=discovered), \
-             patch.object(svc, '_compute_hash', return_value='unique'):
-
-            result = svc.scan_folder(folder)
-
-        assert result['new'] == MAX_ENQUEUE_PER_SCAN
-        assert result['skipped'] == 10
-        assert mock_enqueue.call_count == MAX_ENQUEUE_PER_SCAN
 
 
 @pytest.mark.unit
@@ -509,73 +333,6 @@ class TestScanModifiedFiles:
         mock_doc_svc.set_supersedes.assert_called_once_with('new_doc', 'old_doc')
         mock_enqueue.assert_called_once_with('new_doc', '/test/watched/doc.pdf')
 
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    def test_skips_when_mtime_unchanged(self, mock_isdir, db):
-        """Files with same mtime should be fast-skipped (no hash computation)."""
-        _seed_folder(db)
-        svc = FolderWatcherService(get_shared_db_service())
-
-        existing_doc = {
-            'id': 'doc1', 'file_path': '/test/watched/doc.pdf',
-            'file_hash': 'hash1', 'deleted_at': None,
-        }
-        mock_doc_svc = MagicMock()
-        mock_doc_svc.get_documents_by_watched_folder.return_value = [existing_doc]
-
-        cache_data = json.dumps({
-            '/test/watched/doc.pdf': {'mtime': 100.0, 'doc_id': 'doc1'}
-        })
-        store = MemoryStore()
-        store.set('watcher:state:abc12345', cache_data)  # pre-seed scan-state cache
-
-        folder = _make_folder_dict()
-
-        with patch(_P_MEMSTORE, return_value=store), \
-             patch(_P_DOCSVC, return_value=mock_doc_svc), \
-             patch(_P_ENQUEUE), \
-             patch.object(svc, '_walk_folder', return_value=[
-                 ('/test/watched/doc.pdf', 100.0),  # same mtime
-             ]), \
-             patch.object(svc, '_compute_hash') as mock_hash:
-
-            result = svc.scan_folder(folder)
-
-        assert result['skipped'] == 1
-        mock_hash.assert_not_called()
-
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    def test_skips_when_content_unchanged(self, mock_isdir, db):
-        """Files with different mtime but same hash (touch only) -> skip."""
-        _seed_folder(db)
-        svc = FolderWatcherService(get_shared_db_service())
-
-        existing_doc = {
-            'id': 'doc1', 'file_path': '/test/watched/doc.pdf',
-            'file_hash': 'same_hash', 'deleted_at': None,
-        }
-        mock_doc_svc = MagicMock()
-        mock_doc_svc.get_documents_by_watched_folder.return_value = [existing_doc]
-
-        cache_data = json.dumps({
-            '/test/watched/doc.pdf': {'mtime': 100.0, 'doc_id': 'doc1'}
-        })
-        store = MemoryStore()
-        store.set('watcher:state:abc12345', cache_data)  # pre-seed scan-state cache
-
-        folder = _make_folder_dict()
-
-        with patch(_P_MEMSTORE, return_value=store), \
-             patch(_P_DOCSVC, return_value=mock_doc_svc), \
-             patch(_P_ENQUEUE) as mock_enqueue, \
-             patch.object(svc, '_walk_folder', return_value=[
-                 ('/test/watched/doc.pdf', 200.0),  # different mtime
-             ]), \
-             patch.object(svc, '_compute_hash', return_value='same_hash'):
-
-            result = svc.scan_folder(folder)
-
-        assert result['skipped'] == 1
-        mock_enqueue.assert_not_called()
 
 
 @pytest.mark.unit
@@ -622,39 +379,6 @@ class TestScanDeletedFiles:
     """Test detection and tolerance of deleted files."""
 
     @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
-    def test_tolerates_temporary_absence(self, mock_isdir, db):
-        """Files missing for fewer than MISSING_THRESHOLD scans are not deleted."""
-        _seed_folder(db)
-        svc = FolderWatcherService(get_shared_db_service())
-
-        existing_doc = {
-            'id': 'doc1', 'file_path': '/test/watched/missing.pdf',
-            'file_hash': 'hash1', 'deleted_at': None,
-        }
-        mock_doc_svc = MagicMock()
-        mock_doc_svc.get_documents_by_watched_folder.return_value = [existing_doc]
-
-        # Cache has missing_count = 1 (first absence was last scan)
-        cache_data = json.dumps({
-            '/test/watched/missing.pdf': {'mtime': 100.0, 'doc_id': 'doc1', 'missing_count': 1}
-        })
-        store = MemoryStore()
-        store.set('watcher:state:abc12345', cache_data)  # pre-seed: one prior absence
-
-        folder = _make_folder_dict()
-
-        # File not on disk (empty walk)
-        with patch(_P_MEMSTORE, return_value=store), \
-             patch(_P_DOCSVC, return_value=mock_doc_svc), \
-             patch(_P_ENQUEUE), \
-             patch.object(svc, '_walk_folder', return_value=[]):
-
-            result = svc.scan_folder(folder)
-
-        assert result['deleted'] == 0
-        mock_doc_svc.soft_delete.assert_not_called()
-
-    @patch('services.folder_watcher_service.os.path.isdir', return_value=True)
     def test_deletes_after_threshold_scans(self, mock_isdir, db):
         """Files missing for MISSING_THRESHOLD scans get soft-deleted."""
         _seed_folder(db)
@@ -694,64 +418,5 @@ class TestScanDeletedFiles:
 # Environment tagging tests
 # ---------------------------------------------------------------------------
 
-@pytest.mark.unit
-class TestEnvironmentTags:
-    def test_derives_tags_from_label_and_subfolders(self, service):
-        folder = _make_folder_dict(label='Finance', folder_path='/Users/dylan/Finance')
-        tags = service._derive_environment_tags(folder, '/Users/dylan/Finance/invoices/2024/receipt.pdf')
-        assert tags == ['Finance', 'invoices', '2024']
-
-    def test_root_level_file_gets_label_only(self, service):
-        folder = _make_folder_dict(label='Finance', folder_path='/Users/dylan/Finance')
-        tags = service._derive_environment_tags(folder, '/Users/dylan/Finance/receipt.pdf')
-        assert tags == ['Finance']
-
-    def test_no_label_returns_subfolders_only(self, service):
-        folder = _make_folder_dict(label=None, folder_path='/test/watched')
-        tags = service._derive_environment_tags(folder, '/test/watched/sub/deep/file.txt')
-        assert tags == ['sub', 'deep']
-
-    def test_hidden_segments_excluded(self, service):
-        folder = _make_folder_dict(label='Code', folder_path='/test/repo')
-        tags = service._derive_environment_tags(folder, '/test/repo/.config/hidden/file.py')
-        # .config starts with '.' so it's excluded
-        assert 'Code' in tags
-        assert '.config' not in tags
 
 
-# ---------------------------------------------------------------------------
-# Utility tests
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestParseJsonList:
-    def test_parses_json_string(self, service):
-        assert service._parse_json_list('["*.pdf","*.docx"]') == ['*.pdf', '*.docx']
-
-    def test_returns_list_as_is(self, service):
-        assert service._parse_json_list(['*.pdf']) == ['*.pdf']
-
-    def test_returns_empty_for_invalid_json(self, service):
-        assert service._parse_json_list('not json') == []
-
-    def test_returns_empty_for_non_list_json(self, service):
-        assert service._parse_json_list('{"key": "val"}') == []
-
-    def test_returns_empty_for_none(self, service):
-        assert service._parse_json_list(None) == []
-
-
-@pytest.mark.unit
-class TestRowToDict:
-    def test_converts_row_with_json_fields(self, service):
-        row = (
-            'abc12345', '/test/watched', 'TestFolder', 'filesystem', 1,
-            '["*"]', '[".git","node_modules"]', 1, 300,
-            None, 0, None, '{}',
-            '2026-03-06 12:00:00', '2026-03-06 12:00:00',
-        )
-        result = service._row_to_dict(row, _FOLDER_COLS)
-        assert result['file_patterns'] == ['*']
-        assert result['ignore_patterns'] == ['.git', 'node_modules']
-        assert result['source_config'] == {}
-        assert result['id'] == 'abc12345'

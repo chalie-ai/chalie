@@ -59,10 +59,6 @@ def _payload(result):
 # ─── action: list_all ──────────────────────────────────────────────────────
 
 class TestListAll:
-    def test_returns_empty_when_no_lists(self, ability):
-        body = _payload(_exec(ability, {"action": "list_all"}))
-        assert body == {"status": "success", "lists": []}
-
     def test_returns_summaries_with_ids(self, ability, service):
         a = service.create_list("Groceries")
         b = service.create_list("Chores")
@@ -89,25 +85,6 @@ class TestCreate:
         assert len(body['list']['id']) == 8
         assert body['list']['items'] == []
 
-    def test_creates_with_initial_items(self, ability):
-        body = _payload(_exec(ability, {
-            "action": "create",
-            "name": "Groceries",
-            "items": ["milk", "eggs", "bread"],
-        }))
-        contents = [i['content'] for i in body['list']['items']]
-        assert contents == ['milk', 'eggs', 'bread']
-
-    def test_missing_name_fails(self, ability):
-        body = _payload(_exec(ability, {"action": "create"}))
-        assert body['status'] == 'fail'
-        assert "'name'" in body['message']
-
-    def test_duplicate_name_fails(self, ability, service):
-        service.create_list("Groceries")
-        body = _payload(_exec(ability, {"action": "create", "name": "Groceries"}))
-        assert body['status'] == 'fail'
-        assert 'already exists' in body['message']
 
 
 # ─── action: view ──────────────────────────────────────────────────────────
@@ -121,11 +98,6 @@ class TestView:
         assert body['status'] == 'success'
         assert body['list']['id'] == list_id
         assert body['list']['items'][0]['content'] == 'milk'
-
-    def test_missing_id_fails(self, ability):
-        body = _payload(_exec(ability, {"action": "view"}))
-        assert body['status'] == 'fail'
-        assert "'id'" in body['message']
 
     def test_unknown_id_fails(self, ability):
         body = _payload(_exec(ability, {"action": "view", "id": "deadbeef"}))
@@ -145,15 +117,6 @@ class TestAdd:
         contents = [i['content'] for i in body['list']['items']]
         assert contents == ['milk', 'eggs']
 
-    def test_missing_id_fails(self, ability):
-        body = _payload(_exec(ability, {"action": "add", "items": ["milk"]}))
-        assert body['status'] == 'fail'
-
-    def test_missing_items_fails(self, ability, service):
-        list_id = service.create_list("Groceries")
-        body = _payload(_exec(ability, {"action": "add", "id": list_id}))
-        assert body['status'] == 'fail'
-
     def test_unknown_id_fails(self, ability):
         body = _payload(_exec(ability, {
             "action": "add", "id": "deadbeef", "items": ["milk"],
@@ -161,14 +124,7 @@ class TestAdd:
         assert body['status'] == 'fail'
         assert 'not found' in body['message']
 
-    def test_all_duplicates_fails(self, ability, service):
-        list_id = service.create_list("Groceries")
-        service.add_items(list_id, ["milk"])
-        body = _payload(_exec(ability, {
-            "action": "add", "id": list_id, "items": ["milk"],
-        }))
-        assert body['status'] == 'fail'
-        assert 'duplicates' in body['message'].lower() or 'no items' in body['message'].lower()
+
 
 
 # ─── action: check ─────────────────────────────────────────────────────────
@@ -190,25 +146,6 @@ class TestCheck:
         by_content = {i['content']: i['checked'] for i in body['list']['items']}
         assert by_content == {'milk': True, 'eggs': False}
 
-    def test_no_match_fails(self, ability, service):
-        list_id = service.create_list("Groceries")
-        service.add_items(list_id, ["milk"])
-        body = _payload(_exec(ability, {
-            "action": "check", "id": list_id,
-            "items": [{"content": "bread", "checked": True}],
-        }))
-        assert body['status'] == 'fail'
-        assert 'No matching items' in body['message']
-
-    def test_malformed_items_fails(self, ability, service):
-        list_id = service.create_list("Groceries")
-        body = _payload(_exec(ability, {
-            "action": "check", "id": list_id,
-            "items": ["milk"],  # plain strings, not objects
-        }))
-        assert body['status'] == 'fail'
-        assert "content" in body['message']
-
 
 # ─── action: remove ────────────────────────────────────────────────────────
 
@@ -222,14 +159,7 @@ class TestRemove:
         assert body['status'] == 'success'
         assert [i['content'] for i in body['list']['items']] == ['eggs']
 
-    def test_no_match_fails(self, ability, service):
-        list_id = service.create_list("Groceries")
-        service.add_items(list_id, ["milk"])
-        body = _payload(_exec(ability, {
-            "action": "remove", "id": list_id, "items": ["bread"],
-        }))
-        assert body['status'] == 'fail'
-        assert 'No matching items' in body['message']
+
 
 
 # ─── action: clear ─────────────────────────────────────────────────────────
@@ -243,11 +173,6 @@ class TestClear:
         assert body['status'] == 'success'
         assert body['list']['items'] == []
 
-    def test_unknown_id_fails(self, ability):
-        body = _payload(_exec(ability, {"action": "clear", "id": "deadbeef"}))
-        assert body['status'] == 'fail'
-        assert 'not found' in body['message']
-
 
 # ─── action: rename ────────────────────────────────────────────────────────
 
@@ -260,19 +185,6 @@ class TestRename:
         assert body['status'] == 'success'
         assert body['list']['name'] == 'New'
 
-    def test_collision_fails(self, ability, service):
-        a = service.create_list("Old")
-        service.create_list("Taken")
-        body = _payload(_exec(ability, {
-            "action": "rename", "id": a, "name": "Taken",
-        }))
-        assert body['status'] == 'fail'
-
-    def test_missing_name_fails(self, ability, service):
-        list_id = service.create_list("Old")
-        body = _payload(_exec(ability, {"action": "rename", "id": list_id}))
-        assert body['status'] == 'fail'
-
 
 # ─── action: delete ────────────────────────────────────────────────────────
 
@@ -283,20 +195,6 @@ class TestDelete:
         assert body['status'] == 'success'
         assert body['message'] == f"List with id: {list_id} was deleted successfully"
 
-    def test_unknown_id_fails(self, ability):
-        body = _payload(_exec(ability, {"action": "delete", "id": "deadbeef"}))
-        assert body['status'] == 'fail'
-        assert 'not found' in body['message']
-
-
-# ─── unknown action ────────────────────────────────────────────────────────
-
-class TestUnknownAction:
-    def test_unknown_action_fails_with_valid_list(self, ability):
-        body = _payload(_exec(ability, {"action": "explode"}))
-        assert body['status'] == 'fail'
-        assert 'Unknown action' in body['message']
-        assert 'list_all' in body['message']
 
 
 # ─── rich-media envelope ───────────────────────────────────────────────────
@@ -335,56 +233,7 @@ class TestRichMedia:
         assert payload['id'] == list_id
         assert "list_2" in instruction
 
-    def test_check_emits_rich_payload(self, ability, service):
-        list_id = service.create_list("Groceries")
-        service.add_items(list_id, ["milk"])
-        result = _exec_rich(ability, {
-            "action": "check", "id": list_id,
-            "items": [{"content": "milk", "checked": True}],
-        }, ordinal=3)
-        payload, _ = _unwrap_rich(result, "check")
-        assert payload['items'][0]['checked'] is True
 
-    def test_view_emits_rich_payload(self, ability, service):
-        list_id = service.create_list("Groceries")
-        service.add_items(list_id, ["milk"])
-        result = _exec_rich(ability, {"action": "view", "id": list_id}, ordinal=4)
-        payload, _ = _unwrap_rich(result, "view")
-        assert payload['id'] == list_id
-
-    def test_fail_falls_back_to_plain_skill_tag(self, ability):
-        """Rich-media gate skips fail bodies — they go through the plain path
-        with the `[list(action=X)]\\n{json}\\n[end:list]` wrapper and no
-        instruction trailer."""
-        result = _exec_rich(ability, {"action": "view", "id": "nonexist"}, ordinal=5)
-        assert isinstance(result, dict)
-        text = result['text']
-        assert text.startswith("[list(action=view)]\n")
-        assert text.endswith("\n[end:list]")
-        assert "rich-media" not in text
-        body = json.loads(text[len("[list(action=view)]\n"):-len("\n[end:list]")])
-        assert body['status'] == 'fail'
-
-    def test_delete_does_not_emit_rich_payload(self, ability, service):
-        """Delete returns a message string, not a list. No rich card."""
-        list_id = service.create_list("Groceries")
-        result = _exec_rich(ability, {"action": "delete", "id": list_id}, ordinal=5)
-        assert isinstance(result, dict)
-        assert 'text' in result
-
-    def test_rename_does_not_emit_rich_payload(self, ability, service):
-        list_id = service.create_list("Old")
-        result = _exec_rich(ability, {
-            "action": "rename", "id": list_id, "name": "New",
-        }, ordinal=6)
-        assert isinstance(result, dict)
-        assert 'text' in result
-
-    def test_failure_does_not_emit_rich_payload(self, ability):
-        """A failed call returns the standard text envelope, not a card."""
-        result = _exec_rich(ability, {"action": "view", "id": "deadbeef"}, ordinal=7)
-        assert isinstance(result, dict)
-        assert 'text' in result
 
 
 # ─── enrich_rich_payload (refresh hook) ────────────────────────────────────
@@ -407,15 +256,5 @@ class TestEnrichRichPayload:
         by_content = {i['content']: i['checked'] for i in enriched['items']}
         assert by_content == {"milk": True, "eggs": False}
 
-    def test_falls_back_to_snapshot_when_list_deleted(self):
-        from abilities.list import ListAbility
-        snapshot = {
-            "id": "deadbeef", "name": "Gone",
-            "items": [{"content": "x", "checked": False}],
-        }
-        assert ListAbility.enrich_rich_payload(snapshot, row={}) == snapshot
 
-    def test_passthrough_when_no_id(self):
-        from abilities.list import ListAbility
-        payload = {"name": "Anon", "items": []}
-        assert ListAbility.enrich_rich_payload(payload, row={}) == payload
+

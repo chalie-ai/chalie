@@ -128,7 +128,6 @@ class IntentService:
         target = intent.target_wrapper or _BROADCAST_KEY
         list_key = f"intents:{target}"
         id_key = f"intent:{intent.intent_id}"
-        channel = f"intents:{target}"
 
         serialized = intent.to_json()
 
@@ -139,11 +138,17 @@ class IntentService:
         # Store individually for O(1) lookup (24-hour TTL)
         self._store.setex(id_key, _INTENT_TTL_SECONDS, serialized)
 
-        # Notify any streaming subscriber
+        # Push intent to UI so streaming consumers see it immediately
         try:
-            self._store.publish(channel, serialized)
+            from services.websocket_broker import WebSocketBroker
+            WebSocketBroker().broadcast({
+                "type": "intent",
+                "intent_id": intent.intent_id,
+                "intent_type": intent.intent_type,
+                "target": target,
+            })
         except Exception:
-            pass  # Pub/sub failure must never block emission
+            pass
 
         logger.debug(
             "[IntentService] Emitted intent %s (type=%s target=%s)",

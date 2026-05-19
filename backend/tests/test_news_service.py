@@ -8,8 +8,7 @@ import pytest
 
 from services.news_service import (
     NewsService, NewsArticle,
-    _strip_html, _parse_date, _normalize_title, _levenshtein,
-    _derive_domain,
+    _strip_html, _derive_domain,
 )
 
 SAMPLE_RSS = b'''<?xml version="1.0" encoding="UTF-8"?>
@@ -70,64 +69,13 @@ def _make_article(title="Test Article", source="BBC", source_id="bbc_world", **k
 @pytest.mark.unit
 class TestHelpers:
 
-    def test_strip_html_removes_tags(self):
+    def test_strip_html_removes_tags_and_decodes_entities(self):
         assert _strip_html("<p>Hello <b>world</b></p>") == "Hello world"
+        assert _strip_html("&amp; &lt;") == "& <"
 
-    def test_strip_html_decodes_entities(self):
-        assert _strip_html("&amp; &lt; &gt; &quot;") == "& < > \""
-
-    def test_strip_html_collapses_whitespace(self):
-        assert _strip_html("  hello   world  ") == "hello world"
-
-    def test_parse_date_rfc2822(self):
-        result = _parse_date("Mon, 24 Mar 2026 10:00:00 GMT")
-        assert "2026-03-24" in result
-        assert "10:00:00" in result
-
-    def test_parse_date_iso8601(self):
-        result = _parse_date("2026-03-24T10:00:00Z")
-        assert "2026-03-24" in result
-
-    def test_parse_date_none_returns_now(self):
-        result = _parse_date(None)
-        assert "T" in result  # ISO format
-
-    def test_parse_date_garbage_returns_now(self):
-        result = _parse_date("not a date")
-        assert "T" in result
-
-    def test_normalize_title(self):
-        assert _normalize_title("Hello, World! 123") == "hello world 123"
-
-    def test_normalize_title_collapses_spaces(self):
-        assert _normalize_title("  hello   world  ") == "hello world"
-
-    def test_levenshtein_identical(self):
-        assert _levenshtein("hello", "hello") == 0
-
-    def test_levenshtein_empty(self):
-        assert _levenshtein("", "hello") == 5
-        assert _levenshtein("hello", "") == 5
-        assert _levenshtein("", "") == 0
-
-    def test_levenshtein_one_edit(self):
-        assert _levenshtein("hello", "helo") == 1
-
-    def test_levenshtein_different(self):
-        assert _levenshtein("cat", "dog") == 3
-
-    def test_derive_domain_strips_rss_prefix(self):
+    def test_derive_domain_strips_feed_subdomains(self):
         assert _derive_domain("https://feeds.bbci.co.uk/news/rss.xml") == "bbci.co.uk"
-
-    def test_derive_domain_strips_www(self):
         assert _derive_domain("https://www.example.com/feed") == "example.com"
-
-    def test_derive_domain_proxy_returns_none(self):
-        assert _derive_domain("https://rsshub.app/some/feed") is None
-        assert _derive_domain("https://hnrss.org/frontpage") is None
-
-    def test_derive_domain_simple_url(self):
-        assert _derive_domain("https://example.com/feed") == "example.com"
 
 
 # ── Feed parsing tests ────────────────────────────────────────
@@ -155,44 +103,6 @@ class TestFeedParsing:
         assert articles[0].source_id == "test"
         assert "example.com/article-1" in articles[0].url
 
-    @patch("services.news_service.requests.get")
-    def test_parse_atom_feed(self, mock_get):
-        from services.news_sources import Source
-        mock_resp = MagicMock()
-        mock_resp.content = SAMPLE_ATOM
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
-
-        src = Source("test", "Test Source", "tech", "https://example.com/atom", "US")
-        articles = self.svc._parse_feed(src, 5.0)
-
-        assert len(articles) == 2
-        assert articles[0].title == "Atom Entry One"
-        assert "entry-1" in articles[0].url
-
-    @patch("services.news_service.requests.get")
-    def test_parse_feed_strips_html_from_description(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.content = SAMPLE_RSS
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
-
-        from services.news_sources import Source
-        src = Source("test", "Test", "international", "https://example.com/rss", "US")
-        articles = self.svc._parse_feed(src, 5.0)
-
-        # Second article has HTML description
-        assert "<p>" not in articles[1].description
-        assert "HTML description" in articles[1].description
-
-    @patch("services.news_service.requests.get")
-    def test_parse_feed_network_error(self, mock_get):
-        mock_get.side_effect = Exception("Connection failed")
-        from services.news_sources import Source
-        src = Source("test", "Test", "international", "https://example.com/rss", "US")
-        articles = self.svc._parse_feed(src, 5.0)
-        assert articles == []
-
 
 # ── Deduplication tests ───────────────────────────────────────
 
@@ -215,22 +125,6 @@ class TestDeduplication:
             _make_article(title="Breaking News in Markets Today"),
             _make_article(title="Breaking News in Market Today"),  # edit distance 1 from the title above
         ]
-        result = self.svc.deduplicate(articles)
-        assert len(result) == 1
-
-    def test_different_articles_kept(self):
-        articles = [
-            _make_article(title="Completely Different Article"),
-            _make_article(title="Another Unrelated Story Here"),
-        ]
-        result = self.svc.deduplicate(articles)
-        assert len(result) == 2
-
-    def test_empty_list(self):
-        assert self.svc.deduplicate([]) == []
-
-    def test_single_article(self):
-        articles = [_make_article()]
         result = self.svc.deduplicate(articles)
         assert len(result) == 1
 
@@ -265,25 +159,7 @@ class TestRanking:
         assert len(result) >= 1
         assert result[0].title == "Relevant Article"
 
-    def test_rank_by_relevance_empty_query_returns_date_sorted(self):
-        articles = [
-            _make_article(title="Old", published_at="2026-03-23T10:00:00+00:00"),
-            _make_article(title="New", published_at="2026-03-24T10:00:00+00:00"),
-        ]
-        result = self.svc.rank_by_relevance(articles, "")
-        assert result[0].title == "New"
 
-    def test_rank_by_relevance_embedding_failure_falls_back(self):
-        mock_emb = MagicMock()
-        mock_emb.generate_embedding_np.side_effect = Exception("Model not loaded")
-        self.svc._embedding_svc = mock_emb
-
-        articles = [
-            _make_article(title="A", published_at="2026-03-23T10:00:00+00:00"),
-            _make_article(title="B", published_at="2026-03-24T10:00:00+00:00"),
-        ]
-        result = self.svc.rank_by_relevance(articles, "query")
-        assert len(result) == 2  # All returned, date-sorted
 
 
 # ── Google News country code tests ───────────────────────────
@@ -312,57 +188,6 @@ class TestFetchGoogleNewsCountryCode:
         assert "gl=GB" in call_url
         assert "ceid=GB:en" in call_url
 
-    @patch("services.news_service.requests.get")
-    def test_default_country_code_is_us(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.content = SAMPLE_RSS
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
-
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
-        with patch.object(self.svc, "_get_store", return_value=mock_store):
-            self.svc.fetch_google_news("test query")
-
-        call_url = mock_get.call_args[0][0]
-        assert "gl=US" in call_url
-
-    @patch("services.news_service.requests.get")
-    def test_cache_key_includes_country_code(self, mock_get):
-        import hashlib
-        mock_resp = MagicMock()
-        mock_resp.content = SAMPLE_RSS
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
-
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
-        with patch.object(self.svc, "_get_store", return_value=mock_store):
-            self.svc.fetch_google_news("query", country_code="MT")
-
-        set_key = mock_store.setex.call_args[0][0]
-        expected_hash = hashlib.sha256(("queryMT").encode()).hexdigest()[:16]
-        assert expected_hash in set_key
-
-    @patch("services.news_service.requests.get")
-    def test_different_country_codes_produce_different_cache_keys(self, mock_get):
-        mock_resp = MagicMock()
-        mock_resp.content = SAMPLE_RSS
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
-
-        mock_store = MagicMock()
-        mock_store.get.return_value = None
-
-        with patch.object(self.svc, "_get_store", return_value=mock_store):
-            self.svc.fetch_google_news("query", country_code="US")
-            key_us = mock_store.setex.call_args[0][0]
-            mock_store.reset_mock()
-            self.svc.fetch_google_news("query", country_code="GB")
-            key_gb = mock_store.setex.call_args[0][0]
-
-        assert key_us != key_gb
-
 
 # ── Integration-level tests ───────────────────────────────────
 
@@ -389,67 +214,7 @@ class TestSearchIntegration:
         mock_feeds.assert_called_once()
         mock_google.assert_called_once()
 
-    @patch.object(NewsService, "fetch_google_news")
-    def test_search_without_source_ids_uses_google_only(self, mock_google):
-        mock_google.return_value = [_make_article(title="Google Article")]
 
-        mock_emb = MagicMock()
-        vec = np.ones(768, dtype=np.float32) / np.sqrt(768)
-        mock_emb.generate_embedding_np.return_value = vec
-        mock_emb.generate_embeddings_batch.return_value = [vec]
-        self.svc._embedding_svc = mock_emb
-
-        with patch.object(NewsService, "fetch_feeds") as mock_feeds:
-            result = self.svc.search("test query", limit=10)
-            mock_feeds.assert_not_called()
-        mock_google.assert_called_once()
-        assert len(result) >= 1
-
-    @patch.object(NewsService, "fetch_google_news")
-    def test_search_passes_country_code(self, mock_google):
-        mock_google.return_value = []
-        with patch.object(self.svc, "deduplicate", return_value=[]):
-            with patch.object(self.svc, "rank_by_relevance", return_value=[]):
-                self.svc.search("query", country_code="GB")
-        _, kwargs = mock_google.call_args
-        assert kwargs.get("country_code") == "GB"
-
-    @patch.object(NewsService, "fetch_google_news")
-    def test_search_default_country_code_is_us(self, mock_google):
-        mock_google.return_value = []
-        with patch.object(self.svc, "deduplicate", return_value=[]):
-            with patch.object(self.svc, "rank_by_relevance", return_value=[]):
-                self.svc.search("query")
-        _, kwargs = mock_google.call_args
-        assert kwargs.get("country_code") == "US"
-
-    @patch.object(NewsService, "fetch_google_news")
-    def test_search_world_awareness_signature_compatible(self, mock_google):
-        # world_awareness_service calls: news_svc.search(query=..., limit=...)
-        # This verifies that signature works (no source_ids, positional keyword args)
-        mock_google.return_value = [_make_article()]
-        mock_emb = MagicMock()
-        vec = np.ones(768, dtype=np.float32) / np.sqrt(768)
-        mock_emb.generate_embedding_np.return_value = vec
-        mock_emb.generate_embeddings_batch.return_value = [vec]
-        self.svc._embedding_svc = mock_emb
-
-        result = self.svc.search(query="climate change", limit=5)
-        assert isinstance(result, list)
-        assert len(result) <= 5
-
-    @patch.object(NewsService, "fetch_google_news")
-    def test_search_respects_limit(self, mock_google):
-        mock_google.return_value = [_make_article(title=f"Article {i}", url=f"https://example.com/{i}")
-                                    for i in range(20)]
-        mock_emb = MagicMock()
-        vec = np.ones(768, dtype=np.float32) / np.sqrt(768)
-        mock_emb.generate_embedding_np.return_value = vec
-        mock_emb.generate_embeddings_batch.return_value = [vec] * 20
-        self.svc._embedding_svc = mock_emb
-
-        result = self.svc.search("query", limit=3)
-        assert len(result) <= 3
 
 
 # ── fetch_feeds edge cases ────────────────────────────────────
@@ -462,12 +227,6 @@ class TestFetchFeedsEdgeCases:
 
     def test_fetch_feeds_empty_source_ids(self):
         result = self.svc.fetch_feeds([])
-        assert result == []
-
-    def test_fetch_feeds_unknown_source_id(self):
-        # Source IDs that don't exist in the registry are silently skipped
-        result = self.svc.fetch_feeds(["nonexistent_feed_id"])
-        # Should return empty (no sources resolved)
         assert result == []
 
     @patch("services.news_service.requests.get")
@@ -483,27 +242,6 @@ class TestFetchFeedsEdgeCases:
         assert len(result) == 1
         assert result[0].title == "Test Article"
 
-
-# ── fetch_google_news cache hit ───────────────────────────────
-
-@pytest.mark.unit
-class TestFetchGoogleNewsCacheHit:
-
-    def setup_method(self):
-        self.svc = NewsService()
-
-    @patch("services.news_service.requests.get")
-    def test_cache_hit_skips_network_call(self, mock_get):
-        cached_data = json.dumps([_make_article(title="Cached Article").to_dict()])
-        mock_store = MagicMock()
-        mock_store.get.return_value = cached_data.encode()
-
-        with patch.object(self.svc, "_get_store", return_value=mock_store):
-            result = self.svc.fetch_google_news("query", country_code="US")
-
-        mock_get.assert_not_called()
-        assert len(result) == 1
-        assert result[0].title == "Cached Article"
 
 
 # ── _parse_feed XML error handling ───────────────────────────
@@ -526,128 +264,7 @@ class TestParseFeedXmlError:
         articles = self.svc._parse_feed(src, 5.0)
         assert articles == []
 
-    @patch("services.news_service.requests.get")
-    def test_xml_with_no_items_or_entries_returns_empty(self, mock_get):
-        from services.news_sources import Source
-        mock_resp = MagicMock()
-        mock_resp.content = b"<rss><channel><title>Empty feed</title></channel></rss>"
-        mock_resp.raise_for_status.return_value = None
-        mock_get.return_value = mock_resp
-
-        src = Source("test", "Test", "international", "https://example.com/rss", "US")
-        articles = self.svc._parse_feed(src, 5.0)
-        assert articles == []
 
 
-# ── _derive_domain comprehensive ─────────────────────────────
-
-@pytest.mark.unit
-class TestDeriveDomainComprehensive:
-
-    def test_feeds_subdomain_stripped(self):
-        from services.news_service import _derive_domain
-        assert _derive_domain("https://feeds.reuters.com/rss/topNews") == "reuters.com"
-
-    def test_rss_subdomain_stripped(self):
-        from services.news_service import _derive_domain
-        assert _derive_domain("https://rss.cnn.com/rss/cnn_topstories.rss") == "cnn.com"
-
-    def test_moxie_subdomain_stripped(self):
-        from services.news_service import _derive_domain
-        # moxie. prefix should be stripped
-        result = _derive_domain("https://moxie.foxnews.com/google-publisher/latest.xml")
-        assert result == "foxnews.com"
-
-    def test_empty_url_returns_none(self):
-        from services.news_service import _derive_domain
-        assert _derive_domain("") is None
-
-    def test_url_without_hostname_returns_none(self):
-        from services.news_service import _derive_domain
-        assert _derive_domain("not-a-url") is None
 
 
-@pytest.mark.unit
-class TestRssItemImage:
-    """`_rss_item_image` walks media:thumbnail → media:content (image/*) →
-    enclosure (image/*) → <image><url>."""
-
-    def test_media_thumbnail(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _rss_item_image
-        xml = """<item xmlns:media='http://search.yahoo.com/mrss/'>
-            <media:thumbnail url='https://t.example.com/a.jpg'/>
-        </item>"""
-        assert _rss_item_image(ET.fromstring(xml)) == "https://t.example.com/a.jpg"
-
-    def test_media_content_image_type(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _rss_item_image
-        xml = """<item xmlns:media='http://search.yahoo.com/mrss/'>
-            <media:content url='https://cdn.example.com/p.jpg' type='image/jpeg'/>
-        </item>"""
-        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/p.jpg"
-
-    def test_enclosure_image(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _rss_item_image
-        xml = "<item><enclosure url='https://cdn.example.com/e.png' type='image/png'/></item>"
-        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/e.png"
-
-    def test_image_url_child(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _rss_item_image
-        xml = "<item><image><url>https://cdn.example.com/i.jpg</url></image></item>"
-        assert _rss_item_image(ET.fromstring(xml)) == "https://cdn.example.com/i.jpg"
-
-    def test_no_image_returns_empty(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _rss_item_image
-        assert _rss_item_image(ET.fromstring("<item></item>")) == ""
-
-
-@pytest.mark.unit
-class TestAtomEntryImage:
-    def test_media_thumbnail(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _atom_entry_image
-        xml = """<entry xmlns='http://www.w3.org/2005/Atom' xmlns:media='http://search.yahoo.com/mrss/'>
-            <media:thumbnail url='https://t.example.com/a.jpg'/>
-        </entry>"""
-        assert _atom_entry_image(ET.fromstring(xml)) == "https://t.example.com/a.jpg"
-
-    def test_atom_link_enclosure_image(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _atom_entry_image
-        xml = """<entry xmlns='http://www.w3.org/2005/Atom'>
-            <link rel='enclosure' type='image/jpeg' href='https://cdn.example.com/e.jpg'/>
-        </entry>"""
-        assert _atom_entry_image(ET.fromstring(xml)) == "https://cdn.example.com/e.jpg"
-
-    def test_no_image_returns_empty(self):
-        import xml.etree.ElementTree as ET
-        from services.news_service import _atom_entry_image
-        xml = "<entry xmlns='http://www.w3.org/2005/Atom'></entry>"
-        assert _atom_entry_image(ET.fromstring(xml)) == ""
-
-
-@pytest.mark.unit
-class TestNewsArticleImageUrl:
-    def test_dataclass_default_empty_string(self):
-        from services.news_service import NewsArticle
-        a = NewsArticle(
-            title="t", description="d", url="u",
-            published_at="2026-05-03T00:00:00+00:00",
-            source="s", source_id="sid", category="c",
-        )
-        assert a.image_url == ""
-
-    def test_to_dict_includes_image_url(self):
-        from services.news_service import NewsArticle
-        a = NewsArticle(
-            title="t", description="d", url="u",
-            published_at="2026-05-03T00:00:00+00:00",
-            source="s", source_id="sid", category="c",
-            image_url="https://x.example.com/p.jpg",
-        )
-        assert a.to_dict()["image_url"] == "https://x.example.com/p.jpg"

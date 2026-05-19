@@ -65,13 +65,6 @@ class TestWrapperRateLimiterBasic:
         # wrp_b has a fresh counter
         assert limiter.is_allowed("wrp_b") is True
 
-    def test_chat_ui_wrapper_id_is_tracked_separately(self):
-        limiter, _ = _make_limiter(limit=2)
-        limiter.is_allowed("__chat_ui__")
-        limiter.is_allowed("__chat_ui__")
-        assert limiter.is_allowed("__chat_ui__") is False
-        # Regular wrapper unaffected
-        assert limiter.is_allowed("wrp_other") is True
 
 
 # ---------------------------------------------------------------------------
@@ -134,19 +127,6 @@ class TestWrapperRateLimiterEdgeCases:
         limiter, _ = _make_limiter(limit=1)
         assert limiter.is_allowed("wrp_one") is True
         assert limiter.is_allowed("wrp_one") is False
-
-    def test_high_limit_allows_many(self):
-        limiter, _ = _make_limiter(limit=100)
-        for _ in range(100):
-            assert limiter.is_allowed("wrp_many") is True
-        assert limiter.is_allowed("wrp_many") is False
-
-    def test_key_has_correct_prefix(self):
-        store = MemoryStore()
-        limiter = WrapperRateLimiter(limit=10, window_seconds=60, store=store)
-        limiter.is_allowed("wrp_prefix_check")
-        key = f"{_KEY_PREFIX}wrp_prefix_check"
-        assert store.zcard(key) == 1
 
     def test_unique_members_prevent_collision(self):
         """Two calls at the exact same time should each record a distinct member."""

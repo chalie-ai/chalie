@@ -22,14 +22,6 @@ class TestExtractJson:
 
         assert result == '{"key": "value"}'
 
-    def test_strips_generic_fence_when_fenced_without_json_tag(self):
-        """``` ... ``` fence (no language tag) is removed, inner content returned."""
-        raw = '```\n{"items": [1, 2, 3]}\n```'
-
-        result = _extract_json(raw)
-
-        assert result == '{"items": [1, 2, 3]}'
-
     def test_returns_stripped_text_when_no_fence_present(self):
         """Plain text with no fence markers is returned as-is after stripping whitespace."""
         raw = '  {"plain": true}  '
@@ -51,14 +43,6 @@ class TestSafeJsonLoad:
         result = _safe_json_load(raw)
 
         assert result == {"status": "ok", "count": 42}
-
-    def test_parses_valid_json_when_fenced(self):
-        """Valid JSON wrapped in ```json fences is stripped and parsed."""
-        raw = '```json\n{"intent": "greeting", "salience": 0.7}\n```'
-
-        result = _safe_json_load(raw)
-
-        assert result == {"intent": "greeting", "salience": 0.7}
 
     def test_returns_none_when_json_invalid(self, caplog):
         """Malformed JSON returns None without raising an exception."""

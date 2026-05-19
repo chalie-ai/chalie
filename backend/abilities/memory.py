@@ -131,7 +131,7 @@ class MemoryAbility(Ability):
                     valid="store,recall,reflect,forget",
                 )
         except Exception as e:
-            logger.error(f"{LOG_PREFIX} Error in {action}: {e}", exc_info=True)
+            logger.exception(f"{LOG_PREFIX} Error in {action}: {e}")
             text = _tag("memory", action=action, error=str(e)[:200])
 
         return {"text": text}
@@ -302,11 +302,11 @@ def _handle_recall(channel: str, params: dict) -> str:
 
             proc = current_processor()
             if proc is not None and proc._uid is not None:
-                proc.handleTool({
+                proc.handle_tool({
                     'name': 'document',
                     'input': {'action': 'search', 'query': query},
                 })
-                proc.handleTool({
+                proc.handle_tool({
                     'name': 'schedule',
                     'input': {'action': 'search', 'query': query},
                 })
@@ -554,16 +554,10 @@ def _cosine_distance(a: List[float], b: List[float]) -> float:
     return 1.0 - sim
 
 
-def _compute_radius_factors(
+def _scan_history_distances(
     q_embedding: List[float], history: List[Dict]
-) -> Tuple[float, float, float, float]:
-    """Single-pass narrow + expand factor computation.
-
-    Returns: (narrow_factor, expand_factor, min_dist, max_drift)
-    """
-    if not history:
-        return 1.0, 1.0, float("inf"), 0.0
-
+) -> Tuple[float, float]:
+    """Return (min_dist, max_drift) over all history embeddings."""
     min_dist = float("inf")
     max_drift = 0.0
     for entry in history:
@@ -575,35 +569,50 @@ def _compute_radius_factors(
             min_dist = d
         if d > max_drift:
             max_drift = d
+    return min_dist, max_drift
 
-    # narrow factor
+
+def _compute_narrow_factor(min_dist: float) -> float:
+    """Derive the narrow factor from the minimum history distance."""
     if min_dist == float("inf") or min_dist >= MemoryAbility.NARROW_MIN_DIST:
-        narrow_factor = 1.0
-    elif min_dist <= MemoryAbility.NARROW_MAX_DIST:
-        narrow_factor = MemoryAbility.NARROW_FACTOR_FLOOR
-    else:
-        span = MemoryAbility.NARROW_MIN_DIST - MemoryAbility.NARROW_MAX_DIST
-        if span <= 0:
-            narrow_factor = MemoryAbility.NARROW_FACTOR_FLOOR
-        else:
-            t = (MemoryAbility.NARROW_MIN_DIST - min_dist) / span
-            f = 1.0 - t * (1.0 - MemoryAbility.NARROW_FACTOR_FLOOR)
-            narrow_factor = max(MemoryAbility.NARROW_FACTOR_FLOOR, min(1.0, f))
+        return 1.0
+    if min_dist <= MemoryAbility.NARROW_MAX_DIST:
+        return MemoryAbility.NARROW_FACTOR_FLOOR
+    span = MemoryAbility.NARROW_MIN_DIST - MemoryAbility.NARROW_MAX_DIST
+    if span <= 0:
+        return MemoryAbility.NARROW_FACTOR_FLOOR
+    t = (MemoryAbility.NARROW_MIN_DIST - min_dist) / span
+    f = 1.0 - t * (1.0 - MemoryAbility.NARROW_FACTOR_FLOOR)
+    return max(MemoryAbility.NARROW_FACTOR_FLOOR, min(1.0, f))
 
-    # expand factor
+
+def _compute_expand_factor(max_drift: float) -> float:
+    """Derive the expand factor from the maximum history drift."""
     if max_drift <= MemoryAbility.EXPAND_MIN_DIST:
-        expand_factor = 1.0
-    elif max_drift >= MemoryAbility.EXPAND_MAX_DIST:
-        expand_factor = MemoryAbility.EXPAND_FACTOR_CEILING
-    else:
-        span = MemoryAbility.EXPAND_MAX_DIST - MemoryAbility.EXPAND_MIN_DIST
-        if span <= 0:
-            expand_factor = MemoryAbility.EXPAND_FACTOR_CEILING
-        else:
-            t = (max_drift - MemoryAbility.EXPAND_MIN_DIST) / span
-            f = 1.0 + t * (MemoryAbility.EXPAND_FACTOR_CEILING - 1.0)
-            expand_factor = min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, f))
+        return 1.0
+    if max_drift >= MemoryAbility.EXPAND_MAX_DIST:
+        return MemoryAbility.EXPAND_FACTOR_CEILING
+    span = MemoryAbility.EXPAND_MAX_DIST - MemoryAbility.EXPAND_MIN_DIST
+    if span <= 0:
+        return MemoryAbility.EXPAND_FACTOR_CEILING
+    t = (max_drift - MemoryAbility.EXPAND_MIN_DIST) / span
+    f = 1.0 + t * (MemoryAbility.EXPAND_FACTOR_CEILING - 1.0)
+    return min(MemoryAbility.EXPAND_FACTOR_CEILING, max(1.0, f))
 
+
+def _compute_radius_factors(
+    q_embedding: List[float], history: List[Dict]
+) -> Tuple[float, float, float, float]:
+    """Single-pass narrow + expand factor computation.
+
+    Returns: (narrow_factor, expand_factor, min_dist, max_drift)
+    """
+    if not history:
+        return 1.0, 1.0, float("inf"), 0.0
+
+    min_dist, max_drift = _scan_history_distances(q_embedding, history)
+    narrow_factor = _compute_narrow_factor(min_dist)
+    expand_factor = _compute_expand_factor(max_drift)
     return narrow_factor, expand_factor, min_dist, max_drift
 
 

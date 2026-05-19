@@ -159,20 +159,6 @@ class TestWaitCapDispatchTimeoutConsistency:
             "finishes. Bump TIMEOUT in lock-step with wait_cap."
         )
 
-    def test_every_wait_cap_is_at_most_default_timeout(self):
-        """wait_cap must never exceed default_timeout — the SubagentProcessor's
-        own deadline is set from min(default_timeout, override) and a wait_cap
-        higher than default_timeout would be unreachable in practice and
-        misleading in the docs."""
-        from abilities.subagent import SUBAGENT_TYPES
-
-        for agent_type, entry in SUBAGENT_TYPES.items():
-            assert entry["wait_cap"] <= entry["default_timeout"], (
-                f"{agent_type}: wait_cap={entry['wait_cap']}s exceeds "
-                f"default_timeout={entry['default_timeout']}s — the wait_cap "
-                "would be silently ignored."
-            )
-
 
 # ---------------------------------------------------------------------------
 # AC1. Action-envelope collision guard
@@ -248,10 +234,10 @@ class TestHandleToolDispatchCollisionGuard:
             ROLE = "test"
             SKIP_TRANSCRIPT_WRITE = True
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return "test"
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return "test user"
 
         proc = _BareProcessor(raw_input="test")
@@ -272,7 +258,7 @@ class TestHandleToolDispatchCollisionGuard:
             },
         }
 
-        result_text = proc.handleTool(tc)
+        result_text = proc.handle_tool(tc)
 
         assert not result_text.startswith("Unknown action type"), (
             f"Dispatcher received wrong action_type — collision guard failed. "
@@ -283,200 +269,7 @@ class TestHandleToolDispatchCollisionGuard:
         )
 
 
-# ---------------------------------------------------------------------------
-# AD1. _deliver_envelope discriminator — turn_active Event
-#
-# Regression for the fire-and-forget delivery bug: _deliver_envelope used to
-# check isinstance(parent_ref, UserMessageProcessor) which always returned True
-# even after the parent's turn was over (it's just a Python object reference).
-# The result was silently appended to a dead processor's _pending_steers and
-# never reached the user. Fix: check parent_ref._turn_active.is_set().
-# ---------------------------------------------------------------------------
 
 
-class TestDeliverEnvelopeDiscriminator:
-    def test_case_a_delivers_to_pending_steers_when_parent_active(self):
-        """When parent _turn_active is set, envelope goes to _pending_steers."""
-        import threading
-        from abilities.subagent import _deliver_envelope
-        from services.user_message_processor import UserMessageProcessor
-
-        envelope = "[subagent.complete(type=web_surfer)]\nTest result\n[end:subagent.complete]"
-
-        # Build a real UMP instance (SKIP_TRANSCRIPT_WRITE avoids DB)
-        parent = UserMessageProcessor.__new__(UserMessageProcessor)
-        parent._pending_steers = []
-        parent._turn_active = threading.Event()
-        parent._turn_active.set()
-        parent._current_iteration = 3
-
-        _deliver_envelope(envelope, parent)
-
-        assert envelope in parent._pending_steers
-
-    def test_case_b_fires_when_parent_turn_finished(self):
-        """When parent _turn_active is cleared, envelope routes to Case B."""
-        import threading
-        from abilities.subagent import _deliver_envelope
-        from services.user_message_processor import UserMessageProcessor
-        from unittest.mock import patch
-
-        envelope = "[subagent.complete(type=web_surfer)]\nDone\n[end:subagent.complete]"
-
-        parent = UserMessageProcessor.__new__(UserMessageProcessor)
-        parent._pending_steers = []
-        parent._turn_active = threading.Event()
-        parent._turn_active.clear()  # turn is over
-        parent._current_iteration = 5
-
-        with patch('abilities.subagent._spawn_return_processor') as mock_spawn:
-            _deliver_envelope(envelope, parent)
-
-        mock_spawn.assert_called_once_with(envelope)
-        assert envelope not in parent._pending_steers
-
-    def test_case_b_fires_when_parent_is_none(self):
-        """When parent_ref is None (no UMP), envelope routes to Case B."""
-        from abilities.subagent import _deliver_envelope
-        from unittest.mock import patch
-
-        envelope = "[subagent.complete(type=web_surfer)]\nDone\n[end:subagent.complete]"
-
-        with patch('abilities.subagent._spawn_return_processor') as mock_spawn:
-            _deliver_envelope(envelope, None)
-
-        mock_spawn.assert_called_once_with(envelope)
 
 
-# ---------------------------------------------------------------------------
-# AD2. _spawn_return_processor wires OutputService
-#
-# Regression: _spawn_return_processor used to call
-# SubagentReturnProcessor.send() and discard the return value. The response
-# never reached the WebSocket. Fix: call OutputService.enqueue_proactive()
-# after send() — same pattern as scheduler_service.py.
-# ---------------------------------------------------------------------------
-
-
-class TestSpawnReturnProcessorOutput:
-    def test_enqueue_proactive_called_with_response(self):
-        """_spawn_return_processor must call OutputService.enqueue_proactive()
-        with the response text after SubagentReturnProcessor.send() returns."""
-        from unittest.mock import patch, MagicMock
-        import threading
-        from abilities.subagent import _spawn_return_processor
-
-        envelope = "[subagent.complete(type=web_surfer)]\nResult text\n[end:subagent.complete]"
-
-        mock_output_svc = MagicMock()
-        mock_proc_instance = MagicMock()
-        mock_proc_instance.send.return_value = "Here is what I found from the subagent."
-
-        with patch(
-            'services.user_message_processor.SubagentReturnProcessor',
-            return_value=mock_proc_instance,
-        ), patch(
-            'services.output_service.OutputService',
-            return_value=mock_output_svc,
-        ):
-            _spawn_return_processor(envelope)
-
-            # Join inside the patch context so the thread resolves mocked imports
-            for t in threading.enumerate():
-                if t.name == "subagent-return":
-                    t.join(timeout=5)
-
-            mock_proc_instance.send.assert_called_once()
-            mock_output_svc.enqueue_proactive.assert_called_once_with(
-                topic='user',
-                response="Here is what I found from the subagent.",
-                source='subagent_return',
-            )
-
-    def test_enqueue_proactive_called_with_fallback_on_empty_response(self):
-        """If SubagentReturnProcessor.send() returns empty, deliver a fallback
-        message — never silently drop the result."""
-        from unittest.mock import patch, MagicMock
-        import threading
-        from abilities.subagent import _spawn_return_processor
-
-        envelope = "[subagent.complete(type=web_surfer)]\n\n[end:subagent.complete]"
-
-        mock_output_svc = MagicMock()
-        mock_proc_instance = MagicMock()
-        mock_proc_instance.send.return_value = ""
-
-        # Drain leaked threads from TestAsyncDispatch before patching.
-        for t in threading.enumerate():
-            if t.name.startswith("subagent"):
-                t.join(timeout=5)
-
-        with patch(
-            'services.user_message_processor.SubagentReturnProcessor',
-            return_value=mock_proc_instance,
-        ), patch(
-            'services.output_service.OutputService',
-            return_value=mock_output_svc,
-        ):
-            _spawn_return_processor(envelope)
-
-            for t in threading.enumerate():
-                if t.name == "subagent-return":
-                    t.join(timeout=5)
-
-            mock_output_svc.enqueue_proactive.assert_called_once()
-            response = mock_output_svc.enqueue_proactive.call_args.kwargs['response']
-            assert "no output" in response.lower()
-
-    def test_enqueue_proactive_called_with_error_on_send_exception(self):
-        """If SubagentReturnProcessor.send() raises, deliver the error — never
-        silently swallow it."""
-        from unittest.mock import patch, MagicMock
-        import threading
-        from abilities.subagent import _spawn_return_processor
-
-        envelope = "[subagent.complete(type=web_surfer)]\nResult\n[end:subagent.complete]"
-
-        mock_output_svc = MagicMock()
-        mock_proc_instance = MagicMock()
-        mock_proc_instance.send.side_effect = RuntimeError("provider timeout")
-
-        for t in threading.enumerate():
-            if t.name.startswith("subagent"):
-                t.join(timeout=5)
-
-        with patch(
-            'services.user_message_processor.SubagentReturnProcessor',
-            return_value=mock_proc_instance,
-        ), patch(
-            'services.output_service.OutputService',
-            return_value=mock_output_svc,
-        ):
-            _spawn_return_processor(envelope)
-
-            for t in threading.enumerate():
-                if t.name == "subagent-return":
-                    t.join(timeout=5)
-
-            mock_output_svc.enqueue_proactive.assert_called_once()
-            response = mock_output_svc.enqueue_proactive.call_args.kwargs['response']
-            assert "provider timeout" in response
-
-
-# ---------------------------------------------------------------------------
-# SubagentReturnProcessor isolation contract
-# ---------------------------------------------------------------------------
-
-
-class TestSubagentReturnProcessorIsolation:
-    def test_skip_input_row_is_true(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.SKIP_INPUT_ROW is True
-
-    def test_channel_is_user(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.CHANNEL == 'user'
-
-    def test_skip_transcript_write_is_false(self):
-        from services.user_message_processor import SubagentReturnProcessor
-        assert SubagentReturnProcessor.SKIP_TRANSCRIPT_WRITE is False

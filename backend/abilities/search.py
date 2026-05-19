@@ -26,8 +26,7 @@ from tools.search.fetcher import fetch_providers, fetch_ddg_fallback
 logger = logging.getLogger(__name__)
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a search results card; without it, the user sees "
     "only plain text. Write a single paragraph that synthesises the findings "
     "for the user. Example: \"Based on what I found — "

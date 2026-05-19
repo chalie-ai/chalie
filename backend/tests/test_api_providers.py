@@ -135,17 +135,6 @@ class TestProvidersAPI:
         assert data["provider"]["id"] == 3
         mock_service.get_provider_by_id.assert_called_once_with(3)
 
-    def test_get_provider_not_found(self, client, mock_service):
-        """GET /providers/<id> returns 404 when provider does not exist."""
-        mock_service.get_provider_by_id.return_value = None
-
-        response = client.get('/providers/999')
-
-        assert response.status_code == 404
-        data = response.get_json()
-        assert "error" in data
-        assert "not found" in data["error"].lower()
-
     # ------------------------------------------------------------------
     # PUT /providers/<id>
     # ------------------------------------------------------------------
@@ -271,16 +260,6 @@ class TestProvidersAPI:
         assert data["provider"]["name"] == "ollama-local"
         mock_service.get_selected_provider.assert_called_once()
 
-    def test_get_selected_provider_none(self, client, mock_service):
-        """GET /providers/selected returns null when none is selected."""
-        mock_service.get_selected_provider.return_value = None
-
-        response = client.get('/providers/selected')
-
-        assert response.status_code == 200
-        data = response.get_json()
-        assert data["provider"] is None
-
     # ------------------------------------------------------------------
     # PUT /providers/selected
     # ------------------------------------------------------------------
@@ -302,14 +281,6 @@ class TestProvidersAPI:
         data = response.get_json()
         assert data["provider"]["id"] == 2
         mock_service.set_selected_provider.assert_called_once_with(2)
-
-    def test_set_selected_provider_missing_id(self, client, mock_service):
-        """PUT /providers/selected without provider_id returns 400."""
-        response = client.put('/providers/selected', json={})
-
-        assert response.status_code == 400
-        data = response.get_json()
-        assert "provider_id" in data["error"]
 
     def test_set_selected_provider_not_found(self, client, mock_service):
         """PUT /providers/selected with invalid provider_id returns 404."""

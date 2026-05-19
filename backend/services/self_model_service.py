@@ -16,7 +16,7 @@ Design:
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List
 
 from services.memory_client import MemoryClientService
@@ -47,8 +47,8 @@ SEVERITY_DEAD_THREADS = 0.6
 
 
 def _utc_now() -> datetime:
-    """Timezone-aware UTC now. Inlined to avoid dependency on time_utils."""
-    return datetime.now(timezone.utc)
+    from services.time_utils import utc_now
+    return utc_now()
 
 
 class SelfModelService:
@@ -330,6 +330,8 @@ class SelfModelService:
         try:
             from abilities._registry import AbilityRegistry
             for ability in AbilityRegistry.all():
+                if getattr(ability, 'INTERNAL', False) or getattr(ability, 'SYSTEM', False):
+                    continue
                 name = ability.NAME
                 tool_names.append(name)
                 text = (ability.SUMMARY or '').lower()

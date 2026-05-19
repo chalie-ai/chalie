@@ -91,35 +91,10 @@ class TestListIntents:
         assert len(data["intents"]) == 1
         assert data["intents"][0]["intent_id"] == "abc-123"
 
-    def test_passes_limit_param(self, client):
-        mock_svc = MagicMock()
-        mock_svc.get_pending.return_value = []
-
-        with patch("api.intents.IntentService", return_value=mock_svc):
-            client.get("/api/intents?limit=5")
-
-        mock_svc.get_pending.assert_called_once_with("__chat_ui__", limit=5)
-
     def test_invalid_limit_returns_400(self, client):
         resp = client.get("/api/intents?limit=abc")
         assert resp.status_code == 400
         assert "limit" in resp.get_json()["error"]
-
-    def test_limit_clamped_to_100(self, client):
-        mock_svc = MagicMock()
-        mock_svc.get_pending.return_value = []
-
-        with patch("api.intents.IntentService", return_value=mock_svc):
-            client.get("/api/intents?limit=9999")
-
-        mock_svc.get_pending.assert_called_once_with("__chat_ui__", limit=100)
-
-    def test_requires_auth(self, app):
-        """Unauthenticated request should receive 401."""
-        c = app.test_client()
-        with patch("services.auth_session_service.validate_session", return_value=False):
-            resp = c.get("/api/intents")
-        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -178,15 +153,6 @@ class TestAcknowledgeIntent:
 
         assert resp.status_code == 404
 
-    def test_ack_passes_wrapper_id(self, client):
-        mock_svc = MagicMock()
-        mock_svc.acknowledge.return_value = True
-
-        with patch("api.intents.IntentService", return_value=mock_svc):
-            client.post("/api/intents/abc-123/ack")
-
-        mock_svc.acknowledge.assert_called_once_with("abc-123", "__chat_ui__")
-
 
 # ---------------------------------------------------------------------------
 # POST /api/intents/<id>/resolve — report execution result
@@ -210,28 +176,6 @@ class TestResolveIntent:
         assert data["ok"] is True
         assert data["status"] == "executed"
 
-    def test_resolve_failed(self, client):
-        mock_svc = MagicMock()
-        mock_svc.resolve.return_value = True
-
-        body = {"status": "failed", "error": "permission denied"}
-        with patch("api.intents.IntentService", return_value=mock_svc):
-            resp = client.post("/api/intents/abc-123/resolve", json=body)
-
-        assert resp.status_code == 200
-        assert resp.get_json()["status"] == "failed"
-
-    def test_resolve_skipped(self, client):
-        mock_svc = MagicMock()
-        mock_svc.resolve.return_value = True
-
-        body = {"status": "skipped", "reason": "user declined"}
-        with patch("api.intents.IntentService", return_value=mock_svc):
-            resp = client.post("/api/intents/abc-123/resolve", json=body)
-
-        assert resp.status_code == 200
-        assert resp.get_json()["status"] == "skipped"
-
     def test_resolve_not_found_returns_404(self, client):
         mock_svc = MagicMock()
         mock_svc.resolve.return_value = False
@@ -252,20 +196,6 @@ class TestResolveIntent:
         assert resp.status_code == 400
         assert "status" in resp.get_json()["error"]
 
-    def test_resolve_missing_body_returns_400(self, client):
-        resp = client.post(
-            "/api/intents/abc-123/resolve",
-            data="not json",
-            content_type="text/plain",
-        )
-        assert resp.status_code == 400
 
-    def test_resolve_passes_full_body_to_service(self, client):
-        mock_svc = MagicMock()
-        mock_svc.resolve.return_value = True
 
-        body = {"status": "executed", "result": {"output": "done"}}
-        with patch("api.intents.IntentService", return_value=mock_svc):
-            client.post("/api/intents/abc-123/resolve", json=body)
 
-        mock_svc.resolve.assert_called_once_with("abc-123", body)

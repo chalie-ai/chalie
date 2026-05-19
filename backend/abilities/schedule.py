@@ -22,12 +22,82 @@ LOG_PREFIX = "[SCHEDULER SKILL]"
 _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a scheduler card; without it, the user sees only "
     "plain text. Write a brief confirmation. Example: "
     "\"<span id='{tag}'>Done — 30 min with Mira on Thursday at 14:30.</span>\""
 )
+
+
+# ---------------------------------------------------------------------------
+# Shared query engine — single SQL path for all scheduled_items readers
+# ---------------------------------------------------------------------------
+
+def query_items(
+    *,
+    hidden: int | None = 0,
+    source: str | None = None,
+    item_type: str | None = None,
+    status: tuple[str, ...] = ("pending",),
+    date_from: str | None = None,
+    date_to: str | None = None,
+    external_uid: str | None = None,
+    limit: int | None = None,
+    columns: tuple[str, ...] = (
+        "id", "item_type", "message", "due_at", "recurrence", "status",
+    ),
+) -> list[dict]:
+    """Query ``scheduled_items`` with flexible filters.
+
+    This is the single query path for all callers — the schedule ability,
+    the calendar ability, and anything else that reads scheduled_items.
+    """
+    from services.database_service import get_shared_db_service
+
+    db = get_shared_db_service()
+    col_str = ", ".join(columns)
+    clauses: list[str] = []
+    params: list = []
+
+    if status:
+        placeholders = ", ".join("?" for _ in status)
+        clauses.append(f"status IN ({placeholders})")
+        params.extend(status)
+
+    if hidden is not None:
+        clauses.append("COALESCE(hidden, 0) = ?")
+        params.append(hidden)
+
+    if source:
+        clauses.append("source = ?")
+        params.append(source)
+
+    if item_type:
+        clauses.append("item_type = ?")
+        params.append(item_type)
+
+    if date_from:
+        clauses.append("due_at >= ?")
+        params.append(date_from)
+
+    if date_to:
+        clauses.append("due_at <= ?")
+        params.append(date_to)
+
+    if external_uid:
+        clauses.append("external_uid = ?")
+        params.append(external_uid)
+
+    where = " AND ".join(clauses) if clauses else "1=1"
+    query = f"SELECT {col_str} FROM scheduled_items WHERE {where} ORDER BY due_at ASC"
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    with db.connection() as conn:
+        rows = conn.execute(query, params).fetchall()
+
+    return [dict(zip(columns, row)) for row in rows]
 
 
 class ScheduleAbility(Ability):
@@ -346,7 +416,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Create failed: {e}", exc_info=True)
+        logger.exception(f"{LOG_PREFIX} Create failed: {e}")
         return {"status": "error", "error": f"Create failed: {e}"}
 
 
@@ -409,50 +479,33 @@ def _search(params: dict) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Search failed: {e}", exc_info=True)
+        logger.exception(f"{LOG_PREFIX} Search failed: {e}")
         return {"status": "error", "error": f"Search failed: {e}"}
 
 
 def _list(params: dict) -> dict:
     try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
         time_range = params.get("time_range", "all").lower()
-
         start_dt, end_dt, _ = _resolve_time_range(time_range)
 
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            if start_dt and end_dt:
-                cursor.execute("""
-                    SELECT id, item_type, message, due_at, recurrence, status
-                    FROM scheduled_items
-                    WHERE status IN ('pending', 'fired') AND due_at BETWEEN ? AND ?
-                      AND hidden = 0
-                    ORDER BY due_at ASC
-                """, (start_dt, end_dt))
-            else:
-                cursor.execute("""
-                    SELECT id, item_type, message, due_at, recurrence, status
-                    FROM scheduled_items
-                    WHERE status = 'pending' AND hidden = 0
-                    ORDER BY due_at ASC
-                """)
-            rows = cursor.fetchall()
+        rows = query_items(
+            hidden=0,
+            status=("pending", "fired") if start_dt else ("pending",),
+            date_from=start_dt,
+            date_to=end_dt,
+        )
 
         from services.time_formatter_service import TimeFormatterService
         records = []
         for row in rows:
-            item_id, item_type, message, due_at, recurrence, status = row
-            local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or str(due_at)
+            local_due = TimeFormatterService.local(row["due_at"], fmt=_LOCAL_ISO_FMT) or str(row["due_at"])
             records.append({
-                "id": item_id,
-                "message": message,
+                "id": row["id"],
+                "message": row["message"],
                 "due_at": local_due,
-                "item_type": item_type,
-                "recurrence": recurrence,
-                "status": status,
+                "item_type": row["item_type"],
+                "recurrence": row["recurrence"],
+                "status": row["status"],
             })
 
         return {
@@ -462,23 +515,15 @@ def _list(params: dict) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} List failed: {e}", exc_info=True)
+        logger.exception(f"{LOG_PREFIX} List failed: {e}")
         return {"status": "error", "error": f"List failed: {e}"}
 
 
 def _resolve_time_range(time_range: str):
     now_utc = utc_now()
 
-    try:
-        from services.client_context_service import ClientContextService
-        from zoneinfo import ZoneInfo
-        ctx = ClientContextService().get()
-        tz_name = ctx.get("timezone", "UTC")
-        tz = ZoneInfo(tz_name)
-        client_now = now_utc.astimezone(tz)
-    except Exception:
-        tz = timezone.utc
-        client_now = now_utc
+    from services.locale_service import local_now
+    client_now = local_now()
 
     def _start_of_day(dt):
         return dt.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -603,7 +648,7 @@ def _cancel(params: dict) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"{LOG_PREFIX} Cancel failed: {e}", exc_info=True)
+        logger.exception(f"{LOG_PREFIX} Cancel failed: {e}")
         return {"status": "error", "error": f"Cancel failed: {e}"}
 
 
@@ -652,21 +697,15 @@ def _fetch_same_day_items(new_record: dict) -> list:
 
     try:
         from services.database_service import get_shared_db_service
-        from services.client_context_service import ClientContextService
         from services.time_formatter_service import TimeFormatterService
         from services.time_utils import parse_utc
-        from zoneinfo import ZoneInfo
-
-        try:
-            tz = ZoneInfo(ClientContextService().get().get("timezone", "UTC"))
-        except Exception:
-            tz = timezone.utc
+        from services.locale_service import to_local
 
         new_due_utc = parse_utc(new_due_local)
         if new_due_utc == datetime.min.replace(tzinfo=timezone.utc):
             return []
 
-        local_dt = new_due_utc.astimezone(tz)
+        local_dt = to_local(new_due_utc)
         start_local = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
         start_utc = start_local.astimezone(timezone.utc)
         end_utc = start_utc + timedelta(days=1)

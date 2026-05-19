@@ -6,9 +6,9 @@ Three types, each with its own tool surface, system prompt, and default timeout:
   summariser   (10m): read and compress long documents or web pages.
   general_purpose (30m): parallelise different long-running work.
 
-Default is fire-and-forget (wait=false). When the subagent finishes it steers
-the parent agent's ACT loop (Case A: parent mid-turn) or spawns a fresh
-user-channel turn via SubagentReturnProcessor (Case B: parent idle).
+Default is fire-and-forget (wait=false). When the subagent finishes it
+delivers the result via the chat chokepoint (_start_turn with hidden_input),
+which either steers the active UMP or starts a fresh user-channel turn.
 
 When wait=true the parent ACT iteration blocks until the subagent finishes,
 capped per-type by ``wait_cap``: web_surfer caps at 30 min (web research is
@@ -162,87 +162,6 @@ def _build_envelope(response_text: str, agent_type: str, status: str = "success"
     )
 
 
-def _deliver_envelope(envelope: str, parent_ref: object) -> None:
-    """Deliver the subagent envelope to the parent agent.
-
-    Case A — parent turn is still active (_turn_active Event is set):
-      Append the envelope to parent._pending_steers. The next iteration's
-      getUserPrompt() drains _pending_steers into _act_trail.
-
-    Case B — parent idle (turn finished, or non-UMP):
-      Spawn a daemon thread that runs SubagentReturnProcessor(envelope).send()
-      which produces a normal user-channel ACT turn and publishes via
-      OutputService.
-
-    The discriminator is ``parent_ref._turn_active.is_set()`` — a thread-safe
-    Event that bind_current_processor sets on entry and clears on exit.
-    Unlike isinstance() checks (which always return True for a valid Python
-    object), this correctly detects that the parent's send() has already
-    returned.
-    """
-    from services.user_message_processor import UserMessageProcessor
-
-    if (
-        isinstance(parent_ref, UserMessageProcessor)
-        and parent_ref._turn_active.is_set()
-    ):
-        # Case A: mid-ACT injection via _pending_steers
-        try:
-            parent_ref._pending_steers.append(envelope)
-            logger.info(
-                "%s Delivered envelope to parent _pending_steers (iteration=%d)",
-                LOG_PREFIX, parent_ref._current_iteration,
-            )
-        except Exception as exc:
-            logger.error(
-                "%s Failed to append to parent _pending_steers: %s", LOG_PREFIX, exc
-            )
-            _spawn_return_processor(envelope)
-        return
-
-    # Case B: parent idle — synthetic user-channel turn
-    _spawn_return_processor(envelope)
-
-
-def _spawn_return_processor(envelope: str) -> None:
-    """Spawn a daemon thread that runs SubagentReturnProcessor with the envelope.
-
-    After the ACT loop completes, publishes the response to the WebSocket
-    via OutputService — the same pattern as scheduler_service.py.
-    """
-
-    def _run():
-        from services.output_service import OutputService
-
-        try:
-            from services.user_message_processor import SubagentReturnProcessor
-
-            response_text = SubagentReturnProcessor(raw_input=envelope).send()
-            response_text = (response_text or '').strip()
-            if not response_text:
-                response_text = "Subagent returned a result but synthesis produced no output."
-        except Exception as exc:
-            logger.error(
-                "%s SubagentReturnProcessor failed: %s", LOG_PREFIX, exc, exc_info=True
-            )
-            response_text = f"Subagent synthesis failed: {exc}"
-
-        try:
-            OutputService().enqueue_proactive(
-                topic='user',
-                response=response_text,
-                source='subagent_return',
-            )
-            logger.info("%s SubagentReturnProcessor completed and delivered", LOG_PREFIX)
-        except Exception as exc:
-            logger.error(
-                "%s SubagentReturnProcessor delivery failed: %s", LOG_PREFIX, exc, exc_info=True
-            )
-
-    t = threading.Thread(target=_run, daemon=True, name="subagent-return")
-    t.start()
-
-
 # ── Ability ───────────────────────────────────────────────────────────────────
 
 class SubagentAbility(Ability):
@@ -389,10 +308,7 @@ Briefing rules:
     # ── Execution paths ───────────────────────────────────────────────────────
 
     def _run_async(self, prompt: str, agent_type: str, timeout: int, sub_id: str) -> dict:
-        """Fire-and-forget: spawn daemon thread, deliver result via steer/return."""
-        from services.message_processor import current_processor
-
-        parent_ref = current_processor()
+        """Fire-and-forget: spawn daemon thread, deliver result via chat chokepoint."""
 
         def _run():
             try:
@@ -417,7 +333,8 @@ Briefing rules:
                 envelope = _build_envelope(str(exc), agent_type, status="failure")
 
             try:
-                _deliver_envelope(envelope, parent_ref)
+                from api.chat import dispatch_message
+                dispatch_message(envelope, source='subagent', hidden_input=True, intercept=True)
             except Exception as exc:
                 logger.error(
                     "%s Subagent %s delivery failed: %s", LOG_PREFIX, sub_id[:8], exc, exc_info=True

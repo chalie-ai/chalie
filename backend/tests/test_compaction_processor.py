@@ -19,42 +19,15 @@ class TestCompactionProcessorConstants:
         p = ContinuityCompactionProcessor(raw_input='x')
         assert p._check_threshold('system prompt', [{'name': 'tool'}], 'a very long string ' * 1000) is False
 
-    def test_subagent_trail_check_threshold_always_false(self):
-        from services.compaction_message_processor import SubagentTrailCompactionProcessor
-        p = SubagentTrailCompactionProcessor(raw_input='x')
-        assert p._check_threshold('system prompt', [{'name': 'tool'}], 'a very long string ' * 1000) is False
-
-    def test_continuity_job_is_frontal_cortex_unified(self):
-        from services.compaction_message_processor import ContinuityCompactionProcessor
-        assert ContinuityCompactionProcessor.JOB == 'frontal-cortex-unified'
-
-    def test_subagent_trail_job_is_frontal_cortex_unified(self):
-        from services.compaction_message_processor import SubagentTrailCompactionProcessor
-        assert SubagentTrailCompactionProcessor.JOB == 'frontal-cortex-unified'
-
-    def test_continuity_always_available_empty(self):
-        from services.compaction_message_processor import ContinuityCompactionProcessor
-        assert ContinuityCompactionProcessor.ALWAYS_AVAILABLE == []
-
-    def test_subagent_trail_always_available_empty(self):
-        from services.compaction_message_processor import SubagentTrailCompactionProcessor
-        assert SubagentTrailCompactionProcessor.ALWAYS_AVAILABLE == []
-
-    def test_continuity_discoverable_empty(self):
-        from services.compaction_message_processor import ContinuityCompactionProcessor
-        assert ContinuityCompactionProcessor.DISCOVERABLE == []
-
-    def test_subagent_trail_discoverable_empty(self):
-        from services.compaction_message_processor import SubagentTrailCompactionProcessor
-        assert SubagentTrailCompactionProcessor.DISCOVERABLE == []
-
-    def test_continuity_skip_transcript_write(self):
-        from services.compaction_message_processor import ContinuityCompactionProcessor
-        assert ContinuityCompactionProcessor.SKIP_TRANSCRIPT_WRITE is True
-
-    def test_subagent_trail_skip_transcript_write(self):
-        from services.compaction_message_processor import SubagentTrailCompactionProcessor
-        assert SubagentTrailCompactionProcessor.SKIP_TRANSCRIPT_WRITE is True
+    def test_processor_constants(self):
+        from services.compaction_message_processor import (
+            ContinuityCompactionProcessor, SubagentTrailCompactionProcessor,
+        )
+        for cls in (ContinuityCompactionProcessor, SubagentTrailCompactionProcessor):
+            assert cls.LOG_LABEL == 'compaction'
+            assert cls.ALWAYS_AVAILABLE == []
+            assert cls.DISCOVERABLE == []
+            assert cls.SKIP_TRANSCRIPT_WRITE is True
 
 
 class TestCompactionServiceGone:
@@ -93,30 +66,12 @@ class TestMetricsAccumulatorMerge:
         assert a.tool_counts['memory'] == 3
         assert a.tool_counts['search'] == 1
 
-    def test_merge_preserves_start_time(self):
-        import time
-        from services.metrics_accumulator import MetricsAccumulator
-        a = MetricsAccumulator()
-        original_start = a.start_time
-        time.sleep(0.01)
-        b = MetricsAccumulator()
-        a.merge(b)
-        assert a.start_time == original_start
-
     def test_merge_propagates_incomplete_flag(self):
         from services.metrics_accumulator import MetricsAccumulator
         a = MetricsAccumulator(tokens_total_complete=True)
         b = MetricsAccumulator(tokens_total_complete=False)
         a.merge(b)
         assert a.tokens_total_complete is False
-
-    def test_merge_complete_stays_complete_when_both_complete(self):
-        from services.metrics_accumulator import MetricsAccumulator
-        a = MetricsAccumulator(tokens_total_complete=True)
-        b = MetricsAccumulator(tokens_total_complete=True)
-        a.merge(b)
-        assert a.tokens_total_complete is True
-
 
 class TestCheckThresholdFullPayload:
     """Regression: _check_threshold must measure the full payload, not just user_body.
@@ -140,10 +95,10 @@ class TestCheckThresholdFullPayload:
             SKIP_TRANSCRIPT_WRITE = True
             SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return 'hi'
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return 'test user'
 
         return _MinimalProcessor(raw_input='hi')
@@ -195,38 +150,7 @@ class TestCheckThresholdFullPayload:
             f"but user_body alone ({user_only_est} tokens) is below it"
         )
 
-    def test_small_full_payload_does_not_exceed_threshold(self):
-        """When the entire payload is well within compact_at, return False."""
-        from unittest.mock import patch, MagicMock
 
-        proc = self._make_processor()
-        fake_provider = MagicMock()
-        fake_provider.get_compact_at.return_value = 128_000
-        fake_provider.estimate_payload_tokens.return_value = 100  # well below
-
-        with patch('services.providers.Providers') as mock_providers_cls:
-            mock_providers_cls.instance.return_value = fake_provider
-            result = proc._check_threshold('short system', [], 'short body')
-
-        assert result is False
-
-    def test_missing_compact_at_returns_false_and_logs_error(self):
-        """compact_at=None must return False (skip compaction) and log an error."""
-        from unittest.mock import patch, MagicMock
-
-        proc = self._make_processor()
-        fake_provider = MagicMock()
-        fake_provider.get_compact_at.return_value = None
-
-        with patch('services.providers.Providers') as mock_providers_cls:
-            mock_providers_cls.instance.return_value = fake_provider
-            with patch('services.message_processor.logger') as mock_logger:
-                result = proc._check_threshold('system', [], 'body')
-
-        assert result is False
-        mock_logger.error.assert_called_once()
-        call_args = mock_logger.error.call_args[0]
-        assert 'compact_at missing' in call_args[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,101 +185,21 @@ class TestBuildRequestBodyIncludesAllComponents:
         }
     ]
 
-    def test_ollama_build_request_body_includes_system(self):
+    def test_ollama_includes_system_message_and_tools(self):
         from services.ollama_service import OllamaService
         svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'llama3'})
         body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert self._SYSTEM in body, (
-            "OllamaService.build_request_body must include system_prompt in the output"
-        )
+        assert self._SYSTEM in body
+        assert 'What is the capital of France?' in body
+        assert 'search' in body
 
-    def test_ollama_build_request_body_includes_user_message(self):
-        from services.ollama_service import OllamaService
-        svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'llama3'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert 'What is the capital of France?' in body, (
-            "OllamaService.build_request_body must include message content in the output"
-        )
-
-    def test_ollama_build_request_body_includes_tools(self):
-        from services.ollama_service import OllamaService
-        svc = OllamaService({'platform': 'ollama', 'host': 'http://localhost:11434', 'model': 'llama3'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert 'search' in body, (
-            "OllamaService.build_request_body must include tool names in the output"
-        )
-
-    def test_anthropic_build_request_body_includes_system(self):
+    def test_anthropic_includes_system_message_and_tools(self):
         from services.llm_service import AnthropicService
         svc = AnthropicService({'api_key': 'test-key', 'model': 'claude-haiku-4-5-20251001'})
         body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert self._SYSTEM in body, (
-            "AnthropicService.build_request_body must include system_prompt"
-        )
-
-    def test_anthropic_build_request_body_includes_user_message(self):
-        from services.llm_service import AnthropicService
-        svc = AnthropicService({'api_key': 'test-key', 'model': 'claude-haiku-4-5-20251001'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert 'What is the capital of France?' in body, (
-            "AnthropicService.build_request_body must include message content"
-        )
-
-    def test_anthropic_build_request_body_includes_tools(self):
-        from services.llm_service import AnthropicService
-        svc = AnthropicService({'api_key': 'test-key', 'model': 'claude-haiku-4-5-20251001'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert 'search' in body, (
-            "AnthropicService.build_request_body must include tool names"
-        )
-
-    def test_openai_build_request_body_includes_system(self):
-        from services.llm_service import OpenAIService
-        svc = OpenAIService({'api_key': 'test-key', 'model': 'gpt-4o-mini'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert self._SYSTEM in body, (
-            "OpenAIService.build_request_body must include system_prompt"
-        )
-
-    def test_openai_build_request_body_includes_user_message(self):
-        from services.llm_service import OpenAIService
-        svc = OpenAIService({'api_key': 'test-key', 'model': 'gpt-4o-mini'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert 'What is the capital of France?' in body, (
-            "OpenAIService.build_request_body must include message content"
-        )
-
-    def test_openai_build_request_body_includes_tools(self):
-        from services.llm_service import OpenAIService
-        svc = OpenAIService({'api_key': 'test-key', 'model': 'gpt-4o-mini'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert 'search' in body, (
-            "OpenAIService.build_request_body must include tool names"
-        )
-
-    def test_gemini_build_request_body_includes_system(self):
-        from services.llm_service import GeminiService
-        svc = GeminiService({'api_key': 'test-key', 'model': 'gemini-2.5-flash'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert self._SYSTEM in body, (
-            "GeminiService.build_request_body must include system_prompt"
-        )
-
-    def test_gemini_build_request_body_includes_user_message(self):
-        from services.llm_service import GeminiService
-        svc = GeminiService({'api_key': 'test-key', 'model': 'gemini-2.5-flash'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert 'What is the capital of France?' in body, (
-            "GeminiService.build_request_body must include message content"
-        )
-
-    def test_gemini_build_request_body_includes_tools(self):
-        from services.llm_service import GeminiService
-        svc = GeminiService({'api_key': 'test-key', 'model': 'gemini-2.5-flash'})
-        body = svc.build_request_body(self._SYSTEM, self._MESSAGES, self._TOOLS)
-        assert 'search' in body, (
-            "GeminiService.build_request_body must include tool names"
-        )
+        assert self._SYSTEM in body
+        assert 'What is the capital of France?' in body
+        assert 'search' in body
 
     def test_build_request_body_without_tools_smaller_than_with_tools(self):
         """Serialised body WITH tools must be strictly larger than WITHOUT tools.

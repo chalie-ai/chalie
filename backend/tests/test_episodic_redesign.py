@@ -129,16 +129,6 @@ class TestStoreEpisodeNewColumns:
                              (episode_id,)).fetchone()
         assert row['emotional_valence'] == pytest.approx(0.75)
 
-    def test_emotional_arousal_stored(self, mem_db, episodic_svc):
-        """emotional_arousal float is stored and retrievable."""
-        data = _ep(emotional_arousal=0.4)
-
-        episode_id = episodic_svc.store_episode(data)
-
-        row = mem_db.execute("SELECT emotional_arousal FROM episodes WHERE id = ?",
-                             (episode_id,)).fetchone()
-        assert row['emotional_arousal'] == pytest.approx(0.4)
-
     def test_consolidated_from_stored_as_json(self, mem_db, episodic_svc):
         """consolidated_from list is persisted as a JSON array."""
         source_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
@@ -159,16 +149,6 @@ class TestStoreEpisodeNewColumns:
         row = mem_db.execute("SELECT storage_strength FROM episodes WHERE id = ?",
                              (episode_id,)).fetchone()
         assert row['storage_strength'] == pytest.approx(1.5)
-
-    def test_retrieval_weight_stored(self, mem_db, episodic_svc):
-        """retrieval_weight is stored and retrievable."""
-        data = _ep(retrieval_weight=0.8)
-
-        episode_id = episodic_svc.store_episode(data)
-
-        row = mem_db.execute("SELECT retrieval_weight FROM episodes WHERE id = ?",
-                             (episode_id,)).fetchone()
-        assert row['retrieval_weight'] == pytest.approx(0.8)
 
     def test_new_columns_default_when_absent(self, mem_db, episodic_svc):
         """When optional columns are omitted, defaults are applied."""

@@ -19,8 +19,7 @@ from services.time_formatter_service import TimeFormatterService
 logger = logging.getLogger(__name__)
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a news article card; without it, the user sees "
     "only plain text. Write a single paragraph that synthesises the key story "
     "for the user. Example: \"Here's the latest — "
@@ -115,7 +114,7 @@ class NewsAbility(Ability):
 
             return _serialise_rich(top, ordinal)
         except Exception as e:
-            logger.error(f"[news-tool] failed: {e}", exc_info=True)
+            logger.exception(f"[news-tool] failed: {e}")
             return {"text": "", "error": str(e)}
 
     @classmethod

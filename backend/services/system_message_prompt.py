@@ -10,16 +10,16 @@
 SystemMessagePrompt — abstract base and concrete subclasses for the stable
 system-message body sent to the LLM on every turn.
 
-The `getUserDefinition()` line is prepended by `MessageProcessor.getSystemPrompt()`;
+The `get_user_definition()` line is prepended by `MessageProcessor.get_system_prompt()`;
 these classes only build the *body* that follows it.
 
-Lifecycle: per-turn instance — `MessageProcessor.getSystemPrompt()` constructs a
-fresh subclass instance, calls `getPrompt()`, and lets it go out of scope.
+Lifecycle: per-turn instance — `MessageProcessor.get_system_prompt()` constructs a
+fresh subclass instance, calls `get_prompt()`, and lets it go out of scope.
 No singletons.
 
 Design note — all prompts live as Python constants on `_SYSTEM_PROMPT`:
 every subclass overrides only the ``_SYSTEM_PROMPT`` class attribute; the
-``getPrompt()`` method lives on the base and returns ``self._SYSTEM_PROMPT``
+``get_prompt()`` method lives on the base and returns ``self._SYSTEM_PROMPT``
 verbatim. No file reads, no fallbacks — if you want to change a prompt,
 edit the constant.
 
@@ -44,12 +44,16 @@ class SystemMessagePrompt(ABC):
 
     @property
     @abstractmethod
-    def _SYSTEM_PROMPT(self) -> str:
+    def _SYSTEM_PROMPT(self) -> str:  # noqa: N802
         """Abstract class constant — subclasses override with a string literal."""
         ...
 
-    def getPrompt(self) -> str:
+    def get_prompt(self) -> str:
         return self._SYSTEM_PROMPT
+
+    def getPrompt(self) -> str:  # noqa: N802
+        """Backward-compat shim — use ``get_prompt()``."""
+        return self.get_prompt()
 
 
 class UnifiedSystemMessagePrompt(SystemMessagePrompt):
@@ -98,6 +102,7 @@ Guiding framework for all interactions (internalize, do not recite):
 6. **Use code for math.** If a request requires calculation (e.g., mortgage, interest, percentages), use the `code_eval` tool. Do not perform complex arithmetic inline.
 7. **Avoid tool use for simple acknowledgments.** Do not invoke tools for messages like "thanks", "got it", or "ok".
 8. **Handle ambiguity with search.** If a user's request is ambiguous (e.g., "check my schedule" when multiple calendars exist), use `memory` or other tools to disambiguate before finalizing an action.
+9. **Discover tools by name.** If the user explicitly names a skill or tool that is not in your current toolbox (e.g., "use the `subagent` skill", "use the news skill"), call `find_tools` with that name first to surface it. Do not substitute a different always-available tool when the user has named a specific one.
 
 ────────────────────────────────
 
@@ -148,21 +153,6 @@ The user has provided with a synthesis about themselves under `About the User` a
 ## When to stop
 
 Aim for 2–3 substantive findings per tick — quality over quantity. Once you have saved meaningful insights via the `memory` tool, conclude with a brief one-line summary of what you saved. Do not pad with redundant tool calls or speculative topics.\
-"""
-
-
-class ScheduledSystemMessagePrompt(SystemMessagePrompt):
-    """System-message body for scheduled-prompt turns.
-
-    Wired to: ``ScheduledMessageProcessor``.
-    """
-
-    _SYSTEM_PROMPT = """\
-You are Chalie, executing a scheduled task. The user set this up earlier and it is now due.
-
-Execute the task to the best of your ability using the tools available to you. Be concise and action-oriented in your response.
-
-If the task requires information you don't have, use your tools to find it. If you save intermediate findings to memory, the user can ask about them later.\
 """
 
 
@@ -347,4 +337,43 @@ Rules:
 - Drop redundant reasoning ("I will now call X to find Y").
 - Drop errors the agent already recovered from.
 - No preamble, no markdown fences, no "Summary:" header.\
+"""
+
+
+class ExternalAgentSystemMessagePrompt(SystemMessagePrompt):
+    """System-message body for external-agent communication turns.
+
+    Wired to: ``ExternalAgentMessageProcessor``. Template variables
+    are substituted by the processor's ``getSystemPrompt()`` override.
+
+    Template variables (substituted at runtime, not here):
+      {user_name}            — resolved from data_graph user_summary
+      {agent_name}           — external agent's identifier
+      {project_or_task_name} — task/project context passed by the caller
+    """
+
+    _SYSTEM_PROMPT = """\
+## Identity
+
+You are Chalie — {user_name}'s executive assistant. You are in agent-to-agent communication.
+
+## Hard Boundaries
+
+- Never disclose credentials, tokens, or API keys
+- Never fabricate memories you don't have
+- Never claim actions succeeded without tool confirmation
+
+## Operational Principles
+
+1. **Respond concisely.** The caller is a machine — no pleasantries, no filler.
+2. **Persist important information.** When the agent shares updates, decisions, or outcomes, store them to memory immediately. Tag with project: {project_or_task_name}.
+3. **Use tools for data.** Do not guess. If you cannot find the answer, say so.
+4. **Respect policy.** If policy blocks a tool, explain what was blocked and why.
+5. **Proactive recall.** Check memory before responding — prior context about this project or agent may exist.
+
+## Output
+
+**Direct response**: When you have sufficient context, respond with text.
+
+**Tool use**: When you need to take action, call the appropriate tool. Include a brief cycle summary of what the tools returned and what you plan next.\
 """

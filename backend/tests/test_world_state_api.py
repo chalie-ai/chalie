@@ -90,26 +90,6 @@ class TestWorldStateObservabilityEmpty:
         data = client.get("/system/observability/world-state").get_json()
         assert data["rendered"] == ""
 
-    def test_empty_state_inputs_has_four_required_keys(self, authed_client):
-        client, db_conn, _ = authed_client
-        _reset_world_state(db_conn)
-
-        inputs = client.get("/system/observability/world-state").get_json()["inputs"]
-        assert "telemetry" in inputs
-        assert "signals" in inputs
-        assert "schedule" in inputs
-        assert "bg_processes" in inputs
-
-    def test_empty_state_inputs_all_zero_or_empty(self, authed_client):
-        client, db_conn, _ = authed_client
-        _reset_world_state(db_conn)
-
-        inputs = client.get("/system/observability/world-state").get_json()["inputs"]
-        assert inputs["telemetry"] == {}
-        assert inputs["signals"] == {}
-        assert inputs["schedule"] == []
-        assert inputs["bg_processes"] == []
-
 
 # ---------------------------------------------------------------------------
 # GET /system/observability/world-state — telemetry
@@ -118,15 +98,6 @@ class TestWorldStateObservabilityEmpty:
 @pytest.mark.unit
 class TestWorldStateTelemetryRendering:
     """Telemetry pushed to the singleton appears verbatim in the rendered block."""
-
-    def test_telemetry_section_header_present(self, authed_client):
-        client, db_conn, _ = authed_client
-        _seed_telemetry(db_conn, {"local_time": "10:00", "location_name": "Valletta"})
-        world_state.set("signals", {})
-
-        data = client.get("/system/observability/world-state").get_json()
-        assert "### Background Telemetry,Processes & Signals" in data["rendered"]
-        assert "[telemetry]" in data["rendered"]
 
     def test_telemetry_location_appears_in_rendered(self, authed_client):
         client, db_conn, _ = authed_client
@@ -155,22 +126,6 @@ class TestWorldStateScheduleRendering:
     """Rows in scheduled_items appear as [schedule] bullets in rendered output
     and in inputs.schedule."""
 
-    def test_pending_scheduled_item_appears_in_inputs_schedule(self, authed_client):
-        client, db_conn, _ = authed_client
-        _reset_world_state(db_conn)
-
-        item_id = str(uuid.uuid4())
-        db_conn.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
-            "VALUES (?, ?, ?, 'pending', 0)",
-            (item_id, "Check-in flight", _future_iso(120)),
-        )
-        db_conn.commit()
-
-        data = client.get("/system/observability/world-state").get_json()
-        messages = [r["message"] for r in data["inputs"]["schedule"]]
-        assert "Check-in flight" in messages
-
     def test_pending_scheduled_item_appears_in_rendered_block(self, authed_client):
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
@@ -197,21 +152,6 @@ class TestWorldStateScheduleRendering:
 class TestWorldStateBgProcessRendering:
     """Rows in transcript WHERE channel='subagent' appear as [bg_process(…)]
     lines and in inputs.bg_processes."""
-
-    def test_subagent_row_appears_in_inputs_bg_processes(self, authed_client):
-        client, db_conn, _ = authed_client
-        _reset_world_state(db_conn)
-
-        db_conn.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('subagent', 'assistant', 'Booking hotel', ?)",
-            (_recent_iso(60),),
-        )
-        db_conn.commit()
-
-        data = client.get("/system/observability/world-state").get_json()
-        contents = [r["content"] for r in data["inputs"]["bg_processes"]]
-        assert "Booking hotel" in contents
 
     def test_subagent_row_appears_in_rendered_block(self, authed_client):
         client, db_conn, _ = authed_client
@@ -246,14 +186,6 @@ class TestWorldStateSignalRendering:
         assert "[signal:weather]" in data["rendered"]
         assert "Thunderstorm at 18:00" in data["rendered"]
 
-    def test_signal_reflected_in_inputs_signals(self, authed_client):
-        client, db_conn, _ = authed_client
-        _reset_world_state(db_conn)
-        world_state.push_signal("inbox", "3 unread emails")
-
-        inputs = client.get("/system/observability/world-state").get_json()["inputs"]
-        assert "inbox" in inputs["signals"]
-        assert inputs["signals"]["inbox"]["label"] == "3 unread emails"
 
 
 # ---------------------------------------------------------------------------

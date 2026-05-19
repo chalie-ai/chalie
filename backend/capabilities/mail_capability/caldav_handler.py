@@ -15,7 +15,7 @@ import uuid
 from datetime import timedelta
 from itertools import combinations
 
-from services.time_utils import utc_now, parse_utc, get_user_tz
+from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
@@ -109,10 +109,11 @@ def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
 def _get_user_tz():
     """Return user's ZoneInfo timezone or None.
 
-    Delegates to the centralised ``get_user_tz()`` in time_utils.
+    Delegates to locale_service.get_timezone().
     Returns None when the result is plain UTC (no user timezone detected).
     """
-    tz = get_user_tz()
+    from services.locale_service import get_timezone
+    tz = get_timezone()
     if tz.key == "UTC":
         return None
     return tz
@@ -120,17 +121,12 @@ def _get_user_tz():
 
 def _next_morning_8am() -> _dt_module.datetime:
     """Return the next 08:00 in the user's local timezone (UTC fallback)."""
-    now = utc_now()
-    tz = _get_user_tz()
-    if tz:
-        local_now = now.astimezone(tz)
-        local_8am = local_now.replace(hour=8, minute=0, second=0, microsecond=0)
-        if local_8am <= local_now:
-            local_8am += timedelta(days=1)
-        from datetime import timezone as _tz
-        return local_8am.astimezone(_tz.utc)
-    tomorrow = now + timedelta(days=1)
-    return tomorrow.replace(hour=8, minute=0, second=0, microsecond=0)
+    from services.locale_service import local_now, to_utc
+    now = local_now()
+    local_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if local_8am <= now:
+        local_8am += timedelta(days=1)
+    return to_utc(local_8am)
 
 
 # ---------------------------------------------------------------------------
@@ -458,95 +454,6 @@ class CaldavHandler:
             logger.error("[caldav_handler] upsert_events failed: %s", exc)
 
     # ------------------------------------------------------------------
-    # Tool handlers — DB queries (no credentials needed)
-    # ------------------------------------------------------------------
-
-    def list_events(self, params: dict) -> dict:
-        """Query scheduled_items for calendar events.
-
-        params: date_from, date_to, calendar_name, limit (max 200, default 50).
-        """
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
-            date_from = params.get("date_from")
-            date_to = params.get("date_to")
-            calendar_name = params.get("calendar_name")
-            limit = min(int(params.get("limit", 50)), 200)
-
-            query = (
-                "SELECT message, due_at, metadata FROM scheduled_items "
-                "WHERE source='mail' AND item_type='event' AND status='pending'"
-            )
-            qp: list = []
-            if date_from:
-                query += " AND due_at >= ?"
-                qp.append(date_from)
-            if date_to:
-                query += " AND due_at <= ?"
-                qp.append(date_to)
-            query += " ORDER BY due_at ASC LIMIT ?"
-            qp.append(limit)
-
-            with db.connection() as conn:
-                rows = conn.execute(query, qp).fetchall()
-
-            results = []
-            for msg, due_at, meta_raw in rows:
-                meta = _json.loads(meta_raw) if meta_raw else {}
-                if calendar_name and meta.get("calendar_name", "").lower() != calendar_name.lower():
-                    continue
-                results.append({
-                    "summary": meta.get("uid", msg),
-                    "title": msg,
-                    "dtstart": due_at,
-                    "dtend": meta.get("dtend"),
-                    "location": meta.get("location"),
-                    "attendees": meta.get("attendees", []),
-                    "all_day": meta.get("all_day", False),
-                    "calendar_name": meta.get("calendar_name"),
-                    "uid": meta.get("uid"),
-                })
-            return {"events": results, "count": len(results)}
-        except Exception as exc:
-            return {"error": f"Failed to list events: {exc}"}
-
-    def get_event(self, params: dict) -> dict:
-        """Fetch a single event by UID from scheduled_items."""
-        uid = params.get("uid") or params.get("event_uid")
-        if not uid:
-            return {"error": "uid is required"}
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT message, due_at, metadata FROM scheduled_items "
-                    "WHERE external_uid = ? AND item_type='event'",
-                    (f"caldav:{uid}",),
-                ).fetchone()
-
-            if row:
-                msg, due_at, meta_raw = row
-                meta = _json.loads(meta_raw) if meta_raw else {}
-                return {"event": {
-                    "uid": uid,
-                    "title": msg,
-                    "dtstart": due_at,
-                    "dtend": meta.get("dtend"),
-                    "location": meta.get("location"),
-                    "attendees": meta.get("attendees", []),
-                    "all_day": meta.get("all_day", False),
-                    "calendar_name": meta.get("calendar_name"),
-                    "recurrence": meta.get("recurrence"),
-                }}
-            return {"error": f"Event '{uid}' not found"}
-        except Exception as exc:
-            return {"error": f"Failed to get event: {exc}"}
-
-    # ------------------------------------------------------------------
     # Tool handlers — server mutations (client passed in)
     # ------------------------------------------------------------------
 
@@ -624,6 +531,56 @@ class CaldavHandler:
             logger.error("[caldav_handler] create_event failed: %s", exc)
             return {"error": str(exc)}
 
+    @staticmethod
+    def _find_event_by_uid(client, uid: str):
+        """Search all calendars for an event matching ``uid``. Returns the event or None."""
+        principal = client.principal()
+        for calendar in principal.calendars():
+            try:
+                results = calendar.search(uid=uid)
+                if results:
+                    return results[0]
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _parse_ical_from_event(found_event):
+        """Parse the icalendar Calendar object from a CalDAV event."""
+        try:
+            ical_data = (
+                found_event.data if isinstance(found_event.data, str)
+                else found_event.data.decode("utf-8")
+            )
+            return _icalendar_lib.Calendar.from_ical(ical_data)
+        except AttributeError:
+            return found_event.icalendar_instance
+
+    @staticmethod
+    def _apply_event_updates(ical, params: dict) -> None:
+        """Apply field updates from ``params`` onto the VEVENT component in-place."""
+        for component in ical.walk():
+            if component.name != "VEVENT":
+                continue
+            if "summary" in params and params["summary"] is not None:
+                component.pop("SUMMARY", None)
+                component.add("summary", str(params["summary"]))
+            if "dtstart" in params and params["dtstart"] is not None:
+                component.pop("DTSTART", None)
+                component.add("dtstart", parse_utc(params["dtstart"]))
+            if "dtend" in params and params["dtend"] is not None:
+                component.pop("DTEND", None)
+                component.add("dtend", parse_utc(params["dtend"]))
+            if "location" in params:
+                component.pop("LOCATION", None)
+                if params["location"]:
+                    component.add("location", str(params["location"]))
+            if "description" in params:
+                component.pop("DESCRIPTION", None)
+                if params["description"]:
+                    component.add("description", str(params["description"]))
+            break
+
     def update_event(self, client, params: dict) -> dict:
         """Update an existing CalDAV event by UID.
 
@@ -640,50 +597,12 @@ class CaldavHandler:
             return {"error": "Parameter 'uid' is required."}
 
         try:
-            principal = client.principal()
-            found_event = None
-            for calendar in principal.calendars():
-                try:
-                    results = calendar.search(uid=uid)
-                    if results:
-                        found_event = results[0]
-                        break
-                except Exception:
-                    continue
-
+            found_event = self._find_event_by_uid(client, uid)
             if found_event is None:
                 return {"error": f"Event not found (UID: {uid})"}
 
-            try:
-                ical_data = (
-                    found_event.data if isinstance(found_event.data, str)
-                    else found_event.data.decode("utf-8")
-                )
-                ical = _icalendar_lib.Calendar.from_ical(ical_data)
-            except AttributeError:
-                ical = found_event.icalendar_instance
-
-            for component in ical.walk():
-                if component.name != "VEVENT":
-                    continue
-                if "summary" in params and params["summary"] is not None:
-                    component.pop("SUMMARY", None)
-                    component.add("summary", str(params["summary"]))
-                if "dtstart" in params and params["dtstart"] is not None:
-                    component.pop("DTSTART", None)
-                    component.add("dtstart", parse_utc(params["dtstart"]))
-                if "dtend" in params and params["dtend"] is not None:
-                    component.pop("DTEND", None)
-                    component.add("dtend", parse_utc(params["dtend"]))
-                if "location" in params:
-                    component.pop("LOCATION", None)
-                    if params["location"]:
-                        component.add("location", str(params["location"]))
-                if "description" in params:
-                    component.pop("DESCRIPTION", None)
-                    if params["description"]:
-                        component.add("description", str(params["description"]))
-                break
+            ical = self._parse_ical_from_event(found_event)
+            self._apply_event_updates(ical, params)
 
             found_event.data = ical.to_ical().decode("utf-8")
             found_event.save()

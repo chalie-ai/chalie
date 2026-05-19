@@ -117,7 +117,7 @@ class ListService:
 
             updated = self._write_queue.submit_sync(_soft_delete) > 0
             if updated:
-                logger.info(f"[LISTS] Deleted list '{list_row['name']}' (id={list_id})")
+                logger.info("[LISTS] Deleted list '%s' (id=%s)", safe(list_row['name']), list_id)
             return True
 
         except Exception as e:

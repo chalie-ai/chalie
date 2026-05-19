@@ -14,14 +14,14 @@ export class AmbientCanvas {
     if (!canvas || !ctx) return;
 
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      canvas.width = globalThis.innerWidth;
+      canvas.height = globalThis.innerHeight;
     };
     resize();
-    window.addEventListener('resize', resize);
+    globalThis.addEventListener('resize', resize);
 
     // Check for reduced motion preference
-    const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const prefersReduced = globalThis.matchMedia('(prefers-reduced-motion: reduce)');
     if (prefersReduced.matches) {
       // Draw a single static frame, and redraw when the theme flips so the
       // canvas keeps up without an animation loop.

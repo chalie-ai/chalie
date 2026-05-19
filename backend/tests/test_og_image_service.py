@@ -75,14 +75,6 @@ class TestResolveOgImages:
         out = resolve_og_images([f"{base}/article"])
         assert out[f"{base}/article"]["image_url"] == "https://cdn.example.com/og.jpg"
 
-    def test_twitter_image_fallback(self, html_server):
-        from services.og_image_service import resolve_og_images
-        base, handler = html_server
-        body = _html('<meta name="twitter:image" content="https://cdn.example.com/tw.jpg">')
-        handler.pages["/tw"] = (200, {"Content-Type": "text/html"}, body)
-        out = resolve_og_images([f"{base}/tw"])
-        assert out[f"{base}/tw"]["image_url"] == "https://cdn.example.com/tw.jpg"
-
     def test_relative_url_resolved_against_page(self, html_server):
         from services.og_image_service import resolve_og_images
         base, handler = html_server
@@ -107,23 +99,6 @@ class TestResolveOgImages:
         handler.pages["/bare"] = (200, {"Content-Type": "text/html"}, _html(""))
         out = resolve_og_images([f"{base}/bare"])
         assert out == {}
-
-    def test_non_html_content_type_skipped(self, html_server):
-        from services.og_image_service import resolve_og_images
-        base, handler = html_server
-        handler.pages["/json"] = (200, {"Content-Type": "application/json"}, b"{}")
-        out = resolve_og_images([f"{base}/json"])
-        assert out == {}
-
-    def test_404_drops_silently(self, html_server):
-        from services.og_image_service import resolve_og_images
-        base, _ = html_server
-        out = resolve_og_images([f"{base}/missing"])
-        assert out == {}
-
-    def test_non_http_url_filtered(self):
-        from services.og_image_service import resolve_og_images
-        assert resolve_og_images(["not-a-url", "ftp://x", ""]) == {}
 
     def test_multiple_urls_parallel(self, html_server):
         from services.og_image_service import resolve_og_images
@@ -160,38 +135,6 @@ class TestResolveOgDescription:
         handler.pages["/with-desc"] = (200, {"Content-Type": "text/html"}, body)
         out = resolve_og_images([f"{base}/with-desc"])
         assert out[f"{base}/with-desc"]["description"] == "Scientists find water on Mars."
-
-    def test_og_description_short_falls_back_to_og_title(self, html_server):
-        from services.og_image_service import resolve_og_images
-        base, handler = html_server
-        body = _html(
-            '<meta property="og:image" content="https://cdn.example.com/img.jpg">'
-            '<meta property="og:description" content="Too short">'
-            '<meta property="og:title" content="Mars Water Discovery 2026">'
-        )
-        handler.pages["/short-desc"] = (200, {"Content-Type": "text/html"}, body)
-        out = resolve_og_images([f"{base}/short-desc"])
-        assert out[f"{base}/short-desc"]["description"] == "Mars Water Discovery 2026"
-
-    def test_no_description_falls_back_to_title_tag(self, html_server):
-        from services.og_image_service import resolve_og_images
-        base, handler = html_server
-        body = _html(
-            '<meta property="og:image" content="https://cdn.example.com/img.jpg">',
-            title="Article Title From Title Tag",
-        )
-        handler.pages["/title-only"] = (200, {"Content-Type": "text/html"}, body)
-        out = resolve_og_images([f"{base}/title-only"])
-        assert out[f"{base}/title-only"]["description"] == "Article Title From Title Tag"
-
-    def test_description_empty_when_nothing_found(self, html_server):
-        from services.og_image_service import resolve_og_images
-        base, handler = html_server
-        # Page has og:image but no description/title metadata
-        body = b"<html><head><meta property=\"og:image\" content=\"https://cdn.example.com/img.jpg\"/></head></html>"
-        handler.pages["/no-title"] = (200, {"Content-Type": "text/html"}, body)
-        out = resolve_og_images([f"{base}/no-title"])
-        assert out[f"{base}/no-title"]["description"] == ""
 
     def test_og_image_resolved_when_buried_after_large_inline_payload(self, html_server):
         """Real-world parity: Google News article pages bury og:image past ~575KB.

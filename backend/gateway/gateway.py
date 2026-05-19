@@ -14,12 +14,12 @@ Routes:
     CRUD     /gw/<interface_id>/data — daemon file storage
 """
 
+import json
 import logging
 import os
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 
 import requests
 
@@ -78,9 +78,34 @@ def _deferred_chalie_register(dashboard_iface_id: str, name: str, host: str, por
     t.start()
 
 
+def _safe_interface_id(interface_id: str) -> bool:
+    """Return True if interface_id is safe for use as a path component.
+
+    Rejects null bytes, path separators, ``..`` sequences, and any value
+    whose realpath does not resolve inside the ``interfaces/`` base directory.
+    """
+    if not interface_id:
+        return False
+    if "\x00" in interface_id:
+        return False
+    if "/" in interface_id or "\\" in interface_id:
+        return False
+    if ".." in interface_id:
+        return False
+    base = os.path.realpath(os.path.join(_data_dir, "interfaces"))
+    candidate = os.path.realpath(os.path.join(base, interface_id))
+    return candidate.startswith(base + os.sep) or candidate == base
+
+
 def _daemon_data_dir(interface_id: str) -> str:
-    """Return the data directory for a daemon, creating it if needed."""
-    path = os.path.join(_data_dir, "interfaces", interface_id)
+    """Return the data directory for a daemon, creating it if needed.
+
+    Raises ValueError if interface_id would escape the base directory.
+    """
+    base = os.path.realpath(os.path.join(_data_dir, "interfaces"))
+    path = os.path.realpath(os.path.join(base, interface_id))
+    if not path.startswith(base + os.sep) and path != base:
+        raise ValueError("Invalid interface_id")
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -204,7 +229,8 @@ def register_daemon():
 
     # New daemon — create interface record
     interface_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    from services.time_utils import utc_now
+    now = utc_now().isoformat()
 
     scopes = body.get("scopes", {})
 
@@ -445,7 +471,7 @@ def proxy_render(interface_id: str):
             return jsonify(data), 200
         else:
             # SDK v1 legacy: raw HTML — inject CHALIE_GW_BASE global
-            script = f'<script>window.CHALIE_GW_BASE="{gw_base}";</script>'
+            script = f'<script>window.CHALIE_GW_BASE={json.dumps(gw_base)};</script>'
             html = script + resp.text
             return html, 200, {"Content-Type": "text/html; charset=utf-8"}
     except Exception as e:
@@ -478,17 +504,23 @@ def proxy_execute(interface_id: str):
 @gateway_bp.route("/gw/<interface_id>/data", methods=["GET"])
 def list_data_files(interface_id: str):
     """List all files in the daemon's data folder."""
+    if not _safe_interface_id(interface_id):
+        return jsonify({"error": "Invalid interface_id"}), 400
     _, err = _get_interface(interface_id)
     if err:
         return err
     data_path = _daemon_data_dir(interface_id)
+    real_base = os.path.realpath(data_path)
     files = []
     for name in os.listdir(data_path):
         fpath = os.path.join(data_path, name)
-        if os.path.isfile(fpath):
+        real_fpath = os.path.realpath(fpath)
+        if not real_fpath.startswith(real_base + os.sep) and real_fpath != real_base:
+            continue
+        if os.path.isfile(real_fpath):
             files.append({
                 "name": name,
-                "size": os.path.getsize(fpath),
+                "size": os.path.getsize(real_fpath),
             })
     return jsonify(files), 200
 
@@ -496,6 +528,8 @@ def list_data_files(interface_id: str):
 @gateway_bp.route("/gw/<interface_id>/data/<filename>", methods=["GET"])
 def get_data_file(interface_id: str, filename: str):
     """Read a file from the daemon's data folder."""
+    if not _safe_interface_id(interface_id):
+        return jsonify({"error": "Invalid interface_id"}), 400
     _, err = _get_interface(interface_id)
     if err:
         return err
@@ -513,6 +547,8 @@ def get_data_file(interface_id: str, filename: str):
 @gateway_bp.route("/gw/<interface_id>/data/<filename>", methods=["PUT"])
 def put_data_file(interface_id: str, filename: str):
     """Create or overwrite a file in the daemon's data folder."""
+    if not _safe_interface_id(interface_id):
+        return jsonify({"error": "Invalid interface_id"}), 400
     _, err = _get_interface(interface_id)
     if err:
         return err
@@ -531,6 +567,8 @@ def put_data_file(interface_id: str, filename: str):
 @gateway_bp.route("/gw/<interface_id>/data/<filename>", methods=["DELETE"])
 def delete_data_file(interface_id: str, filename: str):
     """Delete a file from the daemon's data folder."""
+    if not _safe_interface_id(interface_id):
+        return jsonify({"error": "Invalid interface_id"}), 400
     _, err = _get_interface(interface_id)
     if err:
         return err

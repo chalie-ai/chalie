@@ -55,7 +55,7 @@ _KIND_POLICY = {
     KIND_DOCUMENT:           {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
     # behavioral_pattern: written exclusively by abilities.pattern_match.save_pattern.SavePattern
     # via raw SQL UPSERT (one-active-row-per-(kind, key)). Decay (-0.005/pass with
-    # soft-delete at 0) is handled by PatternMatchProcessor.postTurn() — DecayEngine
+    # soft-delete at 0) is handled by PatternMatchProcessor.post_turn() — DecayEngine
     # does NOT touch this kind.
     KIND_BEHAVIORAL_PATTERN: {'ttl_days': None,  'reinforce': True,  'contradiction': None,               'deletion': 'soft',     'd_base': 0.1,  'salience_floor': 0.3},
 }
@@ -853,243 +853,240 @@ class DataGraphService:
 
     # ── recall() ─────────────────────────────────────────────────────
 
+    def _recall_vec_search(self, cursor, candidates: dict, query_blob, k: int) -> None:
+        """Run key-vec and value-vec KNN searches, populating candidates in-place."""
+        if not query_blob:
+            return
+        try:
+            cursor.execute(
+                "SELECT rowid, distance FROM data_graph_key_vec "
+                "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                (query_blob, k),
+            )
+            for rowid, dist in cursor.fetchall():
+                cos = _l2_dist_to_cosine(dist)
+                candidates.setdefault(rowid, {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0})
+                candidates[rowid]['key_cos'] = max(candidates[rowid]['key_cos'], cos)
+        except Exception as e:
+            logger.debug("[DATA GRAPH] key_vec search failed (non-fatal): %s", e)
+        try:
+            cursor.execute(
+                "SELECT rowid, distance FROM data_graph_value_vec "
+                "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                (query_blob, k),
+            )
+            for rowid, dist in cursor.fetchall():
+                cos = _l2_dist_to_cosine(dist)
+                candidates.setdefault(rowid, {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0})
+                candidates[rowid]['value_cos'] = max(candidates[rowid]['value_cos'], cos)
+        except Exception as e:
+            logger.debug("[DATA GRAPH] value_vec search failed (non-fatal): %s", e)
+
+    def _recall_fts_search(self, cursor, candidates: dict, query: str) -> None:
+        """Run FTS search, setting fts_bonus=1.0 for matching rows."""
+        try:
+            fts_query = re.sub(r'[^\w\s]', '', query).strip()
+            if not fts_query:
+                return
+            fts_words = [w for w in fts_query.split() if w and w.lower() not in _get_stop_words()]
+            fts_terms = ' OR '.join(f'"{w}"*' for w in fts_words if w)
+            if not fts_terms:
+                return
+            cursor.execute(
+                "SELECT rowid, rank FROM data_graph_fts "
+                "WHERE data_graph_fts MATCH ? ORDER BY rank LIMIT 30",
+                (fts_terms,),
+            )
+            for rowid, _rank in cursor.fetchall():
+                candidates.setdefault(rowid, {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0})
+                candidates[rowid]['fts_bonus'] = 1.0
+        except Exception as e:
+            logger.debug("[DATA GRAPH] FTS search failed (non-fatal): %s", e)
+
+    def _recall_variant_search(self, cursor, candidates: dict, query_blob, k: int) -> None:
+        """Run expanded-semantic (doc2query variant) vector search."""
+        if not query_blob:
+            return
+        try:
+            variant_k = min(k, 50)
+            cursor.execute("""
+                SELECT CAST(es.related_to_id AS INTEGER) AS source_id, v.distance
+                FROM expanded_semantic_vec v
+                JOIN expanded_semantic es ON es.id = v.rowid
+                WHERE v.embedding MATCH ? AND k = ?
+                  AND es.relates_to_table = 'data_graph'
+                ORDER BY v.distance
+            """, (query_blob, variant_k))
+            for source_id, dist in cursor.fetchall():
+                cos = _l2_dist_to_cosine(dist)
+                candidates.setdefault(source_id, {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0, 'variant_cos': 0.0})
+                candidates[source_id]['variant_cos'] = max(
+                    candidates[source_id].get('variant_cos', 0.0), cos
+                )
+        except Exception as e:
+            logger.debug("[DATA GRAPH] Variant vec search failed (non-fatal): %s", e)
+
+    def _recall_score_candidates(self, cursor, candidates: dict,
+                                  filter_clause: str, filter_params: list) -> list:
+        """Fetch full rows for candidates, compute composite scores, return sorted list."""
+        now_ts = utc_now().timestamp()
+        scored = []
+        for rowid, sigs in candidates.items():
+            cursor.execute(
+                f"SELECT * FROM data_graph WHERE id=? AND {filter_clause}",
+                [rowid] + filter_params,
+            )
+            row = cursor.fetchone()
+            if not row:
+                continue
+            d = self._row_to_dict(row)
+
+            base_score = (
+                2.0 * sigs['key_cos']
+                + 1.0 * sigs['value_cos']
+                + 0.3 * sigs['fts_bonus']
+                + 0.8 * sigs.get('variant_cos', 0.0)
+            )
+            ref_ts_str = d.get('last_accessed_at') or d.get('last_confirmed_at')
+            try:
+                ref_ts = parse_utc(ref_ts_str).timestamp() if ref_ts_str else now_ts - 3600
+            except Exception:
+                ref_ts = now_ts - 3600
+            age_seconds = max(1, now_ts - ref_ts)
+            evidence = max(1, d.get('evidence_count', 1))
+            actr_boost = math.log(evidence) - 0.5 * math.log(age_seconds)
+            composite = base_score * d.get('retrieval_weight', 1.0) * (1 + 0.3 * _sigmoid(actr_boost))
+
+            d['composite_score'] = composite
+            d['cos_score'] = max(sigs.get('key_cos', 0.0), sigs.get('value_cos', 0.0))
+            scored.append(d)
+
+        scored.sort(key=lambda x: x['composite_score'], reverse=True)
+        return scored
+
+    def _recall_expand_graph(self, cursor, top_k: list, filter_clause: str,
+                              filter_params: list, limit: int) -> list:
+        """1-hop graph expansion: add high-scoring neighbours not already in top_k."""
+        expansion = {}
+        top_k_ids = {d['id'] for d in top_k}
+
+        for seed in top_k:
+            seed_id = seed.get('id')
+            if not seed_id:
+                continue
+            cursor.execute(
+                "SELECT e.to_id, e.edge_type, e.strength, e.from_id "
+                "FROM data_graph_edges e WHERE e.from_id = ?",
+                (seed_id,),
+            )
+            edges = cursor.fetchall()
+            out_degree = len(edges)
+
+            for to_id, edge_type, strength, _ in edges:
+                if to_id in top_k_ids:
+                    continue
+                cursor.execute(
+                    f"SELECT * FROM data_graph WHERE id=? AND {filter_clause}",
+                    [to_id] + filter_params,
+                )
+                n_row = cursor.fetchone()
+                if not n_row:
+                    continue
+                n_dict = self._row_to_dict(n_row)
+
+                multiplier = _EDGE_TYPE_MULTIPLIER.get(edge_type, 1.0)
+                n_score = seed['composite_score'] * strength * multiplier
+                if n_dict.get('kind') != seed.get('kind'):
+                    n_score *= 1.2
+                if out_degree > 10:
+                    n_score /= math.sqrt(out_degree)
+
+                neighbour_id = n_dict.get('id')
+                if neighbour_id not in expansion or expansion[neighbour_id]['composite_score'] < n_score:
+                    n_dict['composite_score'] = n_score
+                    n_dict['cos_score'] = seed.get('cos_score', 0.0) / 2.0
+                    expansion[neighbour_id] = n_dict
+
+        all_candidates = {d['id']: d for d in top_k}
+        for nid, nd in expansion.items():
+            if nid not in all_candidates:
+                all_candidates[nid] = nd
+        return sorted(all_candidates.values(), key=lambda x: x['composite_score'], reverse=True)[:limit]
+
+    @staticmethod
+    def _build_kind_filter(kinds) -> tuple[str, list]:
+        """Return (filter_clause, params) for an optional kind restriction."""
+        filters = ["deleted_at IS NULL", "active=1"]
+        params: list = []
+        if kinds:
+            placeholders = ','.join('?' for _ in kinds)
+            filters.append(f"kind IN ({placeholders})")
+            params.extend(kinds)
+        return " AND ".join(filters), params
+
+    @staticmethod
+    def _apply_relevance_floor(candidates: dict) -> dict:
+        """Drop candidates that have no strong signal above the cosine floor."""
+        return {
+            rid: sigs for rid, sigs in candidates.items()
+            if sigs['key_cos'] >= _RECALL_COSINE_FLOOR
+            or sigs['value_cos'] >= _RECALL_COSINE_FLOOR
+            or sigs.get('variant_cos', 0.0) >= _RECALL_COSINE_FLOOR
+            or sigs['fts_bonus'] > 0
+        }
+
+    @staticmethod
+    def _touch_accessed(cursor, top_k: list) -> None:
+        """Increment retrieval_weight and set last_accessed_at for returned rows."""
+        now_iso = utc_now().isoformat()
+        for d in top_k:
+            rid = d.get('id')
+            if rid:
+                new_rw = min(1.0, d.get('retrieval_weight', 1.0) + 0.1)
+                cursor.execute(
+                    "UPDATE data_graph SET last_accessed_at=?, retrieval_weight=? WHERE rowid=?",
+                    (now_iso, new_rw, rid),
+                )
+                d['retrieval_weight'] = new_rw
+
     def recall(self, query: str, *, kinds=None, limit: int = 10, expand_graph: bool = True) -> list:
         try:
             self._backfill_missing_embeddings()
             query_emb = self._generate_embedding(query)
             query_blob = pack_embedding(query_emb) if query_emb else None
 
-            candidates = {}  # rowid -> {'row': dict, 'key_cos': float, 'value_cos': float, 'fts_bonus': float}
-
+            candidates: dict = {}
             k = min(limit * 3, 50)
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
 
-                def _build_filters():
-                    filters = ["deleted_at IS NULL", "active=1"]
-                    params = []
-                    if kinds:
-                        placeholders = ','.join('?' for _ in kinds)
-                        filters.append(f"kind IN ({placeholders})")
-                        params.extend(kinds)
-                    return " AND ".join(filters), params
+                filter_clause, filter_params = self._build_kind_filter(kinds)
 
-                filter_clause, filter_params = _build_filters()
+                self._recall_vec_search(cursor, candidates, query_blob, k)
+                self._recall_fts_search(cursor, candidates, query)
+                self._recall_variant_search(cursor, candidates, query_blob, k)
 
-                # ── Key vec search ──────────────────────────────────
-                if query_blob:
-                    try:
-                        cursor.execute("""
-                            SELECT rowid, distance
-                            FROM data_graph_key_vec
-                            WHERE embedding MATCH ? AND k = ?
-                            ORDER BY distance
-                        """, (query_blob, k))
-                        for rowid, dist in cursor.fetchall():
-                            cos = _l2_dist_to_cosine(dist)
-                            if rowid not in candidates:
-                                candidates[rowid] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0}
-                            candidates[rowid]['key_cos'] = max(candidates[rowid]['key_cos'], cos)
-                    except Exception as e:
-                        logger.debug("[DATA GRAPH] key_vec search failed (non-fatal): %s", e)
-
-                # ── Value vec search ────────────────────────────────
-                if query_blob:
-                    try:
-                        cursor.execute("""
-                            SELECT rowid, distance
-                            FROM data_graph_value_vec
-                            WHERE embedding MATCH ? AND k = ?
-                            ORDER BY distance
-                        """, (query_blob, k))
-                        for rowid, dist in cursor.fetchall():
-                            cos = _l2_dist_to_cosine(dist)
-                            if rowid not in candidates:
-                                candidates[rowid] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0}
-                            candidates[rowid]['value_cos'] = max(candidates[rowid]['value_cos'], cos)
-                    except Exception as e:
-                        logger.debug("[DATA GRAPH] value_vec search failed (non-fatal): %s", e)
-
-                # ── FTS search ──────────────────────────────────────
-                try:
-                    fts_query = re.sub(r'[^\w\s]', '', query).strip()
-                    if fts_query:
-                        fts_words = [
-                            w for w in fts_query.split()
-                            if w and w.lower() not in _get_stop_words()
-                        ]
-                        fts_terms = ' OR '.join(f'"{w}"*' for w in fts_words if w)
-                        if fts_terms:
-                            cursor.execute("""
-                                SELECT rowid, rank
-                                FROM data_graph_fts
-                                WHERE data_graph_fts MATCH ?
-                                ORDER BY rank
-                                LIMIT 30
-                            """, (fts_terms,))
-                            for rowid, _rank in cursor.fetchall():
-                                if rowid not in candidates:
-                                    candidates[rowid] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0}
-                                candidates[rowid]['fts_bonus'] = 1.0
-                except Exception as e:
-                    logger.debug("[DATA GRAPH] FTS search failed (non-fatal): %s", e)
-
-                # ── Variant vec search (expanded_semantic_vec) ──────────
-                # doc2query variants written by SearchExpanderService.  Hits
-                # join back to data_graph via expanded_semantic.related_to_id.
-                if query_blob:
-                    try:
-                        variant_k = min(k, 50)
-                        cursor.execute("""
-                            SELECT CAST(es.related_to_id AS INTEGER) AS source_id,
-                                   v.distance
-                            FROM expanded_semantic_vec v
-                            JOIN expanded_semantic es ON es.id = v.rowid
-                            WHERE v.embedding MATCH ? AND k = ?
-                              AND es.relates_to_table = 'data_graph'
-                            ORDER BY v.distance
-                        """, (query_blob, variant_k))
-                        for source_id, dist in cursor.fetchall():
-                            cos = _l2_dist_to_cosine(dist)
-                            if source_id not in candidates:
-                                candidates[source_id] = {'key_cos': 0.0, 'value_cos': 0.0, 'fts_bonus': 0.0, 'variant_cos': 0.0}
-                            candidates[source_id]['variant_cos'] = max(
-                                candidates[source_id].get('variant_cos', 0.0), cos
-                            )
-                    except Exception as e:
-                        logger.debug("[DATA GRAPH] Variant vec search failed (non-fatal): %s", e)
-
-                # Ensure all existing candidates have the variant_cos key.
                 for sigs in candidates.values():
                     sigs.setdefault('variant_cos', 0.0)
 
-                # ── Relevance floor — drop candidates with no strong signal ──
-                candidates = {
-                    rid: sigs for rid, sigs in candidates.items()
-                    if sigs['key_cos'] >= _RECALL_COSINE_FLOOR
-                    or sigs['value_cos'] >= _RECALL_COSINE_FLOOR
-                    or sigs.get('variant_cos', 0.0) >= _RECALL_COSINE_FLOOR
-                    or sigs['fts_bonus'] > 0
-                }
+                candidates = self._apply_relevance_floor(candidates)
 
-                # ── Fetch full rows ─────────────────────────────────
-                scored = []
-                now_ts = utc_now().timestamp()
-
-                for rowid, sigs in candidates.items():
-                    cursor.execute(
-                        f"SELECT * FROM data_graph WHERE id=? AND {filter_clause}",
-                        [rowid] + filter_params
-                    )
-                    row = cursor.fetchone()
-                    if not row:
-                        continue
-                    d = self._row_to_dict(row)
-
-                    base_score = (
-                        2.0 * sigs['key_cos']
-                        + 1.0 * sigs['value_cos']
-                        + 0.3 * sigs['fts_bonus']
-                        + 0.8 * sigs.get('variant_cos', 0.0)
-                    )
-
-                    ref_ts_str = d.get('last_accessed_at') or d.get('last_confirmed_at')
-                    if ref_ts_str:
-                        try:
-                            ref_ts = parse_utc(ref_ts_str).timestamp()
-                        except Exception:
-                            ref_ts = now_ts - 3600
-                    else:
-                        ref_ts = now_ts - 3600
-
-                    age_seconds = max(1, now_ts - ref_ts)
-                    evidence = max(1, d.get('evidence_count', 1))
-                    actr_boost = math.log(evidence) - 0.5 * math.log(age_seconds)
-                    composite = base_score * d.get('retrieval_weight', 1.0) * (1 + 0.3 * _sigmoid(actr_boost))
-
-                    d['composite_score'] = composite
-                    d['cos_score'] = max(sigs.get('key_cos', 0.0), sigs.get('value_cos', 0.0))
-                    scored.append(d)
-
-                scored.sort(key=lambda x: x['composite_score'], reverse=True)
+                scored = self._recall_score_candidates(cursor, candidates, filter_clause, filter_params)
                 top_k = scored[:limit]
 
-                # ── 1-hop graph expansion ───────────────────────────
                 if expand_graph and top_k:
-                    expansion = {}
+                    top_k = self._recall_expand_graph(cursor, top_k, filter_clause, filter_params, limit)
 
-                    for seed in top_k:
-                        seed_id = seed.get('id')
-                        if not seed_id:
-                            continue
-
-                        cursor.execute("""
-                            SELECT e.to_id, e.edge_type, e.strength, e.from_id
-                            FROM data_graph_edges e
-                            WHERE e.from_id = ?
-                        """, (seed_id,))
-                        edges = cursor.fetchall()
-                        out_degree = len(edges)
-
-                        for to_id, edge_type, strength, _ in edges:
-                            if to_id in {d['id'] for d in top_k}:
-                                continue
-
-                            cursor.execute(
-                                f"SELECT * FROM data_graph WHERE id=? AND {filter_clause}",
-                                [to_id] + filter_params
-                            )
-                            n_row = cursor.fetchone()
-                            if not n_row:
-                                continue
-                            n_dict = self._row_to_dict(n_row)
-
-                            multiplier = _EDGE_TYPE_MULTIPLIER.get(edge_type, 1.0)
-                            n_score = seed['composite_score'] * strength * multiplier
-
-                            if n_dict.get('kind') != seed.get('kind'):
-                                n_score *= 1.2
-
-                            if out_degree > 10:
-                                n_score /= math.sqrt(out_degree)
-
-                            neighbour_id = n_dict.get('id')
-                            if neighbour_id not in expansion or expansion[neighbour_id]['composite_score'] < n_score:
-                                n_dict['composite_score'] = n_score
-                                n_dict['cos_score'] = seed.get('cos_score', 0.0) / 2.0
-                                expansion[neighbour_id] = n_dict
-
-                    all_candidates = {d['id']: d for d in top_k}
-                    for nid, nd in expansion.items():
-                        if nid not in all_candidates:
-                            all_candidates[nid] = nd
-                    top_k = sorted(all_candidates.values(), key=lambda x: x['composite_score'], reverse=True)[:limit]
-
-                # ── Touch accessed ──────────────────────────────────
                 if top_k:
-                    now_iso = utc_now().isoformat()
-                    for d in top_k:
-                        rid = d.get('id')
-                        if rid:
-                            old_rw = d.get('retrieval_weight', 1.0)
-                            new_rw = min(1.0, old_rw + 0.1)
-                            cursor.execute("""
-                                UPDATE data_graph
-                                SET last_accessed_at=?, retrieval_weight=?
-                                WHERE rowid=?
-                            """, (now_iso, new_rw, rid))
-                            d['retrieval_weight'] = new_rw
+                    self._touch_accessed(cursor, top_k)
 
                 cursor.close()
 
                 return [
                     {
-                        'id': d.get('id'),
-                        'kind': d.get('kind'),
-                        'key': d.get('key'),
-                        'value': d.get('value'),
-                        'source': d.get('source'),
+                        'id': d.get('id'), 'kind': d.get('kind'), 'key': d.get('key'),
+                        'value': d.get('value'), 'source': d.get('source'),
                         'retrieval_weight': d.get('retrieval_weight'),
                         'evidence_count': d.get('evidence_count'),
                         'composite_score': d.get('composite_score'),

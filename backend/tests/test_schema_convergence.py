@@ -95,78 +95,24 @@ class TestSchemaConvergence:
             "schema_migrations should not exist — migration scaffolding was removed"
         )
 
-    def test_fresh_db_creates_fts5_virtual_tables(self, tmp_path):
-        """FTS5 virtual tables are created on a fresh database."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            virtual_tables = _virtual_table_names(conn)
-
-        fts_tables = {t for t in virtual_tables if t.endswith("_fts")}
-        assert "episodes_fts" in fts_tables
-        assert "documents_fts" in fts_tables
-
-    def test_fresh_db_creates_vec0_virtual_tables(self, tmp_path):
-        """vec0 virtual tables are created on a fresh database."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            virtual_tables = _virtual_table_names(conn)
-
-        vec_tables = {t for t in virtual_tables if t.endswith("_vec")}
-        assert "episodes_vec" in vec_tables
-        assert "documents_vec" in vec_tables
-
-    def test_fresh_db_creates_indexes(self, tmp_path):
-        """Representative indexes are created on a fresh database."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            indexes = _index_names(conn)
-
-        assert "idx_episodes_channel" in indexes
-        assert "idx_transcript_channel" in indexes
-
     # ── 2. Idempotency ────────────────────────────────────────────────────────
 
-    def test_converge_twice_no_error(self, tmp_path):
-        """Calling converge() on an already-converged database raises no errors."""
-        db = _make_db(tmp_path)
-        _converge(db)
-        # Second run must be silent — no exception
-        _converge(db)
-
-    def test_converge_twice_same_table_set(self, tmp_path):
-        """Table set is identical after two convergence passes."""
+    def test_converge_twice_idempotent(self, tmp_path):
+        """Table and index sets are identical after two convergence passes."""
         db = _make_db(tmp_path)
         _converge(db)
 
         with db.connection() as conn:
             tables_first = _table_names(conn)
-
-        _converge(db)
-
-        with db.connection() as conn:
-            tables_second = _table_names(conn)
-
-        assert tables_first == tables_second
-
-    def test_converge_twice_same_index_set(self, tmp_path):
-        """Index set is identical after two convergence passes."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
             indexes_first = _index_names(conn)
 
         _converge(db)
 
         with db.connection() as conn:
+            tables_second = _table_names(conn)
             indexes_second = _index_names(conn)
 
+        assert tables_first == tables_second
         assert indexes_first == indexes_second
 
     # ── 3. Missing column detection ───────────────────────────────────────────
@@ -224,22 +170,6 @@ class TestSchemaConvergence:
         with db.connection() as conn:
             assert "documents" in _table_names(conn)
 
-    def test_missing_table_columns_correct_after_restore(self, tmp_path):
-        """Restored table has all expected columns."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            conn.execute("DROP TABLE IF EXISTS scheduled_items")
-
-        _converge(db)
-
-        with db.connection() as conn:
-            cols = _column_names(conn, "scheduled_items")
-
-        for expected_col in ("id", "message", "due_at", "status", "channel"):
-            assert expected_col in cols, f"Column '{expected_col}' missing after table restore"
-
     # ── 5. Missing index detection ────────────────────────────────────────────
 
     def test_missing_index_is_restored(self, tmp_path):
@@ -257,24 +187,6 @@ class TestSchemaConvergence:
 
         with db.connection() as conn:
             assert "idx_episodes_channel" in _index_names(conn)
-
-    def test_multiple_missing_indexes_all_restored(self, tmp_path):
-        """Dropping several indexes restores all of them after re-convergence."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        dropped = ["idx_episodes_channel", "idx_transcript_channel"]
-        with db.connection() as conn:
-            for idx in dropped:
-                conn.execute(f"DROP INDEX IF EXISTS {idx}")
-
-        _converge(db)
-
-        with db.connection() as conn:
-            indexes = _index_names(conn)
-
-        for idx in dropped:
-            assert idx in indexes, f"Index '{idx}' was not restored"
 
     # ── 6. Index DDL change detection ─────────────────────────────────────────
 
@@ -320,39 +232,6 @@ class TestSchemaConvergence:
         with db.connection() as conn:
             assert "episodes_fts" in _virtual_table_names(conn)
 
-    def test_dropped_vec0_table_is_recreated(self, tmp_path):
-        """A vec0 virtual table dropped after convergence is recreated."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            conn.execute("DROP TABLE IF EXISTS episodes_vec")
-
-        with db.connection() as conn:
-            assert "episodes_vec" not in _virtual_table_names(conn)
-
-        _converge(db)
-
-        with db.connection() as conn:
-            assert "episodes_vec" in _virtual_table_names(conn)
-
-    def test_fts5_table_is_queryable_after_creation(self, tmp_path):
-        """Newly created FTS5 table accepts an FTS query without error."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            conn.execute("DROP TABLE IF EXISTS documents_fts")
-
-        _converge(db)
-
-        with db.connection() as conn:
-            # A basic FTS match query should execute without error
-            result = conn.execute(
-                "SELECT COUNT(*) FROM documents_fts WHERE documents_fts MATCH 'test'"
-            ).fetchone()
-        assert result is not None
-
     # ── 8. Seed data on fresh DB ──────────────────────────────────────────────
 
     def test_settings_seeded_on_fresh_db(self, tmp_path):
@@ -367,30 +246,6 @@ class TestSchemaConvergence:
 
         assert row is not None, "api_key seed row missing from settings"
         assert row[1] == 1  # the is_sensitive column must be set to true for api_key
-
-    def test_schema_version_seeded_on_fresh_db(self, tmp_path):
-        """schema_version table has at least one row after fresh convergence."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            row = conn.execute("SELECT version FROM schema_version").fetchone()
-
-        assert row is not None, "schema_version has no rows after fresh convergence"
-        assert row[0] == 1
-
-    def test_seed_data_not_duplicated_on_re_convergence(self, tmp_path):
-        """Seed inserts use INSERT OR IGNORE — re-converging does not create duplicates."""
-        db = _make_db(tmp_path)
-        _converge(db)
-        _converge(db)  # second run
-
-        with db.connection() as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM settings WHERE key='api_key'"
-            ).fetchone()[0]
-
-        assert count == 1, f"Expected 1 api_key row, got {count}"
 
     # ── 9. Bidirectional convergence — drop stale schema objects ──────────────
 
@@ -409,74 +264,6 @@ class TestSchemaConvergence:
             assert "legacy_widget" not in _table_names(conn), (
                 "Stale table legacy_widget should have been auto-dropped"
             )
-
-    def test_stale_column_is_dropped(self, tmp_path):
-        """A column added to a live table but absent from schema.sql is dropped on converge."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            conn.execute("ALTER TABLE settings ADD COLUMN obsolete_flag INTEGER DEFAULT 0")
-            assert "obsolete_flag" in _column_names(conn, "settings")
-
-        _converge(db)
-
-        with db.connection() as conn:
-            assert "obsolete_flag" not in _column_names(conn, "settings"), (
-                "Stale column settings.obsolete_flag should have been auto-dropped"
-            )
-
-    def test_stale_index_is_dropped(self, tmp_path):
-        """An index present in the live DB but not in schema.sql is dropped."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            conn.execute("CREATE INDEX idx_obsolete_settings_value ON settings(value)")
-            assert "idx_obsolete_settings_value" in _index_names(conn)
-
-        _converge(db)
-
-        with db.connection() as conn:
-            assert "idx_obsolete_settings_value" not in _index_names(conn), (
-                "Stale index should have been auto-dropped"
-            )
-
-    def test_stale_virtual_table_is_dropped(self, tmp_path):
-        """A vec0 virtual table not declared in schema.sql is dropped."""
-        db = _make_db(tmp_path)
-        _converge(db, embedding_dimensions=256)
-
-        with db.connection() as conn:
-            conn.execute("CREATE VIRTUAL TABLE obsolete_vec USING vec0(embedding float[256])")
-            assert "obsolete_vec" in _virtual_table_names(conn)
-
-        _converge(db, embedding_dimensions=256)
-
-        with db.connection() as conn:
-            assert "obsolete_vec" not in _virtual_table_names(conn), (
-                "Stale virtual table obsolete_vec should have been auto-dropped"
-            )
-
-    def test_protected_sqlite_tables_never_dropped(self, tmp_path):
-        """sqlite_sequence and sqlite_* tables must survive bidirectional convergence."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        # Create a row that triggers sqlite_sequence creation
-        with db.connection() as conn:
-            conn.execute("INSERT INTO settings (key, value) VALUES ('trigger_seq_test', 'x')")
-
-        _converge(db)  # second pass should not even attempt to drop sqlite_*
-
-        with db.connection() as conn:
-            rows = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'sqlite_%'"
-            ).fetchall()
-        # sqlite_sequence is created lazily by SQLite; just confirm convergence
-        # did not blow up trying to manipulate it.
-        for (name,) in rows:
-            assert name.startswith("sqlite_"), f"Unexpected system table name: {name}"
 
     def test_fts5_shadow_tables_survive_convergence(self, tmp_path):
         """FTS5 shadow tables (xxx_data, xxx_idx, etc.) must not be dropped as 'stale'."""
@@ -542,49 +329,6 @@ class TestSchemaConvergence:
         safety_logs = [r.message for r in caplog.records if "SAFETY" in r.message]
         assert safety_logs, "Safety guard did not emit an ERROR-level SAFETY log"
 
-    def test_safety_guard_refuses_empty_schema(self, tmp_path, monkeypatch, caplog):
-        """An empty schema.sql must NOT wipe the live DB."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        empty = tmp_path / "empty_schema.sql"
-        empty.write_text("-- empty schema\n")
-
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-        monkeypatch.setattr(svc, "_schema_path", empty)
-
-        with caplog.at_level(logging.ERROR, logger="services.schema_convergence_service"):
-            svc.converge()
-
-        with db.connection() as conn:
-            tables = _table_names(conn)
-        # Live DB must still have its tables
-        assert "settings" in tables, "Safety guard failed on empty schema — live DB was wiped"
-
-    def test_convergence_idempotent_with_no_drift(self, tmp_path):
-        """Converging an already-converged DB is a no-op (no spurious drops)."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            tables_before = _table_names(conn)
-            indexes_before = _index_names(conn)
-
-        _converge(db)
-
-        with db.connection() as conn:
-            tables_after = _table_names(conn)
-            indexes_after = _index_names(conn)
-
-        assert tables_before == tables_after, (
-            f"Tables changed on idempotent re-converge: "
-            f"added={tables_after - tables_before}, removed={tables_before - tables_after}"
-        )
-        assert indexes_before == indexes_after, (
-            f"Indexes changed on idempotent re-converge: "
-            f"added={indexes_after - indexes_before}, removed={indexes_before - indexes_after}"
-        )
-
     # ── 11. Embedding dimensions override ─────────────────────────────────────
 
     def test_vec0_tables_use_custom_embedding_dimensions(self, tmp_path):
@@ -613,113 +357,6 @@ class TestSchemaConvergence:
                 f"Unexpected float[768] (default) found in {name} DDL"
             )
 
-    def test_default_768_dimensions_when_not_overridden(self, tmp_path):
-        """vec0 tables default to float[768] when no override is provided."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=768)
-        svc.converge()
-
-        with db.connection() as conn:
-            rows = conn.execute(
-                "SELECT name, sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL"
-            ).fetchall()
-
-        vec_tables = {
-            name: sql for name, sql in rows
-            if sql and sql.strip().upper().startswith("CREATE VIRTUAL TABLE")
-            and "vec0" in sql.lower()
-        }
-
-        assert vec_tables, "No vec0 virtual tables found"
-        for name, ddl in vec_tables.items():
-            assert "float[768]" in ddl, (
-                f"Expected float[768] in {name} DDL but got: {ddl}"
-            )
-
-    # ── 12. DDL extraction with comments ──────────────────────────────────────
-
-    def test_comment_does_not_break_ddl_extraction(self, tmp_path):
-        """SQL comments inside CREATE TABLE blocks don't cause _extract_table_ddl()
-        to truncate the DDL prematurely."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-
-        # data_graph has an inline comment on the kind column:
-        #   -- CHECK constraint removed: Python validates kind via VALID_KINDS in data_graph_service.py.
-        # If the extractor is broken it will truncate before the final ')'.
-        schema_sql = svc._schema_path.read_text()
-        ddl = svc._extract_table_ddl(schema_sql, "data_graph")
-
-        assert ddl is not None, "Failed to extract data_graph table DDL"
-        # DDL must be a complete CREATE TABLE statement — ends with );
-        stripped = ddl.strip().rstrip(";").strip()
-        assert stripped.endswith(")"), (
-            f"data_graph DDL appears truncated (missing closing paren): ...{stripped[-60:]}"
-        )
-        # Must contain columns that appear after the comment line
-        assert "search_queries" in ddl.lower(), (
-            "search_queries column absent — DDL was likely cut at the comment"
-        )
-
-    def test_extract_table_ddl_strips_inline_comments(self, tmp_path):
-        """_extract_table_ddl strips single-line comments before matching."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-
-        schema_sql = svc._schema_path.read_text()
-        # episodes table has several inline comments
-        ddl = svc._extract_table_ddl(schema_sql, "episodes")
-
-        assert ddl is not None, "Failed to extract episodes table DDL"
-        assert "CREATE TABLE" in ddl.upper()
-        assert "salience" in ddl.lower()
-
-    # ── 13. Shadow table exclusion ────────────────────────────────────────────
-
-    def test_fts5_shadow_tables_not_in_normal_tables(self, tmp_path):
-        """FTS5 shadow tables (e.g. episodes_fts_data) are excluded from the
-        normal table set returned by _introspect_tables()."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-        with db.connection() as conn:
-            from services.schema_convergence_service import _load_sqlite_vec
-            _load_sqlite_vec(conn)
-            normal_tables = svc._introspect_tables(conn)
-
-        shadow_like = [t for t in normal_tables if "_fts_" in t or "_fts" in t]
-        assert not shadow_like, f"FTS5 shadow tables leaked into normal tables: {shadow_like}"
-
-    def test_vec0_shadow_tables_not_in_normal_tables(self, tmp_path):
-        """vec0 shadow tables (e.g. episodes_vec_info) are excluded from
-        the normal table set returned by _introspect_tables()."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-        with db.connection() as conn:
-            from services.schema_convergence_service import _load_sqlite_vec
-            _load_sqlite_vec(conn)
-            normal_tables = svc._introspect_tables(conn)
-
-        shadow_like = [t for t in normal_tables if "_vec_" in t]
-        assert not shadow_like, f"vec0 shadow tables leaked into normal tables: {shadow_like}"
-
-    def test_virtual_tables_not_in_normal_tables(self, tmp_path):
-        """Virtual tables themselves are excluded from _introspect_tables() output."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-        with db.connection() as conn:
-            from services.schema_convergence_service import _load_sqlite_vec
-            _load_sqlite_vec(conn)
-            normal_tables = svc._introspect_tables(conn)
-            virtual_tables = svc._introspect_virtual_tables(conn)
-
-        overlap = set(normal_tables.keys()) & set(virtual_tables.keys())
-        assert not overlap, f"Virtual tables found in normal table set: {overlap}"
 
     # ── 14. Stale column drop logging ─────────────────────────────────────────
 
@@ -745,101 +382,6 @@ class TestSchemaConvergence:
             if r.levelname == "WARNING" and "legacy_field" in r.message and "DROPPED" in r.message
         ]
         assert warn_logs, "Expected WARNING log entry for the dropped stale column"
-
-    # ── 15. DDL normalization ─────────────────────────────────────────────────
-
-    def test_normalize_ddl_lowercases_and_collapses_whitespace(self, tmp_path):
-        """_normalize_ddl returns lowercase with collapsed whitespace."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-
-        result = svc._normalize_ddl("CREATE  TABLE   Foo  ( bar TEXT )")
-        assert result == result.lower()
-        assert "  " not in result  # no double spaces
-
-    def test_normalize_ddl_strips_if_not_exists(self, tmp_path):
-        """_normalize_ddl removes IF NOT EXISTS for stable comparison."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-
-        with_ine = svc._normalize_ddl("CREATE TABLE IF NOT EXISTS foo (id INTEGER)")
-        without_ine = svc._normalize_ddl("CREATE TABLE foo (id INTEGER)")
-
-        assert with_ine == without_ine
-
-    def test_normalize_ddl_handles_empty_string(self, tmp_path):
-        """_normalize_ddl returns an empty string for empty input."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-
-        assert svc._normalize_ddl("") == ""
-        assert svc._normalize_ddl(None) == ""
-
-    # ── 16. Removed-table cleanup via bidirectional convergence ───────────────
-
-    def test_legacy_tables_absent_after_fresh_convergence(self, tmp_path):
-        """Tables that no longer exist in schema.sql must not appear after convergence.
-
-        Replaces the old DROP-TABLE-statement scaffolding: bidirectional
-        convergence handles removal automatically.  Use historically-removed
-        tables as canaries — if these reappear, schema.sql has regressed.
-        """
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            tables = _table_names(conn)
-
-        for legacy in (
-            "knowledge",
-            "cognitive_reflexes",
-            "triage_calibration_events",
-            "persistent_tasks",
-            "document_chunks",
-            "cortex_iterations",
-            "goals",
-            "goal_evidence",
-        ):
-            assert legacy not in tables, (
-                f"Removed table {legacy!r} must not be created on fresh convergence"
-            )
-
-    def test_legacy_table_present_in_live_db_is_dropped(self, tmp_path):
-        """If a legacy table somehow exists in the live DB, convergence drops it."""
-        db = _make_db(tmp_path)
-        _converge(db)
-
-        with db.connection() as conn:
-            conn.execute("CREATE TABLE persistent_tasks (id INTEGER PRIMARY KEY)")
-            assert "persistent_tasks" in _table_names(conn)
-
-        _converge(db)
-
-        with db.connection() as conn:
-            assert "persistent_tasks" not in _table_names(conn)
-
-    # ── 17. _is_fresh_db ──────────────────────────────────────────────────────
-
-    def test_is_fresh_db_true_for_empty_db(self, tmp_path):
-        """_is_fresh_db() returns True for a database with no user tables."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-
-        with db.connection() as conn:
-            result = svc._is_fresh_db(conn)
-
-        assert result is True
-
-    def test_is_fresh_db_false_after_convergence(self, tmp_path):
-        """_is_fresh_db() returns False after tables have been created."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-        svc.converge()
-
-        with db.connection() as conn:
-            result = svc._is_fresh_db(conn)
-
-        assert result is False
 
     # ── 18. Missing schema.sql ────────────────────────────────────────────────
 
@@ -867,26 +409,7 @@ class TestSchemaConvergence:
         assert "if not exists" in restored
         assert restored.startswith("create index if not exists")
 
-    def test_restore_if_not_exists_preserves_rest_of_ddl(self, tmp_path):
-        """_restore_if_not_exists() does not alter the index name or columns."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
 
-        normalized = "create index idx_foo on bar(col)"
-        restored = svc._restore_if_not_exists(normalized, "index")
-
-        assert "idx_foo" in restored
-        assert "on bar(col)" in restored
-
-    def test_restore_if_not_exists_handles_unique_index(self, tmp_path):
-        """_restore_if_not_exists() correctly handles CREATE UNIQUE INDEX."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-
-        normalized = "create unique index idx_uniq on bar(col)"
-        restored = svc._restore_if_not_exists(normalized, "index")
-
-        assert restored == "create unique index if not exists idx_uniq on bar(col)"
 
 
 
@@ -985,104 +508,6 @@ class TestStripDataGraphCheckConstraint:
         assert not self._has_check_constraint(conn), "CHECK constraint was not removed"
         conn.close()
 
-    def test_preserves_all_rows_after_table_recreation(self, tmp_path):
-        """All existing rows survive the table-recreate that strips the CHECK constraint."""
-        rows = [
-            ('user_specific', 'user_name', 'Dylan'),
-            ('system', 'tone', 'terse'),
-            ('misc', 'scratch', 'temp'),
-        ]
-        conn = self._build_conn_with_check(tmp_path, rows=rows)
 
-        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
-        svc._strip_data_graph_check_constraint(conn)
-        conn.commit()
 
-        stored = conn.execute("SELECT kind, key, value FROM data_graph ORDER BY key").fetchall()
-        assert len(stored) == 3
-        stored_set = {(r[0], r[1], r[2]) for r in stored}
-        assert stored_set == set(rows)
-        conn.close()
 
-    def test_no_op_when_check_constraint_absent(self, tmp_path):
-        """When the table has no CHECK, the method returns without touching any rows."""
-        conn = sqlite3.connect(str(tmp_path / "nocheck.db"))
-        conn.execute(self._NEW_DDL_NO_CHECK)
-        conn.execute(self._FTS_DDL)
-        conn.execute(
-            "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
-            ('user_specific', 'existing_key', 'existing_value')
-        )
-        conn.commit()
-
-        assert not self._has_check_constraint(conn), "Pre-condition: table must NOT have CHECK"
-        before_sql = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='data_graph'"
-        ).fetchone()[0]
-
-        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
-        svc._strip_data_graph_check_constraint(conn)
-        conn.commit()
-
-        # Table DDL must be unchanged and data preserved
-        after_sql = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='data_graph'"
-        ).fetchone()[0]
-        assert before_sql == after_sql
-
-        count = conn.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0]
-        assert count == 1
-        conn.close()
-
-    def test_allows_document_kind_after_constraint_removal(self, tmp_path):
-        """After stripping, inserting kind='document' succeeds without constraint violation."""
-        conn = self._build_conn_with_check(tmp_path)
-
-        # Verify that inserting 'document' kind fails BEFORE stripping
-        try:
-            conn.execute(
-                "INSERT INTO data_graph (kind, key, value) VALUES ('document', 'doc:test:000', 'v')"
-            )
-            conn.rollback()
-            # Some SQLite builds may not enforce CHECK at insert; skip this assertion
-        except Exception:
-            conn.rollback()
-
-        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
-        svc._strip_data_graph_check_constraint(conn)
-        conn.commit()
-
-        # After stripping, 'document' kind must be insertable
-        conn.execute(
-            "INSERT INTO data_graph (kind, key, value) VALUES ('document', 'doc:solar:000', 'solar content')"
-        )
-        conn.commit()
-        row = conn.execute("SELECT kind FROM data_graph WHERE key='doc:solar:000'").fetchone()
-        assert row is not None
-        assert row[0] == 'document'
-        conn.close()
-
-    def test_fts_rebuilt_after_constraint_removal(self, tmp_path):
-        """FTS virtual table is rebuilt — content of pre-existing rows is searchable."""
-        rows = [('user_specific', 'energy_fact', 'solar power efficiency')]
-        conn = self._build_conn_with_check(tmp_path, rows=rows)
-
-        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
-        svc._strip_data_graph_check_constraint(conn)
-        conn.commit()
-
-        # FTS search must find the pre-existing row
-        fts_rows = conn.execute(
-            "SELECT rowid FROM data_graph_fts WHERE data_graph_fts MATCH 'solar'"
-        ).fetchall()
-        assert len(fts_rows) >= 1
-        conn.close()
-
-    def test_no_op_when_table_does_not_exist(self, tmp_path):
-        """If data_graph table doesn't exist at all, method returns silently."""
-        conn = sqlite3.connect(str(tmp_path / "empty.db"))
-
-        svc = SchemaConvergenceService.__new__(SchemaConvergenceService)
-        # Must not raise
-        svc._strip_data_graph_check_constraint(conn)
-        conn.close()

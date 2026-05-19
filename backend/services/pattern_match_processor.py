@@ -24,7 +24,8 @@ TOP_PATTERN_CAP = 50  # bound for {existing_patterns_block} in system prompt
 class PatternMatchProcessor(MessageProcessor):
     CHANNEL = "pattern_match"
     ROLE = "background"
-    JOB = "frontal-cortex-unified"
+    USAGE_CLASS = 'subconscious'
+    LOG_LABEL = 'pattern_match'
     # save_pattern + save_graph are innate to PMP — pre-injected every
     # iteration. No other processor includes them today; processors that
     # need them in future must opt in by listing them in their own
@@ -48,14 +49,15 @@ class PatternMatchProcessor(MessageProcessor):
         # current_processor() + getattr.
         self._save_pattern_calls: int = 0
         self._save_graph_calls: int = 0
+        self._save_graph_seen: set[tuple] = set()
         self._touched_pattern_ids: set[int] = set()
 
     # ── Required MessageProcessor overrides ────────────────────────────────
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         return ""
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         block = self._existing_patterns_block()
         return (
             "You are analysing the user's recent transcripts to detect "
@@ -80,7 +82,7 @@ class PatternMatchProcessor(MessageProcessor):
             "- Emit everything in this single pass."
         )
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         db = get_shared_db_service()
         with db.connection() as conn:
             rows = conn.execute(
@@ -92,7 +94,7 @@ class PatternMatchProcessor(MessageProcessor):
             ).fetchall()
         if not rows:
             return "(no transcripts in window)"
-        trail = self.getActLoopTrail()
+        trail = self.get_act_loop_trail()
         transcript_block = "\n".join(
             f"[id={r[0]} | {r[1]} | {r[3]}] {r[2]}" for r in rows
         )
@@ -100,7 +102,7 @@ class PatternMatchProcessor(MessageProcessor):
             return f"{transcript_block}\n{trail}"
         return transcript_block
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """Decay sweep: -0.005 confidence on untouched active rows; soft-
         delete (active=0) rows whose confidence drops to <=0."""
         try:

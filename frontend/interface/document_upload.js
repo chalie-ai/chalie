@@ -7,6 +7,11 @@ export class DocumentUpload {
   constructor({ api, getHost }) {
     this._api = api;
     this._getHost = getHost;
+
+    // [{name: string, data: string, content_type: string}]
+    // Base64 entries queued via queueFileForChat(), consumed once per send by
+    // getPendingFiles() and forwarded in the WS payload.
+    this._pendingChatFiles = [];
   }
 
   init() {
@@ -36,6 +41,43 @@ export class DocumentUpload {
     fileInput?.addEventListener('change', () => {
       if (fileInput.files?.length) this._handleFiles(fileInput.files);
     });
+  }
+
+  /**
+   * Read a file as base64 and queue it for inclusion in the next WS chat
+   * payload.  Called by the chat attachment flow — does NOT open the Brain
+   * upload dialog or hit /documents/upload.
+   *
+   * @param {File} file
+   * @returns {Promise<void>}
+   */
+  queueFileForChat(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1];
+        this._pendingChatFiles.push({
+          name: file.name,
+          data: base64,
+          content_type: file.type || 'application/octet-stream',
+        });
+        resolve();
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /**
+   * Returns base64 file entries queued via queueFileForChat() since the last
+   * send, then clears the internal list.
+   *
+   * @returns {Array<{name: string, data: string, content_type: string}>}
+   */
+  getPendingFiles() {
+    const files = [...this._pendingChatFiles];
+    this._pendingChatFiles = [];
+    return files;
   }
 
   openDialog() {
@@ -95,8 +137,9 @@ export class DocumentUpload {
       if (res.duplicates?.length) {
         const dup = res.duplicates[0];
         const dateStr = dup.created_at ? new Date(dup.created_at).toLocaleDateString() : '';
+        const datePart = dateStr ? ` from ${dateStr}` : '';
         dupWarning.innerHTML = `
-          <div>This looks like an updated version of <strong>${escHtml(dup.original_name)}</strong>${dateStr ? ` from ${dateStr}` : ''}. Replace the older version, or keep both?</div>
+          <div>This looks like an updated version of <strong>${escHtml(dup.original_name)}</strong>${datePart}. Replace the older version, or keep both?</div>
           <div class="upload-duplicate__actions">
             <button class="upload-duplicate__btn upload-duplicate__btn--primary" data-action="replace" data-new-id="${res.id}" data-old-id="${dup.id}">Replace</button>
             <button class="upload-duplicate__btn" data-action="keep">Keep Both</button>

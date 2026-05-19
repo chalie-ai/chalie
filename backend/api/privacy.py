@@ -10,7 +10,7 @@ concept_lut_misses, browser_snapshots, browser_credentials.
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from flask import Blueprint, Response, request, jsonify, stream_with_context
 
 from services.time_utils import utc_now
@@ -120,7 +120,7 @@ def data_summary():
         return jsonify(result), 200
 
     except Exception as e:
-        logger.error(f"[REST API] privacy/data-summary error: {e}", exc_info=True)
+        logger.exception(f"[REST API] privacy/data-summary error: {e}")
         return jsonify({"error": "Failed to retrieve data summary"}), 500
 
 
@@ -165,7 +165,8 @@ def export_data():
         db = get_shared_db_service()
         store = MemoryClientService.create_connection()
 
-        exported_at = datetime.now(timezone.utc).isoformat()
+        from services.time_utils import utc_now
+        exported_at = utc_now().isoformat()
         yield f'{{"exported_at": {json.dumps(exported_at)}, "tables": {{'
 
         first_table = True
@@ -293,5 +294,5 @@ def delete_all():
         return jsonify(result), 200
 
     except Exception as e:
-        logger.error(f"[REST API] privacy/delete-all error: {e}", exc_info=True)
+        logger.exception(f"[REST API] privacy/delete-all error: {e}")
         return jsonify({"error": "Failed to delete data"}), 500

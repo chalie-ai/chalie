@@ -42,15 +42,14 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
-import uuid
 
 import yaml
 
 from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
 from capabilities.mail_capability.carddav_handler import CarddavHandler
-from capabilities.mail_capability.imap_handler import ImapHandler
-from capabilities.mail_capability.providers import discover_provider
+from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
+from capabilities.mail_capability.providers import build_custom_provider, discover_provider
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -99,7 +98,6 @@ class MailCapability(AbstractCapability):
         _caldav_ok (bool): CalDAV protocol is connected and operational.
         _carddav_ok (bool): CardDAV protocol is connected and operational.
         _cycle_count (int): Monitor cycles since last successful :meth:`connect`.
-        _sync_registered (bool): Scheduler handler has been registered.
     """
 
     def __init__(self) -> None:
@@ -112,7 +110,6 @@ class MailCapability(AbstractCapability):
         self._caldav_ok: bool = False
         self._carddav_ok: bool = False
         self._cycle_count: int = 0
-        self._sync_registered: bool = False
 
     # ------------------------------------------------------------------
     # Identity
@@ -139,6 +136,149 @@ class MailCapability(AbstractCapability):
         return self._manifest_cache
 
     # ------------------------------------------------------------------
+    # Provider resolution
+    # ------------------------------------------------------------------
+
+    def _resolve_provider(self, email: str):
+        """Resolve provider from email domain, falling back to stored credentials.
+
+        Known domains (Gmail, Apple, Yahoo, Outlook) resolve from the registry.
+        Custom/self-hosted servers fall back to connection fields persisted
+        during :meth:`configure`.
+
+        Returns:
+            UnifiedProvider or ``None`` if resolution fails entirely.
+        """
+        provider = discover_provider(email)
+        if provider is not None:
+            return provider
+        # Fall back to stored connection fields (custom provider)
+        imap_host = self.load_credential(_K_IMAP_HOST)
+        if not imap_host:
+            return None
+        smtp_host = self.load_credential(_K_SMTP_HOST) or None
+        return build_custom_provider(
+            imap_host=imap_host,
+            imap_port=int(self.load_credential(_K_IMAP_PORT) or "993"),
+            imap_tls=self.load_credential(_K_IMAP_TLS) != "0",
+            smtp_host=smtp_host,
+            smtp_port=int(self.load_credential(_K_SMTP_PORT) or "587"),
+            smtp_tls=self.load_credential(_K_SMTP_TLS) == "1",
+            caldav_url=self.load_credential(_K_CALDAV_URL) or None,
+            carddav_url=self.load_credential(_K_CARDDAV_URL) or None,
+        )
+
+    # ------------------------------------------------------------------
+    # Lifecycle — configure helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_or_build_provider(self, email: str, credentials: dict):
+        """Return a provider object for the email, building a custom one if needed."""
+        provider = discover_provider(email)
+        if provider is not None:
+            return provider
+
+        imap_host = (credentials.get("imap_host") or "").strip()
+        if not imap_host:
+            raise ValueError(
+                f"[mail] Unsupported provider for '{email}'. "
+                "Supported: Google, Apple, Yahoo, Outlook. "
+                "For custom servers, pass imap_host."
+            )
+        _imap_tls = str(credentials.get("imap_tls", "1")).lower()
+        _smtp_host = (credentials.get("smtp_host") or "").strip() or None
+        _smtp_tls = str(credentials.get("smtp_tls", "0")).lower()
+        return build_custom_provider(
+            imap_host=imap_host,
+            imap_port=int(credentials.get("imap_port", 993)),
+            imap_tls=_imap_tls not in ("0", "false", "no"),
+            smtp_host=_smtp_host,
+            smtp_port=int(credentials.get("smtp_port", 587)),
+            smtp_tls=_smtp_tls not in ("0", "false", "no"),
+            caldav_url=(credentials.get("caldav_url") or "").strip() or None,
+            carddav_url=(credentials.get("carddav_url") or "").strip() or None,
+        )
+
+    def _persist_provider_credentials(self, email: str, password: str, provider) -> None:
+        """Store provider connection settings in the credential store."""
+        self.store_credential(_K_EMAIL, email)
+        self.store_credential(_K_PASSWORD, password)
+        self.store_credential(_K_PROVIDER, provider.name)
+        if provider.imap:
+            self.store_credential(_K_IMAP_HOST, provider.imap.host)
+            self.store_credential(_K_IMAP_PORT, str(provider.imap.port))
+            self.store_credential(_K_IMAP_TLS, "1" if provider.imap.tls else "0")
+        if provider.smtp:
+            self.store_credential(_K_SMTP_HOST, provider.smtp.host)
+            self.store_credential(_K_SMTP_PORT, str(provider.smtp.port))
+            self.store_credential(_K_SMTP_TLS, "1" if provider.smtp.tls else "0")
+        if provider.caldav_url:
+            self.store_credential(
+                _K_CALDAV_URL,
+                provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email),
+            )
+        if provider.carddav_url:
+            self.store_credential(
+                _K_CARDDAV_URL,
+                provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email),
+            )
+
+    def _probe_protocols(self, email: str, password: str, provider) -> list[str]:
+        """Probe each protocol independently and return a list of active protocol names."""
+        active: list[str] = []
+
+        if provider.imap:
+            try:
+                client = self._imap_handler.open_client(
+                    host=provider.imap.host,
+                    port=provider.imap.port,
+                    tls=provider.imap.tls,
+                    email=email,
+                    password=password,
+                )
+                if client is not None:
+                    try:
+                        client.logout()
+                    except Exception:
+                        pass
+                    active.append("imap")
+                    logger.info("[mail] IMAP probe: OK")
+                else:
+                    logger.warning("[mail] IMAP probe: failed (open_client returned None)")
+            except Exception as exc:
+                logger.warning("[mail] IMAP probe: failed — %s", exc)
+
+        if provider.caldav_url:
+            caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
+            try:
+                client = self._caldav_handler.open_client(
+                    url=caldav_url, username=email, password=password
+                )
+                if client is not None:
+                    active.append("caldav")
+                    logger.info("[mail] CalDAV probe: OK")
+                else:
+                    logger.warning("[mail] CalDAV probe: failed (open_client returned None)")
+            except Exception as exc:
+                logger.warning("[mail] CalDAV probe: failed — %s", exc)
+
+        if provider.carddav_url:
+            carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
+            try:
+                client = self._carddav_handler.open_client(
+                    url=carddav_url, username=email, password=password
+                )
+                if client is not None:
+                    active.append("carddav")
+                    logger.info("[mail] CardDAV probe: OK")
+                else:
+                    logger.warning("[mail] CardDAV probe: failed (open_client returned None)")
+            except Exception as exc:
+                logger.warning("[mail] CardDAV probe: failed — %s", exc)
+
+        return active
+
+    # ------------------------------------------------------------------
     # Lifecycle — configure
     # ------------------------------------------------------------------
 
@@ -159,82 +299,9 @@ class MailCapability(AbstractCapability):
         if not password:
             raise ValueError("[mail] configure(): 'password' is required.")
 
-        provider = discover_provider(email)
-        if provider is None:
-            raise ValueError(
-                f"[mail] Unsupported provider for '{email}'. "
-                "Supported: Google, Apple, Yahoo, Outlook."
-            )
-
-        # Persist base credentials
-        self.store_credential(_K_EMAIL, email)
-        self.store_credential(_K_PASSWORD, password)
-        self.store_credential(_K_PROVIDER, provider.name)
-
-        # Persist IMAP/SMTP connection settings
-        if provider.imap:
-            self.store_credential(_K_IMAP_HOST, provider.imap.host)
-            self.store_credential(_K_IMAP_PORT, str(provider.imap.port))
-            self.store_credential(_K_IMAP_TLS, "1" if provider.imap.tls else "0")
-        if provider.smtp:
-            self.store_credential(_K_SMTP_HOST, provider.smtp.host)
-            self.store_credential(_K_SMTP_PORT, str(provider.smtp.port))
-            self.store_credential(_K_SMTP_TLS, "1" if provider.smtp.tls else "0")
-
-        # Probe each protocol independently
-        active_protocols: list[str] = []
-
-        # --- IMAP ---
-        if provider.imap:
-            try:
-                client = self._imap_handler.open_client(
-                    host=provider.imap.host,
-                    port=provider.imap.port,
-                    tls=provider.imap.tls,
-                    email=email,
-                    password=password,
-                )
-                if client is not None:
-                    try:
-                        client.logout()
-                    except Exception:
-                        pass
-                    active_protocols.append("imap")
-                    logger.info("[mail] IMAP probe: OK")
-                else:
-                    logger.warning("[mail] IMAP probe: failed (open_client returned None)")
-            except Exception as exc:
-                logger.warning("[mail] IMAP probe: failed — %s", exc)
-
-        # --- CalDAV ---
-        if provider.caldav_url:
-            caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
-            try:
-                client = self._caldav_handler.open_client(
-                    url=caldav_url, username=email, password=password
-                )
-                if client is not None:
-                    active_protocols.append("caldav")
-                    logger.info("[mail] CalDAV probe: OK")
-                else:
-                    logger.warning("[mail] CalDAV probe: failed (open_client returned None)")
-            except Exception as exc:
-                logger.warning("[mail] CalDAV probe: failed — %s", exc)
-
-        # --- CardDAV ---
-        if provider.carddav_url:
-            carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
-            try:
-                client = self._carddav_handler.open_client(
-                    url=carddav_url, username=email, password=password
-                )
-                if client is not None:
-                    active_protocols.append("carddav")
-                    logger.info("[mail] CardDAV probe: OK")
-                else:
-                    logger.warning("[mail] CardDAV probe: failed (open_client returned None)")
-            except Exception as exc:
-                logger.warning("[mail] CardDAV probe: failed — %s", exc)
+        provider = self._resolve_or_build_provider(email, credentials)
+        self._persist_provider_credentials(email, password, provider)
+        active_protocols = self._probe_protocols(email, password, provider)
 
         if not active_protocols:
             self.delete_credentials()
@@ -246,7 +313,6 @@ class MailCapability(AbstractCapability):
         self.store_credential(_K_PROTOCOLS, json.dumps(active_protocols))
         logger.info("[mail] configure() — active protocols: %s", active_protocols)
 
-        # Final round-trip test via connect()
         if not self.connect():
             self.delete_credentials()
             raise ValueError(
@@ -283,9 +349,9 @@ class MailCapability(AbstractCapability):
             logger.warning("[mail] connect(): no active protocols stored.")
             return False
 
-        provider = discover_provider(email)
+        provider = self._resolve_provider(email)
         if provider is None:
-            logger.error("[mail] connect(): unsupported provider for '%s'.", email)
+            logger.error("[mail] connect(): no provider for '%s'.", email)
             return False
 
         self._imap_ok = False
@@ -341,9 +407,6 @@ class MailCapability(AbstractCapability):
         any_ok = self._imap_ok or self._caldav_ok or self._carddav_ok
         self._connected = any_ok
 
-        if any_ok:
-            self._ensure_sync_registration()
-
         return any_ok
 
     # ------------------------------------------------------------------
@@ -356,6 +419,7 @@ class MailCapability(AbstractCapability):
         self._caldav_ok = False
         self._carddav_ok = False
         self._connected = False
+        self._cycle_count = 0
 
         try:
             from services.database_service import get_shared_db_service
@@ -393,7 +457,7 @@ class MailCapability(AbstractCapability):
         items: list[dict] = []
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
-        provider = discover_provider(email or "")
+        provider = self._resolve_provider(email or "")
         if not provider:
             return []
 
@@ -475,6 +539,59 @@ class MailCapability(AbstractCapability):
     # Cognitive pipeline — monitor
     # ------------------------------------------------------------------
 
+    def _monitor_imap(self, email: str, password: str, provider) -> None:
+        """Run one IMAP monitor cycle: ingest new messages and update the watermark."""
+        try:
+            watermark_raw = self.load_credential(_K_WATERMARK)
+            watermark = int(watermark_raw) if watermark_raw else None
+            client = self._imap_handler.open_client(
+                host=provider.imap.host,
+                port=provider.imap.port,
+                tls=provider.imap.tls,
+                email=email,
+                password=password,
+            )
+            if client is not None:
+                try:
+                    new_items, new_wm = self._imap_handler.ingest(client, watermark)
+                    if new_items:
+                        self._imap_handler.understand(new_items)
+                    if new_wm and new_wm != watermark:
+                        self.store_credential(_K_WATERMARK, str(new_wm))
+                    self._imap_handler.inject_inbox_hint(client)
+                finally:
+                    try:
+                        client.logout()
+                    except Exception:
+                        pass
+        except Exception as exc:
+            logger.error("[mail] _do_monitor() IMAP: %s", exc)
+
+    def _monitor_caldav(self, email: str, password: str, provider, now) -> None:
+        """Run one CalDAV monitor cycle: ingest events and upsert them."""
+        try:
+            caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
+            client = self._caldav_handler.open_client(
+                url=caldav_url, username=email, password=password
+            )
+            if client is not None:
+                events = self._caldav_handler.ingest(client)
+                self._caldav_handler.upsert_events(events, now)
+        except Exception as exc:
+            logger.error("[mail] _do_monitor() CalDAV: %s", exc)
+
+    def _monitor_carddav(self, email: str, password: str, provider) -> None:
+        """Run one CardDAV monitor cycle."""
+        try:
+            carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
+            client = self._carddav_handler.open_client(
+                url=carddav_url, username=email, password=password
+            )
+            if client is not None:
+                self._carddav_handler.monitor(client)
+        except Exception as exc:
+            logger.error("[mail] _do_monitor() CardDAV: %s", exc)
+
     def _do_monitor(self) -> None:
         """Run one monitor cycle with per-protocol cadence management.
 
@@ -490,67 +607,24 @@ class MailCapability(AbstractCapability):
         if not self.is_connected():
             return
 
-        self._cycle_count += 1
         now = utc_now()
 
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
-        provider = discover_provider(email or "")
+        provider = self._resolve_provider(email or "")
         if not provider:
             return
 
-        # --- IMAP: every cycle ---
         if self._imap_ok and provider.imap:
-            try:
-                watermark_raw = self.load_credential(_K_WATERMARK)
-                watermark = int(watermark_raw) if watermark_raw else None
-                client = self._imap_handler.open_client(
-                    host=provider.imap.host,
-                    port=provider.imap.port,
-                    tls=provider.imap.tls,
-                    email=email,
-                    password=password,
-                )
-                if client is not None:
-                    try:
-                        new_items, new_wm = self._imap_handler.ingest(client, watermark)
-                        if new_items:
-                            self._imap_handler.understand(new_items)
-                        if new_wm and new_wm != watermark:
-                            self.store_credential(_K_WATERMARK, str(new_wm))
-                        self._imap_handler.inject_inbox_hint(client)
-                    finally:
-                        try:
-                            client.logout()
-                        except Exception:
-                            pass
-            except Exception as exc:
-                logger.error("[mail] _do_monitor() IMAP: %s", exc)
+            self._monitor_imap(email, password, provider)
 
-        # --- CalDAV: every 3rd cycle ---
         if self._caldav_ok and self._cycle_count % 3 == 0 and provider.caldav_url:
-            try:
-                caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
-                client = self._caldav_handler.open_client(
-                    url=caldav_url, username=email, password=password
-                )
-                if client is not None:
-                    events = self._caldav_handler.ingest(client)
-                    self._caldav_handler.upsert_events(events, now)
-            except Exception as exc:
-                logger.error("[mail] _do_monitor() CalDAV: %s", exc)
+            self._monitor_caldav(email, password, provider, now)
 
-        # --- CardDAV: every 12th cycle ---
         if self._carddav_ok and self._cycle_count % 12 == 0 and provider.carddav_url:
-            try:
-                carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
-                client = self._carddav_handler.open_client(
-                    url=carddav_url, username=email, password=password
-                )
-                if client is not None:
-                    self._carddav_handler.monitor(client)
-            except Exception as exc:
-                logger.error("[mail] _do_monitor() CardDAV: %s", exc)
+            self._monitor_carddav(email, password, provider)
+
+        self._cycle_count += 1
 
     # ------------------------------------------------------------------
     # Cognitive pipeline — act
@@ -560,7 +634,7 @@ class MailCapability(AbstractCapability):
         """Dispatch a write action to the appropriate protocol handler.
 
         Args:
-            action: Tool name, e.g. ``"send_email"``, ``"create_event"``.
+            action: Tool name, e.g. ``"draft_email"``, ``"create_event"``.
             params: Action-specific parameters.
 
         Returns:
@@ -577,48 +651,567 @@ class MailCapability(AbstractCapability):
     # Scheduler registration
     # ------------------------------------------------------------------
 
-    def _ensure_sync_registration(self) -> None:
-        """Register the ``mail:sync`` handler and create the recurring scheduled_item.
+    # ------------------------------------------------------------------
+    # SMTP / guard helpers
+    # ------------------------------------------------------------------
 
-        Runs once per capability lifetime (guarded by ``_sync_registered``).
-        Uses a 5-minute base interval matching the IMAP polling cadence.
+    def _load_smtp_creds(self) -> SmtpCreds:
+        """Load SMTP credentials from the credential store.
+
+        Raises ValueError when SMTP is not configured.
         """
-        if self._sync_registered:
-            return
-        try:
-            from services.scheduler_service import register_system_handler
-            register_system_handler("mail:sync", self.monitor)
+        smtp_host = self.load_credential(_K_SMTP_HOST)
+        if not smtp_host:
+            raise ValueError("SMTP not configured for this provider.")
+        return SmtpCreds(
+            host=smtp_host,
+            port=int(self.load_credential(_K_SMTP_PORT) or "587"),
+            tls=self.load_credential(_K_SMTP_TLS) == "1",
+            from_addr=self.load_credential(_K_EMAIL),
+            password=self.load_credential(_K_PASSWORD),
+        )
 
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            now = utc_now()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                # Backfill: any mail/caldav records created before `hidden` column
-                # will have hidden=NULL; treat them as hidden.
-                cursor.execute(
-                    "UPDATE scheduled_items SET hidden = 1"
-                    " WHERE source = 'mail' AND COALESCE(hidden, 0) != 1"
-                )
-                cursor.execute(
-                    "SELECT id FROM scheduled_items WHERE external_uid = ?",
-                    ("system:mail:sync",),
-                )
-                if not cursor.fetchone():
-                    cursor.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, recurrence, status,
-                            topic, source, external_uid, hidden, created_at)
-                         VALUES (?, 'system', 'Mail sync', ?, 'interval:5',
-                                 'pending', 'mail:sync', 'mail', 'system:mail:sync',
-                                 1, ?)""",
-                        (uuid.uuid4().hex[:8], now.isoformat(), now.isoformat()),
-                    )
-                conn.commit()
-            self._sync_registered = True
-            logger.info("[mail] Sync handler registered + scheduled_item ensured.")
+    # ------------------------------------------------------------------
+    # Tools — connection helpers
+    # ------------------------------------------------------------------
+
+    def _open_imap_client(self):
+        """Open and return an authenticated IMAP client."""
+        _email = self.load_credential(_K_EMAIL)
+        _password = self.load_credential(_K_PASSWORD)
+        _provider = self._resolve_provider(_email or "")
+        if not _provider or not _provider.imap:
+            raise ValueError("IMAP not available for this provider.")
+        return self._imap_handler.open_client(
+            host=_provider.imap.host,
+            port=_provider.imap.port,
+            tls=_provider.imap.tls,
+            email=_email,
+            password=_password,
+        )
+
+    def _open_caldav_client(self):
+        """Open and return an authenticated CalDAV client."""
+        _email = self.load_credential(_K_EMAIL)
+        _password = self.load_credential(_K_PASSWORD)
+        _provider = self._resolve_provider(_email or "")
+        if not _provider or not _provider.caldav_url:
+            raise ValueError("CalDAV not available for this provider.")
+        _url = _provider.caldav_url.replace(_PLACEHOLDER_USERNAME, _email)
+        return self._caldav_handler.open_client(
+            url=_url, username=_email, password=_password
+        )
+
+    # ------------------------------------------------------------------
+    # Tools — IMAP handler methods
+    # ------------------------------------------------------------------
+
+    def _th_search_email(self, topic, params, config=None, telemetry=None):
+        if not self._imap_ok:
+            return {"error": _ERR_IMAP_NOT_CONNECTED}
+        try:
+            client = self._open_imap_client()
+            if client is None:
+                return {"error": "Failed to open IMAP connection."}
+            try:
+                return self._imap_handler.search(client, params)
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
         except Exception as exc:
-            logger.warning("[mail] _ensure_sync_registration: %s", exc)
+            return {"error": str(exc)}
+
+    def _th_read_email(self, topic, params, config=None, telemetry=None):
+        if not self._imap_ok:
+            return {"error": _ERR_IMAP_NOT_CONNECTED}
+        try:
+            client = self._open_imap_client()
+            if client is None:
+                return {"error": "Failed to open IMAP connection."}
+            try:
+                return self._imap_handler.read_email(client, params)
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_draft_email(self, topic, params, config=None, telemetry=None):
+        if not self._imap_ok:
+            return {"error": _ERR_IMAP_NOT_CONNECTED}
+        try:
+            _email = self.load_credential(_K_EMAIL)
+            client = self._open_imap_client()
+            if client is None:
+                return {"error": "Failed to open IMAP connection."}
+            try:
+                return self._imap_handler.draft_email(
+                    client, from_addr=_email, params=params,
+                )
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_manage_email(self, topic, params, config=None, telemetry=None):
+        if not self._imap_ok:
+            return {"error": _ERR_IMAP_NOT_CONNECTED}
+        try:
+            client = self._open_imap_client()
+            if client is None:
+                return {"error": "Failed to open IMAP connection."}
+            try:
+                return self._imap_handler.manage_email(client, params)
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Tools — SMTP handler methods
+    # ------------------------------------------------------------------
+
+    def _th_send_email(self, topic, params, config=None, telemetry=None):
+        if not self._imap_ok:
+            return {"error": _ERR_IMAP_NOT_CONNECTED}
+        try:
+            creds = self._load_smtp_creds()
+            return self._imap_handler.send_email(creds=creds, params=params)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_reply_email(self, topic, params, config=None, telemetry=None):
+        if not self._imap_ok:
+            return {"error": _ERR_IMAP_NOT_CONNECTED}
+        uid = params.get("uid")
+        if not uid:
+            return {"error": "uid is required for reply"}
+        try:
+            creds = self._load_smtp_creds()
+            client = self._open_imap_client()
+            if client is None:
+                return {"error": "Failed to open IMAP connection."}
+            try:
+                original = self._imap_handler.read_email(client, {"uid": uid})
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+            if "error" in original:
+                return original
+            result = self._imap_handler.send_email(
+                creds=creds,
+                params={
+                    "to": original.get("from_addr", ""),
+                    "subject": f"Re: {original.get('subject', '')}",
+                    "body": params.get("body", ""),
+                    "in_reply_to": original.get("message_id", ""),
+                },
+            )
+            if result.get("success"):
+                result["original"] = {
+                    "from": original.get("from_addr", ""),
+                    "subject": original.get("subject", ""),
+                    "body": original.get("body", ""),
+                    "date": original.get("date", ""),
+                }
+            return result
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_forward_email(self, topic, params, config=None, telemetry=None):
+        if not self._imap_ok:
+            return {"error": _ERR_IMAP_NOT_CONNECTED}
+        uid = params.get("uid")
+        if not uid:
+            return {"error": "uid is required for forward"}
+        to = (params.get("to") or "").strip()
+        if not to:
+            return {"error": "to is required for forward"}
+        try:
+            creds = self._load_smtp_creds()
+            client = self._open_imap_client()
+            if client is None:
+                return {"error": "Failed to open IMAP connection."}
+            try:
+                original = self._imap_handler.read_email(client, {"uid": uid})
+            finally:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+            if "error" in original:
+                return original
+            from_name = original.get("from_name") or original.get("from_addr", "")
+            forward_header = (
+                f"---------- Forwarded message ----------\n"
+                f"From: {from_name}\n"
+                f"Date: {original.get('date', '')}\n"
+                f"Subject: {original.get('subject', '')}\n\n"
+            )
+            body = forward_header + original.get("body", "")
+            result = self._imap_handler.send_email(
+                creds=creds,
+                params={
+                    "to": to,
+                    "subject": f"Fwd: {original.get('subject', '')}",
+                    "body": body,
+                },
+            )
+            if result.get("success"):
+                result["original"] = {
+                    "from": original.get("from_addr", ""),
+                    "subject": original.get("subject", ""),
+                    "body": original.get("body", ""),
+                    "date": original.get("date", ""),
+                }
+            return result
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Tools — CalDAV handler methods
+    # ------------------------------------------------------------------
+
+    def _th_create_event(self, topic, params, config=None, telemetry=None):
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        try:
+            client = self._open_caldav_client()
+            if client is None:
+                return {"error": _ERR_CALDAV_OPEN_FAILED}
+            return self._caldav_handler.create_event(client, params)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_update_event(self, topic, params, config=None, telemetry=None):
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        try:
+            client = self._open_caldav_client()
+            if client is None:
+                return {"error": _ERR_CALDAV_OPEN_FAILED}
+            return self._caldav_handler.update_event(client, params)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_delete_event(self, topic, params, config=None, telemetry=None):
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        try:
+            client = self._open_caldav_client()
+            if client is None:
+                return {"error": _ERR_CALDAV_OPEN_FAILED}
+            return self._caldav_handler.delete_event(client, params)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_find_free_slots(self, topic, params, config=None, telemetry=None):
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        return self._caldav_handler.find_free_slots(params)
+
+    def _th_get_attendees(self, topic, params, config=None, telemetry=None):
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        return self._caldav_handler.get_attendees(params)
+
+    # ------------------------------------------------------------------
+    # Tools — CardDAV handler methods
+    # ------------------------------------------------------------------
+
+    def _th_list_contacts(self, topic, params, config=None, telemetry=None):
+        if not self._carddav_ok:
+            return {"error": "Mail (CardDAV) not connected."}
+        return self._carddav_handler.list_contacts(params)
+
+    def _th_get_contact(self, topic, params, config=None, telemetry=None):
+        if not self._carddav_ok:
+            return {"error": "Mail (CardDAV) not connected."}
+        return self._carddav_handler.get_contact(params)
+
+    # ------------------------------------------------------------------
+    # Tools — builder helpers
+    # ------------------------------------------------------------------
+
+    def _build_smtp_tools(self) -> list:
+        """Return SMTP tool dicts if SMTP credentials are present."""
+        smtp_host = self.load_credential(_K_SMTP_HOST)
+        if not smtp_host:
+            return []
+        return [
+            {
+                "name": "send_email",
+                "description": "Send an email via SMTP.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient email address"},
+                        "subject": {"type": "string", "description": "Email subject line"},
+                        "body": {"type": "string", "description": "Plain-text email body"},
+                        "cc": {"type": "string", "description": "CC recipient email address"},
+                        "in_reply_to": {
+                            "type": "string",
+                            "description": "Message-ID for threading this as a reply",
+                        },
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+                "handler": self._th_send_email,
+                "timeout": 30,
+            },
+            {
+                "name": "reply_email",
+                "description": (
+                    "Reply to an email by UID. Reads the original email, "
+                    "then sends the reply. Returns the original email content."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "integer", "description": "IMAP UID of the email to reply to"},
+                        "body": {"type": "string", "description": "Plain-text reply body"},
+                    },
+                    "required": ["uid", "body"],
+                },
+                "handler": self._th_reply_email,
+                "timeout": 30,
+            },
+            {
+                "name": "forward_email",
+                "description": (
+                    "Forward an email by UID to a new recipient. Reads the "
+                    "original email, then sends it. Returns the original content."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "integer", "description": "IMAP UID of the email to forward"},
+                        "to": {"type": "string", "description": "Recipient email address"},
+                    },
+                    "required": ["uid", "to"],
+                },
+                "handler": self._th_forward_email,
+                "timeout": 30,
+            },
+        ]
+
+    def _build_imap_tools(self) -> list:
+        """Return IMAP + SMTP tool dicts."""
+        return self._build_smtp_tools() + [
+            {
+                "name": "search_email",
+                "description": (
+                    "Search emails in INBOX by sender, subject, keyword, "
+                    "date range, or triage category."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "sender": {"type": "string", "description": "Filter by sender address"},
+                        "subject": {"type": "string", "description": "Filter by subject keyword"},
+                        "keyword": {"type": "string", "description": "Full-text keyword search"},
+                        "date_from": {"type": "string", "description": "ISO date lower bound (YYYY-MM-DD)"},
+                        "date_to": {"type": "string", "description": "ISO date upper bound (YYYY-MM-DD)"},
+                        "triage": {
+                            "type": "string",
+                            "description": "Filter by triage category: actionable, informational, or noise",
+                        },
+                        "unanswered": {"type": "boolean", "description": "Only unanswered emails"},
+                        "limit": {"type": "integer", "description": "Max results (default 20, max 100)"},
+                    },
+                },
+                "handler": self._th_search_email,
+                "timeout": 30,
+            },
+            {
+                "name": "read_email",
+                "description": "Fetch the full plain-text body of an email by IMAP UID.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "integer", "description": "IMAP UID of the email"},
+                    },
+                    "required": ["uid"],
+                },
+                "handler": self._th_read_email,
+                "timeout": 30,
+            },
+            {
+                "name": "draft_email",
+                "description": "Create a draft email in the user's Drafts folder via IMAP.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "to": {"type": "string", "description": "Recipient email address"},
+                        "subject": {"type": "string", "description": "Email subject line"},
+                        "body": {"type": "string", "description": "Plain-text email body"},
+                        "in_reply_to": {
+                            "type": "string",
+                            "description": "Message-ID for threading this as a reply",
+                        },
+                    },
+                    "required": ["to", "subject", "body"],
+                },
+                "handler": self._th_draft_email,
+                "timeout": 15,
+            },
+            {
+                "name": "manage_email",
+                "description": "Manage an email: delete, mark as read, mark as important, or move to spam.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "integer", "description": "IMAP UID of the email"},
+                        "operation": {
+                            "type": "string",
+                            "enum": ["delete", "mark_read", "mark_important", "move_to_spam"],
+                            "description": "The management operation to perform.",
+                        },
+                    },
+                    "required": ["uid", "operation"],
+                },
+                "handler": self._th_manage_email,
+                "timeout": 15,
+            },
+        ]
+
+    def _build_caldav_tools(self) -> list:
+        """Return CalDAV tool dicts."""
+        return [
+            {
+                "name": "create_event",
+                "description": "Create a new calendar event on the CalDAV server.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string", "description": "Event title"},
+                        "dtstart": {"type": "string", "description": "Start (ISO 8601 UTC)"},
+                        "dtend": {"type": "string", "description": "End (ISO 8601 UTC)"},
+                        "location": {"type": "string", "description": "Optional location"},
+                        "description": {"type": "string", "description": "Optional description"},
+                        "calendar_name": {"type": "string", "description": "Target calendar name"},
+                    },
+                    "required": ["summary", "dtstart", "dtend"],
+                },
+                "handler": self._th_create_event,
+                "timeout": 30,
+            },
+            {
+                "name": "update_event",
+                "description": "Update an existing calendar event by UID.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "string", "description": _DESC_CALDAV_UID},
+                        "summary": {"type": "string", "description": "New title"},
+                        "dtstart": {"type": "string", "description": "New start (ISO 8601 UTC)"},
+                        "dtend": {"type": "string", "description": "New end (ISO 8601 UTC)"},
+                        "location": {"type": "string", "description": "New location"},
+                        "description": {"type": "string", "description": "New description"},
+                    },
+                    "required": ["uid"],
+                },
+                "handler": self._th_update_event,
+                "timeout": 30,
+            },
+            {
+                "name": "delete_event",
+                "description": "Delete a calendar event from the CalDAV server by UID.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "string", "description": "CalDAV event UID to delete"},
+                    },
+                    "required": ["uid"],
+                },
+                "handler": self._th_delete_event,
+                "timeout": 30,
+            },
+            {
+                "name": "find_free_slots",
+                "description": "Find free time slots within working hours.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "date_from": {"type": "string", "description": "Window start (ISO 8601)"},
+                        "date_to": {"type": "string", "description": "Window end (ISO 8601)"},
+                        "min_duration_minutes": {
+                            "type": "integer",
+                            "description": "Minimum slot length in minutes (default 30)",
+                        },
+                        "working_hours_start": {
+                            "type": "integer",
+                            "description": "Working day start hour 0-23 (default 8)",
+                        },
+                        "working_hours_end": {
+                            "type": "integer",
+                            "description": "Working day end hour 0-23 (default 18)",
+                        },
+                    },
+                },
+                "handler": self._th_find_free_slots,
+                "timeout": 15,
+            },
+            {
+                "name": "get_attendees",
+                "description": "Return resolved attendee details for a calendar event.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "string", "description": _DESC_CALDAV_UID},
+                    },
+                    "required": ["uid"],
+                },
+                "handler": self._th_get_attendees,
+                "timeout": 15,
+            },
+        ]
+
+    def _build_carddav_tools(self) -> list:
+        """Return CardDAV tool dicts."""
+        return [
+            {
+                "name": "list_contacts",
+                "description": "List contacts from the knowledge store, optionally filtered by query.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Free-text search term"},
+                        "limit": {"type": "integer", "description": "Max results (default 20, max 50)"},
+                    },
+                },
+                "handler": self._th_list_contacts,
+                "timeout": 15,
+            },
+            {
+                "name": "get_contact",
+                "description": "Look up a single contact by email address or display name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "identifier": {
+                            "type": "string",
+                            "description": "Email address or display name to look up",
+                        },
+                    },
+                    "required": ["identifier"],
+                },
+                "handler": self._th_get_contact,
+                "timeout": 15,
+            },
+        ]
 
     # ------------------------------------------------------------------
     # Tools
@@ -628,11 +1221,14 @@ class MailCapability(AbstractCapability):
         """Return tool definitions conditioned on which protocols are connected.
 
         IMAP tools (when ``_imap_ok``):
-            ``search_email``, ``read_email``, ``send_email``
+            ``search_email``, ``read_email``, ``draft_email``, ``manage_email``
+
+        SMTP tools (when ``_imap_ok`` and SMTP credentials are stored):
+            ``send_email``, ``reply_email``, ``forward_email``
 
         CalDAV tools (when ``_caldav_ok``):
-            ``list_events``, ``get_event``, ``create_event``, ``update_event``,
-            ``delete_event``, ``find_free_slots``, ``get_attendees``
+            ``create_event``, ``update_event``, ``delete_event``,
+            ``find_free_slots``, ``get_attendees``
 
         CardDAV tools (when ``_carddav_ok``):
             ``list_contacts``, ``get_contact``
@@ -642,380 +1238,18 @@ class MailCapability(AbstractCapability):
             ``parameters``, ``handler``, and ``timeout`` keys.
         """
         tools: list[dict] = []
-        cap = self  # closure capture
-
-        # ------------------------------------------------------------------
-        # Connection helpers
-        # ------------------------------------------------------------------
-
-        def _open_imap_client():
-            _email = cap.load_credential(_K_EMAIL)
-            _password = cap.load_credential(_K_PASSWORD)
-            _provider = discover_provider(_email or "")
-            if not _provider or not _provider.imap:
-                raise ValueError("IMAP not available for this provider.")
-            return cap._imap_handler.open_client(
-                host=_provider.imap.host,
-                port=_provider.imap.port,
-                tls=_provider.imap.tls,
-                email=_email,
-                password=_password,
-            )
-
-        def _open_caldav_client():
-            _email = cap.load_credential(_K_EMAIL)
-            _password = cap.load_credential(_K_PASSWORD)
-            _provider = discover_provider(_email or "")
-            if not _provider or not _provider.caldav_url:
-                raise ValueError("CalDAV not available for this provider.")
-            _url = _provider.caldav_url.replace(_PLACEHOLDER_USERNAME, _email)
-            return cap._caldav_handler.open_client(
-                url=_url, username=_email, password=_password
-            )
-
-        # ------------------------------------------------------------------
-        # IMAP tools
-        # ------------------------------------------------------------------
 
         if self._imap_ok:
-            def _search_email(topic, params, config=None, telemetry=None):
-                if not cap._imap_ok:
-                    return {"error": _ERR_IMAP_NOT_CONNECTED}
-                try:
-                    client = _open_imap_client()
-                    if client is None:
-                        return {"error": "Failed to open IMAP connection."}
-                    try:
-                        return cap._imap_handler.search(client, params)
-                    finally:
-                        try:
-                            client.logout()
-                        except Exception:
-                            pass
-                except Exception as exc:
-                    return {"error": str(exc)}
-
-            def _read_email(topic, params, config=None, telemetry=None):
-                if not cap._imap_ok:
-                    return {"error": _ERR_IMAP_NOT_CONNECTED}
-                try:
-                    client = _open_imap_client()
-                    if client is None:
-                        return {"error": "Failed to open IMAP connection."}
-                    try:
-                        return cap._imap_handler.read_email(client, params)
-                    finally:
-                        try:
-                            client.logout()
-                        except Exception:
-                            pass
-                except Exception as exc:
-                    return {"error": str(exc)}
-
-            def _send_email(topic, params, config=None, telemetry=None):
-                if not cap._imap_ok:
-                    return {"error": _ERR_IMAP_NOT_CONNECTED}
-                try:
-                    _email = cap.load_credential(_K_EMAIL)
-                    _password = cap.load_credential(_K_PASSWORD)
-                    _provider = discover_provider(_email or "")
-                    if not _provider or not _provider.smtp:
-                        return {"error": "SMTP provider not available."}
-                    return cap._imap_handler.send_email(
-                        smtp_host=_provider.smtp.host,
-                        smtp_port=_provider.smtp.port,
-                        smtp_tls=_provider.smtp.tls,
-                        email=_email,
-                        password=_password,
-                        params=params,
-                    )
-                except Exception as exc:
-                    return {"error": str(exc)}
-
-            tools += [
-                {
-                    "name": "search_email",
-                    "description": (
-                        "Search emails in INBOX by sender, subject, keyword, "
-                        "date range, or triage category."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "sender": {"type": "string", "description": "Filter by sender address"},
-                            "subject": {"type": "string", "description": "Filter by subject keyword"},
-                            "keyword": {"type": "string", "description": "Full-text keyword search"},
-                            "date_from": {"type": "string", "description": "ISO date lower bound (YYYY-MM-DD)"},
-                            "date_to": {"type": "string", "description": "ISO date upper bound (YYYY-MM-DD)"},
-                            "triage": {
-                                "type": "string",
-                                "description": "Filter by triage category: actionable, informational, or noise",
-                            },
-                            "unanswered": {"type": "boolean", "description": "Only unanswered emails"},
-                            "limit": {"type": "integer", "description": "Max results (default 20, max 100)"},
-                        },
-                    },
-                    "handler": _search_email,
-                    "timeout": 30,
-                },
-                {
-                    "name": "read_email",
-                    "description": "Fetch the full plain-text body of an email by IMAP UID.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "uid": {"type": "integer", "description": "IMAP UID of the email"},
-                        },
-                        "required": ["uid"],
-                    },
-                    "handler": _read_email,
-                    "timeout": 30,
-                },
-                {
-                    "name": "send_email",
-                    "description": "Send an email via SMTP.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "to": {"type": "string", "description": "Recipient email address"},
-                            "subject": {"type": "string", "description": "Email subject line"},
-                            "body": {"type": "string", "description": "Plain-text email body"},
-                            "in_reply_to": {
-                                "type": "string",
-                                "description": "Message-ID for threading this as a reply",
-                            },
-                        },
-                        "required": ["to", "subject", "body"],
-                    },
-                    "handler": _send_email,
-                    "timeout": 30,
-                },
-            ]
-
-        # ------------------------------------------------------------------
-        # CalDAV tools
-        # ------------------------------------------------------------------
+            tools += self._build_imap_tools()
 
         if self._caldav_ok:
-            def _list_events(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                return cap._caldav_handler.list_events(params)
-
-            def _get_event(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                return cap._caldav_handler.get_event(params)
-
-            def _create_event(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                try:
-                    client = _open_caldav_client()
-                    if client is None:
-                        return {"error": _ERR_CALDAV_OPEN_FAILED}
-                    return cap._caldav_handler.create_event(client, params)
-                except Exception as exc:
-                    return {"error": str(exc)}
-
-            def _update_event(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                try:
-                    client = _open_caldav_client()
-                    if client is None:
-                        return {"error": _ERR_CALDAV_OPEN_FAILED}
-                    return cap._caldav_handler.update_event(client, params)
-                except Exception as exc:
-                    return {"error": str(exc)}
-
-            def _delete_event(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                try:
-                    client = _open_caldav_client()
-                    if client is None:
-                        return {"error": _ERR_CALDAV_OPEN_FAILED}
-                    return cap._caldav_handler.delete_event(client, params)
-                except Exception as exc:
-                    return {"error": str(exc)}
-
-            def _find_free_slots(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                return cap._caldav_handler.find_free_slots(params)
-
-            def _get_attendees(topic, params, config=None, telemetry=None):
-                if not cap._caldav_ok:
-                    return {"error": _ERR_CALDAV_NOT_CONNECTED}
-                return cap._caldav_handler.get_attendees(params)
-
-            tools += [
-                {
-                    "name": "list_events",
-                    "description": "List calendar events within an optional date range.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "date_from": {"type": "string", "description": "ISO 8601 start bound"},
-                            "date_to": {"type": "string", "description": "ISO 8601 end bound"},
-                            "calendar_name": {"type": "string", "description": "Filter by calendar name"},
-                            "limit": {"type": "integer", "description": "Max results (default 50, max 200)"},
-                        },
-                    },
-                    "handler": _list_events,
-                    "timeout": 15,
-                },
-                {
-                    "name": "get_event",
-                    "description": "Get full details of a calendar event by UID.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "uid": {"type": "string", "description": _DESC_CALDAV_UID},
-                        },
-                        "required": ["uid"],
-                    },
-                    "handler": _get_event,
-                    "timeout": 15,
-                },
-                {
-                    "name": "create_event",
-                    "description": "Create a new calendar event on the CalDAV server.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "summary": {"type": "string", "description": "Event title"},
-                            "dtstart": {"type": "string", "description": "Start (ISO 8601 UTC)"},
-                            "dtend": {"type": "string", "description": "End (ISO 8601 UTC)"},
-                            "location": {"type": "string", "description": "Optional location"},
-                            "description": {"type": "string", "description": "Optional description"},
-                            "calendar_name": {"type": "string", "description": "Target calendar name"},
-                        },
-                        "required": ["summary", "dtstart", "dtend"],
-                    },
-                    "handler": _create_event,
-                    "timeout": 30,
-                },
-                {
-                    "name": "update_event",
-                    "description": "Update an existing calendar event by UID.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "uid": {"type": "string", "description": _DESC_CALDAV_UID},
-                            "summary": {"type": "string", "description": "New title"},
-                            "dtstart": {"type": "string", "description": "New start (ISO 8601 UTC)"},
-                            "dtend": {"type": "string", "description": "New end (ISO 8601 UTC)"},
-                            "location": {"type": "string", "description": "New location"},
-                            "description": {"type": "string", "description": "New description"},
-                        },
-                        "required": ["uid"],
-                    },
-                    "handler": _update_event,
-                    "timeout": 30,
-                },
-                {
-                    "name": "delete_event",
-                    "description": "Delete a calendar event from the CalDAV server by UID.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "uid": {"type": "string", "description": "CalDAV event UID to delete"},
-                        },
-                        "required": ["uid"],
-                    },
-                    "handler": _delete_event,
-                    "timeout": 30,
-                },
-                {
-                    "name": "find_free_slots",
-                    "description": "Find free time slots within working hours.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "date_from": {"type": "string", "description": "Window start (ISO 8601)"},
-                            "date_to": {"type": "string", "description": "Window end (ISO 8601)"},
-                            "min_duration_minutes": {
-                                "type": "integer",
-                                "description": "Minimum slot length in minutes (default 30)",
-                            },
-                            "working_hours_start": {
-                                "type": "integer",
-                                "description": "Working day start hour 0-23 (default 8)",
-                            },
-                            "working_hours_end": {
-                                "type": "integer",
-                                "description": "Working day end hour 0-23 (default 18)",
-                            },
-                        },
-                    },
-                    "handler": _find_free_slots,
-                    "timeout": 15,
-                },
-                {
-                    "name": "get_attendees",
-                    "description": "Return resolved attendee details for a calendar event.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "uid": {"type": "string", "description": _DESC_CALDAV_UID},
-                        },
-                        "required": ["uid"],
-                    },
-                    "handler": _get_attendees,
-                    "timeout": 15,
-                },
-            ]
-
-        # ------------------------------------------------------------------
-        # CardDAV tools
-        # ------------------------------------------------------------------
+            tools += self._build_caldav_tools()
 
         if self._carddav_ok:
-            def _list_contacts(topic, params, config=None, telemetry=None):
-                if not cap._carddav_ok:
-                    return {"error": "Mail (CardDAV) not connected."}
-                return cap._carddav_handler.list_contacts(params)
-
-            def _get_contact(topic, params, config=None, telemetry=None):
-                if not cap._carddav_ok:
-                    return {"error": "Mail (CardDAV) not connected."}
-                return cap._carddav_handler.get_contact(params)
-
-            tools += [
-                {
-                    "name": "list_contacts",
-                    "description": "List contacts from the knowledge store, optionally filtered by query.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "query": {"type": "string", "description": "Free-text search term"},
-                            "limit": {"type": "integer", "description": "Max results (default 20, max 50)"},
-                        },
-                    },
-                    "handler": _list_contacts,
-                    "timeout": 15,
-                },
-                {
-                    "name": "get_contact",
-                    "description": "Look up a single contact by email address or display name.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "identifier": {
-                                "type": "string",
-                                "description": "Email address or display name to look up",
-                            },
-                        },
-                        "required": ["identifier"],
-                    },
-                    "handler": _get_contact,
-                    "timeout": 15,
-                },
-            ]
+            tools += self._build_carddav_tools()
 
         return tools
+
 
     # ------------------------------------------------------------------
     # Health

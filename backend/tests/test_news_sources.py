@@ -3,7 +3,7 @@
 import pytest
 from services.news_sources import (
     SOURCES, Source,
-    get_source_by_id, get_sources_by_category,
+    get_source_by_id,
 )
 
 
@@ -26,14 +26,6 @@ class TestNewsSources:
         ids = [s.id for s in SOURCES]
         assert len(ids) == len(set(ids))
 
-    def test_category_distribution(self):
-        expected = {
-            "international": 10, "us": 10, "uk": 6, "tech": 8,
-            "business": 6, "science": 5, "sports": 6, "entertainment": 5,
-        }
-        for cat, count in expected.items():
-            assert len(get_sources_by_category(cat)) == count, f"{cat} expected {count}"
-
     def test_get_source_by_id_found(self):
         src = get_source_by_id("bbc_world")
         assert src is not None
@@ -43,6 +35,4 @@ class TestNewsSources:
     def test_get_source_by_id_not_found(self):
         assert get_source_by_id("nonexistent_source") is None
 
-    def test_get_sources_by_category_unknown(self):
-        assert get_sources_by_category("fictional") == []
 

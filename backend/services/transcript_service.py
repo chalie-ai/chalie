@@ -308,7 +308,6 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             )
             from services.salience_service import compute_salience
             from services.embedding_service import get_embedding_service
-            from services.config_service import ConfigService
 
             db = get_shared_db_service()
 
@@ -357,12 +356,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                 return
 
             # ── 5. Resolve service handles ───────────────────────────────────
-            try:
-                episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-            except Exception:
-                episodic_config = {}
-
-            episodic_svc = EpisodicService(db, episodic_config)
+            episodic_svc = EpisodicService(db)
             emb_svc = get_embedding_service()
 
             valid_ids = {e['id'] for e in entries}
@@ -500,12 +494,7 @@ def _fetch_referenced_episodes(entries: list, db) -> list:
 
     try:
         from services.episodic_service import EpisodicService
-        from services.config_service import ConfigService
-        try:
-            episodic_config = ConfigService.resolve_agent_config("episodic-memory")
-        except Exception:
-            episodic_config = {}
-        episodic_svc = EpisodicService(db, episodic_config)
+        episodic_svc = EpisodicService(db)
         episodes = []
         for eid in episode_ids:
             ep = episodic_svc.get_episode_by_id(eid)

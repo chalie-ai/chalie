@@ -1,9 +1,8 @@
-"""Integration tests for the WS-boundary tool_calls fetch path.
+"""Integration tests for the SegmentService tool_calls fetch path.
 
-The production lookup is ``_fetch_tool_calls_for_transcript_ids(ids)``, which
-takes the exact transcript row IDs threaded from ``MessageProcessor._uid``
-via the OutputService metadata. This replaces the original recency-based
-lookup that had two known bugs:
+The production lookup is ``SegmentService._fetch_tool_calls(ids)``, which
+takes the exact transcript row IDs threaded from ``MessageProcessor._uid``.
+This replaces the original recency-based lookup that had two known bugs:
 
   1. It filtered ``role='user'``, so subagent rows (``role='subagent'``) were
      silently invisible. Subagent weather calls produced orphan tags.
@@ -11,13 +10,12 @@ lookup that had two known bugs:
      completion and the WS emit, causing the recency lookup to point at the
      wrong turn.
 
-These regression-sentinel tests assert that the new function pairs tool_calls
+These regression-sentinel tests assert that the function pairs tool_calls
 to *exact* transcript IDs regardless of channel/role, includes ephemeral=1
-rows, and doesn't drift across other concurrent transcript writes. If a
-future change ever reintroduces a recency heuristic, these tests fail.
+rows, and doesn't drift across other concurrent transcript writes.
 
 Additionally tested:
-- _attach_segments empty/missing transcript_ids fall-through path.
+- SegmentService.build() empty/missing transcript_ids fall-through path.
 - Two consecutive turns each start ordinals at 1 (per-turn freshness contract).
 """
 
@@ -84,8 +82,8 @@ class TestFetchByTranscriptIds:
         _seed_tool_call(db, tid, 1)
         db.commit()
 
-        from api.websocket import _fetch_tool_calls_for_transcript_ids
-        rows = _fetch_tool_calls_for_transcript_ids([tid])
+        from services.segment_service import SegmentService
+        rows = SegmentService._fetch_tool_calls([tid])
 
         assert len(rows) == 1
         assert rows[0]["tool_name"] == "weather"
@@ -97,8 +95,8 @@ class TestFetchByTranscriptIds:
         _seed_tool_call(db, tid, 2, "Tokyo, JP")
         db.commit()
 
-        from api.websocket import _fetch_tool_calls_for_transcript_ids
-        rows = _fetch_tool_calls_for_transcript_ids([tid])
+        from services.segment_service import SegmentService
+        rows = SegmentService._fetch_tool_calls([tid])
 
         assert len(rows) == 2
         results = " ".join(r["result"] for r in rows)
@@ -115,8 +113,8 @@ class TestFetchByTranscriptIds:
         _seed_tool_call(db, tid, 1)
         db.commit()
 
-        from api.websocket import _fetch_tool_calls_for_transcript_ids
-        rows = _fetch_tool_calls_for_transcript_ids([tid])
+        from services.segment_service import SegmentService
+        rows = SegmentService._fetch_tool_calls([tid])
 
         assert len(rows) == 1, (
             "Subagent rows must be returned when the caller passes their exact "
@@ -137,8 +135,8 @@ class TestFetchByTranscriptIds:
         _seed_tool_call(db, dmn_tid, 99, "Mars, X1")
         db.commit()
 
-        from api.websocket import _fetch_tool_calls_for_transcript_ids
-        rows = _fetch_tool_calls_for_transcript_ids([ump_tid])
+        from services.segment_service import SegmentService
+        rows = SegmentService._fetch_tool_calls([ump_tid])
 
         assert len(rows) == 1
         assert "<span id='weather_1'>" in rows[0]["result"]
@@ -148,36 +146,28 @@ class TestFetchByTranscriptIds:
         )
 
     def test_empty_id_list_returns_empty(self):
-        from api.websocket import _fetch_tool_calls_for_transcript_ids
-        assert _fetch_tool_calls_for_transcript_ids([]) == []
+        from services.segment_service import SegmentService
+        assert SegmentService._fetch_tool_calls([]) == []
 
 
-class TestAttachSegments:
-    """_attach_segments is the WS-boundary chokepoint that calls into
-    rich_media_parser. It must never raise and always set ``segments``.
-    """
+class TestSegmentServiceBuild:
+    """SegmentService.build() must always return at least one segment."""
 
     def test_no_transcript_ids_emits_text_segment(self):
-        from api.websocket import _attach_segments
+        from services.segment_service import SegmentService
 
-        message_evt = {"type": "message", "content": ""}
-        content = "Here is your result."
-        _attach_segments(message_evt, content, [])
+        segments = SegmentService.build("Here is your result.", [])
 
-        assert "segments" in message_evt
-        segments = message_evt["segments"]
         assert len(segments) == 1
         assert segments[0]["type"] == "text"
         assert segments[0]["content"] == "Here is your result."
 
     def test_html_content_no_tool_calls_emits_text_segment(self):
-        from api.websocket import _attach_segments
+        from services.segment_service import SegmentService
 
-        message_evt = {"type": "message"}
-        _attach_segments(message_evt, "<p>It is <b>sunny</b> today.</p>", [])
+        segments = SegmentService.build("<p>It is <b>sunny</b> today.</p>", [])
 
-        assert "segments" in message_evt
-        assert all(s["type"] == "text" for s in message_evt["segments"])
+        assert all(s["type"] == "text" for s in segments)
 
 
 class TestOrdinalCounterAcrossConsecutiveTurns:

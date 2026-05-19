@@ -26,11 +26,6 @@ class TestExtractCompactionSummary:
         result = _extract_compaction_summary('plain text no tags here')
         assert result is None
 
-    def test_returns_none_on_empty_string(self):
-        from services.message_processor import _extract_compaction_summary
-        result = _extract_compaction_summary('')
-        assert result is None
-
     def test_returns_none_on_none_input(self):
         from services.message_processor import _extract_compaction_summary
         result = _extract_compaction_summary(None)

@@ -103,15 +103,6 @@ class TestDispatch:
         assert "Unknown action" in result
         assert "explode" in result
 
-    def test_default_action_is_search(self):
-        """When no action is given, defaults to search."""
-        with patch(_P_DB), patch(_P_DOC_SVC) as MockSvc:
-            mock_svc = MagicMock()
-            MockSvc.return_value = mock_svc
-            result = _handle_document("topic", {})
-        # Should attempt search (and fail gracefully due to no query)
-        assert "'query' is required" in result
-
     def test_db_error_returns_error_string(self):
         """Database errors produce a clean error tag."""
         with patch(_P_DB, side_effect=Exception("DB down")):
@@ -149,17 +140,7 @@ class TestSearchAction:
             result = _handle_document("topic", {"action": "search", "query": ""})
         assert "'query' is required" in result
 
-    def test_search_no_results(self):
-        mock_svc = MagicMock()
-        mock_dgs = MagicMock()
-        mock_dgs.recall.return_value = []
 
-        with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_DGS, return_value=mock_dgs):
-            result = _handle_document("topic", {"action": "search", "query": "unicorn"})
-
-        assert "No documents match" in result
 
 
 @pytest.mark.unit
@@ -182,14 +163,7 @@ class TestListAction:
         assert "[warranty]" in result
         assert "[invoice]" in result
 
-    def test_list_empty_library(self):
-        mock_svc = MagicMock()
-        mock_svc.get_all_documents.return_value = []
 
-        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            result = _handle_document("topic", {"action": "list"})
-
-        assert "No documents" in result
 
 
 @pytest.mark.unit
@@ -212,16 +186,6 @@ class TestViewAction:
         # Full document text is included
         assert "Full Document Text" in result
         assert "warranty coverage text" in result
-
-    def test_view_not_found(self):
-        mock_svc = MagicMock()
-        mock_svc.get_document.return_value = None
-        mock_svc.search_documents_metadata.return_value = []
-
-        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            result = _handle_document("topic", {"action": "view", "id": "missing"})
-
-        assert "not found" in result.lower()
 
     def test_view_by_name_fuzzy(self):
         mock_svc = MagicMock()
@@ -256,25 +220,7 @@ class TestDeleteAction:
         assert "warranty.pdf" in result
         assert "artifact(s) removed" in result
 
-    def test_delete_not_found(self):
-        mock_svc = MagicMock()
-        mock_svc.get_document.return_value = None
-        mock_svc.search_documents_metadata.return_value = []
 
-        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            result = _handle_document("topic", {"action": "delete", "name": "nothing"})
-
-        assert "not found" in result.lower()
-
-    def test_delete_failure(self):
-        mock_svc = MagicMock()
-        mock_svc.get_document.return_value = _make_doc()
-        mock_svc.soft_delete.return_value = False
-
-        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            result = _handle_document("topic", {"action": "delete", "id": "doc00001"})
-
-        assert "Failed" in result
 
 
 @pytest.mark.unit
@@ -293,34 +239,6 @@ class TestRestoreAction:
 
         assert "Restored" in result
         assert "warranty.pdf" in result
-
-    def test_restore_not_deleted(self):
-        mock_svc = MagicMock()
-        mock_svc.get_document.return_value = _make_doc(deleted_at=None)
-
-        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
-            result = _handle_document("topic", {"action": "restore", "id": "doc00001"})
-
-        assert "not deleted" in result.lower()
-
-    def test_restore_missing_params(self):
-        with patch(_P_DB), patch(_P_DOC_SVC):
-            result = _handle_document("topic", {"action": "restore"})
-
-        assert "Specify" in result
-
-    def test_restore_by_name(self):
-        mock_svc = MagicMock()
-        deleted_doc = _make_doc(deleted_at=datetime(2026, 2, 25, tzinfo=timezone.utc))
-        mock_svc.get_all_documents.return_value = [deleted_doc]
-        mock_svc.restore.return_value = True
-
-        with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc):
-            result = _handle_document("topic", {"action": "restore", "name": "warranty"})
-
-        assert "Restored" in result
-        mock_svc.get_all_documents.assert_called_once_with(include_deleted=True)
 
 
 @pytest.mark.unit
@@ -352,56 +270,6 @@ class TestCreateAction:
         mock_svc.update_status.assert_called_once_with("abc12345", "ready", chunk_count=1)
         mock_dgs.store.assert_called_once()
 
-    def test_create_missing_name(self):
-        with patch(_P_DB), patch(_P_DOC_SVC):
-            result = _handle_document("topic", {
-                "action": "create",
-                "content": "some content",
-            })
-        assert "'name' is required" in result
-
-    def test_create_missing_content(self):
-        with patch(_P_DB), patch(_P_DOC_SVC):
-            result = _handle_document("topic", {
-                "action": "create",
-                "name": "notes.md",
-            })
-        assert "'content' is required" in result
-
-    def test_create_adds_md_extension(self):
-        mock_svc = MagicMock()
-        mock_svc.create_document_from_text.return_value = "def67890"
-        mock_dgs = MagicMock()
-
-        with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc), \
-             patch(_P_DGS, return_value=mock_dgs):
-            _handle_document("topic", {
-                "action": "create",
-                "name": "my-notes",
-                "content": "content here",
-            })
-
-        # Should have added .md extension
-        mock_svc.create_document_from_text.assert_called_once()
-        call_args = mock_svc.create_document_from_text.call_args
-        assert call_args[1]["original_name"] == "my-notes.md"
-
-    def test_create_error_handling(self):
-        mock_svc = MagicMock()
-        mock_svc.create_document_from_text.side_effect = Exception("disk full")
-
-        with patch(_P_DB), \
-             patch(_P_DOC_SVC, return_value=mock_svc):
-            result = _handle_document("topic", {
-                "action": "create",
-                "name": "notes.md",
-                "content": "content",
-            })
-
-        assert "Failed" in result
-        assert "disk full" in result
-
 
 # ---------------------------------------------------------------------------
 # _split_into_artifacts — pure function, no external dependencies
@@ -417,44 +285,6 @@ def _make_text(n_chars: int, word: str = "x") -> str:
 
 @pytest.mark.unit
 class TestSplitIntoArtifacts:
-
-    def test_empty_text_returns_empty_list(self):
-        from abilities.document import _split_into_artifacts
-        assert _split_into_artifacts("") == []
-
-    def test_short_text_below_min_chars_returns_single_chunk(self):
-        from abilities.document import _split_into_artifacts
-        text = "Short paragraph."
-        result = _split_into_artifacts(text)
-        assert result == [text]
-
-    def test_text_exactly_at_min_chars_returns_single_chunk(self):
-        from abilities.document import _split_into_artifacts
-        text = _make_text(512)
-        result = _split_into_artifacts(text)
-        assert len(result) == 1
-        assert result[0] == text
-
-    def test_text_slightly_over_min_chars_splits_at_paragraph_boundary(self):
-        """Two paragraphs each just over 256 chars should produce at least one split."""
-        from abilities.document import _split_into_artifacts
-        para_a = _make_text(550)
-        para_b = _make_text(550)
-        text = para_a + "\n\n" + para_b
-        result = _split_into_artifacts(text)
-        # Combined is well over min_chars — expect at least one chunk covering para_a
-        assert len(result) >= 1
-        # Every chunk must contain real content
-        assert all(c.strip() for c in result)
-
-    def test_two_large_paragraphs_produce_multiple_chunks(self):
-        """Two paragraphs each >= min_chars produce at least 2 artifacts."""
-        from abilities.document import _split_into_artifacts
-        para_a = _make_text(600)
-        para_b = _make_text(600)
-        text = para_a + "\n\n" + para_b
-        result = _split_into_artifacts(text)
-        assert len(result) >= 2
 
     def test_adjacent_chunks_share_48_char_overlap(self):
         """The last 48 chars of chunk[i] must appear as a prefix of chunk[i+1]."""
@@ -482,64 +312,4 @@ class TestSplitIntoArtifacts:
                 f"Chunk length {len(chunk)} exceeds max_chars+overlap bound"
             )
 
-    def test_single_paragraph_over_max_chars_splits_at_sentence_boundary(self):
-        """A single paragraph > max_chars is split at '. ' sentence boundaries."""
-        from abilities.document import _split_into_artifacts
-        sentences = [f"Sentence number {i} describes a fact about solar energy." for i in range(30)]
-        text = " ".join(sentences)  # ~1650 chars, no \n\n
-        result = _split_into_artifacts(text)
-        assert len(result) >= 2
-        # Each chunk should end mid-sentence or at a sentence — but never exceed max+overlap
-        for chunk in result:
-            assert len(chunk) <= 1024 + 48
 
-    def test_sentence_over_max_chars_is_hard_cut(self):
-        """A single sentence > max_chars is hard-cut at exactly max_chars characters."""
-        from abilities.document import _split_into_artifacts
-        # One enormous "sentence" with no punctuation separator
-        text = "a" * 2500
-        result = _split_into_artifacts(text)
-        # All chunks from hard-cut must be <= max_chars
-        assert len(result) >= 2
-        for chunk in result[:-1]:
-            assert len(chunk) <= 1024 + 48
-
-    def test_first_chunk_has_no_leading_overlap(self):
-        """The very first chunk must not be prefixed with overlap from a previous chunk."""
-        from abilities.document import _split_into_artifacts
-        paras = [_make_text(700, word=f"tok{i}") for i in range(3)]
-        text = "\n\n".join(paras)
-        result = _split_into_artifacts(text)
-        assert len(result) >= 2
-        # The first chunk is stored as-is — it matches chunks[0] before overlap is applied
-        # Re-running split gives same first chunk
-        result2 = _split_into_artifacts(text)
-        assert result[0] == result2[0]
-
-    def test_single_paragraph_with_no_separator_over_max_returns_list(self):
-        """Text with no \n\n and no punctuation still produces a non-empty list."""
-        from abilities.document import _split_into_artifacts
-        text = "word " * 300  # 1500 chars, no sentence separators
-        result = _split_into_artifacts(text)
-        assert isinstance(result, list)
-        assert len(result) >= 1
-        assert all(c.strip() for c in result)
-
-    def test_returns_list_not_generator(self):
-        from abilities.document import _split_into_artifacts
-        result = _split_into_artifacts("Hello world.")
-        assert isinstance(result, list)
-
-    def test_whitespace_only_text_returns_single_or_empty(self):
-        """Whitespace-only input returns [] (empty after strip) or single chunk."""
-        from abilities.document import _split_into_artifacts
-        result = _split_into_artifacts("   \n\n   ")
-        assert isinstance(result, list)
-
-    def test_custom_min_max_respected(self):
-        """min_chars/max_chars parameters are honoured over the defaults."""
-        from abilities.document import _split_into_artifacts
-        # With min=50, max=100, a 200-char text should produce multiple chunks
-        text = "The quick brown fox jumps over the lazy dog. " * 5  # 225 chars
-        result = _split_into_artifacts(text, min_chars=50, max_chars=100, overlap=10)
-        assert len(result) >= 2

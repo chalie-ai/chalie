@@ -1,4 +1,4 @@
-"""Contract tests for tool-event emission in MessageProcessor.handleTool().
+"""Contract tests for tool-event emission in MessageProcessor.handle_tool().
 
 These tests verify the event shape emitted via _emit_tool_event — they do
 NOT test dispatch logic, LLM behaviour, or any other service. The fake
@@ -41,7 +41,7 @@ class TestToolEventEmission:
     def test_handle_tool_emits_start_then_end_with_stable_call_id_and_ok_true(self):
         events = []
         proc = self._make_proc(events)
-        proc.handleTool({'id': 'toolu_abc', 'name': 'memory', 'input': {'q': 'x'}})
+        proc.handle_tool({'id': 'toolu_abc', 'name': 'memory', 'input': {'q': 'x'}})
 
         assert len(events) == 2, f"Expected 2 events, got {len(events)}"
 
@@ -60,7 +60,7 @@ class TestToolEventEmission:
     def test_handle_tool_emits_ok_false_on_dispatch_exception_and_mints_call_id_when_missing(self):
         events = []
         proc = self._make_proc(events, raise_exc=RuntimeError('boom'))
-        proc.handleTool({'name': 'broken_tool', 'input': {}})
+        proc.handle_tool({'name': 'broken_tool', 'input': {}})
 
         assert len(events) == 2, f"Expected 2 events, got {len(events)}"
 

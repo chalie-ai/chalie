@@ -186,8 +186,8 @@ def _run_upload_extraction(doc_id: str):
 
     artifact_count = create_document_artifacts(doc_id, text)
 
-    # Write clean_text so websocket._resolve_file_tags can inject content into
-    # the LLM prompt. Merge with prior metadata to avoid clobbering concurrent
+    # Write clean_text so document(action='view') can return full text.
+    # Merge with prior metadata to avoid clobbering concurrent
     # synthesis/classification writes.
     svc.update_extracted_metadata(
         doc_id,
@@ -205,7 +205,7 @@ def _process_upload(doc_id: str):
         try:
             _run_upload_extraction(doc_id)
         except Exception as e:
-            logger.error(f"[DOCS API] Failed to process upload {doc_id}: {e}")
+            logger.exception(f"[DOCS API] Failed to process upload {doc_id}: {e}")
             _mark_upload_failed(doc_id, str(e))
 
     threading.Thread(target=_run, daemon=True, name=f"doc-upload-{doc_id[:8]}").start()
@@ -305,7 +305,7 @@ def upload_document():
         return jsonify(response), 201
 
     except Exception as e:
-        logger.error(f"[DOCS API] upload error: {e}", exc_info=True)
+        logger.error(f"[DOCS API] upload error: {e}")
         return jsonify({"error": "Upload failed"}), 500
 
 

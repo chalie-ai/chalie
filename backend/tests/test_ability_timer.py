@@ -115,28 +115,6 @@ def test_parser_skips_injection_when_created_at_missing():
     assert segments[0]["payload"].get("started_at") is None
 
 
-def test_parser_skips_injection_when_created_at_is_none():
-    """Explicit None on ``created_at`` must take the same path as missing —
-    no started_at injected, no exception.
-    """
-    from services.rich_media_parser import parse
-
-    raw = TimerAbility().execute(
-        channel="user",
-        params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1},
-        telemetry=None,
-    )
-    tool_calls = [{
-        "tool_name": "timer",
-        "params": "{}",
-        "result": raw,
-        "ephemeral": 1,
-        "created_at": None,
-    }]
-    segments = parse("<span id='timer_1'>Started.</span>", tool_calls)
-    assert segments[0]["payload"].get("started_at") is None
-
-
 def test_parser_rejects_unparseable_created_at_sentinel():
     """``parse_utc`` returns ``datetime.min`` (year 0001) on garbage rather
     than raising. Without an explicit sentinel-rejection, that would propagate

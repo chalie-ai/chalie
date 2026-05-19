@@ -33,8 +33,7 @@ logger = logging.getLogger(__name__)
 _PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 
 _RICH_MEDIA_INSTRUCTION = (
-    "This tool supports rich-media rendering. You MUST present this result by "
-    "wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
+    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
     "The span will render as a live countdown card; without it, the user "
     "sees only plain text. Write a brief acknowledgement. Example: "
     "\"<span id='{tag}'>Started a 25-minute focus timer.</span>\""
@@ -46,6 +45,7 @@ _MIN_DURATION_SECONDS = 1
 
 class TimerAbility(Ability):
     NAME = "timer"
+    SYSTEM = True
     SUMMARY = "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."
     EXAMPLES = [
         "start a 25 minute focus timer",

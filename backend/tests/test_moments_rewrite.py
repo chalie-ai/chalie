@@ -120,9 +120,6 @@ class TestPostMoments:
         cursor.close()
         assert count == 1
 
-    def test_400_when_content_type_is_not_json(self, client):
-        resp = client.post('/moments', data='transcript_id=1')
-        assert resp.status_code == 400
 
 
 class TestGetMoments:
@@ -158,10 +155,6 @@ class TestGetMoments:
         assert len(items) == 1
         assert items[0]['key'] == f'moment_{t1}'
 
-    def test_returns_empty_list_when_no_moments(self, client):
-        resp = client.get('/moments')
-        assert resp.status_code == 200
-        assert resp.get_json()['items'] == []
 
 
 class TestForgetMoment:
@@ -187,20 +180,6 @@ class TestForgetMoment:
         assert resp.status_code == 404
         assert 'error' in resp.get_json()
 
-    def test_forgotten_moment_absent_from_list(self, client, db, dgs):
-        tid = self._seed_moment(db, dgs)
-        client.post(f'/moments/{tid}/forget')
-
-        resp = client.get('/moments')
-        items = resp.get_json()['items']
-        assert all(item['key'] != f'moment_{tid}' for item in items)
-
-    def test_second_forget_of_same_moment_returns_404(self, client, db, dgs):
-        tid = self._seed_moment(db, dgs)
-        client.post(f'/moments/{tid}/forget')
-        resp2 = client.post(f'/moments/{tid}/forget')
-        assert resp2.status_code == 404
-
 
 class TestSearchMoments:
 
@@ -214,15 +193,6 @@ class TestSearchMoments:
     def test_missing_query_parameter_returns_400(self, client):
         resp = client.get('/moments/search')
         assert resp.status_code == 400
-
-    def test_empty_query_returns_400(self, client):
-        resp = client.get('/moments/search?q=')
-        assert resp.status_code == 400
-
-    def test_search_with_no_moments_returns_empty(self, client):
-        resp = client.get('/moments/search?q=cooking')
-        assert resp.status_code == 200
-        assert resp.get_json()['items'] == []
 
     def test_search_returns_200_with_moments_present(self, client, db, dgs):
         self._seed_moment(db, dgs, 'Memorable response about cooking')

@@ -169,50 +169,9 @@ def run_migration(db_path: str, channel: str, limit: int, dry_run: bool):
         conn.close()
 
 
-def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: bool) -> dict:
-    stats = {
-        "channel": channel,
-        "rows_read": 0,
-        "skipped_role": 0,
-        "skipped_unrecoverable_user": 0,
-        "skipped_empty_assistant": 0,
-        "skipped_unpaired": 0,
-        "skipped_dedup": 0,
-        "pairs_inserted": 0,
-        "orphaned_tool_calls_deleted": 0,
-        "unrecoverable_details": [],
-    }
-
-    # ── 1. Read last N rows for this channel ──────────────────────────────
-
-    rows = conn.execute(
-        """
-        SELECT id, role, content, tool_call_id, tool_name, created_at
-        FROM transcript
-        WHERE channel = ?
-        ORDER BY id DESC
-        LIMIT ?
-        """,
-        (channel, limit),
-    ).fetchall()
-
-    if not rows:
-        print(f"  No transcript rows found for channel={channel!r}")
-        return stats
-
-    # Reverse to chronological order (oldest first)
-    rows = list(reversed(rows))
-    stats["rows_read"] = len(rows)
-
-    # ── 2. Walk rows and build (user, assistant) exchange pairs ───────────
-    #
-    # Algorithm:
-    #   - buffer the most-recent user row we've seen
-    #   - when we hit an assistant row, emit a pair and clear the buffer
-    #   - consecutive user rows: replace buffer (last user before assistant wins)
-    #   - skip roles in _SKIP_ROLES
-
-    pairs = []  # list of (user_row, assistant_row)
+def _build_pairs(rows: list, stats: dict) -> list:
+    """Walk rows chronologically and build (user, assistant) exchange pairs."""
+    pairs = []
     pending_user = None
 
     for row in rows:
@@ -228,27 +187,26 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
 
         if role == "assistant":
             if pending_user is None:
-                # Assistant with no preceding user in this window — skip
                 stats["skipped_unpaired"] += 1
                 continue
             pairs.append((pending_user, row))
             pending_user = None
             continue
 
-        # Any other role we don't recognise — skip silently
         stats["skipped_role"] += 1
 
-    # A trailing user row with no following assistant — unpaired
     if pending_user is not None:
         stats["skipped_unpaired"] += 1
 
-    # ── 3. Clean user content + dedup ────────────────────────────────────
+    return pairs
 
+
+def _clean_and_dedup(pairs: list, stats: dict) -> list:
+    """Extract raw user messages, validate assistant content, and deduplicate."""
     clean_pairs = []
     seen_keys: set[str] = set()
 
     for user_row, asst_row in pairs:
-        # Extract raw user message
         raw_user = extract_user_message(user_row["content"])
         if raw_user is None:
             stats["skipped_unrecoverable_user"] += 1
@@ -258,13 +216,11 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
             )
             continue
 
-        # Validate assistant content
         raw_asst = (asst_row["content"] or "").strip()
         if not raw_asst:
             stats["skipped_empty_assistant"] += 1
             continue
 
-        # Dedup
         key = _pair_key(raw_user, raw_asst)
         if key in seen_keys:
             stats["skipped_dedup"] += 1
@@ -278,9 +234,12 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
             "asst_created_at": asst_row["created_at"],
         })
 
-    # ── 4. Report what we found ───────────────────────────────────────────
+    return clean_pairs
 
-    print(f"\n  Channel: {channel!r}")
+
+def _print_stats(stats: dict, clean_count: int) -> None:
+    """Print migration statistics."""
+    print(f"\n  Channel: {stats['channel']!r}")
     print(f"  Rows read            : {stats['rows_read']}")
     print(f"  Skipped (role)       : {stats['skipped_role']}  "
           f"(tool, proactive_thought, subagent, scheduled)")
@@ -290,29 +249,20 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
           f"(cannot extract raw message from assembled prompt)")
     print(f"  Skipped (empty asst) : {stats['skipped_empty_assistant']}")
     print(f"  Skipped (dedup)      : {stats['skipped_dedup']}")
-    print(f"  Clean pairs to write : {len(clean_pairs)}")
+    print(f"  Clean pairs to write : {clean_count}")
 
     if stats["unrecoverable_details"]:
         print("\n  Unrecoverable user rows (skipped):")
         for d in stats["unrecoverable_details"]:
             print(d)
 
-    if not clean_pairs:
-        print("\n  Nothing to write.")
-        return stats
 
-    if dry_run:
-        print("\n  [DRY RUN] No changes made.")
-        _print_pair_preview(clean_pairs[:3])
-        return stats
-
-    # ── 5. Delete old data ────────────────────────────────────────────────
-
-    # Collect IDs of rows we're about to delete (for vec cleanup)
+def _write_pairs(conn: sqlite3.Connection, channel: str, rows: list,
+                 clean_pairs: list, stats: dict) -> None:
+    """Delete old transcript data and re-insert clean pairs."""
     old_ids = [r["id"] for r in rows]
 
     with conn:
-        # 5a. Delete tool_calls rows linked to transcript rows for this channel
         if old_ids:
             placeholders = ",".join("?" * len(old_ids))
             cur = conn.execute(
@@ -320,17 +270,10 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
                 old_ids,
             )
             stats["orphaned_tool_calls_deleted"] = cur.rowcount
-
-        # 5b. Delete transcript rows for this channel
-        #     (we only delete the rows we READ — the last N — not the whole channel,
-        #      since rows earlier than our window are already compacted / irrelevant)
-        if old_ids:
             conn.execute(
                 f"DELETE FROM transcript WHERE id IN ({placeholders})",
                 old_ids,
             )
-
-        # ── 6. Re-insert clean pairs ─────────────────────────────────────
 
         for pair in clean_pairs:
             conn.execute(
@@ -356,6 +299,53 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
     print()
     print("  NOTE: build_messages() is unaffected — it reads by ID range.")
 
+
+def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: bool) -> dict:
+    stats = {
+        "channel": channel,
+        "rows_read": 0,
+        "skipped_role": 0,
+        "skipped_unrecoverable_user": 0,
+        "skipped_empty_assistant": 0,
+        "skipped_unpaired": 0,
+        "skipped_dedup": 0,
+        "pairs_inserted": 0,
+        "orphaned_tool_calls_deleted": 0,
+        "unrecoverable_details": [],
+    }
+
+    rows = conn.execute(
+        """
+        SELECT id, role, content, tool_call_id, tool_name, created_at
+        FROM transcript
+        WHERE channel = ?
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (channel, limit),
+    ).fetchall()
+
+    if not rows:
+        print(f"  No transcript rows found for channel={channel!r}")
+        return stats
+
+    rows = list(reversed(rows))
+    stats["rows_read"] = len(rows)
+
+    pairs = _build_pairs(rows, stats)
+    clean_pairs = _clean_and_dedup(pairs, stats)
+    _print_stats(stats, len(clean_pairs))
+
+    if not clean_pairs:
+        print("\n  Nothing to write.")
+        return stats
+
+    if dry_run:
+        print("\n  [DRY RUN] No changes made.")
+        _print_pair_preview(clean_pairs[:3])
+        return stats
+
+    _write_pairs(conn, channel, rows, clean_pairs, stats)
     return stats
 
 

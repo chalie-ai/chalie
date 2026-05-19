@@ -1,11 +1,12 @@
 """
 Capabilities blueprint — /api/capabilities endpoints for managing capability plugins.
 
-Capabilities are self-contained integrations (e.g. CalDAV) that can be connected,
-disconnected, and queried through this REST interface.  The blueprint delegates
-all business logic to the objects returned by :func:`~capabilities.load_capabilities`
-and to :func:`~services.tool_library_service.register_tool` /
-:func:`~services.tool_library_service.unregister_tool` for dynamic tool registration.
+Capabilities are self-contained integrations (e.g. mail/calendar/contacts) that can
+be connected, disconnected, and queried through this REST interface. The blueprint
+delegates all business logic to the objects returned by
+:func:`~capabilities.load_capabilities`. Capability tools are surfaced to the LLM via
+Ability subclasses (email, calendar, contacts) which are discovered by AbilityRegistry
+at startup.
 
 Authentication
 --------------
@@ -114,12 +115,57 @@ def list_capabilities():
                 "connected": cap.is_connected(),
                 "last_sync_at": _get_last_sync_at(cap_id),
                 "providers": manifest.get("providers", []),
+                "fields": manifest.get("fields"),
             })
         return jsonify({"capabilities": result}), 200
 
     except Exception as exc:
-        logger.error("[capabilities] list_capabilities error: %s", exc, exc_info=True)
+        logger.exception("[capabilities] list_capabilities error: %s", exc)
         return jsonify({"error": "Failed to list capabilities"}), 500
+
+
+@capabilities_bp.route("/<cap_id>", methods=["GET"])
+@require_auth
+def get_capability(cap_id: str):
+    """Return capability details with non-sensitive config for editing.
+
+    Password fields are excluded — only non-secret fields (e.g. email
+    address) are returned so the UI can pre-fill the edit form.
+
+    Returns:
+        Response: ``200`` with JSON body, ``404`` if not found.
+    """
+    try:
+        caps = _load_caps()
+        if cap_id not in caps:
+            return jsonify({"error": f"Capability not found: {cap_id}"}), 404
+
+        cap = caps[cap_id]
+        manifest = cap.get_manifest()
+        fields = manifest.get("fields") or []
+
+        config = {}
+        if cap.is_connected():
+            for field in fields:
+                if field.get("type") == "password":
+                    continue
+                key = f"{cap_id}:{field['name']}"
+                val = cap.load_credential(key)
+                if val is not None:
+                    config[field["name"]] = val
+
+        return jsonify({
+            "id": cap_id,
+            "name": manifest.get("name", cap_id),
+            "version": manifest.get("version", ""),
+            "connected": cap.is_connected(),
+            "last_sync_at": _get_last_sync_at(cap_id),
+            "config": config,
+        }), 200
+
+    except Exception as exc:
+        logger.exception("[capabilities] get_capability('%s') error: %s", cap_id, exc)
+        return jsonify({"error": "Internal error fetching capability"}), 500
 
 
 @capabilities_bp.route("/<cap_id>/setup", methods=["POST"])
@@ -131,9 +177,9 @@ def setup_capability(cap_id: str):
     :meth:`~capabilities.base.AbstractCapability.configure` to validate and
     persist credentials, then calls
     :meth:`~capabilities.base.AbstractCapability.connect` to establish the
-    connection.  On success, each tool returned by
-    :meth:`~capabilities.base.AbstractCapability.get_tools` is registered via
-    :func:`~services.tool_library_service.register_tool`.
+    connection. On success, triggers an immediate first sync and starts a
+    background monitor thread. Capability tools are surfaced to the LLM via
+    Ability subclasses (email, calendar, contacts) discovered by AbilityRegistry.
 
     Args (URL):
         cap_id: Capability identifier, e.g. ``"caldav"``.
@@ -169,22 +215,6 @@ def setup_capability(cap_id: str):
         if not connected:
             return jsonify({"error": "Connection failed — check credentials and try again"}), 400
 
-        # Register dynamic tools exposed by this capability
-        from services.tool_library_service import register_tool
-
-        for tool_def in cap.get_tools():
-            tool_name = tool_def["name"]
-            handler = tool_def["handler"]
-            metadata = {k: v for k, v in tool_def.items() if k != "handler"}
-            try:
-                register_tool(tool_name, handler, metadata)
-                logger.info("[capabilities] registered tool '%s' for capability '%s'", tool_name, cap_id)
-            except Exception as reg_exc:
-                logger.warning(
-                    "[capabilities] failed to register tool '%s' for capability '%s': %s",
-                    tool_name, cap_id, reg_exc,
-                )
-
         # Trigger immediate first sync so the user doesn't wait for the scheduler
         import threading
 
@@ -207,18 +237,19 @@ def setup_capability(cap_id: str):
         logger.warning("[capabilities] setup '%s' failed: vault is locked", cap_id)
         return jsonify({"error": "Vault is locked — please log out and log back in"}), 401
     except Exception as exc:
-        logger.error("[capabilities] setup_capability('%s') error: %s", cap_id, exc, exc_info=True)
+        logger.exception("[capabilities] setup_capability('%s') error: %s", cap_id, exc)
         return jsonify({"error": "Internal error during capability setup"}), 500
 
 
 @capabilities_bp.route("/<cap_id>/disconnect", methods=["POST"])
 @require_auth
 def disconnect_capability(cap_id: str):
-    """Disconnect a capability and unregister its tools.
+    """Disconnect a capability.
 
-    Calls :meth:`~capabilities.base.AbstractCapability.disconnect` then
-    removes every tool the capability exposes from the tool registry via
-    :func:`~services.tool_library_service.unregister_tool`.
+    Calls :meth:`~capabilities.base.AbstractCapability.disconnect` to tear
+    down active connections. Capability tools (email, calendar, contacts) are
+    surfaced via Ability subclasses and will gracefully report "not connected"
+    after disconnect.
 
     Args (URL):
         cap_id: Capability identifier, e.g. ``"caldav"``.
@@ -237,25 +268,11 @@ def disconnect_capability(cap_id: str):
 
         cap = caps[cap_id]
 
-        # Unregister tools before disconnecting so we know what tools to remove
-        from services.tool_library_service import unregister_tool
-
-        for tool_def in cap.get_tools():
-            tool_name = tool_def["name"]
-            try:
-                unregister_tool(tool_name)
-                logger.info("[capabilities] unregistered tool '%s' for capability '%s'", tool_name, cap_id)
-            except Exception as unreg_exc:
-                logger.warning(
-                    "[capabilities] failed to unregister tool '%s' for capability '%s': %s",
-                    tool_name, cap_id, unreg_exc,
-                )
-
         cap.disconnect()
         return jsonify({"status": "disconnected"}), 200
 
     except Exception as exc:
-        logger.error("[capabilities] disconnect_capability('%s') error: %s", cap_id, exc, exc_info=True)
+        logger.exception("[capabilities] disconnect_capability('%s') error: %s", cap_id, exc)
         return jsonify({"error": "Internal error during capability disconnect"}), 500
 
 
@@ -316,5 +333,5 @@ def capability_status(cap_id: str):
         }), 200
 
     except Exception as exc:
-        logger.error("[capabilities] capability_status('%s') error: %s", cap_id, exc, exc_info=True)
+        logger.exception("[capabilities] capability_status('%s') error: %s", cap_id, exc)
         return jsonify({"error": "Internal error fetching capability status"}), 500

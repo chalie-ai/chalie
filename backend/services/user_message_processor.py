@@ -15,11 +15,12 @@ called as:
                                 on_narration=_on_narration)
     response = proc.send(request_id=request_id)
 
-Implements the full postTurn() four-step fan-out, memory seeding, narration
-callback, and getSystemPrompt() override.
+Implements the full post_turn() four-step fan-out, memory seeding, narration
+callback, and get_system_prompt() override.
 """
 
 import logging
+import os
 from collections.abc import Callable
 
 from services.message_processor import MessageProcessor
@@ -34,15 +35,15 @@ class UserMessageProcessor(MessageProcessor):
 
     Hardcodes CHANNEL='user', ROLE='user', uses UnifiedSystemMessagePrompt.
     Adds on_narration callback for real-time ACT narration streaming.
-    Overrides postTurn() with the four-step fan-out.
+    Overrides post_turn() with the four-step fan-out.
     """
 
     CHANNEL = 'user'
     ROLE = 'user'
-    JOB = 'frontal-cortex-unified'
+    LOG_LABEL = 'chat'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # 8 innate abilities — pre-injected on every ACT iteration. The 7 in
+    # 9 innate abilities — pre-injected on every ACT iteration. The 10 in
     # DISCOVERABLE are surfaced at runtime via find_tools and never
     # pre-injected. `subagent` lives in DISCOVERABLE so it competes with
     # weather/search/news/browser via find_tools rather than appearing as
@@ -54,12 +55,17 @@ class UserMessageProcessor(MessageProcessor):
         "memory",
         "read",
         "review_tool_calls",
+        "review_transcript",
         "schedule",
         "timer",
     ]
     DISCOVERABLE: list[str] = [
         "browser",
+        "calendar",
         "code_eval",
+        "contacts",
+        "email",
+        "home",
         "news",
         "programming_docs_search",
         "search",
@@ -77,14 +83,16 @@ class UserMessageProcessor(MessageProcessor):
         on_tool_event: Callable[[dict], None] | None = None,
     ):
         super().__init__(raw_input, metadata)
+        if self._metadata.get('hidden_input'):
+            self.SKIP_INPUT_ROW = True
         self._on_narration = on_narration
         self._on_tool_event = on_tool_event
         # Numeric radius used for the pre-act seed recall (stored for drift calc).
         self._memory_seed_radius: float | None = None
-        # Set by store() — the final LLM response text, needed by postTurn()
+        # Set by store() — the final LLM response text, needed by post_turn()
         # for interaction logging and phase updates (call AFTER store()).
         self._last_response: str = ''
-        # Cached user synthesis string. getSystemPrompt() runs every ACT iteration;
+        # Cached user synthesis string. get_system_prompt() runs every ACT iteration;
         # without this cache each iteration would re-read user_summary from data_graph.
         # The user summary is stable for the duration of a single turn.
         self._user_definition_cached: str | None = None
@@ -92,15 +100,15 @@ class UserMessageProcessor(MessageProcessor):
         # _get_mode_gate() on first access; the gate is ticked exactly once
         # per turn (classify + state update + persist), and the resulting
         # state dict is cached so converse-driven branching in
-        # getUserDefinition() does not re-read MemoryStore on every ACT
+        # get_user_definition() does not re-read MemoryStore on every ACT
         # iteration. The instance is reused for get_system_prompt_additions()
-        # in getSystemPrompt().
+        # in get_system_prompt().
         self._mode_gate_cached = None  # ModeGateService | None — lazy import
         self._mode_state_cached: dict[str, float] | None = None
 
     # ── Abstract overrides ────────────────────────────────────────────────────
 
-    def getUserDefinition(self) -> str:
+    def get_user_definition(self) -> str:
         """One-sentence synthesis of the real human user for the system prompt.
 
         Reads the user_summary record (kind='system', key='user_summary') from data_graph
@@ -112,7 +120,7 @@ class UserMessageProcessor(MessageProcessor):
         UserSummaryProcessor is driven exclusively by SubconsciousWorker._step_synthesis()
         on each idle tick — no lazy fallback here.
 
-        Per-turn cached: getSystemPrompt() runs on every ACT iteration; without this
+        Per-turn cached: get_system_prompt() runs on every ACT iteration; without this
         cache each iteration would re-query the knowledge table.
         """
         _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
@@ -147,25 +155,25 @@ class UserMessageProcessor(MessageProcessor):
                 return self._user_definition_cached
 
         except Exception as e:
-            logger.warning(f"[USER MSG] getUserDefinition failed: {e}")
+            logger.warning(f"[USER MSG] get_user_definition failed: {e}")
 
         self._user_definition_cached = _FALLBACK
         return self._user_definition_cached
 
-    def getUserPrompt(self) -> str:
+    def get_user_prompt(self) -> str:
         """Build the user-message body for one ACT iteration.
 
         Section order:
           1. User definition (user_summary short) — placed at the top of the
              user prompt so the model sees identity in the same recency window
              as the current turn line. The base-class system-prompt slot for
-             user_definition is suppressed in getSystemPrompt() below.
+             user_definition is suppressed in get_system_prompt() below.
           2. World State block
           3. System Awareness block
-          4. ## Previous Messages block (via getPreviousMessages())
+          4. ## Previous Messages block (via get_previous_messages())
           (blank line separator)
           5. Memory seed block (canonical tag block set by pre_act(), injected verbatim)
-          6. Current turn line: user: <raw_input> [file_tags] [nudge_tag]
+          6. Current turn line: user: <raw_input> [nudge_tag]
           7. ACT loop trail (empty string on iteration 1)
 
         Note: The ## Checkpoint / ## Current State envelope is NOT emitted
@@ -174,7 +182,7 @@ class UserMessageProcessor(MessageProcessor):
         parts = []
 
         # 1. User definition (identity anchor)
-        user_def = self.getUserDefinition()
+        user_def = self.get_user_definition()
         if user_def:
             parts.append(user_def)
 
@@ -193,7 +201,7 @@ class UserMessageProcessor(MessageProcessor):
             parts.append(f"## System Awareness\n{self_awareness}")
 
         # 3. Previous Messages
-        prev = self.getPreviousMessages()
+        prev = self.get_previous_messages()
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
 
@@ -204,35 +212,15 @@ class UserMessageProcessor(MessageProcessor):
         if self._memory_seed:
             parts.append(self._memory_seed)
 
-        # 5. Current turn line with optional file tags and nudge
+        # 5. Current turn line with optional nudge
         turn_line = f"user: {self._raw_input}"
-        file_tags = self._metadata.get('file_tags', [])
         nudge_tag = self._metadata.get('nudge_tag')
-        if file_tags:
-            kinds = [t.split('(', 1)[0].lstrip('[') for t in file_tags]
-            logger.info(
-                f"[UMP] file_tags present uuid={self._uid} "
-                f"count={len(file_tags)} kinds={kinds}"
-            )
-            turn_line += ' ' + ' '.join(file_tags)
         if nudge_tag:
             turn_line += ' ' + nudge_tag
         parts.append(turn_line)
 
-        # 6. Drain pending steers from async subagent completions into the trail.
-        # These are envelopes queued by _deliver_envelope() while compaction
-        # or an earlier iteration was in progress. Draining here (before
-        # getActLoopTrail()) is compaction-safe: compaction mutates _act_trail
-        # directly; this drain fires before the next iteration's prompt
-        # assembly, so steers are never mid-compaction when appended.
-        if self._pending_steers:
-            steers = self._pending_steers[:]
-            self._pending_steers.clear()
-            for steer in steers:
-                self._act_trail.append(steer)
-
-        # 7. ACT loop trail (empty on iteration 1)
-        trail = self.getActLoopTrail()
+        # 6. ACT loop trail (empty on iteration 1)
+        trail = self.get_act_loop_trail()
         if trail:
             parts.append(trail)
 
@@ -240,7 +228,7 @@ class UserMessageProcessor(MessageProcessor):
 
     # ── Overridable hooks ─────────────────────────────────────────────────────
 
-    def getSystemPrompt(self) -> str:
+    def get_system_prompt(self) -> str:
         """Build the final system prompt for this turn.
 
         Assembly order:
@@ -250,7 +238,7 @@ class UserMessageProcessor(MessageProcessor):
           2. Template — UnifiedSystemMessagePrompt body.
 
         The user_definition (user_summary short) is intentionally NOT emitted
-        here — it is prepended at the top of getUserPrompt() instead so it
+        here — it is prepended at the top of get_user_prompt() instead so it
         sits in the same recency window as the current turn line. This
         overrides the base-class behaviour which would otherwise prepend the
         user_definition to the system prompt body.
@@ -261,7 +249,7 @@ class UserMessageProcessor(MessageProcessor):
         """
         from services.personality.personality_service import get_current_voice
 
-        template = self.SYSTEM_PROMPT_CLASS().getPrompt()
+        template = self.SYSTEM_PROMPT_CLASS().get_prompt()
 
         voice_line = f"When responding; {get_current_voice()}"
         prompt = f"{voice_line}\n\n{template}"
@@ -283,7 +271,7 @@ class UserMessageProcessor(MessageProcessor):
         Calls handle_memory directly so the result is a canonical tag block,
         records the row via ToolRenderAndRecordService (ephemeral=False) — same
         storage path as any other durable tool call — and stores the block on
-        self._memory_seed for getUserPrompt() to inject verbatim.
+        self._memory_seed for get_user_prompt() to inject verbatim.
         """
         from abilities._registry import AbilityRegistry
         from abilities.memory import MemoryAbility
@@ -326,7 +314,7 @@ class UserMessageProcessor(MessageProcessor):
             result=block,
             ephemeral=False,
             transcript_id=self._uid,
-        ).renderAndRecord()
+        ).render_and_record()
 
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Push mid-loop narration text to the per-request SSE channel.
@@ -355,43 +343,18 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.debug(f"[USER MSG] Tool event callback failed: {e}")
 
-    def _drain_steering(self, request_id: str | None) -> list[str]:
-        """Drain mid-loop user steering messages from MemoryStore.
-
-        WebSocket /steer endpoint pushes user feedback to ``steer:{request_id}``
-        via ``rpush``. Without this override, the base no-op returns [] and
-        every steer is silently dropped — Commit 8 critic P0.
-
-        Returns one string per queued steer (preserving rpush insertion order).
-        Deletes the key after draining. Errors are logged at DEBUG and return
-        [] — a missing or unreadable queue must not abort the turn.
-        """
-        if not request_id:
-            return []
-        try:
-            from services.memory_client import MemoryClientService
-            _store = MemoryClientService.create_connection()
-            key = f"steer:{request_id}"
-            steers = _store.lrange(key, 0, -1)
-            if not steers:
-                return []
-            _store.delete(key)
-            return [s.decode() if isinstance(s, bytes) else s for s in steers]
-        except Exception as exc:
-            logger.debug(f"[USER MSG] Steer drain failed: {exc}")
-            return []
 
     def store(self, llm_response: str) -> None:
-        """Persist the turn atomically, then capture _last_response for postTurn().
+        """Persist the turn atomically, then capture _last_response for post_turn().
 
         Calls base store() (which sets self._uid and writes all rows), then
-        captures the response text so postTurn() can reference it without
+        captures the response text so post_turn() can reference it without
         send() needing to pass it explicitly.
         """
         super().store(llm_response)
         self._last_response = llm_response
 
-    def postTurn(self) -> None:
+    def post_turn(self) -> None:
         """Two-step fan-out, each individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
@@ -403,7 +366,7 @@ class UserMessageProcessor(MessageProcessor):
         The on_turn() hook is therefore not needed here.
 
         Compaction is intentionally NOT here: per the north star
-        (message-processing.md § "What does NOT go in postTurn()"),
+        (message-processing.md § "What does NOT go in post_turn()"),
         compaction is a send()-loop responsibility driven by context
         pressure, not a post-turn consequence. Mid-ACT Stage 1/2 in
         send() owns it.
@@ -438,10 +401,98 @@ class UserMessageProcessor(MessageProcessor):
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    def _process_file_attachments(self) -> None:
+        """Dispatch document.upload + document.view for each attachment.
+
+        Handles the ``attachments`` list of ``/tmp/chalie_*`` paths produced
+        by the POST /upload endpoint. For each path:
+          1. Path-traversal guard — rejects any path not under /tmp/chalie_.
+          2. Read the file from /tmp and base64-encode it for document.upload.
+          3. Dispatch document.upload then document.view via handle_tool() so
+             each call produces audit rows, WS events, and policy enforcement.
+          4. Delete the /tmp file after a successful upload (permanent storage
+             now owns it; /tmp is ephemeral and the cleanup worker removes
+             stragglers after 24 h anyway).
+
+        Called after pre_act(). No-op when metadata has no ``attachments`` key.
+        """
+        import base64
+        import mimetypes
+
+        attachments = self._metadata.get('attachments') or []
+        if not attachments:
+            return
+
+        for tmp_path in attachments:
+            if not self._validate_tmp_path(tmp_path):
+                logger.warning('[UMP] Rejected attachment with unsafe tmp_path: %s', tmp_path)
+                continue
+
+            try:
+                with open(tmp_path, 'rb') as fh:
+                    file_bytes = fh.read()
+            except OSError as exc:
+                logger.warning('[UMP] Could not read attachment %s: %s', tmp_path, exc)
+                continue
+
+            filename = os.path.basename(tmp_path)
+            content_type, _ = mimetypes.guess_type(tmp_path)
+            content_type = content_type or 'application/octet-stream'
+            data_b64 = base64.b64encode(file_bytes).decode()
+
+            upload_result = self.handle_tool({
+                'name': 'document',
+                'input': {
+                    'action': 'upload',
+                    'name': filename,
+                    'content': data_b64,
+                    'content_type': content_type,
+                },
+            })
+
+            # Remove the /tmp file — permanent storage now owns the content.
+            try:
+                os.unlink(tmp_path)
+            except OSError as exc:
+                logger.debug('[UMP] Could not remove tmp file %s: %s', tmp_path, exc)
+
+            doc_id = self._extract_doc_id_from_upload(upload_result)
+            if doc_id:
+                self.handle_tool({
+                    'name': 'document',
+                    'input': {'action': 'view', 'id': doc_id},
+                })
+
+    def _validate_tmp_path(self, path: str) -> bool:
+        """Return True only when path is a real file under /tmp/chalie_.
+
+        Uses os.path.realpath to resolve symlinks before the prefix check,
+        preventing directory-traversal attacks via symlink chains.
+
+        Args:
+            path: Candidate /tmp path from the client ``attachments`` array.
+
+        Returns:
+            True if the resolved path starts with '/tmp/chalie_' and the
+            file exists; False otherwise.
+        """
+        if not path:
+            return False
+        real = os.path.realpath(path)
+        if not real.startswith('/tmp/chalie_'):
+            return False
+        return os.path.isfile(real)
+
+    def _extract_doc_id_from_upload(self, result_text: str) -> str | None:
+        """Parse doc_id from upload result like '(id=abc123ef)'."""
+        import re
+        match = re.search(r'\bid=([0-9a-f]{8})\b', result_text or '')
+        return match.group(1) if match else None
+
     def _get_self_awareness(self) -> str:
         """Get system health degradation signals from SelfModelService.
 
-        Returns empty string when the system is healthy — getUserPrompt()
+        Returns empty string when the system is healthy — get_user_prompt()
         skips the section. Only populates when degradation is detected.
         """
         try:
@@ -475,7 +526,7 @@ class UserMessageProcessor(MessageProcessor):
         """Return the per-mode activation state for this turn (cached).
 
         Wraps ``_get_mode_gate().get_state()`` with a per-turn cache so
-        getUserDefinition() does not re-read MemoryStore on every ACT
+        get_user_definition() does not re-read MemoryStore on every ACT
         iteration. On any failure an empty dict is cached so callers see a
         deterministic miss without retry storms.
         """
@@ -489,27 +540,3 @@ class UserMessageProcessor(MessageProcessor):
         return self._mode_state_cached
 
 
-class SubagentReturnProcessor(UserMessageProcessor):
-    """Synthesize a subagent's result via a fresh user-channel ACT loop.
-
-    Flow (isolation contract):
-    1. SubagentProcessor (CHANNEL='subagent') does the work in its own
-       isolated transcript.
-    2. On completion, a daemon thread constructs this processor with the
-       subagent's result as ``raw_input`` and calls ``.send()``.
-    3. SKIP_INPUT_ROW=True — the raw subagent result is NEVER written to
-       the user transcript.  The user channel stays clean.
-    4. The ACT loop synthesizes the result.  The synthesized response is
-       written to transcript (``store()``) and delivered via WS — this is
-       what the user sees.
-    5. On subagent failure, the same flow runs — the ACT loop sees the
-       error envelope and synthesizes a user-friendly response.
-
-    Why CHANNEL='user': the output of this ACT loop is a normal
-    user-channel assistant message — fully visible, rich-media-capable.
-    Do NOT add a CHANNEL='subagent_return' constant — it would break
-    rich-media card injection for tool calls in this loop.
-    """
-
-    ROLE = 'subagent_return'
-    SKIP_INPUT_ROW = True

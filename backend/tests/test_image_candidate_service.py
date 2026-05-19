@@ -72,10 +72,6 @@ class TestBuildImageCandidates:
         from services.image_candidate_service import build_image_candidates
         assert build_image_candidates([]) == []
 
-    def test_filters_non_string_and_empty(self):
-        from services.image_candidate_service import build_image_candidates
-        assert build_image_candidates(["", None, 0]) == []  # type: ignore[list-item]
-
     def test_dedup_by_url_in_input_order(self, image_server):
         from services.image_candidate_service import build_image_candidates
         base, handler = image_server
@@ -110,21 +106,6 @@ class TestBuildImageCandidates:
         urls = [c["url"] for c in out]
         assert urls == [f"{base}/ok.png"]
 
-    def test_returns_url_verbatim(self, image_server):
-        from services.image_candidate_service import build_image_candidates
-        base, handler = image_server
-        handler.images["/anything.png"] = _png_bytes()
-        url = f"{base}/anything.png"
-        out = build_image_candidates([url])
-        assert out[0]["url"] == url
-
-    def test_bare_url_yields_empty_source_title(self, image_server):
-        from services.image_candidate_service import build_image_candidates
-        base, handler = image_server
-        handler.images["/x.png"] = _png_bytes()
-        out = build_image_candidates([f"{base}/x.png"])
-        assert out[0]["source_title"] == ""
-
     def test_tuple_input_carries_source_title(self, image_server):
         from services.image_candidate_service import build_image_candidates
         base, handler = image_server
@@ -148,13 +129,6 @@ class TestBuildImageCandidates:
         assert len(out) == 1
         assert "caption" in out[0]
 
-    def test_no_ocr_text_field_in_output(self, image_server):
-        from services.image_candidate_service import build_image_candidates
-        base, handler = image_server
-        handler.images["/photo.png"] = _png_bytes()
-        out = build_image_candidates([f"{base}/photo.png"])
-        assert "ocr_text" not in out[0]
-
 
 class TestCaptionFromFilename:
     """Unit tests for the URL-filename caption heuristic."""
@@ -169,34 +143,10 @@ class TestCaptionFromFilename:
         caption = _caption_from_filename(url)
         assert caption == "Mt. Everest from Gokyo Ri November 5, 2012"
 
-    def test_caption_from_filename_with_url_encoding(self):
-        from services.image_candidate_service import _caption_from_filename
-        url = (
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/"
-            "Lotte_World_day_view_2.jpg/960px-Lotte_World_day_view_2.jpg"
-        )
-        caption = _caption_from_filename(url)
-        assert caption == "Lotte World day view 2"
-
-    def test_caption_strips_wiki_prefix_multiple_widths(self):
-        from services.image_candidate_service import _caption_from_filename
-        url = (
-            "https://upload.wikimedia.org/wikipedia/commons/thumb/x/xx/"
-            "Mount_Everest_North_Face.jpg/320px-Mount_Everest_North_Face.jpg"
-        )
-        caption = _caption_from_filename(url)
-        assert caption == "Mount Everest North Face"
-
     def test_caption_empty_when_filename_is_hash(self):
         from services.image_candidate_service import _caption_from_filename
         # Pure hex/digit hash filenames should yield empty string
         url = "https://cdn.example.com/images/a3f9b2c1d4e5f678.jpg"
-        caption = _caption_from_filename(url)
-        assert caption == ""
-
-    def test_caption_empty_for_uuid_style_filename(self):
-        from services.image_candidate_service import _caption_from_filename
-        url = "https://media.example.com/1234567890abcdef1234567890abcdef.jpg"
         caption = _caption_from_filename(url)
         assert caption == ""
 

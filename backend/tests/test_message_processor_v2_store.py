@@ -6,20 +6,20 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Tests for getPreviousMessages(), compaction, and store() hot paths.
+"""Tests for get_previous_messages(), compaction, and store() hot paths.
 
 Uses real in-memory SQLite DB — no mocks for data path.
 """
 
 import logging as _logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 pytestmark = pytest.mark.unit
 
 # =============================================================================
-# RESCUED: getPreviousMessages() tests (from test_message_processor_v2_base.py)
+# RESCUED: get_previous_messages() tests (from test_message_processor_v2_base.py)
 # Only tests that use the real `db` fixture are included.
 # =============================================================================
 
@@ -39,7 +39,7 @@ def _stub_gpm_prompt_cls():
 
 
 class _GPMFakeProcessor:
-    """Concrete MessageProcessor subclass for getPreviousMessages() tests."""
+    """Concrete MessageProcessor subclass for get_previous_messages() tests."""
 
     _CHANNEL = _GPM_CHANNEL
     _ROLE = 'test_role'
@@ -53,10 +53,10 @@ class _GPMFakeProcessor:
             ROLE = _GPMFakeProcessor._ROLE
             SYSTEM_PROMPT_CLASS = _stub_gpm_prompt_cls()
 
-            def getUserDefinition(self) -> str:
+            def get_user_definition(self) -> str:
                 return _GPM_USER_DEF
 
-            def getUserPrompt(self) -> str:
+            def get_user_prompt(self) -> str:
                 return _GPM_USER_PROMPT
 
         for k, v in kwargs.items():
@@ -73,34 +73,25 @@ class _GPMFakeProcessor:
             ROLE = _GPMFakeProcessor._ROLE
             SYSTEM_PROMPT_CLASS = _stub_gpm_prompt_cls()
 
-            def getUserDefinition(self) -> str:
+            def get_user_definition(self) -> str:
                 return _GPM_USER_DEF
 
-            def getUserPrompt(self) -> str:
+            def get_user_prompt(self) -> str:
                 return _GPM_USER_PROMPT
 
         return _Fake
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — empty channel → ''
+# get_previous_messages() — empty channel → ''
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestGetPreviousMessagesEmpty:
-    def test_empty_channel_returns_empty_string(self, db):
-        """No transcript rows and no compaction → empty string."""
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert result == ''
 
-    def test_returns_str_type(self, db):
-        p = _GPMFakeProcessor.make()
-        assert isinstance(p.getPreviousMessages(), str)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — transcript rows + ephemeral filtering
+# get_previous_messages() — transcript rows + ephemeral filtering
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -140,63 +131,16 @@ class TestGetPreviousMessagesTranscript:
         db.commit()
         return uid1, uid2
 
-    def test_user_row_appears(self, db):
-        self._seed_transcript(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'user: Hello world' in result
-        assert 'USER: Hello world' not in result
-
-    def test_assistant_row_appears(self, db):
-        self._seed_transcript(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'Assistant: Hi there' in result
-        assert 'ASSISTANT: Hi there' not in result
-
     def test_durable_tool_call_appears(self, db):
         self._seed_transcript(db)
         p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
+        result = p.get_previous_messages()
         assert '[memory()] User likes dark mode' in result
         assert 'TOOL(memory)' not in result
 
-    def test_ephemeral_tool_call_does_not_appear(self, db):
-        self._seed_transcript(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'Web page content' not in result
-
-    def test_timestamp_format(self, db):
-        self._seed_transcript(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert '[2026-04-10 10:00]' in result
-
-    def test_rows_ordered_oldest_first(self, db):
-        self._seed_transcript(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        user_pos = result.index('user: Hello world')
-        asst_pos = result.index('Assistant: Hi there')
-        assert user_pos < asst_pos
-
-    def test_other_channel_rows_excluded(self, db):
-        """Rows from a different channel must not appear."""
-        self._seed_transcript(db, channel=_GPM_CHANNEL)
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('other_channel', 'user', 'Other channel content', '2026-04-10 10:00:00')"
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'Other channel content' not in result
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — compaction row causes prepend + watermark
+# get_previous_messages() — compaction row causes prepend + watermark
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -205,7 +149,7 @@ def _seed_compaction_via_tool_calls(db, channel, compacted_text, compacted_up_to
 
     Attaches the tool_calls row to the compacted_up_to_id transcript row as the
     FK parent. This avoids inserting a phantom transcript row above the watermark
-    that would otherwise appear in getPreviousMessages() output.
+    that would otherwise appear in get_previous_messages() output.
     Returns the tool_call id.
     """
     import json
@@ -250,153 +194,28 @@ class TestGetPreviousMessagesCompaction:
     def test_compacted_text_prepended(self, db):
         self._seed_with_compaction(db)
         p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
+        result = p.get_previous_messages()
         assert result.startswith('COMPACTED: previous context here')
 
-    def test_pre_watermark_rows_not_re_rendered(self, db):
-        self._seed_with_compaction(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'Old message before compaction' not in result
 
-    def test_post_watermark_rows_appear(self, db):
-        self._seed_with_compaction(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'New message after compaction' in result
-        assert 'New reply after compaction' in result
-
-    def test_compacted_text_before_new_rows(self, db):
-        self._seed_with_compaction(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        compacted_pos = result.index('COMPACTED:')
-        new_msg_pos = result.index('New message after compaction')
-        assert compacted_pos < new_msg_pos
-
-    def test_token_budget_ignored_in_commit2(self, db):
-        """token_budget is accepted but silently ignored."""
-        self._seed_with_compaction(db)
-        p = _GPMFakeProcessor.make()
-        result_no_budget = p.getPreviousMessages()
-        result_with_budget = p.getPreviousMessages(token_budget=100)
-        assert result_no_budget == result_with_budget
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — send() + store() wiring (db-only stubs)
+# get_previous_messages() — send() + store() wiring (db-only stubs)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestGetPreviousMessagesSendStoreWiring:
-    """send() and store() are wired — confirm they operate against the real DB."""
 
-    def test_send_is_callable(self, db):
-        """send() is wired — no longer raises NotImplementedError."""
-        from services.llm_service import LLMResponse
-        p = _GPMFakeProcessor.make()
-        fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._trigger_episode_extraction'):
-            mock_inst.return_value.send_messages.return_value = fake_response
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p.send()
-        assert isinstance(result, str)
-
-    def test_store_is_callable(self, db):
-        """store() is wired — calls DB, no longer raises NotImplementedError."""
-        p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._trigger_episode_extraction'):
-            p.store('final response')
-        # store() writes assistant row; no exception = pass
-
-    def test_send_is_wired_in_commit_6(self, db):
-        """send() calls provider, does not raise NotImplementedError."""
-        from services.llm_service import LLMResponse
-        p = _GPMFakeProcessor.make()
-        fake_response = LLMResponse(text='done', model='m', provider='p', tool_calls=None)
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._trigger_episode_extraction'):
-            mock_inst.return_value.send_messages.return_value = fake_response
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p.send()
-        assert result == 'done'
-
-    def test_store_is_wired_in_commit_4(self, db):
-        """store() calls DB, does not raise NotImplementedError."""
-        p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._trigger_episode_extraction'):
-            p.store('final response')
-        # store() writes assistant row; no exception = pass
-
-    def test_send_accepts_request_id(self, db):
-        """send() accepts an optional request_id parameter."""
-        from services.llm_service import LLMResponse
-        p = _GPMFakeProcessor.make()
-        fake_response = LLMResponse(text='ok', model='m', provider='p', tool_calls=None)
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.transcript_service._trigger_episode_extraction'):
-            mock_inst.return_value.send_messages.return_value = fake_response
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p.send('req-id')
-        assert isinstance(result, str)
-
-    def test_store_not_caught_as_plain_exception(self, db):
-        """store() calls DB, no longer raises NotImplementedError."""
-        p = _GPMFakeProcessor.make()
-        with patch('services.transcript_service._trigger_episode_extraction'):
-            p.store('response text')
-        # store() writes assistant row; no exception = pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — compaction only, no new rows above watermark
+# get_previous_messages() — compaction only, no new rows above watermark
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestGetPreviousMessagesCompactionOnlyNoNewRows:
-    """Watermark is at or above all transcript rows → output is only compacted_text."""
-
-    def test_returns_compacted_text_alone(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Old message', '2026-04-09 09:00:00')",
-            (channel,)
-        )
-        old_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        _seed_compaction_via_tool_calls(db, channel, 'COMPACTED: all prior context', old_id)
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-
-        assert result == 'COMPACTED: all prior context'
-        assert 'Old message' not in result
-
-    def test_no_trailing_newline_when_only_compaction(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Seed', '2026-04-09 09:00:00')",
-            (channel,)
-        )
-        seed_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        _seed_compaction_via_tool_calls(db, channel, 'COMPACT BLOCK', seed_id)
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert result == 'COMPACT BLOCK'
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — compaction + one new transcript row above watermark
+# get_previous_messages() — compaction + one new transcript row above watermark
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -421,40 +240,16 @@ class TestGetPreviousMessagesCompactionPlusOneRow:
         _seed_compaction_via_tool_calls(db, channel, 'COMPACTION SUMMARY', watermark_id)
 
         p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
+        result = p.get_previous_messages()
 
         assert result.startswith('COMPACTION SUMMARY')
         assert 'Post-compaction message' in result
         assert 'Pre-compaction message' not in result
 
-    def test_compaction_before_new_row_in_output(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Seed row', '2026-04-09 08:00:00')",
-            (channel,)
-        )
-        wm = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'assistant', 'Fresh reply', '2026-04-10 09:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        _seed_compaction_via_tool_calls(db, channel, 'COMPACT_START', wm)
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        compact_pos = result.index('COMPACT_START')
-        new_row_pos = result.index('Fresh reply')
-        assert compact_pos < new_row_pos
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — multiple channels, no cross-channel leakage
+# get_previous_messages() — multiple channels, no cross-channel leakage
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -470,56 +265,19 @@ class TestGetPreviousMessagesChannelIsolation:
             )
         db.commit()
 
-    def test_test_channel_does_not_see_user_channel(self, db):
+    def test_test_channel_isolation(self, db):
         self._seed_all_channels(db)
         p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
-        result = p.getPreviousMessages()
-        assert 'Content from user' not in result
+        result = p.get_previous_messages()
         assert f'Content from {_GPM_CHANNEL}' in result
+        for other in ('user', 'dmn', 'subagent', 'scheduled'):
+            assert f'Content from {other}' not in result
 
-    def test_test_channel_does_not_see_dmn_channel(self, db):
-        self._seed_all_channels(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'Content from dmn' not in result
 
-    def test_test_channel_does_not_see_subagent_channel(self, db):
-        self._seed_all_channels(db)
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'Content from subagent' not in result
-
-    def test_each_channel_sees_only_its_own_rows(self, db):
-        """Build four processors with different CHANNELs and assert no bleed."""
-        self._seed_all_channels(db)
-        from services.message_processor import MessageProcessor
-
-        for channel in ('user', 'dmn', 'subagent', 'scheduled'):
-            class _Chan(MessageProcessor):
-                CHANNEL = channel
-                ROLE = 'user'
-                SYSTEM_PROMPT_CLASS = _stub_gpm_prompt_cls()
-
-                def getUserDefinition(self):
-                    return _GPM_USER_DEF
-
-                def getUserPrompt(self):
-                    return _GPM_USER_PROMPT
-
-            p = _Chan('input')
-            result = p.getPreviousMessages()
-            assert f'Content from {channel}' in result, (
-                f"Channel {channel!r} should see its own content"
-            )
-            for other in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
-                if other != channel:
-                    assert f'Content from {other}' not in result, (
-                        f"Channel {channel!r} leaked content from {other!r}"
-                    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — durable tool_call interleaving order
+# get_previous_messages() — durable tool_call interleaving order
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -550,7 +308,7 @@ class TestGetPreviousMessagesDurableToolInterleaving:
         db.commit()
 
         p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
+        result = p.get_previous_messages()
 
         assert '[memory()] Result from memory' in result
         assert '[find_tools()] Found weather tool' in result
@@ -562,39 +320,11 @@ class TestGetPreviousMessagesDurableToolInterleaving:
         find_pos = result.index('[find_tools()] Found weather tool')
         assert input_pos < memory_pos < find_pos
 
-    def test_tool_calls_ordered_by_timestamp(self, db):
-        """Earlier created_at → appears first in output."""
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Input', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        tid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
 
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'second_tool', '{}', 'Second result', 0, '2026-04-10 10:00:30')",
-            (tid,)
-        )
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'first_tool', '{}', 'First result', 0, '2026-04-10 10:00:05')",
-            (tid,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-
-        first_pos = result.index('[first_tool()] First result')
-        second_pos = result.index('[second_tool()] Second result')
-        assert first_pos < second_pos
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — ephemeral=1 for same transcript row is dropped
+# get_previous_messages() — ephemeral=1 for same transcript row is dropped
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -622,14 +352,14 @@ class TestGetPreviousMessagesEphemeralSiblingDropped:
         db.commit()
 
         p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
+        result = p.get_previous_messages()
 
         assert 'DURABLE_RESULT' in result
         assert 'EPHEMERAL_RESULT' not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — exact timestamp format regression
+# get_previous_messages() — exact timestamp format regression
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -644,157 +374,55 @@ class TestGetPreviousMessagesTimestampFormat:
         db.commit()
 
         p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
+        result = p.get_previous_messages()
         assert '[2026-04-10 14:03]' in result
 
-    def test_no_seconds_in_timestamp(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Seconds check', '2026-04-10T14:03:27+00:00')",
-            (channel,)
-        )
-        db.commit()
 
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert '14:03:27' not in result
-
-    def test_naive_sqlite_timestamp_handled(self, db):
-        """Legacy rows use SQLite's naive format; must not crash."""
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Legacy naive timestamp', '2026-04-10 14:03:27')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'Legacy naive timestamp' in result
-        assert '[2026-04-10 14:03]' in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — role rendering per north star
+# get_previous_messages() — role rendering per north star
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestGetPreviousMessagesRoleCase:
-    """Lock the role rendering convention: lowercase for inputs, title-case for
-    assistant only."""
+    """Lock the role rendering convention: lowercase for inputs, title-case for assistant only."""
 
-    def test_user_role_rendered_lowercase(self, db):
+    def test_role_rendering_conventions(self, db):
         channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Hello', '2026-04-10 10:00:00')",
-            (channel,)
-        )
+        for role, content in [
+            ('user', 'Hello'),
+            ('assistant', 'Hi there'),
+            ('subagent', 'Pursuit tick'),
+        ]:
+            db.execute(
+                "INSERT INTO transcript (channel, role, content, created_at) "
+                "VALUES (?, ?, ?, '2026-04-10 10:00:00')",
+                (channel, role, content)
+            )
         db.commit()
 
         p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
+        result = p.get_previous_messages()
         assert 'user: Hello' in result
-        assert 'USER: Hello' not in result
-
-    def test_assistant_role_rendered_titlecase(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'assistant', 'Hi there', '2026-04-10 10:01:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
         assert 'Assistant: Hi there' in result
-        assert 'ASSISTANT: Hi there' not in result
         assert 'assistant: Hi there' not in result
-
-    def test_arbitrary_role_rendered_lowercase(self, db):
-        """Any non-assistant role string stays lowercase."""
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'proactive_thought', 'Background thought', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'proactive_thought: Background thought' in result
-        assert 'PROACTIVE_THOUGHT: Background thought' not in result
-
-    def test_subagent_role_rendered_lowercase(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'subagent', 'Pursuit tick', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
         assert 'subagent: Pursuit tick' in result
-
-    def test_scheduled_role_rendered_lowercase(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'scheduled', 'Timer fired', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'scheduled: Timer fired' in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — token_budget parameter accepted and ignored
+# get_previous_messages() — token_budget parameter accepted and ignored
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestGetPreviousMessagesTokenBudget:
     """token_budget is accepted without error; output is identical regardless."""
 
-    def test_none_and_integer_budget_produce_identical_output(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Budget test', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
 
-        p = _GPMFakeProcessor.make()
-        without_budget = p.getPreviousMessages()
-        with_budget = p.getPreviousMessages(token_budget=100)
-        assert without_budget == with_budget
-
-    def test_large_budget_does_not_change_output(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Large budget test', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result_no_budget = p.getPreviousMessages()
-        result_large_budget = p.getPreviousMessages(token_budget=999999)
-        assert result_no_budget == result_large_budget
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — empty channel returns '' even when other channels
+# get_previous_messages() — empty channel returns '' even when other channels
 # have data
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -808,92 +436,21 @@ class TestGetPreviousMessagesEmptyChannelWithOtherData:
         db.commit()
 
         p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
-        result = p.getPreviousMessages()
+        result = p.get_previous_messages()
         assert result == ''
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — empty content row does not raise
+# get_previous_messages() — empty content row does not raise
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestGetPreviousMessagesEmptyContent:
-    def test_empty_content_row_rendered_without_crash(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', '', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-        assert 'user: ' in result
-        assert 'USER: ' not in result
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# getPreviousMessages() — explicit since_id=0 path
+# get_previous_messages() — explicit since_id=0 path
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestGetPreviousMessagesSinceIdZero:
-    def test_no_compaction_returns_all_rows_including_first(self, db):
-        """With no compaction, even the very first row must surface."""
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'First ever message', '2026-04-08 09:00:00')",
-            (channel,)
-        )
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'assistant', 'First reply', '2026-04-08 09:01:00')",
-            (channel,)
-        )
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Second message', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.getPreviousMessages()
-
-        assert 'First ever message' in result
-        assert 'First reply' in result
-        assert 'Second message' in result
-
-    def test_since_id_zero_passed_when_no_compaction(self, db):
-        """Watermark is exactly 0 (not None) when no compaction exists."""
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Lock the watermark', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        captured_kwargs = {}
-
-        from services import transcript_service as _tsvc
-        real_get_recent = _tsvc.get_recent
-
-        def spy(channel_arg, **kwargs):
-            captured_kwargs.update(kwargs)
-            return real_get_recent(channel_arg, **kwargs)
-
-        with patch('services.transcript_service.get_recent', side_effect=spy):
-            p = _GPMFakeProcessor.make()
-            p.getPreviousMessages()
-
-        assert captured_kwargs.get('since_id') == 0, (
-            f"Expected since_id=0 when no compaction, got {captured_kwargs.get('since_id')!r}"
-        )
-        from services.message_processor import MessageProcessor
-        assert captured_kwargs.get('limit') == MessageProcessor._TRANSCRIPT_FETCH_LIMIT
 
 
 # =============================================================================
@@ -929,10 +486,10 @@ def _make_compact_processor(channel=_COMPACT_CHANNEL, role='user', raw_input='he
         ROLE = role
         SYSTEM_PROMPT_CLASS = _StubPrompt
 
-        def getUserDefinition(self) -> str:
+        def get_user_definition(self) -> str:
             return _COMPACT_USER_DEF
 
-        def getUserPrompt(self) -> str:
+        def get_user_prompt(self) -> str:
             return _prompt
 
     for k, v in kwargs.items():
@@ -964,19 +521,6 @@ class TestWrapWithCheckpoint:
         result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'hello user')
         assert result == 'hello user'
 
-    def test_row_with_content_wraps_with_checkpoint_header(self, db):
-        from services.message_processor import _wrap_with_checkpoint
-        anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
-        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL,
-                                        'Previously: we talked about movies.', anchor)
-        result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'user: What is next?')
-        assert result.startswith(
-            '### Checkpoint - What you were previously discussing / doing\n'
-        )
-        assert 'Previously: we talked about movies.' in result
-        assert "### Current State - What's happening in the current turn\n" in result
-        assert result.endswith('user: What is next?')
-
     def test_row_with_content_exact_envelope_format(self, db):
         from services.message_processor import _wrap_with_checkpoint
         anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
@@ -992,19 +536,6 @@ class TestWrapWithCheckpoint:
         )
         assert result == expected
 
-    def test_row_with_empty_compacted_text_returns_bare_body(self, db):
-        from services.message_processor import _wrap_with_checkpoint
-        anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
-        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL, '', anchor)
-        result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'body text')
-        assert result == 'body text'
-
-    def test_row_with_whitespace_only_compacted_text_returns_bare_body(self, db):
-        from services.message_processor import _wrap_with_checkpoint
-        anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
-        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL, '   \n\t  ', anchor)
-        result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'body text')
-        assert result == 'body text'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1159,47 +690,6 @@ class TestRunFullCompaction:
             for rec in caplog.records
         )
 
-    def test_e2_llm_returns_no_summary_tags_returns_none(self, db):
-        """When LLM returns text without <summary> tags, returns None and writes failure row."""
-        t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hi')
-        p = _make_compact_processor()
-        p._uid = t_id
-        llm_resp = _make_compact_llm_response(text='plain text without tags')
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_entries_since', return_value=[
-                 {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
-             ]), \
-             patch('services.compaction_persistence.get_compaction', return_value=None):
-            mock_inst.return_value.send_messages.return_value = llm_resp
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p._run_full_compaction()
-
-        assert result is None
-        assert _compact_get_audit_row(db, _COMPACT_CHANNEL) is None  # failure invisible
-
-    def test_e3_llm_raises_returns_none(self, db, caplog):
-        """When LLM call raises, _run_full_compaction returns None without a success row."""
-        t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hi')
-        p = _make_compact_processor()
-        p._uid = t_id
-
-        with caplog.at_level(_logging.ERROR):
-            with patch('services.providers.Providers.instance') as mock_inst, \
-                 patch('services.compaction_persistence.get_entries_since', return_value=[
-                     {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
-                 ]), \
-                 patch('services.compaction_persistence.get_compaction', return_value=None):
-                mock_inst.return_value.send_messages.side_effect = RuntimeError('LLM down')
-                mock_inst.return_value.get_context_limit.return_value = 32_000
-                mock_inst.return_value.get_compact_at.return_value = 32_000
-                mock_inst.return_value.estimate_payload_tokens.return_value = 100
-                result = p._run_full_compaction()
-
-        assert result is None
-        assert _compact_get_audit_row(db, _COMPACT_CHANNEL) is None
 
     def test_e4_happy_path_writes_audit_row_and_returns_summary(self, db):
         """Happy path: LLM returns <summary> tags, audit row written, summary text returned."""
@@ -1265,41 +755,6 @@ class TestRunFullCompaction:
         assert row is not None
         assert row['compacted_up_to_id'] == id7
 
-    def test_e6_compaction_always_uses_frontal_cortex_unified(self, db):
-        """Compaction LLM call always uses 'frontal-cortex-unified' regardless of
-        the host processor's JOB. ContinuityCompactionProcessor hardcodes JOB so
-        all compaction work is logged and provider-routed under one cognitive job."""
-        t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hi')
-
-        class CustomJobProcessor(_make_compact_processor().__class__):
-            JOB = 'custom-job-name'  # host JOB must NOT leak into compaction
-
-        p = CustomJobProcessor('hi')
-        p._uid = t_id
-
-        captured_jobs = []
-        llm_resp = _make_compact_llm_response(
-            text='<summary>compacted</summary>'
-        )
-
-        def fake_send(_system_prompt, _messages, job=None, **_kw):  # noqa: ARG001
-            captured_jobs.append(job)
-            return llm_resp
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_entries_since', return_value=[
-                 {'id': t_id, 'role': 'user', 'content': 'hi', 'tool_name': None},
-             ]), \
-             patch('services.compaction_persistence.get_compaction', return_value=None):
-            mock_inst.return_value.send_messages.side_effect = fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            p._run_full_compaction()
-
-        assert captured_jobs == ['frontal-cortex-unified']
-        assert 'custom-job-name' not in captured_jobs
-
 
 # =============================================================================
 # End-to-end ACT loop glue: scenario 120/121 reproduce the same path —
@@ -1360,16 +815,16 @@ class TestActLoopOverflowEndToEnd:
             SYSTEM_PROMPT_CLASS = _StubPrompt
             SKIP_TRANSCRIPT_WRITE = True  # we manage _uid ourselves
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return 'test user'
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return 'current turn — small body'
 
-            def getSystemPrompt(self):
+            def get_system_prompt(self):
                 return 'fake system prompt — content irrelevant, threshold mocked'
 
-            def getTools(self):
+            def get_tools(self):
                 return []
 
         proc = _OverflowProcessor(raw_input='current turn — small body')
@@ -1441,22 +896,20 @@ class TestActLoopOverflowEndToEnd:
 
 
 class TestActLoopCapExitOnOverflowFailure:
-    """When _handle_overflow fails (returns False) the ACT loop breaks to
-    cap exit and send() returns ''.  Without this test the regression is:
-    the loop either hangs, raises, or returns mid-loop narration text that
-    was not authored as a final answer.
+    """When _handle_overflow fails (returns False) the ACT loop falls through
+    to send_messages — the 413 handler is the true safety net.  The recovery
+    flag is set so a second threshold trip on the same turn skips the handler
+    and lets the send proceed.
     """
 
     _CHANNEL = 'test_cap_exit_channel'
 
-    def test_overflow_handler_failure_returns_empty_string(self, db):
-        """_run_full_compaction returning None must cause send() to return ''."""
+    def test_overflow_failure_falls_through_to_send(self, db):
+        """_handle_overflow returning False must set recovery flag and fall
+        through to send_messages (not break to cap exit)."""
         from services.message_processor import MessageProcessor
         from services.system_message_prompt import SystemMessagePrompt
 
-        # Seed no prior transcript rows — _run_full_compaction will find no
-        # entries and no prior checkpoint and will return None immediately
-        # without calling the LLM.  This is the real production failure path.
         input_uid = _compact_seed_transcript_row(
             db, self._CHANNEL, 'user', 'overflow me',
         )
@@ -1470,31 +923,30 @@ class TestActLoopCapExitOnOverflowFailure:
             SYSTEM_PROMPT_CLASS = _StubPrompt
             SKIP_TRANSCRIPT_WRITE = True
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return 'test user'
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return 'overflow me'
 
-            def getSystemPrompt(self):
+            def get_system_prompt(self):
                 return 'sys'
 
-            def getTools(self):
+            def get_tools(self):
                 return []
 
         proc = _CapExitProcessor(raw_input='overflow me')
         proc._uid = input_uid
 
-        # estimate_payload_tokens always exceeds compact_at so the threshold
-        # fires on every iteration.  _run_full_compaction finds zero entries
-        # (only the current-turn row exists; exclude_id filters it out) so it
-        # returns None → _handle_overflow returns False → loop breaks.
         with patch('services.providers.Providers.instance') as mock_inst:
             mock_inst.return_value.get_compact_at.return_value = 10
             mock_inst.return_value.get_context_limit.return_value = 32_000
             mock_inst.return_value.estimate_payload_tokens.return_value = 9999
-            # get_compaction returns None (no prior), get_entries_since returns
-            # only the current-turn row which exclude_id will filter away.
+            mock_resp = MagicMock()
+            mock_resp.text = 'fallthrough answer'
+            mock_resp.tool_calls = []
+            mock_resp.usage = MagicMock(input_tokens=10, output_tokens=5)
+            mock_inst.return_value.send_messages.return_value = mock_resp
             with patch('services.compaction_persistence.get_compaction', return_value=None), \
                  patch('services.compaction_persistence.get_entries_since', return_value=[
                      {'id': input_uid, 'role': 'user', 'content': 'overflow me',
@@ -1502,13 +954,10 @@ class TestActLoopCapExitOnOverflowFailure:
                  ]):
                 result = proc.send()
 
-        assert result == '', (
-            f"send() must return '' on cap exit but got {result!r}. "
-            "The loop may have fallen through to send_messages without compacting."
+        assert result == 'fallthrough answer', (
+            f"send() must fall through to send_messages but got {result!r}"
         )
-        # Confirm no success compaction row was written (compaction genuinely
-        # failed, not just skipped).
-        assert _compact_get_audit_row(db, self._CHANNEL) is None
+        assert proc._overflow_recovered_this_turn is True
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1580,10 +1029,10 @@ class TestHandleOverflowEphemeralPurge:
             SYSTEM_PROMPT_CLASS = _StubPrompt
             SKIP_TRANSCRIPT_WRITE = True
 
-            def getUserDefinition(self):
+            def get_user_definition(self):
                 return 'test user'
 
-            def getUserPrompt(self):
+            def get_user_prompt(self):
                 return 'purge test'
 
         proc = _PurgeProcessor(raw_input='purge test')

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class ReviewToolCallsAbility(Ability):
     NAME = "review_tool_calls"
+    SYSTEM = True
     SUMMARY = "Retrieve raw tool call records within ±5 minutes of a timestamp to inspect details not captured in turn synthesis."
     EXAMPLES = [
         "what tools did you use at 2pm yesterday",
@@ -53,7 +54,7 @@ class ReviewToolCallsAbility(Ability):
             from services.tool_call_service import ToolCallService
             records = ToolCallService().get_by_timerange(date_time, buffer_minutes=5)
         except Exception as e:
-            logger.error(f"[REVIEW TOOL CALLS] Query failed for date_time={date_time!r}: {e}", exc_info=True)
+            logger.exception(f"[REVIEW TOOL CALLS] Query failed for date_time={date_time!r}: {e}")
             return {"text": _skill_tag("review_tool_calls", error=f"query-failed:{str(e)[:150]}")}
 
         if not records:

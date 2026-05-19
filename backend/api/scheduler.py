@@ -12,7 +12,7 @@ Routes (all require session auth):
 
 import uuid
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from flask import Blueprint, jsonify, request
 
@@ -51,6 +51,38 @@ def _normalize_hhmm(s: str) -> str | None:
     return f"{h:02d}:{m:02d}"
 
 
+def _validate_recurrence(recurrence: str | None) -> tuple:
+    """Validate and normalise the recurrence field.
+
+    Returns (normalised_recurrence, None) on success, or (None, error_str).
+    """
+    if recurrence is None:
+        return None, None
+    recurrence = recurrence.strip()
+    if recurrence in _VALID_RECURRENCES:
+        return recurrence, None
+    if recurrence.startswith(_INTERVAL_PREFIX):
+        try:
+            mins = int(recurrence[len(_INTERVAL_PREFIX):])
+            if not (1 <= mins <= 1440):
+                return None, "interval must be between 1 and 1440 minutes"
+            return f"interval:{mins}", None
+        except (ValueError, TypeError):
+            return None, "interval recurrence must be 'interval:N' where N is 1–1440"
+    return None, f"recurrence must be one of: {', '.join(sorted(_VALID_RECURRENCES))}, or 'interval:N'"
+
+
+def _validate_window(window_start: str | None, window_end: str | None, recurrence: str | None) -> str | None:
+    """Validate window_start/window_end consistency. Returns error string or None."""
+    if (window_start or window_end) and recurrence != "hourly":
+        return "window_start/window_end are only valid for 'hourly' recurrence"
+    if window_start and not window_end:
+        return "window_end is required when window_start is set"
+    if window_end and not window_start:
+        return "window_start is required when window_end is set"
+    return None
+
+
 def _validate_item(data: dict, require_future: bool = True) -> tuple:
     """
     Validate item fields.  Returns (clean_dict, None) on success,
@@ -66,13 +98,12 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
     if not due_at_raw:
         return None, "due_at is required"
     try:
-        due_at = datetime.fromisoformat(str(due_at_raw).replace("Z", "+00:00"))
-        if due_at.tzinfo is None:
-            due_at = due_at.replace(tzinfo=timezone.utc)
+        from services.time_utils import parse_utc, utc_now
+        due_at = parse_utc(str(due_at_raw))
     except (ValueError, TypeError):
         return None, "due_at must be a valid ISO 8601 datetime"
 
-    if require_future and due_at <= datetime.now(timezone.utc):
+    if require_future and due_at <= utc_now():
         return None, "due_at must be in the future"
 
     item_type = (data.get("item_type") or "notification").strip()
@@ -81,34 +112,15 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
     if item_type not in _VALID_TYPES:
         return None, f"item_type must be one of: {', '.join(sorted(_VALID_TYPES))}"
 
-    recurrence = data.get("recurrence") or None
-    if recurrence is not None:
-        recurrence = recurrence.strip()
-        if recurrence not in _VALID_RECURRENCES:
-            # Allow interval:N (1–1440 minutes)
-            if recurrence.startswith(_INTERVAL_PREFIX):
-                try:
-                    mins = int(recurrence[len(_INTERVAL_PREFIX):])
-                    if not (1 <= mins <= 1440):
-                        return None, "interval must be between 1 and 1440 minutes"
-                    recurrence = f"interval:{mins}"
-                except (ValueError, TypeError):
-                    return None, "interval recurrence must be 'interval:N' where N is 1–1440"
-            else:
-                return None, f"recurrence must be one of: {', '.join(sorted(_VALID_RECURRENCES))}, or 'interval:N'"
+    recurrence, rec_err = _validate_recurrence(data.get("recurrence") or None)
+    if rec_err:
+        return None, rec_err
 
     window_start = _normalize_hhmm(data.get("window_start") or "")
     window_end = _normalize_hhmm(data.get("window_end") or "")
-
-    if (window_start or window_end) and recurrence != "hourly":
-        return None, "window_start/window_end are only valid for 'hourly' recurrence"
-
-    if window_start and not window_end:
-        return None, "window_end is required when window_start is set"
-    if window_end and not window_start:
-        return None, "window_start is required when window_end is set"
-
-    is_prompt = (item_type == "prompt")
+    win_err = _validate_window(window_start, window_end, recurrence)
+    if win_err:
+        return None, win_err
 
     return {
         "message": message,
@@ -117,7 +129,7 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
         "recurrence": recurrence,
         "window_start": window_start,
         "window_end": window_end,
-        "is_prompt": is_prompt,
+        "is_prompt": (item_type == "prompt"),
     }, None
 
 
@@ -219,7 +231,8 @@ def create_scheduler():
         return jsonify({"error": err}), 400
 
     item_id = uuid.uuid4().hex[:8]
-    now = datetime.now(timezone.utc)
+    from services.time_utils import utc_now
+    now = utc_now()
 
     try:
         from services.database_service import get_shared_db_service
