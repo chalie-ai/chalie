@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS episodes (
     consolidated_from TEXT DEFAULT '[]',      -- JSONB: episode IDs this was consolidated from
     consolidated_into TEXT,                   -- back-pointer to super-episode id (UUID, FK-ish to episodes.id)
     storage_strength REAL DEFAULT 1.0,        -- encoding strength at storage time
-    retrieval_weight REAL DEFAULT 1.0         -- current retrieval priority weight
+    retrieval_weight REAL DEFAULT 1.0,        -- current retrieval priority weight
+    location_lat  REAL,
+    location_lon  REAL,
+    location_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
@@ -508,7 +511,10 @@ CREATE TABLE IF NOT EXISTS transcript (
     internal    INTEGER DEFAULT 0,
     deliberation_score REAL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    xml_migrated INTEGER NOT NULL DEFAULT 0
+    xml_migrated INTEGER NOT NULL DEFAULT 0,
+    location_lat  REAL,
+    location_lon  REAL,
+    location_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);

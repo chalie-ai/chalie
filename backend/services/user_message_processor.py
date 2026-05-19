@@ -67,6 +67,7 @@ class UserMessageProcessor(MessageProcessor):
         "email",
         "home",
         "news",
+        "place",
         "programming_docs_search",
         "search",
         "subagent",

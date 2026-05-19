@@ -24,9 +24,23 @@ exclusively via ``services.locale_service`` — never directly from this service
 import json
 import time
 import logging
-import requests
 from services.memory_client import MemoryClientService
 from services.database_service import get_shared_db_service
+
+_NOMINATIM_USER_AGENT = "Chalie/1.0"
+_NOMINATIM_TIMEOUT_S = 3
+_nominatim = None
+
+
+def _get_nominatim():
+    """Return a lazily-initialised Nominatim geocoder singleton."""
+    global _nominatim
+    if _nominatim is None:
+        from geopy.geocoders import Nominatim
+        _nominatim = Nominatim(
+            user_agent=_NOMINATIM_USER_AGENT, timeout=_NOMINATIM_TIMEOUT_S,
+        )
+    return _nominatim
 
 
 HISTORY_KEY = "client_context:history"
@@ -135,7 +149,7 @@ class ClientContextService:
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
         """Resolve a human-readable city/country name from coordinates.
 
-        Calls the Nominatim reverse-geocoding API (OpenStreetMap). Prefers
+        Uses the geopy Nominatim geocoder (OpenStreetMap). Prefers
         city → town → municipality → county → state_district as the locality
         label, combined with the country name.
 
@@ -145,15 +159,14 @@ class ClientContextService:
 
         Returns:
             A string such as ``"Valletta, Malta"`` on success, or ``None`` if
-            the API call fails or returns an unusable address.
+            the geocoder call fails or returns an unusable address.
         """
         try:
-            url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&accept-language=en"
-            headers = {"User-Agent": "Chalie/1.0"}
-            response = requests.get(url, headers=headers, timeout=3)
-            response.raise_for_status()
-            data = response.json()
-            address = data.get("address", {})
+            geocoder = _get_nominatim()
+            location = geocoder.reverse((lat, lon), language="en", exactly_one=True)
+            if location is None:
+                return None
+            address = location.raw.get("address", {})
             city = (address.get("city") or address.get("town") or
                     address.get("municipality") or address.get("county") or
                     address.get("state_district") or "")
@@ -162,8 +175,10 @@ class ClientContextService:
                 return f"{city}, {country}"
             if country:
                 return country
-        except (requests.RequestException, KeyError, ValueError) as e:
+        except (KeyError, ValueError, AttributeError) as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to resolve location: {e}")
+        except Exception as e:
+            logging.warning(f"[CLIENT CONTEXT] Unexpected error resolving location: {e}")
         return None
 
     def save(self, ctx: dict):

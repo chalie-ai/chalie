@@ -12,6 +12,8 @@ Tick body (sequential, per §5.3):
     4. Run user synthesis.
     5. Run DMN reflection (skipped when no user_summary row exists).
     6. Capability sync (IMAP/CalDAV/CardDAV via MailCapability._do_monitor).
+    7. Geo-spatial pattern extraction from location-tagged transcripts.
+    7. Geo-spatial pattern extraction from location-tagged transcripts.
 
 Gates (both must pass — §5.2):
     - User-active: ``last_user_message_at`` is older than 30 minutes.
@@ -140,6 +142,7 @@ class SubconsciousWorker:
         steps["synthesis"] = self._safe_step("synthesis", self._step_synthesis)
         steps["dmn"] = self._safe_step("dmn", self._step_dmn)
         steps["capability_sync"] = self._safe_step("capability_sync", self._step_capability_sync)
+        steps["geo_patterns"] = self._safe_step("geo_patterns", self._step_geo_patterns)
 
         now = utc_now()
         try:
@@ -157,7 +160,8 @@ class SubconsciousWorker:
             f"pattern_match={steps['pattern_match']['status']} "
             f"synthesis={steps['synthesis']['status']} "
             f"dmn={steps['dmn']['status']} "
-            f"capability_sync={steps['capability_sync']['status']}"
+            f"capability_sync={steps['capability_sync']['status']} "
+            f"geo_patterns={steps['geo_patterns']['status']}"
         )
         return {"steps": steps, "last_fired_at": last_iso}
 
@@ -382,6 +386,75 @@ class SubconsciousWorker:
                 cap.monitor()
                 synced.append(cap.NAME)
         return f"synced: {', '.join(synced)}" if synced else "no connected capabilities"
+
+    def _step_geo_patterns(self) -> str:
+        """Step 7 — single-pass LLM geo-spatial pattern extractor.
+
+        Reads a cursor from data_graph (kind='system' key='geo_pattern_cursor').
+        If the count of location-tagged transcripts beyond the cursor is below
+        the minimum delta (30), skip. Else fire GeoPatternProcessor and advance
+        the cursor on success.
+        """
+        from services.data_graph_service import get_data_graph_service
+        from services.database_service import get_shared_db_service
+        from services.geo_pattern_processor import GeoPatternProcessor
+
+        _DG_KEY_CURSOR = "geo_pattern_cursor"
+        _MIN_DELTA = 30
+
+        db = get_shared_db_service()
+
+        cursor = 0
+        try:
+            with db.connection() as conn:
+                row = conn.execute(
+                    "SELECT value FROM data_graph "
+                    "WHERE kind='system' AND key=? "
+                    "AND active=1 AND deleted_at IS NULL "
+                    "ORDER BY id DESC LIMIT 1",
+                    (_DG_KEY_CURSOR,),
+                ).fetchone()
+                if row and row[0]:
+                    try:
+                        cursor = int(row[0])
+                    except (TypeError, ValueError):
+                        cursor = 0
+
+            with db.connection() as conn:
+                latest_row = conn.execute(
+                    "SELECT MAX(id) FROM transcript "
+                    "WHERE location_lat IS NOT NULL AND location_lon IS NOT NULL"
+                ).fetchone()
+            latest = (latest_row[0] if latest_row else None) or 0
+        except Exception as exc:
+            logger.debug(f"{LOG_PREFIX} geo_patterns no db: {exc}")
+            return "skip: no db"
+
+        delta = latest - cursor
+        if delta < _MIN_DELTA:
+            logger.info(
+                f"{LOG_PREFIX} geo_patterns_skip cursor={cursor} "
+                f"latest={latest} delta={delta}"
+            )
+            return f"skip cursor={cursor} latest={latest} delta={delta}"
+
+        GeoPatternProcessor(window_start=cursor, window_end=latest).send()
+
+        try:
+            get_data_graph_service().store(
+                kind="system",
+                key=_DG_KEY_CURSOR,
+                value=str(latest),
+                source="subconscious_worker",
+            )
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} geo_patterns cursor write failed "
+                f"cursor={cursor}->{latest} — next tick will re-fire same "
+                f"window: {exc}"
+            )
+            raise
+        return f"fired cursor={cursor}->{latest} delta={delta}"
 
     def _load_user_synthesis(self) -> Optional[str]:
         """Check whether a user_summary row exists in data_graph.

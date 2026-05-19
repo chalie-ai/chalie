@@ -79,6 +79,7 @@ _CHAT_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
+    "place.save": "allow", "place.list": "allow", "place.get": "allow", "place.delete": "allow",
     "subagent": "allow",
 }
 

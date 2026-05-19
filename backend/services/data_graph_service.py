@@ -23,9 +23,10 @@ KIND_MISC = 'misc'
 KIND_MOMENT = 'moment'
 KIND_DOCUMENT = 'document'
 KIND_BEHAVIORAL_PATTERN = 'behavioral_pattern'
+KIND_PLACE = 'place'
 VALID_KINDS = frozenset({
     KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
-    KIND_MOMENT, KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN,
+    KIND_MOMENT, KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE,
 })
 
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
@@ -58,6 +59,10 @@ _KIND_POLICY = {
     # soft-delete at 0) is handled by PatternMatchProcessor.post_turn() — DecayEngine
     # does NOT touch this kind.
     KIND_BEHAVIORAL_PATTERN: {'ttl_days': None,  'reinforce': True,  'contradiction': None,               'deletion': 'soft',     'd_base': 0.1,  'salience_floor': 0.3},
+    # place: named locations saved by the user (home, work, gym, etc.). Persistent,
+    # reinforced on re-save of same coords, superseded when the user renames/moves a
+    # place, only removed on explicit user request. Low decay, moderate salience floor.
+    KIND_PLACE:              {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.5},
 }
 
 # Concept LUT asset — pre-built sqlite with lut_concepts + lut_embeddings (vec0).

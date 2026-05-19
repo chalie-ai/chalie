@@ -104,7 +104,8 @@ class ScheduleAbility(Ability):
     NAME = "schedule"
     SUMMARY = (
         "Create, list, or cancel persistent reminders and recurring prompts at a "
-        "specific calendar date/time. For a short ephemeral countdown the user wants "
+        "specific calendar date/time, with optional destination for departure reminders. "
+        "For a short ephemeral countdown the user wants "
         "to watch tick down on screen (focus blocks, kitchen timers, breath holds), "
         "use the `timer` tool instead — not `schedule`."
     )
@@ -115,8 +116,8 @@ class ScheduleAbility(Ability):
         "cancel my dentist reminder",
         "schedule a weekly check-in every Monday at 9am",
         "remind me to email the quarterly report by Friday 5pm",
-        "show me everything coming up in the next hour",
-        "set an hourly reminder between 9am and 5pm to drink water",
+        "remind me to go to the gym at 7pm",
+        "set a reminder to leave for work at 8am",
     ]
     INPUT_SCHEMA = {
         "type": "object",
@@ -195,6 +196,10 @@ class ScheduleAbility(Ability):
                     "Required for search: semantic query to find matching scheduled items."
                 ),
             },
+            "destination_location": {
+                "type": "string",
+                "description": "Name of a saved place or address for the destination. Used for departure-time reminders.",
+            },
         },
         "required": ["action"],
     }
@@ -223,6 +228,44 @@ class ScheduleAbility(Ability):
 
         body = json.dumps(result)
         return {"text": _skill_tag("schedule", body, action=action)}
+
+
+
+def _resolve_place_coords(name: str) -> tuple[float, float] | None:
+    """Look up a saved place by name in data_graph and return (lat, lon) or None."""
+    try:
+        from services.data_graph_service import get_data_graph_service, KIND_PLACE
+        dgs = get_data_graph_service()
+        rows = dgs.fetch(kinds=[KIND_PLACE])
+        matched = next((r for r in rows if r and r.get("key", "").lower() == name.lower()), None)
+        if not matched:
+            return None
+        raw_value = matched.get("value") or "{}"
+        import json as _json
+        place_data = _json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        lat = place_data.get("lat")
+        lon = place_data.get("lon")
+        if lat is None or lon is None:
+            return None
+        return float(lat), float(lon)
+    except Exception as exc:
+        import logging as _logging
+        _logging.debug(f"[SCHEDULE] _resolve_place_coords failed for {name!r}: {exc}")
+        return None
+
+
+def _build_destination_metadata(destination: str) -> dict:
+    """Return a metadata fragment for the given destination string.
+
+    Tries to resolve saved place coordinates first. When no matching place
+    is found, stores the destination name as-is (no geocoding).
+    """
+    coords = _resolve_place_coords(destination)
+    meta: dict = {"destination": destination}
+    if coords:
+        meta["destination_lat"] = coords[0]
+        meta["destination_lon"] = coords[1]
+    return meta
 
 
 def _validate_message(params: dict) -> tuple[str, dict | None]:
@@ -393,6 +436,19 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
                     "record": {"id": existing_id, "message": message, "due_at": local_due},
                     "note": "already_existed",
                 }
+
+        destination = (params.get("destination_location") or "").strip()
+        if destination:
+            dest_meta = _build_destination_metadata(destination)
+            try:
+                with db.connection() as conn:
+                    conn.execute(
+                        "UPDATE scheduled_items SET metadata=? WHERE id=?",
+                        (json.dumps(dest_meta), item_id),
+                    )
+                    conn.commit()
+            except Exception as meta_err:
+                logger.warning(f"{LOG_PREFIX} Failed to write destination metadata (non-fatal): {meta_err}")
 
         try:
             from services.scheduler_service import embed_scheduled_item

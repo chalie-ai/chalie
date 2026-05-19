@@ -6,12 +6,13 @@ tool-scope spec:
  * SavePattern / SaveGraph are real Ability subclasses living at abilities/
    top-level — registered in AbilityRegistry. Reachable via the registry by
    any processor that lists them in its own ALWAYS_AVAILABLE
-   (PatternMatchProcessor today).
+   (PatternMatchProcessor and GeoPatternProcessor today).
  * abilities.sqlite — the find_tools index — contains EVERY ability,
    including save_pattern + save_graph. find_tools gates discovery via the
    calling processor's DISCOVERABLE allowlist; the index itself is global.
- * abilities/ disk layout matches the 20 dispatchable abilities the registry
-   walk expects (18 generic + save_pattern + save_graph, including email/calendar/contacts).
+ * abilities/ disk layout matches the 25 dispatchable abilities the registry
+   walk expects (23 generic + save_pattern + save_graph, including
+   email/calendar/contacts/place).
  * Each MessageProcessor subclass declares the exact ALWAYS_AVAILABLE +
    DISCOVERABLE the spec dictates — discoverable externals are NEVER
    pre-injected; processor-innate abilities live solely on the owning
@@ -113,6 +114,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "list",
     "memory",
     "news",
+    "place",
     "programming_docs_search",
     "read",
     "review_tool_calls",
@@ -191,9 +193,12 @@ _DEFAULT_ALWAYS = frozenset({
 # DMN (background research may need calendar/contacts context), but NOT in
 # Scheduled or Subagent processors — those run headless without personal
 # data access.
+#
+# `place` is discoverable in UMP (user-initiated GPS tagging). Excluded from
+# DMN, GeoPatternProcessor, SubagentProcessor — they have no user-session GPS.
 _DEFAULT_DISCOVERABLE = frozenset({
     "browser", "calendar", "code_eval", "contacts", "email", "home",
-    "news", "programming_docs_search", "search", "subagent", "weather",
+    "news", "place", "programming_docs_search", "search", "subagent", "weather",
 })
 
 # Capability tools (email/calendar/contacts) are personal-data tools — they
@@ -209,19 +214,23 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     # excluded everywhere except UMP so background processes cannot spawn
     # nested subagents. email/calendar/contacts remain discoverable for DMN
     # — background reflection needs access to personal data context.
+    # `place` is excluded from DMN: geo-tagging is user-initiated only.
     "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
-                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent", "home"}),
+                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent", "home", "place"}),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
     # the class-level attribute is [] (empty). The per-instance value is
     # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
     # Subagent does not get capability tools — subagents are task-scoped, not
-    # user-personal-data-scoped.
+    # user-personal-data-scoped. `place` excluded: GPS context is user-session only.
     "SubagentProcessor":         (frozenset(), frozenset(
-        (set(_DEFAULT_DISCOVERABLE) - {"subagent", "home"} - _CAPABILITY_TOOLS)
+        (set(_DEFAULT_DISCOVERABLE) - {"subagent", "home", "place"} - _CAPABILITY_TOOLS)
         | {"document", "list", "memory", "read", "review_tool_calls", "schedule"}
     )),
-    # PMP owns save_pattern + save_graph today; nothing discoverable.
+    # PMP owns save_pattern + save_graph; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
+    # GeoPatternProcessor owns save_pattern + save_graph (same innate as PMP);
+    # nothing discoverable. GPP never widens scope via find_tools.
+    "GeoPatternProcessor":       (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # Background / no tools at all.
     "ContinuityCompactionProcessor":      (frozenset(), frozenset()),
     "SubagentTrailCompactionProcessor":   (frozenset(), frozenset()),
@@ -229,6 +238,9 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "SuperEpisodeEncoderProcessor": (frozenset(), frozenset()),
     "UserSummaryProcessor":        (frozenset(), frozenset()),
 }
+
+# Processors that legitimately own save_pattern/save_graph as innate abilities.
+_INNATE_OWNING_PROCESSORS = frozenset({"PatternMatchProcessor", "GeoPatternProcessor"})
 
 
 def test_per_processor_tool_scope_matches_spec():
@@ -239,7 +251,7 @@ def test_per_processor_tool_scope_matches_spec():
     ALWAYS_AVAILABLE — they are surfaced exclusively through find_tools,
     which gates on DISCOVERABLE.  Processor-innate abilities (save_pattern,
     save_graph) MUST NOT appear in any processor's lists except the owning
-    one (PMP today).
+    ones (PMP + GPP today).
     """
     from services.compaction_message_processor import (
         ContinuityCompactionProcessor,
@@ -247,6 +259,7 @@ def test_per_processor_tool_scope_matches_spec():
     )
     from services.dmn_message_processor import DMNMessageProcessor
     from services.episode_encoder_processor import EpisodeEncoderProcessor
+    from services.geo_pattern_processor import GeoPatternProcessor
     from services.pattern_match_processor import PatternMatchProcessor
     from services.subagent_processor import SubagentProcessor
     from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
@@ -258,6 +271,7 @@ def test_per_processor_tool_scope_matches_spec():
         "DMNMessageProcessor": DMNMessageProcessor,
         "SubagentProcessor": SubagentProcessor,
         "PatternMatchProcessor": PatternMatchProcessor,
+        "GeoPatternProcessor": GeoPatternProcessor,
         "ContinuityCompactionProcessor": ContinuityCompactionProcessor,
         "SubagentTrailCompactionProcessor": SubagentTrailCompactionProcessor,
         "EpisodeEncoderProcessor": EpisodeEncoderProcessor,
@@ -282,11 +296,11 @@ def test_per_processor_tool_scope_matches_spec():
             "only."
         )
 
-        if name != "PatternMatchProcessor":
+        if name not in _INNATE_OWNING_PROCESSORS:
             leaked_innate = (always | discoverable) & innate
             assert not leaked_innate, (
                 f"{name} leaks processor-innate abilities {sorted(leaked_innate)}. "
-                "Only PatternMatchProcessor owns these today."
+                "Only PatternMatchProcessor and GeoPatternProcessor own these today."
             )
 
         assert always == expected_always, (
