@@ -7,6 +7,8 @@ const PanelProviders = (() => {
   let _editingId = null;
   let _editModel = '';
   let _modelsFetchInFlight = false;
+  let _modelFetchTimer = null;
+  const _MODEL_FETCH_DEBOUNCE_MS = 600;
 
   const PLATFORM_CONFIG = {
     ollama: { desc: 'Run locally — no API key needed.', hasHost: true, hasApiKey: false, placeholder: 'e.g. gemma4:31b', models: [] },
@@ -152,12 +154,16 @@ const PanelProviders = (() => {
       document.getElementById('hostGroup').style.display = c.hasHost ? '' : 'none';
       document.getElementById('keyGroup').style.display = c.hasApiKey ? '' : 'none';
       _populateModels();
+      if (_canFetchModels()) _fetchModels();
     });
+
+    document.getElementById('pHost')?.addEventListener('input', _debouncedFetchModels);
+    document.getElementById('pKey')?.addEventListener('input', _debouncedFetchModels);
 
     document.getElementById('testProvBtn').addEventListener('click', _testConnection);
     document.getElementById('providerForm').addEventListener('submit', (e) => { e.preventDefault(); _saveProvider(); });
 
-    if (id) _fetchModels();
+    if (_canFetchModels()) _fetchModels();
   }
 
   function _populateModels() {
@@ -176,6 +182,17 @@ const PanelProviders = (() => {
       opt.value = _editModel; opt.textContent = _editModel; opt.selected = true;
       sel.appendChild(opt);
     }
+  }
+
+  function _canFetchModels() {
+    const cfg = PLATFORM_CONFIG[_editPlatform];
+    if (cfg.hasApiKey && !document.getElementById('pKey')?.value?.trim()) return false;
+    return true;
+  }
+
+  function _debouncedFetchModels() {
+    clearTimeout(_modelFetchTimer);
+    _modelFetchTimer = setTimeout(() => { if (_canFetchModels()) _fetchModels(); }, _MODEL_FETCH_DEBOUNCE_MS);
   }
 
   async function _fetchModels() {
@@ -229,6 +246,15 @@ const PanelProviders = (() => {
       if (res.ok) {
         BrainApp.showToast(_editingId ? 'Provider updated' : 'Provider added', 'success');
         await _load();
+        if (BrainApp.isProvidersOnly()) {
+          try {
+            const sr = await BrainApp.apiFetch('/auth/status');
+            if (sr.ok) {
+              const sd = await sr.json();
+              if (sd.has_providers) BrainApp.liftProvidersOnly();
+            }
+          } catch { /* keep locked */ }
+        }
       } else {
         const e = await res.json().catch(() => ({}));
         BrainApp.showToast(e.error || 'Save failed', 'error');

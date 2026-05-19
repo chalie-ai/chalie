@@ -43,13 +43,13 @@ const BrainSidebar = (() => {
   function render(container) {
     _el = container;
     container.innerHTML = `
-      <div class="sidebar-brand">
+      <a class="sidebar-brand" href="/">
         <img src="/icons/icon.png" alt="Chalie" width="28" height="28">
         <div class="sidebar-brand-text">
           <div class="wordmark">Chalie</div>
           <div class="wordmark-sub">Brain</div>
         </div>
-      </div>
+      </a>
       <nav class="sidebar-scroll" id="sidebarNav"></nav>
       <div class="sidebar-footer">
         <button class="icon-btn theme-toggle" id="themeToggleBtn" aria-label="Toggle theme">
@@ -66,13 +66,21 @@ const BrainSidebar = (() => {
     if (!nav) return;
     const route = BrainApp.getRoute();
     const collapsed = BrainApp.isSidebarCollapsed();
+    const locked = BrainApp.isProvidersOnly();
 
     const cognitionItems = NAV.filter(n => n.group === 'cognition');
     const systemItems = NAV.filter(n => n.group === 'system');
 
-    nav.innerHTML =
-      _renderGroup('Cognition', cognitionItems, route, collapsed) +
-      _renderGroup('System', systemItems, route, collapsed);
+    let html = '';
+    if (locked && !collapsed) {
+      html += `<div class="sidebar-lock-banner">
+        <span class="sidebar-lock-icon">${Icons.Providers(16)}</span>
+        <span>Add a provider to unlock the full dashboard.</span>
+      </div>`;
+    }
+    html += _renderGroup('Cognition', cognitionItems, route, collapsed) +
+            _renderGroup('System', systemItems, route, collapsed);
+    nav.innerHTML = html;
 
     nav.querySelectorAll('[data-nav]').forEach(btn => {
       btn.addEventListener('click', (e) => {

@@ -3,6 +3,7 @@
 const BrainApp = (() => {
   // ── State ──
   let _route = { section: 'providers', sub: null };
+  let _providersOnly = false;
   let _sidebarCollapsed = false;
   let _mobileOpen = false;
   let _theme = localStorage.getItem('chalie_theme') || 'dark';
@@ -94,6 +95,10 @@ const BrainApp = (() => {
   }
 
   function navigate(section, sub) {
+    if (_providersOnly && section !== 'providers') {
+      section = 'providers';
+      sub = null;
+    }
     _route = { section, sub };
     const h = sub ? `#/${section}/${sub}` : `#/${section}`;
     history.replaceState(null, '', h);
@@ -317,9 +322,19 @@ const BrainApp = (() => {
 
   // ── Providers-Only Mode ──
   function _applyProvidersOnly() {
+    _providersOnly = true;
+    _route = { section: 'providers', sub: null };
     document.getElementById('appShell').dataset.providersOnly = 'true';
-    showToast('Configure a provider to start using Chalie.', 'info', { duration: 3600000 });
+    history.replaceState(null, '', '#/providers');
   }
+
+  function liftProvidersOnly() {
+    _providersOnly = false;
+    document.getElementById('appShell').dataset.providersOnly = 'false';
+    BrainSidebar.update();
+  }
+
+  function isProvidersOnly() { return _providersOnly; }
 
   // ── Init ──
   async function init() {
@@ -328,14 +343,17 @@ const BrainApp = (() => {
     const gate = await globalThis.chalieGateReady;
     if (!gate.stay) return;
 
-    _route = _readHash();
+    if (gate.providersOnly) _applyProvidersOnly();
+    else _route = _readHash();
+
     BrainSidebar.render(document.getElementById('sidebar'));
     _render();
 
-    if (gate.providersOnly) _applyProvidersOnly();
-
     document.getElementById('mobileScrim').addEventListener('click', closeMobileSidebar);
-    globalThis.addEventListener('hashchange', () => { _route = _readHash(); _render(); });
+    globalThis.addEventListener('hashchange', () => {
+      const parsed = _readHash();
+      navigate(parsed.section, parsed.sub);
+    });
     globalThis.addEventListener('keydown', (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openCommandPalette(); }
       else if (e.key === 'Escape') _closeCommandPalette();
@@ -370,6 +388,8 @@ const BrainApp = (() => {
     toggleTheme,
     toggleSidebar,
     isSidebarCollapsed,
+    isProvidersOnly,
+    liftProvidersOnly,
     openMobileSidebar,
     closeMobileSidebar,
     openCommandPalette,

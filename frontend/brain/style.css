@@ -135,6 +135,7 @@ body::before {
   display: flex; align-items: center; gap: 10px;
   padding: 14px 16px; border-bottom: 1px solid var(--border);
   min-height: var(--topbar-h);
+  text-decoration: none; color: inherit;
 }
 .sidebar-brand img { width: 28px; height: 28px; border-radius: 6px; }
 .sidebar-brand-text { display: flex; flex-direction: column; gap: 0; min-width: 0; }
@@ -217,6 +218,22 @@ body::before {
 .nav-sub:hover { color: var(--text-primary); background: var(--bg-surface); }
 .nav-sub.active { color: var(--violet); font-weight: 500; }
 .nav-sub .count { font-size: 11px; color: var(--text-tertiary); }
+
+/* ── Providers-only lock ─────────────────────────────────────── */
+[data-providers-only="true"] .nav-item:not([data-nav="providers"]) {
+  pointer-events: none; opacity: 0.3; user-select: none;
+}
+[data-providers-only="true"] .nav-sublist { display: none; }
+[data-providers-only="true"] .topbar-search { pointer-events: none; opacity: 0.3; }
+
+.sidebar-lock-banner {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: 4px 12px 12px; padding: 10px 12px;
+  border-radius: 8px; font-size: 12px; line-height: 1.45;
+  background: rgba(var(--bs-warning-rgb), 0.10); color: var(--warning-banner-text);
+  border: 1px solid rgba(var(--bs-warning-rgb), 0.20);
+}
+.sidebar-lock-banner .sidebar-lock-icon { flex-shrink: 0; margin-top: 1px; }
 
 /* ── Mobile sidebar overlay (must come after .sidebar base styles) ── */
 @media (max-width: 900px) {

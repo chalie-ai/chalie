@@ -1,0 +1,1858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chalie Actor-Model Architecture — Message Processing Visualization</title>
+<style>
+/* ── Design tokens (Radiant system) ─────────────────────────────────────── */
+:root {
+  --violet:         #8A5CFF;
+  --violet-dim:     rgba(138, 92, 255, 0.15);
+  --violet-glow:    rgba(138, 92, 255, 0.35);
+  --magenta:        #FF2FD1;
+  --magenta-dim:    rgba(255, 47, 209, 0.15);
+  --magenta-glow:   rgba(255, 47, 209, 0.35);
+  --cyan:           #00F0FF;
+  --cyan-dim:       rgba(0, 240, 255, 0.12);
+  --cyan-glow:      rgba(0, 240, 255, 0.35);
+  --amber:          #fbbf24;
+  --amber-dim:      rgba(251, 191, 36, 0.15);
+  --amber-glow:     rgba(251, 191, 36, 0.35);
+  --green:          #34d399;
+  --green-dim:      rgba(52, 211, 153, 0.12);
+  --green-glow:     rgba(52, 211, 153, 0.30);
+  --pink:           #ff6eb4;
+  --pink-dim:       rgba(255, 110, 180, 0.15);
+  --pink-glow:      rgba(255, 110, 180, 0.40);
+  --red:            #fb7185;
+  --red-dim:        rgba(251, 113, 133, 0.15);
+  --red-glow:       rgba(251, 113, 133, 0.35);
+
+  --bg:             #06080e;
+  --bg-2:           #0d0f18;
+  --bg-surface:     rgba(255, 255, 255, 0.03);
+  --bg-surface-2:   rgba(255, 255, 255, 0.055);
+  --text:           #eae6f2;
+  --text-secondary: rgba(234, 230, 242, 0.58);
+  --text-muted:     rgba(234, 230, 242, 0.40);
+  --border:         rgba(255, 255, 255, 0.07);
+  --border-strong:  rgba(255, 255, 255, 0.14);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Atmospheric background orbs ─────────────────────────────────────────── */
+.bg-orbs {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.07;
+  animation: orb-drift linear infinite;
+}
+.orb-1 { width: 600px; height: 600px; background: var(--violet); top: -100px; left: -100px; animation-duration: 32s; }
+.orb-2 { width: 500px; height: 500px; background: var(--magenta); bottom: -80px; right: 200px; animation-duration: 27s; animation-direction: reverse; }
+.orb-3 { width: 400px; height: 400px; background: var(--cyan); top: 30%; right: -60px; animation-duration: 35s; }
+.orb-4 { width: 450px; height: 450px; background: #5b4fff; bottom: 10%; left: 30%; animation-duration: 29s; animation-direction: reverse; }
+
+@keyframes orb-drift {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(40px, 30px) scale(1.05); }
+  66%  { transform: translate(-20px, 50px) scale(0.97); }
+  100% { transform: translate(0, 0) scale(1); }
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+#app {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 24px;
+  gap: 20px;
+  max-width: 1600px;
+  margin: 0 auto;
+}
+
+/* ── Header ──────────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.header-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.header-title h1 {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.header-title p {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.controls-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.speed-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.speed-select {
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+.speed-select:focus { border-color: var(--violet); }
+
+/* ── Scenario buttons ────────────────────────────────────────────────────── */
+.scenarios {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scenario-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  margin-right: 4px;
+}
+.btn-scenario {
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+  padding: 6px 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s var(--ease-out);
+  white-space: nowrap;
+}
+.btn-scenario:hover {
+  border-color: var(--violet);
+  color: var(--text);
+  background: var(--violet-dim);
+  box-shadow: 0 0 12px var(--violet-glow);
+}
+.btn-scenario.active {
+  border-color: var(--violet);
+  color: #fff;
+  background: rgba(138, 92, 255, 0.22);
+  box-shadow: 0 0 16px var(--violet-glow);
+}
+.btn-reset {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.18s;
+}
+.btn-reset:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+/* ── Main canvas ─────────────────────────────────────────────────────────── */
+.canvas-wrapper {
+  position: relative;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  min-height: 520px;
+}
+
+#vis-canvas {
+  width: 100%;
+  display: block;
+  min-height: 520px;
+  position: relative;
+}
+
+/* ── SVG paths overlay ───────────────────────────────────────────────────── */
+#path-svg {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* ── Actor blocks ────────────────────────────────────────────────────────── */
+.actor-grid {
+  display: grid;
+  grid-template-columns: 160px 1fr 1fr 1fr;
+  gap: 20px;
+  padding: 28px 24px;
+  align-items: start;
+  min-height: 520px;
+}
+
+.source-column {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 40px;
+}
+
+.processor-column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Source actors */
+.source-actor {
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  transition: all 0.18s;
+  position: relative;
+}
+.source-actor:hover {
+  border-color: currentColor;
+}
+.source-actor.firing {
+  animation: source-pulse 0.4s ease-out;
+}
+@keyframes source-pulse {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+.source-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.source-desc {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-top: 2px;
+  font-weight: 500;
+  width: fit-content;
+}
+
+/* Processor actors */
+.actor {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: border-color 0.3s, box-shadow 0.3s;
+  position: relative;
+}
+.actor.active {
+  border-color: rgba(138, 92, 255, 0.5);
+  box-shadow: 0 0 24px rgba(138, 92, 255, 0.15), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.actor.active-dmn {
+  border-color: rgba(52, 211, 153, 0.5);
+  box-shadow: 0 0 24px rgba(52, 211, 153, 0.10), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.actor.active-subagent {
+  border-color: rgba(138, 92, 255, 0.4);
+  box-shadow: 0 0 20px rgba(138, 92, 255, 0.12);
+}
+
+.actor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.actor-name {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.actor-subtitle {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+.actor-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  transition: background 0.3s, box-shadow 0.3s;
+  flex-shrink: 0;
+}
+.actor-status-dot.idle { background: var(--border-strong); }
+.actor-status-dot.running {
+  background: var(--violet);
+  box-shadow: 0 0 8px var(--violet-glow);
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
+.actor-status-dot.running-dmn {
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green-glow);
+  animation: dot-pulse 1.4s ease-in-out infinite;
+}
+.actor-status-dot.running-sub {
+  background: var(--violet);
+  box-shadow: 0 0 6px var(--violet-glow);
+  animation: dot-pulse 1.2s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+.actor-body {
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Queue visualization ─────────────────────────────────────────────────── */
+.queue-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.queue-track {
+  background: rgba(0,0,0,0.25);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 6px;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  position: relative;
+  overflow: hidden;
+}
+.queue-track::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: var(--border-strong);
+  border-radius: 6px 0 0 6px;
+}
+.queue-empty-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-style: italic;
+  padding-left: 6px;
+}
+.queue-msg {
+  height: 18px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: msg-enter 0.25s var(--ease-out) forwards;
+  position: relative;
+  overflow: hidden;
+}
+.queue-msg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 50%, rgba(255,255,255,0.06));
+  pointer-events: none;
+}
+@keyframes msg-enter {
+  from { transform: translateY(8px) scale(0.85); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes msg-exit-left {
+  to { transform: translateX(-20px) scale(0.8); opacity: 0; }
+}
+@keyframes msg-exit-right {
+  to { transform: translateX(20px) scale(0.8); opacity: 0; }
+}
+.queue-msg.exiting-left  { animation: msg-exit-left  0.2s ease-in forwards; }
+.queue-msg.exiting-right { animation: msg-exit-right 0.2s ease-in forwards; }
+
+/* Message type colors */
+.msg-user     { background: rgba(0, 240, 255, 0.18); color: var(--cyan); border: 1px solid rgba(0,240,255,0.3); }
+.msg-subagent { background: rgba(138,92,255,0.18); color: #c4a5ff; border: 1px solid rgba(138,92,255,0.35); }
+.msg-schedule { background: rgba(251,191,36,0.18); color: var(--amber); border: 1px solid rgba(251,191,36,0.35); }
+.msg-external { background: rgba(52,211,153,0.15); color: var(--green); border: 1px solid rgba(52,211,153,0.3); }
+.msg-steer    { background: rgba(255,110,180,0.20); color: var(--pink); border: 1px solid rgba(255,110,180,0.4); }
+.msg-requeue  { background: rgba(251,113,133,0.18); color: var(--red); border: 1px solid rgba(251,113,133,0.35); animation: requeue-glow 0.5s ease-out; }
+
+@keyframes requeue-glow {
+  0% { box-shadow: 0 0 0 0 rgba(251,113,133,0.6); }
+  50% { box-shadow: 0 0 8px 3px rgba(251,113,133,0.4); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* ── ACT loop state ──────────────────────────────────────────────────────── */
+.act-state {
+  background: rgba(0,0,0,0.2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: border-color 0.3s, background 0.3s;
+}
+.act-state.act-running {
+  border-color: rgba(138,92,255,0.35);
+  background: rgba(138,92,255,0.05);
+}
+.act-state.act-checking {
+  border-color: rgba(255,110,180,0.35);
+  background: rgba(255,110,180,0.05);
+}
+.act-state.act-synthesis {
+  border-color: rgba(0,240,255,0.35);
+  background: rgba(0,240,255,0.04);
+}
+.act-state.dmn-running {
+  border-color: rgba(52,211,153,0.35);
+  background: rgba(52,211,153,0.05);
+}
+.act-state.act-idle {
+  font-style: italic;
+  opacity: 0.5;
+}
+
+.act-spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(138,92,255,0.2);
+  border-top-color: var(--violet);
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.act-spinner.cyan  { border-top-color: var(--cyan); border-color: rgba(0,240,255,0.2); }
+.act-spinner.green { border-top-color: var(--green); border-color: rgba(52,211,153,0.2); }
+.act-spinner.pink  { border-top-color: var(--pink); border-color: rgba(255,110,180,0.2); }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.act-state-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.act-state-label {
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--text);
+}
+.act-state-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.act-iter-badge {
+  background: rgba(138,92,255,0.25);
+  color: var(--violet);
+  border: 1px solid rgba(138,92,255,0.35);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.act-iter-badge.cyan  { background: rgba(0,240,255,0.15); color: var(--cyan); border-color: rgba(0,240,255,0.3); }
+.act-iter-badge.green { background: rgba(52,211,153,0.15); color: var(--green); border-color: rgba(52,211,153,0.3); }
+
+/* ── Consumer state ──────────────────────────────────────────────────────── */
+.consumer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+.consumer-icon {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border-strong);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.consumer-icon.consuming {
+  border-color: var(--violet);
+  box-shadow: 0 0 6px var(--violet-glow);
+}
+.consumer-icon.consuming::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--violet);
+}
+
+/* ── Flying message particles ────────────────────────────────────────────── */
+.particle {
+  position: absolute;
+  pointer-events: none;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  transform-origin: center;
+  transition: none;
+}
+.particle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Path arrows on SVG ──────────────────────────────────────────────────── */
+.path-line {
+  fill: none;
+  stroke-width: 1.5;
+  opacity: 0.25;
+  stroke-dasharray: 4 4;
+}
+.path-line.highlight {
+  opacity: 0.65;
+  stroke-width: 2;
+  stroke-dasharray: none;
+}
+
+/* ── Legend ──────────────────────────────────────────────────────────────── */
+.legend {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  border-top: 1px solid var(--border);
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+/* ── Log panel ───────────────────────────────────────────────────────────── */
+.log-panel {
+  background: rgba(0,0,0,0.35);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.log-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.log-clear {
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: color 0.2s;
+}
+.log-clear:hover { color: var(--text); }
+
+.log-entries {
+  height: 140px;
+  overflow-y: auto;
+  padding: 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  scroll-behavior: smooth;
+}
+.log-entries::-webkit-scrollbar { width: 4px; }
+.log-entries::-webkit-scrollbar-track { background: transparent; }
+.log-entries::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
+
+.log-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  animation: log-in 0.18s ease-out;
+}
+@keyframes log-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+.log-time {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-family: monospace;
+}
+.log-actor {
+  font-weight: 600;
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.log-msg {
+  color: var(--text-secondary);
+}
+
+/* Source actor color theming */
+.src-user     { color: var(--cyan); border-color: rgba(0,240,255,0.25) !important; }
+.src-user:hover { box-shadow: 0 0 12px var(--cyan-glow); }
+.src-subagent { color: #c4a5ff; border-color: rgba(138,92,255,0.25) !important; }
+.src-subagent:hover { box-shadow: 0 0 12px var(--violet-glow); }
+.src-schedule { color: var(--amber); border-color: rgba(251,191,36,0.25) !important; }
+.src-schedule:hover { box-shadow: 0 0 12px var(--amber-glow); }
+.src-external { color: var(--green); border-color: rgba(52,211,153,0.25) !important; }
+.src-external:hover { box-shadow: 0 0 12px var(--green-glow); }
+.src-subconscious { color: var(--green); border-color: rgba(52,211,153,0.2) !important; }
+.src-subconscious:hover { box-shadow: 0 0 12px var(--green-glow); }
+
+/* Intercept badge */
+.badge-intercept { background: rgba(255,110,180,0.15); color: var(--pink); border: 1px solid rgba(255,110,180,0.3); }
+.badge-noqueue   { background: rgba(251,113,133,0.12); color: var(--red); border: 1px solid rgba(251,113,133,0.25); }
+.badge-fresh     { background: rgba(0,240,255,0.1); color: var(--cyan); border: 1px solid rgba(0,240,255,0.2); }
+
+/* Routing decision annotation */
+.routing-annotation {
+  position: absolute;
+  background: rgba(6,8,14,0.9);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 10px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  z-index: 30;
+  white-space: nowrap;
+  animation: annotation-in 0.2s ease-out;
+  backdrop-filter: blur(4px);
+}
+@keyframes annotation-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Steer inject flash */
+.steer-inject {
+  position: absolute;
+  inset: 0;
+  background: rgba(255,110,180,0.07);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: steer-flash 0.6s ease-out forwards;
+  z-index: 5;
+}
+@keyframes steer-flash {
+  0%   { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 1100px) {
+  .actor-grid {
+    grid-template-columns: 140px 1fr 1fr 1fr;
+    gap: 14px;
+    padding: 20px 16px;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="bg-orbs">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+  <div class="orb orb-4"></div>
+</div>
+
+<div id="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-title">
+      <h1>Chalie — Actor-Model Message Processing</h1>
+      <p>Interactive architecture visualization &nbsp;·&nbsp; rc-0.7.0 dispatch_message chokepoint</p>
+    </div>
+    <div class="controls-row">
+      <span class="speed-label">Speed:</span>
+      <select class="speed-select" id="speed-select">
+        <option value="0.4">Slow</option>
+        <option value="1" selected>Normal</option>
+        <option value="2.5">Fast</option>
+      </select>
+      <button class="btn-reset" id="btn-reset">Reset</button>
+    </div>
+  </div>
+
+  <!-- Scenario controls -->
+  <div class="scenarios">
+    <span class="scenario-label">Scenarios:</span>
+    <button class="btn-scenario" data-scenario="1">1 · Normal message</button>
+    <button class="btn-scenario" data-scenario="2">2 · Subagent intercept</button>
+    <button class="btn-scenario" data-scenario="3">3 · Scheduled re-queue</button>
+    <button class="btn-scenario" data-scenario="4">4 · Multi-source concurrency</button>
+    <button class="btn-scenario" data-scenario="5">5 · Subagent spawn &amp; return</button>
+  </div>
+
+  <!-- Main visualization canvas -->
+  <div class="canvas-wrapper">
+    <div id="vis-canvas">
+      <!-- SVG path overlay -->
+      <svg id="path-svg" aria-hidden="true">
+        <defs>
+          <marker id="arrow-violet" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" fill="rgba(138,92,255,0.5)"/>
+          </marker>
+          <marker id="arrow-cyan" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" fill="rgba(0,240,255,0.5)"/>
+          </marker>
+          <marker id="arrow-amber" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" fill="rgba(251,191,36,0.4)"/>
+          </marker>
+          <marker id="arrow-green" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" fill="rgba(52,211,153,0.4)"/>
+          </marker>
+        </defs>
+      </svg>
+
+      <div class="actor-grid">
+        <!-- Sources column -->
+        <div class="source-column" id="sources-col">
+          <div class="source-actor src-user" id="src-user" title="Click to send a user message">
+            <span class="source-name">User</span>
+            <span class="source-desc">WebSocket frame<br>dispatch_message()</span>
+            <span class="source-badge badge-fresh">fresh turn</span>
+          </div>
+          <div class="source-actor src-subagent" id="src-subagent" title="Subagent completion">
+            <span class="source-name">Subagent</span>
+            <span class="source-desc">SubagentProcessor<br>on complete</span>
+            <span class="source-badge badge-intercept">intercept=True</span>
+          </div>
+          <div class="source-actor src-schedule" id="src-schedule" title="Scheduled prompt fires">
+            <span class="source-name">Scheduler</span>
+            <span class="source-desc">60s poll<br>due items fire</span>
+            <span class="source-badge badge-noqueue">intercept=False</span>
+          </div>
+          <div class="source-actor src-external" id="src-external" title="External agent HITL">
+            <span class="source-name">Ext. Agent</span>
+            <span class="source-desc">MCP server<br>loop_in_human</span>
+            <span class="source-badge badge-noqueue">intercept=False</span>
+          </div>
+          <div class="source-actor src-subconscious" id="src-subconscious" title="Subconscious 5-min tick">
+            <span class="source-name">Subconscious</span>
+            <span class="source-desc">5-min tick<br>→ DMN queue</span>
+            <span class="source-badge badge-fresh">dmn only</span>
+          </div>
+        </div>
+
+        <!-- UMP column -->
+        <div class="processor-column" id="ump-col">
+          <div class="actor" id="actor-ump">
+            <div class="actor-header">
+              <div>
+                <div class="actor-name" style="color: var(--violet)">UMP</div>
+                <div class="actor-subtitle">UserMessageProcessor</div>
+              </div>
+              <div class="actor-status-dot idle" id="ump-dot"></div>
+            </div>
+            <div class="actor-body">
+              <div class="queue-label">Queue (FIFO)</div>
+              <div class="queue-track" id="ump-queue">
+                <span class="queue-empty-hint">empty</span>
+              </div>
+
+              <div class="consumer-row" id="ump-consumer">
+                <div class="consumer-icon" id="ump-consumer-icon"></div>
+                <span id="ump-consumer-text" style="font-size:10px;color:var(--text-muted)">Consumer: waiting</span>
+              </div>
+
+              <div class="act-state act-idle" id="ump-act">
+                <span style="font-size:11px">No active ACT loop</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Routing decision callout -->
+          <div style="background:var(--bg-surface-2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:10px;color:var(--text-muted);">
+            <div style="color:var(--text-secondary);font-weight:600;margin-bottom:4px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;">Routing Logic</div>
+            <div id="routing-display" style="display:flex;flex-direction:column;gap:3px;">
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="color:var(--cyan);font-size:10px;">→</span>
+                <span>No active loop → start new UMP turn</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="color:var(--pink);font-size:10px;">→</span>
+                <span>Active + intercept=True → inject steer</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span style="color:var(--red);font-size:10px;">→</span>
+                <span>Active + intercept=False → re-queue</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Subagent column -->
+        <div class="processor-column" id="sub-col">
+          <div class="actor" id="actor-subagent">
+            <div class="actor-header">
+              <div>
+                <div class="actor-name" style="color: #c4a5ff">Subagent</div>
+                <div class="actor-subtitle">SubagentProcessor</div>
+              </div>
+              <div class="actor-status-dot idle" id="sub-dot"></div>
+            </div>
+            <div class="actor-body">
+              <div class="queue-label">Task Queue</div>
+              <div class="queue-track" id="sub-queue">
+                <span class="queue-empty-hint">empty</span>
+              </div>
+
+              <div class="consumer-row">
+                <div class="consumer-icon" id="sub-consumer-icon"></div>
+                <span id="sub-consumer-text" style="font-size:10px;color:var(--text-muted)">Consumer: idle</span>
+              </div>
+
+              <div class="act-state act-idle" id="sub-act">
+                <span style="font-size:11px">No active task</span>
+              </div>
+
+              <div style="font-size:10px;color:var(--text-muted);padding-top:2px;">
+                Types: web_surfer · summariser · general
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DMN + Scheduler column -->
+        <div class="processor-column" id="dmn-col">
+          <div class="actor" id="actor-dmn">
+            <div class="actor-header">
+              <div>
+                <div class="actor-name" style="color: var(--green)">DMN</div>
+                <div class="actor-subtitle">DMNMessageProcessor</div>
+              </div>
+              <div class="actor-status-dot idle" id="dmn-dot"></div>
+            </div>
+            <div class="actor-body">
+              <div class="queue-label">Trigger Queue</div>
+              <div class="queue-track" id="dmn-queue">
+                <span class="queue-empty-hint">empty</span>
+              </div>
+
+              <div class="consumer-row">
+                <div class="consumer-icon" id="dmn-consumer-icon"></div>
+                <span id="dmn-consumer-text" style="font-size:10px;color:var(--text-muted)">Consumer: idle</span>
+              </div>
+
+              <div class="act-state act-idle" id="dmn-act">
+                <span style="font-size:11px">Idle — background thinker</span>
+              </div>
+
+              <div style="font-size:10px;color:var(--text-muted);padding-top:2px;">
+                Never touches UMP · saves via memory tool only
+              </div>
+            </div>
+          </div>
+
+          <div class="actor" id="actor-scheduler" style="border-color:rgba(251,191,36,0.2);">
+            <div class="actor-header">
+              <div>
+                <div class="actor-name" style="color: var(--amber)">Scheduler</div>
+                <div class="actor-subtitle">scheduler_worker — 60s poll</div>
+              </div>
+              <div class="actor-status-dot idle" id="sched-dot"></div>
+            </div>
+            <div class="actor-body">
+              <div class="consumer-row">
+                <div class="consumer-icon" id="sched-consumer-icon"></div>
+                <span id="sched-consumer-text" style="font-size:10px;color:var(--text-muted)">Polling: idle</span>
+              </div>
+              <div style="font-size:10px;color:var(--text-muted);line-height:1.4;">
+                Fires due items via dispatch_message()<br>
+                hidden_input=True, intercept=False
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--cyan);"></div>User</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#c4a5ff;"></div>Subagent</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--amber);"></div>Scheduled</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--green);"></div>External Agent</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--pink);"></div>Steer (injected)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--red);"></div>Re-queued</div>
+    </div>
+  </div>
+
+  <!-- Log panel -->
+  <div class="log-panel">
+    <div class="log-header">
+      <span class="log-title">Event Log</span>
+      <button class="log-clear" id="log-clear">Clear</button>
+    </div>
+    <div class="log-entries" id="log-entries">
+      <div class="log-entry">
+        <span class="log-time">00:00.000</span>
+        <span class="log-actor" style="color:var(--text-muted)">SYS</span>
+        <span class="log-msg">Ready — select a scenario or click a source to fire individual messages</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Chalie Actor-Model Visualization — orchestration engine
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// ── Speed multiplier ────────────────────────────────────────────────────────
+let SPEED = 1;
+document.getElementById('speed-select').addEventListener('change', e => {
+  SPEED = parseFloat(e.target.value);
+});
+const T = ms => ms / SPEED;
+
+// ── Animation queue (sequential scheduler) ──────────────────────────────────
+let _animQueue = Promise.resolve();
+function seq(fn) {
+  _animQueue = _animQueue.then(() => fn()).catch(console.warn);
+  return _animQueue;
+}
+function wait(ms) { return new Promise(r => setTimeout(r, T(ms))); }
+
+// ── Log ──────────────────────────────────────────────────────────────────────
+const logEl = document.getElementById('log-entries');
+const startTime = Date.now();
+
+function log(actor, msg, color) {
+  const elapsed = Date.now() - startTime;
+  const s = String(Math.floor(elapsed / 1000)).padStart(2, '0');
+  const ms = String(elapsed % 1000).padStart(3, '0');
+  const entry = document.createElement('div');
+  entry.className = 'log-entry';
+  entry.innerHTML = `
+    <span class="log-time">${s}:${ms}</span>
+    <span class="log-actor" style="color:${color}">${actor}</span>
+    <span class="log-msg">${msg}</span>
+  `;
+  logEl.appendChild(entry);
+  logEl.scrollTop = logEl.scrollHeight;
+  // Keep max 120 entries
+  while (logEl.children.length > 120) logEl.removeChild(logEl.firstChild);
+}
+
+document.getElementById('log-clear').addEventListener('click', () => {
+  logEl.innerHTML = '';
+});
+
+// ── Queue state ──────────────────────────────────────────────────────────────
+const queues = {
+  ump: [],
+  sub: [],
+  dmn: [],
+};
+
+const MSG_COLORS = {
+  user:     { bg: 'rgba(0,240,255,0.18)', color: 'var(--cyan)', cls: 'msg-user' },
+  subagent: { bg: 'rgba(138,92,255,0.18)', color: '#c4a5ff', cls: 'msg-subagent' },
+  schedule: { bg: 'rgba(251,191,36,0.18)', color: 'var(--amber)', cls: 'msg-schedule' },
+  external: { bg: 'rgba(52,211,153,0.15)', color: 'var(--green)', cls: 'msg-external' },
+  steer:    { bg: 'rgba(255,110,180,0.20)', color: 'var(--pink)', cls: 'msg-steer' },
+  requeue:  { bg: 'rgba(251,113,133,0.18)', color: 'var(--red)', cls: 'msg-requeue' },
+  dmn:      { bg: 'rgba(52,211,153,0.15)', color: 'var(--green)', cls: 'msg-external' },
+};
+
+function renderQueue(queueId) {
+  const el = document.getElementById(`${queueId}-queue`);
+  const msgs = queues[queueId];
+  el.innerHTML = msgs.length === 0
+    ? '<span class="queue-empty-hint">empty</span>'
+    : msgs.map(m => {
+        const c = MSG_COLORS[m.type] || MSG_COLORS.user;
+        return `<div class="queue-msg ${c.cls}">${m.label}</div>`;
+      }).join('');
+}
+
+function enqueue(queueId, msg) {
+  queues[queueId].push(msg);
+  renderQueue(queueId);
+}
+
+async function dequeue(queueId) {
+  const msgs = queues[queueId];
+  if (msgs.length === 0) return null;
+  const el = document.getElementById(`${queueId}-queue`);
+  const firstChild = el.querySelector('.queue-msg');
+  if (firstChild) {
+    firstChild.classList.add('exiting-left');
+    await wait(220);
+  }
+  const msg = msgs.shift();
+  renderQueue(queueId);
+  return msg;
+}
+
+// ── Actor state management ───────────────────────────────────────────────────
+const actorState = {
+  ump: { active: false, iteration: 0, phase: 'idle' },
+  sub: { active: false, iteration: 0, phase: 'idle' },
+  dmn: { active: false, iteration: 0, phase: 'idle' },
+};
+
+function setActorState(id, state) {
+  const s = actorState[id];
+  Object.assign(s, state);
+
+  const dot = document.getElementById(`${id}-dot`);
+  const actEl = document.getElementById(`${id}-act`);
+  const actorEl = document.getElementById(`actor-${id === 'sub' ? 'subagent' : id}`);
+
+  if (id === 'ump') {
+    if (s.phase === 'idle') {
+      dot.className = 'actor-status-dot idle';
+      actorEl.className = 'actor';
+      actEl.className = 'act-state act-idle';
+      actEl.innerHTML = '<span style="font-size:11px">No active ACT loop</span>';
+      document.getElementById('ump-consumer-icon').className = 'consumer-icon';
+      document.getElementById('ump-consumer-text').textContent = 'Consumer: waiting';
+    } else if (s.phase === 'consuming') {
+      dot.className = 'actor-status-dot running';
+      document.getElementById('ump-consumer-icon').className = 'consumer-icon consuming';
+      document.getElementById('ump-consumer-text').textContent = 'Consumer: picked up message';
+    } else if (s.phase === 'act') {
+      dot.className = 'actor-status-dot running';
+      actorEl.className = 'actor active';
+      actEl.className = 'act-state act-running';
+      actEl.innerHTML = `
+        <div class="act-spinner"></div>
+        <div class="act-state-text">
+          <div class="act-state-label">ACT Loop running</div>
+          <div class="act-state-sub">LLM call → tool dispatch → loop</div>
+        </div>
+        <div class="act-iter-badge">iter ${s.iteration}</div>
+      `;
+    } else if (s.phase === 'checking') {
+      actEl.className = 'act-state act-checking';
+      actEl.innerHTML = `
+        <div class="act-spinner pink"></div>
+        <div class="act-state-text">
+          <div class="act-state-label" style="color:var(--pink)">Checking queue for steers</div>
+          <div class="act-state-sub">Between ACT iterations</div>
+        </div>
+        <div class="act-iter-badge">iter ${s.iteration}</div>
+      `;
+    } else if (s.phase === 'steer-inject') {
+      actEl.className = 'act-state act-checking';
+      actEl.innerHTML = `
+        <div class="act-spinner pink"></div>
+        <div class="act-state-text">
+          <div class="act-state-label" style="color:var(--pink)">Steer injected!</div>
+          <div class="act-state-sub">ACT loop continues with steer context</div>
+        </div>
+        <div class="act-iter-badge" style="background:rgba(255,110,180,0.2);color:var(--pink);border-color:rgba(255,110,180,0.4)">steer</div>
+      `;
+      // Flash overlay
+      const flash = document.createElement('div');
+      flash.className = 'steer-inject';
+      actorEl.appendChild(flash);
+      setTimeout(() => flash.remove(), 700);
+    } else if (s.phase === 'synthesis') {
+      actEl.className = 'act-state act-synthesis';
+      actEl.innerHTML = `
+        <div class="act-spinner cyan"></div>
+        <div class="act-state-text">
+          <div class="act-state-label" style="color:var(--cyan)">Synthesis</div>
+          <div class="act-state-sub">LLM composing final response</div>
+        </div>
+        <div class="act-iter-badge cyan">done</div>
+      `;
+    }
+  }
+
+  if (id === 'sub') {
+    if (s.phase === 'idle') {
+      dot.className = 'actor-status-dot idle';
+      actorEl.className = 'actor';
+      actEl.className = 'act-state act-idle';
+      actEl.innerHTML = '<span style="font-size:11px">No active task</span>';
+      document.getElementById('sub-consumer-icon').className = 'consumer-icon';
+      document.getElementById('sub-consumer-text').textContent = 'Consumer: idle';
+    } else if (s.phase === 'consuming') {
+      dot.className = 'actor-status-dot running-sub';
+      document.getElementById('sub-consumer-icon').className = 'consumer-icon consuming';
+      document.getElementById('sub-consumer-text').textContent = 'Consumer: picked up task';
+    } else if (s.phase === 'act') {
+      dot.className = 'actor-status-dot running-sub';
+      actorEl.className = 'actor active-subagent';
+      actEl.className = 'act-state act-running';
+      actEl.innerHTML = `
+        <div class="act-spinner"></div>
+        <div class="act-state-text">
+          <div class="act-state-label">SubagentProcessor running</div>
+          <div class="act-state-sub">Isolated ACT loop</div>
+        </div>
+        <div class="act-iter-badge">iter ${s.iteration}</div>
+      `;
+    } else if (s.phase === 'done') {
+      actEl.className = 'act-state act-synthesis';
+      actEl.innerHTML = `
+        <div class="act-spinner cyan"></div>
+        <div class="act-state-text">
+          <div class="act-state-label" style="color:var(--cyan)">Task complete</div>
+          <div class="act-state-sub">Pushing result to UMP via dispatch_message()</div>
+        </div>
+        <div class="act-iter-badge cyan">✓</div>
+      `;
+    }
+  }
+
+  if (id === 'dmn') {
+    if (s.phase === 'idle') {
+      dot.className = 'actor-status-dot idle';
+      actorEl.className = 'actor';
+      actEl.className = 'act-state act-idle';
+      actEl.innerHTML = '<span style="font-size:11px">Idle — background thinker</span>';
+      document.getElementById('dmn-consumer-icon').className = 'consumer-icon';
+      document.getElementById('dmn-consumer-text').textContent = 'Consumer: idle';
+    } else if (s.phase === 'consuming') {
+      dot.className = 'actor-status-dot running-dmn';
+      document.getElementById('dmn-consumer-icon').className = 'consumer-icon consuming';
+      document.getElementById('dmn-consumer-text').textContent = 'Consumer: picked up tick';
+    } else if (s.phase === 'act') {
+      dot.className = 'actor-status-dot running-dmn';
+      actorEl.className = 'actor active-dmn';
+      actEl.className = 'act-state dmn-running';
+      actEl.innerHTML = `
+        <div class="act-spinner green"></div>
+        <div class="act-state-text">
+          <div class="act-state-label" style="color:var(--green)">DMN ACT loop running</div>
+          <div class="act-state-sub">Background reflection · no UI broadcast</div>
+        </div>
+        <div class="act-iter-badge green">iter ${s.iteration}</div>
+      `;
+    }
+  }
+}
+
+// ── Particle animation ───────────────────────────────────────────────────────
+const canvas = document.getElementById('vis-canvas');
+const svg = document.getElementById('path-svg');
+
+function getCenter(el) {
+  const cr = canvas.getBoundingClientRect();
+  const er = el.getBoundingClientRect();
+  return {
+    x: er.left - cr.left + er.width / 2,
+    y: er.top - cr.top + er.height / 2,
+  };
+}
+
+function getRight(el) {
+  const cr = canvas.getBoundingClientRect();
+  const er = el.getBoundingClientRect();
+  return { x: er.right - cr.left, y: er.top - cr.top + er.height / 2 };
+}
+
+function getLeft(el) {
+  const cr = canvas.getBoundingClientRect();
+  const er = el.getBoundingClientRect();
+  return { x: er.left - cr.left, y: er.top - cr.top + er.height / 2 };
+}
+
+async function flyParticle(fromEl, toEl, type, label, durationMs = 600) {
+  const c = MSG_COLORS[type] || MSG_COLORS.user;
+  const from = getRight(fromEl);
+  const to = getLeft(toEl);
+
+  const p = document.createElement('div');
+  p.className = 'particle';
+  p.style.cssText = `
+    left: ${from.x}px;
+    top: ${from.y - 10}px;
+    background: ${c.bg};
+    color: ${c.color};
+    border: 1px solid ${c.color}40;
+    box-shadow: 0 0 8px ${c.color}50;
+  `;
+  p.innerHTML = `<div class="particle-dot" style="background:${c.color}"></div>${label}`;
+  canvas.appendChild(p);
+
+  const dur = T(durationMs);
+  const start = performance.now();
+
+  await new Promise(resolve => {
+    function frame(now) {
+      const t = Math.min((now - start) / dur, 1);
+      // Bezier-ish arc: use quadratic easing + slight vertical arc
+      const ease = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+      const arcHeight = -40 * Math.sin(Math.PI * t);
+      const x = from.x + (to.x - from.x) * ease;
+      const y = from.y + (to.y - from.y) * ease + arcHeight - 10;
+      p.style.left = x + 'px';
+      p.style.top = y + 'px';
+      p.style.opacity = t < 0.1 ? t * 10 : t > 0.85 ? (1 - t) / 0.15 : 1;
+      if (t < 1) requestAnimationFrame(frame);
+      else { p.remove(); resolve(); }
+    }
+    requestAnimationFrame(frame);
+  });
+}
+
+// ── Source actor firing flash ────────────────────────────────────────────────
+function flashSource(id) {
+  const el = document.getElementById(`src-${id}`);
+  if (!el) return;
+  el.classList.add('firing');
+  setTimeout(() => el.classList.remove('firing'), 500);
+}
+
+function flashSched() {
+  const dot = document.getElementById('sched-dot');
+  const text = document.getElementById('sched-consumer-text');
+  dot.className = 'actor-status-dot running';
+  dot.style.background = 'var(--amber)';
+  dot.style.boxShadow = '0 0 8px var(--amber-glow)';
+  text.textContent = 'Polling: item found!';
+  text.style.color = 'var(--amber)';
+  setTimeout(() => {
+    dot.className = 'actor-status-dot idle';
+    dot.style.background = '';
+    dot.style.boxShadow = '';
+    text.textContent = 'Polling: idle';
+    text.style.color = '';
+  }, T(1200));
+}
+
+// ── Reset ────────────────────────────────────────────────────────────────────
+function resetAll() {
+  _animQueue = Promise.resolve();
+  queues.ump = [];
+  queues.sub = [];
+  queues.dmn = [];
+  renderQueue('ump');
+  renderQueue('sub');
+  renderQueue('dmn');
+  setActorState('ump', { phase: 'idle', iteration: 0, active: false });
+  setActorState('sub', { phase: 'idle', iteration: 0, active: false });
+  setActorState('dmn', { phase: 'idle', iteration: 0, active: false });
+  document.querySelectorAll('.btn-scenario').forEach(b => b.classList.remove('active'));
+  log('SYS', 'Reset', 'var(--text-muted)');
+}
+
+document.getElementById('btn-reset').addEventListener('click', resetAll);
+
+// ── UMP turn runner ──────────────────────────────────────────────────────────
+async function runUmpTurn(msgType, iterations = 3, enableSteerCheck = false, steerCallback = null) {
+  // Consumer picks up
+  setActorState('ump', { phase: 'consuming' });
+  log('UMP', `Consumer: picked up ${msgType} message`, 'var(--violet)');
+  await wait(350);
+
+  setActorState('ump', { phase: 'act', iteration: 1, active: true });
+  log('UMP', 'Starting ACT loop', 'var(--violet)');
+
+  for (let i = 1; i <= iterations; i++) {
+    setActorState('ump', { phase: 'act', iteration: i });
+    log('UMP', `ACT iteration ${i} — LLM call + tool dispatch`, 'var(--violet)');
+    await wait(700);
+
+    if (i < iterations) {
+      // Check queue between iterations
+      setActorState('ump', { phase: 'checking', iteration: i });
+      log('UMP', `Iteration ${i} complete — checking queue for steers...`, '#c4a5ff');
+      await wait(350);
+
+      if (enableSteerCheck && steerCallback) {
+        const steer = await steerCallback(i);
+        if (steer) {
+          setActorState('ump', { phase: 'steer-inject', iteration: i });
+          log('UMP', `Steer injected: "${steer.label}" — continuing ACT loop`, 'var(--pink)');
+          await wait(500);
+        }
+      }
+    }
+  }
+
+  setActorState('ump', { phase: 'synthesis', iteration: iterations });
+  log('UMP', 'Synthesis — composing final response', 'var(--cyan)');
+  await wait(600);
+
+  setActorState('ump', { phase: 'idle', active: false });
+  log('UMP', 'Turn complete — response broadcast via WebSocketBroker', 'var(--cyan)');
+  await wait(300);
+}
+
+// ── Scenario 1: Normal user message ─────────────────────────────────────────
+async function scenario1() {
+  resetAll();
+  log('SYS', '── Scenario 1: Normal user message ──', 'var(--text-muted)');
+  await wait(300);
+
+  // User fires message
+  flashSource('user');
+  log('User', 'Message sent via WebSocket → dispatch_message(intercept=False)', 'var(--cyan)');
+  await wait(200);
+
+  // Fly to UMP queue
+  const srcEl = document.getElementById('src-user');
+  const umpActor = document.getElementById('actor-ump');
+  enqueue('ump', { type: 'user', label: 'user msg' });
+  await flyParticle(srcEl, document.getElementById('ump-queue'), 'user', 'user msg', 500);
+  log('UMP', 'Queue: 1 message waiting', 'var(--violet)');
+  await wait(300);
+
+  // Dequeue and run
+  await dequeue('ump');
+  await runUmpTurn('user', 3);
+}
+
+// ── Scenario 2: Subagent intercept ──────────────────────────────────────────
+async function scenario2() {
+  resetAll();
+  log('SYS', '── Scenario 2: Subagent intercept during active UMP ──', 'var(--text-muted)');
+  await wait(300);
+
+  // User message starts turn
+  flashSource('user');
+  const srcUser = document.getElementById('src-user');
+  enqueue('ump', { type: 'user', label: 'user msg' });
+  await flyParticle(srcUser, document.getElementById('ump-queue'), 'user', 'user msg', 500);
+  log('User', 'Message arrived → UMP queue', 'var(--cyan)');
+  await wait(200);
+  await dequeue('ump');
+
+  // Start UMP turn with steer injection at iteration 2
+  const srcSub = document.getElementById('src-subagent');
+  const umpQueue = document.getElementById('ump-queue');
+
+  let steerInjected = false;
+  setActorState('ump', { phase: 'act', iteration: 1, active: true });
+  log('UMP', 'ACT loop started', 'var(--violet)');
+
+  // Iteration 1
+  setActorState('ump', { phase: 'act', iteration: 1 });
+  log('UMP', 'ACT iteration 1 running...', 'var(--violet)');
+  await wait(500);
+
+  // During iter 1, subagent completes
+  flashSource('subagent');
+  log('Subagent', 'Task complete — pushing to UMP queue with intercept=True', '#c4a5ff');
+  enqueue('ump', { type: 'steer', label: 'subagent result' });
+  await flyParticle(srcSub, umpQueue, 'subagent', 'subagent result', 500);
+  await wait(200);
+
+  // Check queue between iterations
+  setActorState('ump', { phase: 'checking', iteration: 1 });
+  log('UMP', 'Iteration 1 done — checking queue for steers...', '#c4a5ff');
+  await wait(400);
+
+  // intercept=True: drain queue and inject
+  await dequeue('ump');
+  setActorState('ump', { phase: 'steer-inject', iteration: 1 });
+  log('UMP', 'intercept=True → steer injected into ACT loop context', 'var(--pink)');
+  await wait(500);
+
+  // Continue iteration 2 with steer
+  setActorState('ump', { phase: 'act', iteration: 2 });
+  log('UMP', 'ACT iteration 2 — running with subagent context', 'var(--violet)');
+  await wait(600);
+
+  // Check queue again
+  setActorState('ump', { phase: 'checking', iteration: 2 });
+  log('UMP', 'Iteration 2 done — checking queue... empty', '#c4a5ff');
+  await wait(300);
+
+  // Iteration 3
+  setActorState('ump', { phase: 'act', iteration: 3 });
+  log('UMP', 'ACT iteration 3', 'var(--violet)');
+  await wait(600);
+
+  setActorState('ump', { phase: 'synthesis', iteration: 3 });
+  log('UMP', 'Synthesis with subagent findings incorporated', 'var(--cyan)');
+  await wait(600);
+
+  setActorState('ump', { phase: 'idle', active: false });
+  log('UMP', 'Turn complete', 'var(--cyan)');
+}
+
+// ── Scenario 3: Scheduled re-queue ──────────────────────────────────────────
+async function scenario3() {
+  resetAll();
+  log('SYS', '── Scenario 3: Scheduled prompt arrives during active UMP ──', 'var(--text-muted)');
+  await wait(300);
+
+  // User starts turn
+  flashSource('user');
+  const srcUser = document.getElementById('src-user');
+  enqueue('ump', { type: 'user', label: 'user msg' });
+  await flyParticle(srcUser, document.getElementById('ump-queue'), 'user', 'user msg', 500);
+  log('User', 'Message → UMP queue', 'var(--cyan)');
+  await wait(200);
+  await dequeue('ump');
+
+  setActorState('ump', { phase: 'act', iteration: 1, active: true });
+  log('UMP', 'ACT loop started', 'var(--violet)');
+
+  // Iteration 1
+  log('UMP', 'ACT iteration 1 running...', 'var(--violet)');
+  await wait(400);
+
+  // Scheduler fires a prompt
+  flashSched();
+  flashSource('schedule');
+  const srcSched = document.getElementById('src-schedule');
+  log('Scheduler', 'Due item found — dispatch_message(intercept=False)', 'var(--amber)');
+  await wait(150);
+
+  enqueue('ump', { type: 'schedule', label: 'sched prompt' });
+  await flyParticle(srcSched, document.getElementById('ump-queue'), 'schedule', 'sched prompt', 500);
+  log('UMP', 'Scheduled prompt landed in queue — UMP is active', 'var(--amber)');
+  await wait(300);
+
+  // Consumer sees active loop + intercept=False → re-queue (stays in queue)
+  setActorState('ump', { phase: 'checking', iteration: 1 });
+  log('UMP', 'Checking queue between iterations...', '#c4a5ff');
+  await wait(400);
+
+  // The scheduled msg gets re-tagged as "re-queued"
+  queues.ump[0] = { type: 'requeue', label: 'sched→requeue' };
+  renderQueue('ump');
+  log('UMP', 'intercept=False + active loop → re-queued to back of line', 'var(--red)');
+  await wait(400);
+
+  // Continue user turn iterations
+  for (let i = 2; i <= 3; i++) {
+    setActorState('ump', { phase: 'act', iteration: i });
+    log('UMP', `ACT iteration ${i}`, 'var(--violet)');
+    await wait(600);
+    if (i < 3) {
+      setActorState('ump', { phase: 'checking', iteration: i });
+      log('UMP', `Checking queue — scheduled prompt still waiting`, '#c4a5ff');
+      await wait(300);
+    }
+  }
+
+  setActorState('ump', { phase: 'synthesis', iteration: 3 });
+  log('UMP', 'User turn: synthesis', 'var(--cyan)');
+  await wait(600);
+
+  setActorState('ump', { phase: 'idle', active: false });
+  log('UMP', 'User turn complete — consumer loops back to check queue', 'var(--violet)');
+  await wait(400);
+
+  // Now consumer picks up the scheduled prompt
+  setActorState('ump', { phase: 'consuming' });
+  log('UMP', 'Consumer: picking up queued scheduled prompt', 'var(--violet)');
+  await wait(300);
+  await dequeue('ump');
+
+  setActorState('ump', { phase: 'act', iteration: 1, active: true });
+  log('UMP', 'New turn for scheduled prompt — ACT loop starting', 'var(--amber)');
+  await wait(600);
+
+  setActorState('ump', { phase: 'act', iteration: 2 });
+  log('UMP', 'Scheduled prompt ACT iteration 2', 'var(--amber)');
+  await wait(600);
+
+  setActorState('ump', { phase: 'synthesis', iteration: 2 });
+  log('UMP', 'Scheduled prompt: synthesis', 'var(--cyan)');
+  await wait(500);
+
+  setActorState('ump', { phase: 'idle', active: false });
+  log('UMP', 'Scheduled prompt turn complete', 'var(--cyan)');
+}
+
+// ── Scenario 4: Multi-source concurrency ─────────────────────────────────────
+async function scenario4() {
+  resetAll();
+  log('SYS', '── Scenario 4: Multi-source concurrency ──', 'var(--text-muted)');
+  await wait(300);
+
+  const srcUser = document.getElementById('src-user');
+  const srcSub = document.getElementById('src-subagent');
+  const srcSched = document.getElementById('src-schedule');
+  const srcExt = document.getElementById('src-external');
+  const umpQueue = document.getElementById('ump-queue');
+
+  // User starts turn
+  flashSource('user');
+  enqueue('ump', { type: 'user', label: 'user msg' });
+  await flyParticle(srcUser, umpQueue, 'user', 'user msg', 400);
+  log('User', 'Message → UMP queue', 'var(--cyan)');
+  await wait(150);
+  await dequeue('ump');
+
+  setActorState('ump', { phase: 'act', iteration: 1, active: true });
+  log('UMP', 'ACT loop started — processing user message', 'var(--violet)');
+  await wait(500);
+
+  // Simultaneously: subagent completes (intercept=True), scheduled prompt, external agent arrive
+  flashSource('subagent');
+  enqueue('ump', { type: 'steer', label: 'subagent result' });
+  await flyParticle(srcSub, umpQueue, 'subagent', 'subagent result', 400);
+  log('Subagent', 'Complete → dispatch_message(intercept=True)', '#c4a5ff');
+  await wait(200);
+
+  flashSched();
+  flashSource('schedule');
+  enqueue('ump', { type: 'schedule', label: 'sched prompt' });
+  await flyParticle(srcSched, umpQueue, 'schedule', 'sched prompt', 400);
+  log('Scheduler', 'Due item → dispatch_message(intercept=False)', 'var(--amber)');
+  await wait(200);
+
+  flashSource('external');
+  enqueue('ump', { type: 'external', label: 'ext. agent HITL' });
+  await flyParticle(srcExt, umpQueue, 'external', 'ext. agent HITL', 400);
+  log('Ext.Agent', 'HITL message → dispatch_message(intercept=False)', 'var(--green)');
+  await wait(200);
+
+  log('UMP', 'Queue has 3 items: subagent(steer), sched(re-queue), ext(re-queue)', '#c4a5ff');
+  await wait(300);
+
+  // Between iteration 1 and 2: check queue
+  setActorState('ump', { phase: 'checking', iteration: 1 });
+  log('UMP', 'Iteration 1 done — draining queue for steers...', '#c4a5ff');
+  await wait(400);
+
+  // Process steer (intercept=True → inject)
+  await dequeue('ump');
+  setActorState('ump', { phase: 'steer-inject', iteration: 1 });
+  log('UMP', 'Subagent result (intercept=True) → steer injected', 'var(--pink)');
+  await wait(400);
+
+  // Schedule and external are re-queued (intercept=False)
+  queues.ump = queues.ump.map(m => ({ ...m, type: 'requeue', label: m.type === 'schedule' ? 'sched→wait' : 'ext→wait' }));
+  renderQueue('ump');
+  log('UMP', 'sched + ext.agent (intercept=False) → remain in queue, waiting', 'var(--red)');
+  await wait(400);
+
+  // Iterations 2 and 3
+  for (let i = 2; i <= 3; i++) {
+    setActorState('ump', { phase: 'act', iteration: i });
+    log('UMP', `ACT iteration ${i} with injected subagent context`, 'var(--violet)');
+    await wait(600);
+    if (i < 3) {
+      setActorState('ump', { phase: 'checking', iteration: i });
+      log('UMP', 'Queue check — sched + ext still waiting (intercept=False)', '#c4a5ff');
+      await wait(300);
+    }
+  }
+
+  setActorState('ump', { phase: 'synthesis', iteration: 3 });
+  log('UMP', 'Synthesis — user turn complete', 'var(--cyan)');
+  await wait(600);
+  setActorState('ump', { phase: 'idle', active: false });
+  log('UMP', 'User turn done — consumer picks up next', 'var(--violet)');
+  await wait(400);
+
+  // Process scheduled prompt
+  setActorState('ump', { phase: 'consuming' });
+  log('UMP', 'Consumer: picking up scheduled prompt', 'var(--amber)');
+  await wait(300);
+  await dequeue('ump');
+
+  setActorState('ump', { phase: 'act', iteration: 1, active: true });
+  log('UMP', 'Scheduled prompt turn — ACT loop', 'var(--amber)');
+  await wait(500);
+  setActorState('ump', { phase: 'act', iteration: 2 });
+  log('UMP', 'Scheduled prompt ACT iter 2', 'var(--amber)');
+  await wait(500);
+  setActorState('ump', { phase: 'synthesis', iteration: 2 });
+  await wait(400);
+  setActorState('ump', { phase: 'idle', active: false });
+  log('UMP', 'Scheduled prompt done — processing external agent next', 'var(--cyan)');
+  await wait(400);
+
+  // Process external agent
+  setActorState('ump', { phase: 'consuming' });
+  log('UMP', 'Consumer: picking up external agent HITL', 'var(--green)');
+  await wait(300);
+  await dequeue('ump');
+
+  setActorState('ump', { phase: 'act', iteration: 1, active: true });
+  log('UMP', 'External agent HITL turn — ACT loop', 'var(--green)');
+  await wait(500);
+  setActorState('ump', { phase: 'act', iteration: 2 });
+  await wait(500);
+  setActorState('ump', { phase: 'synthesis', iteration: 2 });
+  await wait(400);
+  setActorState('ump', { phase: 'idle', active: false });
+  log('UMP', 'All queued messages processed — consumer idle', 'var(--cyan)');
+}
+
+// ── Scenario 5: Subagent spawn and return ─────────────────────────────────────
+async function scenario5() {
+  resetAll();
+  log('SYS', '── Scenario 5: Subagent spawn & return via dispatch_message ──', 'var(--text-muted)');
+  await wait(300);
+
+  const srcUser = document.getElementById('src-user');
+  const srcSub = document.getElementById('src-subagent');
+  const umpQueue = document.getElementById('ump-queue');
+  const subQueue = document.getElementById('sub-queue');
+  const umpActor = document.getElementById('actor-ump');
+  const subActor = document.getElementById('actor-subagent');
+
+  // User starts turn
+  flashSource('user');
+  enqueue('ump', { type: 'user', label: 'user msg' });
+  await flyParticle(srcUser, umpQueue, 'user', 'user msg', 400);
+  log('User', 'Message → UMP queue', 'var(--cyan)');
+  await wait(200);
+  await dequeue('ump');
+
+  setActorState('ump', { phase: 'act', iteration: 1, active: true });
+  log('UMP', 'ACT iteration 1 — model decides to spawn subagent', 'var(--violet)');
+  await wait(500);
+
+  // UMP spawns subagent
+  log('UMP', 'handle_tool("subagent", {type:"general_purpose", ...}) called', 'var(--violet)');
+  enqueue('sub', { type: 'subagent', label: 'sub task' });
+  await flyParticle(umpActor, subQueue, 'subagent', 'sub task', 500);
+  log('Subagent', 'Task queued from UMP', '#c4a5ff');
+  await wait(300);
+
+  // UMP continues (wait=false, non-blocking)
+  setActorState('ump', { phase: 'act', iteration: 2 });
+  log('UMP', 'ACT iteration 2 — subagent running in background (wait=false)', 'var(--violet)');
+
+  // Sub picks up task and runs concurrently
+  setActorState('sub', { phase: 'consuming' });
+  log('Subagent', 'Consumer: picked up task', '#c4a5ff');
+  await wait(300);
+  await dequeue('sub');
+
+  setActorState('sub', { phase: 'act', iteration: 1 });
+  log('Subagent', 'SubagentProcessor ACT loop — isolated execution', '#c4a5ff');
+
+  await wait(700);
+
+  setActorState('ump', { phase: 'checking', iteration: 2 });
+  log('UMP', 'Iteration 2 done — checking queue', '#c4a5ff');
+  await wait(300);
+
+  // UMP continues
+  setActorState('ump', { phase: 'act', iteration: 3 });
+  log('UMP', 'ACT iteration 3 — subagent still running...', 'var(--violet)');
+  await wait(500);
+
+  // Subagent completes
+  setActorState('sub', { phase: 'act', iteration: 2 });
+  log('Subagent', 'ACT iteration 2 — wrapping up', '#c4a5ff');
+  await wait(400);
+
+  setActorState('sub', { phase: 'done' });
+  log('Subagent', 'Task complete — dispatch_message(hidden_input=True, intercept=True)', '#c4a5ff');
+  await wait(400);
+
+  // Subagent pushes envelope to UMP
+  flashSource('subagent');
+  enqueue('ump', { type: 'steer', label: '[subagent.complete]' });
+  await flyParticle(subActor, umpQueue, 'subagent', '[subagent.complete]', 500);
+  log('UMP', 'Subagent envelope arrived — steer queued', 'var(--pink)');
+  await wait(200);
+
+  setActorState('sub', { phase: 'idle' });
+
+  // UMP checks queue between iterations
+  setActorState('ump', { phase: 'checking', iteration: 3 });
+  log('UMP', 'Checking queue — subagent envelope found (intercept=True)!', '#c4a5ff');
+  await wait(400);
+
+  await dequeue('ump');
+  setActorState('ump', { phase: 'steer-inject', iteration: 3 });
+  log('UMP', 'Subagent envelope injected as steer → synthesis with full context', 'var(--pink)');
+  await wait(500);
+
+  setActorState('ump', { phase: 'synthesis', iteration: 3 });
+  log('UMP', 'Synthesis — incorporating subagent findings', 'var(--cyan)');
+  await wait(600);
+
+  setActorState('ump', { phase: 'idle', active: false });
+  log('UMP', 'Turn complete — subagent findings delivered to user', 'var(--cyan)');
+}
+
+// ── Scenario button wiring ───────────────────────────────────────────────────
+const scenarios = { 1: scenario1, 2: scenario2, 3: scenario3, 4: scenario4, 5: scenario5 };
+
+document.querySelectorAll('.btn-scenario').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const n = parseInt(btn.dataset.scenario);
+    document.querySelectorAll('.btn-scenario').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    resetAll();
+    setTimeout(() => seq(() => scenarios[n]()), 100);
+  });
+});
+
+// ── Individual source click handlers ────────────────────────────────────────
+document.getElementById('src-user').addEventListener('click', () => {
+  seq(async () => {
+    flashSource('user');
+    enqueue('ump', { type: 'user', label: 'user msg' });
+    await flyParticle(document.getElementById('src-user'), document.getElementById('ump-queue'), 'user', 'user msg', 400);
+    log('User', 'Manual: user message → UMP queue', 'var(--cyan)');
+  });
+});
+
+document.getElementById('src-subagent').addEventListener('click', () => {
+  seq(async () => {
+    flashSource('subagent');
+    enqueue('ump', { type: 'steer', label: 'subagent result' });
+    await flyParticle(document.getElementById('src-subagent'), document.getElementById('ump-queue'), 'subagent', 'subagent result', 400);
+    log('Subagent', 'Manual: completion → UMP queue (intercept=True)', '#c4a5ff');
+  });
+});
+
+document.getElementById('src-schedule').addEventListener('click', () => {
+  seq(async () => {
+    flashSource('schedule');
+    flashSched();
+    enqueue('ump', { type: 'schedule', label: 'sched prompt' });
+    await flyParticle(document.getElementById('src-schedule'), document.getElementById('ump-queue'), 'schedule', 'sched prompt', 400);
+    log('Scheduler', 'Manual: due item → UMP queue (intercept=False)', 'var(--amber)');
+  });
+});
+
+document.getElementById('src-external').addEventListener('click', () => {
+  seq(async () => {
+    flashSource('external');
+    enqueue('ump', { type: 'external', label: 'ext. agent HITL' });
+    await flyParticle(document.getElementById('src-external'), document.getElementById('ump-queue'), 'external', 'ext. agent HITL', 400);
+    log('Ext.Agent', 'Manual: HITL message → UMP queue (intercept=False)', 'var(--green)');
+  });
+});
+
+document.getElementById('src-subconscious').addEventListener('click', () => {
+  seq(async () => {
+    flashSource('subconscious');
+    enqueue('dmn', { type: 'dmn', label: 'subconscious tick' });
+    await flyParticle(document.getElementById('src-subconscious'), document.getElementById('dmn-queue'), 'dmn', 'tick', 400);
+    log('Subconscious', 'Manual: 5-min tick → DMN queue', 'var(--green)');
+
+    await wait(200);
+    setActorState('dmn', { phase: 'consuming' });
+    await wait(300);
+    await dequeue('dmn');
+    setActorState('dmn', { phase: 'act', iteration: 1 });
+    log('DMN', 'DMNMessageProcessor ACT loop — background reflection', 'var(--green)');
+    await wait(800);
+    setActorState('dmn', { phase: 'act', iteration: 2 });
+    log('DMN', 'DMN iter 2 — saving findings via memory tool', 'var(--green)');
+    await wait(700);
+    setActorState('dmn', { phase: 'idle' });
+    log('DMN', 'DMN complete — no broadcast, memory-only writes', 'var(--green)');
+  });
+});
+
+// ── Initial state ────────────────────────────────────────────────────────────
+setActorState('ump', { phase: 'idle' });
+setActorState('sub', { phase: 'idle' });
+setActorState('dmn', { phase: 'idle' });
+</script>
+</body>
+</html>
