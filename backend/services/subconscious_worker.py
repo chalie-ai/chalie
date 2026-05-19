@@ -13,7 +13,6 @@ Tick body (sequential, per §5.3):
     5. Run DMN reflection (skipped when no user_summary row exists).
     6. Capability sync (IMAP/CalDAV/CardDAV via MailCapability._do_monitor).
     7. Geo-spatial pattern extraction from location-tagged transcripts.
-    7. Geo-spatial pattern extraction from location-tagged transcripts.
 
 Gates (both must pass — §5.2):
     - User-active: ``last_user_message_at`` is older than 30 minutes.
