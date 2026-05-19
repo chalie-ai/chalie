@@ -14,7 +14,7 @@ Every page loads a shared auth gate before its own bootstrap. The gate calls `/a
 | onboarding (account exists) | — | → login | → login | → login |
 | login (`/login/`) | stay | stay | — | → chat |
 
-When brain enters **providers-only mode**, every tab except Providers is hidden and a persistent toast prompts setup. All app code waits for the gate to complete before booting.
+When brain enters **providers-only mode**, all navigation is locked to `#/providers` — sidebar items are greyed out, the command palette is disabled, and manual hash changes redirect back. A warning banner in the sidebar prompts setup. The lock lifts automatically when the first provider is saved. All app code waits for the gate to complete before booting.
 
 ## Radiant Design System
 
