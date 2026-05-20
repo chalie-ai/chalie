@@ -107,6 +107,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "calendar",
     "code_eval",
     "contacts",
+    "discord",
     "document",
     "email",
     "find_tools",
@@ -126,6 +127,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "steer",
     "subagent",
     "timer",
+    "ubiquiti",
     "weather",
 })
 
@@ -197,7 +199,7 @@ _DEFAULT_ALWAYS = frozenset({
 # `place` is discoverable in UMP (user-initiated GPS tagging). Excluded from
 # DMN, GeoPatternProcessor, SubagentProcessor — they have no user-session GPS.
 _DEFAULT_DISCOVERABLE = frozenset({
-    "browser", "calendar", "code_eval", "contacts", "email", "home",
+    "browser", "calendar", "code_eval", "contacts", "discord", "email", "home",
     "news", "place", "programming_docs_search", "search", "subagent", "weather",
 })
 

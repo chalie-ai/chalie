@@ -605,6 +605,23 @@ input[type="checkbox"]:checked::after {
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .form-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
+/* Tab selector (used for auth method toggle) */
+.tab-select {
+  display: flex; gap: 2px; padding: 2px;
+  background: var(--bg-surface); border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.tab-btn {
+  flex: 1; padding: 7px 12px; font-size: 12px; font-weight: 600;
+  color: var(--text-secondary); background: transparent; border: none;
+  border-radius: 6px; cursor: pointer; transition: 150ms;
+}
+.tab-btn:hover { color: var(--text-primary); background: var(--bg-surface-2); }
+.tab-btn.active {
+  color: var(--text-primary); background: var(--bg-card);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+
 /* Input group with prefix / suffix */
 .input-group {
   display: flex; align-items: stretch; border-radius: 8px;

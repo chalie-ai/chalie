@@ -1,0 +1,46 @@
+id: ubiquiti
+name: Ubiquiti
+version: 1.0.0
+entry_class: UbiquitiCapability
+description: Control and monitor UniFi network devices, clients, and WiFi networks.
+providers:
+  - local
+fields:
+  - name: url
+    label: UniFi Controller URL
+    type: text
+    placeholder: "https://192.168.1.1"
+    required: true
+  - name: auth_method
+    label: Authentication Method
+    type: select
+    options:
+      - {value: "api_key", label: "API Key (UniFi OS)"}
+      - {value: "credentials", label: "Username & Password"}
+    default: "api_key"
+    required: true
+  - name: api_key
+    label: API Key
+    type: password
+    required: false
+    show_when: {auth_method: "api_key"}
+  - name: username
+    label: Username
+    type: text
+    required: false
+    show_when: {auth_method: "credentials"}
+  - name: password
+    label: Password
+    type: password
+    required: false
+    show_when: {auth_method: "credentials"}
+  - name: site
+    label: Site Name
+    type: text
+    placeholder: "default"
+    default: "default"
+    required: false
+  - name: verify_ssl
+    label: Verify SSL
+    type: checkbox
+    default: false
