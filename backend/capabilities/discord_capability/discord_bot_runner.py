@@ -33,7 +33,7 @@ class DiscordBotRunner:
     Args:
         token: Discord bot token.
         on_message: Callable invoked synchronously for each inbound message.
-            Signature: (guild_name, channel_name, channel_id, author_name, content)
+            Signature: (guild_name, channel_name, channel_id, author_name, author_id, content)
             Called inside a ThreadPoolExecutor so blocking operations are safe.
         allowed_guilds: Optional set of guild IDs to accept messages from.
             Empty set means all guilds are allowed.
@@ -44,7 +44,7 @@ class DiscordBotRunner:
     def __init__(
         self,
         token: str,
-        on_message: Callable[[str, str, int, str, str], None],
+        on_message: Callable[[str, str, int, str, int, str], None],
         allowed_guilds: set[int],
         allowed_channels: set[int],
     ) -> None:
@@ -287,6 +287,7 @@ class DiscordBotRunner:
             channel_name,
             channel_id,
             message.author.display_name,
+            message.author.id,
             message.content,
         )
 

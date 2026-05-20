@@ -100,7 +100,7 @@ const PanelPolicies = (() => {
     'Subagent': ['subagent'],
   };
 
-  const CONTEXT_MAP = { chat: 'chat', subagent: 'subagent', background: 'subconscious', external: 'external_agent' };
+  const CONTEXT_MAP = { chat: 'chat', subagent: 'subagent', background: 'subconscious', external: 'external_agent', discord: 'discord' };
 
   function mount(root, sub) {
     _root = root;

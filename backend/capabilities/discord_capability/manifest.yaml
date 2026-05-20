@@ -20,3 +20,7 @@ fields:
     label: Allowed Channels (Channel IDs)
     type: text
     placeholder: "Comma-separated channel IDs (leave empty for all)"
+  - name: owner_user_id
+    label: Your Discord User ID
+    type: text
+    placeholder: "Your 18-digit Discord user ID"

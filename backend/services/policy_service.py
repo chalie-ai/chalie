@@ -4,7 +4,7 @@ Policy Service — per-action permission control (allow / ask / deny).
 Enforcement point: ActDispatcherService.dispatch_action() calls
 PolicyService.check() between handler lookup and execution.
 
-Four independent contexts: chat, subagent, subconscious, external_agent.
+Five independent contexts: chat, subagent, subconscious, external_agent, discord.
 Three states: allow (proceed), ask (block for user confirmation), deny (reject).
 """
 
@@ -18,16 +18,17 @@ from services.time_utils import utc_now
 logger = logging.getLogger(__name__)
 
 State = Literal["allow", "ask", "deny"]
-Context = Literal["chat", "subagent", "subconscious", "external_agent"]
+Context = Literal["chat", "subagent", "subconscious", "external_agent", "discord"]
 
 VALID_STATES: set[str] = {"allow", "ask", "deny"}
-VALID_CONTEXTS: set[str] = {"chat", "subagent", "subconscious", "external_agent"}
+VALID_CONTEXTS: set[str] = {"chat", "subagent", "subconscious", "external_agent", "discord"}
 
 USAGE_CLASS_TO_CONTEXT: dict[str, Context] = {
     "chat": "chat",
     "subagent": "subagent",
     "subconscious": "subconscious",
     "external_agent": "external_agent",
+    "discord": "discord",
 }
 
 # ── System tools — always allowed, invisible to PolicyManager UI ─────────────
@@ -192,6 +193,68 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
 }
 
 
+_DISCORD_ALLOW: dict[str, State] = {
+    # Reads
+    "browser.render": "allow", "browser.screenshot": "allow", "browser.monitor": "allow",
+    "calendar.list_events": "allow", "calendar.get_event": "allow",
+    "contacts.list": "allow", "contacts.get": "allow",
+    "document.search": "allow", "document.list": "allow", "document.view": "allow",
+    "email.search": "allow", "email.read": "allow",
+    "find_tools": "allow",
+    "home.get_state": "allow",
+    "home.list_automations": "allow",
+    "home.list_devices": "allow",
+    "home.subscribe_events": "allow",
+    "ubiquiti.list_devices": "allow", "ubiquiti.list_clients": "allow",
+    "ubiquiti.get_info": "allow",
+    "list.list_all": "allow", "list.view": "allow",
+    "memory.recall": "allow", "memory.reflect": "allow",
+    "news": "allow",
+    "programming_docs_search": "allow",
+    "read": "allow",
+    "schedule.list": "allow", "schedule.search": "allow",
+    "search": "allow",
+    "weather": "allow",
+    # Reversible writes
+    "document.create": "allow", "document.restore": "allow",
+    "list.create": "allow", "list.add": "allow", "list.check": "allow",
+    "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
+    "memory.store": "allow",
+    "discord.list_channels": "allow", "discord.list_servers": "allow",
+    "discord.read_messages": "allow", "discord.send_message": "allow",
+}
+
+_DISCORD_DENY: dict[str, State] = {
+    "browser.interact": "deny",
+    "calendar.update_event": "deny",
+    "code_eval": "deny",
+    "document.delete": "deny",
+    "document.upload": "deny",
+    "email.forward": "deny",
+    "email.manage": "deny",
+    "email.reply": "deny",
+    "email.send": "deny",
+    "email.draft": "deny",
+    "home.control": "deny",
+    "home.trigger_automation": "deny",
+    "ubiquiti.control_client": "deny",
+    "ubiquiti.control_device": "deny",
+    "ubiquiti.manage_wlan": "deny",
+    "ubiquiti.manage_port_forward": "deny",
+    "ubiquiti.manage_traffic_rule": "deny",
+    "ubiquiti.authorize_guest": "deny",
+    "list.delete": "deny",
+    "memory.forget": "deny",
+    "schedule.create": "deny",
+    "schedule.cancel": "deny",
+    "subagent": "deny",
+    "place.save": "deny",
+    "place.list": "deny",
+    "place.get": "deny",
+    "place.delete": "deny",
+}
+
+
 def _build_defaults() -> dict[str, dict[Context, State]]:
     """Build the full default matrix from the ability registry."""
     from abilities._registry import AbilityRegistry
@@ -217,6 +280,7 @@ def _build_defaults() -> dict[str, dict[Context, State]]:
             "subagent": _CHAT_ALLOW.get(action_id, _CHAT_ASK.get(action_id, "ask")),
             "subconscious": _SUBCONSCIOUS_ALLOW.get(action_id, "deny"),
             "external_agent": _EXTERNAL_AGENT_ALLOW.get(action_id, _EXTERNAL_AGENT_DENY.get(action_id, "deny")),
+            "discord": _DISCORD_ALLOW.get(action_id, _DISCORD_DENY.get(action_id, "deny")),
         }
     return defaults
 
