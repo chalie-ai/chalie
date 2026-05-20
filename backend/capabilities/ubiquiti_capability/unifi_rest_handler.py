@@ -55,6 +55,10 @@ def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tu
         logger.debug("SSL verification failed for %s, retrying without", url)
         resp = session.post(login_url, json=body, verify=False, timeout=_TIMEOUT)
 
+    if not resp.ok:
+        logger.warning(
+            "[unifi] login %s returned %d: %s", login_url, resp.status_code, resp.text[:300],
+        )
     resp.raise_for_status()
     csrf = resp.headers.get("x-csrf-token", "")
     with _session_lock:

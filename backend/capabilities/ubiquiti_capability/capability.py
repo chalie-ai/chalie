@@ -124,10 +124,17 @@ class UbiquitiCapability(AbstractCapability):
         if auth_method not in ("api_key", "credentials"):
             raise ValueError(f"Unknown authentication method: {auth_method!r}")
 
+        logger.info(
+            "[ubiquiti] configure: url=%s auth=%s site=%s verify_ssl=%r (raw=%r)",
+            url, auth_method, site, verify_ssl, credentials.get("verify_ssl"),
+        )
         try:
             rest.probe(url, site, api_key=api_key, username=username,
                        password=password, verify_ssl=verify_ssl)
         except Exception as exc:
+            logger.warning("[ubiquiti] probe error detail: %s %s", type(exc).__name__, exc)
+            if hasattr(exc, "response") and exc.response is not None:
+                logger.warning("[ubiquiti] response body: %s", exc.response.text[:500])
             raise ValueError(f"[ubiquiti] Connection probe failed: {exc}") from exc
 
         self.store_credential(_K_URL, url)
