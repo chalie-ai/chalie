@@ -58,6 +58,7 @@ class SubagentProcessor(MessageProcessor):
         "review_tool_calls",
         "schedule",
         "search",
+        "ubiquiti",
         "weather",
     ]
 

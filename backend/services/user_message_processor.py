@@ -71,6 +71,7 @@ class UserMessageProcessor(MessageProcessor):
         "programming_docs_search",
         "search",
         "subagent",
+        "ubiquiti",
         "weather",
     ]
 

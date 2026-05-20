@@ -200,7 +200,8 @@ _DEFAULT_ALWAYS = frozenset({
 # DMN, GeoPatternProcessor, SubagentProcessor — they have no user-session GPS.
 _DEFAULT_DISCOVERABLE = frozenset({
     "browser", "calendar", "code_eval", "contacts", "discord", "email", "home",
-    "news", "place", "programming_docs_search", "search", "subagent", "weather",
+    "news", "place", "programming_docs_search", "search", "subagent", "ubiquiti",
+    "weather",
 })
 
 # Capability tools (email/calendar/contacts) are personal-data tools — they

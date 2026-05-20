@@ -65,6 +65,7 @@ class DMNMessageProcessor(MessageProcessor):
         "contacts",
         "email",
         "programming_docs_search",
+        "ubiquiti",
         "weather",
     ]
 
