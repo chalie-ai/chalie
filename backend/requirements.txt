@@ -38,7 +38,6 @@ mcp>=1.24.0
 uvicorn>=0.34.0
 
 geopy>=2.4.0  # reverse-geocoding + distance calculations (client_context_service, scheduler_service)
-discord.py>=2.3.0  # Discord bot integration (discord_capability)
 
 # ── Test dependencies (not needed in production) ──
 pytest>=8.0.0

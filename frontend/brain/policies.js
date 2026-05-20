@@ -78,7 +78,6 @@ const PanelPolicies = (() => {
   };
 
   const _POLICY_CATEGORIES = {
-    'Discord': ['discord.list_servers', 'discord.list_channels', 'discord.read_messages', 'discord.send_message'],
     'Browser': ['browser.interact', 'browser.monitor', 'browser.render', 'browser.screenshot'],
     'Calendar': ['calendar.get_event', 'calendar.list_events', 'calendar.update_event'],
     'Email': ['email.search', 'email.read', 'email.send', 'email.reply', 'email.draft', 'email.forward', 'email.manage'],
@@ -96,7 +95,7 @@ const PanelPolicies = (() => {
     'Subagent': ['subagent'],
   };
 
-  const CONTEXT_MAP = { chat: 'chat', subagent: 'subagent', background: 'subconscious', external: 'external_agent', discord: 'discord' };
+  const CONTEXT_MAP = { chat: 'chat', subagent: 'subagent', background: 'subconscious', external: 'external_agent' };
 
   function mount(root, sub) {
     _root = root;
