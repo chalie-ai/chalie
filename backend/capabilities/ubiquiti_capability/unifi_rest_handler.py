@@ -67,49 +67,20 @@ def _invalidate_session(url: str, username: str = "") -> None:
         _session_cache.pop((url, username), None)
 
 
-# ── Internal request helpers ─────────────────────────────────────────────────
+# ── Core request helper ──────────────────────────────────────────────────────
 
 
-def _get(
-    url: str,
-    path: str,
-    api_key: str | None,
-    username: str | None,
-    password: str | None,
-    verify_ssl: bool,
-) -> requests.Response:
-    full_url = f"{url.rstrip('/')}{path}"
-
-    if api_key:
-        try:
-            resp = requests.get(full_url, headers=_auth_headers(api_key), verify=verify_ssl, timeout=_TIMEOUT)
-        except SSLError:
-            logger.debug("SSL verification failed for %s, retrying without", url)
-            resp = requests.get(full_url, headers=_auth_headers(api_key), verify=False, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        return resp
-
-    session, _ = _get_session(url, username or "", password or "", verify_ssl)
+def _ssl_call(fn, *args, verify_ssl: bool, url: str, **kwargs) -> requests.Response:
+    """Call fn(*args, verify=verify_ssl, **kwargs), retrying with verify=False on SSLError."""
     try:
-        resp = session.get(full_url, headers={"Content-Type": "application/json"}, verify=verify_ssl, timeout=_TIMEOUT)
+        return fn(*args, verify=verify_ssl, **kwargs)
     except SSLError:
         logger.debug("SSL verification failed for %s, retrying without", url)
-        resp = session.get(full_url, headers={"Content-Type": "application/json"}, verify=False, timeout=_TIMEOUT)
-
-    if resp.status_code == 401:
-        _invalidate_session(url, username or "")
-        session, _ = _get_session(url, username or "", password or "", verify_ssl)
-        try:
-            resp = session.get(full_url, headers={"Content-Type": "application/json"}, verify=verify_ssl, timeout=_TIMEOUT)
-        except SSLError:
-            logger.debug("SSL verification failed for %s, retrying without", url)
-            resp = session.get(full_url, headers={"Content-Type": "application/json"}, verify=False, timeout=_TIMEOUT)
-
-    resp.raise_for_status()
-    return resp
+        return fn(*args, verify=False, **kwargs)
 
 
-def _post(
+def _request(
+    method: str,
     url: str,
     path: str,
     api_key: str | None,
@@ -118,78 +89,34 @@ def _post(
     verify_ssl: bool,
     body: dict | None = None,
 ) -> requests.Response:
+    """Single entry point for all HTTP calls; handles SSL fallback and 401 retry."""
     full_url = f"{url.rstrip('/')}{path}"
-    payload = body or {}
+    kwargs: dict = {"timeout": _TIMEOUT}
+    if body is not None or method in ("post", "put"):
+        kwargs["json"] = body or {}
 
     if api_key:
-        try:
-            resp = requests.post(full_url, headers=_auth_headers(api_key), json=payload, verify=verify_ssl, timeout=_TIMEOUT)
-        except SSLError:
-            logger.debug("SSL verification failed for %s, retrying without", url)
-            resp = requests.post(full_url, headers=_auth_headers(api_key), json=payload, verify=False, timeout=_TIMEOUT)
+        fn = getattr(requests, method)
+        resp = _ssl_call(fn, full_url, headers=_auth_headers(api_key), verify_ssl=verify_ssl, url=url, **kwargs)
         resp.raise_for_status()
         return resp
 
-    session, csrf = _get_session(url, username or "", password or "", verify_ssl)
-    headers = {"Content-Type": "application/json", "X-CSRF-Token": csrf}
-    try:
-        resp = session.post(full_url, headers=headers, json=payload, verify=verify_ssl, timeout=_TIMEOUT)
-    except SSLError:
-        logger.debug("SSL verification failed for %s, retrying without", url)
-        resp = session.post(full_url, headers=headers, json=payload, verify=False, timeout=_TIMEOUT)
+    uname = username or ""
+    session, csrf = _get_session(url, uname, password or "", verify_ssl)
+    needs_csrf = method in ("post", "put")
+
+    def _session_call(sess, tok):
+        headers = {"Content-Type": "application/json"}
+        if needs_csrf:
+            headers["X-CSRF-Token"] = tok
+        return _ssl_call(getattr(sess, method), full_url, headers=headers, verify_ssl=verify_ssl, url=url, **kwargs)
+
+    resp = _session_call(session, csrf)
 
     if resp.status_code == 401:
-        _invalidate_session(url, username or "")
-        session, csrf = _get_session(url, username or "", password or "", verify_ssl)
-        headers["X-CSRF-Token"] = csrf
-        try:
-            resp = session.post(full_url, headers=headers, json=payload, verify=verify_ssl, timeout=_TIMEOUT)
-        except SSLError:
-            logger.debug("SSL verification failed for %s, retrying without", url)
-            resp = session.post(full_url, headers=headers, json=payload, verify=False, timeout=_TIMEOUT)
-
-    resp.raise_for_status()
-    return resp
-
-
-def _put(
-    url: str,
-    path: str,
-    api_key: str | None,
-    username: str | None,
-    password: str | None,
-    verify_ssl: bool,
-    body: dict | None = None,
-) -> requests.Response:
-    full_url = f"{url.rstrip('/')}{path}"
-    payload = body or {}
-
-    if api_key:
-        try:
-            resp = requests.put(full_url, headers=_auth_headers(api_key), json=payload, verify=verify_ssl, timeout=_TIMEOUT)
-        except SSLError:
-            logger.debug("SSL verification failed for %s, retrying without", url)
-            resp = requests.put(full_url, headers=_auth_headers(api_key), json=payload, verify=False, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        return resp
-
-    session, csrf = _get_session(url, username or "", password or "", verify_ssl)
-    headers = {"Content-Type": "application/json", "X-CSRF-Token": csrf}
-    try:
-        resp = session.put(full_url, headers=headers, json=payload, verify=verify_ssl, timeout=_TIMEOUT)
-    except SSLError:
-        logger.debug("SSL verification failed for %s, retrying without", url)
-        resp = session.put(full_url, headers=headers, json=payload, verify=False, timeout=_TIMEOUT)
-
-    if resp.status_code == 401:
-        _invalidate_session(url, username or "")
-        session, csrf = _get_session(url, username or "", password or "", verify_ssl)
-        headers["X-CSRF-Token"] = csrf
-        try:
-            resp = session.put(full_url, headers=headers, json=payload, verify=verify_ssl, timeout=_TIMEOUT)
-        except SSLError:
-            logger.debug("SSL verification failed for %s, retrying without", url)
-            resp = session.put(full_url, headers=headers, json=payload, verify=False, timeout=_TIMEOUT)
+        _invalidate_session(url, uname)
+        session, csrf = _get_session(url, uname, password or "", verify_ssl)
+        resp = _session_call(session, csrf)
 
     resp.raise_for_status()
     return resp
@@ -221,12 +148,10 @@ def probe(
 ) -> dict:
     """Health check -- GET /api/ with auth. Returns API root response.
 
-    Raises:
-        ValueError: If the controller is not running UniFi OS (legacy 404).
-        requests.HTTPError: On any non-2xx response.
+    Raises ValueError on legacy 404, requests.HTTPError on other non-2xx.
     """
     try:
-        resp = _get(url, "/api/", api_key, username, password, verify_ssl)
+        resp = _request("get", url, "/api/", api_key, username, password, verify_ssl)
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             raise ValueError(
@@ -245,15 +170,8 @@ def list_devices(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """List all adopted network devices on the site.
-
-    Returns:
-        dict: ``{"devices": [...], "count": N}`` where each device has
-        ``mac``, ``name``, ``model``, ``type``, ``ip``, ``state``, ``uptime``,
-        ``version``. ``state`` is "online" or "offline".
-    """
-    data = _get(url, _site_path(site, "stat/device"), api_key, username, password, verify_ssl).json()
-    raw = data.get("data", [])
+    """List all adopted network devices. Returns ``{"devices": [...], "count": N}``."""
+    raw = _request("get", url, _site_path(site, "stat/device"), api_key, username, password, verify_ssl).json().get("data", [])
     devices = [
         {
             "mac": d.get("mac", ""),
@@ -279,20 +197,12 @@ def list_clients(
     verify_ssl: bool = True,
     active_only: bool = True,
 ) -> dict:
-    """List clients connected to the network.
+    """List clients connected to the network. Returns ``{"clients": [...], "count": N}``.
 
-    Args:
-        active_only: When ``True``, queries ``stat/sta`` (currently associated).
-            When ``False``, queries ``rest/user`` (all known clients).
-
-    Returns:
-        dict: ``{"clients": [...], "count": N}`` where each client has
-        ``mac``, ``name``, ``hostname``, ``ip``, ``network``, ``is_wired``,
-        ``uptime``.
+    active_only=True queries stat/sta (currently associated); False queries rest/user.
     """
     endpoint = "stat/sta" if active_only else "rest/user"
-    data = _get(url, _site_path(site, endpoint), api_key, username, password, verify_ssl).json()
-    raw = data.get("data", [])
+    raw = _request("get", url, _site_path(site, endpoint), api_key, username, password, verify_ssl).json().get("data", [])
     clients = [
         {
             "mac": c.get("mac", ""),
@@ -317,21 +227,15 @@ def get_info(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Get detailed info for a device (by MAC) or site health.
+    """Get site health or full device detail by MAC.
 
-    Args:
-        target: Either ``"health"`` to get subsystem statuses, or a device MAC
-            address to get full device detail.
-
-    Returns:
-        dict: Health subsystem list when ``target == "health"``, or full device
-        detail dict when ``target`` is a MAC.
+    target="health" returns subsystem statuses; any MAC returns the device dict.
     """
     if target == "health":
-        data = _get(url, _site_path(site, "stat/health"), api_key, username, password, verify_ssl).json()
+        data = _request("get", url, _site_path(site, "stat/health"), api_key, username, password, verify_ssl).json()
         return {"health": data.get("data", [])}
 
-    data = _get(url, _site_path(site, "stat/device"), api_key, username, password, verify_ssl).json()
+    data = _request("get", url, _site_path(site, "stat/device"), api_key, username, password, verify_ssl).json()
     mac_lower = target.lower()
     for device in data.get("data", []):
         if device.get("mac", "").lower() == mac_lower:
@@ -350,20 +254,11 @@ def control_client(
     verify_ssl: bool = True,
     **kwargs,
 ) -> dict:
-    """Send a client management command via cmd/stamgr.
+    """Send a client management command (block-sta, unblock-sta, kick-sta, authorize-guest).
 
-    Args:
-        mac: Client MAC address.
-        command: One of ``"block-sta"``, ``"unblock-sta"``, ``"kick-sta"``,
-            ``"authorize-guest"``.
-        **kwargs: Extra command parameters, e.g. for ``authorize-guest``:
-            ``minutes``, ``up``, ``down``, ``bytes``.
-
-    Returns:
-        dict: ``{"status": "ok", "command": command, "mac": mac}``
+    Returns ``{"status": "ok", "command": command, "mac": mac}``.
     """
-    body = {"cmd": command, "mac": mac, **kwargs}
-    _post(url, _site_path(site, "cmd/stamgr"), api_key, username, password, verify_ssl, body)
+    _request("post", url, _site_path(site, "cmd/stamgr"), api_key, username, password, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
     return {"status": "ok", "command": command, "mac": mac}
 
 
@@ -378,20 +273,11 @@ def control_device(
     verify_ssl: bool = True,
     **kwargs,
 ) -> dict:
-    """Send a device management command via cmd/devmgr.
+    """Send a device management command (restart, set-locate, unset-locate, power-cycle).
 
-    Args:
-        mac: Device MAC address.
-        command: One of ``"restart"``, ``"set-locate"``, ``"unset-locate"``,
-            ``"power-cycle"``.
-        **kwargs: Extra command parameters, e.g. for ``power-cycle``:
-            ``port_idx``.
-
-    Returns:
-        dict: ``{"status": "ok", "command": command, "mac": mac}``
+    Returns ``{"status": "ok", "command": command, "mac": mac}``.
     """
-    body = {"cmd": command, "mac": mac, **kwargs}
-    _post(url, _site_path(site, "cmd/devmgr"), api_key, username, password, verify_ssl, body)
+    _request("post", url, _site_path(site, "cmd/devmgr"), api_key, username, password, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
     return {"status": "ok", "command": command, "mac": mac}
 
 
@@ -403,18 +289,11 @@ def list_wlans(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """List all WLAN configurations on the site.
+    """List WLAN configurations. Returns ``{"wlans": [...], "count": N}``.
 
-    The passphrase (``x_passphrase``) is intentionally excluded from the
-    output to avoid leaking credentials into LLM context.
-
-    Returns:
-        dict: ``{"wlans": [...], "count": N}`` where each WLAN has
-        ``_id``, ``name``, ``enabled``, ``security``, ``wpa_mode``,
-        ``hide_ssid``.
+    Passphrase (x_passphrase) is intentionally excluded to avoid LLM credential leakage.
     """
-    data = _get(url, _site_path(site, "rest/wlanconf"), api_key, username, password, verify_ssl).json()
-    raw = data.get("data", [])
+    raw = _request("get", url, _site_path(site, "rest/wlanconf"), api_key, username, password, verify_ssl).json().get("data", [])
     wlans = [
         {
             "_id": w.get("_id", ""),
@@ -439,17 +318,8 @@ def update_wlan(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Update a WLAN configuration.
-
-    Args:
-        wlan_id: The ``_id`` of the WLAN to update.
-        updates: Fields to update, e.g. ``{"enabled": False}``,
-            ``{"x_passphrase": "new-password"}``, ``{"hide_ssid": True}``.
-
-    Returns:
-        dict: ``{"status": "ok", "wlan_id": wlan_id, "updated": [...field names]}``
-    """
-    _put(url, _site_path(site, f"rest/wlanconf/{wlan_id}"), api_key, username, password, verify_ssl, updates)
+    """Update a WLAN configuration. Returns ``{"status": "ok", "wlan_id": wlan_id, "updated": [...]}``."""
+    _request("put", url, _site_path(site, f"rest/wlanconf/{wlan_id}"), api_key, username, password, verify_ssl, updates)
     return {"status": "ok", "wlan_id": wlan_id, "updated": list(updates.keys())}
 
 
@@ -461,15 +331,8 @@ def list_port_forwards(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """List all port forwarding rules on the site.
-
-    Returns:
-        dict: ``{"rules": [...], "count": N}`` where each rule has
-        ``_id``, ``name``, ``enabled``, ``proto``, ``dst_port``, ``fwd``,
-        ``fwd_port``.
-    """
-    data = _get(url, _site_path(site, "rest/portforward"), api_key, username, password, verify_ssl).json()
-    raw = data.get("data", [])
+    """List port forwarding rules. Returns ``{"rules": [...], "count": N}``."""
+    raw = _request("get", url, _site_path(site, "rest/portforward"), api_key, username, password, verify_ssl).json().get("data", [])
     rules = [
         {
             "_id": r.get("_id", ""),
@@ -495,16 +358,8 @@ def update_port_forward(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Update an existing port forwarding rule.
-
-    Args:
-        rule_id: The ``_id`` of the rule to update.
-        updates: Fields to update, e.g. ``{"enabled": False}``.
-
-    Returns:
-        dict: ``{"status": "ok", "rule_id": rule_id, "updated": [...field names]}``
-    """
-    _put(url, _site_path(site, f"rest/portforward/{rule_id}"), api_key, username, password, verify_ssl, updates)
+    """Update an existing port forwarding rule. Returns ``{"status": "ok", "rule_id": rule_id, "updated": [...]}``."""
+    _request("put", url, _site_path(site, f"rest/portforward/{rule_id}"), api_key, username, password, verify_ssl, updates)
     return {"status": "ok", "rule_id": rule_id, "updated": list(updates.keys())}
 
 
@@ -517,18 +372,9 @@ def create_port_forward(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Create a new port forwarding rule.
-
-    Args:
-        rule: Rule definition dict. Required fields typically include
-            ``name``, ``proto``, ``dst_port``, ``fwd``, ``fwd_port``.
-
-    Returns:
-        dict: ``{"status": "ok", "rule": <created rule dict>}``
-    """
-    resp = _post(url, _site_path(site, "rest/portforward"), api_key, username, password, verify_ssl, rule)
-    data = resp.json()
-    created = data.get("data", [{}])
+    """Create a new port forwarding rule. Returns ``{"status": "ok", "rule": <created rule dict>}``."""
+    resp = _request("post", url, _site_path(site, "rest/portforward"), api_key, username, password, verify_ssl, rule)
+    created = resp.json().get("data", [{}])
     return {"status": "ok", "rule": created[0] if created else {}}
 
 
@@ -540,17 +386,8 @@ def list_traffic_rules(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """List traffic rules (firewall policies) on the site.
-
-    Uses the v2 API path: ``/v2/api/site/{site}/trafficrules``.
-
-    Returns:
-        dict: ``{"rules": [...], "count": N}`` where each rule has
-        ``_id``, ``description``, ``enabled``, ``action``,
-        ``matching_target``.
-    """
-    data = _get(url, _v2_path(site, "trafficrules"), api_key, username, password, verify_ssl).json()
-    # v2 API returns a list directly, not wrapped in {"data": [...]}
+    """List traffic rules via v2 API. Returns ``{"rules": [...], "count": N}``."""
+    data = _request("get", url, _v2_path(site, "trafficrules"), api_key, username, password, verify_ssl).json()
     raw = data if isinstance(data, list) else data.get("data", [])
     rules = [
         {
@@ -575,17 +412,6 @@ def update_traffic_rule(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Update a traffic rule.
-
-    Uses the v2 API path: ``/v2/api/site/{site}/trafficrules/{rule_id}``.
-    The controller returns 201 on success.
-
-    Args:
-        rule_id: The ``_id`` of the traffic rule to update.
-        updates: Fields to update, e.g. ``{"enabled": False}``.
-
-    Returns:
-        dict: ``{"status": "ok", "rule_id": rule_id, "updated": [...field names]}``
-    """
-    _put(url, _v2_path(site, f"trafficrules/{rule_id}"), api_key, username, password, verify_ssl, updates)
+    """Update a traffic rule via v2 API. Returns ``{"status": "ok", "rule_id": rule_id, "updated": [...]}``."""
+    _request("put", url, _v2_path(site, f"trafficrules/{rule_id}"), api_key, username, password, verify_ssl, updates)
     return {"status": "ok", "rule_id": rule_id, "updated": list(updates.keys())}
