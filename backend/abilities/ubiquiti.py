@@ -68,8 +68,8 @@ class UbiquitiAbility(Ability):
                 "type": "string",
                 "enum": ["list", "update", "create"],
                 "description": (
-                    "For manage_wlan, manage_port_forward, manage_traffic_rule: "
-                    "'list' to view, 'update' to modify, 'create' to add new."
+                    "For manage_wlan and manage_traffic_rule: 'list' or 'update'. "
+                    "For manage_port_forward: 'list', 'update', or 'create'."
                 ),
             },
             "wlan_id": {

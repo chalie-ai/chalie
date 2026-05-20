@@ -155,7 +155,7 @@ class UbiquitiCapability(AbstractCapability):
         password = self.load_credential(_K_PASSWORD) or None
         site = self.load_credential(_K_SITE) or "default"
         ssl_raw = self.load_credential(_K_VERIFY_SSL)
-        verify_ssl = ssl_raw != "0"
+        verify_ssl = ssl_raw == "1"
 
         self._url = url
         self._auth_method = auth_method
@@ -212,6 +212,8 @@ class UbiquitiCapability(AbstractCapability):
 
     def _do_monitor(self) -> None:
         """Probe the UniFi controller to check liveness."""
+        if not self._url:
+            return
         rest.probe(
             self._url, self._site,
             api_key=self._api_key,
@@ -295,6 +297,10 @@ class UbiquitiCapability(AbstractCapability):
             return err
         mac = params.get("mac", "")
         command = params.get("command", "")
+        if not mac:
+            return {"status": "error", "error": "mac is required for control_client"}
+        if not command:
+            return {"status": "error", "error": "command is required for control_client"}
         extra = {k: v for k, v in params.items() if k not in ("action", "mac", "command")}
         return rest.control_client(
             self._url, self._site, mac, command,
@@ -311,6 +317,10 @@ class UbiquitiCapability(AbstractCapability):
             return err
         mac = params.get("mac", "")
         command = params.get("command", "")
+        if not mac:
+            return {"status": "error", "error": "mac is required for control_device"}
+        if not command:
+            return {"status": "error", "error": "command is required for control_device"}
         extra = {k: v for k, v in params.items() if k not in ("action", "mac", "command")}
         return rest.control_device(
             self._url, self._site, mac, command,
@@ -334,6 +344,8 @@ class UbiquitiCapability(AbstractCapability):
                 password=self._password,
                 verify_ssl=self._verify_ssl,
             )
+        if sub_action != "update":
+            return {"status": "error", "error": f"manage_wlan supports 'list' and 'update', not '{sub_action}'"}
         wlan_id = params.get("wlan_id", "")
         updates = params.get("updates", {})
         return rest.update_wlan(
@@ -389,6 +401,8 @@ class UbiquitiCapability(AbstractCapability):
                 password=self._password,
                 verify_ssl=self._verify_ssl,
             )
+        if sub_action != "update":
+            return {"status": "error", "error": f"manage_traffic_rule supports 'list' and 'update', not '{sub_action}'"}
         rule_id = params.get("rule_id", "")
         updates = params.get("updates", {})
         return rest.update_traffic_rule(
@@ -404,6 +418,8 @@ class UbiquitiCapability(AbstractCapability):
         if err:
             return err
         mac = params.get("mac", "")
+        if not mac:
+            return {"status": "error", "error": "mac is required for authorize_guest"}
         minutes = params.get("minutes", 60)
         up_kbps = params.get("up_kbps")
         down_kbps = params.get("down_kbps")

@@ -14,6 +14,7 @@ Traffic rules path: /v2/api/site/{site}/trafficrules
 """
 
 import logging
+import threading
 
 import requests
 from requests.exceptions import SSLError
@@ -22,9 +23,8 @@ logger = logging.getLogger(__name__)
 
 _TIMEOUT = 15
 
-# Module-level session cache for username/password auth.
-# Keyed by controller URL; values are {"session": requests.Session, "csrf": str}.
-_session_cache: dict[str, dict] = {}
+_session_lock = threading.Lock()
+_session_cache: dict[tuple[str, str], dict] = {}
 
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
@@ -39,9 +39,11 @@ def _auth_headers(api_key: str | None) -> dict:
 
 def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tuple[requests.Session, str]:
     """Return a (session, csrf_token) pair, logging in if no valid session cached."""
-    cached = _session_cache.get(url)
-    if cached:
-        return cached["session"], cached["csrf"]
+    key = (url, username)
+    with _session_lock:
+        cached = _session_cache.get(key)
+        if cached:
+            return cached["session"], cached["csrf"]
 
     session = requests.Session()
     login_url = f"{url.rstrip('/')}/api/auth/login"
@@ -55,12 +57,14 @@ def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tu
 
     resp.raise_for_status()
     csrf = resp.headers.get("x-csrf-token", "")
-    _session_cache[url] = {"session": session, "csrf": csrf}
+    with _session_lock:
+        _session_cache[key] = {"session": session, "csrf": csrf}
     return session, csrf
 
 
-def _invalidate_session(url: str) -> None:
-    _session_cache.pop(url, None)
+def _invalidate_session(url: str, username: str = "") -> None:
+    with _session_lock:
+        _session_cache.pop((url, username), None)
 
 
 # ── Internal request helpers ─────────────────────────────────────────────────
@@ -93,7 +97,7 @@ def _get(
         resp = session.get(full_url, headers={"Content-Type": "application/json"}, verify=False, timeout=_TIMEOUT)
 
     if resp.status_code == 401:
-        _invalidate_session(url)
+        _invalidate_session(url, username or "")
         session, _ = _get_session(url, username or "", password or "", verify_ssl)
         try:
             resp = session.get(full_url, headers={"Content-Type": "application/json"}, verify=verify_ssl, timeout=_TIMEOUT)
@@ -135,7 +139,7 @@ def _post(
         resp = session.post(full_url, headers=headers, json=payload, verify=False, timeout=_TIMEOUT)
 
     if resp.status_code == 401:
-        _invalidate_session(url)
+        _invalidate_session(url, username or "")
         session, csrf = _get_session(url, username or "", password or "", verify_ssl)
         headers["X-CSRF-Token"] = csrf
         try:
@@ -178,7 +182,7 @@ def _put(
         resp = session.put(full_url, headers=headers, json=payload, verify=False, timeout=_TIMEOUT)
 
     if resp.status_code == 401:
-        _invalidate_session(url)
+        _invalidate_session(url, username or "")
         session, csrf = _get_session(url, username or "", password or "", verify_ssl)
         headers["X-CSRF-Token"] = csrf
         try:
@@ -221,12 +225,15 @@ def probe(
         ValueError: If the controller is not running UniFi OS (legacy 404).
         requests.HTTPError: On any non-2xx response.
     """
-    resp = _get(url, "/api/", api_key, username, password, verify_ssl)
-    if resp.status_code == 404:
-        raise ValueError(
-            f"Controller at {url} returned 404 on /api/ -- legacy UniFi controllers "
-            "are not supported. UniFi OS (UDM/UCK-G2-Plus or newer) is required."
-        )
+    try:
+        resp = _get(url, "/api/", api_key, username, password, verify_ssl)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            raise ValueError(
+                f"Controller at {url} returned 404 on /api/ -- legacy UniFi controllers "
+                "are not supported. UniFi OS (UDM/UCK-G2-Plus or newer) is required."
+            ) from exc
+        raise
     return resp.json()
 
 
