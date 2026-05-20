@@ -45,20 +45,27 @@ class ExternalChatMessageProcessor(MessageProcessor):
     CHANNEL = 'discord'
 
     ALWAYS_AVAILABLE: list[str] = [
+        "document",
         "find_tools",
+        "list",
         "memory",
         "read",
+        "review_tool_calls",
+        "review_transcript",
+        "schedule",
     ]
     DISCOVERABLE: list[str] = [
         "browser",
         "calendar",
+        "code_eval",
         "contacts",
-        "document",
         "email",
-        "list",
+        "home",
         "news",
+        "place",
         "programming_docs_search",
         "search",
+        "ubiquiti",
         "weather",
     ]
 

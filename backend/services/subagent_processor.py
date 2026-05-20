@@ -49,7 +49,6 @@ class SubagentProcessor(MessageProcessor):
     DISCOVERABLE: list[str] = [
         "browser",
         "code_eval",
-        "discord",
         "document",
         "list",
         "memory",

@@ -72,7 +72,6 @@ _CHAT_ALLOW: dict[str, State] = {
     "programming_docs_search": "allow",
     "read": "allow",
     "code_eval": "allow",
-    "discord.list_channels": "allow", "discord.list_servers": "allow", "discord.read_messages": "allow",
     "document.upload": "allow",
     "schedule.cancel": "allow", "schedule.create": "allow", "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
@@ -90,7 +89,6 @@ _CHAT_ALLOW: dict[str, State] = {
 _CHAT_ASK: dict[str, State] = {
     "browser.interact": "ask",
     "calendar.update_event": "ask",
-    "discord.send_message": "ask",
     "document.delete": "ask",
     "email.forward": "ask",
     "email.manage": "ask",
@@ -112,7 +110,6 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     # Reads
     "calendar.list_events": "allow", "calendar.get_event": "allow",
     "contacts.list": "allow", "contacts.get": "allow",
-    "discord.list_channels": "allow", "discord.list_servers": "allow", "discord.read_messages": "allow",
     "document.search": "allow", "document.list": "allow", "document.view": "allow",
     "email.search": "allow", "email.read": "allow",
     "find_tools": "allow",
@@ -168,7 +165,6 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
 _EXTERNAL_AGENT_DENY: dict[str, State] = {
     # Sensitive actions — no user to confirm, so deny by default
     "browser.interact": "deny",
-    "discord.send_message": "deny",
     "calendar.update_event": "deny",
     "code_eval": "deny",
     "document.delete": "deny",
@@ -220,8 +216,6 @@ _DISCORD_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
-    "discord.list_channels": "allow", "discord.list_servers": "allow",
-    "discord.read_messages": "allow", "discord.send_message": "allow",
 }
 
 _DISCORD_DENY: dict[str, State] = {
