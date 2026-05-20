@@ -64,6 +64,7 @@ class UserMessageProcessor(MessageProcessor):
         "calendar",
         "code_eval",
         "contacts",
+        "discord",
         "email",
         "home",
         "news",

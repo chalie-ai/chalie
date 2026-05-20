@@ -383,7 +383,7 @@ class SubconsciousWorker:
         for cap in load_capabilities().values():
             if cap.is_connected():
                 cap.monitor()
-                synced.append(cap.NAME)
+                synced.append(cap.get_id())
         return f"synced: {', '.join(synced)}" if synced else "no connected capabilities"
 
     def _step_geo_patterns(self) -> str:

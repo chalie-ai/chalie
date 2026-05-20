@@ -63,6 +63,7 @@ class DMNMessageProcessor(MessageProcessor):
         "calendar",
         "code_eval",
         "contacts",
+        "discord",
         "email",
         "programming_docs_search",
         "ubiquiti",

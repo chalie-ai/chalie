@@ -1,0 +1,22 @@
+id: discord
+name: Discord
+version: 1.0.0
+entry_class: DiscordCapability
+description: Connect to Discord servers as a bot and interact with channels.
+fields:
+  - name: bot_token
+    label: Bot Token
+    type: password
+    required: true
+  - name: system_prompt
+    label: Custom System Prompt
+    type: textarea
+    placeholder: "Optional personality/instructions for Discord interactions"
+  - name: allowed_guilds
+    label: Allowed Servers (Guild IDs)
+    type: text
+    placeholder: "Comma-separated guild IDs (leave empty for all)"
+  - name: allowed_channels
+    label: Allowed Channels (Channel IDs)
+    type: text
+    placeholder: "Comma-separated channel IDs (leave empty for all)"
