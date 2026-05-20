@@ -34,7 +34,7 @@ const BrainSidebar = (() => {
         { id: 'subagent', label: 'Subagent' },
         { id: 'background', label: 'Background' },
         { id: 'external', label: 'External agent' },
-        { id: 'discord', label: 'Discord' },
+        { id: 'discord', label: 'External chat' },
       ]},
     { id: 'mcp', label: 'MCP Server', icon: 'Server', group: 'system' },
   ];

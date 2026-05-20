@@ -29,7 +29,7 @@ const BrainApp = (() => {
     personality: 'Personality', errors: 'Errors', usage: 'Usage',
     all: 'All', pending: 'Pending', fired: 'Fired', failed: 'Failed', cancelled: 'Cancelled',
     active: 'Active', processing: 'Processing', uploads: 'Uploads', deleted: 'Deleted',
-    chat: 'Chat', subagent: 'Subagent', background: 'Background', external: 'External agent', discord: 'Discord',
+    chat: 'Chat', subagent: 'Subagent', background: 'Background', external: 'External agent', discord: 'External chat',
   };
 
   const PANELS = {
