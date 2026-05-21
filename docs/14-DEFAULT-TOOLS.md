@@ -1,6 +1,6 @@
 # First-Party Abilities
 
-These abilities ship with Chalie as `Ability` subclasses under `backend/abilities/` and are invoked in-process via the ACT loop. They form the **discoverable** tier for `UserMessageProcessor` — they are never pre-injected and reach the LLM only when `find_tools` surfaces them for the current turn. A `browser` ability is also present when Playwright dependencies are installed.
+These abilities ship with Chalie as `Ability` subclasses under `backend/abilities/` and are invoked in-process via the ACT loop. Tool tiers are centralised on `MessageProcessor`: `ALWAYS_AVAILABLE` defaults to `["find_tools", "memory"]` and `DISCOVERABLE` defaults to all 20 first-party abilities. Most processors inherit these defaults; subclasses override only where needed (e.g. `_BLOCKED` to exclude specific tools). The `find_tools` tool schema includes a compact index of all discoverable tools (built from each ability's `SEARCH_TOOLTIP`) so the LLM knows what is available before calling it.
 
 See `docs/09-TOOLS.md` for how the always-available and discoverable tiers stack and when each fires.
 
