@@ -398,7 +398,7 @@ _download_voice_models() {
     if [[ -f "$dest" ]] && [[ "$(stat -c%s "$dest" 2>/dev/null || stat -f%z "$dest" 2>/dev/null)" -gt 1024 ]]; then
       return 0
     fi
-    _info "Downloading $label…"
+    _info "Downloading ${label}…"
     if ! curl -fL --progress-bar -o "$dest" "$url"; then
       _warn "$label download failed — voice will be unavailable until you re-run the installer"
       rm -f "$dest"
