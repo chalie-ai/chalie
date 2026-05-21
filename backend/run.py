@@ -318,7 +318,7 @@ def _warmup_models() -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
-    parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
+    parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     args = parser.parse_args()
 

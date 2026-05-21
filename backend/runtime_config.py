@@ -5,7 +5,7 @@ Populated by run.py from CLI args. Any module that needs runtime values
 (port, host) imports this module instead of reading env vars.
 
     import runtime_config
-    port = runtime_config.get("port", 8081)
+    port = runtime_config.get("port", 31025)
 """
 
 _config = {}

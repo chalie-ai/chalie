@@ -30,4 +30,4 @@
 
 - Start: `./run.sh` or `python backend/run.py`
 - Tests: `cd backend && pytest`
-- Default port: 8081
+- Default port: 31025

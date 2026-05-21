@@ -151,19 +151,6 @@ _python_version_ok() {
   [[ "$major" -gt 3 ]] || { [[ "$major" -eq 3 ]] && [[ "$minor" -ge 11 ]]; }
 }
 
-_install_python_macos() {
-  if command -v brew >/dev/null 2>&1; then
-    _info "Installing Python 3.12 via Homebrew…"
-    brew install python@3.12
-  else
-    _error "Python 3.11+ is required but was not found."
-    _error "Install options:"
-    _error "  • Homebrew: https://brew.sh  (then: brew install python@3.12)"
-    _error "  • Direct download: https://www.python.org/downloads/"
-    exit 1
-  fi
-}
-
 _needs_sudo() {
   # Running as root → no sudo needed; otherwise require sudo to be available
   if [[ "$(id -u)" -eq 0 ]]; then
@@ -186,26 +173,6 @@ _run_privileged() {
   fi
 }
 
-_install_python_linux() {
-  local distro
-  distro="$(_detect_linux_distro)"
-  _info "Installing Python 3 via package manager…"
-  case "$distro" in
-    *debian*|*ubuntu*)
-      _run_privileged apt-get update -qq
-      _run_privileged apt-get install -y python3 python3-pip python3-venv
-      ;;
-    *fedora*|*rhel*|*centos*)
-      _run_privileged dnf install -y python3 python3-pip
-      ;;
-    *)
-      _error "Cannot auto-install Python on distro: $distro"
-      _error "Please install Python 3.11+ manually and re-run the installer."
-      exit 1
-      ;;
-  esac
-}
-
 _check_python() {
   _section "Python"
   if _python_version_ok python3; then
@@ -216,22 +183,15 @@ _check_python() {
     return
   fi
 
-  _warn "Python 3.11+ not found. Attempting to install…"
-  local os
-  os="$(_detect_os)"
-  if [[ "$os" == "darwin" ]]; then
-    _install_python_macos
-  else
-    _install_python_linux
-  fi
-
-  if _python_version_ok python3; then
-    PYTHON="$(command -v python3)"
-    _ok "Python installed: $(python3 --version 2>&1)"
-  else
-    _error "Python installation failed. Please install Python 3.11+ and try again."
-    exit 1
-  fi
+  _error "Python 3.11+ is required but was not found."
+  _error "Please install Python 3.11+ and re-run the installer."
+  _error ""
+  _error "Install options:"
+  _error "  • macOS:         brew install python@3.12"
+  _error "  • Debian/Ubuntu: sudo apt-get install python3 python3-pip python3-venv"
+  _error "  • Fedora/RHEL:   sudo dnf install python3 python3-pip"
+  _error "  • Download:      https://www.python.org/downloads/"
+  exit 1
 }
 
 # ─── System Build Dependencies (Linux) ──────────────────────────────────────
@@ -398,7 +358,7 @@ _download_voice_models() {
     if [[ -f "$dest" ]] && [[ "$(stat -c%s "$dest" 2>/dev/null || stat -f%z "$dest" 2>/dev/null)" -gt 1024 ]]; then
       return 0
     fi
-    _info "Downloading $label…"
+    _info "Downloading ${label}…"
     if ! curl -fL --progress-bar -o "$dest" "$url"; then
       _warn "$label download failed — voice will be unavailable until you re-run the installer"
       rm -f "$dest"
@@ -685,7 +645,7 @@ _is_running() {
 }
 
 # Parse --port=N, --port N, --host=H from all arguments
-_port="8081"
+_port="31025"
 _host="0.0.0.0"
 _cmd=""
 _args=()
@@ -759,7 +719,7 @@ case "$_cmd" in
   help|*)
     echo "Usage: chalie [--port=N] [--host=H] [stop|restart|update|status|logs|version]"
     echo ""
-    echo "  chalie                   Start on port 8081 (default)"
+    echo "  chalie                   Start on port 31025 (default)"
     echo "  chalie --port=9000       Start on a custom port"
     echo "  chalie --host=127.0.0.1  Bind to specific address"
     echo "  chalie stop              Stop Chalie"
@@ -800,7 +760,7 @@ _print_success() {
   printf "${_green}${_bold}  ┌─────────────────────────────────────────────┐${_reset}\n"
   printf "${_green}${_bold}  │${_reset}  ${_bold}Chalie is installed!${_reset}                        ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}                                             ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie${_reset}              Start on port 8081    ${_green}${_bold}│${_reset}\n"
+  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie${_reset}              Start on port 31025${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie --port=9000${_reset}  Custom port           ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie stop${_reset}         Stop                  ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie update${_reset}       Update to latest      ${_green}${_bold}│${_reset}\n"

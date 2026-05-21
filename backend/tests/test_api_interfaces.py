@@ -38,7 +38,7 @@ class TestPairingKeyEndpoint:
             instance.generate_pairing_key.return_value = {
                 "pairing_key": "test-key",
                 "host": "localhost",
-                "port": 8081,
+                "port": 31025,
                 "expires_in_seconds": 600,
             }
             resp = authed_client.post('/api/interfaces/pairing-key')

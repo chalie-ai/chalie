@@ -6,14 +6,14 @@
 curl -fsSL https://chalie.ai/install | bash
 ```
 
-Checks for Python 3.9+, downloads the latest release, and opens Chalie at **http://localhost:8081**. No root access required. Everything lives in `~/.chalie/`.
+Checks for Python 3.11+, downloads the latest release, and opens Chalie at **http://localhost:31025**. No root access required. Everything lives in `~/.chalie/`.
 
 ---
 
 ## CLI
 
 ```bash
-chalie               # Start → http://localhost:8081
+chalie               # Start → http://localhost:31025
 chalie --port=9000   # Custom port
 chalie stop
 chalie restart
@@ -26,9 +26,9 @@ chalie logs
 
 ## First Run
 
-1. Open **http://localhost:8081/on-boarding/** and create an account.
+1. Open **http://localhost:31025/on-boarding/** and create an account.
 2. Log in — you land in the chat interface.
-3. Open **http://localhost:8081/brain/** → Settings → Providers → Add Provider and configure an LLM.
+3. Open **http://localhost:31025/brain/** → Settings → Providers → Add Provider and configure an LLM.
 
 See [02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md) for provider details.
 
@@ -76,7 +76,7 @@ Remove the `export PATH="$HOME/.local/bin:$PATH"` line from `~/.bashrc` or `~/.z
 git clone https://github.com/chalie-ai/chalie.git && cd chalie
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r backend/requirements.txt
-python backend/run.py          # http://localhost:8081
+python backend/run.py          # http://localhost:31025
 ```
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.

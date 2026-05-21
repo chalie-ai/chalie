@@ -104,7 +104,7 @@ class InterfaceRegistryService:
         return {
             "pairing_key": raw_key,
             "host": runtime_config.get("host", "0.0.0.0"),
-            "port": runtime_config.get("port", 8081),
+            "port": runtime_config.get("port", 31025),
             "expires_in_seconds": _PAIRING_KEY_TTL,
         }
 

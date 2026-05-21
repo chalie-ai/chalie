@@ -87,7 +87,7 @@ python backend/run.py
 PORT=9000 python backend/run.py
 
 # Run Flask directly for debugging (without background workers)
-cd backend && python -c "from api import create_app; app = create_app(); app.run(host='0.0.0.0', port=8081)"
+cd backend && python -c "from api import create_app; app = create_app(); app.run(host='0.0.0.0', port=31025)"
 ```
 
 ## Code Style

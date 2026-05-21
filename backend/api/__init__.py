@@ -200,7 +200,7 @@ def _init_dashboard_gateway(app):
 
     from runtime_config import get as rc_get
 
-    port = int(rc_get('port', 8081))
+    port = int(rc_get('port', 31025))
 
     # Dashboard DB lives alongside Chalie's data
     data_dir = str(paths.DATA_DIR)

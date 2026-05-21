@@ -26,7 +26,7 @@ ENV DENO_DIR=/tmp/deno
 # so data/ is alongside backend/ and resolves the same way as a local checkout.
 RUN mkdir -p /root/.chalie/app/data
 VOLUME ["/root/.chalie/app/data"]
-EXPOSE 8081
+EXPOSE 31025
 
 # Runtime run.sh flags pass through unchanged via ENTRYPOINT + CMD:
 #   docker run chalieai/chalie                       → uses CMD defaults
@@ -34,4 +34,4 @@ EXPOSE 8081
 #   docker run chalieai/chalie --no-voice            → run.sh --no-voice
 #   docker run chalieai/chalie --host=127.0.0.1      → run.sh --host=127.0.0.1
 ENTRYPOINT ["bash", "/root/.chalie/app/run.sh"]
-CMD ["--port=8081", "--host=0.0.0.0"]
+CMD ["--port=31025", "--host=0.0.0.0"]

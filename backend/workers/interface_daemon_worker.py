@@ -174,7 +174,7 @@ def interface_daemon_worker():
             time.sleep(3600)
 
     # Gateway URL is Chalie's own address (daemons register via POST /register)
-    port = runtime_config.get("port", 8081)
+    port = runtime_config.get("port", 31025)
     gateway_url = f"http://127.0.0.1:{port}"
 
     logger.info("[DaemonWatcher] Watching %s (gateway=%s)", interfaces_dir, gateway_url)

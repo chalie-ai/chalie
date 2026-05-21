@@ -50,13 +50,13 @@ For scripting and automation.
 
 **List providers**
 ```bash
-curl http://localhost:8081/providers \
+curl http://localhost:31025/providers \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
 **Create provider**
 ```bash
-curl -X POST http://localhost:8081/providers \
+curl -X POST http://localhost:31025/providers \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{"name": "my-claude", "platform": "anthropic", "model": "claude-haiku-4-5-20251001", "api_key": "sk-ant-..."}'
@@ -64,13 +64,13 @@ curl -X POST http://localhost:8081/providers \
 
 **Delete provider**
 ```bash
-curl -X DELETE http://localhost:8081/providers/{id} \
+curl -X DELETE http://localhost:31025/providers/{id} \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
 **Assign provider to a job**
 ```bash
-curl -X PUT http://localhost:8081/providers/jobs/frontal-cortex \
+curl -X PUT http://localhost:31025/providers/jobs/frontal-cortex \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{"provider_id": 1}'
 ```
