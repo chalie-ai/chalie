@@ -146,11 +146,11 @@ const PanelCognition = (() => {
     </div>
     ${_memoryRecords.length === 0 ? '<div class="empty-state"><p>No records found.</p></div>' : `
     <table class="records-table">
-      <thead><tr><th>Created</th><th>Last Accessed</th><th>Key</th><th>Value</th></tr></thead>
+      <thead><tr><th>Created</th><th>Last Accessed</th><th>${_memorySource === 'episodes' ? 'Location' : 'Key'}</th><th>Value</th></tr></thead>
       <tbody>${_memoryRecords.map(r => `<tr>
         <td>${BrainApp.formatDate(r.created)}</td>
         <td>${BrainApp.formatDate(r.last_accessed)}</td>
-        <td class="key-cell">${BrainApp.escapeHtml(r.key || '')}</td>
+        <td class="key-cell">${BrainApp.escapeHtml(_memorySource === 'episodes' ? (r.location || '') : (r.key || ''))}</td>
         <td class="val-cell">${BrainApp.escapeHtml(r.value || '')}</td>
       </tr>`).join('')}</tbody>
     </table>

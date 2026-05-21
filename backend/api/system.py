@@ -232,7 +232,7 @@ def observability_records():
         if source == 'episodes':
             rows = db.fetch_all(
                 "SELECT created_at AS created, last_accessed_at AS last_accessed, "
-                "id AS key, gist AS value "
+                "gist AS value, location_name "
                 "FROM episodes "
                 "WHERE deleted_at IS NULL "
                 "AND (? = '' OR gist LIKE ?) "
@@ -254,18 +254,22 @@ def observability_records():
             )
 
         rows = rows or []
+        serialised = []
+        for r in rows:
+            row = {
+                'created': r['created'],
+                'last_accessed': r['last_accessed'],
+                'value': r['value'],
+            }
+            if source == 'episodes':
+                row['location'] = r.get('location_name') or ''
+            else:
+                row['key'] = r['key']
+            serialised.append(row)
         return jsonify({
             'generated_at': _now_iso(),
             'source': source,
-            'rows': [
-                {
-                    'created': r['created'],
-                    'last_accessed': r['last_accessed'],
-                    'key': r['key'],
-                    'value': r['value'],
-                }
-                for r in rows
-            ],
+            'rows': serialised,
             'offset': offset,
             'limit': _RECORDS_LIMIT,
             'returned': len(rows),
