@@ -1,150 +1,93 @@
-"""Personality service — 5-axis slider corpus powering Chalie's voice.
+"""Personality service — 5-axis voice corpus singleton.
 
-Corpus: voices.jsonl (3,125 rows).  Slider axes (in order):
-  warmth, mood, expressiveness, curiosity, humor
-Each step ∈ {-2, -1, 0, +1, +2}.  Neutral = (0, 0, 0, 0, 0).
-
-The loaded index is a module-level dict keyed by 5-tuple so lookups are O(1)
-after the one-time JSONL scan.  The pattern mirrors _get_lut_conn() in
-data_graph_service — double-checked lock, lazy on first call, graceful None
-on missing file.
+``personality_service.get_voice()`` is the only call site that matters.
+Cached after first read; invalidated on ``set_tuple()``.
 """
 
 import json
 import logging
 import os
-import threading
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-NEUTRAL_TUPLE: tuple[int, int, int, int, int] = (0, 0, 0, 0, 0)
-SLIDER_ORDER: tuple[str, ...] = ('warmth', 'mood', 'expressiveness', 'curiosity', 'humor')
-
+NEUTRAL: tuple[int, int, int, int, int] = (0, 0, 0, 0, 0)
+SLIDER_ORDER = ('warmth', 'mood', 'expressiveness', 'curiosity', 'humor')
 _VOICES_PATH = os.path.join(os.path.dirname(__file__), 'voices.jsonl')
 
-_voices_index: Optional[dict[tuple[int, int, int, int, int], str]] = None
-_voices_lock = threading.Lock()
-_voices_loaded: bool = False
 
+class PersonalityService:
 
-def _load_voices() -> None:
-    """Read voices.jsonl once and populate the module-level index.
+    def __init__(self) -> None:
+        self._index = self._load_index()
+        self._voice: str | None = None
+        self._tuple: tuple[int, int, int, int, int] | None = None
 
-    Called inside the double-checked lock — never call directly.
-    """
-    global _voices_index
-    index: dict[tuple[int, int, int, int, int], str] = {}
-    try:
-        with open(_VOICES_PATH, 'r', encoding='utf-8') as fh:
-            for lineno, raw in enumerate(fh, 1):
-                raw = raw.strip()
-                if not raw:
-                    continue
-                try:
-                    obj = json.loads(raw)
-                    tup = tuple(obj['tuple'])
-                    if len(tup) != 5:
-                        logger.warning("[PERSONALITY] voices.jsonl line %d: tuple length %d (expected 5)", lineno, len(tup))
-                        continue
-                    index[tup] = obj['voice']
-                except Exception as exc:
-                    logger.warning("[PERSONALITY] voices.jsonl line %d parse error: %s", lineno, exc)
-        logger.info("[PERSONALITY] voices.jsonl loaded: %d entries", len(index))
-    except Exception as exc:
-        logger.warning("[PERSONALITY] Failed to load voices.jsonl: %s", exc)
-    _voices_index = index
+    def get_voice(self) -> str:
+        if self._voice is not None:
+            return self._voice
+        self._tuple = self._read_tuple()
+        self._voice = self._index.get(self._tuple) or self._index.get(
+            NEUTRAL, "Engage naturally as a peer.",
+        )
+        return self._voice
 
+    def get_tuple(self) -> tuple[int, int, int, int, int]:
+        if self._tuple is not None:
+            return self._tuple
+        self.get_voice()
+        return self._tuple
 
-def _get_index() -> dict[tuple[int, int, int, int, int], str]:
-    """Return the voice index, loading it on the first call.
-
-    A successful load marks the module loaded and future calls skip the lock.
-    A failed load (missing file, permission error, empty corpus) leaves
-    ``_voices_loaded`` False so the next call retries — operators who notice
-    the warning in logs can fix the asset and resume without restarting.
-    """
-    global _voices_loaded
-    if _voices_loaded:
-        return _voices_index or {}
-    with _voices_lock:
-        if _voices_loaded:
-            return _voices_index or {}
-        _load_voices()
-        if _voices_index:
-            _voices_loaded = True
-        else:
-            logger.error("[PERSONALITY] voices.jsonl produced an empty index — will retry on next call")
-    return _voices_index or {}
-
-
-def get_voice(tup: tuple[int, int, int, int, int]) -> str:
-    """Return the voice paragraph for *tup*, falling back to neutral.
-
-    The neutral fallback is defensive — the full corpus covers every valid
-    combination so a miss should not occur in practice.
-    """
-    index = _get_index()
-    voice = index.get(tup)
-    if voice is not None:
-        return voice
-    logger.warning("[PERSONALITY] Tuple %s not found in index — using neutral fallback", tup)
-    return index.get(NEUTRAL_TUPLE, "Engage naturally as a peer.")
-
-
-def get_current_tuple() -> tuple[int, int, int, int, int]:
-    """Read the current personality tuple from settings.
-
-    Returns ``NEUTRAL_TUPLE`` on missing or invalid data.
-    """
-    try:
+    def set_tuple(self, tup: tuple[int, int, int, int, int]) -> str:
+        if len(tup) != 5 or any(v not in range(-2, 3) for v in tup):
+            raise ValueError(f"Invalid personality tuple: {tup}")
         from services.database_service import get_shared_db_service
         from services.settings_service import SettingsService
+        SettingsService(get_shared_db_service()).set('personality', json.dumps(list(tup)))
+        self._tuple = tup
+        self._voice = self._index.get(tup) or self._index.get(
+            NEUTRAL, "Engage naturally as a peer.",
+        )
+        return self._voice
 
-        db = get_shared_db_service()
-        raw = SettingsService(db).get('personality')
-        if not raw:
-            return NEUTRAL_TUPLE
-        parsed = json.loads(raw)
-        if not isinstance(parsed, list) or len(parsed) != 5:
-            return NEUTRAL_TUPLE
-        steps = tuple(int(v) for v in parsed)
-        if any(v not in (-2, -1, 0, 1, 2) for v in steps):
-            return NEUTRAL_TUPLE
-        return steps
-    except Exception as exc:
-        logger.debug("[PERSONALITY] get_current_tuple error: %s", exc)
-        return NEUTRAL_TUPLE
+    def invalidate(self) -> None:
+        self._voice = None
+        self._tuple = None
+
+    def voice_for(self, tup: tuple[int, int, int, int, int]) -> str:
+        """Lookup by arbitrary tuple — used by corpus tests only."""
+        return self._index.get(tup) or self._index.get(
+            NEUTRAL, "Engage naturally as a peer.",
+        )
+
+    def _read_tuple(self) -> tuple[int, int, int, int, int]:
+        try:
+            from services.database_service import get_shared_db_service
+            from services.settings_service import SettingsService
+            raw = SettingsService(get_shared_db_service()).get('personality')
+            if raw:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list) and len(parsed) == 5:
+                    return tuple(int(v) for v in parsed)
+        except Exception:
+            pass
+        return NEUTRAL
+
+    @staticmethod
+    def _load_index() -> dict[tuple, str]:
+        index: dict[tuple, str] = {}
+        try:
+            with open(_VOICES_PATH, 'r', encoding='utf-8') as fh:
+                for raw in fh:
+                    raw = raw.strip()
+                    if raw:
+                        obj = json.loads(raw)
+                        tup = tuple(obj['tuple'])
+                        if len(tup) == 5:
+                            index[tup] = obj['voice']
+            logger.info("[PERSONALITY] Loaded %d voices", len(index))
+        except Exception as exc:
+            logger.warning("[PERSONALITY] Failed to load voices.jsonl: %s", exc)
+        return index
 
 
-def get_current_voice() -> str:
-    """Return the voice paragraph for the currently persisted personality."""
-    return get_voice(get_current_tuple())
-
-
-def set_current_tuple(tup: tuple[int, int, int, int, int]) -> str:
-    """Validate, persist, and return the voice paragraph for *tup*.
-
-    Args:
-        tup: 5-tuple of ints, each ∈ {-2, -1, 0, +1, +2}.
-
-    Returns:
-        The voice paragraph string corresponding to *tup*.
-
-    Raises:
-        ValueError: If *tup* is not a 5-tuple or any step is out of range.
-    """
-    if len(tup) != 5:
-        raise ValueError(f"Personality tuple must have exactly 5 elements, got {len(tup)}")
-    for i, step in enumerate(tup):
-        if isinstance(step, bool) or not isinstance(step, int) or step not in (-2, -1, 0, 1, 2):
-            raise ValueError(
-                f"Step {i} ({SLIDER_ORDER[i]}) = {step!r} is out of range; "
-                f"must be one of -2, -1, 0, 1, 2"
-            )
-    from services.database_service import get_shared_db_service
-    from services.settings_service import SettingsService
-
-    db = get_shared_db_service()
-    SettingsService(db).set('personality', json.dumps(list(tup)))
-    return get_voice(tup)
+personality_service = PersonalityService()

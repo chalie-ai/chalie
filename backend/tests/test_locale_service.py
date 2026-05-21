@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 
 def _seed_telemetry(db, **kwargs):
     """Insert locale fields into the real telemetry table."""
+    from services.heartbeat_service import heartbeat_service
+    heartbeat_service._ctx = None
     db.execute("DELETE FROM telemetry")
     for key, value in kwargs.items():
         db.execute(

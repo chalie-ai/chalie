@@ -23,10 +23,10 @@ def get_personality():
         {"tuple": [w, m, e, c, h], "voice": "..."}
     """
     try:
-        from services.personality.personality_service import get_current_tuple, get_current_voice
+        from services.personality.personality_service import personality_service
 
-        tup = get_current_tuple()
-        return jsonify({"tuple": list(tup), "voice": get_current_voice()}), 200
+        tup = personality_service.get_tuple()
+        return jsonify({"tuple": list(tup), "voice": personality_service.get_voice()}), 200
     except Exception as exc:
         logger.error("[REST API] Failed to get personality: %s", exc)
         return jsonify({"error": "Failed to get personality"}), 500
@@ -62,9 +62,9 @@ def set_personality():
         if not all(isinstance(v, int) and not isinstance(v, bool) for v in raw):
             return jsonify({"error": "All tuple elements must be integers"}), 400
 
-        from services.personality.personality_service import set_current_tuple
+        from services.personality.personality_service import personality_service
 
-        voice = set_current_tuple(tuple(raw))
+        voice = personality_service.set_tuple(tuple(raw))
         return jsonify({"tuple": raw, "voice": voice}), 200
     except ValueError as exc:
         logger.warning("[REST API] Personality validation error: %s", exc)

@@ -214,11 +214,11 @@ class UserMessageProcessor(MessageProcessor):
         stable Identity/Boundaries/Principles prefix follows, keeping the bulk
         of the prompt hot in the provider's prompt cache.
         """
-        from services.personality.personality_service import get_current_voice
+        from services.personality.personality_service import personality_service
 
         template = self.SYSTEM_PROMPT_CLASS().get_prompt()
 
-        voice_line = f"When responding; {get_current_voice()}"
+        voice_line = f"When responding; {personality_service.get_voice()}"
         prompt = f"{voice_line}\n\n{template}"
 
         # Mode-state-driven steering directives. The mode gate owns the

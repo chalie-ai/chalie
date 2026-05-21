@@ -336,20 +336,15 @@ def observability_token_usage():
 @require_session
 def observability_world_state():
     """World state as seen by the ACT loop — rendered block + raw inputs."""
-    from services.world_state import (
-        world_state,
-        _fetch_schedule_rows,
-        _fetch_bg_process_rows,
-        _fetch_telemetry,
-    )
+    from services.world_state import world_state, _fetch_schedule_rows
+    from services.heartbeat_service import heartbeat_service
 
     return jsonify({
         "rendered": world_state.render(),
         "inputs": {
-            "telemetry": _fetch_telemetry(),
+            "telemetry": heartbeat_service.read(),
             "signals": world_state.get("signals"),
             "schedule": _fetch_schedule_rows(),
-            "bg_processes": _fetch_bg_process_rows(),
         },
     }), 200
 

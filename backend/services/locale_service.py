@@ -17,7 +17,6 @@ import logging
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from services.database_service import get_shared_db_service
 from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
@@ -29,34 +28,31 @@ _LOCALE_KEYS = frozenset({
 
 
 def _read_locale_fields() -> dict:
-    """Read locale-relevant rows from the telemetry table.
+    """Extract locale-relevant fields from the telemetry cache.
 
     Returns a flat dict with keys like 'timezone', 'locale', 'location.lat'.
-    Returns empty dict gracefully when the table doesn't exist (fresh boot,
-    test harness) or when no heartbeat has been received yet.
+    Returns empty dict when no heartbeat has been received yet.
     """
-    import json
-
     try:
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            try:
-                placeholders = ",".join(f"'{k}'" for k in _LOCALE_KEYS)
-                cursor.execute(f"SELECT key, value FROM telemetry WHERE key IN ({placeholders})")
-                rows = cursor.fetchall()
-            finally:
-                cursor.close()
+        from services.heartbeat_service import heartbeat_service
+        ctx = heartbeat_service.read()
+        if not ctx:
+            return {}
+        result = {}
+        for key in _LOCALE_KEYS:
+            parts = key.split(".")
+            value = ctx
+            for part in parts:
+                if isinstance(value, dict):
+                    value = value.get(part)
+                else:
+                    value = None
+                    break
+            if value is not None:
+                result[key] = value
+        return result
     except Exception:
         return {}
-
-    result = {}
-    for key, raw_value in rows:
-        try:
-            result[key] = json.loads(raw_value)
-        except (TypeError, ValueError):
-            result[key] = raw_value
-    return result
 
 
 def get_timezone() -> ZoneInfo:
