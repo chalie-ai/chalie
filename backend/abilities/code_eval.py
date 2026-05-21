@@ -80,12 +80,12 @@ class CodeEvalAbility(Ability):
         code = (params.get("code") or "").strip()
 
         if not code:
-            return {"error": "No code provided", "text": ""}
+            return {"text": "No code provided"}
 
         try:
             byte_code = compile_restricted(code, filename="<scratchpad>", mode="exec")
         except SyntaxError as exc:
-            return {"text": "", "error": f"Syntax error: {exc}"}
+            return {"text": f"Syntax error: {exc}"}
 
         # Fresh globals copy per call so state never leaks between executions.
         exec_globals = dict(self._RESTRICTED_GLOBALS)
@@ -98,8 +98,8 @@ class CodeEvalAbility(Ability):
             captured = collector() if collector is not None else ""
             error_msg = f"{type(exc).__name__}: {exc}"
             text = f"{captured}{error_msg}".strip() if captured else error_msg
-            return {"text": text, "error": error_msg}
+            return {"text": text}
 
         collector = exec_locals.get("_print")
         captured = collector() if collector is not None else ""
-        return {"text": captured, "error": ""}
+        return {"text": captured or "(no output — wrap your result in print() to emit it)"}
