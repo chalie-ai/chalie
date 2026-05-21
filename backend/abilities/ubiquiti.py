@@ -15,22 +15,27 @@ logger = logging.getLogger(__name__)
 
 class UbiquitiAbility(Ability):
     NAME = "ubiquiti"
-    SEARCH_TOOLTIP = "UniFi network control"
+    SEARCH_TOOLTIP = (
+        "UniFi router & WiFi network control: list/block clients, manage SSIDs, "
+        "restart access points, port forwarding, traffic rules, guest authorization"
+    )
     SUMMARY = (
-        "Control and monitor a UniFi network: list devices and connected clients, "
-        "get device info and site health, block or disconnect clients, restart or "
-        "locate devices, manage WiFi networks and port forwarding, toggle traffic "
-        "rules, and authorize guest access."
+        "Control and monitor a UniFi network via the Ubiquiti/UniFi controller: "
+        "list UniFi hardware devices (access points, switches, routers) and connected "
+        "WiFi/LAN clients, get site health and device info, block/unblock/kick clients "
+        "by MAC address, restart or locate access points, manage SSIDs and WiFi "
+        "passwords, set up port forwarding rules, toggle traffic rules, and authorize "
+        "guest WiFi sessions."
     )
     EXAMPLES = [
-        "What UniFi devices are on my network?",
-        "Show me who's connected to the WiFi",
+        "What UniFi network devices do I have?",
+        "Which devices are connected to my network right now?",
         "Block that unknown device on my network",
-        "Restart the office access point",
-        "Disable the guest WiFi",
-        "Is my network healthy?",
-        "Enable port forwarding for the game server",
-        "Authorize this device as a guest for 2 hours",
+        "Disable my guest WiFi network",
+        "Kick this client off the WiFi — disconnect that MAC from the router",
+        "Restart the access point in the office and check UniFi site health",
+        "Set up port forwarding for port 25565 on the UniFi router",
+        "Authorize this MAC address on the guest SSID for 2 hours",
     ]
     INPUT_SCHEMA = {
         "type": "object",

@@ -180,27 +180,18 @@ def test_abilities_directory_has_expected_non_underscore_modules():
 # model hallucinations in nightly run 346.
 
 _DEFAULT_ALWAYS = frozenset({
-    "document", "find_tools", "list", "memory",
-    "read", "review_tool_calls", "review_transcript", "schedule", "timer",
+    "find_tools", "memory",
 })
 
-# `subagent` is discoverable in UMP only — DMN/Scheduled/Subagent processors
-# must not spawn further subagents, so they subtract it explicitly. Listing it
-# here keeps the leak-check honest: any processor that pre-injects `subagent`
-# into ALWAYS_AVAILABLE will trip the assertion in
-# test_per_processor_tool_scope_matches_spec.
-#
-# email/calendar/contacts are discoverable in UMP (personal data tools) and
-# DMN (background research may need calendar/contacts context), but NOT in
-# Scheduled or Subagent processors — those run headless without personal
-# data access.
-#
-# `place` is discoverable in UMP (user-initiated GPS tagging). Excluded from
-# DMN, GeoPatternProcessor, SubagentProcessor — they have no user-session GPS.
+# All tools live in the base DISCOVERABLE list. `subagent` is discoverable in
+# UMP only — DMN/Subagent processors block it via _BLOCKED to prevent nested
+# spawning. email/calendar/contacts are capability tools excluded from headless
+# processors. `place` is user-initiated only (excluded from DMN/Subagent).
 _DEFAULT_DISCOVERABLE = frozenset({
-    "browser", "calendar", "code_eval", "contacts", "email", "home",
-    "news", "place", "programming_docs_search", "search", "subagent", "ubiquiti",
-    "weather",
+    "browser", "calendar", "code_eval", "contacts", "document",
+    "email", "home", "list", "news", "place", "programming_docs_search", "read",
+    "review_tool_calls", "review_transcript", "schedule", "search", "subagent",
+    "timer", "ubiquiti", "weather",
 })
 
 # Capability tools (email/calendar/contacts) are personal-data tools — they
@@ -210,24 +201,15 @@ _CAPABILITY_TOOLS = frozenset({"email", "calendar", "contacts"})
 
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
-    # DMN has news, search, browser natively per masterplan §4 — no find_tools round-trip.
-    # `timer` is dropped: DMN runs in the background without a user-channel
-    # surface, so the rich-media card would never render. `subagent` is
-    # excluded everywhere except UMP so background processes cannot spawn
-    # nested subagents. email/calendar/contacts remain discoverable for DMN
-    # — background reflection needs access to personal data context.
-    # `place` is excluded from DMN: geo-tagging is user-initiated only.
-    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
-                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent", "home", "place"}),
+    # DMN inherits base ALWAYS_AVAILABLE + DISCOVERABLE; _BLOCKED={subagent}
+    # filters subagent out of discovery at query time.
+    "DMNMessageProcessor":       (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
     # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
-    # the class-level attribute is [] (empty). The per-instance value is
-    # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
-    # Subagent does not get capability tools — subagents are task-scoped, not
-    # user-personal-data-scoped. `place` excluded: GPS context is user-session only.
-    "SubagentProcessor":         (frozenset(), frozenset(
-        (set(_DEFAULT_DISCOVERABLE) - {"subagent", "home", "place"} - _CAPABILITY_TOOLS)
-        | {"document", "list", "memory", "read", "review_tool_calls", "schedule"}
-    )),
+    # the class-level attribute inherits base (find_tools, memory). The per-instance
+    # value is verified separately in
+    # test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
+    # Inherits DISCOVERABLE from base; _BLOCKED={subagent} filters at query time.
+    "SubagentProcessor":         (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
     # PMP owns save_pattern + save_graph; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # GeoPatternProcessor owns save_pattern + save_graph (same innate as PMP);
