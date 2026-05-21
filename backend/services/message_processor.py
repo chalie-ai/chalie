@@ -383,14 +383,11 @@ class MessageProcessor:
             for tool_name in self.ALWAYS_AVAILABLE:
                 try:
                     ability = AbilityRegistry.get(tool_name)
-                    schema = {
+                    native.append({
                         'name': ability.NAME,
                         'description': ability.SUMMARY,
                         'input_schema': ability.INPUT_SCHEMA,
-                    }
-                    if ability.NAME == 'find_tools' and self.DISCOVERABLE:
-                        schema = self._enrich_find_tools_schema(schema)
-                    native.append(schema)
+                    })
                 except KeyError:
                     logger.warning(
                         "[MessageProcessor.get_tools] No ability registered for '%s'",
@@ -408,32 +405,6 @@ class MessageProcessor:
                 result.append(schema)
 
         return result
-
-    def _enrich_find_tools_schema(self, schema: dict) -> dict:
-        """Inject a discoverable-tools index into find_tools' query description."""
-        from abilities._registry import AbilityRegistry
-        import copy
-
-        index = {}
-        for name in self.DISCOVERABLE:
-            if name in self._BLOCKED:
-                continue
-            try:
-                ability = AbilityRegistry.get(name)
-                tooltip = getattr(ability, 'SEARCH_TOOLTIP', '') or ability.SUMMARY
-                index[name] = tooltip
-            except KeyError:
-                pass
-
-        if not index:
-            return schema
-
-        schema = copy.deepcopy(schema)
-        tools_index = ", ".join(f"`{k}` ({v})" for k, v in index.items())
-        schema['input_schema']['properties']['query']['description'] = (
-            f"Specify the tool name you need. Tools index: {tools_index}"
-        )
-        return schema
 
     def get_act_loop_trail(self) -> str:
         """Return the ACT loop trail as a single string for prompt injection.
