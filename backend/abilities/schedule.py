@@ -102,6 +102,7 @@ def query_items(
 
 class ScheduleAbility(Ability):
     NAME = "schedule"
+    SEARCH_TOOLTIP = "reminders and scheduled tasks"
     SUMMARY = (
         "Create, list, or cancel persistent reminders and recurring prompts at a "
         "specific calendar date/time, with optional destination for departure reminders. "

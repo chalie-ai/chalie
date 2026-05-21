@@ -27,6 +27,7 @@ _RICH_MEDIA_INSTRUCTION = (
 
 class CalendarAbility(Ability):
     NAME = "calendar"
+    SEARCH_TOOLTIP = "calendar events"
     SUMMARY = (
         "List, view, and update calendar events from the connected CalDAV account. "
         "Available when the user asks about meetings, appointments, or schedule."

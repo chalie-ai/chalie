@@ -18,7 +18,8 @@ KNN_DEPTH = 30
 
 class FindToolsAbility(Ability):
     NAME = "find_tools"
-    SUMMARY = "Semantic search to discover tools or capabilities not in your current toolbox."
+    SEARCH_TOOLTIP = "discover available tools"
+    SUMMARY = "Use this tool to expose more tools and capabilities."
     EXAMPLES = [
         "I want to check if Apple's Q2 earnings report is out yet",
         "can you look up a flight for me",

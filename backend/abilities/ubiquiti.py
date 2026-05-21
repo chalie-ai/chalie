@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class UbiquitiAbility(Ability):
     NAME = "ubiquiti"
+    SEARCH_TOOLTIP = "UniFi network control"
     SUMMARY = (
         "Control and monitor a UniFi network: list devices and connected clients, "
         "get device info and site health, block or disconnect clients, restart or "

@@ -32,6 +32,7 @@ LOG_PREFIX = "[MEMORY]"
 
 class MemoryAbility(Ability):
     NAME = "memory"
+    SEARCH_TOOLTIP = "personal memory store"
     SUMMARY = "Store, recall, or forget first-party facts about the user — traits, preferences, relationships, goals, and habits."
     EXAMPLES = [
         "please remember that my wifi password is BlueSky42",

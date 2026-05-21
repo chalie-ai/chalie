@@ -148,12 +148,35 @@ class MessageProcessor:
     # subconscious traffic in the cognition usage dashboard.
     USAGE_CLASS: str = 'chat'
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
-    # Ability names pre-injected as native tools on every ACT iteration.
-    ALWAYS_AVAILABLE: list[str] = []
-    # Ability names ``find_tools`` may surface for this processor at runtime.
-    # ``find_tools`` itself is gated to ``WHERE name IN DISCOVERABLE`` so a
+    ALWAYS_AVAILABLE: list[str] = [
+        "find_tools",
+        "memory",
+    ]
+    # ``find_tools`` is gated to ``WHERE name IN DISCOVERABLE`` so a
     # processor can never discover anything outside this list.
-    DISCOVERABLE: list[str] = []
+    DISCOVERABLE: list[str] = [
+        "browser",
+        "calendar",
+        "code_eval",
+        "contacts",
+        "document",
+        "email",
+        "home",
+        "list",
+        "news",
+        "place",
+        "programming_docs_search",
+        "read",
+        "review_tool_calls",
+        "review_transcript",
+        "schedule",
+        "search",
+        "subagent",
+        "timer",
+        "ubiquiti",
+        "weather",
+    ]
+    _BLOCKED: frozenset[str] = frozenset()
     MAX_ITERATIONS: int = 30
     ITERATION_TIMEOUT: int = 1800  # seconds — per-iteration safety wall (independent of ACT loop budget)
     THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
@@ -275,11 +298,12 @@ class MessageProcessor:
     def get_dynamic_tools(self) -> list[dict]:
         """Return tool schemas discovered during this turn via find_tools.
 
-        Default returns self._discovered_tools directly (identity — subclasses
-        that mutate the list during a turn see the mutations reflected here).
-        Subclasses may override to filter, replace, or suppress.
+        Filters out ``_BLOCKED`` names so blocked tools never enter the
+        toolbox even if ``find_tools`` matched them.
         """
-        return self._discovered_tools
+        if not self._BLOCKED:
+            return self._discovered_tools
+        return [t for t in self._discovered_tools if t.get('name') not in self._BLOCKED]
 
     # ── Final (concrete on base) ──────────────────────────────────────────────
 
@@ -359,11 +383,14 @@ class MessageProcessor:
             for tool_name in self.ALWAYS_AVAILABLE:
                 try:
                     ability = AbilityRegistry.get(tool_name)
-                    native.append({
+                    schema = {
                         'name': ability.NAME,
                         'description': ability.SUMMARY,
                         'input_schema': ability.INPUT_SCHEMA,
-                    })
+                    }
+                    if ability.NAME == 'find_tools' and self.DISCOVERABLE:
+                        schema = self._enrich_find_tools_schema(schema)
+                    native.append(schema)
                 except KeyError:
                     logger.warning(
                         "[MessageProcessor.get_tools] No ability registered for '%s'",
@@ -381,6 +408,32 @@ class MessageProcessor:
                 result.append(schema)
 
         return result
+
+    def _enrich_find_tools_schema(self, schema: dict) -> dict:
+        """Inject a discoverable-tools index into find_tools' query description."""
+        from abilities._registry import AbilityRegistry
+        import copy
+
+        index = {}
+        for name in self.DISCOVERABLE:
+            if name in self._BLOCKED:
+                continue
+            try:
+                ability = AbilityRegistry.get(name)
+                tooltip = getattr(ability, 'SEARCH_TOOLTIP', '') or ability.SUMMARY
+                index[name] = tooltip
+            except KeyError:
+                pass
+
+        if not index:
+            return schema
+
+        schema = copy.deepcopy(schema)
+        tools_index = ", ".join(f"`{k}` ({v})" for k, v in index.items())
+        schema['input_schema']['properties']['query']['description'] = (
+            f"Specify the tool name you need. Tools index: {tools_index}"
+        )
+        return schema
 
     def get_act_loop_trail(self) -> str:
         """Return the ACT loop trail as a single string for prompt injection.

@@ -30,6 +30,7 @@ _ERR_URL_REQUIRED = "url parameter required"
 
 class BrowserAbility(Ability):
     NAME = "browser"
+    SEARCH_TOOLTIP = "interactive web browser"
     SUMMARY = (
         "Control a headless browser to render JavaScript-heavy pages, take screenshots, "
         "interact with forms and buttons, and monitor pages for changes."

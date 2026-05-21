@@ -17,6 +17,7 @@ class Ability(ABC):
     INPUT_SCHEMA: ClassVar[dict]
     TIMEOUT: ClassVar[int] = 10
     INTERNAL: ClassVar[bool] = False
+    SEARCH_TOOLTIP: ClassVar[str] = ""
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -42,6 +43,11 @@ class Ability(ABC):
             raise TypeError(
                 f"{cls.__name__}.EXAMPLES must have 6–8 entries, got {len(cls.EXAMPLES)}"
             )
+        if (
+            getattr(cls, "__module__", "").startswith("abilities.")
+            and not getattr(cls, "SEARCH_TOOLTIP", "")
+        ):
+            raise TypeError(f"{cls.__name__} must define a non-empty SEARCH_TOOLTIP")
 
     @abstractmethod
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:

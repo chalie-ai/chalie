@@ -24,7 +24,7 @@ from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
-_BLOCKED: frozenset[str] = frozenset({"subagent", "save_graph", "detect_pattern"})
+_BLOCKED: frozenset[str] = frozenset({"subagent"})
 
 
 class SubagentProcessor(MessageProcessor):
@@ -46,21 +46,8 @@ class SubagentProcessor(MessageProcessor):
     LOG_LABEL = 'subagent'
     USAGE_CLASS = 'subagent'
     MAX_ITERATIONS = 50
-    DISCOVERABLE: list[str] = [
-        "browser",
-        "code_eval",
-        "document",
-        "list",
-        "memory",
-        "news",
-        "programming_docs_search",
-        "read",
-        "review_tool_calls",
-        "schedule",
-        "search",
-        "ubiquiti",
-        "weather",
-    ]
+    # Inherits DISCOVERABLE from MessageProcessor; _BLOCKED filters subagent.
+    _BLOCKED: frozenset[str] = _BLOCKED
 
     def __init__(
         self,
@@ -90,13 +77,6 @@ class SubagentProcessor(MessageProcessor):
         type_prompt = SUBAGENT_TYPES[self.agent_type]["system_prompt"]
         body = f"{type_prompt}\n\n{_SHARED_GUARDRAILS}"
         return f"{self.get_user_definition()}\n\n{body}"
-
-    def get_dynamic_tools(self) -> list[dict]:
-        """Filter blocklist from runtime-discovered tools."""
-        return [
-            t for t in self._discovered_tools
-            if t.get('name') not in _BLOCKED
-        ]
 
     def get_user_definition(self) -> str:
         return (

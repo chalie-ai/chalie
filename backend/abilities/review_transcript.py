@@ -25,6 +25,7 @@ _MAX_CONTENT_LENGTH = 500
 
 class ReviewTranscriptAbility(Ability):
     NAME = "review_transcript"
+    SEARCH_TOOLTIP = "review conversation history"
     SYSTEM = True
     SUMMARY = (
         "Retrieve recent conversation messages (user and assistant) within "

@@ -21,6 +21,7 @@ LOG_PREFIX = "[EMAIL ABILITY]"
 
 class EmailAbility(Ability):
     NAME = "email"
+    SEARCH_TOOLTIP = "email inbox and sending"
     SUMMARY = (
         "Read, search, draft, send, reply, forward, and manage emails via the connected "
         "mail account. Available when the user asks to check, find, compose, send, "

@@ -27,6 +27,7 @@ _BUDGET_CAP = 20
 
 class SavePattern(Ability):
     NAME = "save_pattern"
+    SEARCH_TOOLTIP = "record behavioural patterns"
     SYSTEM = True
     SUMMARY = (
         "Record a repeating behavioural pattern observed in the user's "

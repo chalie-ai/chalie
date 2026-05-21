@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 class DocumentAbility(Ability):
     NAME = "document"
+    SEARCH_TOOLTIP = "document and notes manager"
     SUMMARY = "Search, view, create, and manage persistent documents and notes in the document library."
     EXAMPLES = [
         "search my documents for information about coral bleaching",

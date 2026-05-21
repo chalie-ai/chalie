@@ -47,6 +47,7 @@ _RICH_MEDIA_INSTRUCTION = (
 
 class SearchAbility(Ability):
     NAME = "search"
+    SEARCH_TOOLTIP = "web and knowledge search"
     SUMMARY = "Search Wikipedia, GitHub, Reddit, arXiv, news, and more with automatic provider routing from a plain language query."
     EXAMPLES = [
         "what is the current price of EUR compared to USD",

@@ -31,6 +31,7 @@ _RICH_MEDIA_INSTRUCTION = (
 
 class ListAbility(Ability):
     NAME = "list"
+    SEARCH_TOOLTIP = "list and checklist manager"
     SUMMARY = "Create and manage named lists — shopping, to-do, chores — addressed by id."
     EXAMPLES = [
         "create a grocery list and add milk, eggs, and bread",

@@ -24,6 +24,7 @@ _RICH_MEDIA_INSTRUCTION = (
 
 class ContactsAbility(Ability):
     NAME = "contacts"
+    SEARCH_TOOLTIP = "contact book"
     SUMMARY = (
         "Search and look up contacts from the connected address book (CardDAV). "
         "Available when the user asks for someone's phone number, email, or contact details."

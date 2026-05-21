@@ -55,6 +55,7 @@ _CLEAR_WORDS = ("clear", "sunny", "mainly clear")
 
 class WeatherAbility(Ability):
     NAME = "weather"
+    SEARCH_TOOLTIP = "weather forecasts"
     SUMMARY = "Get current weather and tomorrow's forecast for a city or device coordinates."
     EXAMPLES = [
         "what's the weather like today",

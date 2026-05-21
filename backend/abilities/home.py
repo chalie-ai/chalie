@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class HomeAbility(Ability):
     NAME = "home"
+    SEARCH_TOOLTIP = "smart home control"
     SUMMARY = (
         "Control smart home devices and automations via the connected "
         "Home Assistant instance. Available when the user asks about "

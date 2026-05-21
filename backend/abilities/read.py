@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 class ReadAbility(Ability):
     NAME = "read"
+    SEARCH_TOOLTIP = "fetch URL or file contents"
     SUMMARY = "Fetch and extract clean text from any URL or local file — web pages, PDFs, DOCX, PPTX, and plain text."
     EXAMPLES = [
         "can you read this page and tell me what it says? https://example.com",
