@@ -335,7 +335,6 @@ def test_per_processor_tool_scope_matches_spec():
 #   * abilities/_registry.py        — owns the method
 #   * utils/build_ability_db.py     — rebuilds discovery DB from registry
 #   * services/act_dispatcher_service.py — populates dispatcher handlers
-#   * services/self_model_service.py — innate-skills inventory for /self_model
 #
 # To add a new caller, audit the use case (does it pre-inject discoverable
 # abilities?), then extend _ALLOWED_REGISTRY_ALL_CALLERS in this file.
@@ -344,7 +343,6 @@ _ALLOWED_REGISTRY_ALL_CALLERS = frozenset({
     "abilities/_registry.py",
     "utils/build_ability_db.py",
     "services/act_dispatcher_service.py",
-    "services/self_model_service.py",
     "services/policy_service.py",
 })
 

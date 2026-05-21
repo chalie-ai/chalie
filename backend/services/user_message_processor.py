@@ -167,11 +167,6 @@ class UserMessageProcessor(MessageProcessor):
             )
             parts.append(rendered_world_state)
 
-        # 2. System Awareness (degradation signals)
-        self_awareness = self._get_self_awareness()
-        if self_awareness:
-            parts.append(f"## System Awareness\n{self_awareness}")
-
         # 3. Previous Messages
         prev = self.get_previous_messages()
         if prev:
@@ -460,19 +455,6 @@ class UserMessageProcessor(MessageProcessor):
         import re
         match = re.search(r'\bid=([0-9a-f]{8})\b', result_text or '')
         return match.group(1) if match else None
-
-    def _get_self_awareness(self) -> str:
-        """Get system health degradation signals from SelfModelService.
-
-        Returns empty string when the system is healthy — get_user_prompt()
-        skips the section. Only populates when degradation is detected.
-        """
-        try:
-            from services.self_model_service import SelfModelService
-            return SelfModelService().format_for_prompt()
-        except Exception as e:
-            logger.debug(f"[USER MSG] Self-awareness unavailable: {e}")
-            return ''
 
     def _get_mode_gate(self):
         """Return a ticked ModeGateService instance, cached per turn.

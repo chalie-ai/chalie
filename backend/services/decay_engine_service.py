@@ -29,18 +29,8 @@ class DecayEngineService:
         )
 
     def run_once(self) -> None:
-        """Single tick for SubconsciousWorker. Delegates to run_decay_cycle with current richness.
-
-        Resolves richness from SelfModelService; falls back to 1.0 if unavailable.
-        Engine logic itself is unchanged — only the trigger surface is new.
-        """
-        try:
-            from services.self_model_service import SelfModelService
-            richness = SelfModelService().get_memory_richness()
-        except Exception as exc:
-            logger.warning(f"[DecayEngine] richness lookup failed, defaulting to 1.0: {exc}")
-            richness = 1.0
-        self.run_decay_cycle(richness=richness)
+        """Single tick for SubconsciousWorker. Delegates to run_decay_cycle."""
+        self.run_decay_cycle()
 
     def run_decay_cycle(self, richness: float = 1.0):
         """Run one full decay cycle across all memory types.
