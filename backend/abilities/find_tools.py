@@ -29,6 +29,9 @@ class FindToolsAbility(Ability):
         "is there a way to check the current weather in another city",
         "can you help me monitor a webpage for changes",
         "look up something from my gmail",
+        "is the bedroom AC on",
+        "turn off all the downstairs lights",
+        "list my smart home devices",
     ]
     INPUT_SCHEMA = {
         "type": "object",

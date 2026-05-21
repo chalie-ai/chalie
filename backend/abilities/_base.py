@@ -39,9 +39,9 @@ class Ability(ABC):
             isinstance(e, str) for e in cls.EXAMPLES
         ):
             raise TypeError(f"{cls.__name__}.EXAMPLES must be list[str]")
-        if not (6 <= len(cls.EXAMPLES) <= 8):
+        if not (6 <= len(cls.EXAMPLES) <= 20):
             raise TypeError(
-                f"{cls.__name__}.EXAMPLES must have 6–8 entries, got {len(cls.EXAMPLES)}"
+                f"{cls.__name__}.EXAMPLES must have 6–20 entries, got {len(cls.EXAMPLES)}"
             )
         if (
             getattr(cls, "__module__", "").startswith("abilities.")
