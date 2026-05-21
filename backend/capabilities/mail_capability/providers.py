@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from utils.email_utils import Email
+
 
 @dataclass(frozen=True, slots=True)
 class ServerSettings:
@@ -135,7 +137,7 @@ def discover_provider(email: str) -> UnifiedProvider | None:
     """
     if not email or "@" not in email:
         return None
-    domain = email.rsplit("@", 1)[-1].strip().lower()
+    domain = Email.get_domain(email)
     if not domain:
         return None
     return PROVIDERS.get(domain)

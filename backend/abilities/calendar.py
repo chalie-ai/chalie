@@ -13,6 +13,7 @@ import json as _json
 import logging
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CALENDAR ABILITY]"
@@ -132,13 +133,7 @@ class CalendarAbility(Ability):
             result = {"status": "error", "error": f"Unknown calendar action: {action}"}
             return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
 
-        try:
-            action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
-            raw = handler(topic="", params=action_params, telemetry=telemetry)
-            result = raw if isinstance(raw, dict) else {"status": "ok", "data": raw}
-        except Exception as exc:
-            logger.exception(f"{LOG_PREFIX} action={action} failed: {exc}")
-            result = {"status": "error", "error": str(exc)}
+        result = self.handle(handler, params, telemetry)
 
         if ordinal is not None and "error" not in result:
             return _serialise_rich(result, action, ordinal)
@@ -191,7 +186,7 @@ def _read_events(action: str, params: dict) -> dict:
 
 
 def _format_event(row: dict) -> dict:
-    meta = _json.loads(row.get("metadata") or "{}") if isinstance(row.get("metadata"), str) else {}
+    meta = parse_json_column(row.get("metadata"))
     ext_uid = row.get("external_uid", "")
     uid = ext_uid.removeprefix("caldav:") if ext_uid else meta.get("uid", "")
     return {

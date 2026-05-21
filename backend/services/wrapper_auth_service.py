@@ -18,6 +18,8 @@ Each wrapper has:
 import hashlib
 import json
 import logging
+
+from utils.data_utils import parse_json_column
 import secrets
 import uuid
 from typing import Optional
@@ -349,9 +351,9 @@ class WrapperAuthService:
             "id": row[0],
             "wrapper_id": row[1],
             "name": row[2],
-            "capabilities": json.loads(row[3]) if row[3] else {},
-            "permissions": json.loads(row[4]) if row[4] else {},
-            "metadata": json.loads(row[5]) if row[5] else {},
+            "capabilities": parse_json_column(row[3]),
+            "permissions": parse_json_column(row[4]),
+            "metadata": parse_json_column(row[5]),
             "last_seen_at": row[6],
             "created_at": row[7],
         }

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from utils.email_utils import Email
 from capabilities.mail_capability.providers import (
     PROVIDERS as _UNIFIED_PROVIDERS,
     ServerSettings,
@@ -48,7 +49,7 @@ def discover_email_settings(email: str) -> EmailProviderSettings | None:
     """
     if not email or "@" not in email:
         return None
-    domain = email.rsplit("@", 1)[-1].strip().lower()
+    domain = Email.get_domain(email)
     if not domain:
         return None
     return PROVIDERS.get(domain)
@@ -75,5 +76,5 @@ def email_to_caldav_provider(email: str) -> str | None:
     """
     if not email or "@" not in email:
         return None
-    domain = email.rsplit("@", 1)[-1].strip().lower()
+    domain = Email.get_domain(email)
     return _CALDAV_PROVIDERS.get(domain)

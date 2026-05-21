@@ -105,16 +105,7 @@ class ContactsAbility(Ability):
             }
             return {"text": _skill_tag("contacts", json.dumps(result), action=action)}
 
-        try:
-            action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
-            raw = handler(topic="", params=action_params, telemetry=telemetry)
-            if isinstance(raw, dict):
-                result = raw
-            else:
-                result = {"status": "ok", "data": raw}
-        except Exception as exc:
-            logger.exception(f"{LOG_PREFIX} action={action} failed: {exc}")
-            result = {"status": "error", "error": str(exc)}
+        result = self.handle(handler, params, telemetry)
 
         if ordinal is not None and "error" not in result:
             return _serialise_rich(result, action, ordinal)

@@ -477,8 +477,6 @@ def _fetch_transcript_entries(db_service, transcript_ids: List) -> List[Dict]:
         entries = []
         for r in rows:
             content = r[2] or ""
-            if len(content) > 300:
-                content = content[:300] + "..."
             entries.append({
                 "type": "transcript",
                 "content": content,

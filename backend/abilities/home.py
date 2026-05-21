@@ -101,12 +101,6 @@ class HomeAbility(Ability):
             result = {"status": "error", "error": f"Unknown home action: {action}"}
             return {"text": _skill_tag("home", json.dumps(result), action=action)}
 
-        try:
-            action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
-            raw = handler(topic="", params=action_params, telemetry=telemetry)
-            result = raw if isinstance(raw, dict) else {"status": "ok", "data": raw}
-        except Exception as exc:
-            logger.exception("[HOME] action=%s failed: %s", action, exc)
-            result = {"status": "error", "error": str(exc)}
+        result = self.handle(handler, params, telemetry)
 
         return {"text": _skill_tag("home", json.dumps(result), action=action)}

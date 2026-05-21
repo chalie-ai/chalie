@@ -51,6 +51,7 @@ from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
 from capabilities.mail_capability.providers import build_custom_provider, discover_provider
 from services.time_utils import utc_now
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 
@@ -340,10 +341,7 @@ class MailCapability(AbstractCapability):
             logger.warning("[mail] connect(): credentials missing.")
             return False
 
-        try:
-            protocols: list[str] = json.loads(protocols_raw) if protocols_raw else []
-        except (json.JSONDecodeError, TypeError):
-            protocols = []
+        protocols: list[str] = parse_json_column(protocols_raw, default=[])
 
         if not protocols:
             logger.warning("[mail] connect(): no active protocols stored.")

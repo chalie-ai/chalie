@@ -14,6 +14,7 @@ import threading
 from typing import Literal
 
 from services.time_utils import utc_now
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 
@@ -401,7 +402,7 @@ class PolicyService:
                 "action_id": r[1],
                 "context": r[2],
                 "reason": r[3],
-                "params": json.loads(r[4]) if r[4] else None,
+                "params": parse_json_column(r[4], default=None),
                 "created_at": r[5],
             }
             for r in rows

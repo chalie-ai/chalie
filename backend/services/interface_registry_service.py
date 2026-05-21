@@ -18,6 +18,7 @@ import requests
 
 from services.database_service import get_shared_db_service
 from services.time_utils import utc_now, parse_utc
+from utils.data_utils import parse_json_column
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
@@ -591,7 +592,7 @@ class InterfaceRegistryService:
                 "status": r[4],
                 "last_seen_at": r[5],
                 "paired_at": r[6],
-                "metadata": json.loads(r[7]) if r[7] else {},
+                "metadata": parse_json_column(r[7]),
                 "capabilities_hash": r[8],
                 "tool_count": r[9],
             }
@@ -630,7 +631,7 @@ class InterfaceRegistryService:
             "capabilities_hash": row[6],
             "last_seen_at": row[7],
             "paired_at": row[8],
-            "metadata": json.loads(row[9]) if row[9] else {},
+            "metadata": parse_json_column(row[9]),
         }
 
     def get_interface_tools(self, interface_id: str) -> list[dict]:

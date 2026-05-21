@@ -16,6 +16,7 @@ from abilities._base import Ability
 from services.database_service import get_shared_db_service
 from services.message_processor import current_processor
 from services.time_utils import utc_now
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +137,7 @@ def _upsert_pattern(validated: dict) -> tuple[int, float]:
 
 def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> tuple[int, float]:
     existing_id, existing_value = existing[0], existing[1]
-    try:
-        prev = json.loads(existing_value or "{}") or {}
-    except Exception:
-        prev = {}
+    prev = parse_json_column(existing_value)
     prev_conf = float(prev.get("confidence") or 0.0)
     new_conf = min(10.0, prev_conf + 7.0)
     merged_evidence = list(dict.fromkeys([*(prev.get("evidence_transcript_ids") or []), *validated["evidence"]]))

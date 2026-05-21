@@ -13,6 +13,7 @@ current ACT turn.
 import json
 import logging
 from abilities._base import Ability
+
 from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
@@ -162,15 +163,6 @@ class EmailAbility(Ability):
             }
             return {"text": _skill_tag("email", json.dumps(result), action=action)}
 
-        try:
-            action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
-            raw = handler(topic="", params=action_params, telemetry=telemetry)
-            if isinstance(raw, dict):
-                result = raw
-            else:
-                result = {"status": "ok", "data": raw}
-        except Exception as exc:
-            logger.exception(f"{LOG_PREFIX} action={action} failed: {exc}")
-            result = {"status": "error", "error": str(exc)}
+        result = self.handle(handler, params, telemetry)
 
         return {"text": _skill_tag("email", json.dumps(result), action=action)}

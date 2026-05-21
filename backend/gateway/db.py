@@ -9,6 +9,8 @@ import logging
 import sqlite3
 import threading
 
+from utils.data_utils import parse_json_column
+
 logger = logging.getLogger(__name__)
 
 _SCHEMA = """
@@ -166,7 +168,7 @@ def get_meta(interface_id: str) -> dict:
         (interface_id,),
     ).fetchone()
     if row:
-        return json.loads(row[0]) if row[0] else {}
+        return parse_json_column(row[0])
     return {}
 
 
@@ -206,8 +208,8 @@ def _row_to_dict(row) -> dict:
         "version": row[5],
         "description": row[6],
         "author": row[7],
-        "requested_scopes": json.loads(row[8]) if row[8] else {},
-        "approved_scopes": json.loads(row[9]) if row[9] else {},
+        "requested_scopes": parse_json_column(row[8]),
+        "approved_scopes": parse_json_column(row[9]),
         "chalie_interface_id": row[10],
         "paired_at": row[11],
         "last_seen_at": row[12],

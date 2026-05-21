@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_BUFFER_MINUTES = 5
 _MAX_BUFFER_MINUTES = 30
-_MAX_CONTENT_LENGTH = 500
 
 
 class ReviewTranscriptAbility(Ability):
@@ -175,7 +174,5 @@ def _format_row(row: dict) -> str:
         or str(row.get("created_at", ""))[:19]
     role = row.get("role", "unknown")
     content = (row.get("content") or "").strip()
-    if len(content) > _MAX_CONTENT_LENGTH:
-        content = content[:_MAX_CONTENT_LENGTH] + "..."
     content_oneline = content.replace("\n", " ")
     return f"  [{ts}] {role}: {content_oneline}"

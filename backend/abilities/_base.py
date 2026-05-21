@@ -49,6 +49,11 @@ class Ability(ABC):
         ):
             raise TypeError(f"{cls.__name__} must define a non-empty SEARCH_TOOLTIP")
 
+    @staticmethod
+    def handle(handler, params: dict, telemetry: dict | None) -> dict:
+        action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
+        return handler(topic="", params=action_params, telemetry=telemetry)
+
     @abstractmethod
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         """Execute the ability and return a result.

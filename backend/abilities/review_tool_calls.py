@@ -76,8 +76,6 @@ class ReviewToolCallsAbility(Ability):
             from services.time_formatter_service import TimeFormatterService
             created = TimeFormatterService.local(rec.get("created_at"), fmt="%Y-%m-%d %H:%M:%S") \
                 or str(rec.get("created_at", ""))[:19]
-            if len(result) > 300:
-                result = result[:300] + "..."
             lines.append(f"  [{created}] {tool_name} params={params_str} → {result} ({status_hint})")
 
         body = "\n".join(lines)
