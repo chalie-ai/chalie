@@ -25,15 +25,11 @@ _RICH_MEDIA_INSTRUCTION = (
     "for the user. Example: \"Here's the latest — "
     "<span id='{tag}'>The EU opened its first audits under the AI Act today, "
     "targeting three major companies you've been tracking.</span>\""
-    "\n\nThumbnail (optional): if the data above includes an `image_candidates` "
-    "array, each entry has a `url`, `source_title` (the article it came from), "
-    "and `caption` (a short description derived from the image filename or "
-    "article metadata). Pick the candidate whose `caption` and `source_title` "
-    "together best match the topic of your synthesis. If no candidate is a "
-    "clear match, omit `data-image`. To attach a thumbnail, add "
-    "`data-image='<that url>'` to the span, e.g. "
-    "<span id='{tag}' data-image='https://example.com/pic.jpg'>your synthesis</span>. "
-    "Use a URL verbatim from `image_candidates`."
+    "\n\nIf the payload includes `image_candidates`, pick the entry whose "
+    "`caption` and `source_title` best fit your synthesis and add "
+    "`data-image='<that url>'` to the span. This is the only way to render "
+    "an inline image — raw <img> tags will not display. Use a URL verbatim "
+    "from `image_candidates`."
 )
 
 
