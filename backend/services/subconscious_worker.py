@@ -305,6 +305,15 @@ class SubconsciousWorker:
         # 3. Fire processor
         PatternMatchProcessor(window_start=cursor, window_end=latest).send()
 
+        # Layer 2: update skill-personalisation associations after PMP pass
+        try:
+            from services.skill_association_service import SkillAssociationService
+            SkillAssociationService().run_pass()
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} skill_association pass failed: {exc}"
+            )
+
         # 4. Advance cursor on success.
         # Cursor write race / known risk: a crash here leaves the cursor
         # pinned to its previous value while the processor has already

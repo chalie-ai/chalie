@@ -32,6 +32,7 @@ const PanelPolicies = (() => {
     'email.reply': 'Reply to email',
     'email.search': 'Search email',
     'email.send': 'Send email',
+    'find_skills': 'Find skills',
     'find_tools': 'Find tools',
     'home.control': 'Control devices',
     'home.get_state': 'Get device state',
@@ -91,7 +92,7 @@ const PanelPolicies = (() => {
     'News & Weather': ['news', 'weather'],
     'Places': ['place.save', 'place.list', 'place.get', 'place.delete'],
     'Scheduling': ['schedule.list', 'schedule.search', 'schedule.create', 'schedule.cancel'],
-    'Search & Tools': ['search', 'find_tools', 'read', 'programming_docs_search'],
+    'Search & Tools': ['search', 'find_tools', 'find_skills', 'read', 'programming_docs_search'],
     'Subagent': ['subagent'],
   };
 
