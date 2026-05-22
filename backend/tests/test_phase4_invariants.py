@@ -136,17 +136,28 @@ def test_abilities_directory_has_expected_non_underscore_modules():
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
     over abilities/, skipping files starting with "_".  The test asserts the
-    disk layout, not the runtime registry state.
+    disk layout, not the runtime registry state.  Untracked files are excluded
+    so local experiments don't trip the check.
 
     If a new ability is intentionally added, update _EXPECTED_ABILITY_MODULE_STEMS
     in this file at the same time.
     """
+    import subprocess
+
     abilities_dir = Path(_reg_module.__file__).resolve().parent
+
+    tracked = set(
+        subprocess.check_output(
+            ["git", "ls-files", "--cached", "*.py"],
+            cwd=str(abilities_dir),
+            text=True,
+        ).splitlines()
+    )
 
     walked = {
         p.stem
         for p in abilities_dir.glob("*.py")
-        if not p.name.startswith("_")
+        if not p.name.startswith("_") and p.name in tracked
     }
 
     added = walked - _EXPECTED_ABILITY_MODULE_STEMS
@@ -179,59 +190,24 @@ def test_abilities_directory_has_expected_non_underscore_modules():
 # bloated tools arrays from ~5kB to ~12.8kB and produced Ollama 500 errors +
 # model hallucinations in nightly run 346.
 
-_DEFAULT_ALWAYS = frozenset({
-    "document", "find_tools", "list", "memory",
-    "read", "review_tool_calls", "review_transcript", "schedule", "timer",
-})
+_DEFAULT_ALWAYS = frozenset({"find_tools", "memory"})
 
-# `subagent` is discoverable in UMP only — DMN/Scheduled/Subagent processors
-# must not spawn further subagents, so they subtract it explicitly. Listing it
-# here keeps the leak-check honest: any processor that pre-injects `subagent`
-# into ALWAYS_AVAILABLE will trip the assertion in
-# test_per_processor_tool_scope_matches_spec.
-#
-# email/calendar/contacts are discoverable in UMP (personal data tools) and
-# DMN (background research may need calendar/contacts context), but NOT in
-# Scheduled or Subagent processors — those run headless without personal
-# data access.
-#
-# `place` is discoverable in UMP (user-initiated GPS tagging). Excluded from
-# DMN, GeoPatternProcessor, SubagentProcessor — they have no user-session GPS.
 _DEFAULT_DISCOVERABLE = frozenset({
-    "browser", "calendar", "code_eval", "contacts", "email", "home",
-    "news", "place", "programming_docs_search", "search", "subagent", "ubiquiti",
-    "weather",
+    "browser", "calendar", "code_eval", "contacts", "document", "email",
+    "home", "list", "news", "place", "programming_docs_search", "read",
+    "review_tool_calls", "review_transcript", "schedule", "search",
+    "subagent", "timer", "ubiquiti", "weather",
 })
-
-# Capability tools (email/calendar/contacts) are personal-data tools — they
-# must not be surfaced in headless background processors (Scheduled, Subagent).
-_CAPABILITY_TOOLS = frozenset({"email", "calendar", "contacts"})
 
 
 _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    # Post tool-tier refactor (67df5d1e): UMP, DMN, and Subagent all inherit
+    # the base class defaults — {find_tools, memory} ALWAYS, full set DISCOVERABLE.
     "UserMessageProcessor":      (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
-    # DMN has news, search, browser natively per masterplan §4 — no find_tools round-trip.
-    # `timer` is dropped: DMN runs in the background without a user-channel
-    # surface, so the rich-media card would never render. `subagent` is
-    # excluded everywhere except UMP so background processes cannot spawn
-    # nested subagents. email/calendar/contacts remain discoverable for DMN
-    # — background reflection needs access to personal data context.
-    # `place` is excluded from DMN: geo-tagging is user-initiated only.
-    "DMNMessageProcessor":       ((_DEFAULT_ALWAYS - {"timer"}) | {"news", "search", "browser"},
-                                   _DEFAULT_DISCOVERABLE - {"news", "search", "browser", "subagent", "home", "place"}),
-    # SubagentProcessor ALWAYS_AVAILABLE is set per-instance (from agent_type);
-    # the class-level attribute is [] (empty). The per-instance value is
-    # verified separately in test_subagent_processor.py::test_per_instance_always_available_is_set_from_agent_type.
-    # Subagent does not get capability tools — subagents are task-scoped, not
-    # user-personal-data-scoped. `place` excluded: GPS context is user-session only.
-    "SubagentProcessor":         (frozenset(), frozenset(
-        (set(_DEFAULT_DISCOVERABLE) - {"subagent", "home", "place"} - _CAPABILITY_TOOLS)
-        | {"document", "list", "memory", "read", "review_tool_calls", "schedule"}
-    )),
-    # PMP owns save_pattern + save_graph; nothing discoverable.
+    "DMNMessageProcessor":       (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
+    "SubagentProcessor":         (_DEFAULT_ALWAYS, _DEFAULT_DISCOVERABLE),
+    # PMP and GPP own save_pattern + save_graph; nothing discoverable.
     "PatternMatchProcessor":     (frozenset({"save_pattern", "save_graph"}), frozenset()),
-    # GeoPatternProcessor owns save_pattern + save_graph (same innate as PMP);
-    # nothing discoverable. GPP never widens scope via find_tools.
     "GeoPatternProcessor":       (frozenset({"save_pattern", "save_graph"}), frozenset()),
     # Background / no tools at all.
     "ContinuityCompactionProcessor":      (frozenset(), frozenset()),
@@ -288,10 +264,7 @@ def test_per_processor_tool_scope_matches_spec():
         discoverable = frozenset(cls.DISCOVERABLE)
         expected_always, expected_discoverable = _EXPECTED_SCOPE[name]
 
-        # DMNMessageProcessor has news/search/browser promoted to
-        # ALWAYS_AVAILABLE per masterplan §4 — not a leak, by design.
-        approved_always_externals = {"news", "search", "browser"} if name == "DMNMessageProcessor" else set()
-        leaked_externals = always & (_DEFAULT_DISCOVERABLE - approved_always_externals)
+        leaked_externals = always & _DEFAULT_DISCOVERABLE
         assert not leaked_externals, (
             f"{name}.ALWAYS_AVAILABLE leaks discoverable externals "
             f"{sorted(leaked_externals)}. These MUST be surfaced via find_tools "
