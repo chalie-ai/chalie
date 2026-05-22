@@ -98,7 +98,7 @@ class FindSkillsAbility(Ability):
             }
 
         content = _format_skills(rows, self._SKILLS_DB_PATH)
-        return {"text": _skill_tag("find_skills", content, query=query, found=len(rows))}
+        return {"text": _skill_tag("find_skills", content, query=query, found=len(rows), content_type="playbook")}
 
 
 def _load_vec(conn: sqlite3.Connection) -> None:
@@ -261,7 +261,7 @@ def _fallback_keyword_search(query: str, limit: int, db_path: Path) -> dict:
 
         matched = [{"skill_id": r[0], "title": r[1], "score": 0.5} for r in rows]
         content = _format_skills(matched, db_path)
-        return {"text": _skill_tag("find_skills", content, query=query, found=len(matched))}
+        return {"text": _skill_tag("find_skills", content, query=query, found=len(matched), content_type="playbook")}
 
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} keyword fallback failed: {exc}")
