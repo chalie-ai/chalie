@@ -67,7 +67,7 @@ User (WebSocket)
 
 ## ACT Loop
 
-Every processor runs the same bounded ACT loop. The loop continues until the model produces a response with no tool calls, or until iteration limits are reached.
+Every processor runs the same ACT loop. The loop continues until the model produces a response with no tool calls, a cooperative cancel signal is received (`_cancel_event`), or the processor's iteration cap is reached. User-facing processors (UMP, SubagentProcessor) have no iteration cap — they run until the model finishes or the user stops them. Background processors retain hard caps (DMN=100, EAMP=200, PatternMatch=100, GeoPattern=100). The user can stop an active UMP turn via `POST /chat/stop` or a running subagent via `POST /chat/subagent/<sub_id>/stop`.
 
 ```
   ┌──────────────────────────────────────────┐
