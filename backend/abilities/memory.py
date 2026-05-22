@@ -537,10 +537,26 @@ def _relevance_label(score: float) -> str:
     return "low"
 
 
+def _render_behavioral_pattern(raw_value: str) -> str:
+    """Parse a behavioral_pattern JSON value into a compact human-readable line."""
+    try:
+        c = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        name = c.get("name", "unknown")
+        freq = c.get("frequency", "?")
+        anchor = c.get("time_anchor") or ""
+        summary = c.get("summary", "")
+        confidence = c.get("confidence", 0)
+        anchor_part = f" @ {anchor}" if anchor else ""
+        return f"{name} ({freq}{anchor_part}): {summary} [confidence={confidence}]"
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return raw_value
+
+
 def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
     try:
         from services.data_graph_service import (
             get_data_graph_service,
+            KIND_BEHAVIORAL_PATTERN,
             KIND_USER_SPECIFIC,
             KIND_SYSTEM,
             KIND_MISC,
@@ -550,7 +566,8 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
         dgs = get_data_graph_service()
         rows = dgs.recall(
             query=query,
-            kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT],
+            kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT,
+                   KIND_BEHAVIORAL_PATTERN],
             limit=limit,
         )
 
@@ -560,9 +577,14 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
         hits = []
         for row in rows:
             cos = row.get("cos_score", 0.0)
+            kind = row.get("kind", "")
+            text = row.get("value", "")
+            if kind == KIND_BEHAVIORAL_PATTERN:
+                text = _render_behavioral_pattern(text)
             hits.append({
                 "id": row.get("key", ""),
-                "text": row.get("value", ""),
+                "kind": kind,
+                "text": text,
                 "relevance": _relevance_label(cos),
                 "confidence": cos,
             })
@@ -871,7 +893,7 @@ def _count_episode_candidates(db_service, channel: str) -> int:
 def _format_results(results: List[Dict]) -> str:
     """Format recall hits into tagged lines for LLM consumption.
 
-    Includes location when present — omits lat/lon to avoid token bloat.
+    Includes location and kind when present — omits lat/lon to avoid token bloat.
     """
     lines = []
     for hit in results:
@@ -879,9 +901,14 @@ def _format_results(results: List[Dict]) -> str:
         relevance = hit.get("relevance", "low")
         text = hit.get("text", "")
         location = hit.get("location")
-        prefix = f"[id:{rid},relevance:{relevance}]"
+        kind = hit.get("kind", "")
+        parts = [f"id:{rid}"]
+        if kind == "behavioral_pattern":
+            parts.append("kind:behavioral_pattern")
+        parts.append(f"relevance:{relevance}")
         if location:
-            prefix = f"[id:{rid},relevance:{relevance},at:{location}]"
+            parts.append(f"at:{location}")
+        prefix = f"[{','.join(parts)}]"
         lines.append(f"{prefix} {text}")
     return "\n".join(lines)
 
