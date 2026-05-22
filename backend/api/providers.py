@@ -178,6 +178,50 @@ def _fetch_anthropic_models(api_key: str):
         return None, "Anthropic API request failed"
 
 
+def _fetch_openai_compatible_models(host: str, api_key: str):
+    """Fetch models from an OpenAI-compatible endpoint via GET {host}/models."""
+    if not host:
+        return None, "Host URL is required"
+    if not api_key:
+        return None, "API key is required"
+    safe_host, err = _validate_ollama_host(host)
+    if err is not None:
+        return None, err
+    url = safe_host.rstrip('/') + '/models'
+    try:
+        r = req.get(
+            url,
+            headers={'Authorization': f'Bearer {api_key}'},
+            timeout=_LIST_MODELS_TIMEOUT,
+        )
+        if r.status_code in (401, 403):
+            return None, "Invalid API key"
+        if not r.ok:
+            return None, f"API returned {r.status_code}"
+        data = r.json()
+        items = data.get('data') or []
+        if isinstance(data, list):
+            items = data
+        models = []
+        for m in items:
+            if isinstance(m, str):
+                models.append({"id": m, "display_name": None})
+                continue
+            mid = m.get('id') or m.get('name') or ''
+            if not mid:
+                continue
+            models.append({"id": mid, "display_name": m.get('display_name')})
+        models.sort(key=lambda m: m['id'])
+        return models, None
+    except req.exceptions.ConnectionError:
+        return None, f"Cannot connect to {safe_host}"
+    except req.exceptions.Timeout:
+        return None, f"Request to {safe_host} timed out"
+    except Exception as e:
+        logger.warning(f"[REST API] OpenAI-compatible model list failed: {type(e).__name__}: {e}")
+        return None, "Failed to fetch models"
+
+
 def get_provider_service():
     """Get ProviderDbService instance."""
     from services.database_service import get_shared_db_service
@@ -322,9 +366,9 @@ def list_models():
     """Live model-list fetch for the brain provider form.
 
     Body JSON:
-      {"platform": "ollama" | "openai" | "anthropic",
-       "api_key": "...",   # openai / anthropic
-       "host": "..."}      # ollama
+      {"platform": "ollama" | "openai" | "anthropic" | "openai_compatible",
+       "api_key": "...",   # openai / anthropic / openai_compatible
+       "host": "..."}      # ollama / openai_compatible
 
     Always returns HTTP 200 — auth/network/parse failures land in the body's
     ``error`` field so the UI can render them inline. Credentials are POSTed
@@ -343,6 +387,10 @@ def list_models():
         models, err = _fetch_openai_models((body.get('api_key') or '').strip())
     elif platform == 'anthropic':
         models, err = _fetch_anthropic_models((body.get('api_key') or '').strip())
+    elif platform == 'openai_compatible':
+        models, err = _fetch_openai_compatible_models(
+            body.get('host') or '', (body.get('api_key') or '').strip(),
+        )
     else:
         return jsonify({"models": [], "error": f"Unsupported platform '{platform}'"}), 400
 
