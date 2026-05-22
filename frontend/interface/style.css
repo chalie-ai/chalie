@@ -1561,6 +1561,32 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   cursor: not-allowed;
 }
 
+/* Stop button — shown while a turn is in-flight, replaces the send button */
+.btn-action--stop {
+  background: transparent;
+  color: var(--error);
+  transition: all 220ms ease;
+  filter: drop-shadow(0 0 8px rgba(251, 113, 133, 0.35));
+}
+
+.btn-action--stop:hover {
+  transform: scale(1.1);
+  filter: drop-shadow(0 0 12px rgba(251, 113, 133, 0.6));
+}
+
+.btn-action--stop:active {
+  transform: scale(0.95);
+}
+
+/* Stopping state — disabled, muted colour while backend processes cancellation */
+.btn-action--stopping {
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0.55;
+  cursor: not-allowed;
+  transition: all 220ms ease;
+}
+
 /* + attach button — rotates to × when menu is open */
 .btn-action--attach {
   background: transparent;
@@ -2729,6 +2755,57 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   color: var(--text-tertiary);
   font-style: italic;
   border-top: 1px solid color-mix(in oklab, var(--text) 3%, transparent);
+}
+
+/* Active subagent item */
+.task-drawer__item--subagent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-drawer__subagent-row {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.task-drawer__badge {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: color-mix(in oklab, var(--accent-primary) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent-primary) 20%, transparent);
+  border-radius: var(--radius-full);
+  padding: 1px 6px;
+  align-self: flex-start;
+  white-space: nowrap;
+}
+
+.task-drawer__stop-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--error);
+  opacity: 0.7;
+  transition: opacity 150ms ease, transform 150ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-drawer__stop-btn:hover {
+  opacity: 1;
+  transform: scale(1.1);
+}
+
+/* Section divider between reminders and subagents */
+.task-drawer__section-divider {
+  height: 1px;
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  margin: 4px 0;
 }
 
 /* Trigger button in presence bar */

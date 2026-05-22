@@ -33,7 +33,7 @@ class ExternalAgentMessageProcessor(MessageProcessor):
     LOG_LABEL = 'external_agent'
     USAGE_CLASS = 'external_agent'
     SYSTEM_PROMPT_CLASS = ExternalAgentSystemMessagePrompt
-    MAX_ITERATIONS = 20
+    MAX_ITERATIONS = 200
 
     ALWAYS_AVAILABLE: list[str] = [
         "document",

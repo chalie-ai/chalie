@@ -14,6 +14,8 @@ export class EventRouter {
     this._onCapabilityAlert = null;
     this._onPermissionRequest = null;
     this._onQuickTip = null;
+    this._onSubagentStart = null;
+    this._onSubagentEnd = null;
     this._isSendingGetter = () => false;
   }
 
@@ -34,6 +36,12 @@ export class EventRouter {
 
   /** Register handler for 'quick_tip' events. */
   onQuickTip(cb) { this._onQuickTip = cb; }
+
+  /** Register handler for 'subagent_start' events. */
+  onSubagentStart(cb) { this._onSubagentStart = cb; }
+
+  /** Register handler for 'subagent_end' events. */
+  onSubagentEnd(cb) { this._onSubagentEnd = cb; }
 
   /**
    * Register handler for background drift/response/escalation content.
@@ -78,7 +86,8 @@ export class EventRouter {
 
   /**
    * Route event types that require no content — app_update, task,
-   * capability_alert, permission_request, quick_tip.
+   * capability_alert, permission_request, quick_tip, subagent_start,
+   * subagent_end.
    * Returns true when the event was handled.
    */
   _routeSimpleEvent(data) {
@@ -97,6 +106,12 @@ export class EventRouter {
         return true;
       case 'quick_tip':
         if (this._onQuickTip) this._onQuickTip(data);
+        return true;
+      case 'subagent_start':
+        if (this._onSubagentStart) this._onSubagentStart(data);
+        return true;
+      case 'subagent_end':
+        if (this._onSubagentEnd) this._onSubagentEnd(data);
         return true;
       default:
         return false;

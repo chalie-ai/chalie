@@ -28,8 +28,8 @@ class DMNMessageProcessor(MessageProcessor):
     Runs as SubconsciousWorker step 5. Builds user-message context from
     data_graph (user synthesis) and recent, non-decayed user-channel episodes.
 
-    Reduced safety caps — DMN turns are best-effort, short-lived:
-      MAX_ITERATIONS = 15  (vs. base 30)
+    Safety cap:
+      MAX_ITERATIONS = 100
 
     ALWAYS_AVAILABLE excludes 'subagent' to prevent a background
     process from spawning further background work. Includes 'news',
@@ -41,7 +41,7 @@ class DMNMessageProcessor(MessageProcessor):
     ROLE = 'proactive_thought'
     LOG_LABEL = 'dmn'
     USAGE_CLASS = 'subconscious'
-    MAX_ITERATIONS = 15
+    MAX_ITERATIONS = 100
     SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
     # news, search, browser promoted to ALWAYS_AVAILABLE so the model can act

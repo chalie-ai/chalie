@@ -2,12 +2,18 @@
 Chat API — HTTP endpoints for client→server communication.
 
 Routes:
-  POST /chat    — receive a user message; start a new UMP turn or inject
-                  a steer into the active ACT loop. Returns 202 immediately;
-                  response arrives via WebSocketBroker.broadcast().
-  POST /action  — receive an action button click; dispatch via
-                  ActDispatcherService. Returns 202 immediately; response
-                  arrives via WebSocketBroker.broadcast().
+  POST /chat               — receive a user message; start a new UMP turn or
+                             inject a steer into the active ACT loop. Returns
+                             202 immediately; response arrives via
+                             WebSocketBroker.broadcast().
+  POST /chat/stop          — cooperatively cancel the active UMP turn. Sets
+                             the cancel_event on the active processor. Returns
+                             200 always with JSON body.
+  POST /action             — receive an action button click; dispatch via
+                             ActDispatcherService. Returns 202 immediately;
+                             response arrives via WebSocketBroker.broadcast().
+  POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
+                             subagent by its sub_id. Returns 200 always.
 
 Design:
   WS is receive-only push (server→client). All client→server requests use
@@ -227,6 +233,54 @@ def post_chat():
 
     dispatch_message(text, source=source, attachments=attachments, intercept=True)
     return jsonify({"status": "accepted"}), 202
+
+
+@chat_bp.route("/chat/stop", methods=["POST"])
+@require_auth
+def post_chat_stop():
+    """Cooperatively cancel the active UMP turn.
+
+    Sets the cancel_event on the active processor so the ACT loop exits at
+    the next iteration boundary. The turn still completes normally (store +
+    post_turn) with final_text=''. The frontend receives the normal 'done'
+    WS event when the loop actually exits.
+
+    Always returns HTTP 200 — the caller should not treat 200 as confirmation
+    that the turn has stopped, only that the stop signal was delivered.
+
+    Response JSON:
+        {ok: true, cancelled: true}   — stop signal delivered to active turn
+        {ok: true, reason: "no_active_turn"} — nothing was in-flight
+    """
+    proc = _get_active_ump()
+    if proc is not None:
+        proc._cancel_event.set()
+        logger.info("[Chat API] Stop signal delivered to active UMP turn")
+        return jsonify({"ok": True, "cancelled": True}), 200
+    return jsonify({"ok": True, "reason": "no_active_turn"}), 200
+
+
+@chat_bp.route("/chat/subagent/<sub_id>/stop", methods=["POST"])
+@require_auth
+def post_subagent_stop(sub_id: str):
+    """Cooperatively cancel a running async subagent.
+
+    Delegates to cancel_subagent() from the subagent ability module.
+    The subagent's cancel_event is set; the ACT loop exits at the next
+    iteration boundary.
+
+    Always returns HTTP 200.
+
+    Response JSON:
+        {ok: true, cancelled: true}         — stop signal delivered
+        {ok: true, reason: "not_found"}     — sub_id not in active registry
+    """
+    from abilities.subagent import cancel_subagent
+
+    if cancel_subagent(sub_id):
+        logger.info("[Chat API] Stop signal delivered to subagent %s", sub_id[:8])
+        return jsonify({"ok": True, "cancelled": True}), 200
+    return jsonify({"ok": True, "reason": "not_found"}), 200
 
 
 @chat_bp.route("/action", methods=["POST"])

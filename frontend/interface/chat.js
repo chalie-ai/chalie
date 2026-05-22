@@ -79,6 +79,68 @@ export class Chat {
   }
 
   // ---------------------------------------------------------------------------
+  // Stop
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Transition the send button to stop mode.
+   * Called immediately when a send turn starts.
+   */
+  _enterStopMode() {
+    const sendBtn = document.getElementById('sendBtn');
+    if (!sendBtn) return;
+    sendBtn.disabled = false;
+    sendBtn.classList.remove('btn-action--send');
+    sendBtn.classList.add('btn-action--stop');
+    sendBtn.setAttribute('aria-label', 'Stop');
+    sendBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+      <rect x="2" y="2" width="12" height="12" rx="2"/>
+    </svg>`;
+  }
+
+  /**
+   * Transition the send button to stopping mode (after stop clicked, before done).
+   */
+  _enterStoppingMode() {
+    const sendBtn = document.getElementById('sendBtn');
+    if (!sendBtn) return;
+    sendBtn.disabled = true;
+    sendBtn.classList.remove('btn-action--stop');
+    sendBtn.classList.add('btn-action--stopping');
+    sendBtn.setAttribute('aria-label', 'Stopping...');
+  }
+
+  /**
+   * Revert the send button to normal send mode.
+   * Called when a turn completes (done event) or is cancelled.
+   */
+  _exitStopMode() {
+    const sendBtn = document.getElementById('sendBtn');
+    if (!sendBtn) return;
+    sendBtn.disabled = true;
+    sendBtn.classList.remove('btn-action--stop', 'btn-action--stopping');
+    sendBtn.classList.add('btn-action--send');
+    sendBtn.setAttribute('aria-label', 'Send message');
+    sendBtn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <line x1="22" y1="2" x2="11" y2="13"></line>
+      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+    </svg>`;
+  }
+
+  /**
+   * Request stop of the active turn. Posts to /api/chat/stop and enters
+   * stopping mode. The button remains disabled until the done event fires.
+   */
+  async requestStop() {
+    this._enterStoppingMode();
+    try {
+      await this._api._post('/chat/stop', {});
+    } catch (err) {
+      console.warn('[Chat] Stop request failed:', err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Send
   // ---------------------------------------------------------------------------
 
@@ -117,7 +179,7 @@ export class Chat {
     textarea.value = '';
     textarea.style.height = 'auto';
     if (this._imageAttach) this._imageAttach.clear();
-    sendBtn.disabled = true;
+    this._enterStopMode();
 
     // Capture timestamp for this exchange
     const exchangeTimestamp = new Date();
@@ -260,6 +322,7 @@ export class Chat {
     }
     this._presence.setState('resting');
     this._isSending = false;
+    this._exitStopMode();
     this._onSendCompleteCb?.();
   }
 

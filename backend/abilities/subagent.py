@@ -25,9 +25,37 @@ import uuid
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
 from services.rich_media_parser import strip_spans
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SUBAGENT SKILL]"
+
+# ── Active subagent registry ──────────────────────────────────────────────────
+#
+# Tracks all async subagents that are currently running so the stop endpoint
+# can signal cooperative cancellation. Entries are added before thread.start()
+# and removed in the thread's finally block, guaranteeing no leaked entries.
+# Each entry: {"processor": SubagentProcessor, "agent_type": str,
+#               "description": str, "started_at": str}
+
+_active_subagents: dict[str, dict] = {}
+_subagent_lock = threading.Lock()
+
+
+def get_active_subagents() -> dict[str, dict]:
+    """Return a snapshot of the active subagent registry (thread-safe)."""
+    with _subagent_lock:
+        return dict(_active_subagents)
+
+
+def cancel_subagent(sub_id: str) -> bool:
+    """Set the cancel_event on a running subagent. Returns True if found."""
+    with _subagent_lock:
+        entry = _active_subagents.get(sub_id)
+    if entry is None:
+        return False
+    entry["processor"]._cancel_event.set()
+    return True
 
 # ── Per-type system prompts ───────────────────────────────────────────────────
 
@@ -300,6 +328,9 @@ Briefing rules:
             timeout = min(timeout, type_entry["wait_cap"])
 
         sub_id = uuid.uuid4().hex
+        # Expose sub_id in params so it appears in tool_calls.params and is
+        # accessible by the stop endpoint and nightly scenarios.
+        params = {**params, "sub_id": sub_id}
 
         if wait:
             return self._run_sync(prompt, agent_type, timeout, sub_id)
@@ -309,28 +340,69 @@ Briefing rules:
 
     def _run_async(self, prompt: str, agent_type: str, timeout: int, sub_id: str) -> dict:
         """Fire-and-forget: spawn daemon thread, deliver result via chat chokepoint."""
+        from services.subagent_processor import SubagentProcessor
+        from services.websocket_broker import WebSocketBroker
+
+        cancel_event = threading.Event()
+        description = SUBAGENT_TYPES[agent_type]["description"]
+        proc = SubagentProcessor(
+            raw_input=prompt,
+            metadata={"sub_id": sub_id},
+            agent_type=agent_type,
+            max_timeout_override=timeout,
+            cancel_event=cancel_event,
+        )
+
+        with _subagent_lock:
+            _active_subagents[sub_id] = {
+                "processor": proc,
+                "agent_type": agent_type,
+                "description": description,
+                "started_at": utc_now().isoformat(),
+            }
 
         def _run():
+            broker = WebSocketBroker()
+            status = "done"
+            envelope = ""
             try:
-                from services.subagent_processor import SubagentProcessor
+                broker.broadcast({
+                    "type": "subagent_start",
+                    "sub_id": sub_id,
+                    "agent_type": agent_type,
+                    "description": description,
+                })
 
-                response_text = SubagentProcessor(
-                    raw_input=prompt,
-                    metadata={"sub_id": sub_id},
-                    agent_type=agent_type,
-                    max_timeout_override=timeout,
-                ).send()
+                response_text = proc.send()
                 response_text = strip_spans((response_text or "").strip()).strip()
                 if not response_text:
                     response_text = "Subagent completed but produced no output."
 
-                envelope = _build_envelope(response_text, agent_type, status="success")
-                logger.info("%s Subagent %s complete — delivering envelope", LOG_PREFIX, sub_id[:8])
+                if cancel_event.is_set():
+                    status = "cancelled"
+                    envelope = _build_envelope(
+                        "Subagent was cancelled before completing.", agent_type, status="failure"
+                    )
+                else:
+                    envelope = _build_envelope(response_text, agent_type, status="success")
+                logger.info(
+                    "%s Subagent %s complete (status=%s) — delivering envelope",
+                    LOG_PREFIX, sub_id[:8], status,
+                )
             except Exception as exc:
+                status = "error"
                 logger.error(
                     "%s Subagent %s failed: %s", LOG_PREFIX, sub_id[:8], exc, exc_info=True
                 )
                 envelope = _build_envelope(str(exc), agent_type, status="failure")
+            finally:
+                with _subagent_lock:
+                    _active_subagents.pop(sub_id, None)
+                broker.broadcast({
+                    "type": "subagent_end",
+                    "sub_id": sub_id,
+                    "status": status,
+                })
 
             try:
                 from api.chat import dispatch_message

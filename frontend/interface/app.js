@@ -465,6 +465,14 @@ class ChalieApp {
     this._eventRouter.onQuickTip((data) => {
       this._quickTipCard.handleTip(data);
     });
+
+    this._eventRouter.onSubagentStart((data) => {
+      this._taskStrip.onSubagentStart(data);
+    });
+
+    this._eventRouter.onSubagentEnd((data) => {
+      this._taskStrip.onSubagentEnd(data);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -622,7 +630,10 @@ class ChalieApp {
     textarea.addEventListener('input', () => {
       textarea.style.height = 'auto';
       textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-      sendBtn.disabled = (!textarea.value.trim() && !this._imageAttach.count) || this._imageAttach.isUploading;
+      // Do not override the stop/stopping button state while a turn is in-flight.
+      if (!this._chat.isSending) {
+        sendBtn.disabled = (!textarea.value.trim() && !this._imageAttach.count) || this._imageAttach.isUploading;
+      }
     });
 
     // Enter to send (Shift+Enter for newline)
@@ -633,8 +644,14 @@ class ChalieApp {
       }
     });
 
-    // Send button click
-    sendBtn.addEventListener('click', () => this._chat.sendMessage());
+    // Send button click — routes to stop if a turn is in-flight.
+    sendBtn.addEventListener('click', () => {
+      if (this._chat.isSending) {
+        this._chat.requestStop();
+      } else {
+        this._chat.sendMessage();
+      }
+    });
 
     // Re-enable input after send completes
     this._chat.onSendComplete(() => {

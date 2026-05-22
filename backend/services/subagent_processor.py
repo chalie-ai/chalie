@@ -30,13 +30,14 @@ _BLOCKED: frozenset[str] = frozenset({"subagent", "save_graph", "detect_pattern"
 class SubagentProcessor(MessageProcessor):
     """MessageProcessor subclass for focused subagent task execution.
 
-    Extended safety caps:
-      MAX_ITERATIONS = 50   (vs. base 30)
-      ITERATION_TIMEOUT inherited from base (1800s per-iteration wall)
+    Loop termination:
+      - Unbounded iteration loop (overrides _iteration_cap_reached() → False)
+      - Cancelled by user via _cancel_event (set by stop endpoint)
+      - Per-instance deadline (self._deadline) from SUBAGENT_TYPES timeout
+      - ITERATION_TIMEOUT inherited from base (1800s per-iteration wall)
 
     ALWAYS_AVAILABLE is set per-instance from SUBAGENT_TYPES[agent_type]['native_tools'].
     DISCOVERABLE covers everything not in the blocklist or type's native list.
-    Per-instance deadline (self._deadline) enforces the type's wall-clock budget.
 
     _BLOCKED names are filtered from DISCOVERABLE and any find_tools discovery.
     """
@@ -45,7 +46,6 @@ class SubagentProcessor(MessageProcessor):
     ROLE = 'subagent'
     LOG_LABEL = 'subagent'
     USAGE_CLASS = 'subagent'
-    MAX_ITERATIONS = 50
     DISCOVERABLE: list[str] = [
         "browser",
         "code_eval",
@@ -61,12 +61,18 @@ class SubagentProcessor(MessageProcessor):
         "weather",
     ]
 
+    def _iteration_cap_reached(self) -> bool:
+        """SubagentProcessor runs an unbounded loop — terminated by user stop,
+        per-instance deadline, ITERATION_TIMEOUT, or a clean LLM exit."""
+        return False
+
     def __init__(
         self,
         raw_input: str,
         metadata: dict | None = None,
         agent_type: str = "general_purpose",
         max_timeout_override: int | None = None,
+        cancel_event=None,
     ) -> None:
         super().__init__(raw_input, metadata)
 
@@ -82,6 +88,11 @@ class SubagentProcessor(MessageProcessor):
             else SUBAGENT_TYPES[agent_type]["default_timeout"]
         )
         self._deadline = time.time() + timeout_seconds
+
+        # Allow the caller to inject an external cancel_event so the subagent
+        # registry can signal cooperative stop from the stop endpoint.
+        if cancel_event is not None:
+            self._cancel_event = cancel_event
 
     def get_system_prompt(self) -> str:
         """Build the subagent system prompt from the per-type prompt + guardrails."""

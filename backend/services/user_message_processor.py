@@ -73,6 +73,11 @@ class UserMessageProcessor(MessageProcessor):
         "weather",
     ]
 
+    def _iteration_cap_reached(self) -> bool:
+        """UMP runs an unbounded loop — only user stop, ITERATION_TIMEOUT, or
+        a clean LLM exit terminate it. No iteration counter cap."""
+        return False
+
     # ── Constructor ───────────────────────────────────────────────────────────
 
     def __init__(

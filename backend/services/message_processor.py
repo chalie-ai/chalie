@@ -24,6 +24,7 @@ import contextlib
 import contextvars
 import logging
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
@@ -224,6 +225,10 @@ class MessageProcessor:
         # hard wall-clock cap (e.g. SubagentProcessor). None means no deadline.
         # Set by subclasses in __init__ after calling super().__init__().
         self._deadline: float | None = None
+        # Cooperative cancellation flag. Set by stop endpoints to signal the
+        # ACT loop to exit at the next iteration boundary. Never raises —
+        # the loop checks is_set() at the top of each iteration.
+        self._cancel_event: threading.Event = threading.Event()
 
     def set_turn_start(self, ts: float) -> None:
         """Override the accumulator start time (called from _handle_chat before thread spawn)."""
@@ -734,7 +739,13 @@ class MessageProcessor:
 
         ACT loop termination:
         - Clean exit: LLM returned text with no tool_calls.
-        - MAX_ITERATIONS safety cap (default 30; subagent 50).
+        - User-initiated cancel: ``_cancel_event`` set by stop endpoints;
+          checked at the top of each iteration before any LLM call.
+          UMP and SubagentProcessor run ``while True:`` — this is their
+          only hard iteration cap besides ITERATION_TIMEOUT and deadline.
+        - MAX_ITERATIONS safety cap — background processors only (DMN=100,
+          EAMP=200, PatternMatch=100, GeoPattern=100). UMP and SubagentProcessor
+          override ``_iteration_cap_reached()`` to return False.
         - Per-instance deadline (``self._deadline``) — opt-in, set by
           SubagentProcessor based on agent_type. Base class: no deadline.
         - ITERATION_TIMEOUT (1800s) per-iteration safety wall — fires only
@@ -807,7 +818,16 @@ class MessageProcessor:
             llm_response = None
             loop_exited_cleanly = False
 
-            while self._current_iteration < self.MAX_ITERATIONS:
+            while True:
+                # Cooperative cancellation — set by stop endpoints between iterations.
+                if self._cancel_event.is_set():
+                    logger.info(
+                        "[MessageProcessor] %s: ACT loop cancelled by user "
+                        "(iteration=%d)",
+                        self.CHANNEL, self._current_iteration,
+                    )
+                    break
+
                 # Per-instance deadline check (opt-in — SubagentProcessor only).
                 # Base class never sets self._deadline so this is a no-op for UMP.
                 if self._deadline is not None and time.time() > self._deadline:
@@ -815,6 +835,22 @@ class MessageProcessor:
                         "[MessageProcessor.send] %s: per-instance deadline exceeded "
                         "(iteration=%d) — breaking to cap exit",
                         self.CHANNEL, self._current_iteration,
+                    )
+                    break
+
+                # Iteration cap check (background processors only — UMP and
+                # SubagentProcessor override _iteration_cap_reached() to return
+                # False, making their loops unbounded except for user stop /
+                # deadline / ITERATION_TIMEOUT / clean exit).
+                if self._iteration_cap_reached():
+                    logger.warning(
+                        "[MessageProcessor.send] %s: ACT loop hit safety cap "
+                        "(iteration=%d, max_iter=%d) — "
+                        "final_text set to '' to avoid persisting mid-loop narration "
+                        "as assistant response",
+                        self.CHANNEL,
+                        self._current_iteration,
+                        self.MAX_ITERATIONS,
                     )
                     break
 
@@ -902,17 +938,9 @@ class MessageProcessor:
             if loop_exited_cleanly:
                 final_text = (llm_response.text or '') if llm_response else ''
             else:
-                # Cap exit — no clean terminating text. The last iteration's
-                # narration is already captured as a narration DTO; we
-                # must NOT re-use it as the assistant row.
-                logger.warning(
-                    "[MessageProcessor.send] ACT loop hit safety cap "
-                    "(iteration=%d, max_iter=%d) — "
-                    "final_text set to '' to avoid persisting mid-loop narration "
-                    "as assistant response",
-                    self._current_iteration,
-                    self.MAX_ITERATIONS,
-                )
+                # Non-clean exit (cap / deadline / cancel / ITERATION_TIMEOUT).
+                # The last iteration's narration is already captured as a narration
+                # DTO; we must NOT re-use it as the assistant row.
                 final_text = ''
 
             with self._metrics.stage('store'):
@@ -925,6 +953,16 @@ class MessageProcessor:
                     "[POSTTURN] Failed (turn already stored): %s", e, exc_info=True
                 )
             return final_text
+
+    def _iteration_cap_reached(self) -> bool:
+        """Return True when the ACT loop should break due to the iteration cap.
+
+        Background processors (DMN, EAMP, PatternMatch, GeoPattern) use the
+        default MAX_ITERATIONS cap. UMP and SubagentProcessor override this to
+        return False, making their loops unbounded (terminated only by user stop,
+        deadline, ITERATION_TIMEOUT, or clean exit).
+        """
+        return self._current_iteration >= self.MAX_ITERATIONS
 
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Base no-op. UserMessageProcessor overrides in Commit 8 to push

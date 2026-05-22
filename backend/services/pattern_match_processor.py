@@ -2,7 +2,7 @@
 
 Fires from SubconsciousWorker._step_pattern_match() when >=50 new transcripts
 have accumulated since the last cursor. One forward pass; the model emits
-save_pattern / save_graph tool_calls in parallel; ACT loop bounded at 30
+save_pattern / save_graph tool_calls in parallel; ACT loop bounded at 100
 iterations. Tool results are intentionally minimal so the model has no useful
 content to react to in subsequent iterations.
 
@@ -33,7 +33,7 @@ class PatternMatchProcessor(MessageProcessor):
     # via find_tools.
     ALWAYS_AVAILABLE: list[str] = ["save_pattern", "save_graph"]
     DISCOVERABLE: list[str] = []
-    MAX_ITERATIONS = 30
+    MAX_ITERATIONS = 100
     SKIP_TRANSCRIPT_WRITE = True
 
     def __init__(
