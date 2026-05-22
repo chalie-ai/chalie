@@ -131,6 +131,7 @@ class SkillAssociationService:
 
         conn = sqlite3.connect(str(_SKILLS_DB))
         try:
+            conn.execute("PRAGMA foreign_keys = ON")
             for assoc in associations:
                 sid = assoc.get("skill_id")
                 pname = assoc.get("pattern_name")
@@ -171,7 +172,11 @@ def _parse_associations(text: str) -> list[dict] | None:
     try:
         payload = text.strip()
         if '```' in payload:
-            payload = payload.split('```')[1]
+            parts = payload.split('```')
+            if len(parts) >= 3:
+                payload = parts[1]
+            else:
+                payload = parts[1]
             if payload.startswith('json'):
                 payload = payload[4:]
         result = json.loads(payload.strip())

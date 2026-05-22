@@ -191,11 +191,11 @@ def test_abilities_directory_has_expected_non_underscore_modules():
 # bloated tools arrays from ~5kB to ~12.8kB and produced Ollama 500 errors +
 # model hallucinations in nightly run 346.
 
-_DEFAULT_ALWAYS = frozenset({"find_tools", "memory"})
+_DEFAULT_ALWAYS = frozenset({"find_skills", "find_tools", "memory"})
 
 _DEFAULT_DISCOVERABLE = frozenset({
     "browser", "calendar", "code_eval", "contacts", "document", "email",
-    "find_skills", "home", "list", "news", "place", "programming_docs_search", "read",
+    "home", "list", "news", "place", "programming_docs_search", "read",
     "review_tool_calls", "review_transcript", "schedule", "search",
     "subagent", "timer", "ubiquiti", "weather",
 })

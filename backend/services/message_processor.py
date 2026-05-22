@@ -149,6 +149,7 @@ class MessageProcessor:
     USAGE_CLASS: str = 'chat'
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
     ALWAYS_AVAILABLE: list[str] = [
+        "find_skills",
         "find_tools",
         "memory",
     ]
@@ -161,7 +162,6 @@ class MessageProcessor:
         "contacts",
         "document",
         "email",
-        "find_skills",
         "home",
         "list",
         "news",
@@ -419,8 +419,6 @@ class MessageProcessor:
         for name in self.DISCOVERABLE:
             if name in self._BLOCKED:
                 continue
-            if name == 'find_skills':
-                continue  # TKT-579: exclude from injected index per TKT-578 convention
             try:
                 ability = AbilityRegistry.get(name)
                 tooltip = getattr(ability, 'SEARCH_TOOLTIP', '') or ability.SUMMARY
