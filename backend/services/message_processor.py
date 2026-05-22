@@ -561,6 +561,12 @@ class MessageProcessor:
             )
             result_text = str(dispatch.get('result', ''))
 
+            # Merge any params updates from the ability back into tc_input
+            # so they appear in the recorded tool_calls row.
+            _params_upd = dispatch.get('_params_update')
+            if _params_upd and isinstance(_params_upd, dict):
+                tc_input.update(_params_upd)
+
             # find_tools side effect — inject discovered schemas AND
             # register discovered tools as handlers on self._dispatcher
             # so subsequent iterations dispatch through the same path.

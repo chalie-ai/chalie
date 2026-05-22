@@ -401,9 +401,11 @@ class ActDispatcherService:
         """Build the success result dict from a raw handler return value."""
         reply_actions = None
         _discovered_tools = None
+        _params_update = None
         if isinstance(raw_result, dict) and 'text' in raw_result:
             reply_actions = raw_result.get('reply_actions')
             _discovered_tools = raw_result.get('_discovered_tools')
+            _params_update = raw_result.get('_params_update')
             raw_result = raw_result['text']
 
         confidence = _estimate_confidence(action_type, raw_result)
@@ -421,6 +423,8 @@ class ActDispatcherService:
             dispatch_result['reply_actions'] = reply_actions
         if _discovered_tools:
             dispatch_result['_discovered_tools'] = _discovered_tools
+        if _params_update:
+            dispatch_result['_params_update'] = _params_update
         return dispatch_result
 
     def _try_wrapper_intent(self, action_type: str, action: Dict[str, Any]) -> Dict[str, Any] | None:

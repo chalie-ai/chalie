@@ -328,9 +328,6 @@ Briefing rules:
             timeout = min(timeout, type_entry["wait_cap"])
 
         sub_id = uuid.uuid4().hex
-        # Mutate in-place so the ACT loop's reference to params includes sub_id
-        # when it writes the tool_calls row.
-        params["sub_id"] = sub_id
 
         if wait:
             return self._run_sync(prompt, agent_type, timeout, sub_id)
@@ -421,7 +418,10 @@ Briefing rules:
             "type": agent_type,
             "response": "Working on it. I'll notify you when done.",
         })
-        return {"text": _skill_tag("subagent", body, sub_id=sub_id[:8], wait=False)}
+        return {
+            "text": _skill_tag("subagent", body, sub_id=sub_id[:8], wait=False),
+            "_params_update": {"sub_id": sub_id},
+        }
 
     def _run_sync(self, prompt: str, agent_type: str, timeout: int, sub_id: str) -> dict:
         """Blocking: run SubagentProcessor inline and return its result."""
