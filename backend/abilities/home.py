@@ -28,7 +28,7 @@ class HomeAbility(Ability):
         "turn off all lights downstairs",
         "what automations do I have",
         "trigger the good morning routine",
-        "what devices are currently on",
+        "run the good morning routine",
         "set the thermostat to 21 degrees",
     ]
     INPUT_SCHEMA = {
@@ -75,7 +75,11 @@ class HomeAbility(Ability):
             },
             "automation_id": {
                 "type": "string",
-                "description": "trigger_automation: automation entity_id.",
+                "description": (
+                    "trigger_automation: HA entity_id (e.g. 'automation.good_morning') "
+                    "OR a unique substring of the automation's friendly name "
+                    "(e.g. 'good morning')."
+                ),
             },
         },
         "required": ["action"],

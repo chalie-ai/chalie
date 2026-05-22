@@ -215,14 +215,55 @@ class HomeCapability(AbstractCapability):
             return err
         return rest.list_automations(self._url, self._token, self._verify_ssl)
 
+    def _resolve_automation_id(self, value: str) -> dict:
+        """Resolve a friendly-name substring to a HA automation entity_id.
+
+        Returns a dict with either ``entity_id`` (resolved) or ``error``.
+        When ``value`` already looks like an entity_id (starts with
+        ``automation.``), it is returned as-is without a network call.
+        """
+        if value.startswith("automation."):
+            return {"entity_id": value}
+
+        result = rest.list_automations(self._url, self._token, self._verify_ssl)
+        automations = result.get("automations", [])
+        needle = value.lower()
+        matches = [
+            a for a in automations
+            if needle in a.get("friendly_name", "").lower()
+            or needle == a["entity_id"].lower()
+        ]
+
+        if len(matches) == 0:
+            return {"error": f"No automation found matching '{value}'"}
+        if len(matches) > 1:
+            names = [m.get("friendly_name", m["entity_id"]) for m in matches]
+            return {
+                "error": (
+                    f"Multiple automations match '{value}': {names}. "
+                    "Use the entity_id instead."
+                )
+            }
+        return {"entity_id": matches[0]["entity_id"], "resolved_from": value}
+
     def _tool_trigger_automation(self, topic, params, config=None, telemetry=None) -> dict:
         err = self._require_connection()
         if err:
             return err
-        aid = params.get("automation_id")
+        aid = (params.get("automation_id") or "").strip()
         if not aid:
             return {"error": "automation_id is required"}
-        return rest.trigger_automation(self._url, self._token, self._verify_ssl, aid)
+
+        resolved = self._resolve_automation_id(aid)
+        if "error" in resolved:
+            return resolved
+
+        result = rest.trigger_automation(
+            self._url, self._token, self._verify_ssl, resolved["entity_id"]
+        )
+        if "resolved_from" in resolved:
+            result["resolved_from"] = resolved["resolved_from"]
+        return result
 
     def _tool_subscribe_events(self, topic, params, config=None, telemetry=None) -> dict:
         err = self._require_connection()
