@@ -38,20 +38,24 @@ If no patterns match any skills, respond with an empty array: []"""
 class SkillAssociationService:
     """Run LLM-driven association passes between behavioural patterns and skills.
 
-    Reads active patterns from data_graph and available skills from skills.sqlite,
-    makes one LLM call to determine personalisation rules, then writes the results
-    back to skill_associations in skills.sqlite.
+    Accepts the row IDs of patterns touched by the current PMP pass, loads only
+    those patterns, makes one LLM call to determine personalisation rules, then
+    writes the results back to skill_associations in skills.sqlite.
     """
 
-    def run_pass(self) -> int:
+    def run_pass(self, touched_pattern_ids: set[int]) -> int:
         """Run a single association pass. Returns the number of rules written."""
         if not _SKILLS_DB.exists():
             logger.info(f"{LOG_PREFIX} skills.sqlite not found — skipping")
             return 0
 
-        patterns = self._load_active_patterns()
+        if not touched_pattern_ids:
+            logger.info(f"{LOG_PREFIX} no touched patterns — skipping")
+            return 0
+
+        patterns = self._load_patterns(touched_pattern_ids)
         if not patterns:
-            logger.info(f"{LOG_PREFIX} no active patterns — skipping")
+            logger.info(f"{LOG_PREFIX} no patterns found for touched IDs — skipping")
             return 0
 
         skills = self._load_skill_index()
@@ -64,28 +68,31 @@ class SkillAssociationService:
             return 0
 
         valid_skill_ids = {s[0] for s in skills}
-        active_pattern_names = {p[0] for p in patterns}
-        written = self._write_associations(associations, valid_skill_ids, active_pattern_names)
+        pattern_names = {p[0] for p in patterns}
+        written = self._write_associations(associations, valid_skill_ids, pattern_names)
 
         logger.info(f"{LOG_PREFIX} wrote {written} associations")
         return written
 
-    def _load_active_patterns(self) -> list[tuple[str, str]]:
-        """Read all active behavioral_pattern rows from data_graph."""
+    def _load_patterns(self, row_ids: set[int]) -> list[tuple[str, str]]:
+        """Load behavioral_pattern rows by their data_graph IDs."""
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
+        placeholders = ",".join("?" * len(row_ids))
         with db.connection() as conn:
             return conn.execute(
-                "SELECT key, value FROM data_graph "
-                "WHERE kind='behavioral_pattern' AND active=1 AND deleted_at IS NULL"
+                f"SELECT key, value FROM data_graph "
+                f"WHERE id IN ({placeholders}) "
+                f"AND kind='behavioral_pattern' AND active=1 AND deleted_at IS NULL",
+                tuple(row_ids),
             ).fetchall()
 
     def _load_skill_index(self) -> list[tuple]:
-        """Read skill index (id, title, use_for, tags) from skills.sqlite."""
+        """Read skill index (id, title, use_for) from skills.sqlite."""
         conn = sqlite3.connect(str(_SKILLS_DB))
         try:
             return conn.execute(
-                "SELECT id, title, use_for, tags FROM skills"
+                "SELECT id, title, use_for FROM skills"
             ).fetchall()
         finally:
             conn.close()
@@ -96,26 +103,37 @@ class SkillAssociationService:
         skills: list[tuple],
     ) -> list[dict] | None:
         """Call LLM to map patterns to skills. Returns parsed associations or None."""
-        pattern_text = "\n".join(
-            f"- {key}: {_safe_parse_summary(value)}"
+        pattern_list = [
+            {key: json.loads(value).get("summary", value) if value else value}
             for key, value in patterns
-        )
-        skill_text = "\n".join(
-            f"- id={sid}, title={title}, use_for={use_for}, tags={tags}"
-            for sid, title, use_for, tags in skills
-        )
+        ]
+        skill_list = [
+            {"id": sid, "title": title, "use_for": use_for}
+            for sid, title, use_for in skills
+        ]
         user_prompt = (
-            f"## Behavioral Patterns\n{pattern_text}\n\n"
-            f"## Available Skills\n{skill_text}"
+            f"## Behavioral Patterns\n{json.dumps(pattern_list)}\n\n"
+            f"## Available Skills\n{json.dumps(skill_list)}"
         )
 
         from services.providers import Providers
-        response = Providers.instance().send(
-            user_prompt=user_prompt,
-            system_prompt=_SYSTEM_PROMPT,
-            job='subconscious',
-            tools=[],
-        )
+        try:
+            response = Providers.instance().send(
+                user_prompt=user_prompt,
+                system_prompt=_SYSTEM_PROMPT,
+                job='subconscious',
+                tools=[],
+            )
+        except Exception as exc:
+            exc_str = str(exc).lower()
+            if "context" in exc_str or "token" in exc_str or "length" in exc_str:
+                logger.error(
+                    f"{LOG_PREFIX} prompt exceeds provider context window — "
+                    f"patterns={len(patterns)} skills={len(skills)}: {exc}"
+                )
+            else:
+                logger.error(f"{LOG_PREFIX} LLM call failed: {exc}")
+            return None
 
         return _parse_associations(response.text)
 
@@ -123,9 +141,9 @@ class SkillAssociationService:
         self,
         associations: list[dict],
         valid_skill_ids: set[int],
-        active_pattern_names: set[str],
+        pattern_names: set[str],
     ) -> int:
-        """Write valid associations and prune stale rows. Returns count written."""
+        """Write valid associations. Returns count written."""
         now = utc_now().isoformat()
         written = 0
 
@@ -140,7 +158,7 @@ class SkillAssociationService:
                     continue
                 if sid not in valid_skill_ids:
                     continue
-                if pname not in active_pattern_names:
+                if pname not in pattern_names:
                     continue
                 conn.execute(
                     "INSERT OR REPLACE INTO skill_associations "
@@ -148,15 +166,6 @@ class SkillAssociationService:
                     (sid, pname, rule, now),
                 )
                 written += 1
-
-            # Remove rules for patterns no longer active.
-            if active_pattern_names:
-                placeholders = ",".join("?" * len(active_pattern_names))
-                conn.execute(
-                    f"DELETE FROM skill_associations "
-                    f"WHERE pattern_name NOT IN ({placeholders})",
-                    tuple(active_pattern_names),
-                )
 
             conn.commit()
         finally:
@@ -189,12 +198,3 @@ def _parse_associations(text: str) -> list[dict] | None:
         return None
 
     return result
-
-
-def _safe_parse_summary(value: str) -> str:
-    """Extract summary from pattern JSON value, falling back to raw text."""
-    try:
-        data = json.loads(value)
-        return data.get("summary", str(value)[:200])
-    except (json.JSONDecodeError, TypeError):
-        return str(value)[:200]
