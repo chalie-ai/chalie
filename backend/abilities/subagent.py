@@ -328,9 +328,9 @@ Briefing rules:
             timeout = min(timeout, type_entry["wait_cap"])
 
         sub_id = uuid.uuid4().hex
-        # Expose sub_id in params so it appears in tool_calls.params and is
-        # accessible by the stop endpoint and nightly scenarios.
-        params = {**params, "sub_id": sub_id}
+        # Mutate in-place so the ACT loop's reference to params includes sub_id
+        # when it writes the tool_calls row.
+        params["sub_id"] = sub_id
 
         if wait:
             return self._run_sync(prompt, agent_type, timeout, sub_id)
