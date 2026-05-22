@@ -54,7 +54,7 @@ def cancel_subagent(sub_id: str) -> bool:
         entry = _active_subagents.get(sub_id)
     if entry is None:
         return False
-    entry["processor"]._cancel_event.set()
+    entry["processor"].cancel()
     return True
 
 # ── Per-type system prompts ───────────────────────────────────────────────────
@@ -410,7 +410,13 @@ Briefing rules:
                 )
 
         t = threading.Thread(target=_run, daemon=True, name=f"subagent-{sub_id[:8]}")
-        t.start()
+        try:
+            t.start()
+        except RuntimeError:
+            with _subagent_lock:
+                _active_subagents.pop(sub_id, None)
+            logger.error("%s Failed to start thread for subagent %s", LOG_PREFIX, sub_id[:8])
+            return {"text": "Failed to launch subagent — thread could not start."}
 
         body = json.dumps({
             "success": True,

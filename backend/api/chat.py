@@ -254,7 +254,7 @@ def post_chat_stop():
     """
     proc = _get_active_ump()
     if proc is not None:
-        proc._cancel_event.set()
+        proc.cancel()
         logger.info("[Chat API] Stop signal delivered to active UMP turn")
         return jsonify({"ok": True, "cancelled": True}), 200
     return jsonify({"ok": True, "reason": "no_active_turn"}), 200

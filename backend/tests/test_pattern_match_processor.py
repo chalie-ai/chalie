@@ -512,18 +512,29 @@ class TestSaveGraphBudgetCapAt50:
         )
 
 
-class TestMaxIterations30CapsRunawayLoop:
-    """Test 11 — always-tool-calling LLM → loop caps at 30 iterations exactly."""
+class TestMaxIterations100CapsRunawayLoop:
+    """Test 11 — always-tool-calling LLM → loop caps at 100 iterations exactly.
 
-    def test_max_iterations_30_caps_runaway_loop(self, db, store):
+    TKT-598 raised PatternMatchProcessor.MAX_ITERATIONS from 30 to 100.
+    The safety cap still terminates a runaway loop; only the ceiling changed.
+    """
+
+    def test_max_iterations_100_caps_runaway_loop(self, db, store):
         from services.subconscious_worker import SubconsciousWorker
+        from services.pattern_match_processor import PatternMatchProcessor
+
+        # Confirm the processor carries the new cap before driving the loop.
+        assert PatternMatchProcessor.MAX_ITERATIONS == 100, (
+            f"PatternMatchProcessor.MAX_ITERATIONS is {PatternMatchProcessor.MAX_ITERATIONS}, "
+            "expected 100 (TKT-598 raised it from 30)"
+        )
 
         _seed_transcripts(db, 60)
 
         # Always return a new save_pattern call with a unique name per iteration
-        # so budget doesn't stop us before iteration 30. The budget is 20, so
-        # iterations 1-20 land patterns; iterations 21-30 get budget_exceeded
-        # from handleTool but the loop keeps going until MAX_ITERATIONS=30.
+        # so budget doesn't stop us before iteration 100. The budget is 20, so
+        # iterations 1-20 land patterns; iterations 21-100 get budget_exceeded
+        # from handleTool but the loop keeps going until MAX_ITERATIONS=100.
         send_call_count = {"n": 0}
 
         def _always_tool_call(system_prompt, messages, job=None, tools=None, **kw):
@@ -550,9 +561,9 @@ class TestMaxIterations30CapsRunawayLoop:
             # Must complete (not loop forever).
             worker._step_pattern_match()
 
-        # Providers.send_messages called exactly 30 times (MAX_ITERATIONS).
-        assert send_call_count["n"] == 30, (
-            f"Expected exactly 30 send_messages calls (MAX_ITERATIONS), "
+        # Providers.send_messages called exactly 100 times (MAX_ITERATIONS).
+        assert send_call_count["n"] == 100, (
+            f"Expected exactly 100 send_messages calls (MAX_ITERATIONS=100), "
             f"got {send_call_count['n']}"
         )
 

@@ -124,6 +124,14 @@ class ChalieApp {
     this._eventRouter = new EventRouter({ ws: this.ws, renderer: this.renderer });
     this._wireEventRouter();
 
+    // Reset stop-mode if WS drops mid-turn so the send button doesn't stay bricked.
+    this.ws.onDisconnect(() => {
+      if (this._chat.isSending) {
+        this._chat.isSending = false;
+        this._chat._exitStopMode();
+      }
+    });
+
     // Ambient sensor — passive behavioral observer
     this._ambientSensor = new AmbientSensor();
     this._ambientSensor.bindTypingInput(document.getElementById('messageInput'));

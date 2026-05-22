@@ -1566,12 +1566,12 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   background: transparent;
   color: var(--error);
   transition: all 220ms ease;
-  filter: drop-shadow(0 0 8px rgba(251, 113, 133, 0.35));
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--error) 35%, transparent));
 }
 
 .btn-action--stop:hover {
   transform: scale(1.1);
-  filter: drop-shadow(0 0 12px rgba(251, 113, 133, 0.6));
+  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--error) 60%, transparent));
 }
 
 .btn-action--stop:active {

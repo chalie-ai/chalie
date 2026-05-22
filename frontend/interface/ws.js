@@ -26,6 +26,7 @@ export class WSClient {
     this._reconnectTimer = null;
     this._chatCallbacks = null;
     this._driftHandler = null;
+    this._disconnectHandler = null;
     this._connected = false;
     this._intentionallyClosed = false;
   }
@@ -61,6 +62,14 @@ export class WSClient {
     this._driftHandler = handler;
   }
 
+  /**
+   * Set handler called when the WS connection drops (before reconnect).
+   * @param {() => void} handler
+   */
+  onDisconnect(handler) {
+    this._disconnectHandler = handler;
+  }
+
   connect() {
     if (this._ws && (this._ws.readyState === WebSocket.OPEN || this._ws.readyState === WebSocket.CONNECTING)) {
       return;
@@ -94,6 +103,7 @@ export class WSClient {
 
     this._ws.onclose = () => {
       this._connected = false;
+      this._disconnectHandler?.();
       if (!this._intentionallyClosed) {
         this._scheduleReconnect();
       }

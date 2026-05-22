@@ -230,6 +230,14 @@ class MessageProcessor:
         # the loop checks is_set() at the top of each iteration.
         self._cancel_event: threading.Event = threading.Event()
 
+    def cancel(self) -> None:
+        """Signal the ACT loop to exit at the next iteration boundary.
+
+        Public interface for stop endpoints — avoids reaching into the private
+        ``_cancel_event`` attribute from outside the class hierarchy.
+        """
+        self._cancel_event.set()
+
     def set_turn_start(self, ts: float) -> None:
         """Override the accumulator start time (called from _handle_chat before thread spawn)."""
         self._metrics.start_time = ts
