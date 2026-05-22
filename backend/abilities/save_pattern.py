@@ -60,7 +60,10 @@ class SavePattern(Ability):
                 "type": "string",
                 "description": "Optional anchor: '07:00' | 'evening' | 'weekends' | '' if not applicable.",
             },
-            "summary": {"type": "string"},
+            "summary": {
+                "type": "string",
+                "description": "One concise sentence describing the habitual behavior. Not a narrative or episode summary.",
+            },
             "evidence_transcript_ids": {
                 "type": "array",
                 "items": {"type": "integer"},

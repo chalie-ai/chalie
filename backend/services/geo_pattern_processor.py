@@ -62,50 +62,40 @@ class GeoPatternProcessor(MessageProcessor):
         return ""
 
     def get_system_prompt(self) -> str:
-        block = self._existing_patterns_block()
         return (
             "You are analysing the user's recent location-tagged transcripts "
             "to detect geo-spatial behavioural patterns — routines, habits, "
-            "and durable facts that are tied to specific physical places.\n\n"
+            "and durable facts tied to specific physical places.\n\n"
             "You have ONE forward pass. Emit ALL tool calls in parallel. Do "
             "NOT loop — results are intentionally minimal.\n\n"
-            "Tools:\n\n"
-            "1. save_pattern — record a repeating location-tied behaviour with "
-            "at least 2 evidence rows. Use snake_case names. REUSE existing "
-            "names exactly when reinforcing (case-sensitive). Focus on:\n"
-            "   - Location-based routines (gym Monday evenings, coffee shop "
-            "Saturday mornings).\n"
-            "   - Movement patterns (commute route, weekend trip pattern).\n"
-            "   - Activity-place associations (work meetings at office, leisure "
-            "at waterfront).\n"
-            f"   Existing patterns currently tracked:\n{block}\n\n"
-            "2. save_graph — record a durable place fact (kind='place') for "
-            "frequently-visited locations the user appears to return to "
-            "regularly.\n\n"
+            "save_pattern summaries must be 1 sentence and concise. "
+            "Examples:\n"
+            "- User walks to work every morning at 09:00\n"
+            "- User goes to the gym daily, except Sundays\n"
+            "- User's gym schedule is: Monday weights, Tuesday boxing\n"
+            "Do NOT write narratives, episode summaries, or date-stamped "
+            "event logs. The summary is a distilled habit, not a story.\n\n"
             "Rules:\n"
             "- save_pattern requires >=2 evidence rows in this batch.\n"
             "- Mirror existing pattern names exactly when reinforcing — "
             "case-sensitive.\n"
-            "- DO NOT emit generic behavioural patterns unrelated to location "
-            "(e.g. 'user checks email in the morning'). Another processor "
-            "handles those. Only emit patterns where physical place is central.\n"
+            "- Only emit patterns where physical place is central. Another "
+            "processor handles location-independent patterns.\n"
+            "- Do NOT use save_graph for repeating behaviours — use "
+            "save_pattern.\n"
             "- Skip noise. Skip one-offs. Skip ambiguous interpretations.\n"
             "- Emit everything in this single pass."
         )
 
     def get_user_prompt(self) -> str:
-        """Build the transcript block, including lat/lon and place name per row.
-
-        The DB query result is cached on first call — the window is fixed at
-        construction time and transcript data in that range never changes during
-        a single processor run.
-        """
         if self._cached_transcript_block is None:
             self._cached_transcript_block = self._load_transcript_block()
+        existing = self._existing_patterns_block()
         trail = self.get_act_loop_trail()
+        parts = [f"Existing patterns:\n{existing}", self._cached_transcript_block]
         if trail:
-            return f"{self._cached_transcript_block}\n{trail}"
-        return self._cached_transcript_block
+            parts.append(trail)
+        return "\n\n".join(parts)
 
     def _load_transcript_block(self) -> str:
         """Fetch location-tagged transcripts from the window and format them."""
@@ -161,14 +151,13 @@ class GeoPatternProcessor(MessageProcessor):
             ).fetchall()
         if not rows:
             return "(none yet)"
-        lines = []
+        patterns = {}
         for (val,) in rows:
             try:
                 d = json.loads(val) or {}
-                lines.append(
-                    f"- {d.get('name')} ({d.get('frequency')}): "
-                    f"{d.get('summary')}"
-                )
+                name = d.get("name")
+                if name:
+                    patterns[name] = d.get("summary", "")
             except Exception:
                 continue
-        return "\n".join(lines) if lines else "(none yet)"
+        return json.dumps(patterns, indent=2) if patterns else "(none yet)"
