@@ -6,8 +6,9 @@
 # Behaviour:
 #   - Idempotent: safe to re-run. Updates, upgrades, and fresh installs all use
 #     the same flow. Data at $HOME/.chalie/app/data is never touched.
-#   - If the source tree is already present at $HOME/.chalie/app, the GitHub
-#     download is skipped (used by the Dockerfile, which COPYs the source in).
+#   - Upgrades: if source already exists, the installer always downloads the
+#     target version, replaces managed source directories, and re-runs pip
+#     install.
 #   - One-time migration: legacy installs whose DB lives inside the source
 #     tree at $HOME/.chalie/app/backend/data are moved up one level to
 #     $HOME/.chalie/app/data, where the new paths module looks for it.
@@ -17,10 +18,6 @@ CHALIE_HOME="$HOME/.chalie"
 CHALIE_BIN="$HOME/.local/bin"
 CHALIE_REPO="chalie-ai/chalie"
 GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
-
-# sqlite-vec: PyPI aarch64 wheel ships a broken 32-bit .so (upstream bug).
-# Version pinned to match what requirements.txt resolves; bump both together.
-SQLITE_VEC_VERSION="0.1.6"
 
 # onnxruntime: version must match across the three wheels (CPU, CUDA, ROCm).
 # Changing this line is the single source of truth — requirements.txt no longer
@@ -405,16 +402,20 @@ _fetch_latest_tag() {
 }
 
 _download_release() {
-  # If the source tree is already present (Dockerfile COPY'd it, or a previous
-  # run completed), skip the download. This is how the Dockerfile reuses this
-  # script without needing a flag.
+  local is_upgrade=false
+  local current_version="unknown"
   if [[ -f "$CHALIE_HOME/app/backend/requirements.txt" ]]; then
-    _section "Using Existing Source"
-    _ok "Source present at $CHALIE_HOME/app"
-    return
+    is_upgrade=true
+    current_version="$(cat "$CHALIE_HOME/app/VERSION" 2>/dev/null || echo unknown)"
   fi
 
-  _section "Downloading Chalie"
+  if [[ "$is_upgrade" == true ]]; then
+    _section "Upgrading Chalie"
+    _info "Installed version: $current_version"
+  else
+    _section "Downloading Chalie"
+  fi
+
   # Priority order:
   #   1. --tag=NAME  → fetch refs/tags/NAME.tar.gz directly (no API lookup).
   #      Used by the Docker workflow on tag pushes — avoids racing with the
@@ -435,6 +436,9 @@ _download_release() {
     _info "Latest release: $ref"
     tarball_url="https://github.com/$CHALIE_REPO/archive/refs/tags/$ref.tar.gz"
   fi
+
+  local ref_version="${ref#v}"
+
   local tmp_dir
   tmp_dir="$(mktemp -d)"
   local tarball="$tmp_dir/chalie.tar.gz"
@@ -451,6 +455,19 @@ _download_release() {
     exit 1
   fi
 
+  # Remove old managed source directories before extraction so deleted files
+  # from previous versions don't linger. data/ is user state — never touched.
+  if [[ "$is_upgrade" == true ]]; then
+    _info "Removing old source…"
+    rm -rf "$CHALIE_HOME/app/backend" \
+           "$CHALIE_HOME/app/frontend" \
+           "$CHALIE_HOME/app/resources" \
+           "$CHALIE_HOME/app/installer" \
+           "$CHALIE_HOME/app/docs" \
+           "$CHALIE_HOME/app/scripts" \
+           "$CHALIE_HOME/app/utils"
+  fi
+
   _info "Extracting to $CHALIE_HOME/app/…"
   mkdir -p "$CHALIE_HOME/app"
   if ! tar -xzf "$tarball" --strip-components=1 -C "$CHALIE_HOME/app"; then
@@ -461,7 +478,11 @@ _download_release() {
   fi
 
   rm -rf "$tmp_dir"
-  _ok "Source extracted ($ref)"
+  if [[ "$is_upgrade" == true ]]; then
+    _ok "Upgraded: $current_version → $ref_version"
+  else
+    _ok "Source extracted ($ref)"
+  fi
 }
 
 # ─── Python Virtualenv + Dependencies ───────────────────────────────────────
@@ -552,78 +573,6 @@ _install_deno() {
     fi
   done
   _ok "Deno installed at $HOME/.deno"
-}
-
-# ─── sqlite-vec aarch64 Fix (Linux only) ───────────────────────────────────
-# The PyPI sqlite-vec wheel for linux_aarch64 ships a 32-bit ARM .so — a 64-bit
-# process cannot load it. Rebuild from source and replace the broken binary.
-# Only runs on Linux arm64; other platforms use the working wheel as-is.
-_install_sqlite_vec_fix() {
-  local os arch
-  os="$(_detect_os)"
-  arch="$(_detect_arch)"
-  if [[ "$os" != "linux" ]] || [[ "$arch" != "arm64" ]]; then
-    return 0
-  fi
-
-  _section "sqlite-vec (aarch64 wheel patch)"
-
-  local venv="$CHALIE_HOME/venv"
-  # If sqlite-vec isn't pip-installed at all, there's nothing to patch —
-  # earlier pip install must have failed. Skip with a different warning.
-  if ! "$venv/bin/pip" show sqlite-vec >/dev/null 2>&1; then
-    _warn "sqlite-vec not pip-installed — skipping patch"
-    return 0
-  fi
-
-  # Quick sanity: can we even load the existing wheel? If yes, skip.
-  if "$venv/bin/python" -c "
-import sqlite3, sqlite_vec
-c = sqlite3.connect(':memory:')
-c.enable_load_extension(True)
-sqlite_vec.load(c)
-c.execute('CREATE VIRTUAL TABLE t USING vec0(e float[4])')
-" 2>/dev/null; then
-    _ok "sqlite-vec loads correctly — no patch needed"
-    return 0
-  fi
-
-  _info "Rebuilding sqlite-vec from source (PyPI aarch64 wheel is broken)…"
-  local tmp
-  tmp="$(mktemp -d)"
-  (
-    cd "$tmp"
-    curl -sL "https://github.com/asg017/sqlite-vec/archive/refs/tags/v${SQLITE_VEC_VERSION}.tar.gz" | tar xz
-    cd "sqlite-vec-${SQLITE_VEC_VERSION}"
-    echo "${SQLITE_VEC_VERSION}" > VERSION
-    VERSION="${SQLITE_VEC_VERSION}" DATE=installer SOURCE=local \
-      VERSION_MAJOR="$(echo "${SQLITE_VEC_VERSION}" | cut -d. -f1)" \
-      VERSION_MINOR="$(echo "${SQLITE_VEC_VERSION}" | cut -d. -f2)" \
-      VERSION_PATCH="$(echo "${SQLITE_VEC_VERSION}" | cut -d. -f3)" \
-      envsubst < sqlite-vec.h.tmpl > sqlite-vec.h
-    mkdir -p dist
-    cc -fPIC -shared -O3 -lm -I/usr/include sqlite-vec.c -o dist/vec0.so
-    site_pkg="$("$venv/bin/python" -c 'import sqlite_vec, os; print(os.path.dirname(sqlite_vec.__file__))')"
-    cp dist/vec0.so "$site_pkg/vec0.so"
-  ) || {
-    rm -rf "$tmp"
-    _warn "sqlite-vec rebuild failed — vector search will not work"
-    return 0
-  }
-  rm -rf "$tmp"
-
-  # Verify the patch took.
-  if "$venv/bin/python" -c "
-import sqlite3, sqlite_vec
-c = sqlite3.connect(':memory:')
-c.enable_load_extension(True)
-sqlite_vec.load(c)
-c.execute('CREATE VIRTUAL TABLE t USING vec0(e float[4])')
-" 2>/dev/null; then
-    _ok "sqlite-vec patched and verified"
-  else
-    _warn "sqlite-vec still fails to load after rebuild"
-  fi
 }
 
 # ─── Install CLI Wrapper ─────────────────────────────────────────────────────
@@ -769,23 +718,6 @@ _print_success() {
   printf "\n"
 }
 
-# ─── Data layout migration (one-time) ────────────────────────────────────────
-# Pre-cleanup installs let Python's old default resolver write the DB inside
-# the source tree at $CHALIE_HOME/app/backend/data/. The new layout puts data
-# alongside backend/ at $CHALIE_HOME/app/data/. Move it once if the legacy
-# location is populated and the new one is empty.
-_migrate_data_layout() {
-  local legacy="$CHALIE_HOME/app/backend/data"
-  local target="$CHALIE_HOME/app/data"
-  if [[ -f "$legacy/chalie.db" && ! -f "$target/chalie.db" ]]; then
-    _section "Migrating Data Layout"
-    _info "Moving $legacy → $target"
-    mkdir -p "$CHALIE_HOME/app"
-    mv "$legacy" "$target"
-    _ok "Data migrated"
-  fi
-}
-
 # ─── Main ────────────────────────────────────────────────────────────────────
 # Single flow — fresh installs, upgrades, and re-runs all take the same path.
 # Every step is idempotent. Data at $CHALIE_HOME/app/data is never touched.
@@ -804,11 +736,9 @@ main() {
   _install_voice_deps
   _install_deno
   _download_release
-  _migrate_data_layout
   _setup_venv
   _install_onnxruntime_variant
   _install_playwright_browsers
-  _install_sqlite_vec_fix
   _download_voice_models
   _install_cli
   _print_success
