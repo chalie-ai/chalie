@@ -29,6 +29,7 @@ import uuid
 from flask import Blueprint, jsonify, request
 
 from .auth import require_auth
+from services.log_utils import safe
 from services.markup import actions_to_xml, sanitize
 from services.websocket_broker import WebSocketBroker
 from services.segment_service import SegmentService
@@ -278,7 +279,7 @@ def post_subagent_stop(sub_id: str):
     from abilities.subagent import cancel_subagent
 
     if cancel_subagent(sub_id):
-        logger.info("[Chat API] Stop signal delivered to subagent %s", sub_id[:8])
+        logger.info("[Chat API] Stop signal delivered to subagent %s", safe(sub_id[:8]))
         return jsonify({"ok": True, "cancelled": True}), 200
     return jsonify({"ok": True, "reason": "not_found"}), 200
 

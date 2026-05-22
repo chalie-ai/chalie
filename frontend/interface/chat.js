@@ -155,7 +155,6 @@ export class Chat {
    */
   async sendMessage(source = 'text') {
     const textarea = document.getElementById('messageInput');
-    const sendBtn = document.getElementById('sendBtn');
     const text = textarea.value.trim();
     const attachments = this._imageAttach ? this._imageAttach.getAttachmentPaths() : [];
 
