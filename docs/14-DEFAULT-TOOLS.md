@@ -1,12 +1,12 @@
 # First-Party Abilities
 
-These abilities ship with Chalie as `Ability` subclasses under `backend/abilities/` and are invoked in-process via the ACT loop. Tool tiers are centralised on `MessageProcessor`: `ALWAYS_AVAILABLE` defaults to `["find_skills", "find_tools", "memory"]` and `DISCOVERABLE` defaults to all 20 first-party abilities. Most processors inherit these defaults; subclasses override only where needed (e.g. `_BLOCKED` to exclude specific tools). The `find_tools` tool schema includes a compact index of all discoverable tools (built from each ability's `SEARCH_TOOLTIP`) so the LLM knows what is available before calling it.
+These abilities ship with Chalie as `Ability` subclasses under `backend/abilities/` and are invoked in-process via the ACT loop. Tool tiers are centralised on `MessageProcessor`: `ALWAYS_AVAILABLE` defaults to `["find_skills", "find_tools", "memory"]` and `DISCOVERABLE` defaults to all 20 first-party abilities. Most processors inherit these defaults; subclasses override only where needed (e.g. `_BLOCKED` to exclude specific tools). `find_tools` and `find_skills` both inherit from `SearchableAbility` (`abilities/_search.py`) which provides shared vec+FTS5 RRF fusion search.
 
 See `docs/09-TOOLS.md` for how the always-available and discoverable tiers stack and when each fires.
 
 ## Find Skills
 
-Returns curated step-by-step playbooks for complex tasks (research, planning, analysis, writing). Queries `abilities/assets/skills.sqlite` (vec + FTS5 RRF fusion) built from YAML files in `backend/abilities/skills/`. Results are annotated with personalisation rules from `skill_associations` when `SkillAssociationService` has mapped the user's behavioural patterns to a skill. ALWAYS_AVAILABLE on all user-facing processors — not discoverable, because returning procedural playbooks is infrastructure like `find_tools` and `memory`. Falls back to FTS-only when embedding generation fails. Build: `python -m utils.build_skills_db`; drift check: `python -m utils.build_skills_db --check`.
+Returns curated step-by-step tool-calling playbooks for complex tasks. Queries `abilities/assets/skills.sqlite` (vec + FTS5 RRF fusion) built from 5 YAML files in `backend/abilities/skills/`: competitor analysis, weekly meal planning, performance review writing, fitness routine builder, and technology evaluation. Each playbook is a numbered sequence of exact tool-calling instructions (e.g. "Use the `search` tool to find competitors…"). Results are annotated with personalisation rules from `skill_associations` when `SkillAssociationService` has mapped the user's behavioural patterns to a skill. ALWAYS_AVAILABLE on all user-facing processors — not discoverable, because returning procedural playbooks is infrastructure like `find_tools` and `memory`. Falls back to FTS-only when embedding generation fails. Build: `python -m utils.build_skills_db`; drift check: `python -m utils.build_skills_db --check`.
 
 ## Weather
 

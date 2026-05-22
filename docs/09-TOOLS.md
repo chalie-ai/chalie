@@ -8,7 +8,7 @@ Every dispatchable capability in Chalie is an `Ability` subclass under `backend/
 
 **Blocked abilities (_BLOCKED)** is a `frozenset` on the base class (empty by default). Subclasses override it to exclude specific tools from both `DISCOVERABLE` and the `find_tools` index without redeclaring the full list. `DMNMessageProcessor` and `SubagentProcessor` both set `_BLOCKED = frozenset({"subagent"})` — preventing background processes from spawning further background work.
 
-**SEARCH_TOOLTIP** is a required `ClassVar[str]` on every non-INTERNAL `Ability` subclass (enforced at import time by `__init_subclass__`). It provides a 2–5 word description used to build the `find_tools` index. When `get_tools()` assembles the tool list, `_enrich_find_tools_schema()` injects a compact index of all discoverable tools (name + tooltip) into the `find_tools` query field description — giving the LLM visibility into what `find_tools` can surface before calling it.
+**SEARCH_TOOLTIP** is a required `ClassVar[str]` on every non-INTERNAL `Ability` subclass (enforced at import time by `__init_subclass__`). It provides a 2–5 word description used to build the `find_tools` index.
 
 **Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They are projected into the abilities surface at boot via the same RRF discovery path. See [15-INTERFACES.md](15-INTERFACES.md).
 
@@ -55,7 +55,7 @@ class WeatherAbility(Ability):
         ...
 ```
 
-`channel` is the current conversation channel, `params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability. SEARCH_TOOLTIP provides a compact label for the `find_tools` index (injected into the tool's query description at runtime).
+`channel` is the current conversation channel, `params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability. SEARCH_TOOLTIP provides a compact label for the `find_tools` index. Both `find_tools` and `find_skills` inherit from `SearchableAbility` (`abilities/_search.py`) which provides the shared vec+FTS5 RRF fusion search infrastructure.
 
 After registering the ability, wire it into the appropriate processor(s). For a discoverable ability, add its `NAME` to `DISCOVERABLE` on `MessageProcessor` (the base class default). For an always-available ability, add it to `ALWAYS_AVAILABLE` instead. If a specific processor should not see the ability, add the name to that processor's `_BLOCKED` frozenset. Then regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
 
