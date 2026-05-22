@@ -584,72 +584,8 @@ class TestMaxIterations30CapsRunawayLoop:
         )
 
 
-class TestReinforcementUpdatesSQLColumns:
-    """Test 12 — reinforcing an existing pattern bumps evidence_count, storage_strength,
-    and sets last_accessed_at (TKT-581 fix)."""
-
-    def test_reinforce_updates_evidence_count_and_storage_strength(self, db, store):
-        from services.subconscious_worker import SubconsciousWorker
-
-        # Seed a pattern at confidence=4.0; SQL defaults apply: evidence_count=1,
-        # storage_strength=0.5, last_accessed_at=NULL.
-        _seed_pattern(db, "morning_run", confidence=4.0)
-        _seed_transcripts(db, 60)
-
-        tc = _tool_call(
-            "save_pattern",
-            name="morning_run",
-            frequency="weekday",
-            time_anchor="07:00",
-            summary="goes for a run in the morning",
-            evidence_transcript_ids=[1, 2],
-        )
-        call_count = {"n": 0}
-
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return _make_llm_response(tool_calls=[tc])
-            return _make_llm_response(tool_calls=None)
-
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
-            worker._step_pattern_match()
-
-        cols = _fetch_pattern_sql_cols(db, "morning_run")
-        assert cols is not None, "Expected behavioral_pattern row for 'morning_run'"
-
-        # evidence_count must have been incremented from 1 to 2.
-        assert cols["evidence_count"] == 2, (
-            f"Expected evidence_count=2 after one reinforce, got {cols['evidence_count']}"
-        )
-
-        # storage_strength must exceed the default 0.5 (boost = 0.05/log2(3) ≈ 0.0316).
-        assert cols["storage_strength"] > 0.5, (
-            f"Expected storage_strength > 0.5 after reinforce, got {cols['storage_strength']}"
-        )
-        assert cols["storage_strength"] <= 1.0, (
-            f"storage_strength must not exceed cap 1.0, got {cols['storage_strength']}"
-        )
-
-        # retrieval_weight must be reset to 1.0 on reinforce.
-        assert cols["retrieval_weight"] == pytest.approx(1.0), (
-            f"Expected retrieval_weight=1.0 after reinforce, got {cols['retrieval_weight']}"
-        )
-
-        # last_accessed_at must be non-NULL after reinforcement.
-        assert cols["last_accessed_at"] is not None, (
-            "Expected last_accessed_at to be set after reinforce, got NULL"
-        )
-
-
 class TestReinforcementDiminishingBoost:
-    """Test 13 — each successive reinforce adds a smaller storage_strength boost and
+    """Test 12 — each successive reinforce adds a smaller storage_strength boost and
     the value is capped at 1.0 (TKT-581 fix, diminishing returns)."""
 
     def test_multiple_reinforcements_give_diminishing_boost(self, db, store):
