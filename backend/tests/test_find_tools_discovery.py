@@ -10,13 +10,13 @@ Verifies:
 - find_tools module has no reference to the old shared DB or tool_capability_profiles
 - DISCOVERABLE allowlist gates which abilities surface for a given processor
 
-Strategy: monkeypatch _ABILITIES_DB_PATH on FindToolsAbility to a tmp_path
+Strategy: monkeypatch _DB_PATH on FindToolsAbility to a tmp_path
 database populated with real embeddings. Real EmbeddingService is used.
 ``FindToolsAbility.execute()`` reads the calling MessageProcessor's
 ``DISCOVERABLE`` list via ``current_processor()``; tests bind a stub
-processor for that lookup. Direct ``_query_abilities_db`` and
-``_fallback_keyword_search`` calls accept the allowlist as a positional arg
-so RRF ordering can be verified by formula, not by semantic luck.
+processor for that lookup. Direct ``_query`` and ``_fallback`` calls
+accept the allowlist as a positional arg so RRF ordering can be verified
+by formula, not by semantic luck.
 """
 
 import inspect
@@ -27,12 +27,8 @@ import numpy as np
 import pytest
 
 import abilities.find_tools as _ft_module
-from abilities.find_tools import (
-    FindToolsAbility,
-    RRF_K,
-    _fallback_keyword_search,
-    _query_abilities_db,
-)
+from abilities._search import RRF_K
+from abilities.find_tools import FindToolsAbility
 from services.message_processor import MessageProcessor, bind_current_processor
 
 pytestmark = pytest.mark.unit
@@ -154,7 +150,7 @@ class TestFindToolsDiscovery:
             "summary": _real_embeddings["weather_summary_text"],
             "embedding": _real_embeddings["weather_summary"],
         }])
-        monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
         result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
@@ -185,7 +181,7 @@ class TestFindToolsDiscovery:
                 "embedding": _real_embeddings["code_summary"],
             },
         ])
-        monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
         result = _execute_with_discoverable(
@@ -218,7 +214,7 @@ class TestFindToolsDiscovery:
                 "embedding": _real_embeddings["code_summary"],
             },
         ])
-        monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
         result = _execute_with_discoverable(
@@ -245,7 +241,7 @@ class TestFindToolsDiscovery:
             "summary": _real_embeddings["weather_summary_text"],
             "embedding": _real_embeddings["weather_summary"],
         }])
-        monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
         result = _execute_with_discoverable(
@@ -261,7 +257,7 @@ class TestFindToolsDiscovery:
     def test_missing_db_returns_empty_gracefully(self, tmp_path, monkeypatch):
         """abilities.sqlite does not exist → empty _discovered_tools, no exception."""
         nonexistent = tmp_path / "does_not_exist" / "abilities.sqlite"
-        monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", nonexistent)
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", nonexistent)
 
         ability = FindToolsAbility()
         result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
@@ -291,7 +287,7 @@ class TestFindToolsDiscovery:
                 "embedding": _real_embeddings["weather_summary"],
             },
         ])
-        monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
         result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
@@ -318,7 +314,7 @@ class TestFindToolsDiscovery:
             "summary": _real_embeddings["weather_summary_text"],
             "embedding": _real_embeddings["weather_summary"],
         }])
-        monkeypatch.setattr(FindToolsAbility, "_ABILITIES_DB_PATH", new_db_path)
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
         result = _execute_with_discoverable(ability, "weather forecast", [])
@@ -368,7 +364,7 @@ def _build_stub_db(path: Path, abilities: list) -> None:
 
 class TestFindToolsPhase3Gaps:
 
-    def test_rrf_order_matches_formula_when_vec_and_fts_disagree(self, tmp_path):
+    def test_rrf_order_matches_formula_when_vec_and_fts_disagree(self, tmp_path, monkeypatch):
         """Ability winning FTS but losing vec ranks above the vec-only winner when
         the FTS boost produces a higher RRF score.
 
@@ -404,12 +400,12 @@ class TestFindToolsPhase3Gaps:
              "embedding": b_emb},
         ])
 
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
+        ability = FindToolsAbility()
         blob = pack_embedding(q_vec.tolist())
-        rows = _query_abilities_db(
-            "zetakeyword", blob, 5, db_path, ["ability_a", "ability_b"]
-        )
+        rows = ability._query("zetakeyword", blob, 5, ["ability_a", "ability_b"])
 
-        names = [r["tool_name"] for r in rows]
+        names = [r["key"] for r in rows]
         assert len(names) >= 2, f"Expected both abilities in results, got: {names}"
         assert names[0] == "ability_b", (
             f"ability_b should rank first (FTS win + vec rank 2 > vec-only rank 1). "
@@ -418,8 +414,8 @@ class TestFindToolsPhase3Gaps:
             f"score(a) = {1/(RRF_K+1):.4f}"
         )
 
-    def test_fallback_keyword_search_queries_abilities_sqlite(self, tmp_path):
-        """_fallback_keyword_search hits ability_search_fts in abilities.sqlite.
+    def test_fallback_keyword_search_queries_abilities_sqlite(self, tmp_path, monkeypatch):
+        """_fallback hits ability_search_fts in abilities.sqlite.
 
         This is the path exercised when EmbeddingService fails. It must NOT
         touch tool_capability_profiles or the shared chalie.db — proved here by
@@ -435,15 +431,17 @@ class TestFindToolsPhase3Gaps:
              "embedding": q_vec},
         ])
 
-        result = _fallback_keyword_search("sandbox", 5, db_path, ["sandboxer"])
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
+        ability = FindToolsAbility()
+        result = ability._fallback("sandbox", 5, ["sandboxer"])
 
         assert result["_discovered_tools"] == ["sandboxer"], (
             f"Expected ['sandboxer'] from abilities.sqlite FTS fallback, "
             f"got: {result['_discovered_tools']}"
         )
 
-    def test_query_abilities_db_filters_by_allowlist(self, tmp_path):
-        """_query_abilities_db ignores rows whose name is outside the allowlist.
+    def test_query_abilities_filters_by_allowlist(self, tmp_path, monkeypatch):
+        """_query ignores rows whose name is outside the allowlist.
 
         Indexes two abilities; runs the query with only the second in `allow`.
         The first MUST NOT appear regardless of vec or FTS rank.
@@ -464,10 +462,12 @@ class TestFindToolsPhase3Gaps:
             {"name": "allowed_ability", "summary": "alphajet engine design", "embedding": b_emb},
         ])
 
+        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
+        ability = FindToolsAbility()
         blob = pack_embedding(q_vec.tolist())
-        rows = _query_abilities_db("alphajet", blob, 5, db_path, ["allowed_ability"])
+        rows = ability._query("alphajet", blob, 5, ["allowed_ability"])
 
-        names = {r["tool_name"] for r in rows}
+        names = {r["key"] for r in rows}
         assert names == {"allowed_ability"}, (
             f"Expected only 'allowed_ability' through the allowlist, got: {names}"
         )

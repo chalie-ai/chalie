@@ -1,17 +1,14 @@
 """Feature tests for the Self-Refining Skill Library pure functions (TKT-579).
 
-Three behaviours under test:
+Two behaviours under test:
 
-1. _rrf_merge() — reciprocal rank fusion of vec + FTS result rows.
+1. rrf_merge() — reciprocal rank fusion of vec + FTS result rows.
    Verifies: correct merging, dedup, FTS-only path, vec-only path,
    empty inputs, and score-ordering invariant.
 
 2. _parse_associations() — LLM JSON response parser.
    Verifies: valid JSON, fenced code blocks, empty array, non-list,
    empty string, and malformed JSON all handled correctly.
-
-3. _safe_parse_summary() — extracts summary from behavioural pattern JSON.
-   Verifies: happy path, missing summary key, invalid JSON, None input.
 
 All functions are pure: no IO, no collaborators, no network. Zero mocks.
 """
@@ -24,124 +21,86 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# 1. _rrf_merge — pure RRF fusion, no IO
+# 1. rrf_merge — pure RRF fusion, no IO
 # ---------------------------------------------------------------------------
-
-# The module-level constant matches the source: _RRF_K = 15
-_RRF_K = 15
 
 
 class TestRrfMerge:
-    """_rrf_merge(vec_rows, fts_rows, k) returns a merged ranked list."""
+    """rrf_merge(vec_rows, fts_rows, k) returns a merged ranked list."""
 
     def test_vec_and_fts_rows_both_appear_in_result(self):
-        """Two different skills, one from vec and one from FTS, both surface."""
-        from abilities.find_skills import _rrf_merge
+        from abilities._search import SearchableAbility
 
         vec_rows = [(1, "Research Framework", 0.12)]
         fts_rows = [(2, "Project Planning", -3.5)]
 
-        result = _rrf_merge(vec_rows, fts_rows, k=5)
+        result = SearchableAbility.rrf_merge(vec_rows, fts_rows, k=5)
 
-        skill_ids = {r["skill_id"] for r in result}
-        assert skill_ids == {1, 2}, (
-            f"Both skills must appear in merged result, got ids: {skill_ids}"
-        )
+        keys = {r["key"] for r in result}
+        assert keys == {1, 2}
 
-    def test_skill_in_both_retrievers_appears_exactly_once(self):
-        """A skill ranked by both vec and FTS must appear exactly once in output."""
-        from abilities.find_skills import _rrf_merge
+    def test_item_in_both_retrievers_appears_exactly_once(self):
+        from abilities._search import SearchableAbility
 
         vec_rows = [(1, "Research Framework", 0.10)]
         fts_rows = [(1, "Research Framework", -4.2)]
 
-        result = _rrf_merge(vec_rows, fts_rows, k=5)
+        result = SearchableAbility.rrf_merge(vec_rows, fts_rows, k=5)
 
-        skill_ids = [r["skill_id"] for r in result]
-        assert skill_ids.count(1) == 1, (
-            f"Skill 1 duplicated in output: {skill_ids}"
-        )
+        keys = [r["key"] for r in result]
+        assert keys.count(1) == 1
 
-    def test_skill_in_both_retrievers_has_higher_score_than_single_retriever(self):
-        """A skill ranked in both vec and FTS accumulates a higher RRF score
-        than a skill ranked only in vec at the same position.
-
-        Skill A: vec rank 1 only            → score = 1/(RRF_K+1)
-        Skill B: vec rank 2 + FTS rank 1    → score = 1/(RRF_K+2) + 1/(RRF_K+1)
-        Skill B must rank first.
-        """
-        from abilities.find_skills import _rrf_merge
+    def test_item_in_both_retrievers_has_higher_score_than_single_retriever(self):
+        from abilities._search import SearchableAbility
 
         vec_rows = [(1, "Skill A", 0.05), (2, "Skill B", 0.15)]
         fts_rows = [(2, "Skill B", -5.0)]
 
-        result = _rrf_merge(vec_rows, fts_rows, k=5)
+        result = SearchableAbility.rrf_merge(vec_rows, fts_rows, k=5)
 
-        assert result[0]["skill_id"] == 2, (
-            f"Skill B (dual-retriever) must rank above Skill A (vec-only). "
-            f"Got order: {[r['skill_id'] for r in result]}"
-        )
+        assert result[0]["key"] == 2
 
     def test_cap_at_k_limits_output_size(self):
-        """Result is capped at k even when more rows are available."""
-        from abilities.find_skills import _rrf_merge
+        from abilities._search import SearchableAbility
 
         vec_rows = [(i, f"Skill {i}", float(i) * 0.01) for i in range(10)]
-        fts_rows = []
 
-        result = _rrf_merge(vec_rows, fts_rows, k=3)
+        result = SearchableAbility.rrf_merge(vec_rows, [], k=3)
 
-        assert len(result) == 3, (
-            f"Result must be capped at k=3, got {len(result)} items"
-        )
+        assert len(result) == 3
 
     def test_empty_inputs_return_empty_list(self):
-        """Both empty → empty result, no exception."""
-        from abilities.find_skills import _rrf_merge
+        from abilities._search import SearchableAbility
 
-        result = _rrf_merge([], [], k=5)
-        assert result == []
+        assert SearchableAbility.rrf_merge([], [], k=5) == []
 
     def test_fts_only_path_returns_results(self):
-        """vec_rows empty, fts_rows populated → FTS skills surface."""
-        from abilities.find_skills import _rrf_merge
+        from abilities._search import SearchableAbility
 
         fts_rows = [(7, "Meal Planning", -2.1), (8, "Fitness Routine", -3.8)]
-        result = _rrf_merge([], fts_rows, k=5)
+        result = SearchableAbility.rrf_merge([], fts_rows, k=5)
 
-        skill_ids = {r["skill_id"] for r in result}
-        assert skill_ids == {7, 8}
+        assert {r["key"] for r in result} == {7, 8}
 
     def test_result_items_contain_required_keys(self):
-        """Each item in the result has skill_id, title, and score keys."""
-        from abilities.find_skills import _rrf_merge
+        from abilities._search import SearchableAbility
 
-        vec_rows = [(1, "Research Framework", 0.10)]
-        fts_rows = [(2, "Project Planning", -4.0)]
-
-        result = _rrf_merge(vec_rows, fts_rows, k=5)
+        result = SearchableAbility.rrf_merge([(1, "A", 0.1)], [(2, "B", -4.0)], k=5)
 
         for item in result:
-            assert "skill_id" in item, f"Missing 'skill_id' in: {item}"
-            assert "title" in item, f"Missing 'title' in: {item}"
-            assert "score" in item, f"Missing 'score' in: {item}"
+            assert "key" in item
+            assert "label" in item
+            assert "score" in item
 
-    def test_best_distance_wins_when_skill_appears_multiple_times_in_vec(self):
-        """If a skill appears twice in vec_rows, only the lowest distance counts."""
-        from abilities.find_skills import _rrf_merge
+    def test_best_distance_wins_when_item_appears_multiple_times_in_vec(self):
+        from abilities._search import SearchableAbility
 
-        # Skill 1 with two distances — only the smaller (0.05) should be used for ranking.
         vec_rows = [(1, "Skill A", 0.50), (1, "Skill A", 0.05)]
-        fts_rows = []
 
-        result = _rrf_merge(vec_rows, fts_rows, k=5)
+        result = SearchableAbility.rrf_merge(vec_rows, [], k=5)
 
-        skill_ids = [r["skill_id"] for r in result]
-        assert skill_ids.count(1) == 1, (
-            f"Dedup by best vec distance must collapse to one row, got: {skill_ids}"
-        )
-        # Rank should be 1 (best distance = 0.05, sorts first)
-        assert result[0]["skill_id"] == 1
+        assert [r["key"] for r in result].count(1) == 1
+        assert result[0]["key"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -210,5 +169,3 @@ class TestParseAssociations:
         result = _parse_associations("")
 
         assert result is None
-
-

@@ -1,0 +1,16 @@
+---
+title: Weekly Meal Planning
+use_for: planning meals for the week with shopping lists and prep schedules
+tags: food, nutrition, cooking, health, scheduling
+version: 1
+related_abilities: memory, search, list, schedule, document
+---
+
+1. Use the `memory` tool to recall any stored dietary preferences, allergies, restrictions, or cooking skill level.
+2. Ask the user for the number of people eating, meals per day, budget constraints, and any cuisine preferences for the week.
+3. Use the `search` tool to find seasonal ingredients and recipe ideas matching the user's constraints and preferences.
+4. Build a 7-day meal plan balancing nutrition, variety, and prep time. Reuse ingredients across meals to minimise waste.
+5. Use the `list` tool to create a shopping list grouped by store section — produce, dairy, protein, pantry, frozen.
+6. Use the `schedule` tool to set prep reminders for meals that need advance preparation (marinades, slow cooks, dough rising).
+7. Use the `document` tool to save the meal plan as a persistent weekly reference.
+8. Present the plan to the user day-by-day with estimated prep times and any make-ahead notes.
