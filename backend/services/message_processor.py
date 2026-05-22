@@ -158,6 +158,7 @@ class MessageProcessor:
     DISCOVERABLE: list[str] = [
         "browser",
         "calendar",
+        "chalie_docs",
         "code_eval",
         "contacts",
         "document",

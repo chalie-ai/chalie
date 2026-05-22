@@ -15,6 +15,7 @@ const PanelPolicies = (() => {
     'calendar.get_event': 'Get event',
     'calendar.list_events': 'List events',
     'calendar.update_event': 'Update event',
+    'chalie_docs': 'Look up Chalie docs',
     'code_eval': 'Run sandboxed code',
     'contacts.get': 'Get contact',
     'contacts.list': 'List contacts',
@@ -92,7 +93,7 @@ const PanelPolicies = (() => {
     'News & Weather': ['news', 'weather'],
     'Places': ['place.save', 'place.list', 'place.get', 'place.delete'],
     'Scheduling': ['schedule.list', 'schedule.search', 'schedule.create', 'schedule.cancel'],
-    'Search & Tools': ['search', 'find_tools', 'find_skills', 'read', 'programming_docs_search'],
+    'Search & Tools': ['search', 'find_tools', 'find_skills', 'read', 'programming_docs_search', 'chalie_docs'],
     'Subagent': ['subagent'],
   };
 

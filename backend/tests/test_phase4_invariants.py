@@ -105,6 +105,7 @@ def test_abilities_sqlite_indexes_save_pattern_and_save_graph():
 _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "browser",
     "calendar",
+    "chalie_docs",
     "code_eval",
     "contacts",
     "document",
@@ -194,8 +195,8 @@ def test_abilities_directory_has_expected_non_underscore_modules():
 _DEFAULT_ALWAYS = frozenset({"find_skills", "find_tools", "memory"})
 
 _DEFAULT_DISCOVERABLE = frozenset({
-    "browser", "calendar", "code_eval", "contacts", "document", "email",
-    "home", "list", "news", "place", "programming_docs_search", "read",
+    "browser", "calendar", "chalie_docs", "code_eval", "contacts", "document",
+    "email", "home", "list", "news", "place", "programming_docs_search", "read",
     "review_tool_calls", "review_transcript", "schedule", "search",
     "subagent", "timer", "ubiquiti", "weather",
 })

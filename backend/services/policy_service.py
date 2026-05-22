@@ -57,6 +57,7 @@ _CHAT_ALLOW: dict[str, State] = {
     "browser.interact": "allow", "browser.render": "allow",
     "browser.screenshot": "allow", "browser.monitor": "allow",
     "calendar.list_events": "allow", "calendar.get_event": "allow",
+    "chalie_docs": "allow",
     "contacts.list": "allow", "contacts.get": "allow",
     "document.search": "allow", "document.list": "allow", "document.view": "allow",
     "email.search": "allow", "email.read": "allow",
@@ -110,6 +111,7 @@ _CHAT_ASK: dict[str, State] = {
 _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     # Reads
     "calendar.list_events": "allow", "calendar.get_event": "allow",
+    "chalie_docs": "allow",
     "contacts.list": "allow", "contacts.get": "allow",
     "document.search": "allow", "document.list": "allow", "document.view": "allow",
     "email.search": "allow", "email.read": "allow",
@@ -139,6 +141,7 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     # Reads
     "browser.render": "allow", "browser.screenshot": "allow", "browser.monitor": "allow",
     "calendar.list_events": "allow", "calendar.get_event": "allow",
+    "chalie_docs": "allow",
     "contacts.list": "allow", "contacts.get": "allow",
     "document.search": "allow", "document.list": "allow", "document.view": "allow",
     "email.search": "allow", "email.read": "allow",
