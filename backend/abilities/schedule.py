@@ -144,9 +144,12 @@ class ScheduleAbility(Ability):
             "due_at": {
                 "type": "string",
                 "description": (
-                    "Required for create: ISO 8601 timestamp with timezone offset "
+                    "Required for create UNLESS destination_location is provided. "
+                    "ISO 8601 timestamp with timezone offset "
                     "(e.g. '2026-03-20T09:00:00+02:00'). Use the user's timezone offset. "
-                    "Must be in the future. If off by a few seconds, the scheduler will auto-correct."
+                    "Must be in the future. If off by a few seconds, the scheduler will auto-correct. "
+                    "Omit when destination_location is set and the reminder is location-triggered "
+                    "(e.g. 'when I get home', 'when I arrive at X')."
                 ),
             },
             "item_type": {
@@ -199,7 +202,12 @@ class ScheduleAbility(Ability):
             },
             "destination_location": {
                 "type": "string",
-                "description": "Name of a saved place or address for the destination. Used for departure-time reminders.",
+                "description": (
+                    "Name of a saved place or address. Use for location-triggered reminders: "
+                    "departure-time reminders ('leave by X to reach Y') AND arrival-trigger reminders "
+                    "('when I get to X', 'when I arrive home'). "
+                    "When set and due_at is omitted, the reminder fires on location arrival."
+                ),
             },
         },
         "required": ["action"],
@@ -280,9 +288,16 @@ def _validate_message(params: dict) -> tuple[str, dict | None]:
 
 
 def _resolve_due_at(params: dict, past_due_grace: int):
-    """Parse due_at, apply grace if past, return (due_at, error_response | None)."""
+    """Parse due_at, apply grace if past, return (due_at, error_response | None).
+
+    When due_at is absent but destination_location is provided the reminder is
+    location-triggered; use a 30-day placeholder so the row is created and the
+    geofence metadata carries the real trigger condition.
+    """
     due_at_str = params.get("due_at", "").strip()
     if not due_at_str:
+        if params.get("destination_location", "").strip():
+            return utc_now() + timedelta(days=30), None
         return None, {"status": "error", "error": "due_at (ISO 8601 with timezone) is required"}
 
     from services.time_utils import parse_utc
