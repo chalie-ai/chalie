@@ -177,10 +177,9 @@ def _insert_skill(
     entries, embeddings = _dedup_entries(raw_entries, embeddings)
 
     for (text, kind), emb in zip(entries, embeddings):
-        actual_kind = kind if kind != 'use_for' or text != combined else 'use_for'
         conn.execute(
             "INSERT INTO skill_search_entries(skill_id, text, kind) VALUES (?, ?, ?)",
-            (skill_id, text, actual_kind),
+            (skill_id, text, kind),
         )
         entry_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
