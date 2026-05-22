@@ -10,6 +10,7 @@ defaults so it remains usable from any processor that opts it in.
 """
 import json
 import logging
+import math
 import re
 
 from abilities._base import Ability
@@ -124,7 +125,7 @@ def _upsert_pattern(validated: dict) -> tuple[int, float]:
 
     with db.connection() as conn:
         existing = conn.execute(
-            "SELECT id, value FROM data_graph "
+            "SELECT id, value, storage_strength, evidence_count FROM data_graph "
             "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
             "ORDER BY id DESC LIMIT 1",
             ("behavioral_pattern", validated["name"]),
@@ -137,6 +138,8 @@ def _upsert_pattern(validated: dict) -> tuple[int, float]:
 
 def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> tuple[int, float]:
     existing_id, existing_value = existing[0], existing[1]
+    old_strength = float(existing[2]) if existing[2] is not None else 0.5
+    old_evidence = int(existing[3]) if existing[3] is not None else 1
     prev = parse_json_column(existing_value)
     prev_conf = float(prev.get("confidence") or 0.0)
     new_conf = min(10.0, prev_conf + 7.0)
@@ -150,9 +153,15 @@ def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> t
         "last_seen_at": now_iso,
         "evidence_transcript_ids": merged_evidence,
     }
+    new_evidence = old_evidence + 1
+    boost = 0.05 / math.log2(new_evidence + 1)
+    new_strength = min(1.0, old_strength + boost)
     conn.execute(
-        "UPDATE data_graph SET value=?, last_confirmed_at=?, source=? WHERE id=?",
-        (json.dumps(new_value), now_iso, "pattern_match", existing_id),
+        "UPDATE data_graph "
+        "SET value=?, last_confirmed_at=?, last_accessed_at=?, source=?, "
+        "    evidence_count=?, storage_strength=?, retrieval_weight=1.0 "
+        "WHERE id=?",
+        (json.dumps(new_value), now_iso, now_iso, "pattern_match", new_evidence, new_strength, existing_id),
     )
     return existing_id, new_conf
 

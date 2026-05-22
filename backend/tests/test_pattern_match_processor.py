@@ -96,6 +96,24 @@ def _fetch_pattern(db, name):
     return {"id": row[0], "value": json.loads(row[1]), "active": row[2]}
 
 
+def _fetch_pattern_sql_cols(db, name):
+    """Fetch the SQL reinforcement columns for the most-recent behavioral_pattern row."""
+    row = db.execute(
+        "SELECT evidence_count, storage_strength, retrieval_weight, last_accessed_at "
+        "FROM data_graph "
+        "WHERE kind='behavioral_pattern' AND key=? ORDER BY id DESC LIMIT 1",
+        (name,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "evidence_count": row[0],
+        "storage_strength": row[1],
+        "retrieval_weight": row[2],
+        "last_accessed_at": row[3],
+    }
+
+
 def _fetch_cursor(db):
     """Read the pattern_match_cursor value from data_graph. Returns int or None."""
     row = db.execute(
@@ -563,4 +581,124 @@ class TestMaxIterations30CapsRunawayLoop:
         ).fetchone()[0]
         assert count == 20, (
             f"Expected 20 rows (budget cap), got {count}"
+        )
+
+
+class TestReinforcementUpdatesSQLColumns:
+    """Test 12 — reinforcing an existing pattern bumps evidence_count, storage_strength,
+    and sets last_accessed_at (TKT-581 fix)."""
+
+    def test_reinforce_updates_evidence_count_and_storage_strength(self, db, store):
+        from services.subconscious_worker import SubconsciousWorker
+
+        # Seed a pattern at confidence=4.0; SQL defaults apply: evidence_count=1,
+        # storage_strength=0.5, last_accessed_at=NULL.
+        _seed_pattern(db, "morning_run", confidence=4.0)
+        _seed_transcripts(db, 60)
+
+        tc = _tool_call(
+            "save_pattern",
+            name="morning_run",
+            frequency="weekday",
+            time_anchor="07:00",
+            summary="goes for a run in the morning",
+            evidence_transcript_ids=[1, 2],
+        )
+        call_count = {"n": 0}
+
+        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return _make_llm_response(tool_calls=[tc])
+            return _make_llm_response(tool_calls=None)
+
+        with patch(_PROVIDERS_INSTANCE) as mock_inst:
+            mock_inst.return_value.send_messages.side_effect = _fake_send
+            mock_inst.return_value.get_context_limit.return_value = 32_000
+            mock_inst.return_value.get_compact_at.return_value = 32_000
+            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
+            worker._step_pattern_match()
+
+        cols = _fetch_pattern_sql_cols(db, "morning_run")
+        assert cols is not None, "Expected behavioral_pattern row for 'morning_run'"
+
+        # evidence_count must have been incremented from 1 to 2.
+        assert cols["evidence_count"] == 2, (
+            f"Expected evidence_count=2 after one reinforce, got {cols['evidence_count']}"
+        )
+
+        # storage_strength must exceed the default 0.5 (boost = 0.05/log2(3) ≈ 0.0316).
+        assert cols["storage_strength"] > 0.5, (
+            f"Expected storage_strength > 0.5 after reinforce, got {cols['storage_strength']}"
+        )
+        assert cols["storage_strength"] <= 1.0, (
+            f"storage_strength must not exceed cap 1.0, got {cols['storage_strength']}"
+        )
+
+        # retrieval_weight must be reset to 1.0 on reinforce.
+        assert cols["retrieval_weight"] == pytest.approx(1.0), (
+            f"Expected retrieval_weight=1.0 after reinforce, got {cols['retrieval_weight']}"
+        )
+
+        # last_accessed_at must be non-NULL after reinforcement.
+        assert cols["last_accessed_at"] is not None, (
+            "Expected last_accessed_at to be set after reinforce, got NULL"
+        )
+
+
+class TestReinforcementDiminishingBoost:
+    """Test 13 — each successive reinforce adds a smaller storage_strength boost and
+    the value is capped at 1.0 (TKT-581 fix, diminishing returns)."""
+
+    def test_multiple_reinforcements_give_diminishing_boost(self, db, store):
+        from abilities.save_pattern import _upsert_pattern
+
+        # Seed with SQL defaults (evidence_count=1, storage_strength=0.5).
+        _seed_pattern(db, "evening_read", confidence=3.0)
+
+        tc_params = {
+            "name": "evening_read",
+            "frequency": "daily",
+            "time_anchor": "evening",
+            "summary": "reads before bed",
+            "evidence_transcript_ids": [1, 2],
+        }
+
+        # Reinforce 3 times directly via the production upsert function.
+        strengths = []
+        for _ in range(3):
+            _upsert_pattern({**tc_params, "evidence": tc_params["evidence_transcript_ids"]})
+            cols = _fetch_pattern_sql_cols(db, "evening_read")
+            strengths.append(cols["storage_strength"])
+
+        # evidence_count must be 1 (initial) + 3 (reinforcements) = 4.
+        cols = _fetch_pattern_sql_cols(db, "evening_read")
+        assert cols["evidence_count"] == 4, (
+            f"Expected evidence_count=4 after 3 reinforcements, got {cols['evidence_count']}"
+        )
+
+        # strength must grow after each reinforce.
+        assert strengths[1] > strengths[0], (
+            f"Expected strength to grow after 2nd reinforce: {strengths}"
+        )
+        assert strengths[2] > strengths[1], (
+            f"Expected strength to grow after 3rd reinforce: {strengths}"
+        )
+
+        # Each boost must be smaller than the previous (diminishing returns).
+        boost_1 = strengths[0] - 0.5
+        boost_2 = strengths[1] - strengths[0]
+        boost_3 = strengths[2] - strengths[1]
+        assert boost_2 < boost_1, (
+            f"Expected diminishing boost: boost_2={boost_2:.5f} should be < boost_1={boost_1:.5f}"
+        )
+        assert boost_3 < boost_2, (
+            f"Expected diminishing boost: boost_3={boost_3:.5f} should be < boost_2={boost_2:.5f}"
+        )
+
+        # strength must not exceed 1.0.
+        assert cols["storage_strength"] <= 1.0, (
+            f"storage_strength must be capped at 1.0, got {cols['storage_strength']}"
         )
