@@ -16,6 +16,7 @@ from services.innate_skills._tag import tag as _tag
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
+_KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
 
 
 # ── Dynamic memory radius — tuning constants ────────────────────────────────
@@ -549,7 +550,7 @@ def _render_behavioral_pattern(raw_value: str) -> str:
         anchor_part = f" @ {anchor}" if anchor else ""
         return f"{name} ({freq}{anchor_part}): {summary} [confidence={confidence}]"
     except (json.JSONDecodeError, TypeError, AttributeError):
-        return raw_value
+        return str(raw_value) if raw_value is not None else ""
 
 
 def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
@@ -893,7 +894,8 @@ def _count_episode_candidates(db_service, channel: str) -> int:
 def _format_results(results: List[Dict]) -> str:
     """Format recall hits into tagged lines for LLM consumption.
 
-    Includes location and kind when present — omits lat/lon to avoid token bloat.
+    Labels behavioral_pattern hits explicitly. Includes location when present.
+    Omits lat/lon to avoid token bloat.
     """
     lines = []
     for hit in results:
@@ -903,7 +905,7 @@ def _format_results(results: List[Dict]) -> str:
         location = hit.get("location")
         kind = hit.get("kind", "")
         parts = [f"id:{rid}"]
-        if kind == "behavioral_pattern":
+        if kind == _KIND_BEHAVIORAL_PATTERN:
             parts.append("kind:behavioral_pattern")
         parts.append(f"relevance:{relevance}")
         if location:
