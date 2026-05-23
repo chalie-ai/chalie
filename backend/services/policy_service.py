@@ -86,6 +86,7 @@ _CHAT_ALLOW: dict[str, State] = {
     # Reversible writes
     "document.create": "allow", "document.restore": "allow",
     "email.draft": "allow",
+    "file_write.tmp": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
@@ -100,6 +101,7 @@ _CHAT_ASK: dict[str, State] = {
     "email.manage": "ask",
     "email.reply": "ask",
     "email.send": "ask",
+    "file_write.system": "ask",
     "home.control": "ask",
     "home.trigger_automation": "ask",
     "ubiquiti.control_client": "ask",
@@ -136,6 +138,7 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "weather": "allow",
     # Internal writes
     "document.create": "allow", "document.restore": "allow",
+    "file_write.tmp": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
@@ -167,6 +170,7 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "weather": "allow",
     # Reversible writes
     "document.create": "allow", "document.restore": "allow",
+    "file_write.tmp": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
@@ -183,6 +187,7 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
     "email.reply": "deny",
     "email.send": "deny",
     "email.draft": "deny",
+    "file_write.system": "deny",
     "home.control": "deny",
     "home.trigger_automation": "deny",
     "ubiquiti.control_client": "deny",
