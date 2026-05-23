@@ -5,7 +5,7 @@ Monitors user-selected folders for new, modified, renamed, and deleted files.
 Automatically processes changes through the document pipeline.
 
 Design notes:
-- Files are referenced in-place (absolute paths), never copied to DOCUMENTS_ROOT.
+- Files are referenced in-place (absolute paths), never copied to the documents root.
 - Watched folder documents auto-confirm (source_type='watched_folder' skips awaiting_confirmation).
 - Missing-file tolerance: files must be absent for MISSING_THRESHOLD consecutive scans before soft-delete.
 - Ingestion rate limiter: max MAX_ENQUEUE_PER_SCAN new documents per scan cycle.

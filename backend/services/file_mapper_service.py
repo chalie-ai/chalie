@@ -166,3 +166,11 @@ class FileMapperService:
     def get_capabilities_path(cls, *parts: str) -> Path:
         """Return backend/capabilities/ joined with any additional path parts."""
         return cls._CAPABILITIES_DIR.joinpath(*parts) if parts else cls._CAPABILITIES_DIR
+
+    @classmethod
+    def validate_document_path(cls, full_path: str) -> bool:
+        """Return True if *full_path* resolves inside the documents root."""
+        import os
+        real = os.path.realpath(full_path)
+        root = os.path.realpath(str(cls._DOCUMENTS_DIR))
+        return real.startswith(root + os.sep) or real == root

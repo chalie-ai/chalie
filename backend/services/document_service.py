@@ -33,7 +33,6 @@ DEDUP_MIN_TEXT_LENGTH = 200        # skip semantic dedup for very short docs
 # Purge window (days after soft delete)
 PURGE_WINDOW_DAYS = 30
 
-DOCUMENTS_ROOT = str(FileMapperService.get_documents_path())
 
 
 class DocumentService:
@@ -70,7 +69,7 @@ class DocumentService:
             original_name: Human-readable filename displayed in the UI.
             mime_type: MIME type string (e.g. ``'application/pdf'``).
             file_size: File size in bytes.
-            file_path: Path relative to ``DOCUMENTS_ROOT`` (or absolute for
+            file_path: Path relative to the documents root (or absolute for
                 watched-folder documents).
             file_hash: SHA-256 hex digest of the file for deduplication.
             source_type: Origin label (``'upload'``, ``'watched_folder'``,
@@ -262,9 +261,9 @@ class DocumentService:
         # Write markdown to disk — strip any path components from the filename
         # to prevent directory traversal via a crafted original_name.
         safe_name = os.path.basename(original_name) or "document.md"
-        doc_dir = os.path.join(DOCUMENTS_ROOT, doc_id)
+        doc_dir = FileMapperService.get_documents_path(doc_id)
         os.makedirs(doc_dir, exist_ok=True)
-        file_path = os.path.join(doc_dir, safe_name)
+        file_path = str(FileMapperService.get_documents_path(doc_id, safe_name))
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(text_content)
 
@@ -693,9 +692,9 @@ class DocumentService:
             if deleted and doc.get('file_path') and not doc.get('watched_folder_id'):
                 # Validate doc_id is a safe hex token before using in path construction.
                 safe_doc_id = os.path.basename(doc_id)
-                file_dir = os.path.join(DOCUMENTS_ROOT, safe_doc_id)
+                file_dir = str(FileMapperService.get_documents_path(safe_doc_id))
                 resolved = os.path.realpath(file_dir)
-                if resolved.startswith(os.path.realpath(DOCUMENTS_ROOT)) and os.path.exists(resolved):
+                if FileMapperService.validate_document_path(resolved) and os.path.exists(resolved):
                     shutil.rmtree(resolved, ignore_errors=True)
             if deleted:
                 logger.info("[DOCS] Hard-deleted document %s", safe(doc_id))

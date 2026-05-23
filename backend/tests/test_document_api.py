@@ -11,6 +11,7 @@ from unittest.mock import patch, MagicMock
 from flask import Flask
 
 from api.documents import documents_bp
+from services.file_mapper_service import FileMapperService
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +268,7 @@ class TestDocumentsAPI:
         """Successful upload creates record, saves file, enqueues processing."""
         import io
 
-        with patch("api.documents.DOCUMENTS_ROOT", str(tmp_path)):
+        with patch.object(FileMapperService, "_DOCUMENTS_DIR", tmp_path):
             with patch(_P_SVC) as mock_get:
                 mock_svc = MagicMock()
                 mock_get.return_value = mock_svc
@@ -303,7 +304,7 @@ class TestHelpers:
 
     def test_validate_file_path_rejects_traversal(self, tmp_path):
         from api.documents import _validate_file_path
-        with patch("api.documents.DOCUMENTS_ROOT", str(tmp_path)):
+        with patch.object(FileMapperService, "_DOCUMENTS_DIR", tmp_path):
             assert _validate_file_path(str(tmp_path / "doc" / "file.pdf")) is True
             assert _validate_file_path("/etc/passwd") is False
 
