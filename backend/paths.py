@@ -1,7 +1,8 @@
 """Canonical path layout for Chalie. Hard-coded, no env overrides.
 
 All persistent runtime state lives under ``data/`` at the repo root.
-All git-tracked, ship-with-Chalie assets live under ``resources/``.
+Git-tracked classifier heads live under ``backend/pre-trained/``.
+Runtime-only install artifacts (voice models) live under ``resources/``.
 
 Adding a new path? Define it here, import it everywhere else. No
 ``os.environ.get(...)`` fallbacks, no CLI flags, no per-service path
@@ -23,5 +24,7 @@ INTERFACES_DIR = DATA_DIR / "interfaces"
 MODELS_DIR = DATA_DIR / "models"
 
 # ── Git-tracked, ship-with-Chalie assets ─────────────────────────────────
+PRETRAINED_DIR = _BACKEND_DIR / "pre-trained"
+
+# ── Runtime-only install artifact (voice models, created by install.sh) ───
 RESOURCES_DIR = APP_ROOT / "resources"
-PRETRAINED_DIR = RESOURCES_DIR / "pre-trained"

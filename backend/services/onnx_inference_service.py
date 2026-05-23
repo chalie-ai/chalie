@@ -12,9 +12,9 @@ ONNX Inference Service — shared gte-modernbert encoder + swappable MLP heads.
 Architecture:
     1 shared ONNX encoder (gte-modernbert-base, downloaded into ``data/models/``)
     N 2-layer MLP heads loaded from per-task .npz files (shipped in
-    ``resources/pre-trained/<task>/``).
+    ``backend/pre-trained/<task>/``).
 
-Pre-shipped classifier files (meta + .npz) live under ``resources/pre-trained/``
+Pre-shipped classifier files (meta + .npz) live under ``backend/pre-trained/``
 and are tracked in git. Runtime-downloaded models (encoders, voice, doc2query)
 stay under ``data/models/`` and are NOT tracked. All paths are hard-coded in
 :mod:`paths`.
@@ -166,7 +166,7 @@ class OnnxInferenceService:
     Shared gte-modernbert encoder + swappable 2-layer MLP classifier heads.
 
     Classifier heads (meta + .npz) are pre-shipped under
-    ``resources/pre-trained/<task>/``. The shared encoder ONNX is downloaded
+    ``backend/pre-trained/<task>/``. The shared encoder ONNX is downloaded
     into ``data/models/gte-modernbert-base/``. No network access for heads.
 
     Usage:

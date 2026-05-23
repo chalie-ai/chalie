@@ -4,7 +4,7 @@ Build or drift-check the ability search database.
 Walks backend/abilities/ for concrete Ability subclasses, embeds SUMMARY +
 EXAMPLES for each, and writes:
   backend/abilities/assets/abilities.sqlite  — vector + FTS5 search index
-  resources/pre-trained/abilities_sha.json   — drift sidecar
+  backend/pre-trained/abilities_sha.json   — drift sidecar
 
 Run from backend/:
     python -m utils.build_ability_db           # build (default)
