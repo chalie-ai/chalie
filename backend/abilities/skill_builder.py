@@ -9,6 +9,7 @@ Only user-created skills (source='user') can be edited or deleted.
 
 import logging
 import sqlite3
+from pathlib import Path
 
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -25,6 +26,23 @@ from utils.skills_io import (
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[SKILL_BUILDER]"
+
+# Internal/meta tools that should not appear in skill content guidance.
+_META_TOOLS = frozenset({
+    "find_tools", "find_skills", "skill_builder", "steer",
+    "subagent", "review_tool_calls", "review_transcript",
+    "save_graph", "save_pattern",
+})
+
+
+def _discover_tool_names() -> str:
+    """Auto-discover user-facing ability names from the abilities directory."""
+    abilities_dir = Path(__file__).resolve().parent
+    names = sorted(
+        p.stem for p in abilities_dir.glob("*.py")
+        if not p.name.startswith("_") and p.stem not in _META_TOOLS
+    )
+    return ", ".join(names)
 
 
 class SkillBuilderAbility(Ability):
@@ -79,9 +97,7 @@ class SkillBuilderAbility(Ability):
                     "The skill body as numbered steps (1. 2. 3. …). "
                     "Each step MUST: start with a verb, reference a tool name in backticks "
                     "(e.g. `memory`, `search`, `document`), and describe one clear action. "
-                    "Available tools: memory, search, news, document, code_eval, read, "
-                    "schedule, list, calendar, email, browser, home, weather, place, "
-                    "contacts, timer. "
+                    f"Available tools: {_discover_tool_names()}. "
                     "Pattern — good: '1. Use `memory` to recall dietary preferences and restrictions.' "
                     "Pattern — bad: '1. Think about what the user might want.' (no tool, vague). "
                     "Aim for 5–10 steps. Steps should build logically: recall context → "
@@ -100,9 +116,8 @@ class SkillBuilderAbility(Ability):
             "related_abilities": {
                 "type": "string",
                 "description": (
-                    "Comma-separated list of the tool names referenced in the content steps "
-                    "(e.g. 'search, schedule, memory'). Must match the backtick-quoted names "
-                    "in the content. Optional."
+                    "Comma-separated list of tool names this skill uses "
+                    "(e.g. 'search, schedule, memory'). Optional."
                 ),
             },
         },
