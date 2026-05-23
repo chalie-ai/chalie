@@ -14,10 +14,11 @@ import sqlite3
 import sys
 from pathlib import Path
 
-_DB_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from services.file_mapper_service import FileMapperService  # noqa: E402
+
+_DB_PATH = FileMapperService.get_search_providers_db_path()
 
 # wikipedia provider_id = 1
 _WIKIPEDIA_EXAMPLES = [

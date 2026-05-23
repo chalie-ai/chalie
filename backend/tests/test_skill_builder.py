@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from services.file_mapper_service import FileMapperService
+
 # ---------------------------------------------------------------------------
 # Marks
 # ---------------------------------------------------------------------------
@@ -37,7 +39,7 @@ pytestmark_integration = pytest.mark.integration
 # Helpers
 # ---------------------------------------------------------------------------
 
-_REAL_DB = Path(__file__).resolve().parent.parent / "abilities" / "assets" / "skills.sqlite"
+_REAL_DB = FileMapperService.get_skills_db_path()
 
 
 def _copy_db(tmp_path: Path) -> Path:

@@ -24,8 +24,8 @@ from utils.logger import Logger
 def _read_version():
     """Read version from the VERSION file — single source of truth."""
     try:
-        from pathlib import Path
-        return Path(__file__).parent.parent.joinpath("VERSION").read_text().strip()
+        from services.file_mapper_service import FileMapperService
+        return FileMapperService.get_version_path().read_text().strip()
     except Exception:
         return "0.0.0"
 

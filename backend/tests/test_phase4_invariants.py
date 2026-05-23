@@ -29,10 +29,11 @@ import pytest
 
 import abilities._registry as _reg_module
 from abilities._base import Ability
+from services.file_mapper_service import FileMapperService
 
 pytestmark = pytest.mark.unit
 
-_BACKEND_DIR = Path(__file__).resolve().parent.parent
+_BACKEND_DIR = FileMapperService.get_backend_path()
 
 
 # ---------------------------------------------------------------------------

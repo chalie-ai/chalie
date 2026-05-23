@@ -68,8 +68,8 @@ _COMPILING_EPS = frozenset({
 
 def _model_dir() -> Path:
     """Return path to local model cache directory, creating it if needed."""
-    import paths
-    base = paths.MODELS_DIR / _MODEL_SUBDIR
+    from services.file_mapper_service import FileMapperService
+    base = FileMapperService.get_models_path(_MODEL_SUBDIR)
     base.mkdir(parents=True, exist_ok=True)
     return base
 

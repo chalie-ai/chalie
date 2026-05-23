@@ -41,9 +41,10 @@ from __future__ import annotations
 
 import json
 import logging
-import pathlib
 
 import yaml
+
+from services.file_mapper_service import FileMapperService
 
 from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
@@ -55,7 +56,7 @@ from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 
-_MANIFEST_PATH = pathlib.Path(__file__).parent / "manifest.yaml"
+_MANIFEST_PATH = FileMapperService.get_capabilities_path("mail_capability", "manifest.yaml")
 
 # ---------------------------------------------------------------------------
 # Credential key names (unified mail namespace)

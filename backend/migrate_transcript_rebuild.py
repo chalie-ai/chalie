@@ -55,18 +55,18 @@ import sqlite3
 import sys
 from pathlib import Path
 
-# Add backend/ to sys.path so `import paths` resolves when invoked standalone.
+# Add backend/ to sys.path so services.* imports resolve when invoked standalone.
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-import paths  # noqa: E402
+from services.file_mapper_service import FileMapperService  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
 def _resolve_db(cli_arg: str | None) -> str:
-    return cli_arg if cli_arg else str(paths.DB_PATH)
+    return cli_arg if cli_arg else str(FileMapperService.get_db_path())
 
 
 # ── Content extraction ──────────────────────────────────────────────────────
@@ -389,7 +389,7 @@ def run_once_on_boot(db_path: str | None = None, limit: int = 100) -> None:
     loop exits early with "Nothing to write."
 
     Args:
-        db_path: Override the DB path (default: paths.DB_PATH).
+        db_path: Override the DB path (default: FileMapperService.get_db_path()).
         limit:   Number of most-recent rows to analyse per channel (default 100).
     """
     db_path = _resolve_db(db_path)
@@ -477,7 +477,7 @@ def main():
         "--db",
         metavar="PATH",
         default=None,
-        help=f"SQLite DB path (default: {paths.DB_PATH})",
+        help=f"SQLite DB path (default: {FileMapperService.get_db_path()})",
     )
     parser.add_argument(
         "--channel",

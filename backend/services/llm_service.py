@@ -23,10 +23,9 @@ _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
 
 def _read_version() -> str:
-    from pathlib import Path
-    vf = Path(__file__).resolve().parent.parent / "VERSION"
+    from services.file_mapper_service import FileMapperService
     try:
-        return vf.read_text().strip()
+        return FileMapperService.get_version_path().read_text().strip()
     except OSError:
         return "0.0.0"
 

@@ -26,9 +26,9 @@ import os
 import numpy as np
 import pytest
 
-import paths
 from services.deliberation_score_service import DeliberationScoreService
 from services.embedding_service import _get_session_and_tokenizer
+from services.file_mapper_service import FileMapperService
 from services.onnx_inference_service import (
     OnnxInferenceService,
     _get_encoder_sha256,
@@ -36,8 +36,8 @@ from services.onnx_inference_service import (
 
 
 # Default repo paths for real assets — resolved via canonical paths module.
-_DEFAULT_MODELS_DIR = str(paths.MODELS_DIR)
-_DEFAULT_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
+_DEFAULT_MODELS_DIR = str(FileMapperService.get_models_path())
+_DEFAULT_PRETRAINED_DIR = str(FileMapperService.get_pretrained_path())
 
 
 def _real_encoder_sha() -> str:

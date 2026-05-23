@@ -17,10 +17,10 @@ import json
 import logging
 import sqlite3
 import time
-from pathlib import Path
 from typing import ClassVar
 
 from abilities._base import Ability
+from services.file_mapper_service import FileMapperService
 from tools.search.fetcher import fetch_providers, fetch_ddg_fallback
 
 logger = logging.getLogger(__name__)
@@ -87,9 +87,7 @@ class SearchAbility(Ability):
     }
     TIMEOUT = 180
 
-    _DB: ClassVar[str] = str(
-        Path(__file__).resolve().parent.parent / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
-    )
+    _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
     _providers: ClassVar[dict | None] = None
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:

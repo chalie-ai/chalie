@@ -1,8 +1,7 @@
-from pathlib import Path
-
 from abilities._base import Ability
+from services.file_mapper_service import FileMapperService
 
-_VERSION_FILE = Path(__file__).resolve().parents[2] / "VERSION"
+_VERSION_FILE = FileMapperService.get_version_path()
 
 _QUERY_URLS: dict[str, list[str]] = {
     "basics": [

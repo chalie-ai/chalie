@@ -9,9 +9,9 @@ Only user-created skills (source='user') can be edited or deleted.
 
 import logging
 import sqlite3
-from pathlib import Path
 
 from abilities._base import Ability
+from services.file_mapper_service import FileMapperService
 from services.innate_skills._tag import tag as _skill_tag
 from utils.skills_io import (
     DEFAULT_VERSION,
@@ -37,7 +37,7 @@ _META_TOOLS = frozenset({
 
 def _discover_tool_names() -> str:
     """Auto-discover user-facing ability names from the abilities directory."""
-    abilities_dir = Path(__file__).resolve().parent
+    abilities_dir = FileMapperService.get_abilities_path()
     names = sorted(
         p.stem for p in abilities_dir.glob("*.py")
         if not p.name.startswith("_") and p.stem not in _META_TOOLS

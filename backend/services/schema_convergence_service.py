@@ -18,7 +18,7 @@ import logging
 import os
 import re
 import sqlite3
-from pathlib import Path
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class SchemaConvergenceService:
     def __init__(self, db_service, embedding_dimensions: int = 768):
         self.db_service = db_service
         self._embedding_dimensions = embedding_dimensions
-        self._schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
+        self._schema_path = FileMapperService.get_schema_path()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API

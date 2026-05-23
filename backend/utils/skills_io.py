@@ -7,11 +7,12 @@ from pathlib import Path
 
 import yaml
 
+from services.file_mapper_service import FileMapperService
+
 logger = logging.getLogger(__name__)
 
-_BACKEND_DIR = Path(__file__).resolve().parent.parent
-USER_SKILLS_DIR = _BACKEND_DIR.parent / "data" / "skills" / "user"
-SKILLS_DB_PATH = _BACKEND_DIR / "abilities" / "assets" / "skills.sqlite"
+USER_SKILLS_DIR = FileMapperService.get_user_skills_path()
+SKILLS_DB_PATH = FileMapperService.get_skills_db_path()
 
 DEFAULT_VERSION = 1
 SLUG_MAX_LENGTH = 64

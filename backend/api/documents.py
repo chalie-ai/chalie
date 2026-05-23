@@ -33,7 +33,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request, send_file
 
-import paths
+from services.file_mapper_service import FileMapperService
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -74,8 +74,7 @@ ALLOWED_EXTENSIONS = {
     '.jpg', '.jpeg', '.png', '.webp', '.gif',
 }
 
-# Document storage root — single hard-coded layout (paths.py).
-DOCUMENTS_ROOT = str(paths.DOCUMENTS_DIR)
+DOCUMENTS_ROOT = str(FileMapperService.get_documents_path())
 
 
 # ---------------------------------------------------------------------------

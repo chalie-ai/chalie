@@ -366,27 +366,17 @@ class TestHealthTracking:
 class TestLoadCapabilities:
     """Tests for :func:`capabilities.load_capabilities`."""
 
-    def test_load_capabilities_returns_empty_dict_with_no_dirs(self):
-        """``load_capabilities()`` must return ``{}`` when no sub-directories exist.
-
-        Patches ``capabilities.Path`` so that the ``capabilities/`` directory
-        scan yields an empty iterator, simulating a clean state with no
-        capability packages installed.
-        """
+    def test_load_capabilities_returns_empty_dict_with_no_dirs(self, tmp_path):
+        """``load_capabilities()`` must return ``{}`` when no sub-directories exist."""
         import capabilities as _cap
         from capabilities import load_capabilities
+        from services.file_mapper_service import FileMapperService
 
         old_cache = _cap._capabilities_cache
         _cap._capabilities_cache = None
 
-        mock_parent = MagicMock()
-        mock_parent.iterdir.return_value = []
-
-        mock_file_path = MagicMock()
-        mock_file_path.parent = mock_parent
-
         try:
-            with patch("capabilities.Path", return_value=mock_file_path):
+            with patch.object(FileMapperService, "get_capabilities_path", return_value=tmp_path):
                 result = load_capabilities()
 
             assert result == {}
@@ -400,12 +390,8 @@ class TestMailManifest:
 
     def test_manifest_loads_correctly(self):
         """The manifest must parse successfully with required fields present."""
-        manifest_path = (
-            Path(__file__).parent.parent
-            / "capabilities"
-            / "mail_capability"
-            / "manifest.yaml"
-        )
+        from services.file_mapper_service import FileMapperService
+        manifest_path = FileMapperService.get_capabilities_path("mail_capability", "manifest.yaml")
         assert manifest_path.exists(), f"manifest.yaml not found at {manifest_path}"
 
         with manifest_path.open("r", encoding="utf-8") as fh:

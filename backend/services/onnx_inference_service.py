@@ -609,10 +609,10 @@ def get_onnx_inference_service() -> OnnxInferenceService:
         if _instance is not None:
             return _instance
 
-        import paths
+        from services.file_mapper_service import FileMapperService
 
-        models_dir = str(paths.MODELS_DIR)
-        pretrained_dir = str(paths.PRETRAINED_DIR)
+        models_dir = str(FileMapperService.get_models_path())
+        pretrained_dir = str(FileMapperService.get_pretrained_path())
 
         _instance = OnnxInferenceService(models_dir, pretrained_dir)
         logger.info(

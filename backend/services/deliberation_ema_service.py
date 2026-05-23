@@ -44,8 +44,8 @@ def _load_meta() -> dict:
     if _meta_cache is not None:
         return _meta_cache
 
-    import paths
-    meta_path = paths.PRETRAINED_DIR / "deliberation_score" / "deliberation-score-classifier_meta.json"
+    from services.file_mapper_service import FileMapperService
+    meta_path = FileMapperService.get_pretrained_path("deliberation_score", "deliberation-score-classifier_meta.json")
     with open(meta_path) as f:
         meta = json.load(f)
 

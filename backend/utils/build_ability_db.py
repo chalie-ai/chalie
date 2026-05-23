@@ -22,13 +22,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import paths  # noqa: E402
 from abilities._registry import AbilityRegistry  # noqa: E402
 from services.embedding_service import EmbeddingService  # noqa: E402
 from services.embedding_utils import pack_embedding  # noqa: E402
+from services.file_mapper_service import FileMapperService  # noqa: E402
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "abilities" / "assets" / "abilities.sqlite"
-_SHA_PATH = paths.PRETRAINED_DIR / "abilities_sha.json"
+_DB_PATH = FileMapperService.get_abilities_db_path()
+_SHA_PATH = FileMapperService.get_abilities_sha_path()
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:

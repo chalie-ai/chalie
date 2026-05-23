@@ -11,12 +11,12 @@ Run from the backend directory:
 
 import sqlite3
 import sys
-from pathlib import Path
 
 from services.embedding_service import EmbeddingService
 from services.embedding_utils import pack_embedding
+from services.file_mapper_service import FileMapperService
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
+_DB_PATH = FileMapperService.get_search_providers_db_path()
 
 
 def main():

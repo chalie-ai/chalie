@@ -7,13 +7,13 @@ import threading
 import time
 from typing import List
 
-import paths
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[DOC2QUERY]"
 _ONNX_PRESENT_PREFIX = "present."
-_MODEL_DIR = str(paths.MODELS_DIR / "doc2query-small")
+_MODEL_DIR = str(FileMapperService.get_models_path("doc2query-small"))
 _IDLE_TIMEOUT = 600  # 10 minutes
 
 

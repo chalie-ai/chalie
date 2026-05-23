@@ -34,15 +34,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.embedding_service import EmbeddingService
 from services.embedding_utils import pack_embedding
+from services.file_mapper_service import FileMapperService
 
-_YAML_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "services" / "data_graph" / "assets" / "concept_lut.yaml"
-)
-_DB_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "services" / "data_graph" / "assets" / "concept_lut.sqlite"
-)
+_YAML_PATH = FileMapperService.get_concept_lut_yaml_path()
+_DB_PATH = FileMapperService.get_concept_lut_db_path()
 
 _BATCH_SIZE = 32
 

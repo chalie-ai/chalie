@@ -18,7 +18,7 @@ import shutil
 from datetime import timedelta
 from typing import Optional, List, Dict, Any
 
-import paths
+from services.file_mapper_service import FileMapperService
 from services.embedding_utils import pack_embedding as _pack_embedding
 from services.log_utils import safe
 from services.write_queue_service import get_write_queue
@@ -33,8 +33,7 @@ DEDUP_MIN_TEXT_LENGTH = 200        # skip semantic dedup for very short docs
 # Purge window (days after soft delete)
 PURGE_WINDOW_DAYS = 30
 
-# Document storage root — single hard-coded layout (paths.py).
-DOCUMENTS_ROOT = str(paths.DOCUMENTS_DIR)
+DOCUMENTS_ROOT = str(FileMapperService.get_documents_path())
 
 
 class DocumentService:

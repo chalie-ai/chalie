@@ -24,15 +24,14 @@ import threading
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from services.file_mapper_service import FileMapperService
 from services.log_utils import safe
 from services.memory_client import MemoryClientService
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
-# App root is three levels up from this file:
-# backend/services/app_update_service.py -> backend/services -> backend -> <root>
-APP_ROOT = Path(__file__).parent.parent.parent
+APP_ROOT = FileMapperService.get_chalie_root()
 
 GITHUB_API_URL = "https://api.github.com/repos/chalie-ai/chalie/releases/latest"
 GITHUB_TARBALL_URL = "https://github.com/chalie-ai/chalie/archive/refs/tags/{tag}.tar.gz"

@@ -256,14 +256,13 @@ def _register_workers(manager, host: str, port: int) -> None:
 
 def _check_asset_caches() -> None:
     """Verify search routing and concept LUT assets are present."""
+    import sqlite3 as _sql
+    from services.file_mapper_service import FileMapperService
+
     try:
-        import os as _os
-        import sqlite3 as _sql
-        _search_db = _os.path.join(
-            _os.path.dirname(__file__), "tools", "search", "assets", "search_tool_providers.sqlite"
-        )
-        if _os.path.exists(_search_db):
-            _c = _sql.connect(_search_db)
+        _search_db = FileMapperService.get_search_providers_db_path()
+        if _search_db.exists():
+            _c = _sql.connect(str(_search_db))
             _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
             _c.close()
             if "example_embeddings" in _tables:
@@ -276,13 +275,9 @@ def _check_asset_caches() -> None:
         logger.warning(f"[Startup] Search cache check failed: {e}")
 
     try:
-        import os as _os
-        import sqlite3 as _sql
-        _lut_db = _os.path.join(
-            _os.path.dirname(__file__), "services", "data_graph", "assets", "concept_lut.sqlite"
-        )
-        if _os.path.exists(_lut_db):
-            _c = _sql.connect(_lut_db)
+        _lut_db = FileMapperService.get_concept_lut_db_path()
+        if _lut_db.exists():
+            _c = _sql.connect(str(_lut_db))
             _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
             _c.close()
             if "lut_embeddings" in _tables:

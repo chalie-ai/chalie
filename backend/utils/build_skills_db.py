@@ -24,14 +24,14 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import paths  # noqa: E402
 from services.embedding_service import EmbeddingService  # noqa: E402
 from services.embedding_utils import pack_embedding  # noqa: E402
+from services.file_mapper_service import FileMapperService  # noqa: E402
 
-_SKILLS_DIR = Path(__file__).resolve().parent.parent / "abilities" / "skills"
-_USER_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "skills" / "user"
-_DB_PATH = Path(__file__).resolve().parent.parent / "abilities" / "assets" / "skills.sqlite"
-_SHA_PATH = paths.PRETRAINED_DIR / "skills_sha.json"
+_SKILLS_DIR = FileMapperService.get_abilities_skills_path()
+_USER_SKILLS_DIR = FileMapperService.get_user_skills_path()
+_DB_PATH = FileMapperService.get_skills_db_path()
+_SHA_PATH = FileMapperService.get_skills_sha_path()
 
 _DEDUP_THRESHOLD = 0.95
 _SOURCE_CURATED = "curated"

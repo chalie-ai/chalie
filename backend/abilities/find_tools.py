@@ -5,6 +5,7 @@ from typing import ClassVar
 
 from abilities._search import KNN_DEPTH, SearchableAbility
 from services.embedding_utils import pack_embedding
+from services.file_mapper_service import FileMapperService
 from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,7 @@ class FindToolsAbility(SearchableAbility):
     }
     TIMEOUT = 10
 
-    _DB_PATH: ClassVar[Path] = (
-        Path(__file__).resolve().parent / "assets" / "abilities.sqlite"
-    )
+    _DB_PATH: ClassVar[Path] = FileMapperService.get_abilities_db_path()
     _LOG_PREFIX = "[FIND_TOOLS]"
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:

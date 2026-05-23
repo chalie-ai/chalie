@@ -26,12 +26,12 @@ import re
 import struct
 import tempfile
 import threading
-from pathlib import Path
 
 from flask import Blueprint, Response, request, jsonify
 
 from markdown_it import MarkdownIt
 
+from services.file_mapper_service import FileMapperService
 from services.markup import extract_plaintext
 
 logger = logging.getLogger(__name__)
@@ -43,10 +43,9 @@ voice_bp = Blueprint("voice", __name__)
 # Models are baked into the install by installer/install.sh into a directory
 # sibling to backend/, intentionally OUTSIDE the data/ volume so the files
 # travel with the image and survive `chalie update` on native installs.
-_VOICE_ROOT = Path(__file__).resolve().parents[2] / "resources" / "voice-models"
-_KOKORO_MODEL = _VOICE_ROOT / "kokoro" / "kokoro-v1.0.onnx"
-_KOKORO_VOICES = _VOICE_ROOT / "kokoro" / "voices-v1.0.bin"
-_MOONSHINE_DIR = _VOICE_ROOT / "moonshine" / "base"
+_KOKORO_MODEL = FileMapperService.get_voice_models_path("kokoro", "kokoro-v1.0.onnx")
+_KOKORO_VOICES = FileMapperService.get_voice_models_path("kokoro", "voices-v1.0.bin")
+_MOONSHINE_DIR = FileMapperService.get_voice_models_path("moonshine", "base")
 
 TTS_VOICE = "af_heart"
 TTS_LANG = "en-us"

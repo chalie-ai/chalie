@@ -9,6 +9,7 @@ from typing import Optional
 
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
+from services.file_mapper_service import FileMapperService
 from services.log_utils import safe
 from services.time_utils import utc_now, parse_utc
 # SearchExpanderService: generates doc2query variants + embeds them for KNN recall.
@@ -67,9 +68,7 @@ _KIND_POLICY = {
 
 # Concept LUT asset — pre-built sqlite with lut_concepts + lut_embeddings (vec0).
 # Regenerate with: cd backend && python -m utils.generate_concept_lut
-_CONCEPT_LUT_PATH = os.path.join(
-    os.path.dirname(__file__), 'data_graph', 'assets', 'concept_lut.sqlite'
-)
+_CONCEPT_LUT_PATH = str(FileMapperService.get_concept_lut_db_path())
 
 # Cosine threshold for LUT canonical match.
 _CONCEPT_LUT_THRESHOLD = 0.80

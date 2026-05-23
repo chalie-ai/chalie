@@ -10,14 +10,14 @@ Called by SubconsciousWorker after every PatternMatchProcessor pass.
 import json
 import logging
 import sqlite3
-from pathlib import Path
 
+from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SKILL_ASSOC]"
 
-_SKILLS_DB = Path(__file__).resolve().parent.parent / "abilities" / "assets" / "skills.sqlite"
+_SKILLS_DB = FileMapperService.get_skills_db_path()
 
 _SYSTEM_PROMPT = """You map behavioral patterns to skill playbooks.
 

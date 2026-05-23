@@ -17,13 +17,13 @@ import shutil
 
 import pytest
 
-import paths
+from services.file_mapper_service import FileMapperService
 from services.onnx_inference_service import OnnxInferenceService
 
 pytestmark = pytest.mark.integration
 
-_MODELS_DIR = str(paths.MODELS_DIR)
-_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
+_MODELS_DIR = str(FileMapperService.get_models_path())
+_PRETRAINED_DIR = str(FileMapperService.get_pretrained_path())
 _ENCODER_PATH = os.path.join(_MODELS_DIR, "gte-modernbert-base", "onnx", "model.onnx")
 
 _DELIB_META = os.path.join(

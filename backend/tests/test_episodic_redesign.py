@@ -12,13 +12,14 @@ column definitions, constraints, and indexes are never out of sync with producti
 import json
 import sqlite3
 import uuid
-from pathlib import Path
 import pytest
 from contextlib import contextmanager
 
+from services.file_mapper_service import FileMapperService
+
 pytestmark = pytest.mark.unit
 
-_SCHEMA_PATH = Path(__file__).parent.parent / "schema.sql"
+_SCHEMA_PATH = FileMapperService.get_schema_path()
 
 
 def _build_schema(conn: sqlite3.Connection) -> None:

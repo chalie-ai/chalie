@@ -6,13 +6,14 @@ Cached after first read; invalidated on ``set_tuple()``.
 
 import json
 import logging
-import os
+
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
 NEUTRAL: tuple[int, int, int, int, int] = (0, 0, 0, 0, 0)
 SLIDER_ORDER = ('warmth', 'mood', 'expressiveness', 'curiosity', 'humor')
-_VOICES_PATH = os.path.join(os.path.dirname(__file__), 'voices.jsonl')
+_VOICES_PATH = str(FileMapperService.get_backend_path("services", "personality", "voices.jsonl"))
 
 
 class PersonalityService:

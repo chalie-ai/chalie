@@ -13,9 +13,10 @@ Public API
 
 import importlib
 import logging
-from pathlib import Path
 
 import yaml
+
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def load_capabilities() -> dict:
     if _capabilities_cache is not None:
         return _capabilities_cache
 
-    capabilities_dir = Path(__file__).parent
+    capabilities_dir = FileMapperService.get_capabilities_path()
     discovered: dict = {}
 
     for subdir in sorted(capabilities_dir.iterdir()):

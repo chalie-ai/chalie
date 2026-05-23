@@ -13,7 +13,7 @@ from pathlib import Path
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask_cors import CORS
 
-import paths
+from services.file_mapper_service import FileMapperService
 from .auth import require_session as require_session
 
 
@@ -42,14 +42,12 @@ mimetypes.add_type('application/json', '.json')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
-# Resolve frontend directories relative to backend/
-_BACKEND_DIR = Path(__file__).resolve().parent.parent
-_FRONTEND_DIR = _BACKEND_DIR.parent / 'frontend'
-_INTERFACE_DIR = _FRONTEND_DIR / 'interface'
-_BRAIN_DIR = _FRONTEND_DIR / 'brain'
-_ONBOARDING_DIR = _FRONTEND_DIR / 'on-boarding'
-_LOGIN_DIR = _FRONTEND_DIR / 'login'
-_SHARED_DIR = _FRONTEND_DIR / 'shared'
+_FRONTEND_DIR = FileMapperService.get_frontend_path()
+_INTERFACE_DIR = FileMapperService.get_frontend_path("interface")
+_BRAIN_DIR = FileMapperService.get_frontend_path("brain")
+_ONBOARDING_DIR = FileMapperService.get_frontend_path("on-boarding")
+_LOGIN_DIR = FileMapperService.get_frontend_path("login")
+_SHARED_DIR = FileMapperService.get_frontend_path("shared")
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +65,7 @@ _SHARED_DIR = _FRONTEND_DIR / 'shared'
 # entry; a distinct filename is universally treated as a new resource.
 # ---------------------------------------------------------------------------
 
-_VERSION_FILE = _BACKEND_DIR.parent / 'VERSION'
+_VERSION_FILE = FileMapperService.get_version_path()
 
 
 def _read_asset_version() -> str:
@@ -164,7 +162,7 @@ def _get_or_generate_session_secret() -> str:
     if env_key:
         return env_key
 
-    secret_file = paths.SESSION_SECRET_PATH
+    secret_file = FileMapperService.get_session_secret_path()
     if secret_file.exists():
         try:
             value = secret_file.read_text().strip()

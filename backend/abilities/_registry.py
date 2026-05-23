@@ -1,8 +1,8 @@
 import importlib
 import threading
-from pathlib import Path
 
 from abilities._base import Ability
+from services.file_mapper_service import FileMapperService
 
 _lock = threading.RLock()
 _registry: dict[str, Ability] | None = None
@@ -14,7 +14,7 @@ def _load() -> dict[str, Ability]:
     Concrete Ability subclasses self-register via __init_subclass__; we collect
     them after the walk by inspecting all subclasses of Ability.
     """
-    abilities_dir = Path(__file__).resolve().parent
+    abilities_dir = FileMapperService.get_abilities_path()
     for path in sorted(abilities_dir.glob("*.py")):
         if path.name.startswith("_"):
             continue

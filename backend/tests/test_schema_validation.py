@@ -9,7 +9,8 @@ tests run with zero external dependencies.
 
 import sqlite3
 import pytest
-from pathlib import Path
+
+from services.file_mapper_service import FileMapperService
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -53,7 +54,7 @@ class TestSchemaValidation:
         schema.sql.
         """
         import re
-        schema_path = Path(__file__).parent.parent / 'schema.sql'
+        schema_path = FileMapperService.get_schema_path()
         raw = schema_path.read_text()
 
         # Strip statements that create virtual tables requiring extensions

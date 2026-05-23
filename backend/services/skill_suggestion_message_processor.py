@@ -14,8 +14,8 @@ never raises.
 import logging
 import threading
 import time
-from pathlib import Path
 
+from services.file_mapper_service import FileMapperService
 from services.message_processor import MessageProcessor
 from services.system_message_prompt import SkillSuggestionSystemPrompt
 
@@ -23,9 +23,7 @@ logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[SKILL_SUGGEST]"
 
-_SKILLS_DB_PATH = (
-    Path(__file__).resolve().parent.parent / "abilities" / "assets" / "skills.sqlite"
-)
+_SKILLS_DB_PATH = FileMapperService.get_skills_db_path()
 
 # Module-level cooldown: seconds between successive suggestions.
 _COOLDOWN_SECONDS = 300

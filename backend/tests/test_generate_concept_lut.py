@@ -10,15 +10,11 @@ from pathlib import Path
 
 import pytest
 
+from services.file_mapper_service import FileMapperService
+
 pytestmark = pytest.mark.integration
 
-# Ensure backend/ is on sys.path for service imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-_YAML_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "services" / "data_graph" / "assets" / "concept_lut.yaml"
-)
+_YAML_PATH = FileMapperService.get_concept_lut_yaml_path()
 
 
 def _run_generator(db_path: str) -> None:
