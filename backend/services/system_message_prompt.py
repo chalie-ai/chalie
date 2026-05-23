@@ -121,8 +121,9 @@ Example: "Web searches showed Midea founded 1968 by He Xiangjian in Shunde, born
 ## Response format
 
 In the {{provider_content_field_name}} field (what the user sees) format your response as HTML.
-Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>, <li>
+Specifically only use the following tags: <p>, <h1>, <b>, <i>, <u>, <code>, <ul>, <li>, <table>, <thead>, <tbody>, <tfoot>, <tr>, <th>, <td>
 NEVER use markdown syntax. Use <b> not **, use <i> not _, use <h1> not #, use <ul><li> not - or *. No backtick fences. HTML tags only.
+Avoid using table structures to represent data. If you do need to use tables, output in html only NEVER as markdown and keep column count under 4.
 
 ────────────────────────────────\
 """

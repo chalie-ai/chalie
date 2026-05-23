@@ -36,11 +36,14 @@ import nh3
 # and phonemizer silently drops the resulting gibberish token. We insert a
 # space at each opening / closing boundary before tag stripping so adjacent
 # items stay separable.
-_BLOCK_BOUNDARY_RE = re.compile(r"</?(?:p|li|ul|h1|br)\b[^>]*>", re.IGNORECASE)
+_BLOCK_BOUNDARY_RE = re.compile(r"</?(?:p|li|ul|h1|br|tr|td|th)\b[^>]*>", re.IGNORECASE)
 
 # ── Tag allowlist ───────────────────────────────────────────────────────────
 
-LLM_TAGS = frozenset({"b", "i", "u", "h1", "code", "p", "ul", "li", "span"})
+LLM_TAGS = frozenset({
+    "b", "i", "u", "h1", "code", "p", "ul", "li", "span",
+    "table", "thead", "tbody", "tfoot", "tr", "td", "th",
+})
 PROGRAMMATIC_TAGS = frozenset({"img", "actions", "action"})
 ALLOWED_TAGS = LLM_TAGS | PROGRAMMATIC_TAGS
 

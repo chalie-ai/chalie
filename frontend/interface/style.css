@@ -1008,12 +1008,32 @@ body.speaker-user   #ambientBloom {
   font-size: 0.88em;
 }
 
+.speech-form--chalie .speech-form__text thead {
+  display: table-header-group;
+}
+
+.speech-form--chalie .speech-form__text tbody {
+  display: table-row-group;
+}
+
+.speech-form--chalie .speech-form__text tfoot {
+  display: table-row-group;
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
+.speech-form--chalie .speech-form__text tfoot td {
+  border-top: 1px solid color-mix(in oklab, var(--accent-primary) 15%, transparent);
+  border-bottom: none;
+  padding-top: 0.5em;
+}
+
 .speech-form--chalie .speech-form__text th {
   text-align: left;
   font-weight: 600;
   color: var(--text-primary);
   padding: 0.5em 0.75em;
-  border-bottom: 1px solid rgba(138, 92, 255, 0.20);
+  border-bottom: 1px solid color-mix(in oklab, var(--accent-primary) 20%, transparent);
   font-size: 0.85em;
   text-transform: uppercase;
   letter-spacing: 0.03em;
