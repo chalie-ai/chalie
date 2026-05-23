@@ -231,12 +231,6 @@ def _register_workers(manager, host: str, port: int) -> None:
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)
 
-    from workers.interface_health_worker import interface_health_worker
-    manager.register_service("interface-health-monitor", interface_health_worker)
-
-    from workers.interface_daemon_worker import interface_daemon_worker
-    manager.register_service("interface-daemon-watcher", interface_daemon_worker)
-
     from services.moment_context_service import moment_context_worker
     manager.register_service("moment-context-service", moment_context_worker)
 

@@ -232,7 +232,6 @@ def authed_client(db):
     with patch('services.auth_session_service.validate_session', return_value=True), \
          patch('services.memory_store.get_shared_store', return_value=real_store), \
          patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store), \
-         patch('api._init_dashboard_gateway'), \
          patch('api._get_or_generate_session_secret', return_value='test-secret'):
         app = create_app()
         app.config['TESTING'] = True

@@ -17,10 +17,8 @@ APP_ROOT = _BACKEND_DIR.parent
 # ── Persistent runtime state (gitignored, owned by the running process) ──
 DATA_DIR = APP_ROOT / "data"
 DB_PATH = DATA_DIR / "chalie.db"
-DASHBOARD_DB_PATH = DATA_DIR / "dashboard.db"
 SESSION_SECRET_PATH = DATA_DIR / ".session_secret"
 DOCUMENTS_DIR = DATA_DIR / "documents"
-INTERFACES_DIR = DATA_DIR / "interfaces"
 MODELS_DIR = DATA_DIR / "models"
 
 # ── Git-tracked, ship-with-Chalie assets ─────────────────────────────────

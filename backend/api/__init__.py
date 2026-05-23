@@ -131,11 +131,6 @@ def _version_html(html: str, base_dir: Path) -> str:
         asset = _resolve_same_origin_asset(url, base_dir)
         if asset is None:
             return match.group(0)
-        # Service-worker script must stay at its registration URL — browsers
-        # identify SW registrations by scriptURL. Renaming would orphan the
-        # existing registration and install a second, conflicting SW.
-        if asset.name == 'sw.js':
-            return match.group(0)
         versioned = _inject_version_into_url(url)
         if versioned == url:
             return match.group(0)
@@ -185,56 +180,6 @@ def _get_or_generate_session_secret() -> str:
     secret_file.chmod(0o600)
     logger.info(f"[Flask] Generated new session secret → {secret_file}")
     return value
-
-
-def _init_dashboard_gateway(app):
-    """Initialise the dashboard gateway for interface daemons.
-
-    Registers the gateway and app-management blueprints, inits the dashboard
-    DB, and creates a ChalieClient for proxying signals/context to the backend.
-    All runs inside the same Flask process — no separate server or proxy needed.
-    """
-    from gateway import db as dashboard_db
-    from gateway.gateway import gateway_bp, init_gateway
-    from gateway.chalie_client import ChalieClient
-
-    from runtime_config import get as rc_get
-
-    port = int(rc_get('port', 31025))
-
-    # Dashboard DB lives alongside Chalie's data
-    data_dir = str(paths.DATA_DIR)
-    dashboard_db.init_db(str(paths.DASHBOARD_DB_PATH))
-
-    # ChalieClient talks to ourselves (localhost) — no network hop.
-    # Auto-generate a wrapper bearer token so the gateway can authenticate
-    # with Chalie's own API endpoints (signals, context, interfaces).
-    client = ChalieClient(f'http://127.0.0.1:{port}')
-    boot_token = dashboard_db.get_config('boot_token')
-    if not boot_token:
-        try:
-            from services.wrapper_auth_service import WrapperAuthService
-            from services.database_service import get_shared_db_service
-            wrapper_svc = WrapperAuthService(get_shared_db_service())
-            boot_token, _wrapper_id = wrapper_svc.create_token(
-                name="Dashboard Gateway",
-                capabilities={"signals": ["*"]},
-                permissions={"query": ["memory", "context"], "update": ["context"]},
-                metadata={"type": "dashboard", "version": "1.0.0"},
-                wrapper_id_override="__dashboard_gateway__",
-            )
-            dashboard_db.set_config('boot_token', boot_token)
-            logger.info("[Dashboard] Auto-generated boot token for gateway auth")
-        except Exception as e:
-            logger.warning("[Dashboard] Could not generate boot token: %s", e)
-    if boot_token:
-        client.token = boot_token
-
-    init_gateway(client, port, data_dir)
-
-    app.register_blueprint(gateway_bp)
-
-    logger.info("[Dashboard] Gateway blueprint registered")
 
 
 def _register_blueprints(app: Flask) -> None:
@@ -362,9 +307,6 @@ def create_app():
 
     _configure_app(app)
     _register_blueprints(app)
-
-    # ── Dashboard gateway (interface daemons) ─────────────────────
-    _init_dashboard_gateway(app)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock

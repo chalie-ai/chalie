@@ -1,9 +1,4 @@
-"""
-Context API — returns the user's current ambient context for gateway proxy.
-
-This endpoint provides location, timezone, and device data that the dashboard
-gateway filters by approved scopes before serving to interface daemons.
-"""
+"""Context API -- returns ambient context (location, timezone, device data)."""
 
 import logging
 
