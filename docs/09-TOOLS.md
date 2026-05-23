@@ -10,14 +10,12 @@ Every dispatchable capability in Chalie is an `Ability` subclass under `backend/
 
 **SEARCH_TOOLTIP** is a required `ClassVar[str]` on every non-INTERNAL `Ability` subclass (enforced at import time by `__init_subclass__`). It provides a 2–5 word description used to build the `find_tools` index.
 
-**Interface tools** are capabilities exposed by external applications that have paired with Chalie via the interface protocol. They are projected into the abilities surface at boot via the same RRF discovery path. See [15-INTERFACES.md](15-INTERFACES.md).
-
 ## How tools are loaded on a turn
 
 Two loading tiers stack on each ACT iteration and are de-duplicated first-seen:
 
 1. **Unconditional** — every ability in the processor's `ALWAYS_AVAILABLE` list. Always present.
-2. **Dynamic (discoverable)** — abilities surfaced this turn via the `find_tools` ability's semantic search, gated to the processor's `DISCOVERABLE` list. Every non-innate ability (first-party + interface) is reachable exclusively through this path.
+2. **Dynamic (discoverable)** — abilities surfaced this turn via the `find_tools` ability's semantic search, gated to the processor's `DISCOVERABLE` list. Every non-innate first-party ability is reachable exclusively through this path.
 
 `ModeGateService` runs once per user turn but **does not gate tool availability**. It classifies the turn along eight independent cognitive intents (`research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) using a small ONNX multi-label head; per-mode state follows an asymmetric EMA (fire snaps up, miss decays by 0.75 per turn). State persists across turns in MemoryStore under `mode_gate:state` and is cleared by `/privacy/delete-all`. The active mode set powers prompt-steering directives in `UserMessageProcessor` (long-summary swap on `converse`, brainstorm/research/analyze suffixes appended to the system prompt) and is reserved for future mode-driven features.
 

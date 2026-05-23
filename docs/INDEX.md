@@ -15,8 +15,7 @@
 2. [04-ARCHITECTURE.md](04-ARCHITECTURE.md) — Runtime shape, memory, background reasoning
 3. [09-TOOLS.md](09-TOOLS.md) — How tools work, how to add one
 4. [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) — Tools shipped with Chalie
-5. [15-INTERFACES.md](15-INTERFACES.md) — External app integration contract
-6. [12-TESTING.md](12-TESTING.md) — Test philosophy and discipline
+5. [12-TESTING.md](12-TESTING.md) — Test philosophy and discipline
 
 ## Specialized
 

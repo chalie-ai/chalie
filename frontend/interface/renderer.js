@@ -429,7 +429,7 @@ export class Renderer {
     wrapper.innerHTML = CHALIE_GLYPH;
     header.appendChild(wrapper.content.firstElementChild);
     const timestampEl = this._createEl('span', 'speech-form__timestamp');
-    timestampEl.textContent = this._formatTimestamp(meta.ts ?? null);
+    timestampEl.textContent = meta.ts || '';
     header.appendChild(timestampEl);
     return header;
   }
@@ -565,13 +565,6 @@ export class Renderer {
         }
       });
     });
-  }
-
-  _formatTimestamp(ts) {
-    const d = ts ? new Date(ts) : new Date();
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${day} ${months[d.getMonth()]} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
   }
 
   _setActiveForm(el) {

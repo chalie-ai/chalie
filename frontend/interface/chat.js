@@ -119,10 +119,7 @@ export class Chat {
     if (this._imageAttach) this._imageAttach.clear();
     sendBtn.disabled = true;
 
-    // Capture timestamp for this exchange
-    const exchangeTimestamp = new Date();
-
-    this._renderer.appendUserForm(text || '[File attached]', exchangeTimestamp, {});
+    this._renderer.appendUserForm(text || '[File attached]', null, {});
 
     // ACT cycle host: blinking logo + (optional) narrative + cumulative tool list.
     // Persists for the entire turn; replaced wholesale by the final response.
@@ -159,6 +156,7 @@ export class Chat {
           mode: data.mode || '',
           confidence: data.confidence || 0,
           segments: data.segments || null,
+          ts: data.timestamp || '',
         };
         this._presence.setState('responding');
       },
@@ -170,7 +168,7 @@ export class Chat {
       },
       onDone: (data) => {
         this._onResponseReceivedCb?.();
-        this._finaliseTurn(actEl, responseContent, responseMeta, data, exchangeTimestamp);
+        this._finaliseTurn(actEl, responseContent, responseMeta, data);
       },
     }, attachments);
 
@@ -245,10 +243,9 @@ export class Chat {
    * Finalise a completed send turn: swap or remove the ACT placeholder,
    * fire background notification if needed, then reset send state.
    */
-  _finaliseTurn(actEl, responseContent, responseMeta, doneData, exchangeTimestamp) {
+  _finaliseTurn(actEl, responseContent, responseMeta, doneData) {
     if (responseContent) {
       responseMeta.duration_ms = doneData.duration_ms;
-      responseMeta.ts = exchangeTimestamp;
       // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
       this._renderer.replaceActWithResponse(actEl, responseContent, responseMeta);
       this._pendingForm = null;

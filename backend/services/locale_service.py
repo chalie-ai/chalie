@@ -117,6 +117,10 @@ def get_location() -> dict:
     }
 
 
+# ── Format constants ──────────────────────────────────────────────────────
+
+CHAT_TIMESTAMP_FMT = "%d %b %H:%M"
+
 # ── Formatting helpers ────────────────────────────────────────────────────
 
 
