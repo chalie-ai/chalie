@@ -281,7 +281,7 @@ def _build_service(config: dict):
         )
 
     model = config.get('model')
-    if not model and platform != 'codex_cli':
+    if not model:
         raise ValueError(
             "LLM config missing 'model'. Configure it via POST /api/providers"
         )
@@ -328,9 +328,6 @@ def _build_service(config: dict):
                 "(base URL, e.g. 'https://api.minimax.io/v1')"
             )
         return OpenAIService(config)
-    elif platform == 'codex_cli':
-        from services.codex_cli_service import CodexCliProviderService
-        return CodexCliProviderService(config)
     raise ValueError(f"Unknown platform: {platform}")
 
 

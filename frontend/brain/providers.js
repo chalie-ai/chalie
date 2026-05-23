@@ -10,18 +10,13 @@ const PanelProviders = (() => {
   let _modelFetchTimer = null;
   const _MODEL_FETCH_DEBOUNCE_MS = 600;
 
-  let _cliDetected = {};
-
   const PLATFORM_CONFIG = {
     ollama: { desc: 'Run locally — no API key needed.', hasHost: true, hasApiKey: false, placeholder: 'e.g. gemma4:31b', models: [] },
     anthropic: { desc: 'API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. claude-sonnet-4-6', models: [] },
     openai: { desc: 'API key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. gpt-4o', models: ['gpt-4o', 'gpt-4.1', 'o3', 'o4-mini'] },
     gemini: { desc: 'API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. gemini-2.5-flash', models: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
     openai_compatible: { desc: 'Any OpenAI-compatible API (Groq, DeepSeek, Together, etc.)', hasHost: true, hasApiKey: true, placeholder: 'e.g. MiniMax-M2', models: [] },
-    codex_cli: { desc: 'Piggyback on your Codex CLI subscription — no API key needed.', hasHost: false, hasApiKey: false, placeholder: 'e.g. o4-mini', models: [] },
   };
-
-  const _CLI_PLATFORMS = { codex_cli: true };
 
   async function mount(root) {
     _root = root;
@@ -32,18 +27,6 @@ const PanelProviders = (() => {
     <div id="providersList" class="providers-list"><div class="loading">Loading providers…</div></div>`;
     document.getElementById('addProviderBtn').addEventListener('click', () => _openModal(null));
     await _load();
-    _detectCliProviders();
-  }
-
-  async function _detectCliProviders() {
-    try {
-      const res = await BrainApp.apiFetch('/providers/detect-cli', { method: 'POST', body: JSON.stringify({ cli: 'codex' }) });
-      if (res.ok) {
-        const data = await res.json();
-        _cliDetected.codex_cli = data;
-        if (data.available && data.models) PLATFORM_CONFIG.codex_cli.models = data.models;
-      }
-    } catch (e) { console.debug('[Providers] CLI detection failed:', e); }
   }
 
   function unmount() { _root = null; }
@@ -117,11 +100,7 @@ const PanelProviders = (() => {
     if (p) { _editPlatform = p.platform; _editModel = p.model || ''; }
 
     const cfg = PLATFORM_CONFIG[_editPlatform];
-    const platforms = Object.keys(PLATFORM_CONFIG).filter(k => {
-      if (!_CLI_PLATFORMS[k]) return true;
-      if (p && p.platform === k) return true;
-      return _cliDetected[k]?.available;
-    });
+    const platforms = Object.keys(PLATFORM_CONFIG);
 
     const root = document.getElementById('providersList');
     if (!root) return;
@@ -131,7 +110,7 @@ const PanelProviders = (() => {
         <h3>${id ? 'Edit Provider' : 'Add Provider'}</h3>
       </div>
       <div class="platform-tabs" id="platTabs">
-        ${platforms.map(k => `<button class="platform-tab${k === _editPlatform ? ' active' : ''}" data-plat="${k}">${k === 'openai_compatible' ? 'OpenAI-Compat' : k === 'codex_cli' ? 'Codex CLI' : k.charAt(0).toUpperCase() + k.slice(1)}</button>`).join('')}
+        ${platforms.map(k => `<button class="platform-tab${k === _editPlatform ? ' active' : ''}" data-plat="${k}">${k === 'openai_compatible' ? 'OpenAI-Compat' : k.charAt(0).toUpperCase() + k.slice(1)}</button>`).join('')}
       </div>
       <p class="platform-desc" id="platDesc">${cfg.desc}</p>
       <form id="providerForm">
@@ -208,7 +187,6 @@ const PanelProviders = (() => {
   function _canFetchModels() {
     const cfg = PLATFORM_CONFIG[_editPlatform];
     if (cfg.hasApiKey && !document.getElementById('pKey')?.value?.trim()) return false;
-    if (_CLI_PLATFORMS[_editPlatform] && !_cliDetected[_editPlatform]?.available) return false;
     return true;
   }
 
@@ -250,7 +228,7 @@ const PanelProviders = (() => {
       if (PLATFORM_CONFIG[_editPlatform].hasApiKey) body.api_key = document.getElementById('pKey').value.trim();
       const res = await BrainApp.apiFetch('/providers/test', { method: 'POST', body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success) BrainApp.showToast(data.message || 'Connection successful', 'success');
+      if (res.ok) BrainApp.showToast('Connection successful', 'success');
       else BrainApp.showToast(data.error || 'Test failed', 'error');
     } catch { BrainApp.showToast('Network error', 'error'); }
     btn.disabled = false; btn.textContent = 'Test';

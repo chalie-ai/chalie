@@ -391,12 +391,6 @@ def list_models():
         models, err = _fetch_openai_compatible_models(
             body.get('host') or '', (body.get('api_key') or '').strip(),
         )
-    elif platform == 'codex_cli':
-        from services.codex_cli_service import check_codex_cli
-        result = check_codex_cli()
-        models = [{"id": m, "display_name": None} for m in (result.get('models') or [])]
-        err = None if result.get('available') else result.get('error')
-        return jsonify({"models": models, "error": err}), 200
     else:
         return jsonify({"models": [], "error": f"Unsupported platform '{platform}'"}), 400
 
@@ -520,15 +514,13 @@ def test_provider():
 
         if not platform:
             return jsonify({"success": False, "error": "Platform is required"}), 200
-        if not model and platform != 'codex_cli':
+        if not model:
             return jsonify({"success": False, "error": "Model is required"}), 200
 
         start = time.time()
 
         if platform == 'ollama':
             return _test_ollama_provider(config, model, start)
-        elif platform == 'codex_cli':
-            return _test_codex_cli_provider(start)
         else:
             return _test_api_provider(config, platform, model, start)
 
@@ -592,33 +584,3 @@ def set_selected_provider():
     except Exception as e:
         logger.error(f"[REST API] Failed to set selected provider: {e}")
         return jsonify({"error": "Failed to set selected provider"}), 500
-
-
-def _test_codex_cli_provider(start: float):
-    """Test Codex CLI with a full round-trip (handshake + test turn)."""
-    import time
-    from services.codex_cli_service import detect_codex_cli
-    result = detect_codex_cli()
-    latency_ms = int((time.time() - start) * 1000)
-    if result.get('available'):
-        return jsonify({
-            "success": True, "model": "codex-cli",
-            "latency_ms": latency_ms,
-            "message": f"Codex CLI operational · {len(result.get('models', []))} model(s)",
-        }), 200
-    return jsonify({"success": False, "error": result.get('error', 'Detection failed')}), 200
-
-
-@providers_bp.route('/detect-cli', methods=['POST'])
-@require_session
-def detect_cli_provider():
-    """Detect whether a CLI-based provider is installed and functional.
-
-    Body JSON: ``{"cli": "codex"}``
-    """
-    body = request.get_json(silent=True) or {}
-    cli = (body.get('cli') or '').strip().lower()
-    if cli == 'codex':
-        from services.codex_cli_service import check_codex_cli
-        return jsonify(check_codex_cli()), 200
-    return jsonify({"available": False, "error": f"Unknown CLI provider: {cli}"}), 400
