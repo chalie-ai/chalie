@@ -24,6 +24,7 @@
   "Experiment Tracker": "b085c08729167ecfde6cf2f044e0a96a2c1f833c110abf05f9b1dd038e223dd7",
   "Fact Checker": "74f80ba0327455d4fedf20fdb68c8c5fca0e54584f7a50dab6ed7c848b932865",
   "Financial Analysis": "227ef9982abfe9c19b30aaabc97b2965f37fd808ef366405fcb902e2ac1894d7",
+  "Fitness Routine Builder": "a479b3ca1ecc307a298ef5cdf5eb0fbb39590ada295eeaf74f870144c0e6481b",
   "Five Whys Root Cause Analysis": "6a3908adb27071364b61f4a4cb165e89009cb490be80f6d7ce26810f9a282589",
   "GDPR Audit Prep": "f5a28afaf5c96b0b07defa5ddc0e69ca9fe8572ac9503605f5661214b353cd85",
   "General Research": "d4f2121eadbb4f20185e51a4f237e47de166dd577e357fc63140ec99fbe39d0e",
@@ -39,6 +40,7 @@
   "Meeting Prep": "32a5f56d476382db28ab52f1bdeea4cc00e21801358ffee70967b05cd2b17ea0",
   "News Briefing": "9df5e36f9c2d94010ae3d59b55e50b5cd8cab2752cec1bcdb7d7010e982f6138",
   "Partnership Architect": "dbe4f75c01b3f20d1ea884d03e407235397f8caaebac2d18671db2a72cadeef1",
+  "Performance Review Writing": "c22b94c30b855253d35a61e7dd6ea8c31bf3a40341ef32786eb39430fe508f0f",
   "Plan-Do-Check-Act (PDCA)": "ec85c071750e604ff6e22080535650f3c5a7449138d11ac530d0622a623357fb",
   "Pricing Strategy": "38bfe405291a217e7d6d3cda4f256714287c929cc1e8daed4fe140b9ed090a72",
   "Product Analytics": "b7bd6ee5d8c403d0d81e587de927c51ed65dbe96342c09d059bbcf40ee39e082",
@@ -56,9 +58,11 @@
   "Stock Data Lookup": "e12f496f4219baa98d9583051999be9b7dc2e81b10f9c77569eab238cd183fe7",
   "Strategic Alignment Check": "8b9ea1eef92c278eae1c0793088e874be2c9a502db55d062de8f1f4df9469c69",
   "Team Update Writer": "533602d0df3ba91f676172004c8b2f4e11ed67b78d6421b948fcd6c2c6f87f64",
+  "Technology Evaluation Framework": "33b19584f87cc45f97657368bd3deb08bac535d0f4e80917a9b71b2bbbeb0163",
   "Topic Pulse": "bcbb3b68a67c8350b3fe7711efa775617fb9f988120889686669c2c571eddb85",
   "Travel Planning": "44993b474ddd50437737618b0a02b8b349f5f3b2a64c955a39888ffc15c82a22",
   "Twitter Thread Reader": "47160b1b40b72223cf875c0ffc9fbd5f84ddd6db543dae7ebd3d99c1bbcffc3f",
   "UX Research": "7b40f8a85a4ac5ba012dd1a6a925de521b5149014b0a395d859dbb9d78121ca5",
-  "Video Content Strategy": "37f3c4c509e91f79cda7e9cce0e3f56049d2204a4eec668fae6153d1deb1981a"
+  "Video Content Strategy": "37f3c4c509e91f79cda7e9cce0e3f56049d2204a4eec668fae6153d1deb1981a",
+  "Weekly Meal Planning": "66c4fc60c934c0c3cc526f083255c7e415998181cc1a0407ebf831cb8e6d63a9"
 }
