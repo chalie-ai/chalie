@@ -6,22 +6,23 @@ user-skill YAML files in data/skills/user/.
 """
 
 import logging
-import re
 import sqlite3
-from pathlib import Path
 
-import yaml
 from flask import Blueprint, jsonify, request
+
+from utils.skills_io import (
+    DEFAULT_VERSION,
+    SKILLS_DB_PATH,
+    ensure_user_skills_dir,
+    open_skills_db,
+    remove_search_entries,
+    skill_yaml_path,
+    write_skill_file,
+)
 
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
-
-_SKILLS_DB = Path(__file__).resolve().parent.parent / "abilities" / "assets" / "skills.sqlite"
-_USER_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "skills" / "user"
-
-_SLUG_MAX_LENGTH = 64
-_DEFAULT_VERSION = 1
 
 skills_bp = Blueprint("skills", __name__, url_prefix="/api/skills")
 
@@ -29,64 +30,9 @@ skills_bp = Blueprint("skills", __name__, url_prefix="/api/skills")
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
 
-def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
-    conn.enable_load_extension(True)
-    try:
-        import sqlite_vec
-        sqlite_vec.load(conn)
-    except Exception:
-        try:
-            conn.load_extension("vec0")
-        except Exception:
-            pass
-
-
 def _open_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_SKILLS_DB))
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    _load_sqlite_vec(conn)
-    return conn
-
-
-def _slugify(title: str) -> str:
-    slug = title.lower().strip()
-    slug = re.sub(r"[^a-z0-9]+", "-", slug)
-    slug = slug.strip("-")
-    return slug[:_SLUG_MAX_LENGTH]
-
-
-def _skill_path(title: str) -> Path:
-    return _USER_SKILLS_DIR / f"{_slugify(title)}.yaml"
-
-
-def _ensure_user_skills_dir() -> None:
-    _USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _write_skill_file(path: Path, meta: dict) -> None:
-    frontmatter = {
-        "title": meta["title"],
-        "use_for": meta["use_for"],
-        "tags": meta.get("tags", ""),
-        "version": meta.get("version", _DEFAULT_VERSION),
-        "related_abilities": meta.get("related_abilities", ""),
-    }
-    body = meta.get("content", "")
-    content = "---\n" + yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True) + "---\n\n" + body + "\n"
-    path.write_text(content, encoding="utf-8")
-
-
-def _remove_search_entries(conn: sqlite3.Connection, skill_id: int) -> None:
-    entry_ids = [
-        r[0] for r in conn.execute(
-            "SELECT id FROM skill_search_entries WHERE skill_id = ?", (skill_id,)
-        ).fetchall()
-    ]
-    for eid in entry_ids:
-        conn.execute("DELETE FROM skill_search_vec WHERE rowid = ?", (eid,))
-        conn.execute("DELETE FROM skill_search_fts WHERE rowid = ?", (eid,))
-    conn.execute("DELETE FROM skill_search_entries WHERE skill_id = ?", (skill_id,))
+    """Open skills.sqlite with row_factory for API dict conversion."""
+    return open_skills_db(row_factory=True)
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
@@ -140,16 +86,8 @@ def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_fo
 @skills_bp.route("", methods=["GET"])
 @require_session
 def list_skills():
-    """Return all skills from skills.sqlite grouped with associations.
-
-    Response 200::
-
-        {
-          "skills": [...],
-          "associations": [...]
-        }
-    """
-    if not _SKILLS_DB.exists():
+    """Return all skills from skills.sqlite grouped with associations."""
+    if not SKILLS_DB_PATH.exists():
         return jsonify({"skills": [], "associations": []}), 200
 
     try:
@@ -174,16 +112,7 @@ def list_skills():
 @skills_bp.route("", methods=["POST"])
 @require_session
 def create_skill():
-    """Create a new user skill.
-
-    Request body::
-
-        {"title": "...", "use_for": "...", "content": "...", "tags": "...", "related_abilities": "..."}
-
-    Response 201::
-
-        {"skill": {...}}
-    """
+    """Create a new user skill."""
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
     use_for = (data.get("use_for") or "").strip()
@@ -196,7 +125,7 @@ def create_skill():
     if not content:
         return jsonify({"error": "content is required"}), 400
 
-    if not _SKILLS_DB.exists():
+    if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
     try:
@@ -215,18 +144,18 @@ def create_skill():
             conn.execute(
                 "INSERT INTO skills(title, use_for, content, tags, version, related_abilities, source) "
                 "VALUES (?, ?, ?, ?, ?, ?, 'user')",
-                (title, use_for, content, tags, _DEFAULT_VERSION, related_abilities),
+                (title, use_for, content, tags, DEFAULT_VERSION, related_abilities),
             )
             skill_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-            conn.commit()
-
-            _ensure_user_skills_dir()
-            _write_skill_file(_skill_path(title), {
-                "title": title, "use_for": use_for, "content": content,
-                "tags": tags, "version": _DEFAULT_VERSION, "related_abilities": related_abilities,
-            })
 
             _index_new_skill(conn, skill_id, title, use_for, tags)
+            conn.commit()
+
+            ensure_user_skills_dir()
+            write_skill_file(skill_yaml_path(title), {
+                "title": title, "use_for": use_for, "content": content,
+                "tags": tags, "version": DEFAULT_VERSION, "related_abilities": related_abilities,
+            })
 
             row = conn.execute(
                 "SELECT id, title, use_for, content, tags, version, related_abilities, "
@@ -247,21 +176,10 @@ def create_skill():
 @skills_bp.route("/<int:skill_id>", methods=["PUT"])
 @require_session
 def update_skill(skill_id: int):
-    """Update a user-created skill.
-
-    Only source='user' skills can be edited.
-
-    Request body::
-
-        {"use_for": "...", "content": "...", "tags": "...", "related_abilities": "..."}
-
-    Response 200::
-
-        {"skill": {...}}
-    """
+    """Update a user-created skill."""
     data = request.get_json(silent=True) or {}
 
-    if not _SKILLS_DB.exists():
+    if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
     try:
@@ -297,13 +215,13 @@ def update_skill(skill_id: int):
                 (updated["use_for"], updated["content"], updated["tags"],
                  updated["version"], updated["related_abilities"], skill_id),
             )
+
+            remove_search_entries(conn, skill_id)
+            _index_new_skill(conn, skill_id, title, updated["use_for"], updated["tags"])
             conn.commit()
 
-            _ensure_user_skills_dir()
-            _write_skill_file(_skill_path(title), updated)
-
-            _remove_search_entries(conn, skill_id)
-            _index_new_skill(conn, skill_id, title, updated["use_for"], updated["tags"])
+            ensure_user_skills_dir()
+            write_skill_file(skill_yaml_path(title), updated)
 
             row = conn.execute(
                 "SELECT id, title, use_for, content, tags, version, related_abilities, "
@@ -324,15 +242,8 @@ def update_skill(skill_id: int):
 @skills_bp.route("/<int:skill_id>", methods=["DELETE"])
 @require_session
 def delete_skill(skill_id: int):
-    """Delete a user-created skill.
-
-    Only source='user' skills can be deleted.
-
-    Response 200::
-
-        {"deleted": true}
-    """
-    if not _SKILLS_DB.exists():
+    """Delete a user-created skill."""
+    if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
     try:
@@ -347,14 +258,14 @@ def delete_skill(skill_id: int):
                 return jsonify({"error": "Only user-created skills can be deleted"}), 403
 
             title = row["title"]
-            skill_path = _skill_path(title)
+            path = skill_yaml_path(title)
 
-            _remove_search_entries(conn, skill_id)
+            remove_search_entries(conn, skill_id)
             conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
             conn.commit()
 
-            if skill_path.exists():
-                skill_path.unlink()
+            if path.exists():
+                path.unlink()
         finally:
             conn.close()
 
@@ -368,13 +279,8 @@ def delete_skill(skill_id: int):
 @skills_bp.route("/<int:skill_id>/toggle", methods=["PUT"])
 @require_session
 def toggle_skill(skill_id: int):
-    """Toggle the enabled/disabled state of any skill.
-
-    Response 200::
-
-        {"skill_id": 1, "enabled": false}
-    """
-    if not _SKILLS_DB.exists():
+    """Toggle the enabled/disabled state of any skill."""
+    if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
     try:
@@ -402,16 +308,8 @@ def toggle_skill(skill_id: int):
 @skills_bp.route("/<int:skill_id>/copy", methods=["POST"])
 @require_session
 def copy_skill(skill_id: int):
-    """Copy a curated skill as a new user skill and disable the original.
-
-    Creates a user copy with based_on set to the curated skill id.
-    Disables the curated original.
-
-    Response 201::
-
-        {"skill": {...}}
-    """
-    if not _SKILLS_DB.exists():
+    """Copy a curated skill as a new user skill and disable the original."""
+    if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
     try:
@@ -443,23 +341,23 @@ def copy_skill(skill_id: int):
                 "INSERT INTO skills(title, use_for, content, tags, version, related_abilities, source, based_on) "
                 "VALUES (?, ?, ?, ?, ?, ?, 'user', ?)",
                 (copy_title, row["use_for"], row["content"], tags,
-                 _DEFAULT_VERSION, related_abilities, skill_id),
+                 DEFAULT_VERSION, related_abilities, skill_id),
             )
             new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             conn.execute("UPDATE skills SET enabled = 0 WHERE id = ?", (skill_id,))
+
+            _index_new_skill(conn, new_id, copy_title, row["use_for"], tags)
             conn.commit()
 
-            _ensure_user_skills_dir()
-            _write_skill_file(_skill_path(copy_title), {
+            ensure_user_skills_dir()
+            write_skill_file(skill_yaml_path(copy_title), {
                 "title": copy_title,
                 "use_for": row["use_for"],
                 "content": row["content"],
                 "tags": tags,
-                "version": _DEFAULT_VERSION,
+                "version": DEFAULT_VERSION,
                 "related_abilities": related_abilities,
             })
-
-            _index_new_skill(conn, new_id, copy_title, row["use_for"], tags)
 
             new_row = conn.execute(
                 "SELECT id, title, use_for, content, tags, version, related_abilities, "
@@ -471,7 +369,7 @@ def copy_skill(skill_id: int):
             conn.close()
 
         logger.info(
-            "[SKILLS API] Copied curated skill id=%d '%s' → user skill id=%d '%s'",
+            "[SKILLS API] Copied curated skill id=%d '%s' -> user skill id=%d '%s'",
             skill_id, base_title, new_id, copy_title,
         )
         return jsonify({"skill": skill}), 201

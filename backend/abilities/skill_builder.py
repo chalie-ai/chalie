@@ -8,24 +8,23 @@ Only user-created skills (source='user') can be edited or deleted.
 """
 
 import logging
-import re
 import sqlite3
-from pathlib import Path
-from typing import ClassVar
-
-import yaml
 
 from abilities._base import Ability
 from services.innate_skills._tag import tag as _skill_tag
+from utils.skills_io import (
+    DEFAULT_VERSION,
+    SKILLS_DB_PATH,
+    ensure_user_skills_dir,
+    open_skills_db,
+    remove_search_entries,
+    skill_yaml_path,
+    write_skill_file,
+)
 
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[SKILL_BUILDER]"
-_USER_SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "skills" / "user"
-_DB_PATH = Path(__file__).resolve().parent / "assets" / "skills.sqlite"
-
-_DEFAULT_VERSION = 1
-_SLUG_MAX_LENGTH = 64
 
 
 class SkillBuilderAbility(Ability):
@@ -104,9 +103,6 @@ class SkillBuilderAbility(Ability):
     }
     TIMEOUT = 15
 
-    _DB_PATH: ClassVar[Path] = _DB_PATH
-    _USER_SKILLS_DIR: ClassVar[Path] = _USER_SKILLS_DIR
-
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "list")
         logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
@@ -136,52 +132,6 @@ class SkillBuilderAbility(Ability):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _slugify(title: str) -> str:
-    """Convert a skill title to a safe filename slug."""
-    slug = title.lower().strip()
-    slug = re.sub(r"[^a-z0-9]+", "-", slug)
-    slug = slug.strip("-")
-    return slug[:_SLUG_MAX_LENGTH]
-
-
-def _skill_path(title: str) -> Path:
-    return _USER_SKILLS_DIR / f"{_slugify(title)}.yaml"
-
-
-def _ensure_user_skills_dir() -> None:
-    _USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _write_skill_file(path: Path, meta: dict) -> None:
-    """Write a skill metadata dict to a YAML frontmatter file."""
-    frontmatter = {
-        "title": meta["title"],
-        "use_for": meta["use_for"],
-        "tags": meta.get("tags", ""),
-        "version": meta.get("version", _DEFAULT_VERSION),
-        "related_abilities": meta.get("related_abilities", ""),
-    }
-    body = meta.get("content", "")
-    content = "---\n" + yaml.dump(frontmatter, default_flow_style=False, allow_unicode=True) + "---\n\n" + body + "\n"
-    path.write_text(content, encoding="utf-8")
-
-
-def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
-    conn.enable_load_extension(True)
-    try:
-        import sqlite_vec
-        sqlite_vec.load(conn)
-    except Exception:
-        conn.load_extension("vec0")
-
-
-def _open_skills_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.execute("PRAGMA foreign_keys = ON")
-    _load_sqlite_vec(conn)
-    return conn
-
-
 def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | None:
     """Return the skill row for a user-created skill matching title (case-insensitive)."""
     row = conn.execute(
@@ -202,19 +152,6 @@ def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | No
     }
 
 
-def _remove_search_entries(conn: sqlite3.Connection, skill_id: int) -> None:
-    """Remove all search index entries for a skill (CASCADE handles vec/fts)."""
-    entry_ids = [
-        r[0] for r in conn.execute(
-            "SELECT id FROM skill_search_entries WHERE skill_id = ?", (skill_id,)
-        ).fetchall()
-    ]
-    for eid in entry_ids:
-        conn.execute("DELETE FROM skill_search_vec WHERE rowid = ?", (eid,))
-        conn.execute("DELETE FROM skill_search_fts WHERE rowid = ?", (eid,))
-    conn.execute("DELETE FROM skill_search_entries WHERE skill_id = ?", (skill_id,))
-
-
 # ── Action handlers ────────────────────────────────────────────────────────────
 
 
@@ -230,10 +167,10 @@ def _handle_create(params: dict) -> str:
     if not content:
         return _skill_tag("skill_builder", action="create", error="content-required")
 
-    if not _DB_PATH.exists():
+    if not SKILLS_DB_PATH.exists():
         return _skill_tag("skill_builder", action="create", error="skill-db-unavailable")
 
-    conn = _open_skills_db()
+    conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is not None:
@@ -251,18 +188,14 @@ def _handle_create(params: dict) -> str:
             "use_for": use_for,
             "content": content,
             "tags": tags,
-            "version": _DEFAULT_VERSION,
+            "version": DEFAULT_VERSION,
             "related_abilities": related_abilities,
         }
-
-        _ensure_user_skills_dir()
-        skill_path = _skill_path(title)
-        _write_skill_file(skill_path, meta)
 
         conn.execute(
             "INSERT INTO skills(title, use_for, content, tags, version, related_abilities, source) "
             "VALUES (?, ?, ?, ?, ?, ?, 'user')",
-            (title, use_for, content, tags, _DEFAULT_VERSION, related_abilities),
+            (title, use_for, content, tags, DEFAULT_VERSION, related_abilities),
         )
         skill_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -271,7 +204,13 @@ def _handle_create(params: dict) -> str:
         emb_service = EmbeddingService()
         index_skill(conn, emb_service, skill_id, title, use_for, tags)
 
-        logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, skill_path.name)
+        conn.commit()
+
+        ensure_user_skills_dir()
+        path = skill_yaml_path(title)
+        write_skill_file(path, meta)
+
+        logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
         return _skill_tag(
             "skill_builder",
             f'Skill "{title}" created and indexed.',
@@ -288,10 +227,10 @@ def _handle_edit(params: dict) -> str:
     if not title:
         return _skill_tag("skill_builder", action="edit", error="title-required")
 
-    if not _DB_PATH.exists():
+    if not SKILLS_DB_PATH.exists():
         return _skill_tag("skill_builder", action="edit", error="skill-db-unavailable")
 
-    conn = _open_skills_db()
+    conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is None:
@@ -316,10 +255,6 @@ def _handle_edit(params: dict) -> str:
             ),
         }
 
-        _ensure_user_skills_dir()
-        skill_path = _skill_path(title)
-        _write_skill_file(skill_path, updated_meta)
-
         conn.execute(
             "UPDATE skills SET use_for=?, content=?, tags=?, version=?, related_abilities=? "
             "WHERE id=?",
@@ -333,12 +268,17 @@ def _handle_edit(params: dict) -> str:
             ),
         )
 
-        _remove_search_entries(conn, skill_id)
+        remove_search_entries(conn, skill_id)
 
         from services.embedding_service import EmbeddingService
         from utils.build_skills_db import index_skill
         emb_service = EmbeddingService()
         index_skill(conn, emb_service, skill_id, title, updated_meta["use_for"], updated_meta["tags"])
+
+        conn.commit()
+
+        ensure_user_skills_dir()
+        write_skill_file(skill_yaml_path(title), updated_meta)
 
         logger.info("%s Updated skill '%s' (id=%d, version=%d)", _LOG_PREFIX, title, skill_id, updated_meta["version"])
         return _skill_tag(
@@ -357,10 +297,10 @@ def _handle_delete(params: dict) -> str:
     if not title:
         return _skill_tag("skill_builder", action="delete", error="title-required")
 
-    if not _DB_PATH.exists():
+    if not SKILLS_DB_PATH.exists():
         return _skill_tag("skill_builder", action="delete", error="skill-db-unavailable")
 
-    conn = _open_skills_db()
+    conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is None:
@@ -372,16 +312,16 @@ def _handle_delete(params: dict) -> str:
             )
 
         skill_id = existing["id"]
-        skill_path = _skill_path(title)
+        path = skill_yaml_path(title)
 
-        _remove_search_entries(conn, skill_id)
+        remove_search_entries(conn, skill_id)
         conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
         conn.commit()
 
-        if skill_path.exists():
-            skill_path.unlink()
+        if path.exists():
+            path.unlink()
 
-        logger.info("%s Deleted skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, skill_path.name)
+        logger.info("%s Deleted skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
         return _skill_tag(
             "skill_builder",
             f'Skill "{title}" deleted.',
@@ -393,10 +333,10 @@ def _handle_delete(params: dict) -> str:
 
 
 def _handle_list(params: dict) -> str:  # noqa: ARG001
-    if not _DB_PATH.exists():
+    if not SKILLS_DB_PATH.exists():
         return _skill_tag("skill_builder", action="list", error="skill-db-unavailable")
 
-    conn = sqlite3.connect(str(_DB_PATH))
+    conn = sqlite3.connect(str(SKILLS_DB_PATH))
     try:
         rows = conn.execute(
             "SELECT id, title, use_for, tags, version, source, enabled "

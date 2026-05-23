@@ -173,6 +173,7 @@ class MessageProcessor:
         "review_transcript",
         "schedule",
         "search",
+        "skill_builder",
         "subagent",
         "timer",
         "ubiquiti",
