@@ -3,7 +3,6 @@ title: Meeting Prep
 use_for: prepare for an upcoming meeting — research attendees, surface context, draft an agenda, and set a follow-up reminder
 tags: meetings, preparation, agenda, research, calendar, contacts
 version: 1
-related_abilities: calendar, contacts, search, news, memory, schedule, document
 ---
 
 1. Ask for the meeting details: who is attending, the stated purpose, when it is, and any documents or links the user wants reviewed; use `memory` to recall prior context on the attendees.

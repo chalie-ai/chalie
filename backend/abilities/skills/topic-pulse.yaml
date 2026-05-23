@@ -3,7 +3,6 @@ title: Topic Pulse
 use_for: find out what people are saying about a topic right now — trends, sentiment, problems, or opportunities
 tags: research, trends, sentiment, social, news, current events
 version: 1
-related_abilities: search, news, memory, document
 ---
 
 1. Use `memory` to recall any previously tracked topics, then ask the user to specify the topic precisely (push back if too vague, e.g. "AI" — ask for a narrower angle).

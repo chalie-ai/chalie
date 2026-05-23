@@ -3,7 +3,6 @@ title: Knowledge Base Builder
 use_for: read a set of URLs or documents and build a structured, searchable knowledge base saved as persistent documents
 tags: knowledge-base, documentation, reading, archiving, reference, notes, organisation
 version: 1
-related_abilities: read, browser, search, document, memory, subagent
 ---
 
 1. Ask the user what the knowledge base is for, what sources to include (URLs, topics to search, or pasted text), and how they want it organised; use `memory` to recall any existing structure.

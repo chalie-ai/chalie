@@ -3,7 +3,6 @@ title: Email Sequence Designer
 use_for: create a lifecycle email sequence — welcome, onboarding, nurture, re-engagement, or post-purchase drip
 tags: email, marketing, automation, drip, nurture, onboarding, lifecycle
 version: 1
-related_abilities: email, memory, document
 ---
 
 1. Use `memory` to recall any existing brand voice, tone preferences, or ICP information before gathering sequence requirements.

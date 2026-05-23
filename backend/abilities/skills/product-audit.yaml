@@ -3,7 +3,6 @@ title: Product Audit
 use_for: run a structured UX, messaging, or information-architecture audit on a product website or app
 tags: product, ux, audit, review, messaging, information-architecture, feedback
 version: 1
-related_abilities: read, browser, search, memory, document
 ---
 
 1. Use `memory` to recall any prior audit context, then ask the user for the product URL and audit scope: messaging clarity, UX flow, information architecture, conversion copy, or a full review.

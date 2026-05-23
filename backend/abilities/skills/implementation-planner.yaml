@@ -3,7 +3,6 @@ title: Implementation Planner
 use_for: produce a structured implementation plan with risk assessment for any bug, feature request, or improvement
 tags: planning, bugs, features, analysis, implementation, engineering
 version: 1
-related_abilities: search, read, memory, document, schedule
 ---
 
 1. Use `memory` to recall any relevant architectural decisions, prior related work, or user preferences — then ask the user to describe the issue, bug, or feature (including expected vs. current behaviour for bugs).

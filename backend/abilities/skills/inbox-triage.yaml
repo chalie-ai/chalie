@@ -3,7 +3,6 @@ title: Inbox Triage
 use_for: process and organize recent emails — classify them, surface action items, and draft replies without sending
 tags: email, inbox, triage, productivity, drafts, follow-up
 version: 1
-related_abilities: email, search, memory, schedule, document
 ---
 
 1. Ask how far back to look (default: since yesterday) and whether to skip any categories; use `memory` to recall any triage preferences or filters.

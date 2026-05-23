@@ -3,7 +3,6 @@ title: Pricing Strategy
 use_for: design SaaS pricing tiers, optimize existing pricing, or plan a price increase
 tags: pricing, SaaS, monetization, tiers, value metric, price increase, packaging
 version: 1
-related_abilities: search, memory
 ---
 
 1. Use `memory` to recall any existing pricing, ICP, or product context, then ask whether this is designing pricing from scratch, optimizing existing pricing, or planning a price increase.

@@ -3,7 +3,6 @@ title: EU AI Act Readiness
 use_for: assessing EU AI Act compliance for AI systems before EU deployment or during annual compliance refresh
 tags: EU AI Act, AI compliance, high-risk AI, GPAI, conformity assessment, regulatory compliance
 version: 1
-related_abilities: search, read, document, memory
 ---
 
 1. Use `memory` to recall any prior AI Act assessments or compliance decisions for the system in scope.

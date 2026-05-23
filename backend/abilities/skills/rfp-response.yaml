@@ -3,7 +3,6 @@ title: RFP Response Planner
 use_for: parsing RFPs and RFIs, mapping requirements to proof points, and producing a bid or no-bid recommendation
 tags: RFP, RFI, RFQ, proposal, bid management, win theme, proof points, vendor questionnaire
 version: 1
-related_abilities: read, search, document, memory, code_eval
 ---
 
 1. Use `read` to load the RFP document and extract every requirement, tagging each as MANDATORY, WEIGHTED, or NICE-TO-HAVE based on cue words (must/shall = MANDATORY; should/weighted = WEIGHTED; may/preferred = NICE-TO-HAVE).

@@ -139,10 +139,6 @@ const PanelSkills = (() => {
             <input type="text" class="skill-field-tags" value="${BrainApp.escapeHtml(skill.tags || '')}" placeholder="tag1, tag2">
           </div>
           <div class="form-group">
-            <label>Related abilities</label>
-            <input type="text" class="skill-field-related_abilities" value="${BrainApp.escapeHtml(skill.related_abilities || '')}" placeholder="search, memory, schedule">
-          </div>
-          <div class="form-group">
             <label>Instructions</label>
             <textarea class="skill-field-content" rows="8" placeholder="1. First step&#10;2. Second step">${BrainApp.escapeHtml(skill.content)}</textarea>
           </div>
@@ -213,15 +209,9 @@ const PanelSkills = (() => {
   }
 
   function _renderExpandedContent(skill) {
-    const sections = [];
-    if (skill.related_abilities) {
-      sections.push(`<div class="skill-detail-row">
-        <span class="skill-detail-label">Abilities:</span>
-        <span>${BrainApp.escapeHtml(skill.related_abilities)}</span>
-      </div>`);
-    }
-    sections.push(`<pre class="skill-content-preview">${BrainApp.escapeHtml(skill.content)}</pre>`);
-    return `<div class="skill-expanded-content">${sections.join('')}</div>`;
+    return `<div class="skill-expanded-content">
+      <pre class="skill-content-preview">${BrainApp.escapeHtml(skill.content)}</pre>
+    </div>`;
   }
 
   function _renderTags(tagsStr) {
@@ -306,10 +296,6 @@ const PanelSkills = (() => {
             <input type="text" id="skill_tags" placeholder="logistics, tracking, delivery">
           </div>
           <div class="form-group">
-            <label for="skill_related_abilities">Related abilities</label>
-            <input type="text" id="skill_related_abilities" placeholder="search, memory, schedule">
-          </div>
-          <div class="form-group">
             <label for="skill_content">Instructions <span style="color:var(--error)">*</span></label>
             <textarea id="skill_content" rows="10" placeholder="1. First step (reference tools like \`search\`, \`memory\`)&#10;2. Second step&#10;3. Third step" required></textarea>
           </div>
@@ -333,12 +319,11 @@ const PanelSkills = (() => {
     const use_for = document.getElementById('skill_use_for').value.trim();
     const content = document.getElementById('skill_content').value.trim();
     const tags = document.getElementById('skill_tags').value.trim();
-    const related_abilities = document.getElementById('skill_related_abilities').value.trim();
 
     try {
       const res = await BrainApp.apiFetch('/api/skills', {
         method: 'POST',
-        body: JSON.stringify({ title, use_for, content, tags, related_abilities }),
+        body: JSON.stringify({ title, use_for, content, tags }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -358,12 +343,11 @@ const PanelSkills = (() => {
     const use_for = form.querySelector('.skill-field-use_for').value.trim();
     const content = form.querySelector('.skill-field-content').value.trim();
     const tags = form.querySelector('.skill-field-tags').value.trim();
-    const related_abilities = form.querySelector('.skill-field-related_abilities').value.trim();
 
     try {
       const res = await BrainApp.apiFetch(`/api/skills/${skillId}`, {
         method: 'PUT',
-        body: JSON.stringify({ use_for, content, tags, related_abilities }),
+        body: JSON.stringify({ use_for, content, tags }),
       });
       const data = await res.json();
       if (res.ok) {

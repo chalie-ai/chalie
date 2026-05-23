@@ -3,7 +3,6 @@ title: General Research
 use_for: lightweight / single-thread research on any topic — breaks the question into sub-questions, searches multiple sources, and synthesizes a cited briefing
 tags: research, investigation, information, synthesis, briefing, quick-lookup
 version: 1
-related_abilities: search, news, read, memory
 ---
 
 1. Use `memory` to recall any prior research or context on this topic — then ask the user to state the research question in 1–2 sentences (push back if too vague).

@@ -3,7 +3,6 @@ title: Experiment Designer
 use_for: planning product experiments, writing testable hypotheses, estimating sample sizes, prioritizing tests, and interpreting A/B outcomes
 tags: A/B testing, experiment design, hypothesis, sample size, statistical significance, ICE scoring, product experiments
 version: 1
-related_abilities: code_eval, document, memory
 ---
 
 1. Use `memory` to recall any prior experiments or hypotheses on this topic, then write the hypothesis in If/Then/Because format: if we change [intervention], then [metric] will change by [expected direction/magnitude], because [behavioral mechanism].

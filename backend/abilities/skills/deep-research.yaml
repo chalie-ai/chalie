@@ -3,7 +3,6 @@ title: Deep Research
 use_for: produce a comprehensive, cited research report with multi-source evidence tracking, counter-review, and confidence markers
 tags: research, report, analysis, synthesis, evidence, citations, literature-review, parallel-research, multi-source-synthesis
 version: 1
-related_abilities: search, news, read, subagent, document, memory
 ---
 
 1. Use `memory` to recall any prior research, related findings, or user preferences — then ask for the specific question, scope (company vs. industry vs. policy/tech), and preferred output length.

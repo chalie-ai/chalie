@@ -3,7 +3,6 @@ title: Experiment Tracker
 use_for: plan and track iterative experiments with goal, hypothesis, outcome, and learnings logged per attempt
 tags: experiments, iteration, tracking, learning, problem-solving, planning
 version: 1
-related_abilities: document, memory, schedule
 ---
 
 1. Ask the user to describe the goal of the experiment; use `memory` to recall any prior experiments on the same topic.

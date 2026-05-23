@@ -3,7 +3,6 @@ title: Meeting Analyzer
 use_for: analyzing meeting transcripts to surface communication patterns, speaking dynamics, and actionable coaching feedback
 tags: meeting transcript, communication patterns, speaking ratio, filler words, conflict avoidance, coaching, Otter, Fireflies, Granola
 version: 1
-related_abilities: read, memory, document
 ---
 
 1. Use `read` to load the meeting transcript file, identifying the user's speaker label and noting participant count in `document`.

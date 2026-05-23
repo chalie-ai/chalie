@@ -3,7 +3,6 @@ title: Travel Planning
 use_for: plan a trip — destination research, itinerary, places to visit, weather check, and travel reminders
 tags: travel, planning, itinerary, places, weather, vacation, trip
 version: 1
-related_abilities: search, news, weather, place, memory, schedule, calendar, document
 ---
 
 1. Use `memory` to recall any stored travel preferences or past trip details, then ask the user for: destination(s), travel dates, number of travellers, budget range, and trip style (city, nature, cultural, relaxation, mix).

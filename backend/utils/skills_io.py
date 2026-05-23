@@ -42,7 +42,6 @@ def write_skill_file(path: Path, meta: dict) -> None:
         "use_for": meta["use_for"],
         "tags": meta.get("tags", ""),
         "version": meta.get("version", DEFAULT_VERSION),
-        "related_abilities": meta.get("related_abilities", ""),
     }
     body = meta.get("content", "")
     content = (

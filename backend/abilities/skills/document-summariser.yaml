@@ -3,7 +3,6 @@ title: Document Summariser
 use_for: read and summarise a long document, PDF, or webpage into key points, an executive summary, or a Q&A
 tags: summary, document, reading, extraction, briefing, pdf, report
 version: 1
-related_abilities: read, browser, document, memory, news
 ---
 
 1. Use `memory` to recall any prior summaries or user preferences for this type of document before fetching.

@@ -3,7 +3,6 @@ title: SaaS Metrics Coach
 use_for: calculating and benchmarking SaaS health metrics including ARR, churn, LTV, CAC, and NRR with prioritized advice
 tags: SaaS metrics, ARR, MRR, churn, LTV, CAC, NRR, unit economics, SaaS health
 version: 1
-related_abilities: code_eval, document, memory, search
 ---
 
 1. Use `memory` to recall any previously shared business metrics or prior health reports.

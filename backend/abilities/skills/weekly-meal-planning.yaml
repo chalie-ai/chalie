@@ -3,7 +3,6 @@ title: Weekly Meal Planning
 use_for: planning meals for the week with shopping lists and prep schedules
 tags: food, nutrition, cooking, health, scheduling
 version: 1
-related_abilities: memory, search, list, schedule, document
 ---
 
 1. Use the `memory` tool to recall any stored dietary preferences, allergies, restrictions, or cooking skill level.

@@ -3,7 +3,6 @@ title: UX Research
 use_for: generating user personas from research data, creating journey maps, planning usability tests, and synthesizing research findings
 tags: UX research, user persona, journey map, usability testing, user research, empathy map, design validation
 version: 1
-related_abilities: search, code_eval, document, memory
 ---
 
 1. Use `memory` to recall any prior user research, personas, or journey maps already created.

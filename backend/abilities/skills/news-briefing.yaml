@@ -3,7 +3,6 @@ title: News Briefing
 use_for: produce a concise news briefing on one or more topics, companies, or industries for a specific time window
 tags: news, briefing, current-events, media, summary, daily, digest
 version: 1
-related_abilities: news, search, read, memory, document
 ---
 
 1. Use `memory` to recall any standing briefing topics, then ask the user which topics, companies, or industries to cover, and the desired time window (today, this week, last 30 days).

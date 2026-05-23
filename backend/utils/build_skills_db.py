@@ -65,7 +65,6 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
             content          TEXT    NOT NULL,
             tags             TEXT,
             version          INTEGER DEFAULT 1,
-            related_abilities TEXT,
             source           TEXT    NOT NULL DEFAULT 'curated'
                                  CHECK(source IN ('curated', 'user')),
             enabled          INTEGER NOT NULL DEFAULT 1,
@@ -203,15 +202,14 @@ def _insert_skill(
     tags_str = tags_raw if isinstance(tags_raw, str) else ', '.join(tags_raw)
 
     conn.execute(
-        "INSERT INTO skills(title, use_for, content, tags, version, related_abilities, source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO skills(title, use_for, content, tags, version, source) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (
             title,
             use_for,
             meta.get('content', ''),
             tags_str,
             meta.get('version', 1),
-            meta.get('related_abilities', ''),
             source,
         ),
     )

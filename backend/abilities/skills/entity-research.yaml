@@ -3,7 +3,6 @@ title: Entity Research
 use_for: build a comprehensive dossier on a person, company, or organisation from public sources
 tags: research, person, company, dossier, due-diligence, background-check, organisation
 version: 1
-related_abilities: search, news, read, memory, document
 ---
 
 1. Use `memory` to recall any prior notes on this entity or related organisations before gathering requirements.

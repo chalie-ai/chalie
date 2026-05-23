@@ -3,7 +3,6 @@ title: Market Sizing
 use_for: estimate the total addressable market (TAM), serviceable addressable market (SAM), and serviceable obtainable market (SOM) for a product or business idea
 tags: market-sizing, TAM, SAM, SOM, research, business, strategy, startup
 version: 1
-related_abilities: search, news, read, code_eval, document, memory
 ---
 
 1. Ask the user to describe the product or business and the target geography; use `memory` to recall any prior research on this market.

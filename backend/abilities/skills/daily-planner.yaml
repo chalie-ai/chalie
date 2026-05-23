@@ -3,7 +3,6 @@ title: Daily Planner
 use_for: organise today's tasks, schedule time blocks, surface calendar conflicts, and set focus priorities for the day
 tags: planning, daily, schedule, productivity, tasks, calendar, priorities, focus
 version: 1
-related_abilities: calendar, schedule, list, memory, timer, document
 ---
 
 1. Use `calendar` to pull today's events and any fixed commitments — note their times and durations.

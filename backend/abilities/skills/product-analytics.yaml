@@ -3,7 +3,6 @@ title: Product Analytics
 use_for: defining product KPIs, building metric dashboards, running cohort analysis, and interpreting feature adoption trends
 tags: product metrics, KPIs, AARRR, North Star, cohort analysis, retention, feature adoption, funnel
 version: 1
-related_abilities: code_eval, document, memory
 ---
 
 1. Use `memory` to recall any previously defined KPIs, metric baselines, or product stage context.

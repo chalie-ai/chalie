@@ -3,7 +3,6 @@ title: Fitness Routine Builder
 use_for: designing personalised workout routines and exercise plans
 tags: fitness, exercise, health, workout, training
 version: 1
-related_abilities: memory, search, schedule, list, document
 ---
 
 1. Use the `memory` tool to recall any stored fitness goals, injuries, medical considerations, or available equipment.

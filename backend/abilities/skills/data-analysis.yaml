@@ -3,7 +3,6 @@ title: Data Analysis
 use_for: analyse a dataset, calculate statistics, run comparisons, and produce charts or summary tables
 tags: data, analysis, statistics, code, charts, csv, calculations
 version: 1
-related_abilities: code_eval, document, memory
 ---
 
 1. Use `memory` to recall any prior analysis on related data, then ask the user to describe the dataset (paste it, describe its structure, or state where it lives) and what question they want answered.

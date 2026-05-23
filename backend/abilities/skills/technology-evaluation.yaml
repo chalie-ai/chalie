@@ -3,7 +3,6 @@ title: Technology Evaluation Framework
 use_for: evaluating and comparing technology options for a specific use case
 tags: technology, evaluation, comparison, architecture, decision
 version: 1
-related_abilities: search, read, subagent, document
 ---
 
 1. Ask the user for the technology category, specific use case, and evaluation criteria — cost, scalability, ecosystem maturity, learning curve, licensing, community support.

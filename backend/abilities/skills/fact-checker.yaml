@@ -3,7 +3,6 @@ title: Fact Checker
 use_for: verify specific factual claims in text against authoritative sources and produce a correction report
 tags: fact-check, verification, accuracy, claims, corrections, sources
 version: 1
-related_abilities: search, read, news, document
 ---
 
 1. Ask the user to paste the text (or specific claims) to be verified, and clarify the domain: AI model specs, technical docs, statistics, general facts, or other; use `memory` to recall any prior checks on this topic.

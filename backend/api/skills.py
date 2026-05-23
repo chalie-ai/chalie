@@ -43,7 +43,6 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "content": row["content"],
         "tags": row["tags"] or "",
         "version": row["version"],
-        "related_abilities": row["related_abilities"] or "",
         "source": row["source"],
         "enabled": bool(row["enabled"]),
         "based_on": row["based_on"],
@@ -94,7 +93,7 @@ def list_skills():
         conn = _open_db()
         try:
             rows = conn.execute(
-                "SELECT id, title, use_for, content, tags, version, related_abilities, "
+                "SELECT id, title, use_for, content, tags, version, "
                 "source, enabled, based_on "
                 "FROM skills ORDER BY source, title"
             ).fetchall()
@@ -130,7 +129,6 @@ def create_skill():
 
     try:
         tags = (data.get("tags") or "").strip()
-        related_abilities = (data.get("related_abilities") or "").strip()
 
         conn = _open_db()
         try:
@@ -142,9 +140,9 @@ def create_skill():
                 return jsonify({"error": f"A user skill named '{title}' already exists"}), 409
 
             conn.execute(
-                "INSERT INTO skills(title, use_for, content, tags, version, related_abilities, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'user')",
-                (title, use_for, content, tags, DEFAULT_VERSION, related_abilities),
+                "INSERT INTO skills(title, use_for, content, tags, version, source) "
+                "VALUES (?, ?, ?, ?, ?, 'user')",
+                (title, use_for, content, tags, DEFAULT_VERSION),
             )
             skill_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -154,11 +152,11 @@ def create_skill():
             ensure_user_skills_dir()
             write_skill_file(skill_yaml_path(title), {
                 "title": title, "use_for": use_for, "content": content,
-                "tags": tags, "version": DEFAULT_VERSION, "related_abilities": related_abilities,
+                "tags": tags, "version": DEFAULT_VERSION,
             })
 
             row = conn.execute(
-                "SELECT id, title, use_for, content, tags, version, related_abilities, "
+                "SELECT id, title, use_for, content, tags, version, "
                 "source, enabled, based_on FROM skills WHERE id = ?",
                 (skill_id,),
             ).fetchone()
@@ -186,7 +184,7 @@ def update_skill(skill_id: int):
         conn = _open_db()
         try:
             row = conn.execute(
-                "SELECT id, title, use_for, content, tags, version, related_abilities, "
+                "SELECT id, title, use_for, content, tags, version, "
                 "source, enabled, based_on FROM skills WHERE id = ?",
                 (skill_id,),
             ).fetchone()
@@ -202,18 +200,13 @@ def update_skill(skill_id: int):
                 "content": (data.get("content") or "").strip() or row["content"],
                 "tags": (data.get("tags") if data.get("tags") is not None else row["tags"]) or "",
                 "version": row["version"] + 1,
-                "related_abilities": (
-                    data.get("related_abilities")
-                    if data.get("related_abilities") is not None
-                    else row["related_abilities"]
-                ) or "",
             }
 
             conn.execute(
-                "UPDATE skills SET use_for=?, content=?, tags=?, version=?, related_abilities=? "
+                "UPDATE skills SET use_for=?, content=?, tags=?, version=? "
                 "WHERE id=?",
                 (updated["use_for"], updated["content"], updated["tags"],
-                 updated["version"], updated["related_abilities"], skill_id),
+                 updated["version"], skill_id),
             )
 
             remove_search_entries(conn, skill_id)
@@ -224,7 +217,7 @@ def update_skill(skill_id: int):
             write_skill_file(skill_yaml_path(title), updated)
 
             row = conn.execute(
-                "SELECT id, title, use_for, content, tags, version, related_abilities, "
+                "SELECT id, title, use_for, content, tags, version, "
                 "source, enabled, based_on FROM skills WHERE id = ?",
                 (skill_id,),
             ).fetchone()
@@ -316,7 +309,7 @@ def copy_skill(skill_id: int):
         conn = _open_db()
         try:
             row = conn.execute(
-                "SELECT id, title, use_for, content, tags, version, related_abilities, source "
+                "SELECT id, title, use_for, content, tags, version, source "
                 "FROM skills WHERE id = ?",
                 (skill_id,),
             ).fetchone()
@@ -328,7 +321,6 @@ def copy_skill(skill_id: int):
             base_title = row["title"]
             copy_title = f"{base_title} (Custom)"
             tags = row["tags"] or ""
-            related_abilities = row["related_abilities"] or ""
 
             existing_copy = conn.execute(
                 "SELECT id FROM skills WHERE source = 'user' AND lower(title) = lower(?)",
@@ -338,10 +330,10 @@ def copy_skill(skill_id: int):
                 return jsonify({"error": f"A user copy named '{copy_title}' already exists"}), 409
 
             conn.execute(
-                "INSERT INTO skills(title, use_for, content, tags, version, related_abilities, source, based_on) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'user', ?)",
+                "INSERT INTO skills(title, use_for, content, tags, version, source, based_on) "
+                "VALUES (?, ?, ?, ?, ?, 'user', ?)",
                 (copy_title, row["use_for"], row["content"], tags,
-                 DEFAULT_VERSION, related_abilities, skill_id),
+                 DEFAULT_VERSION, skill_id),
             )
             new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             conn.execute("UPDATE skills SET enabled = 0 WHERE id = ?", (skill_id,))
@@ -356,11 +348,10 @@ def copy_skill(skill_id: int):
                 "content": row["content"],
                 "tags": tags,
                 "version": DEFAULT_VERSION,
-                "related_abilities": related_abilities,
             })
 
             new_row = conn.execute(
-                "SELECT id, title, use_for, content, tags, version, related_abilities, "
+                "SELECT id, title, use_for, content, tags, version, "
                 "source, enabled, based_on FROM skills WHERE id = ?",
                 (new_id,),
             ).fetchone()

@@ -3,7 +3,6 @@ title: Prompt Refiner
 use_for: transform a vague or loose prompt into a precise, structured specification with concrete conditions and measurable outcomes
 tags: prompting, requirements, specification, clarity, EARS, writing, prompt-engineering
 version: 1
-related_abilities: memory, document
 ---
 
 1. Use `memory` to recall any prior prompt work or specification preferences — then ask the user to share the prompt they want to improve and what they will use it for.

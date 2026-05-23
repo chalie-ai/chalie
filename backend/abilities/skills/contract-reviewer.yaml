@@ -3,7 +3,6 @@ title: Contract Reviewer
 use_for: review a contract or agreement, surface key clauses, flag unusual terms, and produce a plain-language summary
 tags: contract, legal, review, terms, agreement, risk, summary
 version: 1
-related_abilities: read, document, memory
 ---
 
 1. Use `memory` to recall any stored red lines or prior contract preferences, then ask the user to paste the contract text or provide a URL and clarify the agreement type (employment, SaaS terms, partnership, NDA, vendor, lease, etc.).

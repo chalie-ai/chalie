@@ -3,7 +3,6 @@ title: Roadmap Communicator
 use_for: preparing roadmap narratives, release notes, changelogs, and stakeholder updates tailored for executives, engineering teams, and customers
 tags: roadmap, release notes, changelog, stakeholder update, feature announcement, board update
 version: 1
-related_abilities: memory, document, email
 ---
 
 1. Use `memory` to recall the product's current roadmap, recent releases, and any prior stakeholder communication preferences.

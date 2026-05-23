@@ -3,7 +3,6 @@ title: Decision Log
 use_for: recording, reviewing, and tracking key decisions and action items with owners and deadlines
 tags: decision log, action items, meeting minutes, decisions, accountability, follow-up
 version: 1
-related_abilities: memory, document, schedule
 ---
 
 1. Use `memory` to recall any existing decision log context or prior decisions relevant to this topic.

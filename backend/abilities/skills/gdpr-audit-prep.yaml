@@ -3,7 +3,6 @@ title: GDPR Audit Prep
 use_for: pressure-testing GDPR compliance before internal audits, DPA investigations, breach responses, or acquisition due diligence
 tags: GDPR, data privacy, DPO, audit prep, DPIA, RoPA, data protection, compliance
 version: 1
-related_abilities: search, read, document, memory
 ---
 
 1. Use `memory` to recall any prior GDPR assessments, known gaps, or compliance decisions already documented.

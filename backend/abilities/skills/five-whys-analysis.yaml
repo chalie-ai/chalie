@@ -3,7 +3,6 @@ title: Five Whys Root Cause Analysis
 use_for: drilling from surface symptoms to root causes by iteratively asking why a problem occurred
 tags: root cause, five whys, problem solving, debugging, analysis
 version: 1
-related_abilities: document, memory, search
 ---
 
 1. Use `memory` to recall any relevant background or previous analysis on this issue.

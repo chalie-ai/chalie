@@ -3,7 +3,6 @@ title: Smart Shopping
 use_for: research a purchase — compare products, find the best price, check reviews, and recommend the best option
 tags: shopping, comparison, research, products, price, reviews, consumer
 version: 1
-related_abilities: search, read, browser, memory, list
 ---
 
 1. Use `memory` to recall any stored purchase preferences or brand notes, then ask what the user wants to buy, their budget, and the 2–3 most important criteria (e.g. price, durability, specific feature, brand preference).

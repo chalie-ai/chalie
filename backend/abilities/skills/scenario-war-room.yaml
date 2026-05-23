@@ -3,7 +3,6 @@ title: Scenario War Room
 use_for: modeling cascading what-if scenarios across business functions when facing compound adversity or major strategic decisions
 tags: scenario planning, war room, what-if analysis, risk modeling, cascading effects, compound risk, contingency planning
 version: 1
-related_abilities: memory, document, code_eval
 ---
 
 1. Use `memory` to recall the company's current metrics, runway, headcount, and any prior scenario analyses.

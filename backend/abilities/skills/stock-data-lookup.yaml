@@ -3,7 +3,6 @@ title: Stock Data Lookup
 use_for: retrieve current market data, financial statements, and analyst estimates for a publicly traded company
 tags: finance, stocks, market-data, fundamentals, valuation, investing
 version: 1
-related_abilities: search, read, code_eval, document, memory
 ---
 
 1. Use `memory` to recall any previously analysed companies, then ask the user for the company name or ticker symbol, and what data they need: current price/market cap, income statement, cash flow, balance sheet, WACC inputs, or analyst estimates.

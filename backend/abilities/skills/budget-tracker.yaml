@@ -3,7 +3,6 @@ title: Budget Tracker
 use_for: track income and expenses, categorise spending, calculate variances against a budget, and surface overspend alerts
 tags: budget, finance, spending, personal-finance, tracking, expenses, planning
 version: 1
-related_abilities: code_eval, document, memory, schedule, read
 ---
 
 1. Use `memory` to recall any prior budget structure, then ask whether they are starting a new budget or updating an existing one — collect income, fixed costs, and variable budget targets per category.
