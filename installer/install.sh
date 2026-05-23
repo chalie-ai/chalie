@@ -193,7 +193,7 @@ _check_python() {
 
 # ─── System Build Dependencies (Linux) ──────────────────────────────────────
 # Needed for native Python wheels (cryptography), sqlite-vec rebuild,
-# envsubst (sqlite-vec template), Deno installer (unzip), and curl.
+# envsubst (sqlite-vec template), and curl.
 _install_build_deps() {
   local os
   os="$(_detect_os)"
@@ -549,31 +549,6 @@ _install_playwright_browsers() {
   return 0
 }
 
-# ─── Deno Runtime (for interface daemons) ──────────────────────────────────
-# Chalie runs user-authored TypeScript interface daemons in Deno. Without it,
-# those interfaces silently fail to start.
-_install_deno() {
-  _section "Deno Runtime"
-  if command -v deno >/dev/null 2>&1; then
-    _ok "Found $(deno --version 2>&1 | head -1)"
-    return
-  fi
-  _info "Installing Deno…"
-  # Official installer drops into $HOME/.deno/bin
-  if ! curl -fsSL https://deno.land/install.sh | sh >/dev/null 2>&1; then
-    _warn "Deno install failed — TypeScript interface daemons will be unavailable"
-    _warn "Retry manually: curl -fsSL https://deno.land/install.sh | sh"
-    return 0
-  fi
-  # Add ~/.deno/bin to PATH for future shells
-  local deno_path='export PATH="$HOME/.deno/bin:$PATH"'
-  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [[ -f "$rc" ]] && ! grep -qF '.deno/bin' "$rc" 2>/dev/null; then
-      printf '\n# Added by Chalie installer\n%s\n' "$deno_path" >> "$rc"
-    fi
-  done
-  _ok "Deno installed at $HOME/.deno"
-}
 
 # ─── Install CLI Wrapper ─────────────────────────────────────────────────────
 _install_cli() {
@@ -734,7 +709,6 @@ main() {
   _check_python
   _install_build_deps
   _install_voice_deps
-  _install_deno
   _download_release
   _setup_venv
   _install_onnxruntime_variant

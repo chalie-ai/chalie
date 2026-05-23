@@ -19,8 +19,6 @@ RUN apt-get update \
  && bash /tmp/install.sh ${DISABLE_VOICE:+--disable-voice} ${BRANCH:+--branch="$BRANCH"} ${TAG:+--tag="$TAG"} \
  && rm /tmp/install.sh
 
-ENV PATH="/root/.deno/bin:${PATH}"
-ENV DENO_DIR=/tmp/deno
 
 # Persistent runtime state. The application code lives at /root/.chalie/app/,
 # so data/ is alongside backend/ and resolves the same way as a local checkout.
