@@ -250,9 +250,14 @@ def get_policy_meta() -> list[dict]:
     """
     from abilities._registry import AbilityRegistry
 
+    from services.message_processor import MessageProcessor
+    always_available = set(MessageProcessor.ALWAYS_AVAILABLE)
+
     entries: list[dict] = []
     for ability in AbilityRegistry.all():
         if getattr(ability, "INTERNAL", False) or getattr(ability, "SYSTEM", False):
+            continue
+        if ability.NAME in always_available and not ability.INPUT_SCHEMA.get("properties", {}).get("action"):
             continue
         category = getattr(ability, "POLICY_CATEGORY", "") or ability.NAME.replace("_", " ").title()
         labels = getattr(ability, "POLICY_LABELS", {})
