@@ -41,9 +41,9 @@ def _get_system_tools() -> frozenset[str]:
     if _system_tools_cache is not None:
         return _system_tools_cache
     from abilities._registry import AbilityRegistry
+    visible = {a.NAME for a in AbilityRegistry.policy_visible()}
     _system_tools_cache = frozenset(
-        a.NAME for a in AbilityRegistry.all()
-        if getattr(a, 'SYSTEM', False) or getattr(a, 'INTERNAL', False)
+        a.NAME for a in AbilityRegistry.all() if a.NAME not in visible
     )
     return _system_tools_cache
 
@@ -204,11 +204,7 @@ def _build_defaults() -> dict[str, dict[Context, State]]:
     from abilities._registry import AbilityRegistry
 
     all_action_ids: list[str] = []
-    for ability in AbilityRegistry.all():
-        if getattr(ability, 'INTERNAL', False):
-            continue
-        if getattr(ability, 'SYSTEM', False):
-            continue
+    for ability in AbilityRegistry.policy_visible():
         schema = ability.INPUT_SCHEMA
         actions = schema.get("properties", {}).get("action", {}).get("enum", [])
         if actions:
@@ -250,15 +246,8 @@ def get_policy_meta() -> list[dict]:
     """
     from abilities._registry import AbilityRegistry
 
-    from services.message_processor import MessageProcessor
-    always_available = set(MessageProcessor.ALWAYS_AVAILABLE)
-
     entries: list[dict] = []
-    for ability in AbilityRegistry.all():
-        if getattr(ability, "INTERNAL", False) or getattr(ability, "SYSTEM", False):
-            continue
-        if ability.NAME in always_available and not ability.INPUT_SCHEMA.get("properties", {}).get("action"):
-            continue
+    for ability in AbilityRegistry.policy_visible():
         category = getattr(ability, "POLICY_CATEGORY", "") or ability.NAME.replace("_", " ").title()
         labels = getattr(ability, "POLICY_LABELS", {})
         schema = ability.INPUT_SCHEMA
