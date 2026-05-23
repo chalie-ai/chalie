@@ -22,6 +22,7 @@ compaction primitives.
 
 import contextlib
 import contextvars
+import copy
 import logging
 import re
 import time
@@ -364,6 +365,34 @@ class MessageProcessor:
             return body
         return body.replace("{{provider_content_field_name}}", label)
 
+    _ACT_SUMMARY_PROPERTY: dict = {
+        'type': 'string',
+        'description': (
+            'A ~3-10 word summary of what this specific tool call does, shown to'
+            ' the user as a tooltip (e.g. "Searching for laptops in Malta",'
+            ' "Looking up the weather in London").'
+        ),
+    }
+
+    @staticmethod
+    def _with_act_summary(schema: dict) -> dict:
+        """Return a copy of schema with act_summary injected into input_schema.
+
+        Deep-copies input_schema to avoid mutating the ClassVar dict on the
+        originating Ability.
+        """
+        input_schema = copy.deepcopy(schema.get('input_schema') or {})
+        properties = input_schema.setdefault('properties', {})
+        properties['act_summary'] = dict(MessageProcessor._ACT_SUMMARY_PROPERTY)
+        required = input_schema.setdefault('required', [])
+        if 'act_summary' not in required:
+            required.append('act_summary')
+        return {
+            'name': schema['name'],
+            'description': schema['description'],
+            'input_schema': input_schema,
+        }
+
     def get_tools(self) -> list[dict]:
         """Return the full tool list for the current ACT iteration.
 
@@ -409,7 +438,7 @@ class MessageProcessor:
             name = schema.get('name')
             if name and name not in seen:
                 seen.add(name)
-                result.append(schema)
+                result.append(self._with_act_summary(schema))
 
         return result
 
@@ -587,6 +616,7 @@ class MessageProcessor:
         if not isinstance(tc_input, dict):
             tc_input = {}
         tc_input = _sanitize_llm_args(tc_input)
+        act_summary = tc_input.pop('act_summary', None)
 
         self._metrics.record_tool(tool_name)
 
@@ -598,6 +628,7 @@ class MessageProcessor:
             'call_id': call_id,
             'name': tool_name,
             'iter': self._current_iteration,
+            **(({'act_summary': act_summary}) if act_summary else {}),
         })
 
         ok = True

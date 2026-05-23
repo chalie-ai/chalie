@@ -234,9 +234,10 @@ export class Renderer {
    * @param {HTMLElement} actEl — the .act-cycle element
    * @param {string} callId — server-assigned id for resolveToolPill lookup
    * @param {string} name — tool name to display
+   * @param {string|undefined} summary — optional ~3-10 word description of the call
    * @returns {HTMLElement|null} the row element (null if actEl falsy)
    */
-  appendToolPill(actEl, callId, name) {
+  appendToolPill(actEl, callId, name, summary) {
     if (!actEl || !callId) return null;
     const host = actEl.querySelector(':scope > .act-tools');
     if (!host) return null;
@@ -252,7 +253,16 @@ export class Renderer {
     const spinner = this._createEl('span', 'act-spinner');
     statusEl.appendChild(spinner);
 
-    row.appendChild(nameEl);
+    if (summary) {
+      const labelEl = this._createEl('span', 'act-tool__label');
+      labelEl.appendChild(nameEl);
+      const summaryEl = this._createEl('span', 'act-tool__summary');
+      summaryEl.textContent = `— ${summary}`;
+      labelEl.appendChild(summaryEl);
+      row.appendChild(labelEl);
+    } else {
+      row.appendChild(nameEl);
+    }
     row.appendChild(statusEl);
     host.appendChild(row);
     this._scrollToBottom();

@@ -140,7 +140,7 @@ export class Chat {
       },
       onToolStart: (msg) => {
         // Tools accumulate in a single flat list spanning the whole ACT loop.
-        this._renderer.appendToolPill(actEl, msg.call_id, msg.name);
+        this._renderer.appendToolPill(actEl, msg.call_id, msg.name, msg.act_summary);
       },
       onToolEnd: (msg) => {
         this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);

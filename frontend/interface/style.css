@@ -1309,7 +1309,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   gap: 16px;
   padding: 4px 0;
   min-width: 220px;
-  max-width: 320px;
+  max-width: 480px;
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;
   line-height: 1.2;
@@ -1320,6 +1320,24 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 
 .act-tool__name {
   font-weight: 500;
+  white-space: nowrap;
+}
+
+.act-tool__label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.act-tool__summary {
+  color: var(--text-secondary);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .act-tool__status {
