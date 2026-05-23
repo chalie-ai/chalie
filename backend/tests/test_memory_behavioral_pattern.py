@@ -136,8 +136,8 @@ class TestFormatResults:
         lines = result.splitlines()
         assert len(lines) == 2
 
-        bp_line = next(l for l in lines if "morning_run" in l)
-        user_line = next(l for l in lines if "food_preference" in l)
+        bp_line = next(line for line in lines if "morning_run" in line)
+        user_line = next(line for line in lines if "food_preference" in line)
 
         assert "kind:behavioral_pattern" in bp_line
         assert "kind:" not in user_line
