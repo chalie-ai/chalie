@@ -366,6 +366,15 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
+        # 3. Proactive skill suggestion — fires only on clean ACT exits with 4+
+        # tool-calling iterations. Non-blocking (daemon thread inside the service).
+        if self._loop_exited_cleanly and self._current_iteration >= 4:
+            try:
+                from services.skill_suggestion_service import maybe_suggest_skill
+                maybe_suggest_skill(self._act_trail, self._raw_input)
+            except Exception as exc:
+                logger.warning("[POSTTURN] skill suggestion failed: %s", exc)
+
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _process_file_attachments(self) -> None:

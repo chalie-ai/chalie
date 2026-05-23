@@ -225,6 +225,7 @@ class MessageProcessor:
         # Never persisted — cleared when the instance is discarded.
         self._memory_query_history: list[dict] = []
         self._act_trail: list[str] = []
+        self._loop_exited_cleanly: bool = False
         self._discovered_tools: list[dict] = []
         self._uid: int | None = None
         # Default is 'low' — classifier must explicitly set medium/high.
@@ -933,6 +934,7 @@ class MessageProcessor:
 
                     if len(self._act_trail) == trail_before:
                         loop_exited_cleanly = True
+                        self._loop_exited_cleanly = True
                         break
 
                     self._record_iteration_narration(llm_response)
