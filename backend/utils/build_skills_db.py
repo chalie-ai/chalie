@@ -190,12 +190,6 @@ def index_skill(
     return len(entries)
 
 
-def remove_skill(conn: sqlite3.Connection, skill_id: int) -> None:
-    """Delete a skill row and its dependent search entries (via CASCADE)."""
-    conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
-    conn.commit()
-
-
 def _insert_skill(
     conn: sqlite3.Connection,
     emb_service: EmbeddingService,
