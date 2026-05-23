@@ -78,6 +78,10 @@ _CHAT_ALLOW: dict[str, State] = {
     "document.upload": "allow",
     "schedule.cancel": "allow", "schedule.create": "allow", "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
+    "skill_builder.create": "allow",
+    "skill_builder.delete": "allow",
+    "skill_builder.edit": "allow",
+    "skill_builder.list": "allow",
     "weather": "allow",
     # Reversible writes
     "document.create": "allow", "document.restore": "allow",

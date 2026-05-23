@@ -77,6 +77,10 @@ const PanelPolicies = (() => {
     'subagent': 'Spawn subagent',
     'weather': 'Weather lookup',
     'programming_docs_search': 'Search programming docs',
+    'skill_builder.create': 'Create custom skill',
+    'skill_builder.edit': 'Edit custom skill',
+    'skill_builder.delete': 'Delete custom skill',
+    'skill_builder.list': 'List custom skills',
   };
 
   const _POLICY_CATEGORIES = {
@@ -94,6 +98,7 @@ const PanelPolicies = (() => {
     'Places': ['place.save', 'place.list', 'place.get', 'place.delete'],
     'Scheduling': ['schedule.list', 'schedule.search', 'schedule.create', 'schedule.cancel'],
     'Search & Tools': ['search', 'find_tools', 'find_skills', 'read', 'programming_docs_search', 'chalie_docs'],
+    'Skills': ['skill_builder.list', 'skill_builder.create', 'skill_builder.edit', 'skill_builder.delete'],
     'Subagent': ['subagent'],
   };
 

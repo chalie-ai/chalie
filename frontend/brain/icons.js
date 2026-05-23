@@ -43,5 +43,6 @@ const Icons = (() => {
     X: (s) => svg('<path d="M18 6 6 18M6 6l12 12"/>', s),
     Filter: (s) => svg('<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>', s),
     MoreH: (s) => svg('<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>', s),
+    Skill: (s) => svg('<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>', s),
   };
 })();

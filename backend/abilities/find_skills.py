@@ -100,6 +100,7 @@ class FindSkillsAbility(SearchableAbility):
                 JOIN skill_search_entries e ON e.id = v.rowid
                 JOIN skills s ON s.id = e.skill_id
                 WHERE v.embedding MATCH ? AND k = ?
+                AND s.enabled = 1
                 ORDER BY v.distance ASC
             """,
             fts_sql="""
@@ -108,6 +109,7 @@ class FindSkillsAbility(SearchableAbility):
                 JOIN skill_search_entries e ON e.id = skill_search_fts.rowid
                 JOIN skills s ON s.id = e.skill_id
                 WHERE skill_search_fts MATCH ?
+                AND s.enabled = 1
                 ORDER BY score ASC
             """,
             vec_params=(blob, KNN_DEPTH),
@@ -152,6 +154,7 @@ class FindSkillsAbility(SearchableAbility):
                 JOIN skill_search_entries e ON e.id = skill_search_fts.rowid
                 JOIN skills s ON s.id = e.skill_id
                 WHERE skill_search_fts MATCH ?
+                AND s.enabled = 1
                 GROUP BY s.id
                 ORDER BY s.title
                 LIMIT ?

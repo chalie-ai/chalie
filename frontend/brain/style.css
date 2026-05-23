@@ -946,3 +946,31 @@ input[type="checkbox"]:checked::after {
   .segmented { gap: 0; }
   .seg-btn { padding: 4px 8px; font-size: 11px; }
 }
+
+/* ── Skills panel ─────────────────────────────────────────────── */
+.skills-grid { display: flex; flex-direction: column; gap: 8px; }
+
+.skill-card { flex-direction: column; align-items: stretch; gap: 10px; padding: 16px; }
+.skill-card.skill-disabled { opacity: 0.6; }
+
+.skill-card-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  flex-wrap: wrap;
+}
+.skill-card-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.skill-card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.skill-use-for { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+
+.skill-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.skill-tag { font-size: 10px; padding: 1px 6px; }
+
+.skill-toggle-wrap { margin-right: 2px; }
+
+.skill-edit-form { display: flex; flex-direction: column; gap: 0; }
+.skill-edit-form textarea { font-family: 'Inter', monospace; font-size: 12px; resize: vertical; }
+
+@media (max-width: 900px) {
+  .skill-card-header { flex-direction: column; align-items: flex-start; }
+  .skill-card-actions { width: 100%; justify-content: flex-end; }
+}
