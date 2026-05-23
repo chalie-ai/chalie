@@ -36,7 +36,6 @@ if ('scrollRestoration' in history) {
 class ChalieApp {
   constructor() {
     this._backendHost = lsGet('chalie_backend_host') || '';
-    this._deferredInstallPrompt = null;
     this._activeCapabilityAlerts = new Map();
 
     // Core modules
@@ -58,14 +57,12 @@ class ChalieApp {
     const gate = await globalThis.chalieGateReady;
     if (!gate.stay) return;
 
-    this._registerServiceWorker();
-    this._initInstallPrompt();
     this._initPresence();
     this._initRenderer();
     this._checkVaultReinit();
 
     // Notifications module
-    this._notifications = new Notifications({ getHost: () => this._backendHost });
+    this._notifications = new Notifications();
 
     // Image attach module
     this._imageAttach = new ImageAttach({
@@ -157,9 +154,6 @@ class ChalieApp {
     // Attach menu (+ button)
     this._initAttachMenu();
 
-    // PWA install dialog
-    this._initPwaDialog();
-
     // Ambient canvas (background animation)
     const canvas = new AmbientCanvas();
     canvas.init();
@@ -173,9 +167,6 @@ class ChalieApp {
     // Capability alert banner dismiss wiring
     this._initCapabilityAlertBanner();
 
-    // Share target (PWA shared content)
-    this._handleSharedContent();
-
     // Start heartbeat
     this.heartbeat.start();
 
@@ -187,26 +178,12 @@ class ChalieApp {
       }
     });
 
-    // Show PWA install prompt first, then resume normal flow after dismiss/install
-    await this._showPwaDialogIfNeeded();
-
     // Show the "Waking up" overlay while we wait for the backend
     this._readyPollActive = true;
     this._showLoadingOverlay();
 
     // Start the app
     await this._start();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Service Worker
-  // ---------------------------------------------------------------------------
-
-  _registerServiceWorker() {
-    if (!('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('/sw.js').catch(err =>
-      console.warn('SW registration failed:', err)
-    );
   }
 
   // ---------------------------------------------------------------------------
@@ -229,29 +206,6 @@ class ChalieApp {
     } catch (err) {
       console.debug('[vault-reinit] check failed (non-fatal):', err);
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Install Prompt
-  // ---------------------------------------------------------------------------
-
-  _initInstallPrompt() {
-    globalThis.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      this._deferredInstallPrompt = e;
-      document.getElementById('installBtn')?.classList.remove('hidden');
-    });
-    globalThis.addEventListener('appinstalled', () => {
-      this._deferredInstallPrompt = null;
-      document.getElementById('installBtn')?.classList.add('hidden');
-    });
-    document.getElementById('installBtn')?.addEventListener('click', async () => {
-      if (!this._deferredInstallPrompt) return;
-      this._deferredInstallPrompt.prompt();
-      const { outcome } = await this._deferredInstallPrompt.userChoice;
-      this._deferredInstallPrompt = null;
-      if (outcome === 'accepted') document.getElementById('installBtn')?.classList.add('hidden');
-    });
   }
 
   // ---------------------------------------------------------------------------
@@ -332,8 +286,6 @@ class ChalieApp {
         this._taskStrip.destroy();
         this._voiceRecorder.destroy();
       }, { once: true });
-
-      this._notifications.requestPushSubscription();
 
       // Ask once for geolocation permission so the heartbeat can capture coordinates.
       this.heartbeat.requestLocationPermission();
@@ -755,30 +707,6 @@ class ChalieApp {
   }
 
   // ---------------------------------------------------------------------------
-  // Share Target
-  // ---------------------------------------------------------------------------
-
-  _handleSharedContent() {
-    const params = new URLSearchParams(globalThis.location.search);
-    const shared = params.get('shared');
-    if (!shared) return;
-
-    // Pre-fill the prompt textarea with shared content
-    const textarea = document.getElementById('messageInput');
-    if (textarea) {
-      textarea.value = decodeURIComponent(shared);
-      textarea.style.height = 'auto';
-      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-      const sendBtn = document.getElementById('sendBtn');
-      if (sendBtn) sendBtn.disabled = false;
-    }
-
-    // Clean URL without reload
-    const cleanUrl = globalThis.location.pathname;
-    globalThis.history.replaceState({}, '', cleanUrl);
-  }
-
-  // ---------------------------------------------------------------------------
   // Loading Overlay
   // ---------------------------------------------------------------------------
 
@@ -830,8 +758,6 @@ class ChalieApp {
         if (!this.ws.isConnected) {
           this.ws.connect();
         }
-        // Dismiss stale notifications now that the user is back
-        this._notifications.dismissNotifications();
         // Scroll to latest message so user sees current state
         this.renderer.forceScrollToBottom();
       }
@@ -934,47 +860,6 @@ class ChalieApp {
     globalThis.location.replace('/login/');
   }
 
-  // ---------------------------------------------------------------------------
-  // PWA Install Dialog
-  // ---------------------------------------------------------------------------
-
-  _initPwaDialog() {
-    const dialog = document.getElementById('pwaInstallDialog');
-    const closeBtn = dialog.querySelector('.pwa-dialog__close');
-    const installBtn = document.getElementById('pwaInstallBtn');
-
-    const dismiss = () => {
-      lsSet('chalie_pwa_dismissed', '1');
-      dialog.close();
-    };
-
-    closeBtn.addEventListener('click', dismiss);
-    dialog.addEventListener('cancel', dismiss); // Escape key
-
-    installBtn.addEventListener('click', async () => {
-      if (this._deferredInstallPrompt) {
-        this._deferredInstallPrompt.prompt();
-        const { outcome } = await this._deferredInstallPrompt.userChoice;
-        this._deferredInstallPrompt = null;
-      }
-      dismiss();
-    });
-  }
-
-  _showPwaDialogIfNeeded() {
-    // Already installed as PWA
-    if (globalThis.matchMedia('(display-mode: standalone)').matches) return;
-    // Already dismissed by user
-    if (lsGet('chalie_pwa_dismissed')) return;
-
-    const dialog = document.getElementById('pwaInstallDialog');
-    dialog.showModal();
-
-    // Return a Promise that resolves when the dialog closes
-    return new Promise(resolve => {
-      dialog.addEventListener('close', resolve, { once: true });
-    });
-  }
 }
 
 // Boot

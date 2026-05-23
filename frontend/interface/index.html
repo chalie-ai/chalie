@@ -39,13 +39,6 @@
   <script src="/shared/auth-gate.js"></script>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <link rel="manifest" href="/manifest.json">
-  <meta name="theme-color" content="#8A5CFF">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Chalie">
-  <link rel="apple-touch-icon" href="/icons/icon.png">
   <link rel="icon" type="image/png" href="/icons/icon.png">
 </head>
 <body class="voice-loading">
@@ -130,13 +123,6 @@
       <button id="recallBtn" class="btn-icon" aria-label="Recall" title="Recall">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z"></path>
-        </svg>
-      </button>
-      <button id="installBtn" class="btn-icon hidden" aria-label="Install Chalie" title="Install app">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
         </svg>
       </button>
       <button id="taskDrawerBtn" class="btn-icon task-drawer-trigger hidden" aria-label="Active tasks" title="Active tasks">
@@ -324,33 +310,6 @@
       </div>
       <div id="uploadDuplicateWarning" class="upload-duplicate hidden"></div>
       <p class="upload-privacy">Your documents are stored locally and never leave this device. Text extraction runs entirely on your hardware.</p>
-    </div>
-  </dialog>
-
-  <!-- PWA install dialog -->
-  <dialog id="pwaInstallDialog" class="pwa-dialog">
-    <div class="pwa-dialog__content">
-      <button class="pwa-dialog__close btn-icon" aria-label="Close">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-      <div class="pwa-dialog__icon">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-          <polyline points="7 10 12 15 17 10"></polyline>
-          <line x1="12" y1="15" x2="12" y2="3"></line>
-        </svg>
-      </div>
-      <h2 class="pwa-dialog__title">Install Chalie</h2>
-      <p class="pwa-dialog__desc">
-        You can use Chalie right here in your browser — no download needed.
-        Install the app to get <strong>push notifications</strong> and a native home screen experience.
-      </p>
-      <div class="pwa-dialog__actions">
-        <button id="pwaInstallBtn" class="btn-install">Install App</button>
-      </div>
     </div>
   </dialog>
 

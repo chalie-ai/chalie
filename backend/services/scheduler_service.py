@@ -339,12 +339,6 @@ def _fire_item(item: dict):
         })
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
 
-        try:
-            from api.push import send_push_to_all
-            send_push_to_all(title='Chalie', body=message[:200])
-        except Exception as _push_err:
-            logger.warning(f"{LOG_PREFIX} Web push failed: {_push_err}")
-
 
 _RECURRENCE_MAP = {
     "daily": ("day", 1),

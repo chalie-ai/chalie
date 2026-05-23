@@ -18,9 +18,7 @@ frontend/interface/
 ├── voice_recorder.js   # Voice input (mic → STT → transcript paste)
 ├── voice_player.js     # Voice output (speaker → overlay audio player)
 ├── presence.js         # Presence/status indicators
-├── sw.js               # Service worker
 ├── style.css           # All styling
-├── manifest.json       # PWA manifest
 ├── icons/              # Icon files
 └── cards/              # Reusable card components
 

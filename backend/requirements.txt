@@ -11,7 +11,6 @@ anthropic>=0.39.0
 openai>=1.0.0
 google-genai>=1.0.0
 trafilatura>=2.0.0
-pywebpush>=2.0.0
 pdfplumber>=0.11.0
 python-docx>=1.1.0
 python-pptx>=1.0.0

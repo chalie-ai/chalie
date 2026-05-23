@@ -192,7 +192,7 @@ _check_python() {
 }
 
 # ─── System Build Dependencies (Linux) ──────────────────────────────────────
-# Needed for native Python wheels (cryptography, pywebpush), sqlite-vec rebuild,
+# Needed for native Python wheels (cryptography), sqlite-vec rebuild,
 # envsubst (sqlite-vec template), Deno installer (unzip), and curl.
 _install_build_deps() {
   local os
