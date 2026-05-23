@@ -132,6 +132,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "timer",
     "ubiquiti",
     "weather",
+    "web_download",
 })
 
 
@@ -200,7 +201,7 @@ _DEFAULT_DISCOVERABLE = frozenset({
     "browser", "calendar", "chalie_docs", "code_eval", "contacts", "document",
     "email", "home", "list", "news", "place", "programming_docs_search", "read",
     "review_tool_calls", "review_transcript", "schedule", "search",
-    "skill_builder", "subagent", "timer", "ubiquiti", "weather",
+    "skill_builder", "subagent", "timer", "ubiquiti", "weather", "web_download",
 })
 
 

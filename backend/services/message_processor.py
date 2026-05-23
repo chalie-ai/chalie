@@ -179,6 +179,7 @@ class MessageProcessor:
         "timer",
         "ubiquiti",
         "weather",
+        "web_download",
     ]
     _BLOCKED: frozenset[str] = frozenset()
     _FIND_TOOLS_GUARDRAILS: dict[str, str] = {
