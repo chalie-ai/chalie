@@ -370,7 +370,7 @@ class UserMessageProcessor(MessageProcessor):
         # tool-calling iterations. Non-blocking (daemon thread inside the service).
         if self._loop_exited_cleanly and self._current_iteration >= 4:
             try:
-                from services.skill_suggestion_service import maybe_suggest_skill
+                from services.skill_suggestion_message_processor import maybe_suggest_skill
                 maybe_suggest_skill(self._act_trail, self._raw_input)
             except Exception as exc:
                 logger.warning("[POSTTURN] skill suggestion failed: %s", exc)
