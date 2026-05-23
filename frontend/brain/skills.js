@@ -5,6 +5,7 @@ const PanelSkills = (() => {
   let _associations = [];
   let _loaded = false;
   let _editingId = null;
+  let _expandedId = null;
 
   function mount(root) {
     _root = root;
@@ -14,6 +15,7 @@ const PanelSkills = (() => {
   function unmount() {
     _root = null;
     _editingId = null;
+    _expandedId = null;
   }
 
   // ── Data loading ──────────────────────────────────────────────────
@@ -152,9 +154,12 @@ const PanelSkills = (() => {
       </div>`;
     }
 
-    return `<div class="cap-card skill-card" data-skill-id="${skill.id}">
+    const isExpanded = _expandedId === skill.id;
+
+    return `<div class="cap-card skill-card${isExpanded ? ' skill-expanded' : ''}" data-skill-id="${skill.id}">
       <div class="skill-card-header">
-        <div class="skill-card-title">
+        <div class="skill-card-title" data-expand-skill="${skill.id}" style="cursor:pointer;">
+          <span class="skill-expand-icon">${isExpanded ? Icons.ChevronDown(12) : Icons.Chevron(12)}</span>
           <strong>${BrainApp.escapeHtml(skill.title)}</strong>
           <span class="badge badge-violet">v${skill.version}</span>
           ${enabledBadge}
@@ -172,6 +177,7 @@ const PanelSkills = (() => {
       </div>
       <div class="skill-use-for">${BrainApp.escapeHtml(skill.use_for)}</div>
       ${skill.tags ? `<div class="skill-tags">${_renderTags(skill.tags)}</div>` : ''}
+      ${isExpanded ? _renderExpandedContent(skill) : ''}
     </div>`;
   }
 
@@ -180,9 +186,12 @@ const PanelSkills = (() => {
       ? `<span class="badge badge-success">enabled</span>`
       : `<span class="badge badge-muted">disabled</span>`;
 
-    return `<div class="cap-card skill-card${!skill.enabled ? ' skill-disabled' : ''}" data-skill-id="${skill.id}">
+    const isExpanded = _expandedId === skill.id;
+
+    return `<div class="cap-card skill-card${!skill.enabled ? ' skill-disabled' : ''}${isExpanded ? ' skill-expanded' : ''}" data-skill-id="${skill.id}">
       <div class="skill-card-header">
-        <div class="skill-card-title">
+        <div class="skill-card-title" data-expand-skill="${skill.id}" style="cursor:pointer;">
+          <span class="skill-expand-icon">${isExpanded ? Icons.ChevronDown(12) : Icons.Chevron(12)}</span>
           <strong>${BrainApp.escapeHtml(skill.title)}</strong>
           <span class="badge badge-muted">v${skill.version}</span>
           ${enabledBadge}
@@ -199,7 +208,20 @@ const PanelSkills = (() => {
       </div>
       <div class="skill-use-for">${BrainApp.escapeHtml(skill.use_for)}</div>
       ${skill.tags ? `<div class="skill-tags">${_renderTags(skill.tags)}</div>` : ''}
+      ${isExpanded ? _renderExpandedContent(skill) : ''}
     </div>`;
+  }
+
+  function _renderExpandedContent(skill) {
+    const sections = [];
+    if (skill.related_abilities) {
+      sections.push(`<div class="skill-detail-row">
+        <span class="skill-detail-label">Abilities:</span>
+        <span>${BrainApp.escapeHtml(skill.related_abilities)}</span>
+      </div>`);
+    }
+    sections.push(`<pre class="skill-content-preview">${BrainApp.escapeHtml(skill.content)}</pre>`);
+    return `<div class="skill-expanded-content">${sections.join('')}</div>`;
   }
 
   function _renderTags(tagsStr) {
@@ -211,6 +233,13 @@ const PanelSkills = (() => {
   // ── Event binding ─────────────────────────────────────────────────
 
   function _bindEvents(el) {
+    el.querySelectorAll('[data-expand-skill]').forEach(title => {
+      title.addEventListener('click', () => {
+        const id = Number(title.dataset.expandSkill);
+        _expandedId = _expandedId === id ? null : id;
+        _renderContent();
+      });
+    });
     el.querySelectorAll('.skill-toggle').forEach(cb => {
       cb.addEventListener('change', () => _toggleSkill(Number(cb.dataset.skillId)));
     });
