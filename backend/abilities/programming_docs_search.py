@@ -869,6 +869,8 @@ def lookup(language, query):
 class ProgrammingDocsSearchAbility(Ability):
     NAME = "programming_docs_search"
     SEARCH_TOOLTIP = "programming docs search"
+    POLICY_CATEGORY = "Search & Tools"
+    POLICY_LABELS = {"": "Search programming docs"}
     SUMMARY = "Search official documentation for 12 programming languages and 11 frameworks by language name and query."
     EXAMPLES = [
         "how do I use asyncio in Python",

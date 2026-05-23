@@ -16,6 +16,18 @@ logger = logging.getLogger(__name__)
 class UbiquitiAbility(Ability):
     NAME = "ubiquiti"
     SEARCH_TOOLTIP = "UniFi network control"
+    POLICY_CATEGORY = "Ubiquiti"
+    POLICY_LABELS = {
+        "authorize_guest": "Authorize guest access",
+        "control_client": "Block / disconnect client",
+        "control_device": "Restart / locate device",
+        "get_info": "Get device info / health",
+        "list_clients": "List connected clients",
+        "list_devices": "List network devices",
+        "manage_port_forward": "Manage port forwarding",
+        "manage_traffic_rule": "Manage traffic rules",
+        "manage_wlan": "Manage WiFi networks",
+    }
     SUMMARY = (
         "Control and monitor a UniFi network: list devices and connected clients, "
         "get device info and site health, block or disconnect clients, restart or "

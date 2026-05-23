@@ -18,6 +18,8 @@ class Ability(ABC):
     TIMEOUT: ClassVar[int] = 10
     INTERNAL: ClassVar[bool] = False
     SEARCH_TOOLTIP: ClassVar[str] = ""
+    POLICY_CATEGORY: ClassVar[str] = ""
+    POLICY_LABELS: ClassVar[dict[str, str]] = {}
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)

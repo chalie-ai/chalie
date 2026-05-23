@@ -29,6 +29,12 @@ _RICH_MEDIA_INSTRUCTION = (
 class CalendarAbility(Ability):
     NAME = "calendar"
     SEARCH_TOOLTIP = "calendar events"
+    POLICY_CATEGORY = "Calendar"
+    POLICY_LABELS = {
+        "get_event": "Get event",
+        "list_events": "List events",
+        "update_event": "Update event",
+    }
     SUMMARY = (
         "List, view, and update calendar events from the connected CalDAV account. "
         "Available when the user asks about meetings, appointments, or schedule."

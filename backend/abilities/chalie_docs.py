@@ -31,6 +31,8 @@ def _read_version() -> str:
 class ChalieDocsAbility(Ability):
     NAME = "chalie_docs"
     SEARCH_TOOLTIP = "chalie documentation and self-reference"
+    POLICY_CATEGORY = "Search & Tools"
+    POLICY_LABELS = {"": "Look up Chalie docs"}
     SUMMARY = "Look up Chalie's own documentation — what it is, its tools, release history, or codebase."
     EXAMPLES = [
         "what is chalie",

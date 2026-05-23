@@ -242,6 +242,35 @@ def get_defaults() -> dict[str, dict[Context, State]]:
     return _defaults_cache
 
 
+def get_policy_meta() -> list[dict]:
+    """Return label and category metadata for every policy-visible action_id.
+
+    Derived from the AbilityRegistry — no hardcoded list.
+    Returns a sorted list of {action_id, label, category} dicts.
+    """
+    from abilities._registry import AbilityRegistry
+
+    entries: list[dict] = []
+    for ability in AbilityRegistry.all():
+        if getattr(ability, "INTERNAL", False) or getattr(ability, "SYSTEM", False):
+            continue
+        category = getattr(ability, "POLICY_CATEGORY", "") or ability.NAME.replace("_", " ").title()
+        labels = getattr(ability, "POLICY_LABELS", {})
+        schema = ability.INPUT_SCHEMA
+        actions = schema.get("properties", {}).get("action", {}).get("enum", [])
+        if actions:
+            for act in actions:
+                action_id = f"{ability.NAME}.{act}"
+                label = labels.get(act, act.replace("_", " ").title())
+                entries.append({"action_id": action_id, "label": label, "category": category})
+        else:
+            action_id = ability.NAME
+            label = labels.get("", ability.SUMMARY if hasattr(ability, "SUMMARY") else action_id)
+            entries.append({"action_id": action_id, "label": label, "category": category})
+    entries.sort(key=lambda e: (e["category"], e["action_id"]))
+    return entries
+
+
 def reset_defaults_cache() -> None:
     global _defaults_cache
     _defaults_cache = None

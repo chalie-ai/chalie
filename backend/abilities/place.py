@@ -36,6 +36,13 @@ _ERR_NOT_FOUND = "No saved place found with that name."
 class PlaceAbility(Ability):
     NAME = "place"
     SEARCH_TOOLTIP = "place and location lookup"
+    POLICY_CATEGORY = "Places"
+    POLICY_LABELS = {
+        "delete": "Delete a saved place",
+        "get": "Look up a saved place",
+        "list": "List saved places",
+        "save": "Save a named place",
+    }
     SUMMARY = (
         "Save, list, or delete named places (home, work, gym, etc.). "
         "Use when the user wants to save their current location with a name, "

@@ -31,6 +31,13 @@ _ERR_URL_REQUIRED = "url parameter required"
 class BrowserAbility(Ability):
     NAME = "browser"
     SEARCH_TOOLTIP = "interactive web browser"
+    POLICY_CATEGORY = "Browser"
+    POLICY_LABELS = {
+        "interact": "Interact with page",
+        "monitor": "Monitor page",
+        "render": "Render page",
+        "screenshot": "Take screenshot",
+    }
     SUMMARY = (
         "Control a headless browser to render JavaScript-heavy pages, take screenshots, "
         "interact with forms and buttons, and monitor pages for changes."

@@ -48,6 +48,13 @@ def _discover_tool_names() -> str:
 class SkillBuilderAbility(Ability):
     NAME = "skill_builder"
     SEARCH_TOOLTIP = "create, edit, delete, or list user-defined skill playbooks"
+    POLICY_CATEGORY = "Skills"
+    POLICY_LABELS = {
+        "create": "Create custom skill",
+        "delete": "Delete custom skill",
+        "edit": "Edit custom skill",
+        "list": "List custom skills",
+    }
     SUMMARY = (
         "Create, edit, delete, or list custom skill playbooks. "
         "Use this to save step-by-step procedures that Chalie should follow for recurring tasks."
@@ -113,13 +120,6 @@ class SkillBuilderAbility(Ability):
                     "(e.g. 'logistics, packages, delivery, tracking'). Optional."
                 ),
             },
-            "related_abilities": {
-                "type": "string",
-                "description": (
-                    "Comma-separated list of tool names this skill uses "
-                    "(e.g. 'search, schedule, memory'). Optional."
-                ),
-            },
         },
         "required": ["action"],
     }
@@ -157,7 +157,7 @@ class SkillBuilderAbility(Ability):
 def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | None:
     """Return the skill row for a user-created skill matching title (case-insensitive)."""
     row = conn.execute(
-        "SELECT id, title, use_for, content, tags, version, related_abilities "
+        "SELECT id, title, use_for, content, tags, version "
         "FROM skills WHERE source = 'user' AND lower(title) = lower(?)",
         (title,),
     ).fetchone()
@@ -170,7 +170,6 @@ def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | No
         "content": row[3],
         "tags": row[4],
         "version": row[5],
-        "related_abilities": row[6],
     }
 
 
@@ -204,20 +203,18 @@ def _handle_create(params: dict) -> str:
             )
 
         tags = (params.get("tags") or "").strip()
-        related_abilities = (params.get("related_abilities") or "").strip()
         meta = {
             "title": title,
             "use_for": use_for,
             "content": content,
             "tags": tags,
             "version": DEFAULT_VERSION,
-            "related_abilities": related_abilities,
         }
 
         conn.execute(
-            "INSERT INTO skills(title, use_for, content, tags, version, related_abilities, source) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'user')",
-            (title, use_for, content, tags, DEFAULT_VERSION, related_abilities),
+            "INSERT INTO skills(title, use_for, content, tags, version, source) "
+            "VALUES (?, ?, ?, ?, ?, 'user')",
+            (title, use_for, content, tags, DEFAULT_VERSION),
         )
         skill_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -270,22 +267,16 @@ def _handle_edit(params: dict) -> str:
             "content": (params.get("content") or "").strip() or existing["content"],
             "tags": (params.get("tags") or "").strip() if params.get("tags") is not None else (existing["tags"] or ""),
             "version": existing["version"] + 1,
-            "related_abilities": (
-                (params.get("related_abilities") or "").strip()
-                if params.get("related_abilities") is not None
-                else (existing["related_abilities"] or "")
-            ),
         }
 
         conn.execute(
-            "UPDATE skills SET use_for=?, content=?, tags=?, version=?, related_abilities=? "
+            "UPDATE skills SET use_for=?, content=?, tags=?, version=? "
             "WHERE id=?",
             (
                 updated_meta["use_for"],
                 updated_meta["content"],
                 updated_meta["tags"],
                 updated_meta["version"],
-                updated_meta["related_abilities"],
                 skill_id,
             ),
         )
