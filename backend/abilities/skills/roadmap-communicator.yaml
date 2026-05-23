@@ -1,0 +1,16 @@
+---
+title: Roadmap Communicator
+use_for: preparing roadmap narratives, release notes, changelogs, and stakeholder updates tailored for executives, engineering teams, and customers
+tags: roadmap, release notes, changelog, stakeholder update, feature announcement, board update
+version: 1
+related_abilities: memory, document, email
+---
+
+1. Use `memory` to recall the product's current roadmap, recent releases, and any prior stakeholder communication preferences.
+2. Identify the audience and format needed — board/executive, engineering, or customer — and select the appropriate roadmap format (Now/Next/Later, Timeline, or Theme-based), then open `document` to draft.
+3. For release notes, use `document` to lead with user value not implementation details, group by user workflows, and call out migration or behaviour changes explicitly.
+4. For feature announcements, use `document` to structure as: problem context, what changed, who it benefits, and what to do next.
+5. For board or executive updates, use `document` to focus on progress against strategic goals, trade-offs made, and decisions required — not feature lists.
+6. Use `memory` to store the finalized communication so future updates reference consistent framing and audience priors.
+7. Present the draft for review and refine in `document` based on feedback.
+8. Use `email` to distribute the finalized communication if sending directly to stakeholders.

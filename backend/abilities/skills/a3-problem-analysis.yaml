@@ -1,0 +1,16 @@
+---
+title: A3 Problem Analysis
+use_for: comprehensive structured problem analysis covering background, root cause, countermeasures, and follow-up plan
+tags: problem solving, root cause, A3, structured analysis, planning
+version: 1
+related_abilities: document, memory, search
+---
+
+1. Use `memory` to recall any prior context or past attempts related to the problem.
+2. Establish the background section: capture why this problem matters, who it affects, and its business or personal impact — use `search` to verify any facts or figures cited.
+3. Use `memory` to surface the current condition: record facts, data points, and examples of what is actually happening now.
+4. Define the goal or target using `document` as scratch space: specify what success looks like in measurable, time-bound terms.
+5. Apply 5 Whys or Fishbone thinking to identify the fundamental root cause, not just symptoms — use `search` to validate hypotheses against known patterns or documentation.
+6. Record countermeasures with `document`: list specific actions that address the root cause directly, categorised by timeframe (immediate, short-term, long-term).
+7. Note the implementation plan inline in `document`: specify who does what by when, including dependencies and milestones.
+8. Use `document` to save the completed A3 analysis, including success metrics, monitoring approach, and review dates to verify the fix holds.

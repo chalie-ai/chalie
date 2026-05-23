@@ -1,0 +1,16 @@
+---
+title: Email Sequence Designer
+use_for: create a lifecycle email sequence — welcome, onboarding, nurture, re-engagement, or post-purchase drip
+tags: email, marketing, automation, drip, nurture, onboarding, lifecycle
+version: 1
+related_abilities: email, memory, document
+---
+
+1. Use `memory` to recall any existing brand voice, tone preferences, or ICP information before gathering sequence requirements.
+2. Ask what type of sequence is needed (welcome/onboarding, lead nurture, re-engagement, post-purchase, or event-based), who the audience is, what triggered them, and what the primary conversion goal is — then record requirements in `document`.
+3. Use `document` to design the sequence overview: trigger condition, number of emails, send timing/delays, and exit conditions.
+4. Use `document` to draft each email with: subject line, preview text, full body copy, and CTA button text with destination — never include send instructions.
+5. For sequences of 5 or more emails, use `document` to produce an overview table before individual email drafts.
+6. Use `document` to add 3 subject line alternatives per email for A/B testing.
+7. Save the finalized sequence structure and target profile to `memory` for future iteration on this campaign.
+8. Use `email` to send a test draft to the user if they want to preview the first email in an actual inbox.

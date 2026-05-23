@@ -1,0 +1,16 @@
+---
+title: Partnership Architect
+use_for: evaluating prospective partners, classifying partner tier, designing 90-day joint GTM plans, and modeling revshare economics
+tags: partnerships, channel partners, joint GTM, revshare, OEM, reseller, strategic alliance, partner tier
+version: 1
+related_abilities: search, memory, document, code_eval
+---
+
+1. Use `memory` to recall any existing partnership agreements or prior partner evaluations.
+2. Use `memory` to gather any previously stored partner intake details, then ask the user to confirm or supply: partner name, type, evidence of independent demand (named accounts sourced, sales team size), strategic value, and commitments offered.
+3. Use `document` to classify the partner tier based on evidence of independent demand and commitments: REFERRAL (introductions only), RESELLER (owns quota), OEM (embeds product), SI-CONSULTING (services revshare), or STRATEGIC (named accounts + multi-year + dedicated resources).
+4. Use `search` to research the prospective partner's market presence, customer base, and reputation.
+5. Use `document` to design a 90-day joint GTM plan with: pre-launch milestones (training, certification, materials), launch motion (target accounts, MDF allocation), mid-quarter checkpoint, and explicit 90-day success criteria.
+6. Use `code_eval` to model the revshare economics — compare margin per deal direct versus via partner at the proposed revshare percentage, and calculate the break-even point where partner economics beat direct.
+7. Use `document` to define kill criteria: the specific metrics that trigger re-tiering, restructuring, or unwinding the partnership.
+8. Use `document` to save the tier verdict, GTM plan, revshare model, and kill criteria for the partnership committee.
