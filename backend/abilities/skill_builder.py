@@ -76,10 +76,16 @@ class SkillBuilderAbility(Ability):
             "content": {
                 "type": "string",
                 "description": (
-                    "The skill instructions as numbered steps. Each step should be a clear, "
-                    "actionable instruction that references specific tools when applicable "
-                    "(e.g. 'Use the search tool to...', 'Check your memory for...'). "
-                    "Structure: numbered steps (1. 2. 3.) describing the procedure. "
+                    "The skill body as numbered steps (1. 2. 3. …). "
+                    "Each step MUST: start with a verb, reference a tool name in backticks "
+                    "(e.g. `memory`, `search`, `document`), and describe one clear action. "
+                    "Available tools: memory, search, news, document, code_eval, read, "
+                    "schedule, list, calendar, email, browser, home, weather, place, "
+                    "contacts, timer. "
+                    "Pattern — good: '1. Use `memory` to recall dietary preferences and restrictions.' "
+                    "Pattern — bad: '1. Think about what the user might want.' (no tool, vague). "
+                    "Aim for 5–10 steps. Steps should build logically: recall context → "
+                    "gather data → process → produce output → persist results. "
                     "Optionally end with a Preferences section for user-specific defaults. "
                     "Required for create."
                 ),
@@ -94,8 +100,9 @@ class SkillBuilderAbility(Ability):
             "related_abilities": {
                 "type": "string",
                 "description": (
-                    "Comma-separated list of Chalie tool names this skill uses "
-                    "(e.g. 'search, schedule, memory'). Optional."
+                    "Comma-separated list of the tool names referenced in the content steps "
+                    "(e.g. 'search, schedule, memory'). Must match the backtick-quoted names "
+                    "in the content. Optional."
                 ),
             },
         },
