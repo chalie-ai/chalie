@@ -5,20 +5,18 @@ Reads all provider examples, embeds them using EmbeddingService, and writes
 the vectors into an ``example_embeddings`` vec0 virtual table inside the same
 providers.sqlite database.
 
-Run from the repo root:
-    python -m utils.generate_search_cache
+Run from the backend directory:
+    cd backend && python -m utils.generate_search_cache
 """
 
 import sqlite3
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
-
 from services.embedding_service import EmbeddingService
 from services.embedding_utils import pack_embedding
 
-_DB_PATH = Path(__file__).resolve().parent.parent / "backend" / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
+_DB_PATH = Path(__file__).resolve().parent.parent / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
 
 
 def main():

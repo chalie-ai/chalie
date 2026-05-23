@@ -1,9 +1,9 @@
 """
 Seed additional provider_examples into search_tool_providers.sqlite.
 
-Run from the repo root after inserting rows:
-    python -m utils.seed_routing_examples
-    python -m utils.generate_search_cache
+Run from the backend directory after inserting rows:
+    cd backend && python -m utils.seed_routing_examples
+    cd backend && python -m utils.generate_search_cache
 
 Uses INSERT OR IGNORE so this script is idempotent — safe to re-run.
 Requires a UNIQUE constraint on (provider_id, example_query); the script
@@ -16,7 +16,7 @@ from pathlib import Path
 
 _DB_PATH = (
     Path(__file__).resolve().parent.parent
-    / "backend" / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
+    / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
 )
 
 # wikipedia provider_id = 1
@@ -128,7 +128,7 @@ def main() -> None:
         print(f"Inserted {inserted} new rows (OR IGNORE skips duplicates).")
         print(f"  wikipedia total: {total_wiki}")
         print(f"  nominatim total: {total_nom}")
-        print("\nNext step: python -m utils.generate_search_cache")
+        print("\nNext step: cd backend && python -m utils.generate_search_cache")
     finally:
         conn.close()
 

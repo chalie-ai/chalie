@@ -4,7 +4,7 @@ Search query router — semantic routing via pre-built example embeddings.
 Embeds the query, runs k-NN against example_embeddings (vec0), scores
 providers by top-3 mean similarity, returns winners above threshold.
 
-Regenerate embeddings with:  python -m utils.generate_search_cache
+Regenerate embeddings with:  cd backend && python -m utils.generate_search_cache
 """
 
 import logging

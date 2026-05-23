@@ -269,7 +269,7 @@ def _check_asset_caches() -> None:
             if "example_embeddings" in _tables:
                 logger.info("[Startup] Search router cache ready")
             else:
-                logger.warning("[Startup] Search embeddings missing — run 'python -m utils.generate_search_cache'")
+                logger.warning("[Startup] Search embeddings missing — run 'cd backend && python -m utils.generate_search_cache'")
         else:
             logger.warning("[Startup] search_tool_providers.sqlite not found")
     except Exception as e:

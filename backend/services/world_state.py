@@ -238,7 +238,7 @@ def _render_schedule_fields(row: dict, now) -> str:
 
 @dataclass(frozen=True)
 class Signal:
-    """Typed event pushed by an interface. Short-lived, absorbed and discarded."""
+    """Typed event pushed by a background worker or capability."""
 
     source: str
     kind: str
