@@ -1,0 +1,16 @@
+---
+title: Five Whys Root Cause Analysis
+use_for: drilling from surface symptoms to root causes by iteratively asking why a problem occurred
+tags: root cause, five whys, problem solving, debugging, analysis
+version: 1
+related_abilities: document, memory, search
+---
+
+1. Use `memory` to recall any relevant background or previous analysis on this issue.
+2. State the problem clearly as a single observable symptom or failure, then open `document` to capture the Why chain.
+3. Ask "Why did this happen?" and record the first-level cause in `document`.
+4. For each answer, ask "Why?" again and record each level in `document` until reaching a systemic or process-level root cause (typically 4-6 iterations).
+5. When multiple branches of causes emerge, use `document` to trace each branch separately — capture all paths to prevent missed root causes.
+6. Use `search` to validate the root cause against known patterns, documentation, or prior incidents.
+7. Propose solutions that address the root cause rather than the surface symptom — confirm plausibility via `search` if the domain is technical or specialised.
+8. Use `document` to save the complete 5 Whys chain and proposed solutions for future reference.

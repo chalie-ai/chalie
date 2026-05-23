@@ -1,0 +1,16 @@
+---
+title: Deep Research
+use_for: produce a comprehensive, cited research report with multi-source evidence tracking, counter-review, and confidence markers
+tags: research, report, analysis, synthesis, evidence, citations, literature-review, parallel-research, multi-source-synthesis
+version: 1
+related_abilities: search, news, read, subagent, document, memory
+---
+
+1. Use `memory` to recall any prior research, related findings, or user preferences — then ask for the specific question, scope (company vs. industry vs. policy/tech), and preferred output length.
+2. Break the topic into 3–6 parallel sub-questions (what, why, how, who, trends, counter-claims) and assign each to a `subagent` to search independently, keeping raw search context out of the main thread.
+3. Each `subagent` uses `search` and `news` to gather sources and `read` to extract content from the most authoritative URLs, then returns distilled notes — never raw results.
+4. Use `document` to build a citation registry from the distilled notes: record source URL, type (news/official/academic/industry), recency date, and authority level for every claim.
+5. Use `document` to construct an evidence-mapped outline, flagging claims lacking two independent sources and any counter-claims or competing perspectives.
+6. Use `document` to draft the report from the outline and citation registry, embedding confidence markers (confirmed / likely / contested / unverified) per major claim.
+7. Use `document` to run a counter-review pass: for each key finding, state the strongest plausible objection or alternative interpretation and address it inline.
+8. Present the final report from `document` with executive summary, section findings with inline citations, counter-claims addressed, and a confidence summary — then use `memory` to store key findings.

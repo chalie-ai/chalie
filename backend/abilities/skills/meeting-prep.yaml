@@ -1,0 +1,16 @@
+---
+title: Meeting Prep
+use_for: prepare for an upcoming meeting — research attendees, surface context, draft an agenda, and set a follow-up reminder
+tags: meetings, preparation, agenda, research, calendar, contacts
+version: 1
+related_abilities: calendar, contacts, search, news, memory, schedule, document
+---
+
+1. Ask for the meeting details: who is attending, the stated purpose, when it is, and any documents or links the user wants reviewed; use `memory` to recall prior context on the attendees.
+2. Use `calendar` to pull the meeting event and confirm time, location, and any notes already attached to it.
+3. Use `contacts` to retrieve information on the key attendees — role, organisation, and any prior interaction notes.
+4. Use `memory` to recall any context on the attendees, their organisation, or the topic from previous conversations.
+5. Use `search` and `news` to find recent news, announcements, or developments relevant to the attendees' company or the meeting topic.
+6. Use `document` to draft a structured agenda: opening (2 min), context / background (5 min), main discussion items with owner and time allocation, decisions needed, and next steps.
+7. Use `document` to suggest 3–5 questions the user should be prepared to answer, and 3–5 questions worth asking the other party.
+8. Use `schedule` to create a reminder 30 minutes before the meeting, and optionally a follow-up reminder to send notes the day after.

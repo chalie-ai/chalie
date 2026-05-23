@@ -1,0 +1,16 @@
+---
+title: Daily Planner
+use_for: organise today's tasks, schedule time blocks, surface calendar conflicts, and set focus priorities for the day
+tags: planning, daily, schedule, productivity, tasks, calendar, priorities, focus
+version: 1
+related_abilities: calendar, schedule, list, memory, timer, document
+---
+
+1. Use `calendar` to pull today's events and any fixed commitments — note their times and durations.
+2. Use `memory` to recall any running priorities, active projects, or tasks the user was working on recently.
+3. Use `list` to check active to-do items for anything due today, then ask the user if there is anything new to add or any tasks they must complete today.
+4. Use `calendar` to identify conflicts or tight windows and flag them.
+5. Use `list` to pull any active to-do items and sort them by: urgency (deadline today), importance (impact), and effort (quick wins first).
+6. Use `document` to build a time-blocked day plan: slot calendar events first, then assign tasks to remaining blocks — keep at least one buffer block for reactive work.
+7. Present the day plan from `document` with time blocks, assigned tasks, and the single top-priority item highlighted — ask the user to confirm or adjust.
+8. Use `schedule` to create reminders for any time-sensitive tasks or deadlines, and use `timer` if the user wants a focus session started immediately.

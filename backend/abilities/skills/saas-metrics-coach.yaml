@@ -1,0 +1,16 @@
+---
+title: SaaS Metrics Coach
+use_for: calculating and benchmarking SaaS health metrics including ARR, churn, LTV, CAC, and NRR with prioritized advice
+tags: SaaS metrics, ARR, MRR, churn, LTV, CAC, NRR, unit economics, SaaS health
+version: 1
+related_abilities: code_eval, document, memory, search
+---
+
+1. Use `memory` to recall any previously shared business metrics or prior health reports.
+2. Use `memory` to recall any previously stored metrics, then collect missing inputs from the user in a single grouped request: current MRR, MRR last month, expansion MRR, churned MRR, total active customers, new customers this month, churned customers, sales and marketing spend, and gross margin — work with partial data and state assumptions explicitly.
+3. Use `code_eval` to calculate: ARR, MRR growth percentage, monthly churn rate, CAC, LTV, LTV:CAC ratio, CAC payback period, and NRR.
+4. Use `search` to benchmark each metric against industry standards for the user's market segment (Enterprise, Mid-Market, SMB, or PLG) and stage (Early, Growth, or Scale), labeling each as HEALTHY, WATCH, or CRITICAL.
+5. Use `code_eval` to identify the top 2 to 3 metrics at WATCH or CRITICAL status, ordered by business impact.
+6. Use `document` to state for each priority issue: what is happening (one sentence), why it matters, and two to three specific actions to take this month.
+7. Present the report from `document` in a fixed structure: Metrics at a Glance table, Overall Picture (2-3 sentences), Priority Issues, What is Working (genuine strengths only), and a 90-Day Focus with a single numeric target.
+8. Use `document` to save the health report and use `memory` to store the metrics baseline for trend tracking.

@@ -1,0 +1,16 @@
+---
+title: Cause and Effect Analysis
+use_for: systematically exploring all potential causes of a problem across multiple categories using a Fishbone (Ishikawa) structure
+tags: fishbone, Ishikawa, root cause, problem analysis, structured thinking
+version: 1
+related_abilities: document, memory, search
+---
+
+1. Use `memory` to recall any relevant context or prior analysis on this problem.
+2. State the problem clearly as the central issue and open `document` to capture the Fishbone structure.
+3. For the People and Process categories, brainstorm potential causes related to skills, communication, workflows, and standards — use `search` to validate any factual claims.
+4. For the Environment and Methods categories, consider external factors, situational conditions, approaches, and practices that may contribute — record each in `document`.
+5. For the Materials or Resources category, assess whether inputs, data, tools, or dependencies are contributing factors — use `search` to confirm availability or known issues.
+6. Across all categories, ask "Why?" for each identified cause to determine whether it is a contributing factor or a root cause — note each level in `document`.
+7. Prioritise causes by impact and likelihood, then use `search` to find evidence or prior art supporting the highest-priority root causes.
+8. Use `document` to save the complete Fishbone analysis with ranked root causes and targeted solutions for each.

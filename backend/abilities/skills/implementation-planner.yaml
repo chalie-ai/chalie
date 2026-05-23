@@ -1,0 +1,16 @@
+---
+title: Implementation Planner
+use_for: produce a structured implementation plan with risk assessment for any bug, feature request, or improvement
+tags: planning, bugs, features, analysis, implementation, engineering
+version: 1
+related_abilities: search, read, memory, document, schedule
+---
+
+1. Use `memory` to recall any relevant architectural decisions, prior related work, or user preferences — then ask the user to describe the issue, bug, or feature (including expected vs. current behaviour for bugs).
+2. Use `search` or `read` to look up relevant documentation, prior art, or similar solutions if the domain is unfamiliar.
+3. Use `document` to restate the problem in a single sentence and capture the scope: areas affected, constraints (performance, security, backwards compatibility), and stakeholders.
+4. Use `document` to draft a structured plan broken into phases (investigate → design → implement → test → deploy), with each phase listing specific tasks, owners, and acceptance criteria.
+5. Use `search` to validate assumptions about the implementation approach against existing patterns or known constraints.
+6. Use `document` to list the top 3 risks (what could go wrong), a mitigation for each, and any dependencies that must be resolved first.
+7. Use `schedule` to set reminders for any milestone or review point the user wants tracked.
+8. Use `document` to save the finalized plan and store a summary in `memory` for future reference.
