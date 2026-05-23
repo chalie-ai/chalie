@@ -577,14 +577,6 @@ class ChalieApp {
       sendBtn.disabled = (!textarea.value.trim() && !this._imageAttach.count) || this._imageAttach.isUploading;
     });
 
-    // Enter to send (Shift+Enter for newline)
-    textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        this._chat.sendMessage();
-      }
-    });
-
     // Send button click
     sendBtn.addEventListener('click', () => this._chat.sendMessage());
 
