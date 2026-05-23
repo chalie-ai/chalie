@@ -13,6 +13,7 @@ All provider setup is done in **Brain → Settings → Providers → Add Provide
 | **OpenAI** | No | Yes | GPT models — [platform.openai.com](https://platform.openai.com) |
 | **Google Gemini** | No | Yes | Gemini models — [ai.google.dev](https://ai.google.dev) |
 | **OpenAI-Compatible** | Either | Yes | Any endpoint that speaks the OpenAI Chat Completions format (Groq, DeepSeek, Together, OpenRouter, LM Studio, vLLM, MiniMax, etc.) |
+| **Codex CLI** | Yes | No (uses existing Codex auth) | Piggybacks on an installed `codex` CLI subscription via JSON-RPC over stdio |
 
 ---
 
@@ -26,6 +27,8 @@ Each provider needs a **name** (any label), a **platform**, a **model ID**, and 
 
 **OpenAI-Compatible:** set the base URL to your provider's endpoint, enter your API key and model ID. Use this for any provider not listed above.
 
+**Codex CLI:** requires the `codex` binary to be installed and authenticated on the host. The Providers tab detects CLI availability automatically on load — the platform tab only appears when `codex` is found. No API key entry is needed; authentication is inherited from the CLI's own OAuth session. The default model is `o4-mini`; enter any model ID supported by your Codex subscription. v1 passes conversations in pass-through mode (no tool bridging).
+
 ---
 
 ## Troubleshooting
@@ -33,6 +36,7 @@ Each provider needs a **name** (any label), a **platform**, a **model ID**, and 
 **"Provider connection failed"**
 - Ollama: confirm Ollama is running (`ollama serve`) and the host URL is correct.
 - Cloud: check your API key and that the provider endpoint is reachable.
+- Codex CLI: confirm `codex` is on `$PATH` (`which codex`) and that your CLI session is authenticated (`codex auth login`).
 
 **"API key is invalid"**
 - Copy the key again — watch for leading/trailing spaces.
@@ -74,3 +78,12 @@ curl -X PUT http://localhost:31025/providers/jobs/frontal-cortex \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{"provider_id": 1}'
 ```
+
+**Detect CLI providers**
+```bash
+curl -X POST http://localhost:31025/providers/detect-cli \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"cli": "codex"}'
+```
+Returns `{"available": true, "models": [...]}` when a supported CLI binary is found and authenticated, `{"available": false}` otherwise. The Brain Providers tab calls this on mount to conditionally show CLI platform tabs.
