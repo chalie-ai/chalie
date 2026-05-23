@@ -166,6 +166,8 @@ The **Errors** subtab (under Cognition) shows the most recent ERROR and CRITICAL
 
 The **Policies** tab provides per-action permission control (allow / ask / deny) across three independent contexts: Chat, Subagent, and Background (subconscious). Each action has a three-state segmented toggle. Three presets are available: Careful (reads allowed, writes ask), Balanced (restore defaults), and Autonomous (all allowed). A collapsible Blocked Actions Log section shows recent policy denials. Served by `GET/PUT /api/policies`, `POST /api/policies/reset`, `GET/DELETE /api/policies/blocked`.
 
+The **Skills** tab manages curated and user-created skill playbooks. Three sections: My Skills (full CRUD with inline editor, enable/disable toggle), Curated Skills (read-only with toggle and Copy & Customise), and Skill Associations (read-only table of behavioural pattern links). Served by `GET/POST /api/skills`, `PUT/DELETE /api/skills/<id>`, `PUT /api/skills/<id>/toggle`, `POST /api/skills/<id>/copy`.
+
 ### Onboarding (`/on-boarding/`)
 
 Account creation only — username and password. If an account already exists, the page bounces to login. After creating an account it redirects to Brain so the user can add a provider.
