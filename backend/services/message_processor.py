@@ -164,6 +164,7 @@ class MessageProcessor:
         "contacts",
         "document",
         "email",
+        "file_permissions",
         "file_write",
         "home",
         "list",
