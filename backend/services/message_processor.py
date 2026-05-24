@@ -175,6 +175,7 @@ class MessageProcessor:
         "review_transcript",
         "schedule",
         "search",
+        "search_files",
         "skill_builder",
         "subagent",
         "timer",
