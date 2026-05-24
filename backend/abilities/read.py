@@ -10,10 +10,8 @@ Security:
   - File guard: blocks reads from system paths (/etc, /proc, /dev, /sys, /var/run)
 """
 
-import ipaddress
 import logging
 import os
-import socket
 import urllib3
 from typing import ClassVar
 from urllib.parse import urlparse
@@ -21,6 +19,7 @@ from urllib.parse import urlparse
 import requests
 
 from abilities._base import Ability
+from abilities._ssrf import is_private_url
 from services.innate_skills._tag import tag as _skill_tag
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -86,16 +85,6 @@ class ReadAbility(Ability):
         "Upgrade-Insecure-Requests": "1",
     }
 
-    _BLOCKED_NETS: ClassVar[list] = [
-        ipaddress.ip_network("127.0.0.0/8"),
-        ipaddress.ip_network("10.0.0.0/8"),
-        ipaddress.ip_network("172.16.0.0/12"),
-        ipaddress.ip_network("192.168.0.0/16"),
-        ipaddress.ip_network("169.254.0.0/16"),
-        ipaddress.ip_network("::1/128"),
-        ipaddress.ip_network("fc00::/7"),
-    ]
-
     _BLOCKED_PATH_PREFIXES: ClassVar[tuple] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
@@ -128,22 +117,8 @@ def _classify_source(source: str) -> str:
     return "file"
 
 
-def _is_private_url(url: str) -> bool:
-    hostname = urlparse(url).hostname
-    if not hostname:
-        return True
-    try:
-        for info in socket.getaddrinfo(hostname, None):
-            addr = ipaddress.ip_address(info[4][0])
-            if any(addr in net for net in ReadAbility._BLOCKED_NETS):
-                return True
-    except socket.gaierror:
-        return True
-    return False
-
-
 def _read_url(url: str, max_chars: int) -> str:
-    if _is_private_url(url):
+    if is_private_url(url):
         return _skill_tag("read", source=url, error="private-or-internal-url-blocked")
 
     try:

@@ -112,6 +112,7 @@ _CHAT_ASK: dict[str, State] = {
     "ubiquiti.authorize_guest": "ask",
     "list.delete": "ask",
     "memory.forget": "ask",
+    "web_download": "ask",
 }
 
 _SUBCONSCIOUS_ALLOW: dict[str, State] = {
@@ -201,6 +202,7 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
     "schedule.create": "deny",
     "schedule.cancel": "deny",
     "subagent": "deny",
+    "web_download": "deny",
 }
 
 
