@@ -1,0 +1,15 @@
+---
+title: Prompt Refiner
+use_for: transform a vague or loose prompt into a precise, structured specification with concrete conditions and measurable outcomes
+tags: prompting, requirements, specification, clarity, EARS, writing, prompt-engineering
+version: 1
+---
+
+1. Use `memory` to recall any prior prompt work or specification preferences — then ask the user to share the prompt they want to improve and what they will use it for.
+2. Use `document` to analyse the original prompt and list its weaknesses: ambiguous terms, missing trigger conditions, unmeasurable outcomes, absent constraints, or undefined audience.
+3. Use `document` to apply EARS syntax transformation — rewrite each requirement using the appropriate pattern: Ubiquitous ("shall"), Event-driven ("When X, shall"), State-driven ("While X, shall"), Conditional ("If X, shall"), or Unwanted-behaviour ("shall prevent").
+4. Use `document` to ground the rewritten requirements in a relevant domain framework (e.g. GTD, BJ Fogg, WCAG) — name the framework and explain how it informs each requirement.
+5. Use `document` to extract 2–3 concrete use-case examples with real data values rather than placeholders, and embed them in the specification.
+6. Use `document` to format the final output using the Role / Skills / Workflows / Examples / Output-format structure: one paragraph each.
+7. Present the refined prompt alongside a before/after comparison from `document`, highlighting the specific improvements made.
+8. Use `document` to save the refined specification if the user wants to keep it.

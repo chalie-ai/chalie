@@ -1,0 +1,15 @@
+---
+title: General Research
+use_for: lightweight / single-thread research on any topic — breaks the question into sub-questions, searches multiple sources, and synthesizes a cited briefing
+tags: research, investigation, information, synthesis, briefing, quick-lookup
+version: 1
+---
+
+1. Use `memory` to recall any prior research or context on this topic — then ask the user to state the research question in 1–2 sentences (push back if too vague).
+2. Use `search` to scope the question: run a broad query first to identify 3–5 sub-questions covering what, why, how, who, and what's next.
+3. For each sub-question, use `search` to find relevant sources (2–3 queries per sub-question, broad to narrow).
+4. Use `read` to extract content from the most relevant URLs found.
+5. Use `news` to find recent developments on the topic.
+6. Use `document` to synthesize findings per sub-question with inline source references, surfacing where sources agree or disagree.
+7. Use `document` to add a cross-cutting patterns section noting consensus signals, controversies, and notable gaps.
+8. Save a summary of findings to `memory` if the topic is relevant to ongoing work.

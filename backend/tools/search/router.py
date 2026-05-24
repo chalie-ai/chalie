@@ -4,18 +4,18 @@ Search query router — semantic routing via pre-built example embeddings.
 Embeds the query, runs k-NN against example_embeddings (vec0), scores
 providers by top-3 mean similarity, returns winners above threshold.
 
-Regenerate embeddings with:  python -m utils.generate_search_cache
+Regenerate embeddings with:  cd backend && python -m utils.generate_search_cache
 """
 
 import logging
-import os
 import sqlite3
 
 from services.embedding_utils import pack_embedding
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
-_DB = os.path.join(os.path.dirname(__file__), 'assets', 'search_tool_providers.sqlite')
+_DB = str(FileMapperService.get_search_providers_db_path())
 
 _GAP = 0.10        # max distance from top score to still be selected
 _MAX = 3            # max providers returned

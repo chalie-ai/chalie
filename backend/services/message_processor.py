@@ -22,6 +22,7 @@ compaction primitives.
 
 import contextlib
 import contextvars
+import copy
 import logging
 import re
 import threading
@@ -149,12 +150,55 @@ class MessageProcessor:
     # subconscious traffic in the cognition usage dashboard.
     USAGE_CLASS: str = 'chat'
     SYSTEM_PROMPT_CLASS = SystemMessagePrompt  # class reference, not instance
-    # Ability names pre-injected as native tools on every ACT iteration.
-    ALWAYS_AVAILABLE: list[str] = []
-    # Ability names ``find_tools`` may surface for this processor at runtime.
-    # ``find_tools`` itself is gated to ``WHERE name IN DISCOVERABLE`` so a
+    ALWAYS_AVAILABLE: list[str] = [
+        "find_skills",
+        "find_tools",
+        "memory",
+    ]
+    # ``find_tools`` is gated to ``WHERE name IN DISCOVERABLE`` so a
     # processor can never discover anything outside this list.
-    DISCOVERABLE: list[str] = []
+    DISCOVERABLE: list[str] = [
+        "browser",
+        "calendar",
+        "chalie_docs",
+        "code_eval",
+        "contacts",
+        "document",
+        "email",
+        "file_permissions",
+        "file_write",
+        "home",
+        "list",
+        "news",
+        "place",
+        "programming_docs_search",
+        "read",
+        "review_tool_calls",
+        "review_transcript",
+        "schedule",
+        "search",
+        "search_files",
+        "skill_builder",
+        "subagent",
+        "timer",
+        "ubiquiti",
+        "weather",
+        "web_download",
+    ]
+    _BLOCKED: frozenset[str] = frozenset()
+    _FIND_TOOLS_GUARDRAILS: dict[str, str] = {
+        "browser": (
+            "If you only need the contents of a web-page use the `read` tool"
+            " as first preference. Keep `browser` for complex website"
+            " interactive actions after you have tried `read`."
+        ),
+        "file_write": (
+            "`file_write` requires an absolute `path` and `contents`. You"
+            " must call the `read` tool on the same path first. If you're"
+            " creating notes or reference documents use the `document` tool"
+            " instead."
+        ),
+    }
     MAX_ITERATIONS: int = 30
     ITERATION_TIMEOUT: int = 1800  # seconds — per-iteration safety wall (independent of ACT loop budget)
     THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
@@ -200,6 +244,7 @@ class MessageProcessor:
         # Never persisted — cleared when the instance is discarded.
         self._memory_query_history: list[dict] = []
         self._act_trail: list[str] = []
+        self._loop_exited_cleanly: bool = False
         self._discovered_tools: list[dict] = []
         self._uid: int | None = None
         # Default is 'low' — classifier must explicitly set medium/high.
@@ -288,11 +333,12 @@ class MessageProcessor:
     def get_dynamic_tools(self) -> list[dict]:
         """Return tool schemas discovered during this turn via find_tools.
 
-        Default returns self._discovered_tools directly (identity — subclasses
-        that mutate the list during a turn see the mutations reflected here).
-        Subclasses may override to filter, replace, or suppress.
+        Filters out ``_BLOCKED`` names so blocked tools never enter the
+        toolbox even if ``find_tools`` matched them.
         """
-        return self._discovered_tools
+        if not self._BLOCKED:
+            return self._discovered_tools
+        return [t for t in self._discovered_tools if t.get('name') not in self._BLOCKED]
 
     # ── Final (concrete on base) ──────────────────────────────────────────────
 
@@ -349,6 +395,34 @@ class MessageProcessor:
             return body
         return body.replace("{{provider_content_field_name}}", label)
 
+    _ACT_SUMMARY_PROPERTY: dict = {
+        'type': 'string',
+        'description': (
+            'A ~3-10 word summary of what this specific tool call does, shown to'
+            ' the user as a tooltip (e.g. "Searching for laptops in Malta",'
+            ' "Looking up the weather in London").'
+        ),
+    }
+
+    @staticmethod
+    def _with_act_summary(schema: dict) -> dict:
+        """Return a copy of schema with act_summary injected into input_schema.
+
+        Deep-copies input_schema to avoid mutating the ClassVar dict on the
+        originating Ability.
+        """
+        input_schema = copy.deepcopy(schema.get('input_schema') or {})
+        properties = input_schema.setdefault('properties', {})
+        properties['act_summary'] = dict(MessageProcessor._ACT_SUMMARY_PROPERTY)
+        required = input_schema.setdefault('required', [])
+        if 'act_summary' not in required:
+            required.append('act_summary')
+        return {
+            'name': schema['name'],
+            'description': schema['description'],
+            'input_schema': input_schema,
+        }
+
     def get_tools(self) -> list[dict]:
         """Return the full tool list for the current ACT iteration.
 
@@ -375,7 +449,7 @@ class MessageProcessor:
                     native.append({
                         'name': ability.NAME,
                         'description': ability.SUMMARY,
-                        'input_schema': ability.INPUT_SCHEMA,
+                        'input_schema': ability.get_input_schema(),
                     })
                 except KeyError:
                     logger.warning(
@@ -391,7 +465,7 @@ class MessageProcessor:
             name = schema.get('name')
             if name and name not in seen:
                 seen.add(name)
-                result.append(schema)
+                result.append(self._with_act_summary(schema))
 
         return result
 
@@ -543,6 +617,7 @@ class MessageProcessor:
         if not isinstance(tc_input, dict):
             tc_input = {}
         tc_input = _sanitize_llm_args(tc_input)
+        act_summary = tc_input.pop('act_summary', None)
 
         self._metrics.record_tool(tool_name)
 
@@ -554,6 +629,7 @@ class MessageProcessor:
             'call_id': call_id,
             'name': tool_name,
             'iter': self._current_iteration,
+            **(({'act_summary': act_summary}) if act_summary else {}),
         })
 
         ok = True
@@ -602,6 +678,14 @@ class MessageProcessor:
                             continue
                         self._discovered_tools.append(schema)
                         existing_names.add(name)
+
+                    steers = [
+                        self._FIND_TOOLS_GUARDRAILS[n]
+                        for n in discovered
+                        if n in self._FIND_TOOLS_GUARDRAILS
+                    ]
+                    if steers:
+                        result_text += "\n\n" + "\n".join(steers)
 
         except Exception as exc:
             ok = False
@@ -927,6 +1011,7 @@ class MessageProcessor:
 
                     if len(self._act_trail) == trail_before:
                         loop_exited_cleanly = True
+                        self._loop_exited_cleanly = True
                         break
 
                     self._record_iteration_narration(llm_response)

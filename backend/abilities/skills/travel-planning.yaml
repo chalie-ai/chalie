@@ -1,0 +1,15 @@
+---
+title: Travel Planning
+use_for: plan a trip — destination research, itinerary, places to visit, weather check, and travel reminders
+tags: travel, planning, itinerary, places, weather, vacation, trip
+version: 1
+---
+
+1. Use `memory` to recall any stored travel preferences or past trip details, then ask the user for: destination(s), travel dates, number of travellers, budget range, and trip style (city, nature, cultural, relaxation, mix).
+2. Use `memory` to recall any stored preferences — dietary restrictions, preferred hotel chains, interests, or past trips.
+3. Use `weather` to check the forecast for the destination(s) across the travel dates, and flag any extreme conditions or rain-heavy windows.
+4. Use `place` to look up top attractions, neighbourhoods, and logistics (airport, transport options, visa requirements) for the destination.
+5. Use `search` to find curated recommendations for accommodation, restaurants, and activities matching the user's style and budget.
+6. Use `news` to check for any travel advisories, local events, or disruptions at the destination during the travel window.
+7. Use `document` to build a day-by-day itinerary: morning / afternoon / evening slots with specific places, estimated travel times between locations, and alternatives for bad weather days.
+8. Use `calendar` to add the trip dates and key activities, use `schedule` to set a packing reminder 3 days before departure, and use `document` to save the full itinerary.

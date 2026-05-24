@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from services.file_mapper_service import FileMapperService
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -165,7 +167,7 @@ class TestSearchExecute:
 
 import importlib.util as _importlib_util  # noqa: E402
 
-_GENERATOR = Path(__file__).resolve().parent.parent.parent / 'utils' / 'generate_search_cache.py'
+_GENERATOR = FileMapperService.get_backend_path("utils", "generate_search_cache.py")
 
 
 def _load_gen():

@@ -180,7 +180,6 @@ export class ClientHeartbeat {
       pixel_ratio: window.devicePixelRatio || 1,
       orientation: sw > sh ? 'landscape' : 'portrait',
       input: coarse ? 'coarse' : 'fine',
-      pwa: this._detectPwa(),
     };
   }
 
@@ -204,13 +203,6 @@ export class ClientHeartbeat {
       if (p.includes('iphone') || p.includes('ipad')) return 'iOS';
     }
     return 'unknown';
-  }
-
-  /** Return true when the app is running as an installed PWA. */
-  _detectPwa() {
-    return matchMedia('(display-mode: standalone)').matches ||
-           matchMedia('(display-mode: fullscreen)').matches ||
-           navigator.standalone === true;
   }
 
   /**

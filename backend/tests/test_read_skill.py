@@ -27,8 +27,8 @@ class TestHandleRead:
 @pytest.mark.unit
 class TestUrlSSRF:
     def _check(self, url):
-        from abilities.read import _is_private_url
-        return _is_private_url(url)
+        from abilities._ssrf import is_private_url
+        return is_private_url(url)
 
     def test_localhost_blocked(self):
         with patch('socket.getaddrinfo') as mock_dns:
@@ -83,7 +83,7 @@ class TestUrlReading:
     def test_successful_fetch_returns_content(self):
         mock_req = self._make_mock_requests('<html><body><article><p>Article.</p></article></body></html>')
         with patch.dict('sys.modules', {'requests': mock_req}), \
-             patch('abilities.read._is_private_url', return_value=False), \
+             patch('abilities.read.is_private_url', return_value=False), \
              patch('services.text_extractor.extract_html', return_value='Article content.'):
             from abilities.read import _read_url
             result = _read_url('https://example.com', 4000)
@@ -93,7 +93,7 @@ class TestUrlReading:
 
     def test_private_url_blocked_before_fetch(self):
         from abilities.read import _read_url
-        with patch('abilities.read._is_private_url', return_value=True):
+        with patch('abilities.read.is_private_url', return_value=True):
             result = _read_url('http://localhost', 4000)
         assert 'blocked' in result.lower()
         assert '[end:read]' in result
@@ -102,7 +102,7 @@ class TestUrlReading:
         import requests as real_requests
         mock_req = self._make_mock_requests(side_effect=real_requests.RequestException('Connection refused'))
         with patch.dict('sys.modules', {'requests': mock_req}), \
-             patch('abilities.read._is_private_url', return_value=False):
+             patch('abilities.read.is_private_url', return_value=False):
             from abilities.read import _read_url
             result = _read_url('https://unreachable.example.com', 4000)
         assert 'error=fetch-failed' in result

@@ -14,6 +14,7 @@ import threading
 from typing import Literal
 
 from services.time_utils import utc_now
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,9 @@ def _get_system_tools() -> frozenset[str]:
     if _system_tools_cache is not None:
         return _system_tools_cache
     from abilities._registry import AbilityRegistry
+    visible = {a.NAME for a in AbilityRegistry.policy_visible()}
     _system_tools_cache = frozenset(
-        a.NAME for a in AbilityRegistry.all()
-        if getattr(a, 'SYSTEM', False) or getattr(a, 'INTERNAL', False)
+        a.NAME for a in AbilityRegistry.all() if a.NAME not in visible
     )
     return _system_tools_cache
 
@@ -53,16 +54,21 @@ def _get_system_tools() -> frozenset[str]:
 
 _CHAT_ALLOW: dict[str, State] = {
     # Reads
-    "browser.render": "allow", "browser.screenshot": "allow", "browser.monitor": "allow",
+    "browser.interact": "allow", "browser.render": "allow",
+    "browser.screenshot": "allow", "browser.monitor": "allow",
     "calendar.list_events": "allow", "calendar.get_event": "allow",
+    "chalie_docs": "allow",
     "contacts.list": "allow", "contacts.get": "allow",
     "document.search": "allow", "document.list": "allow", "document.view": "allow",
     "email.search": "allow", "email.read": "allow",
+    "find_skills": "allow",
     "find_tools": "allow",
     "home.get_state": "allow",
     "home.list_automations": "allow",
     "home.list_devices": "allow",
     "home.subscribe_events": "allow",
+    "ubiquiti.list_devices": "allow", "ubiquiti.list_clients": "allow",
+    "ubiquiti.get_info": "allow",
     "list.list_all": "allow", "list.view": "allow",
     "memory.recall": "allow", "memory.reflect": "allow",
     "news": "allow",
@@ -72,6 +78,11 @@ _CHAT_ALLOW: dict[str, State] = {
     "document.upload": "allow",
     "schedule.cancel": "allow", "schedule.create": "allow", "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
+    "search_files.glob": "allow", "search_files.grep": "allow",
+    "skill_builder.create": "allow",
+    "skill_builder.delete": "allow",
+    "skill_builder.edit": "allow",
+    "skill_builder.list": "allow",
     "weather": "allow",
     # Reversible writes
     "document.create": "allow", "document.restore": "allow",
@@ -79,33 +90,46 @@ _CHAT_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
+    "place.save": "allow", "place.list": "allow", "place.get": "allow", "place.delete": "allow",
     "subagent": "allow",
 }
 
 _CHAT_ASK: dict[str, State] = {
-    "browser.interact": "ask",
     "calendar.update_event": "ask",
     "document.delete": "ask",
     "email.forward": "ask",
     "email.manage": "ask",
     "email.reply": "ask",
     "email.send": "ask",
+    "file_permissions": "ask",
+    "file_write": "ask",
     "home.control": "ask",
     "home.trigger_automation": "ask",
+    "ubiquiti.control_client": "ask",
+    "ubiquiti.control_device": "ask",
+    "ubiquiti.manage_wlan": "ask",
+    "ubiquiti.manage_port_forward": "ask",
+    "ubiquiti.manage_traffic_rule": "ask",
+    "ubiquiti.authorize_guest": "ask",
     "list.delete": "ask",
     "memory.forget": "ask",
+    "web_download": "ask",
 }
 
 _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     # Reads
     "calendar.list_events": "allow", "calendar.get_event": "allow",
+    "chalie_docs": "allow",
     "contacts.list": "allow", "contacts.get": "allow",
     "document.search": "allow", "document.list": "allow", "document.view": "allow",
     "email.search": "allow", "email.read": "allow",
+    "find_skills": "allow",
     "find_tools": "allow",
     "home.get_state": "allow",
     "home.list_automations": "allow",
     "home.list_devices": "allow",
+    "ubiquiti.list_devices": "allow", "ubiquiti.list_clients": "allow",
+    "ubiquiti.get_info": "allow",
     "list.list_all": "allow", "list.view": "allow",
     "memory.recall": "allow", "memory.reflect": "allow",
     "news": "allow",
@@ -113,6 +137,7 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "read": "allow",
     "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
+    "search_files.glob": "allow", "search_files.grep": "allow",
     "weather": "allow",
     # Internal writes
     "document.create": "allow", "document.restore": "allow",
@@ -125,14 +150,18 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     # Reads
     "browser.render": "allow", "browser.screenshot": "allow", "browser.monitor": "allow",
     "calendar.list_events": "allow", "calendar.get_event": "allow",
+    "chalie_docs": "allow",
     "contacts.list": "allow", "contacts.get": "allow",
     "document.search": "allow", "document.list": "allow", "document.view": "allow",
     "email.search": "allow", "email.read": "allow",
+    "find_skills": "allow",
     "find_tools": "allow",
     "home.get_state": "allow",
     "home.list_automations": "allow",
     "home.list_devices": "allow",
     "home.subscribe_events": "allow",
+    "ubiquiti.list_devices": "allow", "ubiquiti.list_clients": "allow",
+    "ubiquiti.get_info": "allow",
     "list.list_all": "allow", "list.view": "allow",
     "memory.recall": "allow", "memory.reflect": "allow",
     "news": "allow",
@@ -140,6 +169,7 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "read": "allow",
     "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
+    "search_files.glob": "allow", "search_files.grep": "allow",
     "weather": "allow",
     # Reversible writes
     "document.create": "allow", "document.restore": "allow",
@@ -159,8 +189,16 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
     "email.reply": "deny",
     "email.send": "deny",
     "email.draft": "deny",
+    "file_permissions": "deny",
+    "file_write": "deny",
     "home.control": "deny",
     "home.trigger_automation": "deny",
+    "ubiquiti.control_client": "deny",
+    "ubiquiti.control_device": "deny",
+    "ubiquiti.manage_wlan": "deny",
+    "ubiquiti.manage_port_forward": "deny",
+    "ubiquiti.manage_traffic_rule": "deny",
+    "ubiquiti.authorize_guest": "deny",
     "list.delete": "deny",
     "memory.forget": "deny",
     "schedule.create": "deny",
@@ -174,11 +212,7 @@ def _build_defaults() -> dict[str, dict[Context, State]]:
     from abilities._registry import AbilityRegistry
 
     all_action_ids: list[str] = []
-    for ability in AbilityRegistry.all():
-        if getattr(ability, 'INTERNAL', False):
-            continue
-        if getattr(ability, 'SYSTEM', False):
-            continue
+    for ability in AbilityRegistry.policy_visible():
         schema = ability.INPUT_SCHEMA
         actions = schema.get("properties", {}).get("action", {}).get("enum", [])
         if actions:
@@ -210,6 +244,33 @@ def get_defaults() -> dict[str, dict[Context, State]]:
         if _defaults_cache is None:
             _defaults_cache = _build_defaults()
     return _defaults_cache
+
+
+def get_policy_meta() -> list[dict]:
+    """Return label and category metadata for every policy-visible action_id.
+
+    Derived from the AbilityRegistry — no hardcoded list.
+    Returns a sorted list of {action_id, label, category} dicts.
+    """
+    from abilities._registry import AbilityRegistry
+
+    entries: list[dict] = []
+    for ability in AbilityRegistry.policy_visible():
+        category = getattr(ability, "POLICY_CATEGORY", "") or ability.NAME.replace("_", " ").title()
+        labels = getattr(ability, "POLICY_LABELS", {})
+        schema = ability.INPUT_SCHEMA
+        actions = schema.get("properties", {}).get("action", {}).get("enum", [])
+        if actions:
+            for act in actions:
+                action_id = f"{ability.NAME}.{act}"
+                label = labels.get(act, act.replace("_", " ").title())
+                entries.append({"action_id": action_id, "label": label, "category": category})
+        else:
+            action_id = ability.NAME
+            label = labels.get("", ability.SUMMARY if hasattr(ability, "SUMMARY") else action_id)
+            entries.append({"action_id": action_id, "label": label, "category": category})
+    entries.sort(key=lambda e: (e["category"], e["action_id"]))
+    return entries
 
 
 def reset_defaults_cache() -> None:
@@ -382,7 +443,7 @@ class PolicyService:
                 "action_id": r[1],
                 "context": r[2],
                 "reason": r[3],
-                "params": json.loads(r[4]) if r[4] else None,
+                "params": parse_json_column(r[4], default=None),
                 "created_at": r[5],
             }
             for r in rows

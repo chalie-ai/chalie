@@ -103,7 +103,30 @@ const PanelCapabilities = (() => {
               </label>
             </div>`;
           }
-          return `<div class="form-group">
+          if (f.type === 'select') {
+            const opts = (f.options || []).map(o =>
+              `<option value="${BrainApp.escapeHtml(o.value)}" ${String(val) === o.value ? 'selected' : ''}>${BrainApp.escapeHtml(o.label)}</option>`
+            ).join('');
+            return `<div class="form-group">
+              <label for="cap_${f.name}">${BrainApp.escapeHtml(f.label)}</label>
+              <div class="tab-select" id="cap_tabs_${f.name}">
+                ${(f.options || []).map(o =>
+                  `<button type="button" class="tab-btn${String(val) === o.value ? ' active' : ''}" data-value="${BrainApp.escapeHtml(o.value)}">${BrainApp.escapeHtml(o.label)}</button>`
+                ).join('')}
+              </div>
+              <select id="cap_${f.name}" style="display:none">${opts}</select>
+            </div>`;
+          }
+          if (f.type === 'textarea') {
+            return `<div class="form-group">
+              <label for="cap_${f.name}">${BrainApp.escapeHtml(f.label)}</label>
+              <textarea id="cap_${f.name}"
+                placeholder="${BrainApp.escapeHtml(f.placeholder || '')}"
+                rows="4">${BrainApp.escapeHtml(String(val))}</textarea>
+            </div>`;
+          }
+          const showWhen = f.show_when ? `data-show-when='${JSON.stringify(f.show_when)}'` : '';
+          return `<div class="form-group" ${showWhen}>
             <label for="cap_${f.name}">${BrainApp.escapeHtml(f.label)}</label>
             <input type="${f.type === 'password' ? 'password' : 'text'}" id="cap_${f.name}"
               placeholder="${BrainApp.escapeHtml(f.placeholder || '')}"
@@ -120,6 +143,32 @@ const PanelCapabilities = (() => {
 
     document.getElementById('backToCaps').addEventListener('click', _renderCaps);
     document.getElementById('cancelCapBtn').addEventListener('click', _renderCaps);
+
+    // Tab-select buttons + conditional field visibility
+    el.querySelectorAll('.tab-select').forEach(tabGroup => {
+      const selectId = tabGroup.id.replace('cap_tabs_', 'cap_');
+      const hiddenSelect = document.getElementById(selectId);
+      const fieldName = selectId.replace('cap_', '');
+
+      function applyVisibility(val) {
+        el.querySelectorAll('[data-show-when]').forEach(fg => {
+          const cond = JSON.parse(fg.dataset.showWhen);
+          fg.style.display = (cond[fieldName] === val) ? '' : 'none';
+        });
+      }
+
+      tabGroup.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          tabGroup.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          if (hiddenSelect) hiddenSelect.value = btn.dataset.value;
+          applyVisibility(btn.dataset.value);
+        });
+      });
+
+      if (hiddenSelect) applyVisibility(hiddenSelect.value);
+    });
+
     document.getElementById('capSetupForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const body = {};

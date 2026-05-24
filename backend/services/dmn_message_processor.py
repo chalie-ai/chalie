@@ -44,29 +44,9 @@ class DMNMessageProcessor(MessageProcessor):
     MAX_ITERATIONS = 100
     SYSTEM_PROMPT_CLASS = DMNSystemMessagePrompt
 
-    # news, search, browser promoted to ALWAYS_AVAILABLE so the model can act
-    # immediately without a find_tools discovery round-trip (agreed in masterplan §4).
-    ALWAYS_AVAILABLE: list[str] = [
-        "browser",
-        "document",
-        "find_tools",
-        "list",
-        "memory",
-        "news",
-        "read",
-        "review_tool_calls",
-        "review_transcript",
-        "schedule",
-        "search",
-    ]
-    DISCOVERABLE: list[str] = [
-        "calendar",
-        "code_eval",
-        "contacts",
-        "email",
-        "programming_docs_search",
-        "weather",
-    ]
+    # Inherits ALWAYS_AVAILABLE and DISCOVERABLE from MessageProcessor.
+    # Excludes subagent — background must not spawn further background work.
+    _BLOCKED: frozenset[str] = frozenset({"subagent"})
 
     def get_user_definition(self) -> str:
         """DMN runs as a background process — no human user definition needed."""

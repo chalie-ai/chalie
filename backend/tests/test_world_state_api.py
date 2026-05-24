@@ -12,7 +12,7 @@ All tests use real production code + real SQLite from schema.sql.
 Zero mocks of Chalie services.
 """
 
-import json
+
 import uuid
 from datetime import timedelta
 
@@ -42,29 +42,24 @@ def _reset_world_state(db_conn=None):
     """
     world_state.set("signals", {})
     if db_conn is not None:
+        from services.heartbeat_service import heartbeat_service
+        heartbeat_service._ctx = None
         db_conn.execute("DELETE FROM telemetry")
         db_conn.commit()
 
 
 def _seed_telemetry(db_conn, ctx: dict) -> None:
-    """Persist a flat key/value snapshot into the telemetry table.
-
-    Mirrors what ClientContextService.save() does on a /health POST.
-    """
-    def _flatten(payload, prefix=""):
-        for key, value in payload.items():
-            full = f"{prefix}{key}"
-            if isinstance(value, dict) and value:
-                yield from _flatten(value, prefix=f"{full}.")
-            else:
-                yield full, json.dumps(value)
-
+    """Persist a flat key/value snapshot into the telemetry table."""
+    from services.heartbeat_service import heartbeat_service
+    heartbeat_service._ctx = None
+    flat = heartbeat_service._flatten(ctx)
     db_conn.execute("DELETE FROM telemetry")
     db_conn.executemany(
         "INSERT INTO telemetry (key, value) VALUES (?, ?)",
-        list(_flatten(ctx)),
+        list(flat.items()),
     )
     db_conn.commit()
+    heartbeat_service._ctx = None
 
 
 # ---------------------------------------------------------------------------
@@ -145,31 +140,6 @@ class TestWorldStateScheduleRendering:
 
 
 # ---------------------------------------------------------------------------
-# GET /system/observability/world-state — bg_process rows
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestWorldStateBgProcessRendering:
-    """Rows in transcript WHERE channel='subagent' appear as [bg_process(…)]
-    lines and in inputs.bg_processes."""
-
-    def test_subagent_row_appears_in_rendered_block(self, authed_client):
-        client, db_conn, _ = authed_client
-        _reset_world_state(db_conn)
-
-        db_conn.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('subagent', 'assistant', 'Booking holiday flights', ?)",
-            (_recent_iso(60),),
-        )
-        db_conn.commit()
-
-        data = client.get("/system/observability/world-state").get_json()
-        assert "[bg_process(" in data["rendered"]
-        assert "Booking holiday flights" in data["rendered"]
-
-
-# ---------------------------------------------------------------------------
 # Signal push → rendered output
 # ---------------------------------------------------------------------------
 
@@ -197,7 +167,7 @@ class TestWorldStateFullLifecycle:
     """Push all four data sources → GET world-state → assert all sections rendered
     and all inputs populated."""
 
-    def test_all_four_sections_in_render_and_inputs(self, authed_client):
+    def test_all_three_sections_in_render_and_inputs(self, authed_client):
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 
@@ -214,13 +184,6 @@ class TestWorldStateFullLifecycle:
             "VALUES (?, ?, ?, 'pending', 0)",
             (item_id, "Call Mum", _future_iso(120)),
         )
-
-        # bg_process
-        db_conn.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('subagent', 'assistant', 'Booking holiday flights', ?)",
-            (_recent_iso(60),),
-        )
         db_conn.commit()
 
         resp = client.get("/system/observability/world-state")
@@ -233,8 +196,6 @@ class TestWorldStateFullLifecycle:
         assert "Sliema, MT" in rendered
         assert "[schedule]" in rendered
         assert "Call Mum" in rendered
-        assert "[bg_process(" in rendered
-        assert "Booking holiday flights" in rendered
         assert "[signal:news_service]" in rendered
         assert "Malta heatwave warning" in rendered
 
@@ -242,4 +203,3 @@ class TestWorldStateFullLifecycle:
         assert inputs["telemetry"]["location_name"] == "Sliema, MT"
         assert "news_service" in inputs["signals"]
         assert any(r["message"] == "Call Mum" for r in inputs["schedule"])
-        assert any(r["content"] == "Booking holiday flights" for r in inputs["bg_processes"])

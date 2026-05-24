@@ -17,6 +17,9 @@ class Ability(ABC):
     INPUT_SCHEMA: ClassVar[dict]
     TIMEOUT: ClassVar[int] = 10
     INTERNAL: ClassVar[bool] = False
+    SEARCH_TOOLTIP: ClassVar[str] = ""
+    POLICY_CATEGORY: ClassVar[str] = ""
+    POLICY_LABELS: ClassVar[dict[str, str]] = {}
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -42,6 +45,32 @@ class Ability(ABC):
             raise TypeError(
                 f"{cls.__name__}.EXAMPLES must have 6–8 entries, got {len(cls.EXAMPLES)}"
             )
+        if (
+            getattr(cls, "__module__", "").startswith("abilities.")
+            and not getattr(cls, "SEARCH_TOOLTIP", "")
+        ):
+            raise TypeError(f"{cls.__name__} must define a non-empty SEARCH_TOOLTIP")
+
+    def get_description(self) -> str:
+        """Return the tool description for LLM tool presentation.
+
+        Override to enrich the description at runtime (e.g. find_tools
+        appends a discoverable-tools index).  The default returns SUMMARY.
+        """
+        return self.SUMMARY
+
+    def get_input_schema(self) -> dict:
+        """Return the INPUT_SCHEMA for LLM tool presentation.
+
+        Override to enrich the schema at runtime.  The default returns
+        the class-level INPUT_SCHEMA unchanged.
+        """
+        return self.INPUT_SCHEMA
+
+    @staticmethod
+    def handle(handler, params: dict, telemetry: dict | None) -> dict:
+        action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
+        return handler(topic="", params=action_params, telemetry=telemetry)
 
     @abstractmethod
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:

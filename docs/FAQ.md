@@ -86,8 +86,8 @@ See `docs/09-TOOLS.md` for how tools work and `docs/14-DEFAULT-TOOLS.md` for the
 
 ## How do I configure an LLM provider?
 
-1. Start Chalie, create your account at `http://localhost:8081/on-boarding/`, and log in
-2. Open Brain at `http://localhost:8081/brain/` → **Settings** → **Providers** → **Add Provider**
+1. Start Chalie, create your account at `http://localhost:31025/on-boarding/`, and log in
+2. Open Brain at `http://localhost:31025/brain/` → **Settings** → **Providers** → **Add Provider**
 3. For Ollama: install from [ollama.ai](https://ollama.ai), pull a model (`ollama pull gemma4:31b`), set endpoint to `http://localhost:11434`
 4. For cloud providers: paste your API key — it is encrypted and stored locally
 
@@ -167,7 +167,7 @@ Yes — native speech-to-text (Moonshine Voice, ONNX) and text-to-speech (Kokoro
 
 ## What is the Brain dashboard?
 
-The Brain dashboard (`http://localhost:8081/brain/`) is the admin and observability interface. It shows:
+The Brain dashboard (`http://localhost:31025/brain/`) is the admin and observability interface. It shows:
 - Routing decision distribution
 - Memory layer health
 - User traits and data graph

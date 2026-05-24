@@ -33,7 +33,7 @@ from datetime import datetime
 
 from flask import Blueprint, jsonify, request, send_file
 
-import paths
+from services.file_mapper_service import FileMapperService
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -73,9 +73,6 @@ ALLOWED_EXTENSIONS = {
     '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.go', '.rs', '.rb',
     '.jpg', '.jpeg', '.png', '.webp', '.gif',
 }
-
-# Document storage root — single hard-coded layout (paths.py).
-DOCUMENTS_ROOT = str(paths.DOCUMENTS_DIR)
 
 
 # ---------------------------------------------------------------------------
@@ -125,10 +122,8 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _validate_file_path(full_path: str) -> bool:
-    """Ensure resolved path is within DOCUMENTS_ROOT (prevent symlink attacks)."""
-    real_path = os.path.realpath(full_path)
-    real_root = os.path.realpath(DOCUMENTS_ROOT)
-    return real_path.startswith(real_root)
+    """Ensure resolved path is within the documents root (prevent symlink attacks)."""
+    return FileMapperService.validate_document_path(full_path)
 
 
 def _read_existing_metadata(svc, doc_id: str) -> dict:
@@ -179,7 +174,7 @@ def _run_upload_extraction(doc_id: str):
         svc.update_status(doc_id, 'failed', 'No file path')
         return
 
-    text = extract_text(os.path.join(DOCUMENTS_ROOT, file_path))
+    text = extract_text(str(FileMapperService.get_documents_path(file_path)))
     if not text:
         svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
         return
@@ -257,10 +252,10 @@ def upload_document():
         file_path = f"{doc_id}/{original_name}"
 
         # Save file to disk
-        dir_path = os.path.join(DOCUMENTS_ROOT, doc_id)
+        dir_path = FileMapperService.get_documents_path(doc_id)
         os.makedirs(dir_path, exist_ok=True)
 
-        full_path = os.path.join(dir_path, original_name)
+        full_path = str(FileMapperService.get_documents_path(doc_id, original_name))
         if not _validate_file_path(full_path):
             return jsonify({"error": "Invalid file path"}), 400
 
@@ -387,13 +382,12 @@ def download_document(doc_id):
         if not doc:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
-        # Watched folder docs store absolute paths; uploaded docs are relative to DOCUMENTS_ROOT
         if doc.get('watched_folder_id'):
             full_path = doc['file_path']
             if not os.path.isfile(os.path.realpath(full_path)):
                 return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
         else:
-            full_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
+            full_path = str(FileMapperService.get_documents_path(doc['file_path']))
             if not _validate_file_path(full_path) or not os.path.exists(full_path):
                 return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
 
@@ -423,7 +417,7 @@ def preview_document(doc_id):
             if not os.path.isfile(os.path.realpath(full_path)):
                 return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
         else:
-            full_path = os.path.join(DOCUMENTS_ROOT, doc['file_path'])
+            full_path = str(FileMapperService.get_documents_path(doc['file_path']))
             if not _validate_file_path(full_path) or not os.path.exists(full_path):
                 return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
 

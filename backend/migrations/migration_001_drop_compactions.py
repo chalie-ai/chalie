@@ -22,12 +22,12 @@ import os
 import sqlite3
 import sys
 
-# Add backend/ to sys.path so `import paths` resolves when invoked standalone.
+# Add backend/ to sys.path so services.* imports resolve when invoked standalone.
 _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
-import paths  # noqa: E402
+from services.file_mapper_service import FileMapperService  # noqa: E402
 
 
 def apply(db_path: str) -> None:
@@ -42,5 +42,5 @@ def apply(db_path: str) -> None:
 
 
 if __name__ == "__main__":
-    _path = sys.argv[1] if len(sys.argv) > 1 else str(paths.DB_PATH)
+    _path = sys.argv[1] if len(sys.argv) > 1 else str(FileMapperService.get_db_path())
     apply(_path)

@@ -232,7 +232,7 @@ def observability_records():
         if source == 'episodes':
             rows = db.fetch_all(
                 "SELECT created_at AS created, last_accessed_at AS last_accessed, "
-                "id AS key, gist AS value "
+                "gist AS value, location_name "
                 "FROM episodes "
                 "WHERE deleted_at IS NULL "
                 "AND (? = '' OR gist LIKE ?) "
@@ -254,18 +254,22 @@ def observability_records():
             )
 
         rows = rows or []
+        serialised = []
+        for r in rows:
+            row = {
+                'created': r['created'],
+                'last_accessed': r['last_accessed'],
+                'value': r['value'],
+            }
+            if source == 'episodes':
+                row['location'] = r.get('location_name') or ''
+            else:
+                row['key'] = r['key']
+            serialised.append(row)
         return jsonify({
             'generated_at': _now_iso(),
             'source': source,
-            'rows': [
-                {
-                    'created': r['created'],
-                    'last_accessed': r['last_accessed'],
-                    'key': r['key'],
-                    'value': r['value'],
-                }
-                for r in rows
-            ],
+            'rows': serialised,
             'offset': offset,
             'limit': _RECORDS_LIMIT,
             'returned': len(rows),
@@ -332,51 +336,17 @@ def observability_token_usage():
 @require_session
 def observability_world_state():
     """World state as seen by the ACT loop — rendered block + raw inputs."""
-    from services.world_state import (
-        world_state,
-        _fetch_schedule_rows,
-        _fetch_bg_process_rows,
-        _fetch_telemetry,
-    )
+    from services.world_state import world_state, _fetch_schedule_rows
+    from services.heartbeat_service import heartbeat_service
 
     return jsonify({
         "rendered": world_state.render(),
         "inputs": {
-            "telemetry": _fetch_telemetry(),
+            "telemetry": heartbeat_service.read(),
             "signals": world_state.get("signals"),
             "schedule": _fetch_schedule_rows(),
-            "bg_processes": _fetch_bg_process_rows(),
         },
     }), 200
-
-
-@system_bp.route('/system/observability/self-model', methods=['GET'])
-@require_session
-def observability_self_model():
-    """Self-model snapshot: epistemic, operational, capability state."""
-    try:
-        from services.self_model_service import SelfModelService
-        snapshot = SelfModelService().get_snapshot()
-        return jsonify(snapshot), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/self-model error: {e}")
-        return jsonify({"error": "Failed to retrieve self-model"}), 500
-
-
-@system_bp.route('/system/observability/pipeline-health', methods=['GET'])
-@require_session
-def observability_pipeline_health():
-    """Pipeline health checks — subset of self-model noteworthy items."""
-    try:
-        from services.self_model_service import SelfModelService
-        snapshot = SelfModelService().get_snapshot()
-        noteworthy = snapshot.get('noteworthy', [])
-        pipeline_items = [n for n in noteworthy if n.get('severity', 0) >= 0.3]
-        return jsonify({'ok': True, 'checks': pipeline_items}), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/pipeline-health error: {e}")
-        return jsonify({'ok': False, 'error': 'Failed to retrieve pipeline health'}), 500
-
 
 
 @system_bp.route('/system/observability/write-queue', methods=['GET'])

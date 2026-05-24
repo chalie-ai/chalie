@@ -18,9 +18,7 @@ frontend/interface/
 ├── voice_recorder.js   # Voice input (mic → STT → transcript paste)
 ├── voice_player.js     # Voice output (speaker → overlay audio player)
 ├── presence.js         # Presence/status indicators
-├── sw.js               # Service worker
 ├── style.css           # All styling
-├── manifest.json       # PWA manifest
 ├── icons/              # Icon files
 └── cards/              # Reusable card components
 
@@ -87,7 +85,7 @@ python backend/run.py
 PORT=9000 python backend/run.py
 
 # Run Flask directly for debugging (without background workers)
-cd backend && python -c "from api import create_app; app = create_app(); app.run(host='0.0.0.0', port=8081)"
+cd backend && python -c "from api import create_app; app = create_app(); app.run(host='0.0.0.0', port=31025)"
 ```
 
 ## Code Style

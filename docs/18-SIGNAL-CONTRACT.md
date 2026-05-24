@@ -98,7 +98,7 @@ Adding a new signal type requires: an entry in this table, a nightly test scenar
 
 ## Service Health
 
-Services write periodic heartbeats keyed by service name with a TTL of 2x their expected cycle time. The self-model aggregates these and includes dead services in its noteworthy list. Health is observational, not coercive — no automated restart.
+Services write periodic heartbeats keyed by service name with a TTL of 2x their expected cycle time. WorkerManager monitors thread health and restarts dead workers automatically.
 
 ---
 

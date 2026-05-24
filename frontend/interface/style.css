@@ -433,28 +433,6 @@ body.speaker-user   #ambientBloom {
   box-shadow: 0 0 12px color-mix(in oklab, var(--violet) 8%, transparent);
 }
 
-#installBtn {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-sm);
-  transition: all 220ms ease;
-}
-
-#installBtn:hover {
-  background: var(--bg-surface-2);
-  border-color: color-mix(in oklab, var(--violet) 25%, transparent);
-  box-shadow: 0 0 12px color-mix(in oklab, var(--violet) 8%, transparent);
-}
-
-#installBtn:not(.hidden) {
-  animation: installPulse 2.5s ease-in-out 3;
-}
-
-@keyframes installPulse {
-  0%, 100% { box-shadow: none; }
-  50%       { box-shadow: 0 0 0 3px color-mix(in oklab, var(--violet) 12%, transparent); }
-}
-
 /* Theme toggle — sliding pill with sun/moon glyphs in the track. */
 .theme-toggle {
   position: relative;
@@ -1008,12 +986,32 @@ body.speaker-user   #ambientBloom {
   font-size: 0.88em;
 }
 
+.speech-form--chalie .speech-form__text thead {
+  display: table-header-group;
+}
+
+.speech-form--chalie .speech-form__text tbody {
+  display: table-row-group;
+}
+
+.speech-form--chalie .speech-form__text tfoot {
+  display: table-row-group;
+  font-size: 0.85em;
+  color: var(--text-secondary);
+}
+
+.speech-form--chalie .speech-form__text tfoot td {
+  border-top: 1px solid color-mix(in oklab, var(--accent-primary) 15%, transparent);
+  border-bottom: none;
+  padding-top: 0.5em;
+}
+
 .speech-form--chalie .speech-form__text th {
   text-align: left;
   font-weight: 600;
   color: var(--text-primary);
   padding: 0.5em 0.75em;
-  border-bottom: 1px solid rgba(138, 92, 255, 0.20);
+  border-bottom: 1px solid color-mix(in oklab, var(--accent-primary) 20%, transparent);
   font-size: 0.85em;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -1311,7 +1309,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   gap: 16px;
   padding: 4px 0;
   min-width: 220px;
-  max-width: 320px;
+  max-width: 480px;
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;
   line-height: 1.2;
@@ -1322,6 +1320,24 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 
 .act-tool__name {
   font-weight: 500;
+  white-space: nowrap;
+}
+
+.act-tool__label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.act-tool__summary {
+  color: var(--text-secondary);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .act-tool__status {
@@ -1615,21 +1631,6 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 
 .btn-icon:hover       { color: var(--text-primary); }
 .btn-icon--small      { padding: var(--space-xs); }
-
-.btn-install {
-  background: #236b41;
-  color: #fff;
-  border: none;
-  padding: var(--space-sm) var(--space-xl);
-  border-radius: var(--radius-sm);
-  font-size: 0.9375rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background var(--duration-fast);
-}
-
-.btn-install:hover     { background: #2e8a53; }
-.btn-install:disabled  { opacity: 0.45; cursor: default; }
 
 /* --------------------------------------------------------------------------
    12. Attach Menu
@@ -2175,99 +2176,6 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 
 .api-key-dialog__status--success { color: var(--success); }
 .api-key-dialog__status--error   { color: var(--error); }
-
-/* --------------------------------------------------------------------------
-   18. PWA Install Dialog
-   -------------------------------------------------------------------------- */
-.pwa-dialog {
-  position: fixed;
-  inset: 0;
-  z-index: 310;
-  border: none;
-  background: transparent;
-  width: 100%;
-  height: 100%;
-  max-width: 100%;
-  max-height: 100%;
-}
-
-.pwa-dialog[open] {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.pwa-dialog::backdrop {
-  background: rgba(3, 4, 8, 0.80);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-.pwa-dialog__content {
-  position: relative;
-  background: rgba(12, 14, 24, 0.96);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
-  border-radius: var(--radius-md);
-  padding: var(--space-xl);
-  width: 100%;
-  max-width: 400px;
-  margin: auto;
-  text-align: center;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.60);
-}
-
-.pwa-dialog__close {
-  position: absolute;
-  top: var(--space-md);
-  right: var(--space-md);
-}
-
-.pwa-dialog__icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 64px;
-  height: 64px;
-  margin: 0 auto var(--space-lg);
-  border-radius: var(--radius-md);
-  background: rgba(138, 92, 255, 0.10);
-  border: 1px solid rgba(138, 92, 255, 0.20);
-  color: var(--accent-primary);
-}
-
-/* Dialog surface is hardcoded dark in both themes (rgba(12,14,24,0.96)),
-   so text must stay on the dark-theme light tokens — otherwise light theme
-   resolves --text-primary to #1A1626 and the copy goes dark-on-dark. */
-.pwa-dialog__content,
-.pwa-dialog__close {
-  color: #eae6f2;
-}
-
-.pwa-dialog__title {
-  font-size: var(--font-size-xl);
-  font-weight: 300;
-  margin-bottom: var(--space-sm);
-  color: #eae6f2;
-}
-
-.pwa-dialog__desc {
-  font-size: var(--font-size-sm);
-  color: rgba(234, 230, 242, 0.78);
-  margin-bottom: var(--space-lg);
-  line-height: 1.6;
-}
-
-.pwa-dialog__desc strong {
-  color: #eae6f2;
-  font-weight: 500;
-}
-
-.pwa-dialog__actions {
-  display: flex;
-  justify-content: center;
-}
 
 /* --------------------------------------------------------------------------
    19. Update Dialog
@@ -3429,8 +3337,7 @@ details.block-section[open] > summary.block-section__title::before {
 
   .btn-action { width: 32px; height: 32px; }
 
-  .api-key-dialog__content,
-  .pwa-dialog__content {
+  .api-key-dialog__content {
     margin: var(--space-md);
     max-width: calc(100% - var(--space-xl));
   }

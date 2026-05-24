@@ -20,6 +20,17 @@ logger = logging.getLogger(__name__)
 
 class DocumentAbility(Ability):
     NAME = "document"
+    SEARCH_TOOLTIP = "document and notes manager"
+    POLICY_CATEGORY = "Documents"
+    POLICY_LABELS = {
+        "create": "Create document",
+        "delete": "Delete document",
+        "list": "List documents",
+        "restore": "Restore document",
+        "search": "Search documents",
+        "upload": "Upload document",
+        "view": "View document",
+    }
     SUMMARY = "Search, view, create, and manage persistent documents and notes in the document library."
     EXAMPLES = [
         "search my documents for information about coral bleaching",
@@ -443,11 +454,12 @@ def _handle_upload(service, params: dict) -> str:
     file_path_rel = f"{doc_id}/{name}"
 
     try:
-        from api.documents import DOCUMENTS_ROOT, _run_upload_extraction
+        from api.documents import _run_upload_extraction
+        from services.file_mapper_service import FileMapperService
 
-        dir_path = _os.path.join(DOCUMENTS_ROOT, doc_id)
+        dir_path = FileMapperService.get_documents_path(doc_id)
         _os.makedirs(dir_path, exist_ok=True)
-        full_path = _os.path.join(dir_path, name)
+        full_path = str(FileMapperService.get_documents_path(doc_id, name))
         with open(full_path, 'wb') as fh:
             fh.write(file_bytes)
 

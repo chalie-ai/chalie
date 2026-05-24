@@ -1,8 +1,8 @@
 import importlib
 import threading
-from pathlib import Path
 
 from abilities._base import Ability
+from services.file_mapper_service import FileMapperService
 
 _lock = threading.RLock()
 _registry: dict[str, Ability] | None = None
@@ -14,7 +14,7 @@ def _load() -> dict[str, Ability]:
     Concrete Ability subclasses self-register via __init_subclass__; we collect
     them after the walk by inspecting all subclasses of Ability.
     """
-    abilities_dir = Path(__file__).resolve().parent
+    abilities_dir = FileMapperService.get_abilities_path()
     for path in sorted(abilities_dir.glob("*.py")):
         if path.name.startswith("_"):
             continue
@@ -73,6 +73,25 @@ class AbilityRegistry:
     def all() -> list[Ability]:
         """Return every registered Ability instance."""
         return list(_get_registry().values())
+
+    @staticmethod
+    def policy_visible() -> list[Ability]:
+        """Return abilities that should appear in the policy UI.
+
+        Excludes SYSTEM, INTERNAL, and actionless ALWAYS_AVAILABLE meta-tools
+        (find_tools, find_skills) whose denial would break routing.
+        """
+        from services.message_processor import MessageProcessor
+        always_available = set(MessageProcessor.ALWAYS_AVAILABLE)
+        return [
+            a for a in _get_registry().values()
+            if not getattr(a, "SYSTEM", False)
+            and not getattr(a, "INTERNAL", False)
+            and not (
+                a.NAME in always_available
+                and not a.INPUT_SCHEMA.get("properties", {}).get("action")
+            )
+        ]
 
 
 def _reset_for_tests() -> None:

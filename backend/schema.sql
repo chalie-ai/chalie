@@ -30,7 +30,10 @@ CREATE TABLE IF NOT EXISTS episodes (
     consolidated_from TEXT DEFAULT '[]',      -- JSONB: episode IDs this was consolidated from
     consolidated_into TEXT,                   -- back-pointer to super-episode id (UUID, FK-ish to episodes.id)
     storage_strength REAL DEFAULT 1.0,        -- encoding strength at storage time
-    retrieval_weight REAL DEFAULT 1.0         -- current retrieval priority weight
+    retrieval_weight REAL DEFAULT 1.0,        -- current retrieval priority weight
+    location_lat  REAL,
+    location_lon  REAL,
+    location_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
@@ -74,37 +77,6 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
-
--- ────────────────────────────────────────────────────────────────
--- INTERFACES — external interface registry (bluetooth-style pairing)
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS interfaces (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    host TEXT NOT NULL,
-    port INTEGER NOT NULL,
-    signal_token_hash TEXT,
-    status TEXT NOT NULL DEFAULT 'offline',
-    capabilities_hash TEXT,
-    last_seen_at TEXT,
-    paired_at TEXT NOT NULL,
-    metadata TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS interface_tools (
-    interface_id TEXT NOT NULL REFERENCES interfaces(id) ON DELETE CASCADE,
-    tool_name TEXT NOT NULL,
-    manifest_json TEXT NOT NULL,
-    registered_at TEXT NOT NULL,
-    PRIMARY KEY (interface_id, tool_name)
-);
-
-CREATE TABLE IF NOT EXISTS interface_pairing_keys (
-    key_hash TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    used_at TEXT
-);
 
 -- ────────────────────────────────────────────────────────────────
 -- VAULT — envelope-encryption key store
@@ -508,7 +480,10 @@ CREATE TABLE IF NOT EXISTS transcript (
     internal    INTEGER DEFAULT 0,
     deliberation_score REAL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    xml_migrated INTEGER NOT NULL DEFAULT 0
+    xml_migrated INTEGER NOT NULL DEFAULT 0,
+    location_lat  REAL,
+    location_lon  REAL,
+    location_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);

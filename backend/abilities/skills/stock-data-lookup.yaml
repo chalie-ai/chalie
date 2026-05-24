@@ -1,0 +1,15 @@
+---
+title: Stock Data Lookup
+use_for: retrieve current market data, financial statements, and analyst estimates for a publicly traded company
+tags: finance, stocks, market-data, fundamentals, valuation, investing
+version: 1
+---
+
+1. Use `memory` to recall any previously analysed companies, then ask the user for the company name or ticker symbol, and what data they need: current price/market cap, income statement, cash flow, balance sheet, WACC inputs, or analyst estimates.
+2. Use `search` to find the company's investor relations page and any recent financial filings or earnings reports.
+3. Use `read` to extract financial data from the investor relations page, SEC filings, or reputable financial data sites.
+4. Use `search` to find current analyst consensus estimates and ratings from reputable financial sources.
+5. Use `code_eval` to calculate any derived metrics requested: P/E, EV/EBITDA, free cash flow yield, revenue growth rates, or basic DCF if inputs are available.
+6. Use `code_eval` to validate data consistency: check that market cap aligns with price × shares outstanding, and flag any fields that could not be confirmed from a primary source.
+7. Use `document` to present a structured data card: market data (price, market cap, beta), income statement highlights, cash flow summary, and analyst consensus — with source attribution and retrieval date for every figure.
+8. Use `document` to save the data card if the user intends to use it in further analysis.

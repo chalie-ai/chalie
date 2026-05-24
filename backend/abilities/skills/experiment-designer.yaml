@@ -1,0 +1,15 @@
+---
+title: Experiment Designer
+use_for: planning product experiments, writing testable hypotheses, estimating sample sizes, prioritizing tests, and interpreting A/B outcomes
+tags: A/B testing, experiment design, hypothesis, sample size, statistical significance, ICE scoring, product experiments
+version: 1
+---
+
+1. Use `memory` to recall any prior experiments or hypotheses on this topic, then write the hypothesis in If/Then/Because format: if we change [intervention], then [metric] will change by [expected direction/magnitude], because [behavioral mechanism].
+2. Use `document` to define and record metrics before running the test: one primary decision metric, guardrail metrics for quality protection, and secondary diagnostic metrics.
+3. Use `code_eval` to estimate the required sample size given baseline conversion rate, minimum detectable effect, significance level (alpha), and statistical power.
+4. Use `code_eval` to score the experiment using ICE: Impact (potential upside), Confidence (evidence quality), Ease (cost and speed) — ICE Score = (Impact × Confidence × Ease) / 10.
+5. Use `document` to define and record stopping rules before launch: fixed sample size or fixed duration, with explicit guidance against early peeking.
+6. After results arrive, interpret using `code_eval` — compare the point estimate and confidence interval to the decision threshold, check for novelty effects and segment heterogeneity.
+7. Use `document` to produce a decision recommendation: ship, iterate, or abandon — with the effect size and confidence interval clearly stated alongside the p-value.
+8. Use `document` to save the experiment design, results, and decision rationale for future reference.

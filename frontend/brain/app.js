@@ -18,13 +18,14 @@ const BrainApp = (() => {
     documents: ['active', 'processing', 'uploads', 'deleted'],
     capabilities: null,
     policies: ['chat', 'subagent', 'background', 'external'],
+    skills: null,
     mcp: null,
   };
 
   const LABELS = {
     providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
     lists: 'Lists', documents: 'Documents', capabilities: 'Capabilities',
-    policies: 'Policies', mcp: 'MCP Server',
+    policies: 'Policies', skills: 'Skills', mcp: 'MCP Server',
     memory: 'Memory', tools: 'Tools', world: 'World state',
     personality: 'Personality', errors: 'Errors', usage: 'Usage',
     all: 'All', pending: 'Pending', fired: 'Fired', failed: 'Failed', cancelled: 'Cancelled',
@@ -40,6 +41,7 @@ const BrainApp = (() => {
     documents: typeof PanelDocuments !== 'undefined' ? PanelDocuments : null,
     capabilities: typeof PanelCapabilities !== 'undefined' ? PanelCapabilities : null,
     policies: typeof PanelPolicies !== 'undefined' ? PanelPolicies : null,
+    skills: typeof PanelSkills !== 'undefined' ? PanelSkills : null,
     mcp: typeof PanelMcp !== 'undefined' ? PanelMcp : null,
   };
 
@@ -162,6 +164,7 @@ const BrainApp = (() => {
       { kind: 'Jump', label: 'Documents · Active', icon: 'Document', section: 'documents', sub: 'active' },
       { kind: 'Jump', label: 'Capabilities', icon: 'Capability', section: 'capabilities' },
       { kind: 'Jump', label: 'Policies · Chat', icon: 'Policy', section: 'policies', sub: 'chat' },
+      { kind: 'Jump', label: 'Skills', icon: 'Skill', section: 'skills' },
       { kind: 'Jump', label: 'MCP Server', icon: 'Server', section: 'mcp' },
     ];
 

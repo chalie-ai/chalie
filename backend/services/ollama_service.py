@@ -13,6 +13,8 @@ import re
 import time
 from urllib.parse import urlparse
 
+from services.llm_service import _app_user_agent
+
 import requests
 import json
 from services.llm_service import LLMResponse, PayloadTooLargeError, RateLimitError
@@ -105,7 +107,10 @@ class OllamaService:
         start_time = time.time()
         for attempt in range(1 + self.max_retries):
             try:
-                response = requests.post(url, json=payload, timeout=self.timeout)
+                response = requests.post(
+                    url, json=payload, timeout=self.timeout,
+                    headers={"User-Agent": _app_user_agent()},
+                )
                 response.raise_for_status()
                 data = response.json()
                 return LLMResponse(
@@ -146,7 +151,10 @@ class OllamaService:
         start_time = time.time()
         for attempt in range(1 + self.max_retries):
             try:
-                response = requests.post(url, json=payload, timeout=self.timeout)
+                response = requests.post(
+                    url, json=payload, timeout=self.timeout,
+                    headers={"User-Agent": _app_user_agent()},
+                )
                 response.raise_for_status()
                 parsed = _parse_chat_response(response.json(), self.model)
                 parsed.latency_ms = int((time.time() - start_time) * 1000)
@@ -262,6 +270,7 @@ class OllamaService:
                 f"{self.host}/api/show",
                 json={"name": self.model},
                 timeout=5,
+                headers={"User-Agent": _app_user_agent()},
             )
             if resp.ok:
                 data = resp.json()
@@ -296,6 +305,7 @@ class OllamaService:
                 f"{self.host}/api/show",
                 json={"name": self.model},
                 timeout=5,
+                headers={"User-Agent": _app_user_agent()},
             )
             if resp.ok:
                 data = resp.json()

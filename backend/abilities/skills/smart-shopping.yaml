@@ -1,0 +1,15 @@
+---
+title: Smart Shopping
+use_for: research a purchase — compare products, find the best price, check reviews, and recommend the best option
+tags: shopping, comparison, research, products, price, reviews, consumer
+version: 1
+---
+
+1. Use `memory` to recall any stored purchase preferences or brand notes, then ask what the user wants to buy, their budget, and the 2–3 most important criteria (e.g. price, durability, specific feature, brand preference).
+2. Use `memory` to recall any prior preferences, brands to avoid, or past purchase context.
+3. Use `search` to find the top 4–6 products in the category that fit the budget — look for both editorial recommendations and retailer listings.
+4. Use `read` to extract specs, pricing, and availability from the most relevant product pages or comparison sites.
+5. Use `search` to find independent user reviews for the top 3 candidates — look for patterns in complaints and praise rather than single reviews.
+6. Use `browser` if a retailer site requires JS to display pricing or availability correctly.
+7. Use `document` to produce a comparison table: product name, price, key specs, and pros/cons — then give a clear recommendation with the single most important reason for the choice.
+8. Use `list` to add the recommended item to a shopping list if the user wants to track it.

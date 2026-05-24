@@ -30,11 +30,12 @@ def get_policies():
     """
     try:
         from services.database_service import get_shared_db_service
-        from services.policy_service import PolicyService
+        from services.policy_service import PolicyService, get_policy_meta
 
         svc = PolicyService(get_shared_db_service())
         policies = svc.get_all()
-        return jsonify({"policies": policies}), 200
+        meta = get_policy_meta()
+        return jsonify({"policies": policies, "meta": meta}), 200
     except Exception as exc:
         logger.error("[POLICIES API] GET failed: %s", exc)
         return jsonify({"error": "Failed to load policies"}), 500

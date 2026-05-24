@@ -12,7 +12,7 @@ output is the only contract that matters; everything observable flows through
 ``WorldState.render()``.
 """
 
-import json
+
 import time as _time
 import uuid
 from datetime import timedelta
@@ -43,25 +43,17 @@ def _past_iso(minutes: int) -> str:
 
 
 def _seed_telemetry(db, ctx: dict) -> None:
-    """Persist a heartbeat-shaped dict into the telemetry table (flat key/value).
-
-    Mirrors what ClientContextService.save() does on a /health POST so render
-    tests can drive the full pipeline without spinning up the API.
-    """
-    def _flatten(payload, prefix=""):
-        for key, value in payload.items():
-            full = f"{prefix}{key}"
-            if isinstance(value, dict) and value:
-                yield from _flatten(value, prefix=f"{full}.")
-            else:
-                yield full, json.dumps(value)
-
+    """Persist a heartbeat-shaped dict into the telemetry table via HeartbeatService."""
+    from services.heartbeat_service import heartbeat_service
+    heartbeat_service._ctx = None
+    flat = heartbeat_service._flatten(ctx)
     db.execute("DELETE FROM telemetry")
     db.executemany(
         "INSERT INTO telemetry (key, value) VALUES (?, ?)",
-        list(_flatten(ctx)),
+        list(flat.items()),
     )
     db.commit()
+    heartbeat_service._ctx = None
 
 
 def _seed_pending(db, message: str, due_minutes_ahead: int, *, recurrence: str | None = None) -> None:
@@ -184,50 +176,6 @@ class TestRenderSchedule:
 
 
 # ---------------------------------------------------------------------------
-# bg_process section
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestRenderBgProcess:
-    def test_recent_subagent_appears_with_last_update(self, db):
-        # A row from ~2 minutes ago must surface with a formatted "Xm ago" timestamp,
-        # rendered as a [bg_process(...)] line (not a bullet).
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('subagent', 'assistant', 'Researching hotels in Valletta', ?)",
-            ((utc_now() - timedelta(seconds=125)).strftime("%Y-%m-%d %H:%M:%S"),),
-        )
-        db.commit()
-
-        result = _fresh().render()
-        line = next(ln for ln in result.splitlines() if "[bg_process(" in ln)
-        assert not line.startswith("*")
-        assert "last_update:2m ago" in line
-        assert "Researching hotels in Valletta" in line
-
-    def test_older_than_24h_excluded_and_other_channels_ignored(self, db):
-        # Two rows that must NOT surface: a subagent row >24h old, and a
-        # recent row on a non-subagent channel.
-        old_iso = _past_iso(1500)  # >24h
-        recent_iso = (utc_now() - timedelta(seconds=60)).strftime("%Y-%m-%d %H:%M:%S")
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('subagent', 'assistant', 'Old pursuit', ?)",
-            (old_iso,),
-        )
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('user', 'assistant', 'regular chat content', ?)",
-            (recent_iso,),
-        )
-        db.commit()
-
-        result = _fresh().render()
-        assert "Old pursuit" not in result
-        assert "regular chat content" not in result
-
-
-# ---------------------------------------------------------------------------
 # Signals section
 # ---------------------------------------------------------------------------
 
@@ -267,19 +215,13 @@ class TestRenderFullMix:
         ws = _fresh()
         ws.push_signal("news", "heatwave")
         _seed_pending(db, "Team meeting", due_minutes_ahead=60)
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('subagent', 'assistant', 'Active goal', ?)",
-            ((utc_now() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S"),),
-        )
         db.commit()
 
         result = ws.render()
         assert result.startswith(_HEADER)
         idx_telemetry = result.index("[telemetry]")
         idx_schedule = result.index("[schedule]")
-        idx_bg = result.index("[bg_process(")
         idx_signal = result.index("[signal:news]")
-        assert idx_telemetry < idx_schedule < idx_bg < idx_signal
+        assert idx_telemetry < idx_schedule < idx_signal
 
 

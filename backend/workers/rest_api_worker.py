@@ -25,7 +25,7 @@ def rest_api_worker():
         logger.info("[REST API] Starting REST API worker...")
 
         host = runtime_config.get("host", "0.0.0.0")
-        port = runtime_config.get("port", 8081)
+        port = runtime_config.get("port", 31025)
 
         logger.info(f"[REST API] Starting Flask server on {host}:{port}")
 

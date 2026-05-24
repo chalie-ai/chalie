@@ -231,17 +231,8 @@ def _register_workers(manager, host: str, port: int) -> None:
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)
 
-    from workers.interface_health_worker import interface_health_worker
-    manager.register_service("interface-health-monitor", interface_health_worker)
-
-    from workers.interface_daemon_worker import interface_daemon_worker
-    manager.register_service("interface-daemon-watcher", interface_daemon_worker)
-
     from services.moment_context_service import moment_context_worker
     manager.register_service("moment-context-service", moment_context_worker)
-
-    from services.self_model_service import self_model_worker
-    manager.register_service("self-model-service", self_model_worker)
 
     from services.subconscious_worker import subconscious_worker
     manager.register_service("subconscious-worker", subconscious_worker)
@@ -265,33 +256,28 @@ def _register_workers(manager, host: str, port: int) -> None:
 
 def _check_asset_caches() -> None:
     """Verify search routing and concept LUT assets are present."""
+    import sqlite3 as _sql
+    from services.file_mapper_service import FileMapperService
+
     try:
-        import os as _os
-        import sqlite3 as _sql
-        _search_db = _os.path.join(
-            _os.path.dirname(__file__), "tools", "search", "assets", "search_tool_providers.sqlite"
-        )
-        if _os.path.exists(_search_db):
-            _c = _sql.connect(_search_db)
+        _search_db = FileMapperService.get_search_providers_db_path()
+        if _search_db.exists():
+            _c = _sql.connect(str(_search_db))
             _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
             _c.close()
             if "example_embeddings" in _tables:
                 logger.info("[Startup] Search router cache ready")
             else:
-                logger.warning("[Startup] Search embeddings missing — run 'python -m utils.generate_search_cache'")
+                logger.warning("[Startup] Search embeddings missing — run 'cd backend && python -m utils.generate_search_cache'")
         else:
             logger.warning("[Startup] search_tool_providers.sqlite not found")
     except Exception as e:
         logger.warning(f"[Startup] Search cache check failed: {e}")
 
     try:
-        import os as _os
-        import sqlite3 as _sql
-        _lut_db = _os.path.join(
-            _os.path.dirname(__file__), "services", "data_graph", "assets", "concept_lut.sqlite"
-        )
-        if _os.path.exists(_lut_db):
-            _c = _sql.connect(_lut_db)
+        _lut_db = FileMapperService.get_concept_lut_db_path()
+        if _lut_db.exists():
+            _c = _sql.connect(str(_lut_db))
             _tables = [r[0] for r in _c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
             _c.close()
             if "lut_embeddings" in _tables:
@@ -321,7 +307,7 @@ def _warmup_models() -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
-    parser.add_argument("--port", type=int, default=8081, help="Server port (default: 8081)")
+    parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
     args = parser.parse_args()
 

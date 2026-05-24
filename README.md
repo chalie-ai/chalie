@@ -19,7 +19,7 @@
 ```bash
 curl -fsSL https://chalie.ai/install | bash
 chalie
-# → http://localhost:8081
+# → http://localhost:31025
 ```
 
 > Alpha. Sharp edges. If you hit one, [open an issue](https://github.com/chalie-ai/chalie/issues) — we respond fast.
@@ -63,7 +63,7 @@ chalie                 # choose Ollama → http://localhost:11434
 git clone https://github.com/chalie-ai/chalie.git && cd chalie
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r backend/requirements.txt
-python backend/run.py  # → http://localhost:8081/on-boarding/
+python backend/run.py  # → http://localhost:31025/on-boarding/
 ```
 
 ---

@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -63,11 +62,9 @@ _DIRECTIVE_MATH_CODING = (
 
 # ── Module-level config (loaded once) ─────────────────────────────────────────
 
-_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),  # backend/
-    "configs",
-    "mode_gate.yaml",
-)
+from services.file_mapper_service import FileMapperService as _FMS
+
+_CONFIG_PATH = str(_FMS.get_configs_path("mode_gate.yaml"))
 
 _DEFAULT_CONFIG = {
     "decay_factor": 0.75,
@@ -150,8 +147,7 @@ def _resolve_fire_thresholds(modes: Tuple[str, ...], config: Dict) -> Dict[str, 
     # Attempt to read calibrated thresholds from classifier_meta.json
     meta_thresholds: dict[str, float] = {}
     try:
-        import paths
-        meta_path = paths.PRETRAINED_DIR / "mode_detector" / "mode-detector-classifier_meta.json"
+        meta_path = _FMS.get_pretrained_path("mode_detector", "mode-detector-classifier_meta.json")
         if meta_path.exists():
             with open(meta_path) as f:
                 meta = json.load(f)

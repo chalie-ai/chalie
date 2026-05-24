@@ -11,7 +11,7 @@ MCP Server implementation using FastMCP.
 
 Exposes a single tool ``talk_to_chalie`` that external agents use to
 communicate. Auth is validated via bearer token against the wrapper_tokens
-table (same pattern as the dashboard gateway).
+table (same pattern as the REST API bearer auth).
 
 Transport: Streamable HTTP on a dedicated port (default 8462).
 Auth: Custom ASGI middleware validates Bearer tokens before requests

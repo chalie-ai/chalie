@@ -129,7 +129,7 @@ def _poll_and_fire():
             cursor.execute("""
                 SELECT id, item_type, message, due_at, recurrence,
                        window_start, window_end, channel, created_by_session, group_id,
-                       is_prompt
+                       is_prompt, metadata
                 FROM scheduled_items
                 WHERE status = 'pending' AND due_at <= ? AND item_type NOT IN ('event') AND COALESCE(hidden, 0) = 0
                 ORDER BY due_at
@@ -140,7 +140,7 @@ def _poll_and_fire():
             cols = [
                 "id", "item_type", "message", "due_at", "recurrence",
                 "window_start", "window_end", "channel", "created_by_session", "group_id",
-                "is_prompt"
+                "is_prompt", "metadata"
             ]
 
             for row in rows:
@@ -205,9 +205,102 @@ def _poll_and_fire():
         logger.error(f"{LOG_PREFIX} Poll and fire error: {e}")
 
 
+def _load_speed_from_history() -> float | None:
+    """Read the location-history ring buffer and estimate current speed."""
+    try:
+        import json
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
+        raw_entries = store.lrange("client_context:history", 0, 11)
+        if not raw_entries:
+            return None
+        entries = []
+        for raw in raw_entries:
+            try:
+                entry = json.loads(raw if isinstance(raw, str) else raw.decode('utf-8'))
+                entries.append(entry)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        if not entries:
+            return None
+        from services.geo_utils import estimate_speed_from_history
+        return estimate_speed_from_history(entries)
+    except Exception:
+        return None
+
+
+_MIN_ADVISORY_BUFFER_MINUTES = 10  # minimum warning before departure time
+
+
+def _build_departure_advisory(item: dict) -> str | None:
+    """Return a departure advisory string when location data is available."""
+    try:
+        import json
+        meta_raw = item.get("metadata") or "{}"
+        meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
+    except (TypeError, ValueError):
+        return None
+
+    dest_lat = meta.get("destination_lat")
+    dest_lon = meta.get("destination_lon")
+    destination_name = meta.get("destination")
+
+    if dest_lat is None or dest_lon is None:
+        return None
+
+    try:
+        from services.locale_service import get_location
+        from services.time_utils import utc_now, parse_utc
+        from services.geo_utils import distance_km, estimate_travel_minutes, DEFAULT_SPEED_KMH
+
+        user_loc = get_location()
+        user_lat = user_loc.get("lat")
+        user_lon = user_loc.get("lon")
+
+        if user_lat is None or user_lon is None:
+            return None
+
+        dist = distance_km(float(user_lat), float(user_lon), float(dest_lat), float(dest_lon))
+
+        speed = _load_speed_from_history() or DEFAULT_SPEED_KMH
+        travel_minutes = estimate_travel_minutes(dist, speed)
+
+        due_at_raw = item.get("due_at")
+        if not due_at_raw:
+            return None
+        from datetime import timezone as _tz
+        due_dt = parse_utc(due_at_raw)
+        if due_dt == datetime.min.replace(tzinfo=_tz.utc):
+            return None
+        now = utc_now()
+        time_to_event_minutes = (due_dt - now).total_seconds() / 60.0
+
+        latest_depart_minutes = time_to_event_minutes - travel_minutes
+        label = destination_name or "your destination"
+        buffer = max(travel_minutes * 0.25, _MIN_ADVISORY_BUFFER_MINUTES)
+
+        if latest_depart_minutes <= 0:
+            return (
+                f"You should already be on your way to {label}! "
+                f"Estimated travel time: {travel_minutes:.0f} min ({dist:.1f} km)."
+            )
+        if latest_depart_minutes <= buffer:
+            return (
+                f"Leave for {label} in ~{latest_depart_minutes:.0f} min. "
+                f"Travel time: {travel_minutes:.0f} min ({dist:.1f} km)."
+            )
+    except Exception as exc:
+        logger.debug(f"[SCHEDULER] _build_departure_advisory failed: {exc}")
+
+    return None
+
+
 def _fire_item(item: dict):
     """Fire a due item — directly or via LLM pipeline depending on item_type."""
+    advisory = _build_departure_advisory(item)
     message = item.get("message", "")
+    if advisory:
+        message = f"{advisory}\n\n{message}"
     source = item.get("item_type", "notification")
     is_prompt = (source == "prompt")
 
@@ -245,12 +338,6 @@ def _fire_item(item: dict):
             'content': sanitize(message),
         })
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
-
-        try:
-            from api.push import send_push_to_all
-            send_push_to_all(title='Chalie', body=message[:200])
-        except Exception as _push_err:
-            logger.warning(f"{LOG_PREFIX} Web push failed: {_push_err}")
 
 
 _RECURRENCE_MAP = {

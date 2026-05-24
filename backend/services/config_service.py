@@ -4,8 +4,9 @@ Config Service — JSON loading and connection settings.
 
 import json
 import logging
-from pathlib import Path
 from typing import Dict, Any
+
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +14,8 @@ logger = logging.getLogger(__name__)
 class ConfigService:
     """Static configuration service for connections and providers."""
 
-    CONFIGS_DIR         = Path(__file__).resolve().parent.parent / "configs"
-    CONNECTIONS_CONFIG  = str(CONFIGS_DIR / "connections.json")
+    CONFIGS_DIR         = FileMapperService.get_configs_path()
+    CONNECTIONS_CONFIG  = str(FileMapperService.get_configs_path("connections.json"))
 
     @staticmethod
     def load_json(file_path: str) -> Dict[str, Any]:

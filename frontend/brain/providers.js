@@ -12,9 +12,9 @@ const PanelProviders = (() => {
 
   const PLATFORM_CONFIG = {
     ollama: { desc: 'Run locally — no API key needed.', hasHost: true, hasApiKey: false, placeholder: 'e.g. gemma4:31b', models: [] },
-    anthropic: { desc: 'API key from console.anthropic.com', hasHost: false, hasApiKey: true, placeholder: 'e.g. claude-sonnet-4-6', models: [] },
-    openai: { desc: 'API key from platform.openai.com', hasHost: false, hasApiKey: true, placeholder: 'e.g. gpt-4o', models: ['gpt-4o', 'gpt-4.1', 'o3', 'o4-mini'] },
-    gemini: { desc: 'API key from aistudio.google.com/apikey', hasHost: false, hasApiKey: true, placeholder: 'e.g. gemini-2.5-flash', models: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
+    anthropic: { desc: 'API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. claude-sonnet-4-6', models: [] },
+    openai: { desc: 'API key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. gpt-4o', models: ['gpt-4o', 'gpt-4.1', 'o3', 'o4-mini'] },
+    gemini: { desc: 'API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. gemini-2.5-flash', models: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
     openai_compatible: { desc: 'Any OpenAI-compatible API (Groq, DeepSeek, Together, etc.)', hasHost: true, hasApiKey: true, placeholder: 'e.g. MiniMax-M2', models: [] },
   };
 
@@ -150,7 +150,7 @@ const PanelProviders = (() => {
       _editPlatform = tab.dataset.plat;
       document.querySelectorAll('#platTabs .platform-tab').forEach(t => t.classList.toggle('active', t === tab));
       const c = PLATFORM_CONFIG[_editPlatform];
-      document.getElementById('platDesc').textContent = c.desc;
+      document.getElementById('platDesc').innerHTML = c.desc;
       document.getElementById('hostGroup').style.display = c.hasHost ? '' : 'none';
       document.getElementById('keyGroup').style.display = c.hasApiKey ? '' : 'none';
       _populateModels();

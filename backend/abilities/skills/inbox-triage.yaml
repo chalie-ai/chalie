@@ -1,0 +1,15 @@
+---
+title: Inbox Triage
+use_for: process and organize recent emails — classify them, surface action items, and draft replies without sending
+tags: email, inbox, triage, productivity, drafts, follow-up
+version: 1
+---
+
+1. Ask how far back to look (default: since yesterday) and whether to skip any categories; use `memory` to recall any triage preferences or filters.
+2. Use the `email` tool to retrieve unread emails from the specified window.
+3. Use `document` to classify each email into: Action Required, Active Conversation, Opportunity/Decision, Financial, or Low Priority / Informational.
+4. For unknown senders on important emails, use the `search` tool to verify company legitimacy or context.
+5. For each Action Required or Active Conversation email, draft a reply using the user's preferred tone stored in `memory` — never send, only draft.
+6. Identify overdue follow-ups by cross-referencing `memory` for any tracked threads.
+7. Use the `schedule` tool to create reminders for any emails with upcoming deadlines.
+8. Use `document` to present a triage report: overview, action-needed items with draft previews, and quick-reference list of all emails processed.

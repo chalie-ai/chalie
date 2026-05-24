@@ -194,6 +194,9 @@ def _build_envelope(response_text: str, agent_type: str, status: str = "success"
 
 class SubagentAbility(Ability):
     NAME = "subagent"
+    SEARCH_TOOLTIP = "delegate task to subagent"
+    POLICY_CATEGORY = "Subagent"
+    POLICY_LABELS = {"": "Spawn subagent"}
     SUMMARY = """\
 ONLY use this tool if multi-step actions are needed OR you need to process
 a large volume of data (call summariser in this case). For a single tool

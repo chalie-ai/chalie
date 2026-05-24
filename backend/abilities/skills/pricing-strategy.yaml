@@ -1,0 +1,15 @@
+---
+title: Pricing Strategy
+use_for: design SaaS pricing tiers, optimize existing pricing, or plan a price increase
+tags: pricing, SaaS, monetization, tiers, value metric, price increase, packaging
+version: 1
+---
+
+1. Use `memory` to recall any existing pricing, ICP, or product context, then ask whether this is designing pricing from scratch, optimizing existing pricing, or planning a price increase.
+2. Use `memory` to check for stored product notes, then ask about the product type (B2B/B2C, self-serve/sales-assisted), customer segments, and the primary value customers get from the product.
+3. Use `memory` to recall any current pricing data, then ask to confirm: plan names, price points, billing model, and conversion rate from trial to paid.
+4. Use the `search` tool to research competitor pricing pages and identify the market price range for comparable products.
+5. Use `memory` to recall any existing ICP, positioning, or customer insights relevant to pricing.
+6. Use `document` to recommend a value metric (per seat, per usage, per outcome, flat fee, or hybrid) with rationale for why it scales with customer value.
+7. Use `document` to design a three-tier Good/Better/Best structure: entry tier limited by features or usage, middle tier as the recommended default, top tier for enterprise with SSO/SLA/dedicated support.
+8. For a price increase, provide a communication template, risk model showing expected churn impact, and a 90-day rollout checklist, then save the pricing strategy to `memory`.

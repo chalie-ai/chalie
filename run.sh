@@ -6,7 +6,7 @@
 # the sync step automatically.
 #
 # Usage:
-#   ./run.sh                          # start on default port 8081
+#   ./run.sh                          # start on default port 31025
 #   ./run.sh --port=9000              # custom port
 #   ./run.sh --host=127.0.0.1         # bind to specific address
 #   ./run.sh --no-voice               # skip voice dep sync
@@ -16,7 +16,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ─── Arg Parsing ─────────────────────────────────────────────────────────────
-_PORT=8081
+_PORT=31025
 _HOST="0.0.0.0"
 _VOICE=true
 

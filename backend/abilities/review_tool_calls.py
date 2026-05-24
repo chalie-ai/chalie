@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class ReviewToolCallsAbility(Ability):
     NAME = "review_tool_calls"
+    SEARCH_TOOLTIP = "inspect past tool calls"
     SYSTEM = True
     SUMMARY = "Retrieve raw tool call records within ±5 minutes of a timestamp to inspect details not captured in turn synthesis."
     EXAMPLES = [
@@ -75,8 +76,6 @@ class ReviewToolCallsAbility(Ability):
             from services.time_formatter_service import TimeFormatterService
             created = TimeFormatterService.local(rec.get("created_at"), fmt="%Y-%m-%d %H:%M:%S") \
                 or str(rec.get("created_at", ""))[:19]
-            if len(result) > 300:
-                result = result[:300] + "..."
             lines.append(f"  [{created}] {tool_name} params={params_str} → {result} ({status_hint})")
 
         body = "\n".join(lines)

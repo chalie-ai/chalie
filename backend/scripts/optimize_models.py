@@ -32,9 +32,9 @@ sys.path.insert(0, str(_backend))
 
 import onnxruntime as ort  # noqa: E402
 
-import paths  # noqa: E402
+from services.file_mapper_service import FileMapperService  # noqa: E402
 
-MODELS_DIR = paths.MODELS_DIR
+MODELS_DIR = FileMapperService.get_models_path()
 
 
 def optimize_model(onnx_path: Path, optimized_path: Path,

@@ -211,8 +211,7 @@ def setup_capability(cap_id: str):
             logger.warning("[capabilities] setup '%s' configure failed: %s", cap_id, exc)
             return jsonify({"error": str(exc)}), 400
 
-        connected = cap.connect()
-        if not connected:
+        if not cap.is_connected():
             return jsonify({"error": "Connection failed — check credentials and try again"}), 400
 
         # Trigger immediate first sync so the user doesn't wait for the scheduler

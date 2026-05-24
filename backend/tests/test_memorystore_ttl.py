@@ -122,35 +122,5 @@ class TestIntentServiceQueueTTL:
         assert _has_ttl(store, list_key), f"{list_key} must have a TTL for broadcast intents"
 
 
-# ---------------------------------------------------------------------------
-# 11. api/push.py — store.set(VAPID_KEYS_KEY, ..., ex=86400)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestPushAPIVapidKeyTTL:
-    """Generated VAPID keys stored via store.set(..., ex=86400) must have a TTL."""
-
-    def test_get_vapid_keys_sets_ttl_on_generated_keys(self):
-        store = MemoryStore()
-        with patch("services.memory_client.MemoryClientService.create_connection",
-                   return_value=store), \
-             patch.dict("os.environ", {"VAPID_PUBLIC_KEY": "", "VAPID_PRIVATE_KEY": ""},
-                        clear=False):
-            # Remove env vars so the generation path fires
-            import os
-            env_backup = {k: os.environ.pop(k, None)
-                          for k in ("VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY")}
-            try:
-                from api.push import _get_vapid_keys, VAPID_KEYS_KEY
-                # Ensure no cached key so we hit the generation branch
-                store._strings.pop(VAPID_KEYS_KEY, None)
-                _get_vapid_keys()
-            finally:
-                for k, v in env_backup.items():
-                    if v is not None:
-                        os.environ[k] = v
-
-        assert _has_ttl(store, VAPID_KEYS_KEY), \
-            f"{VAPID_KEYS_KEY} must have ex=86400 TTL after key generation"
 
 

@@ -163,11 +163,11 @@ class TestPrivacyAPI:
         schema rip removes a table that is still listed in the tuple.
         """
         import re
-        from pathlib import Path
 
         from api.privacy import _DELETE_ALL_TABLES
+        from services.file_mapper_service import FileMapperService
 
-        schema_path = Path(__file__).resolve().parent.parent / "schema.sql"
+        schema_path = FileMapperService.get_schema_path()
         schema_sql = schema_path.read_text()
 
         # Match both plain and virtual CREATE TABLE declarations

@@ -1,0 +1,15 @@
+---
+title: News Briefing
+use_for: produce a concise news briefing on one or more topics, companies, or industries for a specific time window
+tags: news, briefing, current-events, media, summary, daily, digest
+version: 1
+---
+
+1. Use `memory` to recall any standing briefing topics, then ask the user which topics, companies, or industries to cover, and the desired time window (today, this week, last 30 days).
+2. Use `memory` to recall any standing briefing preferences — sources to prioritise, topics to exclude, or format preferences.
+3. Use `news` to search for recent articles on each topic within the time window.
+4. Use `search` to supplement news results with any web coverage not surfaced by the news tool, especially for niche or technical topics.
+5. Use `read` to extract full content from the 2–3 most significant articles per topic.
+6. Use `document` to group stories by topic and rank within each group by newsworthiness (impact × recency × source authority).
+7. Present the briefing from `document`: one paragraph per topic with 2–4 bullet points for key stories, each with headline, source, date, and a one-sentence take on why it matters.
+8. Use `document` to save the briefing if the user wants a record, and use `memory` to update any standing topic-tracking context.

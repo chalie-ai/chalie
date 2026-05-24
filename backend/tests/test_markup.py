@@ -53,6 +53,30 @@ class TestSanitize:
         assert 'data:' not in out
 
 
+    def test_keeps_table_structure(self):
+        html = "<table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Alice</td></tr></tbody></table>"
+        out = sanitize(html)
+        assert "<table>" in out
+        assert "<thead>" in out
+        assert "<tbody>" in out
+        assert "<tr>" in out
+        assert "<th>" in out
+        assert "<td>" in out
+
+    def test_keeps_tfoot(self):
+        html = "<table><tfoot><tr><td>Total</td></tr></tfoot></table>"
+        out = sanitize(html)
+        assert "<tfoot>" in out
+
+    def test_strips_table_attributes(self):
+        html = '<table class="fancy" style="width:100%"><tr><td colspan="2">x</td></tr></table>'
+        out = sanitize(html)
+        assert "<table>" in out
+        assert "class=" not in out
+        assert "style=" not in out
+        assert "colspan=" not in out
+
+
 @pytest.mark.unit
 class TestExtractPlaintext:
     def test_strips_simple_tags(self):
@@ -65,11 +89,15 @@ class TestExtractPlaintext:
         )
 
     def test_minified_list_items_are_separated(self):
-        # Without block-boundary spacing this collapses to ``oneTwoThree`` and
-        # phonemizer drops the gibberish tokens — the "lists skipped" TTS bug.
         assert (
             extract_plaintext("<ul><li>one</li><li>two</li><li>three</li></ul>")
             == "one two three"
+        )
+
+    def test_table_cells_are_separated(self):
+        assert (
+            extract_plaintext("<table><tr><td>Alice</td><td>30</td></tr></table>")
+            == "Alice 30"
         )
 
 

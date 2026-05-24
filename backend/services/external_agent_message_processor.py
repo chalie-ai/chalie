@@ -35,28 +35,7 @@ class ExternalAgentMessageProcessor(MessageProcessor):
     SYSTEM_PROMPT_CLASS = ExternalAgentSystemMessagePrompt
     MAX_ITERATIONS = 200
 
-    ALWAYS_AVAILABLE: list[str] = [
-        "document",
-        "find_tools",
-        "list",
-        "memory",
-        "read",
-        "review_tool_calls",
-        "review_transcript",
-        "schedule",
-    ]
-    DISCOVERABLE: list[str] = [
-        "browser",
-        "calendar",
-        "code_eval",
-        "contacts",
-        "email",
-        "home_assistant",
-        "news",
-        "programming_docs_search",
-        "search",
-        "weather",
-    ]
+    # Inherits ALWAYS_AVAILABLE and DISCOVERABLE from MessageProcessor.
 
     def __init__(
         self,

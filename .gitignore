@@ -6,6 +6,8 @@ backend/.env
 backend/.key
 # Runtime state — entire /data tree is local-only, never committed.
 data/
+# Install-time artifact — voice models created by install.sh, not git-tracked.
+resources/
 *.db
 *.db-journal
 *.db-wal

@@ -3,7 +3,7 @@ WorldState — in-process singleton for ambient world context.
 
 render() is called on demand: once per user turn and once per Cognition
 endpoint hit.  Signals are stored in an internal dict, TTL-pruned on read;
-telemetry, schedule, and bg_process are read directly from the database.
+telemetry and schedule are read directly from the database.
 
 Push sites:
   - POST /health (heartbeat.js) → ClientContextService.save() →
@@ -15,7 +15,6 @@ Push sites:
 Pull sites (read inside render()):
   - telemetry        — flat key/value rows persisted from the FE heartbeat
   - scheduled_items  — upcoming / recently-fired schedule entries
-  - transcript WHERE channel='subagent' — active pursuits
 
 Output format (literal):
   ### Background Telemetry,Processes & Signals
@@ -26,7 +25,6 @@ Output format (literal):
   …one bullet per top-level group the FE sent…
   [schedule]
   * {message} (due-in:{duration})
-  [bg_process(last_update:{duration} ago)] {content}
   [signal:{source}] {label}
 """
 
@@ -55,16 +53,6 @@ WHERE (
 ) AND hidden = 0
 ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, due_at ASC
 LIMIT 200
-"""
-
-# bg_process query — recent subagent transcript rows (schema uses created_at, not updated_at)
-_BG_PROCESS_SQL = """
-SELECT content, created_at
-FROM transcript
-WHERE channel = 'subagent'
-  AND created_at >= datetime('now', '-24 hours')
-ORDER BY created_at DESC
-LIMIT 10
 """
 
 
@@ -250,7 +238,7 @@ def _render_schedule_fields(row: dict, now) -> str:
 
 @dataclass(frozen=True)
 class Signal:
-    """Typed event pushed by an interface. Short-lived, absorbed and discarded."""
+    """Typed event pushed by a background worker or capability."""
 
     source: str
     kind: str
@@ -381,10 +369,6 @@ class WorldState:
             parts.append("[schedule]")
             parts.extend(schedule_lines)
 
-        # ── bg_process ─────────────────────────────────────────────────────
-        bg_lines = self._render_bg_process()
-        parts.extend(bg_lines)
-
         # ── Signals ────────────────────────────────────────────────────────
         signal_lines = self._render_signals()
         parts.extend(signal_lines)
@@ -406,7 +390,8 @@ class WorldState:
         their own groups.  ``local_time`` is overwritten with a freshly-computed
         value derived from the stored IANA timezone so it never goes stale.
         """
-        ctx = _fetch_telemetry()
+        from services.heartbeat_service import heartbeat_service
+        ctx = dict(heartbeat_service.read())  # shallow copy — _render mutates local_time
         if not ctx:
             return []
 
@@ -439,27 +424,6 @@ class WorldState:
         for message in ordered:
             row = pending_by_msg.get(message) or fired_by_msg[message]
             lines.append(f"* {message} ({_render_schedule_fields(row, now)})")
-        return lines
-
-    def _render_bg_process(self) -> list[str]:
-        """Produce [bg_process(...)] lines from subagent transcript rows."""
-        rows = _fetch_bg_process_rows()
-        lines = []
-        for row in rows:
-            content = (row.get("content") or "").strip()
-            created_at = row.get("created_at") or ""
-            if not content:
-                continue
-            try:
-                last_update = TimeFormatterService.ago(created_at)
-            except Exception:
-                last_update = "unknown"
-            if len(content) > 200:
-                cut = content.rfind(" ", 0, 200)
-                if cut == -1:
-                    cut = 200
-                content = content[:cut] + "…"
-            lines.append(f"[bg_process(last_update:{last_update})] {content}")
         return lines
 
     def _render_signals(self) -> list[str]:
@@ -509,54 +473,6 @@ def _fetch_schedule_rows() -> list[dict]:
         finally:
             cursor.close()
 
-
-def _fetch_bg_process_rows() -> list[dict]:
-    """Execute the bg_process query and return rows as list of dicts."""
-    db = _get_db()
-    with db.connection() as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute(_BG_PROCESS_SQL)
-            cols = [d[0] for d in cursor.description]
-            return [dict(zip(cols, row)) for row in cursor.fetchall()]
-        finally:
-            cursor.close()
-
-
-def _fetch_telemetry() -> dict:
-    """Read the telemetry table and return the unflattened nested dict.
-
-    Each row is ``key TEXT PRIMARY KEY, value TEXT`` (JSON-encoded leaf).
-    Dotted keys reconstruct into nested dicts so the renderer can group by
-    top-level prefix without knowing the schema in advance.
-    """
-    db = _get_db()
-    with db.connection() as conn:
-        cursor = conn.cursor()
-        try:
-            cursor.execute("SELECT key, value FROM telemetry")
-            rows = cursor.fetchall()
-        finally:
-            cursor.close()
-    if not rows:
-        return {}
-
-    out: dict = {}
-    for flat_key, raw_value in rows:
-        try:
-            value = json.loads(raw_value) if raw_value is not None else None
-        except (TypeError, ValueError):
-            value = raw_value
-        parts = flat_key.split(".")
-        cursor_dict = out
-        for part in parts[:-1]:
-            existing = cursor_dict.get(part)
-            if not isinstance(existing, dict):
-                existing = {}
-                cursor_dict[part] = existing
-            cursor_dict = existing
-        cursor_dict[parts[-1]] = value
-    return out
 
 
 # ── Module-level singleton ─────────────────────────────────────────────────

@@ -1,0 +1,15 @@
+---
+title: Experiment Tracker
+use_for: plan and track iterative experiments with goal, hypothesis, outcome, and learnings logged per attempt
+tags: experiments, iteration, tracking, learning, problem-solving, planning
+version: 1
+---
+
+1. Ask the user to describe the goal of the experiment; use `memory` to recall any prior experiments on the same topic.
+2. Ask what they have already tried; use `memory` to check whether prior attempts are already logged.
+3. Use `memory` to recall any prior related experiments or context that might inform the approach.
+4. Use `document` to draft a hypothesis and a concise plan: state the specific change to try, why it is expected to work, and how success will be measured.
+5. Use `document` to create or update an experiment log with: goal, hypothesis, plan, attempt number, and expected outcome.
+6. After the user executes the experiment and reports back, use `document` to record the actual outcome in the experiment log — categorise as Success, Partial, or Failure.
+7. If the outcome was not a success, use `document` to log what was learned, update the hypothesis, and draft the next attempt's plan — repeating from step 4.
+8. When the experiment succeeds, produce a summary of what worked, why, and what to watch out for, then save it to `memory`.

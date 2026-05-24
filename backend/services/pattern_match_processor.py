@@ -58,26 +58,26 @@ class PatternMatchProcessor(MessageProcessor):
         return ""
 
     def get_system_prompt(self) -> str:
-        block = self._existing_patterns_block()
         return (
             "You are analysing the user's recent transcripts to detect "
             "repeating behavioural patterns and surface durable life-graph "
             "facts.\n\n"
             "You have ONE forward pass. Emit ALL tool calls in parallel. Do "
             "NOT loop — results are intentionally minimal.\n\n"
-            "Tools:\n\n"
-            "1. save_pattern — record a repeating behaviour with at least 2 "
-            "evidence rows. Use snake_case names. REUSE existing names "
-            "exactly when reinforcing (case-sensitive).\n"
-            f"   Existing patterns currently tracked:\n{block}\n\n"
-            "2. save_graph — record a durable fact about the user "
-            "(preferences, identity, relationships, places). Pick the right "
-            "`kind`. Do NOT use save_graph for repeating behaviours — use "
-            "save_pattern.\n\n"
+            "save_pattern summaries must be 1 sentence and concise. "
+            "Examples:\n"
+            "- User walks to work every morning at 09:00\n"
+            "- User prefers cold-beverages\n"
+            "- User goes to the gym daily, except Sundays\n"
+            "- User's gym schedule is: Monday weights, Tuesday boxing\n"
+            "Do NOT write narratives, episode summaries, or date-stamped "
+            "event logs. The summary is a distilled habit, not a story.\n\n"
             "Rules:\n"
             "- save_pattern requires >=2 evidence rows in this batch.\n"
             "- Mirror existing pattern names exactly when reinforcing — "
             "case-sensitive.\n"
+            "- Do NOT use save_graph for repeating behaviours — use "
+            "save_pattern.\n"
             "- Skip noise. Skip one-offs. Skip ambiguous interpretations.\n"
             "- Emit everything in this single pass."
         )
@@ -94,13 +94,15 @@ class PatternMatchProcessor(MessageProcessor):
             ).fetchall()
         if not rows:
             return "(no transcripts in window)"
+        existing = self._existing_patterns_block()
         trail = self.get_act_loop_trail()
         transcript_block = "\n".join(
             f"[id={r[0]} | {r[1]} | {r[3]}] {r[2]}" for r in rows
         )
+        parts = [f"Existing patterns:\n{existing}", transcript_block]
         if trail:
-            return f"{transcript_block}\n{trail}"
-        return transcript_block
+            parts.append(trail)
+        return "\n\n".join(parts)
 
     def post_turn(self) -> None:
         """Decay sweep: -0.005 confidence on untouched active rows; soft-
@@ -126,17 +128,16 @@ class PatternMatchProcessor(MessageProcessor):
             ).fetchall()
         if not rows:
             return "(none yet)"
-        lines = []
+        patterns = {}
         for (val,) in rows:
             try:
                 d = json.loads(val) or {}
-                lines.append(
-                    f"- {d.get('name')} ({d.get('frequency')}): "
-                    f"{d.get('summary')}"
-                )
+                name = d.get("name")
+                if name:
+                    patterns[name] = d.get("summary", "")
             except Exception:
                 continue
-        return "\n".join(lines) if lines else "(none yet)"
+        return json.dumps(patterns, indent=2) if patterns else "(none yet)"
 
     def _decay_sweep(self) -> None:
         db = get_shared_db_service()

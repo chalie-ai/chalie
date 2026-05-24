@@ -84,9 +84,10 @@ class EpisodicService:
                         id, gist, salience, channel,
                         transcript_ids, transcript_id_start, transcript_id_end,
                         emotional_valence, emotional_arousal,
-                        consolidated_from, storage_strength, retrieval_weight
+                        consolidated_from, storage_strength, retrieval_weight,
+                        location_lat, location_lon, location_name
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     episode_id,
                     episode_data['gist'],
@@ -100,6 +101,9 @@ class EpisodicService:
                     json.dumps(episode_data.get('consolidated_from', [])),
                     episode_data.get('storage_strength', 1.0),
                     episode_data.get('retrieval_weight', 1.0),
+                    episode_data.get('location_lat'),
+                    episode_data.get('location_lon'),
+                    episode_data.get('location_name'),
                 ))
 
                 # Insert embedding into vec table if available
@@ -215,7 +219,8 @@ class EpisodicService:
                            transcript_ids, transcript_id_start, transcript_id_end,
                            emotional_valence, emotional_arousal,
                            consolidated_from, consolidated_into,
-                           storage_strength, retrieval_weight
+                           storage_strength, retrieval_weight,
+                           location_lat, location_lon, location_name
                     FROM episodes
                     WHERE id = ? AND deleted_at IS NULL
                 """, (episode_id,))
@@ -247,6 +252,9 @@ class EpisodicService:
                     'consolidated_into': row[14],
                     'storage_strength': row[15] if row[15] is not None else 1.0,
                     'retrieval_weight': row[16] if row[16] is not None else 1.0,
+                    'location_lat': row[17],
+                    'location_lon': row[18],
+                    'location_name': row[19],
                 }
 
                 return episode

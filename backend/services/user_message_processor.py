@@ -43,35 +43,7 @@ class UserMessageProcessor(MessageProcessor):
     LOG_LABEL = 'chat'
     SYSTEM_PROMPT_CLASS = UnifiedSystemMessagePrompt
 
-    # 9 innate abilities — pre-injected on every ACT iteration. The 10 in
-    # DISCOVERABLE are surfaced at runtime via find_tools and never
-    # pre-injected. `subagent` lives in DISCOVERABLE so it competes with
-    # weather/search/news/browser via find_tools rather than appearing as
-    # an always-on fallback that biases routing for single-tool lookups.
-    ALWAYS_AVAILABLE: list[str] = [
-        "find_tools",
-        "document",
-        "list",
-        "memory",
-        "read",
-        "review_tool_calls",
-        "review_transcript",
-        "schedule",
-        "timer",
-    ]
-    DISCOVERABLE: list[str] = [
-        "browser",
-        "calendar",
-        "code_eval",
-        "contacts",
-        "email",
-        "home",
-        "news",
-        "programming_docs_search",
-        "search",
-        "subagent",
-        "weather",
-    ]
+    # Inherits ALWAYS_AVAILABLE and DISCOVERABLE from MessageProcessor.
 
     def _iteration_cap_reached(self) -> bool:
         """UMP runs an unbounded loop — only user stop, ITERATION_TIMEOUT, or
@@ -200,11 +172,6 @@ class UserMessageProcessor(MessageProcessor):
             )
             parts.append(rendered_world_state)
 
-        # 2. System Awareness (degradation signals)
-        self_awareness = self._get_self_awareness()
-        if self_awareness:
-            parts.append(f"## System Awareness\n{self_awareness}")
-
         # 3. Previous Messages
         prev = self.get_previous_messages()
         if prev:
@@ -252,11 +219,11 @@ class UserMessageProcessor(MessageProcessor):
         stable Identity/Boundaries/Principles prefix follows, keeping the bulk
         of the prompt hot in the provider's prompt cache.
         """
-        from services.personality.personality_service import get_current_voice
+        from services.personality.personality_service import personality_service
 
         template = self.SYSTEM_PROMPT_CLASS().get_prompt()
 
-        voice_line = f"When responding; {get_current_voice()}"
+        voice_line = f"When responding; {personality_service.get_voice()}"
         prompt = f"{voice_line}\n\n{template}"
 
         # Mode-state-driven steering directives. The mode gate owns the
@@ -404,6 +371,15 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
+        # 3. Proactive skill suggestion — fires only on clean ACT exits with 4+
+        # tool-calling iterations. Non-blocking (daemon thread inside the service).
+        if self._loop_exited_cleanly and self._current_iteration >= 4:
+            try:
+                from services.skill_suggestion_message_processor import maybe_suggest_skill
+                maybe_suggest_skill(self._act_trail, self._raw_input)
+            except Exception as exc:
+                logger.warning("[POSTTURN] skill suggestion failed: %s", exc)
+
     # ── Private helpers ───────────────────────────────────────────────────────
 
     def _process_file_attachments(self) -> None:
@@ -493,19 +469,6 @@ class UserMessageProcessor(MessageProcessor):
         import re
         match = re.search(r'\bid=([0-9a-f]{8})\b', result_text or '')
         return match.group(1) if match else None
-
-    def _get_self_awareness(self) -> str:
-        """Get system health degradation signals from SelfModelService.
-
-        Returns empty string when the system is healthy — get_user_prompt()
-        skips the section. Only populates when degradation is detected.
-        """
-        try:
-            from services.self_model_service import SelfModelService
-            return SelfModelService().format_for_prompt()
-        except Exception as e:
-            logger.debug(f"[USER MSG] Self-awareness unavailable: {e}")
-            return ''
 
     def _get_mode_gate(self):
         """Return a ticked ModeGateService instance, cached per turn.

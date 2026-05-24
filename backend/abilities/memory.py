@@ -16,6 +16,7 @@ from services.innate_skills._tag import tag as _tag
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
+_KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
 
 
 # ── Dynamic memory radius — tuning constants ────────────────────────────────
@@ -32,6 +33,14 @@ LOG_PREFIX = "[MEMORY]"
 
 class MemoryAbility(Ability):
     NAME = "memory"
+    SEARCH_TOOLTIP = "personal memory store"
+    POLICY_CATEGORY = "Memory"
+    POLICY_LABELS = {
+        "forget": "Forget memory",
+        "recall": "Recall memory",
+        "reflect": "Reflect on memory",
+        "store": "Store memory",
+    }
     SUMMARY = "Store, recall, or forget first-party facts about the user — traits, preferences, relationships, goals, and habits."
     EXAMPLES = [
         "please remember that my wifi password is BlueSky42",
@@ -40,8 +49,8 @@ class MemoryAbility(Ability):
         "do you know anything about my dietary preferences",
         "save the fact that I have a dog named Biscuit",
         "reflect on everything you know about my exercise habits",
-        "remember I prefer to be called Max not Maximilian",
-        "what do you know about my family",
+        "what happened at home last week",
+        "recall conversations in Zabbar",
     ]
     INPUT_SCHEMA = {
         "type": "object",
@@ -94,6 +103,16 @@ class MemoryAbility(Ability):
                     "call — to fetch memories about different topics, call "
                     "this tool once for each topic. If results are broad or "
                     "sparse, try searching again with more narrow queries."
+                ),
+            },
+            "location": {
+                "type": "string",
+                "description": (
+                    "A location to filter memories by. Use a city, country, "
+                    "or a saved place name like 'home' or 'work'. "
+                    "When set, only memories from that location are returned. "
+                    "You can use location without query to get all memories "
+                    "from a place regardless of topic."
                 ),
             },
         },
@@ -283,18 +302,44 @@ def _format_forget_response(result: dict) -> str:
 
 def _handle_recall(channel: str, params: dict) -> str:
     query = params.get("query", "")
-    if not query:
-        return _tag("memory", action="recall", error="no-query")
+    location = params.get("location", "")
+    if not query and not location:
+        return _tag("memory", action="recall", error="no-query-or-location")
 
     limit = 10
-
     results: List[Dict] = []
 
-    hits, _ = _search_data_graph(query, limit)
-    results.extend(hits)
+    if query and location:
+        # AND gate: only episodes that satisfy both location AND semantic query.
+        loc_hits, _ = _search_episodes_by_location(channel, location, limit * 3)
+        loc_ids = {h["id"] for h in loc_hits}
+        loc_by_id = {h["id"]: h for h in loc_hits}
 
-    hits, _ = _search_episodes(channel, query, limit)
-    results.extend(hits)
+        sem_hits, _ = _search_episodes(channel, query, limit * 3)
+        sem_ids = {h["id"] for h in sem_hits}
+        sem_by_id = {h["id"]: h for h in sem_hits}
+
+        matched_ids = loc_ids & sem_ids
+        for ep_id in matched_ids:
+            hit = dict(loc_by_id[ep_id])
+            sem_hit = sem_by_id[ep_id]
+            hit["confidence"] = sem_hit["confidence"]
+            hit["relevance"] = sem_hit["relevance"]
+            results.append(hit)
+
+        dg_hits, _ = _search_data_graph(query, limit)
+        results.extend(dg_hits)
+
+    elif location:
+        hits, _ = _search_episodes_by_location(channel, location, limit)
+        results.extend(hits)
+
+    else:
+        hits, _ = _search_data_graph(query, limit)
+        results.extend(hits)
+
+        hits, _ = _search_episodes(channel, query, limit)
+        results.extend(hits)
 
     if not params.get('_auto'):
         try:
@@ -302,14 +347,15 @@ def _handle_recall(channel: str, params: dict) -> str:
 
             proc = current_processor()
             if proc is not None and proc._uid is not None:
-                proc.handle_tool({
-                    'name': 'document',
-                    'input': {'action': 'search', 'query': query},
-                })
-                proc.handle_tool({
-                    'name': 'schedule',
-                    'input': {'action': 'search', 'query': query},
-                })
+                if query:
+                    proc.handle_tool({
+                        'name': 'document',
+                        'input': {'action': 'search', 'query': query},
+                    })
+                    proc.handle_tool({
+                        'name': 'schedule',
+                        'input': {'action': 'search', 'query': query},
+                    })
         except Exception as exc:
             logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
 
@@ -317,10 +363,10 @@ def _handle_recall(channel: str, params: dict) -> str:
     _store_fok_signal(channel, partial)
 
     if not results:
-        return _tag("memory", query=query, results=0)
+        return _tag("memory", query=query or location, results=0)
 
     body = _format_results(results)
-    return _tag("memory", body, query=query, results=len(results))
+    return _tag("memory", body, query=query or location, results=len(results))
 
 
 # ── Reflect ──────────────────────────────────────────────────────────
@@ -439,8 +485,6 @@ def _fetch_transcript_entries(db_service, transcript_ids: List) -> List[Dict]:
         entries = []
         for r in rows:
             content = r[2] or ""
-            if len(content) > 300:
-                content = content[:300] + "..."
             entries.append({
                 "type": "transcript",
                 "content": content,
@@ -501,10 +545,26 @@ def _relevance_label(score: float) -> str:
     return "low"
 
 
+def _render_behavioral_pattern(raw_value: str) -> str:
+    """Parse a behavioral_pattern JSON value into a compact human-readable line."""
+    try:
+        c = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        name = c.get("name", "unknown")
+        freq = c.get("frequency", "?")
+        anchor = c.get("time_anchor") or ""
+        summary = c.get("summary", "")
+        confidence = c.get("confidence", 0)
+        anchor_part = f" @ {anchor}" if anchor else ""
+        return f"{name} ({freq}{anchor_part}): {summary} [confidence={confidence}]"
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return str(raw_value) if raw_value is not None else ""
+
+
 def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
     try:
         from services.data_graph_service import (
             get_data_graph_service,
+            KIND_BEHAVIORAL_PATTERN,
             KIND_USER_SPECIFIC,
             KIND_SYSTEM,
             KIND_MISC,
@@ -514,7 +574,8 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
         dgs = get_data_graph_service()
         rows = dgs.recall(
             query=query,
-            kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT],
+            kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT,
+                   KIND_BEHAVIORAL_PATTERN],
             limit=limit,
         )
 
@@ -524,9 +585,14 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
         hits = []
         for row in rows:
             cos = row.get("cos_score", 0.0)
+            kind = row.get("kind", "")
+            text = row.get("value", "")
+            if kind == KIND_BEHAVIORAL_PATTERN:
+                text = _render_behavioral_pattern(text)
             hits.append({
                 "id": row.get("key", ""),
-                "text": row.get("value", ""),
+                "kind": kind,
+                "text": text,
                 "relevance": _relevance_label(cos),
                 "confidence": cos,
             })
@@ -796,6 +862,7 @@ def recall_episodes(
                 "text": gist[:200],
                 "relevance": _relevance_label(conf),
                 "confidence": conf,
+                "location": ep.get("location_name"),
             })
 
         return hits, f"{len(hits)} matches"
@@ -832,13 +899,95 @@ def _count_episode_candidates(db_service, channel: str) -> int:
 
 
 def _format_results(results: List[Dict]) -> str:
+    """Format recall hits into tagged lines for LLM consumption.
+
+    Labels behavioral_pattern hits explicitly. Includes location when present.
+    Omits lat/lon to avoid token bloat.
+    """
     lines = []
     for hit in results:
         rid = hit.get("id", "")
         relevance = hit.get("relevance", "low")
         text = hit.get("text", "")
-        lines.append(f"[id:{rid},relevance:{relevance}] {text}")
+        location = hit.get("location")
+        kind = hit.get("kind", "")
+        parts = [f"id:{rid}"]
+        if kind == _KIND_BEHAVIORAL_PATTERN:
+            parts.append("kind:behavioral_pattern")
+        parts.append(f"relevance:{relevance}")
+        if location:
+            parts.append(f"at:{location}")
+        prefix = f"[{','.join(parts)}]"
+        lines.append(f"{prefix} {text}")
     return "\n".join(lines)
+
+
+_LOCATION_SEARCH_CONFIDENCE = 0.9
+_LOCATION_SEARCH_RELEVANCE = "high"
+
+
+def _search_episodes_by_location(
+    channel: str, location: str, limit: int
+) -> Tuple[List[Dict], str]:
+    """Search episodes whose location_name contains the given text.
+
+    Also resolves saved place labels (e.g. 'home') via data_graph kind='place'
+    to pick up alternate location_name strings stored at save time.
+    """
+    try:
+        from services.data_graph_service import KIND_PLACE, get_data_graph_service
+        from services.database_service import get_shared_db_service
+
+        # Build the list of strings to LIKE-match against location_name.
+        # Start with the raw input and add any resolved name from saved places.
+        location_names = [location]
+        try:
+            dgs = get_data_graph_service()
+            places = dgs.fetch(kinds=[KIND_PLACE])
+            for place in places:
+                raw_value = place.get("value") or "{}"
+                val = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+                if isinstance(val, dict) and place.get("key", "").lower() == location.lower():
+                    place_name = val.get("name")
+                    if place_name and place_name.lower() != location.lower():
+                        location_names.append(place_name)
+        except Exception as _resolve_exc:
+            logger.debug("%s Place label resolution failed: %s", LOG_PREFIX, _resolve_exc)
+
+        db = get_shared_db_service()
+        like_clauses = " OR ".join(["e.location_name LIKE ?"] * len(location_names))
+        like_params = [f"%{name}%" for name in location_names]
+
+        with db.connection() as conn:
+            sql = (
+                "SELECT e.id, e.gist, e.location_name "
+                "FROM episodes e "
+                f"WHERE e.deleted_at IS NULL AND e.channel = ? AND ({like_clauses}) "
+                "AND e.location_name IS NOT NULL "
+                "ORDER BY e.created_at DESC LIMIT ?"
+            )
+            db_params = [channel] + like_params + [limit]
+            rows = conn.execute(sql, db_params).fetchall()
+
+        if not rows:
+            return [], "0 matches"
+
+        hits = []
+        for row in rows:
+            ep_id, gist, loc_name = row
+            hits.append({
+                "id": str(ep_id),
+                "text": (gist or "")[:200],
+                "relevance": _LOCATION_SEARCH_RELEVANCE,
+                "confidence": _LOCATION_SEARCH_CONFIDENCE,
+                "location": loc_name,
+            })
+
+        return hits, f"{len(hits)} matches"
+
+    except Exception as exc:
+        logger.warning("%s Location episode search failed: %s", LOG_PREFIX, exc)
+        return [], f"error: {exc}"
 
 
 def _store_fok_signal(channel: str, partial_match_count: int) -> None:

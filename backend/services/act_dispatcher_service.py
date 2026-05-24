@@ -124,8 +124,6 @@ def _summarize_params(action: dict, max_keys: int = 4) -> dict:
             continue
         if len(preview) >= max_keys:
             break
-        if isinstance(v, str) and len(v) > 80:
-            v = v[:77] + '...'
         preview[k] = v
     return preview
 
@@ -188,8 +186,6 @@ def _build_action_description(action_id: str, action: dict) -> str:
     for key in context_keys:
         val = action.get(key)
         if val and isinstance(val, str) and key != 'operation':
-            if len(val) > 60:
-                val = val[:57] + '...'
             return f"{base} — {val}"
     return base
 

@@ -22,11 +22,24 @@ exclusively via ``services.locale_service`` — never directly from this service
 """
 
 import json
-import time
 import logging
-import requests
+import time
 from services.memory_client import MemoryClientService
-from services.database_service import get_shared_db_service
+
+_NOMINATIM_USER_AGENT = "Chalie/1.0"
+_NOMINATIM_TIMEOUT_S = 3
+_nominatim = None
+
+
+def _get_nominatim():
+    """Return a lazily-initialised Nominatim geocoder singleton."""
+    global _nominatim
+    if _nominatim is None:
+        from geopy.geocoders import Nominatim
+        _nominatim = Nominatim(
+            user_agent=_NOMINATIM_USER_AGENT, timeout=_NOMINATIM_TIMEOUT_S,
+        )
+    return _nominatim
 
 
 HISTORY_KEY = "client_context:history"
@@ -83,59 +96,19 @@ LOCALE_REGION_OVERRIDES = {
 class ClientContextService:
     """Manages client context (timezone, location, device, behavioral signals).
 
-    Telemetry is persisted to the ``telemetry`` table (flat key/value).  The
-    MemoryStore connection is retained for ephemeral inference flags
-    (place-transition, session-reentry, culture-seed) and the location-history
-    ring buffer — not for telemetry itself.
+    Telemetry persistence is delegated to ``TelemetryCacheService``.
+    MemoryStore is retained for ephemeral inference flags (place-transition,
+    session-reentry, culture-seed) and the location-history ring buffer.
     """
 
     def __init__(self):
         """Initialize the service and open a MemoryStore connection."""
         self._store = MemoryClientService.create_connection()
 
-    # ── Telemetry table helpers ────────────────────────────────────────
-
-    @staticmethod
-    def _flatten(ctx: dict, prefix: str = "") -> dict[str, str]:
-        """Flatten a nested dict into ``{"a.b.c": json_str_value}``.
-
-        Leaf values (anything that isn't a non-empty dict) are JSON-encoded
-        so type fidelity round-trips through the TEXT column.  Empty dicts
-        are dropped — they carry no information once persisted as rows.
-        """
-        out: dict[str, str] = {}
-        for key, value in ctx.items():
-            full_key = f"{prefix}{key}"
-            if isinstance(value, dict) and value:
-                out.update(ClientContextService._flatten(value, prefix=f"{full_key}."))
-            else:
-                out[full_key] = json.dumps(value)
-        return out
-
-    @staticmethod
-    def _unflatten(rows: dict[str, str]) -> dict:
-        """Rebuild the nested dict from the flat ``{key: json_str}`` rows."""
-        out: dict = {}
-        for flat_key, raw_value in rows.items():
-            try:
-                value = json.loads(raw_value)
-            except (TypeError, ValueError):
-                value = raw_value
-            parts = flat_key.split(".")
-            cursor = out
-            for part in parts[:-1]:
-                existing = cursor.get(part)
-                if not isinstance(existing, dict):
-                    existing = {}
-                    cursor[part] = existing
-                cursor = existing
-            cursor[parts[-1]] = value
-        return out
-
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
         """Resolve a human-readable city/country name from coordinates.
 
-        Calls the Nominatim reverse-geocoding API (OpenStreetMap). Prefers
+        Uses the geopy Nominatim geocoder (OpenStreetMap). Prefers
         city → town → municipality → county → state_district as the locality
         label, combined with the country name.
 
@@ -145,15 +118,14 @@ class ClientContextService:
 
         Returns:
             A string such as ``"Valletta, Malta"`` on success, or ``None`` if
-            the API call fails or returns an unusable address.
+            the geocoder call fails or returns an unusable address.
         """
         try:
-            url = f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&accept-language=en"
-            headers = {"User-Agent": "Chalie/1.0"}
-            response = requests.get(url, headers=headers, timeout=3)
-            response.raise_for_status()
-            data = response.json()
-            address = data.get("address", {})
+            geocoder = _get_nominatim()
+            location = geocoder.reverse((lat, lon), language="en", exactly_one=True)
+            if location is None:
+                return None
+            address = location.raw.get("address", {})
             city = (address.get("city") or address.get("town") or
                     address.get("municipality") or address.get("county") or
                     address.get("state_district") or "")
@@ -162,8 +134,10 @@ class ClientContextService:
                 return f"{city}, {country}"
             if country:
                 return country
-        except (requests.RequestException, KeyError, ValueError) as e:
+        except (KeyError, ValueError, AttributeError) as e:
             logging.debug(f"[CLIENT CONTEXT] Failed to resolve location: {e}")
+        except Exception as e:
+            logging.warning(f"[CLIENT CONTEXT] Unexpected error resolving location: {e}")
         return None
 
     def save(self, ctx: dict):
@@ -208,22 +182,8 @@ class ClientContextService:
                     ctx["location_name"] = cached_ctx["location_name"]
 
 
-        # Persist the heartbeat to the telemetry table — replace-all so deleted
-        # FE keys disappear from the next render.
-        ctx["saved_at"] = time.time()
-        flat = self._flatten(ctx)
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("DELETE FROM telemetry")
-                cursor.executemany(
-                    "INSERT INTO telemetry (key, value) VALUES (?, ?)",
-                    list(flat.items()),
-                )
-                conn.commit()
-            finally:
-                cursor.close()
+        from services.heartbeat_service import heartbeat_service
+        heartbeat_service.write(ctx)
 
         # Location history ring buffer (for mobility inference)
         self._push_history(ctx)
@@ -235,16 +195,9 @@ class ClientContextService:
                      f"device={(ctx.get('device') or {}).get('class')}")
 
     def get(self) -> dict:
-        """Retrieve client context from the telemetry table as a nested dict."""
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            try:
-                cursor.execute("SELECT key, value FROM telemetry")
-                rows = dict(cursor.fetchall())
-            finally:
-                cursor.close()
-        return self._unflatten(rows) if rows else {}
+        """Retrieve client context from the heartbeat cache."""
+        from services.heartbeat_service import heartbeat_service
+        return heartbeat_service.read()
 
     def is_stale(self, max_age_seconds: int = 600) -> bool:
         """Check whether the stored client context is older than the allowed age.

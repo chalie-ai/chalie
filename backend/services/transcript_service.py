@@ -10,6 +10,7 @@ Key operations:
 
 import logging
 import threading
+from collections import Counter
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,22 @@ _EXTRACTION_WINDOW = 25
 _EXTRACTION_OVERLAP = 5
 
 
+def _resolve_location(lat, lon, name):
+    """Return (lat, lon, name) for a transcript row.
+
+    When all three arguments are None, reads the user's last known location
+    from locale_service. Returns (None, None, None) on any failure.
+    """
+    if lat is not None or lon is not None or name is not None:
+        return lat, lon, name
+    try:
+        from services.locale_service import get_location
+        loc = get_location()
+        return loc.get('lat'), loc.get('lon'), loc.get('name')
+    except Exception:
+        return None, None, None
+
+
 def append(
     channel: str,
     role: str,
@@ -38,6 +55,9 @@ def append(
     tool_call_id: str = None,
     tool_name: str = None,
     internal: bool = False,
+    location_lat=None,
+    location_lon=None,
+    location_name=None,
 ) -> Optional[int]:
     """Append a turn to the topic transcript.
 
@@ -52,14 +72,20 @@ def append(
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
 
+        lat, lon, loc_name = _resolve_location(location_lat, location_lon, location_name)
+
         with db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO transcript (channel, role, content, tool_call_id, tool_name, internal, xml_migrated)
-                VALUES (?, ?, ?, ?, ?, ?, 1)
+                INSERT INTO transcript (
+                    channel, role, content, tool_call_id, tool_name, internal,
+                    xml_migrated, location_lat, location_lon, location_name
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
                 """,
-                (channel, role, content, tool_call_id, tool_name, 1 if internal else 0),
+                (channel, role, content, tool_call_id, tool_name, 1 if internal else 0,
+                 lat, lon, loc_name),
             )
             rowid = cursor.lastrowid
             cursor.close()
@@ -316,7 +342,8 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    SELECT id, role, content, tool_name, created_at
+                    SELECT id, role, content, tool_name, created_at,
+                           location_lat, location_lon, location_name
                     FROM transcript
                     WHERE channel = ? AND id <= ?
                     ORDER BY id DESC
@@ -337,6 +364,9 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     'content': r[2],
                     'tool_name': r[3],
                     'created_at': r[4],
+                    'location_lat': r[5],
+                    'location_lon': r[6],
+                    'location_name': r[7],
                     'channel': channel,
                 }
                 for r in reversed(rows)
@@ -383,6 +413,12 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     ep['transcript_id_end'] = max(ep['transcript_ids'])
                     ep['channel'] = channel
 
+                    dominant_location = _aggregate_dominant_location(entries)
+                    if dominant_location.get('lat') is not None:
+                        ep['location_lat'] = dominant_location['lat']
+                        ep['location_lon'] = dominant_location['lon']
+                        ep['location_name'] = dominant_location.get('name')
+
                     gist = ep.get('gist', '') or ''
                     embedding = emb_svc.generate_embedding(gist) if gist else None
 
@@ -426,6 +462,46 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
 
 
 # ── Episode extraction helpers ───────────────────────────────────────────────
+
+
+def _aggregate_dominant_location(entries: list) -> dict:
+    """Return the dominant location across a window of transcript entries.
+
+    Selects the location_name appearing most frequently among non-null rows.
+    When all names are unique (every count is 1), uses the most recent
+    non-null row instead. Returns a dict with keys 'lat', 'lon', 'name'
+    (all may be None when no entries carry location data).
+    """
+    located = [
+        e for e in entries
+        if e.get('location_lat') is not None or e.get('location_name') is not None
+    ]
+    if not located:
+        return {'lat': None, 'lon': None, 'name': None}
+
+    name_counts = Counter(
+        e['location_name'] for e in located if e.get('location_name') is not None
+    )
+
+    if name_counts:
+        top_name, top_count = name_counts.most_common(1)[0]
+        if top_count > 1:
+            # Clear dominant name — use any row with that name for coords
+            for e in reversed(located):
+                if e.get('location_name') == top_name:
+                    return {
+                        'lat': e.get('location_lat'),
+                        'lon': e.get('location_lon'),
+                        'name': top_name,
+                    }
+
+    # All names are unique (or no names) — use the most recent located row
+    most_recent = located[-1]
+    return {
+        'lat': most_recent.get('location_lat'),
+        'lon': most_recent.get('location_lon'),
+        'name': most_recent.get('location_name'),
+    }
 
 
 def _format_window_entries(entries: list) -> str:
@@ -569,11 +645,16 @@ def write_input_row(channel: str, role: str, content: str) -> int:
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
+    lat, lon, loc_name = _resolve_location(None, None, None)
     with db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES (?, ?, ?, 1)",
-            (channel, role, content),
+            """
+            INSERT INTO transcript (channel, role, content, xml_migrated,
+                                    location_lat, location_lon, location_name)
+            VALUES (?, ?, ?, 1, ?, ?, ?)
+            """,
+            (channel, role, content, lat, lon, loc_name),
         )
         row_id = cursor.lastrowid
         cursor.close()
@@ -588,11 +669,16 @@ def write_assistant_row(channel: str, content: str) -> int:
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
+    lat, lon, loc_name = _resolve_location(None, None, None)
     with db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
-            "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES (?, ?, ?, 1)",
-            (channel, 'assistant', content),
+            """
+            INSERT INTO transcript (channel, role, content, xml_migrated,
+                                    location_lat, location_lon, location_name)
+            VALUES (?, ?, ?, 1, ?, ?, ?)
+            """,
+            (channel, 'assistant', content, lat, lon, loc_name),
         )
         row_id = cursor.lastrowid
         cursor.close()

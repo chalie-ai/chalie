@@ -1,0 +1,15 @@
+---
+title: Market Sizing
+use_for: estimate the total addressable market (TAM), serviceable addressable market (SAM), and serviceable obtainable market (SOM) for a product or business idea
+tags: market-sizing, TAM, SAM, SOM, research, business, strategy, startup
+version: 1
+---
+
+1. Ask the user to describe the product or business and the target geography; use `memory` to recall any prior research on this market.
+2. Use `memory` to recall any prior industry context, benchmarks, or research on this market.
+3. Use `search` to find industry reports, analyst estimates, and government data for the broad category (top-down inputs: total market value, growth rate, key segments).
+4. Use `read` to extract relevant figures from the most authoritative sources found — note the source, publication date, and methodology caveats.
+5. Use `search` to find bottom-up inputs: number of potential buyers, average deal size or spend per unit, and purchase frequency — triangulate from multiple sources.
+6. Use `code_eval` to run the TAM/SAM/SOM calculations for both top-down and bottom-up approaches, showing the formula and every assumption explicitly.
+7. Use `document` to produce a market sizing summary: TAM / SAM / SOM figures with confidence ranges, key assumptions, source references, and the most important variable to validate first.
+8. Use `document` to save the full sizing model with all inputs and sources.

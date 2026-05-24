@@ -1,0 +1,15 @@
+---
+title: Scenario War Room
+use_for: modeling cascading what-if scenarios across business functions when facing compound adversity or major strategic decisions
+tags: scenario planning, war room, what-if analysis, risk modeling, cascading effects, compound risk, contingency planning
+version: 1
+---
+
+1. Use `memory` to recall the company's current metrics, runway, headcount, and any prior scenario analyses.
+2. Use `memory` to recall any prior scenario inputs, then ask the user to define up to three scenario variables, each with: what changes, estimated probability, and timeline.
+3. Use `document` to map the impact of each variable across relevant business domains: cash and runway, revenue, product, engineering velocity, people, and operations.
+4. Use `document` to model cascade effects — show how Variable A triggering consequences in one domain amplifies or accelerates Variable B's effects.
+5. Use `code_eval` to compute quantitative impacts such as runway changes, ARR gaps, or burn multiple shifts under each scenario combination.
+6. Use `document` to produce outputs at three severity levels (mild, moderate, severe) with specific financial and operational consequences for each.
+7. Use `document` to define for each scenario combination: pre-committed hedges (actions taken now regardless), conditional triggers (the specific signal that activates a response), and the response playbook.
+8. Use `document` to save the scenario model, cascade map, and hedge playbook.

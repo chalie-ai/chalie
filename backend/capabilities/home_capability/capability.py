@@ -11,17 +11,17 @@ VaultService in tool_configs).
 from __future__ import annotations
 
 import logging
-import pathlib
 
 import yaml
 
 from capabilities.base import AbstractCapability
+from services.file_mapper_service import FileMapperService
 from capabilities.home_capability import ha_rest_handler as rest
 from capabilities.home_capability.ha_ws_handler import HaWebSocketHandler
 
 logger = logging.getLogger(__name__)
 
-_MANIFEST_PATH = pathlib.Path(__file__).parent / "manifest.yaml"
+_MANIFEST_PATH = FileMapperService.get_capabilities_path("home_capability", "manifest.yaml")
 
 _K_URL = "home:url"
 _K_TOKEN = "home:token"

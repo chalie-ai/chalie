@@ -1,0 +1,15 @@
+---
+title: Data Analysis
+use_for: analyse a dataset, calculate statistics, run comparisons, and produce charts or summary tables
+tags: data, analysis, statistics, code, charts, csv, calculations
+version: 1
+---
+
+1. Use `memory` to recall any prior analysis on related data, then ask the user to describe the dataset (paste it, describe its structure, or state where it lives) and what question they want answered.
+2. Use `memory` to recall any relevant prior context — units, domain conventions, or previous analyses on related data.
+3. Use `memory` to check for any stored domain conventions, then clarify the analysis type: descriptive statistics, correlation, trend analysis, comparison across groups, ranking, or forecasting.
+4. Use `code_eval` to load, clean, and validate the data — report any missing values, outliers, or type errors before proceeding.
+5. Use `code_eval` to run the requested analysis: compute statistics, group comparisons, correlations, or growth rates with appropriate precision.
+6. Use `code_eval` to generate a chart or summary table that makes the key finding visually clear — prefer a simple bar, line, or scatter as appropriate.
+7. Use `document` to record the plain-language interpretation: the main finding, what drives it, and any caveats (sample size, data quality, assumptions).
+8. Use `document` to save the analysis results and code so the user can reproduce or extend it later.

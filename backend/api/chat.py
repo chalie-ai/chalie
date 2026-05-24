@@ -29,8 +29,10 @@ import uuid
 from flask import Blueprint, jsonify, request
 
 from .auth import require_auth
+from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.log_utils import safe
 from services.markup import actions_to_xml, sanitize
+from services.time_utils import utc_now
 from services.websocket_broker import WebSocketBroker
 from services.segment_service import SegmentService
 
@@ -80,6 +82,7 @@ def _run_chat_background(
             "confidence": 1.0,
             "exchange_id": request_id,
             "metrics": metrics,
+            "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
         }
         message_evt["segments"] = SegmentService.build(content, transcript_ids)
         broker.broadcast(message_evt)
@@ -355,6 +358,7 @@ def post_action():
                     "tools": {},
                     "response_time_s": round(time.time() - action_start, 3),
                 },
+                "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
             }
             message_evt["segments"] = SegmentService.build(content, [])
             broker.broadcast(message_evt)

@@ -96,6 +96,24 @@ def _fetch_pattern(db, name):
     return {"id": row[0], "value": json.loads(row[1]), "active": row[2]}
 
 
+def _fetch_pattern_sql_cols(db, name):
+    """Fetch the SQL reinforcement columns for the most-recent behavioral_pattern row."""
+    row = db.execute(
+        "SELECT evidence_count, storage_strength, retrieval_weight, last_accessed_at "
+        "FROM data_graph "
+        "WHERE kind='behavioral_pattern' AND key=? ORDER BY id DESC LIMIT 1",
+        (name,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "evidence_count": row[0],
+        "storage_strength": row[1],
+        "retrieval_weight": row[2],
+        "last_accessed_at": row[3],
+    }
+
+
 def _fetch_cursor(db):
     """Read the pattern_match_cursor value from data_graph. Returns int or None."""
     row = db.execute(
@@ -574,4 +592,60 @@ class TestMaxIterations100CapsRunawayLoop:
         ).fetchone()[0]
         assert count == 20, (
             f"Expected 20 rows (budget cap), got {count}"
+        )
+
+
+class TestReinforcementDiminishingBoost:
+    """Test 12 — each successive reinforce adds a smaller storage_strength boost and
+    the value is capped at 1.0 (TKT-581 fix, diminishing returns)."""
+
+    def test_multiple_reinforcements_give_diminishing_boost(self, db, store):
+        from abilities.save_pattern import _upsert_pattern
+
+        # Seed with SQL defaults (evidence_count=1, storage_strength=0.5).
+        _seed_pattern(db, "evening_read", confidence=3.0)
+
+        tc_params = {
+            "name": "evening_read",
+            "frequency": "daily",
+            "time_anchor": "evening",
+            "summary": "reads before bed",
+            "evidence_transcript_ids": [1, 2],
+        }
+
+        # Reinforce 3 times directly via the production upsert function.
+        strengths = []
+        for _ in range(3):
+            _upsert_pattern({**tc_params, "evidence": tc_params["evidence_transcript_ids"]})
+            cols = _fetch_pattern_sql_cols(db, "evening_read")
+            strengths.append(cols["storage_strength"])
+
+        # evidence_count must be 1 (initial) + 3 (reinforcements) = 4.
+        cols = _fetch_pattern_sql_cols(db, "evening_read")
+        assert cols["evidence_count"] == 4, (
+            f"Expected evidence_count=4 after 3 reinforcements, got {cols['evidence_count']}"
+        )
+
+        # strength must grow after each reinforce.
+        assert strengths[1] > strengths[0], (
+            f"Expected strength to grow after 2nd reinforce: {strengths}"
+        )
+        assert strengths[2] > strengths[1], (
+            f"Expected strength to grow after 3rd reinforce: {strengths}"
+        )
+
+        # Each boost must be smaller than the previous (diminishing returns).
+        boost_1 = strengths[0] - 0.5
+        boost_2 = strengths[1] - strengths[0]
+        boost_3 = strengths[2] - strengths[1]
+        assert boost_2 < boost_1, (
+            f"Expected diminishing boost: boost_2={boost_2:.5f} should be < boost_1={boost_1:.5f}"
+        )
+        assert boost_3 < boost_2, (
+            f"Expected diminishing boost: boost_3={boost_3:.5f} should be < boost_2={boost_2:.5f}"
+        )
+
+        # strength must not exceed 1.0.
+        assert cols["storage_strength"] <= 1.0, (
+            f"storage_strength must be capped at 1.0, got {cols['storage_strength']}"
         )

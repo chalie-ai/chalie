@@ -41,9 +41,10 @@ from __future__ import annotations
 
 import json
 import logging
-import pathlib
 
 import yaml
+
+from services.file_mapper_service import FileMapperService
 
 from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
@@ -51,10 +52,11 @@ from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
 from capabilities.mail_capability.providers import build_custom_provider, discover_provider
 from services.time_utils import utc_now
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 
-_MANIFEST_PATH = pathlib.Path(__file__).parent / "manifest.yaml"
+_MANIFEST_PATH = FileMapperService.get_capabilities_path("mail_capability", "manifest.yaml")
 
 # ---------------------------------------------------------------------------
 # Credential key names (unified mail namespace)
@@ -340,10 +342,7 @@ class MailCapability(AbstractCapability):
             logger.warning("[mail] connect(): credentials missing.")
             return False
 
-        try:
-            protocols: list[str] = json.loads(protocols_raw) if protocols_raw else []
-        except (json.JSONDecodeError, TypeError):
-            protocols = []
+        protocols: list[str] = parse_json_column(protocols_raw, default=[])
 
         if not protocols:
             logger.warning("[mail] connect(): no active protocols stored.")

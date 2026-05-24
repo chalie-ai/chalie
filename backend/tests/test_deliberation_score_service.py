@@ -15,14 +15,14 @@ import os
 
 import pytest
 
-import paths
 from services.deliberation_score_service import DeliberationScoreService
+from services.file_mapper_service import FileMapperService
 from services.onnx_inference_service import OnnxInferenceService
 
 pytestmark = pytest.mark.integration
 
-_DEFAULT_MODELS_DIR = str(paths.MODELS_DIR)
-_DEFAULT_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
+_DEFAULT_MODELS_DIR = str(FileMapperService.get_models_path())
+_DEFAULT_PRETRAINED_DIR = str(FileMapperService.get_pretrained_path())
 _ENCODER_PATH = os.path.join(
     _DEFAULT_MODELS_DIR, "gte-modernbert-base", "onnx", "model.onnx"
 )

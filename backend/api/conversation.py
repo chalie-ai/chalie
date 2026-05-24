@@ -4,6 +4,7 @@ import logging
 from flask import Blueprint, request, jsonify
 
 from .auth import require_session
+from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_call_transcript_ids as _resolve_ids
 
 logger = logging.getLogger(__name__)
@@ -56,19 +57,21 @@ def get_recent_history(limit=12, offset=0):
         for row in reversed(rows):
             transcript_id, role, content, created_at = row[0], row[1], row[2] or "", row[3]
 
+            ts = format_date(created_at, CHAT_TIMESTAMP_FMT, for_ui=True) or ""
+
             if role == 'user':
                 messages.append({
                     "id": str(transcript_id),
                     "role": role,
                     "content": content,
-                    "timestamp": created_at,
+                    "timestamp": ts,
                 })
             else:
                 msg = {
                     "id": str(transcript_id),
                     "role": role,
                     "content": content,
-                    "timestamp": created_at,
+                    "timestamp": ts,
                 }
                 # Attach segments for assistant rows so the frontend can
                 # reconstruct rich-media cards on page refresh.

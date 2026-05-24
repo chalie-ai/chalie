@@ -69,7 +69,8 @@ def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
                        transcript_id_start, transcript_id_end,
                        emotional_valence, emotional_arousal,
                        consolidated_from, consolidated_into,
-                       storage_strength, retrieval_weight
+                       storage_strength, retrieval_weight,
+                       location_lat, location_lon, location_name
                 FROM episodes
                 WHERE id = ? AND deleted_at IS NULL
                 """,
@@ -97,6 +98,9 @@ def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
             'consolidated_into': row[14],
             'storage_strength': row[15] if row[15] is not None else 1.0,
             'retrieval_weight': row[16] if row[16] is not None else 1.0,
+            'location_lat': row[17],
+            'location_lon': row[18],
+            'location_name': row[19],
         }
     except Exception as exc:
         logger.warning(f"[RETRIEVAL] _get_episode_raw failed for id={episode_id}: {exc}")
@@ -224,7 +228,8 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict]:
                            e.last_accessed_at, e.retrieval_weight,
                            e.emotional_valence, e.emotional_arousal,
                            e.consolidated_into,
-                           episodes_fts.rank AS text_rank
+                           episodes_fts.rank AS text_rank,
+                           e.location_lat, e.location_lon, e.location_name
                     FROM episodes_fts
                     JOIN episodes e ON e.rowid = episodes_fts.rowid
                     WHERE episodes_fts MATCH ?
@@ -242,7 +247,8 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict]:
                            e.last_accessed_at, e.retrieval_weight,
                            e.emotional_valence, e.emotional_arousal,
                            e.consolidated_into,
-                           episodes_fts.rank AS text_rank
+                           episodes_fts.rank AS text_rank,
+                           e.location_lat, e.location_lon, e.location_name
                     FROM episodes_fts
                     JOIN episodes e ON e.rowid = episodes_fts.rowid
                     WHERE episodes_fts MATCH ?
@@ -269,6 +275,9 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict]:
                 'consolidated_into': r[9],
                 'text_rank': r[10],
                 'vector_distance': None,
+                'location_lat': r[11],
+                'location_lon': r[12],
+                'location_name': r[13],
             }
             for r in rows
         ]
@@ -311,7 +320,8 @@ def _vector_search(
                            e.last_accessed_at, e.retrieval_weight,
                            e.emotional_valence, e.emotional_arousal,
                            e.consolidated_into,
-                           v.distance AS vector_distance
+                           v.distance AS vector_distance,
+                           e.location_lat, e.location_lon, e.location_name
                     FROM episodes e
                     JOIN episodes_vec v ON v.rowid = e.rowid
                     WHERE v.embedding MATCH ? AND k = ?
@@ -328,7 +338,8 @@ def _vector_search(
                            e.last_accessed_at, e.retrieval_weight,
                            e.emotional_valence, e.emotional_arousal,
                            e.consolidated_into,
-                           v.distance AS vector_distance
+                           v.distance AS vector_distance,
+                           e.location_lat, e.location_lon, e.location_name
                     FROM episodes e
                     JOIN episodes_vec v ON v.rowid = e.rowid
                     WHERE v.embedding MATCH ? AND k = ?
@@ -354,6 +365,9 @@ def _vector_search(
                 'consolidated_into': r[9],
                 'text_rank': None,
                 'vector_distance': r[10],
+                'location_lat': r[11],
+                'location_lon': r[12],
+                'location_name': r[13],
             }
             for r in rows
         ]

@@ -1,4 +1,5 @@
 // Policies panel — per-context permission grid with presets.
+// Labels and categories are derived from the AbilityRegistry via GET /api/policies.
 const PanelPolicies = (() => {
   let _root = null;
   let _sub = 'chat';
@@ -6,79 +7,8 @@ const PanelPolicies = (() => {
   let _blocked = [];
   let _loaded = false;
   let _blockedOpen = false;
-
-  const _POLICY_ACTION_LABELS = {
-    'browser.interact': 'Interact with page',
-    'browser.monitor': 'Monitor page',
-    'browser.render': 'Render page',
-    'browser.screenshot': 'Take screenshot',
-    'calendar.get_event': 'Get event',
-    'calendar.list_events': 'List events',
-    'calendar.update_event': 'Update event',
-    'code_eval': 'Run sandboxed code',
-    'contacts.get': 'Get contact',
-    'contacts.list': 'List contacts',
-    'document.create': 'Create document',
-    'document.delete': 'Delete document',
-    'document.list': 'List documents',
-    'document.restore': 'Restore document',
-    'document.search': 'Search documents',
-    'document.upload': 'Upload document',
-    'document.view': 'View document',
-    'email.draft': 'Draft email',
-    'email.forward': 'Forward email',
-    'email.manage': 'Manage email',
-    'email.read': 'Read email',
-    'email.reply': 'Reply to email',
-    'email.search': 'Search email',
-    'email.send': 'Send email',
-    'find_tools': 'Find tools',
-    'home.control': 'Control devices',
-    'home.get_state': 'Get device state',
-    'home.list_automations': 'List automations',
-    'home.list_devices': 'List devices',
-    'home.subscribe_events': 'Subscribe events',
-    'home.trigger_automation': 'Trigger automation',
-    'list.add': 'Add list items',
-    'list.check': 'Check list items',
-    'list.clear': 'Clear list',
-    'list.create': 'Create list',
-    'list.delete': 'Delete list',
-    'list.list_all': 'List all lists',
-    'list.remove': 'Remove list items',
-    'list.rename': 'Rename list',
-    'list.view': 'View list',
-    'memory.forget': 'Forget memory',
-    'memory.recall': 'Recall memory',
-    'memory.reflect': 'Reflect on memory',
-    'memory.store': 'Store memory',
-    'news': 'Search news',
-    'read': 'Read content',
-    'schedule.cancel': 'Cancel schedule',
-    'schedule.create': 'Create schedule',
-    'schedule.list': 'List schedules',
-    'schedule.search': 'Search schedules',
-    'search': 'Web search',
-    'subagent': 'Spawn subagent',
-    'weather': 'Weather lookup',
-    'programming_docs_search': 'Search programming docs',
-  };
-
-  const _POLICY_CATEGORIES = {
-    'Browser': ['browser.interact', 'browser.monitor', 'browser.render', 'browser.screenshot'],
-    'Calendar': ['calendar.get_event', 'calendar.list_events', 'calendar.update_event'],
-    'Email': ['email.search', 'email.read', 'email.send', 'email.reply', 'email.draft', 'email.forward', 'email.manage'],
-    'Code': ['code_eval'],
-    'Contacts': ['contacts.get', 'contacts.list'],
-    'Documents': ['document.list', 'document.view', 'document.search', 'document.create', 'document.upload', 'document.delete', 'document.restore'],
-    'Lists': ['list.list_all', 'list.view', 'list.create', 'list.add', 'list.check', 'list.remove', 'list.clear', 'list.rename', 'list.delete'],
-    'Home': ['home.get_state', 'home.list_devices', 'home.control', 'home.list_automations', 'home.trigger_automation', 'home.subscribe_events'],
-    'Memory': ['memory.recall', 'memory.store', 'memory.forget', 'memory.reflect'],
-    'News & Weather': ['news', 'weather'],
-    'Scheduling': ['schedule.list', 'schedule.search', 'schedule.create', 'schedule.cancel'],
-    'Search & Tools': ['search', 'find_tools', 'read', 'programming_docs_search'],
-    'Subagent': ['subagent'],
-  };
+  let _labels = {};
+  let _categories = {};
 
   const CONTEXT_MAP = { chat: 'chat', subagent: 'subagent', background: 'subconscious', external: 'external_agent' };
 
@@ -114,6 +44,13 @@ const PanelPolicies = (() => {
             _policies[ctx][actionId] = state;
           }
         }
+        _labels = {};
+        _categories = {};
+        for (const entry of raw.meta || []) {
+          _labels[entry.action_id] = entry.label;
+          if (!_categories[entry.category]) _categories[entry.category] = [];
+          _categories[entry.category].push(entry.action_id);
+        }
       }
       if (blockRes.ok) { const d = await blockRes.json(); _blocked = d.entries || []; }
       _loaded = true;
@@ -128,13 +65,12 @@ const PanelPolicies = (() => {
     const rules = _policies[ctx] || {};
 
     let html = `<div class="policies-grid">`;
-    for (const [catName, actionIds] of Object.entries(_POLICY_CATEGORIES)) {
-      const catRules = actionIds.filter(a => _POLICY_ACTION_LABELS[a]);
-      if (catRules.length === 0) continue;
+    for (const [catName, actionIds] of Object.entries(_categories)) {
+      if (actionIds.length === 0) continue;
       html += `<div class="policy-category">
         <h4 class="section-head">${BrainApp.escapeHtml(catName)}</h4>
-        ${catRules.map(actionId => {
-          const label = _POLICY_ACTION_LABELS[actionId] || actionId;
+        ${actionIds.map(actionId => {
+          const label = _labels[actionId] || actionId;
           const currentVal = rules[actionId] || 'ask';
           return `<div class="policy-rule">
             <span class="policy-label">${label}</span>
@@ -151,9 +87,9 @@ const PanelPolicies = (() => {
       html += `<div class="blocked-section">
         <button class="blocked-toggle" id="blockedToggle">Blocked Actions Log ${_blockedOpen ? '▴' : '▾'}</button>
         ${_blockedOpen ? `<div class="blocked-list">${_blocked.map(b => `<div class="blocked-item">
-          <span class="badge badge-danger">${BrainApp.escapeHtml(b.action || '')}</span>
+          <span class="badge badge-danger">${BrainApp.escapeHtml(b.action_id || '')}</span>
           <span>${BrainApp.escapeHtml(b.context || '')}</span>
-          <span class="blocked-time">${BrainApp.formatDate(b.time)}</span>
+          <span class="blocked-time">${BrainApp.formatDate(b.created_at)}</span>
         </div>`).join('')}</div>` : ''}
       </div>`;
     }

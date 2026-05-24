@@ -73,11 +73,16 @@ def stub_worker(monkeypatch):
         fired.append("dmn")
         return "ok"
 
+    def _geo_patterns(_self):
+        fired.append("geo_patterns")
+        return "skip cursor=0 latest=0 delta=0"
+
     monkeypatch.setattr(SubconsciousWorker, "_step_consolidate", _consolidate)
     monkeypatch.setattr(SubconsciousWorker, "_step_decay", _decay)
     monkeypatch.setattr(SubconsciousWorker, "_step_pattern_match", _pattern_match)
     monkeypatch.setattr(SubconsciousWorker, "_step_synthesis", _synthesis)
     monkeypatch.setattr(SubconsciousWorker, "_step_dmn", _dmn)
+    monkeypatch.setattr(SubconsciousWorker, "_step_geo_patterns", _geo_patterns)
     monkeypatch.setattr(SubconsciousWorker, "_persist_last_fired",
                         lambda _self, when: _persist(when))
     monkeypatch.setattr(SubconsciousWorker, "_load_last_fired_from_storage",
@@ -96,7 +101,7 @@ def test_cold_boot_passes_both_gates(isolated_world_state, stub_worker):
     """No user message, no prior fire → run all five steps."""
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn", "geo_patterns"]
     assert all(step["status"] == "ok" for step in result["steps"].values())
     assert result["last_fired_at"] is not None
 
@@ -124,7 +129,7 @@ def test_idle_window_passed_runs(isolated_world_state, stub_worker):
     ))
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn", "geo_patterns"]
 
 
 def test_already_fired_gate_skips(isolated_world_state, stub_worker):
@@ -156,7 +161,7 @@ def test_fresh_message_resets_already_fired_gate(isolated_world_state, stub_work
     ))
     result = stub_worker.run_once()
     assert "skipped" not in result
-    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn"]
+    assert stub_worker._fired == ["consolidate", "decay", "pattern_match", "synthesis", "dmn", "geo_patterns"]
 
 
 # ── Step exception isolation ────────────────────────────────────────────────

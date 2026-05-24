@@ -19,6 +19,19 @@ logger = logging.getLogger(__name__)
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
 
+_APP_URL = "https://chalie.ai"
+_APP_TITLE = "Chalie"
+
+def _read_version() -> str:
+    from services.file_mapper_service import FileMapperService
+    try:
+        return FileMapperService.get_version_path().read_text().strip()
+    except OSError:
+        return "0.0.0"
+
+def _app_user_agent() -> str:
+    return f"Chalie/{_read_version()}"
+
 def _strip_think_blocks(text: str) -> str:
     """Remove <think>...</think> chain-of-thought blocks emitted by reasoning
     models (MiniMax, DeepSeek-R1, Qwen-reasoning, etc.) served via OpenAI-
@@ -465,7 +478,11 @@ class AnthropicService:
     def _get_client(self):
         import anthropic
         api_key = _resolve_api_key(self._config)
-        return anthropic.Anthropic(api_key=api_key, timeout=self.timeout)
+        return anthropic.Anthropic(
+            api_key=api_key,
+            timeout=self.timeout,
+            default_headers={"User-Agent": _app_user_agent()},
+        )
 
     def send_message(self, system_prompt: str, user_message: str) -> LLMResponse:
         """Send a message to the Anthropic Messages API.
@@ -704,7 +721,15 @@ class OpenAIService:
     def _get_client(self):
         from openai import OpenAI
         api_key = _resolve_api_key(self._config)
-        kwargs = {'api_key': api_key, 'timeout': self.timeout}
+        kwargs = {
+            'api_key': api_key,
+            'timeout': self.timeout,
+            'default_headers': {
+                "HTTP-Referer": _APP_URL,
+                "X-Title": _APP_TITLE,
+                "User-Agent": _app_user_agent(),
+            },
+        }
         base_url = self._config.get('host')
         if base_url:
             kwargs['base_url'] = base_url
@@ -1044,7 +1069,10 @@ class GeminiService:
             )
 
         api_key = _resolve_api_key(self._config)
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options={"headers": {"User-Agent": _app_user_agent()}},
+        )
 
         start_time = time.time()
 
@@ -1141,7 +1169,10 @@ class GeminiService:
                 "Run: pip install google-genai"
             )
 
-        client = genai.Client(api_key=_resolve_api_key(self._config))
+        client = genai.Client(
+            api_key=_resolve_api_key(self._config),
+            http_options={"headers": {"User-Agent": _app_user_agent()}},
+        )
         start_time = time.time()
         gemini_contents = _gemini_convert_messages(messages)
         gen_config_kwargs = self._gemini_build_config(genai, system_prompt, tools, thinking_mode)

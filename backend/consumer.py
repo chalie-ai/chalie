@@ -24,8 +24,8 @@ from utils.logger import Logger
 def _read_version():
     """Read version from the VERSION file — single source of truth."""
     try:
-        from pathlib import Path
-        return Path(__file__).parent.parent.joinpath("VERSION").read_text().strip()
+        from services.file_mapper_service import FileMapperService
+        return FileMapperService.get_version_path().read_text().strip()
     except Exception:
         return "0.0.0"
 
@@ -118,18 +118,6 @@ class WorkerManager:
             except Exception as e:
                 logging.error(f"[Manager] Health check failed for service {worker_id}: {e}")
 
-        # Publish thread health summary to MemoryStore for self-model consumption
-        try:
-            import json
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            alive = [wid for wid, t in self.threads.items() if t.is_alive()]
-            dead = [wid for wid, t in self.threads.items() if not t.is_alive()]
-            store.setex("self_model:thread_health", 15, json.dumps({
-                "alive": alive, "dead": dead, "total": len(self.threads),
-            }))
-        except Exception:
-            pass  # never let health publication crash the health check
 
     def shutdown_all(self):
         """Initiate a graceful shutdown by clearing the running flag.

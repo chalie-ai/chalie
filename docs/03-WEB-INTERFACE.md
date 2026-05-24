@@ -55,7 +55,7 @@ While the ACT loop runs:                    Final:
 - **Tool list** (`act-tools`) — cumulative across the entire ACT loop (NOT per-iteration). Indented 24 px under the logo so it visually belongs to the row.
 - **Final response**: `replaceActWithResponse` removes the `act-cycle` node and appends a fresh `.speech-form--chalie` bubble in its place.
 
-Tool rows are minimal monospace lines — name LEFT, state RIGHT — with no chrome:
+Tool rows are minimal monospace lines — name LEFT, optional summary, state RIGHT — with no chrome. When the LLM provides an `act_summary` (a ~3-10 word description injected into every tool's `INPUT_SCHEMA` at request time), the row displays `tool_name — summary` (e.g. `search — Searching for laptops in Malta`). The summary uses `var(--text-secondary)` at `font-weight: 400` and truncates with ellipsis when space is constrained. When `act_summary` is absent the row falls back to showing only the tool name.
 
 | State | Class | Color | Status slot |
 |---|---|---|---|
@@ -65,9 +65,9 @@ Tool rows are minimal monospace lines — name LEFT, state RIGHT — with no chr
 
 Sub-100 ms tools enforce a 150 ms minimum visible duration so the spinner-to-state transition is always perceptible. Rows are display-only — no click-to-expand, no tooltips.
 
-**CSS classes:** `act-cycle` (chrome-less host), `act-row` (logo + narrative line), `act-logo` (blinking disc), `act-narrative` (italic text), `act-tools` (cumulative list), `act-tool` + `act-tool--running` / `--done` / `--error`, `act-tool__name`, `act-tool__status`, `act-spinner`. Animations: `@keyframes act-logo-pulse` (1.4 s opacity + box-shadow), `@keyframes act-spinner-spin` (0.9 s linear).
+**CSS classes:** `act-cycle` (chrome-less host), `act-row` (logo + narrative line), `act-logo` (blinking disc), `act-narrative` (italic text), `act-tools` (cumulative list), `act-tool` + `act-tool--running` / `--done` / `--error`, `act-tool__name`, `act-tool__label` (name + summary wrapper), `act-tool__summary`, `act-tool__status`, `act-spinner`. Animations: `@keyframes act-logo-pulse` (1.4 s opacity + box-shadow), `@keyframes act-spinner-spin` (0.9 s linear).
 
-**Frontend wiring:** `renderer.js` exposes `createActCycle()`, `setActNarrative(actEl, text, step)`, `appendToolPill(actEl, callId, name)`, `resolveToolPill(callId, ms, ok)`, `replaceActWithResponse(actEl, blocks, meta)`, `replaceActWithError(actEl, message)`. `chat.js` calls `createActCycle()` once on send and stores the element for the whole turn — `onNarration` calls `setActNarrative` (which mutates the single text slot in-place), `onToolStart` calls `appendToolPill(actEl, …)` (single flat list, no nesting under narrations), `onDone` calls `replaceActWithResponse` to swap the ACT UI for the final bubble. The action flow in `app.js` (deterministic skill invocation) shares the same primitives.
+**Frontend wiring:** `renderer.js` exposes `createActCycle()`, `setActNarrative(actEl, text, step)`, `appendToolPill(actEl, callId, name, summary)`, `resolveToolPill(callId, ms, ok)`, `replaceActWithResponse(actEl, blocks, meta)`, `replaceActWithError(actEl, message)`. `chat.js` calls `createActCycle()` once on send and stores the element for the whole turn — `onNarration` calls `setActNarrative` (which mutates the single text slot in-place), `onToolStart` calls `appendToolPill(actEl, …)` (single flat list, no nesting under narrations), `onDone` calls `replaceActWithResponse` to swap the ACT UI for the final bubble. The `act_tool_start` WebSocket event includes an optional `act_summary` field (omitted when the LLM does not provide one). The action flow in `app.js` (deterministic skill invocation) shares the same primitives.
 
 ## Presence Dot
 
@@ -164,7 +164,9 @@ The **Personality** subtab (under Cognition) exposes five sliders — warmth, mo
 
 The **Errors** subtab (under Cognition) shows the most recent ERROR and CRITICAL log entries from `/tmp/chalie.log`, newest first, capped at 200 entries. Served by `GET /system/observability/errors` (`@require_session`). Reads only the last ~256 KB of the log file. Returns an empty list on a missing file rather than a 500.
 
-The **Policies** tab provides per-action permission control (allow / ask / deny) across three independent contexts: Chat, Subagent, and Background (subconscious). Each action has a three-state segmented toggle. Three presets are available: Careful (reads allowed, writes ask), Balanced (restore defaults), and Autonomous (all allowed). A collapsible Blocked Actions Log section shows recent policy denials. Served by `GET/PUT /api/policies`, `POST /api/policies/reset`, `GET/DELETE /api/policies/blocked`.
+The **Policies** tab provides per-action permission control (allow / ask / deny) across four independent contexts: Chat, Subagent, Background (subconscious), and External Agent. Each action has a three-state segmented toggle (Allow / Ask / Deny). Action labels and grouping categories are derived server-side from `POLICY_CATEGORY` / `POLICY_LABELS` on each Ability class and served via the `meta` key of `GET /api/policies` — no hardcoded label lists exist in the frontend. A collapsible Blocked Actions Log section shows recent policy denials (fields: `action_id`, `context`, `created_at`). Served by `GET/PUT /api/policies`, `POST /api/policies/reset`, `GET/DELETE /api/policies/blocked`.
+
+The **Skills** tab manages curated and user-created skill playbooks. Three sections: My Skills (full CRUD with inline editor, enable/disable toggle), Curated Skills (read-only with toggle and Copy & Customise), and Skill Associations (read-only table of behavioural pattern links). Served by `GET/POST /api/skills`, `PUT/DELETE /api/skills/<id>`, `PUT /api/skills/<id>/toggle`, `POST /api/skills/<id>/copy`.
 
 ### Onboarding (`/on-boarding/`)
 

@@ -37,7 +37,6 @@ class TestAPIEndpointExistence:
         store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store), \
-             patch('api._init_dashboard_gateway'), \
              patch('api._get_or_generate_session_secret', return_value='test-secret'):
             app = create_app()
             return {rule.rule: rule.methods for rule in app.url_map.iter_rules()}

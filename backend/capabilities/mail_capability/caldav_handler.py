@@ -16,6 +16,7 @@ from datetime import timedelta
 from itertools import combinations
 
 from services.time_utils import utc_now, parse_utc
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 
@@ -668,7 +669,7 @@ class CaldavHandler:
 
             busy = []
             for due_at_str, meta_raw in rows:
-                meta = _json.loads(meta_raw) if meta_raw else {}
+                meta = parse_json_column(meta_raw)
                 start = parse_utc(due_at_str)
                 end_str = meta.get("dtend")
                 end = parse_utc(end_str) if end_str else start + timedelta(hours=1)
@@ -741,7 +742,7 @@ class CaldavHandler:
                 return {"error": f"Event '{uid}' not found"}
 
             title, meta_raw = row
-            meta = _json.loads(meta_raw) if meta_raw else {}
+            meta = parse_json_column(meta_raw)
             resolved = []
             for email in meta.get("attendees", []):
                 matches = resolve(email, limit=1)

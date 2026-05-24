@@ -112,15 +112,15 @@ class TestSystemAPI:
 
     # GET /system/observability/records
 
-    def test_records_episodes_source_returns_gist_and_id(self, client, db):
-        """Episodes source returns key=id, value=gist, ordered by last_accessed DESC (NULLs last)."""
+    def test_records_episodes_source_returns_gist_and_location(self, client, db):
+        """Episodes source returns value=gist + location, ordered by last_accessed DESC (NULLs last)."""
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at) "
-            "VALUES ('ep-a', 'first gist', 5, 'user', '2026-01-01T00:00:00', '2026-01-03T00:00:00')"
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at, location_name) "
+            "VALUES ('ep-a', 'first gist', 5, 'user', '2026-01-01T00:00:00', '2026-01-03T00:00:00', 'Valletta, Malta')"
         )
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at) "
-            "VALUES ('ep-b', 'second gist', 5, 'user', '2026-01-02T00:00:00', '2026-01-04T00:00:00')"
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at, location_name) "
+            "VALUES ('ep-b', 'second gist', 5, 'user', '2026-01-02T00:00:00', '2026-01-04T00:00:00', NULL)"
         )
         db.execute(
             "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at) "
@@ -134,13 +134,14 @@ class TestSystemAPI:
         data = resp.get_json()
         assert data['source'] == 'episodes'
         assert data['returned'] == 3
-        keys = [r['key'] for r in data['rows']]
-        # NULLs last — ep-c should be last
-        assert keys[-1] == 'ep-c'
-        # ep-b accessed more recently than ep-a
-        assert keys.index('ep-b') < keys.index('ep-a')
-        row = next(r for r in data['rows'] if r['key'] == 'ep-a')
-        assert row['value'] == 'first gist'
+        values = [r['value'] for r in data['rows']]
+        assert values[-1] == 'null access'
+        assert values.index('second gist') < values.index('first gist')
+        row = next(r for r in data['rows'] if r['value'] == 'first gist')
+        assert row['location'] == 'Valletta, Malta'
+        assert 'key' not in row
+        row_null = next(r for r in data['rows'] if r['value'] == 'second gist')
+        assert row_null['location'] == ''
 
     def test_records_search_filters_by_like(self, client, db):
         """Search param filters gist (episodes) and key/value (data_graph)."""

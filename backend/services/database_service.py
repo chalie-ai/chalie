@@ -12,7 +12,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 
-import paths
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ def get_shared_db_service() -> 'DatabaseService':
     if _shared_db_service is None:
         with _shared_lock:
             if _shared_db_service is None:
-                _shared_db_service = DatabaseService(str(paths.DB_PATH))
+                _shared_db_service = DatabaseService(str(FileMapperService.get_db_path()))
                 logger.info("[DB] Created shared DatabaseService singleton")
     return _shared_db_service
 
@@ -292,10 +292,10 @@ class DatabaseService:
 
         Args:
             db_path: Absolute path to the SQLite file. Defaults to the
-                hard-coded :data:`paths.DB_PATH`. Tests pass a temp path
-                explicitly.
+                hard-coded ``FileMapperService.get_db_path()``. Tests pass a temp
+                path explicitly.
         """
-        self.db_path = db_path or str(paths.DB_PATH)
+        self.db_path = db_path or str(FileMapperService.get_db_path())
         # Ensure the directory exists
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 

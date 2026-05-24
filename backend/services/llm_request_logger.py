@@ -29,14 +29,13 @@ logger.debug() — logging must NEVER block the LLM call.
 import json
 import logging
 import threading
-from pathlib import Path
 
+from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
-# Repo root = backend/../../ → logs/ sits next to backend/
-_LOGS_DIR = Path(__file__).parent.parent.parent / 'logs'
+_LOGS_DIR = FileMapperService.get_logs_path()
 
 # First-failure-warning flag. Disk-full / permission errors are shouted once
 # per process so Dylan notices in the logs; subsequent failures drop to debug

@@ -11,9 +11,10 @@ Callers:
   - MessageProcessor._run_full_compaction  (orchestrator reads prior state)
 """
 
-import json
 import logging
 from typing import Optional, Dict, List
+
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[COMPACTION]"
@@ -52,7 +53,7 @@ def get_compaction(channel: str) -> Optional[Dict]:
         if not row:
             return None
 
-        params = json.loads(row[1] or '{}')
+        params = parse_json_column(row[1])
         return {
             'compacted_text': row[0],
             'compacted_up_to_id': params.get('compacted_up_to_id', 0),

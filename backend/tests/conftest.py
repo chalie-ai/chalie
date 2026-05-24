@@ -101,6 +101,10 @@ def db(_db_template, tmp_path):
     original_dgs_instance = _dgs_mod._instance
     _dgs_mod._instance = None
 
+    # Invalidate heartbeat cache so it reads from this test's DB
+    from services.heartbeat_service import heartbeat_service
+    heartbeat_service._ctx = None
+
     conn = db_service._get_connection()
     try:
         yield conn
@@ -110,6 +114,7 @@ def db(_db_template, tmp_path):
         _db_mod._local.conn = None
         _db_mod._local.db_path = None
         _dgs_mod._instance = original_dgs_instance
+        heartbeat_service._ctx = None
 
 
 # ── Non-DB mock fixtures ──────────────────────────────────────────
@@ -227,7 +232,6 @@ def authed_client(db):
     with patch('services.auth_session_service.validate_session', return_value=True), \
          patch('services.memory_store.get_shared_store', return_value=real_store), \
          patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store), \
-         patch('api._init_dashboard_gateway'), \
          patch('api._get_or_generate_session_secret', return_value='test-secret'):
         app = create_app()
         app.config['TESTING'] = True
