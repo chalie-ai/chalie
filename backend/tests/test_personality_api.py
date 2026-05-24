@@ -8,19 +8,19 @@ Blueprint: api.personality (url_prefix='/settings')
 """
 
 import json
-import os
 
 import pytest
+
+from services.file_mapper_service import FileMapperService
 
 pytestmark = pytest.mark.unit
 
 
 # ── Shared corpus helper ───────────────────────────────────────────────────────
 
-_VOICES_PATH = os.path.join(
-    os.path.dirname(__file__),
-    '..', 'services', 'personality', 'voices.jsonl',
-)
+_VOICES_PATH = str(FileMapperService.get_backend_path(
+    'services', 'personality', 'voices.jsonl',
+))
 
 
 def _load_corpus() -> dict:

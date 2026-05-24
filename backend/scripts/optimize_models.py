@@ -26,9 +26,8 @@ import sys
 import time
 from pathlib import Path
 
-# Ensure backend/ is on path
-_backend = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(_backend))
+# Ensure backend/ is on path — sys.path.insert bootstrap (CLAUDE.md rule 9 exception)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import onnxruntime as ort  # noqa: E402
 
