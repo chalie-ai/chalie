@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 from pathlib import Path
@@ -45,6 +46,34 @@ class FindToolsAbility(SearchableAbility):
 
     _DB_PATH: ClassVar[Path] = FileMapperService.get_abilities_db_path()
     _LOG_PREFIX = "[FIND_TOOLS]"
+
+    def get_input_schema(self) -> dict:
+        from abilities._registry import AbilityRegistry
+        from services.message_processor import current_processor
+
+        proc = current_processor()
+        discoverable = list(getattr(proc, "DISCOVERABLE", []) or []) if proc else []
+        blocked = set(getattr(proc, "_BLOCKED", set()) or set()) if proc else set()
+
+        index = {}
+        for name in discoverable:
+            if name in blocked:
+                continue
+            try:
+                ability = AbilityRegistry.get(name)
+                index[name] = getattr(ability, "SEARCH_TOOLTIP", "") or ability.SUMMARY
+            except KeyError:
+                pass
+
+        if not index:
+            return self.INPUT_SCHEMA
+
+        schema = copy.deepcopy(self.INPUT_SCHEMA)
+        tools_index = ", ".join(f"`{k}` ({v})" for k, v in index.items())
+        schema["properties"]["query"]["description"] = (
+            f"Specify the tool name you need. Tools index: {tools_index}"
+        )
+        return schema
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         query = params.get("query", "").strip()

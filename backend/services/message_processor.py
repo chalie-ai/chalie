@@ -435,7 +435,7 @@ class MessageProcessor:
                     native.append({
                         'name': ability.NAME,
                         'description': ability.SUMMARY,
-                        'input_schema': ability.INPUT_SCHEMA,
+                        'input_schema': ability.get_input_schema(),
                     })
                 except KeyError:
                     logger.warning(

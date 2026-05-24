@@ -51,6 +51,15 @@ class Ability(ABC):
         ):
             raise TypeError(f"{cls.__name__} must define a non-empty SEARCH_TOOLTIP")
 
+    def get_input_schema(self) -> dict:
+        """Return the INPUT_SCHEMA for LLM tool presentation.
+
+        Override to enrich the schema at runtime (e.g. find_tools injects
+        a discoverable-tools index).  The default returns the class-level
+        INPUT_SCHEMA unchanged.
+        """
+        return self.INPUT_SCHEMA
+
     @staticmethod
     def handle(handler, params: dict, telemetry: dict | None) -> dict:
         action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
