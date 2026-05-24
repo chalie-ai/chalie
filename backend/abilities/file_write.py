@@ -1,15 +1,16 @@
 """FileWriteAbility — write or append content to filesystem files.
 
-Two policy sub-actions based on path:
-  - file_write.tmp  (path under CHALIE_ROOT/tmp/) — lenient, allow everywhere
-  - file_write.system (everything else) — ask in chat, deny elsewhere
+Two policy sub-actions via ``action`` parameter:
+  - file_write.tmp   — writes to CHALIE_ROOT/tmp/{uuid}.txt, allow everywhere
+  - file_write.system — writes to caller-supplied ``path``, ask in chat, deny elsewhere
 
-Act-trail guard: requires a prior `read` call on the same resolved path
-in the current transcript before any write is executed.
+Act-trail guard (system only): requires a prior ``read`` call on the same
+resolved path in the current transcript before any write is executed.
 """
 
 import json
 import logging
+import uuid
 from pathlib import Path
 
 from abilities._base import Ability
@@ -43,11 +44,14 @@ class FileWriteAbility(Ability):
             "action": {
                 "type": "string",
                 "enum": ["tmp", "system"],
-                "description": "Derived internally from path — do not set.",
+                "description": (
+                    "By default writes to /tmp. To write to an arbitrary "
+                    "path, set action to 'system' and supply 'path'."
+                ),
             },
             "path": {
                 "type": "string",
-                "description": "Absolute path to write to.",
+                "description": "Absolute path to write to. Required when action is 'system', ignored for 'tmp'.",
             },
             "content": {
                 "type": "string",
@@ -59,85 +63,67 @@ class FileWriteAbility(Ability):
                 "description": "Write mode: 'write' overwrites, 'append' adds to end. Default: write.",
             },
         },
-        "required": ["path", "content"],
+        "required": ["content"],
     }
     TIMEOUT = 15
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        path_str = params.get("path", "")
+        action = params.get("action", "tmp")
         content = params.get("content", "")
         mode = params.get("mode", "write")
 
-        if not path_str:
-            return {"text": "Error: 'path' is required."}
         if not content:
             return {"text": "Error: 'content' must not be empty."}
         if mode not in ("write", "append"):
             return {"text": f"Error: invalid mode '{mode}'. Must be 'write' or 'append'."}
 
-        target = Path(path_str).resolve()
+        if action == "system":
+            path_str = params.get("path", "")
+            if not path_str:
+                return {"text": "Error: 'path' is required when action is 'system'."}
+            target = Path(path_str).resolve()
+        else:
+            CHALIE_TMP.mkdir(parents=True, exist_ok=True)
+            target = CHALIE_TMP / f"{uuid.uuid4()}.txt"
 
-        # ── Derive sub-action from path ──────────────────────────────
-        sub_action = "tmp" if target.is_relative_to(CHALIE_TMP) else "system"
+        if action == "system":
+            if not target.parent.exists():
+                return {"text": f"Error writing to {target}: parent directory does not exist."}
 
-        # ── Policy check ─────────────────────────────────────────────
-        # ActDispatcher._enforce_policy() skips unknown action_ids. Since
-        # the LLM never sets params["action"], the dispatcher sees bare
-        # "file_write" which is not in get_defaults() — so enforcement is
-        # skipped there.  We check the path-derived sub-action here.
-        # "ask" is treated as "deny" because the ability lacks access to
-        # the dispatcher's _request_permission blocking gate.
-        from services.policy_service import PolicyService
-        from services.database_service import get_shared_db_service
+            from services.database_service import get_shared_db_service
+            guard_error = self._check_read_guard(get_shared_db_service(), target)
+            if guard_error:
+                return {"text": guard_error}
 
-        action_id = f"file_write.{sub_action}"
-        context = PolicyService.resolve_context()
-        db = get_shared_db_service()
-        svc = PolicyService(db)
-        state = svc.check(action_id, context)
-
-        if state == "deny":
-            svc.log_blocked(action_id, context, "policy_deny", {"path": path_str})
-            return {"text": f"Policy denied: {action_id} is not allowed in {context} context."}
-        if state == "ask":
-            logger.info("file_write: %s state=ask context=%s — allowing (dispatcher gate unavailable)", action_id, context)
-
-        # ── Act-trail read guard ─────────────────────────────────────
-        guard_error = self._check_read_guard(db, target)
-        if guard_error:
-            return {"text": guard_error}
-
-        # ── Write the file ───────────────────────────────────────────
         try:
-            if sub_action == "tmp":
-                target.parent.mkdir(parents=True, exist_ok=True)
-            else:
-                if not target.parent.exists():
-                    return {"text": f"Error writing to {target}: parent directory does not exist."}
-
             if mode == "append":
                 with open(target, "a", encoding="utf-8") as f:
                     f.write(content)
-                verb = "Appended"
             else:
                 with open(target, "w", encoding="utf-8") as f:
                     f.write(content)
-                verb = "Written"
 
-            n_bytes = len(content.encode("utf-8"))
-            return {"text": f"{verb} {n_bytes} bytes to {target}"}
+            stat = target.stat()
+            size_kb = round(stat.st_size / 1024, 2)
+            perms = oct(stat.st_mode)[-3:]
+            return {"text": json.dumps({
+                "status": "success",
+                "path": str(target),
+                "permission": perms,
+                "size": f"{size_kb}kb",
+            })}
 
         except OSError as exc:
             return {"text": f"Error writing to {target}: {exc}"}
 
     @staticmethod
     def _check_read_guard(db, target: Path) -> str | None:
-        """Return an error message if `read` was not called on this path first."""
+        """Return an error message if ``read`` was not called on this path first."""
         from services.message_processor import current_processor
 
         proc = current_processor()
         if proc is None:
-            return None  # fail open outside a turn (tests, workers)
+            return None
 
         transcript_id = getattr(proc, "_uid", None)
         if transcript_id is None:

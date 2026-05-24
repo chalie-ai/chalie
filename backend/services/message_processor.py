@@ -190,12 +190,11 @@ class MessageProcessor:
             " interactive actions after you have tried `read`."
         ),
         "file_write": (
-            "To use the `file_write` tool you must first use the `read` tool"
-            " on the same path you're going to write to. This ensures you see"
-            " the contents of the file prior to writing (if it exists). Also,"
-            " if you're creating notes or reference documents you should use"
-            " the `document` tool instead which allows you to find the file"
-            " more easily when you need it."
+            "By default `file_write` writes to /tmp — just supply content."
+            " To write to an arbitrary path, set action to 'system' and"
+            " supply 'path'. System writes require you to call the `read`"
+            " tool on the same path first. If you're creating notes or"
+            " reference documents use the `document` tool instead."
         ),
     }
     MAX_ITERATIONS: int = 30
