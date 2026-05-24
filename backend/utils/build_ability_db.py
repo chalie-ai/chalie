@@ -40,14 +40,8 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
         conn.load_extension("vec0")
 
 
-def _rebuild_schema(conn: sqlite3.Connection) -> None:
-    conn.execute("DROP TABLE IF EXISTS ability_search_fts")
-    conn.execute("DROP TABLE IF EXISTS ability_search_vec")
-    conn.execute("DROP INDEX IF EXISTS idx_search_entries_ability")
-    conn.execute("DROP TABLE IF EXISTS ability_search_entries")
-    conn.execute("DROP TABLE IF EXISTS abilities")
-    conn.commit()
-
+def _create_schema(conn: sqlite3.Connection) -> None:
+    """Create tables in a fresh (empty) database."""
     conn.execute("""
         CREATE TABLE abilities (
             id      INTEGER PRIMARY KEY,
@@ -152,12 +146,16 @@ def _build(db_path: Path, sha_path: Path) -> None:
 
     emb_service = EmbeddingService() if abilities else None
 
+    # Always delete and rebuild from scratch. The DB is a build artifact —
+    # incremental DROP/CREATE is pointless and fails when FTS5 is corrupted.
+    if db_path.exists():
+        db_path.unlink()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("PRAGMA foreign_keys = ON")
         _load_sqlite_vec(conn)
-        _rebuild_schema(conn)
+        _create_schema(conn)
 
         total_entries = 0
         for ability in abilities:

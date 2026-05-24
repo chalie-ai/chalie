@@ -51,12 +51,19 @@ class Ability(ABC):
         ):
             raise TypeError(f"{cls.__name__} must define a non-empty SEARCH_TOOLTIP")
 
+    def get_description(self) -> str:
+        """Return the tool description for LLM tool presentation.
+
+        Override to enrich the description at runtime (e.g. find_tools
+        appends a discoverable-tools index).  The default returns SUMMARY.
+        """
+        return self.SUMMARY
+
     def get_input_schema(self) -> dict:
         """Return the INPUT_SCHEMA for LLM tool presentation.
 
-        Override to enrich the schema at runtime (e.g. find_tools injects
-        a discoverable-tools index).  The default returns the class-level
-        INPUT_SCHEMA unchanged.
+        Override to enrich the schema at runtime.  The default returns
+        the class-level INPUT_SCHEMA unchanged.
         """
         return self.INPUT_SCHEMA
 

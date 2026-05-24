@@ -17,7 +17,7 @@ class FindToolsAbility(SearchableAbility):
     SEARCH_TOOLTIP = "discover available tools"
     POLICY_CATEGORY = "Search & Tools"
     POLICY_LABELS = {"": "Find tools"}
-    SUMMARY = "Use this tool to expose more tools and capabilities."
+    SUMMARY = "Use this tool to discover more tools and capabilities. Search for the tools you need."
     EXAMPLES = [
         "I want to check if Apple's Q2 earnings report is out yet",
         "can you look up a flight for me",
@@ -47,7 +47,8 @@ class FindToolsAbility(SearchableAbility):
     _DB_PATH: ClassVar[Path] = FileMapperService.get_abilities_db_path()
     _LOG_PREFIX = "[FIND_TOOLS]"
 
-    def get_input_schema(self) -> dict:
+    def _build_tools_index(self) -> str:
+        """Return a formatted tools index string, or '' if unavailable."""
         from abilities._registry import AbilityRegistry
         from services.message_processor import current_processor
 
@@ -66,12 +67,16 @@ class FindToolsAbility(SearchableAbility):
                 pass
 
         if not index:
-            return self.INPUT_SCHEMA
+            return ""
+        return ", ".join(f"`{k}` ({v})" for k, v in index.items())
 
+    def get_input_schema(self) -> dict:
+        tools_index = self._build_tools_index()
+        if not tools_index:
+            return self.INPUT_SCHEMA
         schema = copy.deepcopy(self.INPUT_SCHEMA)
-        tools_index = ", ".join(f"`{k}` ({v})" for k, v in index.items())
         schema["properties"]["query"]["description"] = (
-            f"Specify the tool name you need. Tools index: {tools_index}"
+            f"Specify the name of the tool you need. Tools available: {tools_index}"
         )
         return schema
 
