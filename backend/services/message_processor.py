@@ -192,7 +192,7 @@ class MessageProcessor:
             " interactive actions after you have tried `read`."
         ),
         "file_write": (
-            "`file_write` requires an absolute `path` and `content`. You"
+            "`file_write` requires an absolute `path` and `contents`. You"
             " must call the `read` tool on the same path first. If you're"
             " creating notes or reference documents use the `document` tool"
             " instead."

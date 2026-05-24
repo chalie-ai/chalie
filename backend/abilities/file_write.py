@@ -1,7 +1,8 @@
-"""FileWriteAbility — write or append content to a file at a caller-supplied path.
+"""FileWriteAbility — write content to a file at a caller-supplied absolute path.
 
-Act-trail guard: requires a prior ``read`` call on the same resolved path in
-the current transcript before any write is executed.
+Act-trail guard: if the target file already exists, a prior ``read`` call on
+the same resolved path in the current transcript is required before the write
+is executed.
 """
 
 import json
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class FileWriteAbility(Ability):
     NAME = "file_write"
-    SUMMARY = "Write or append content to a file on the filesystem."
+    SUMMARY = "Write content to a file. You MUST call the 'read' tool on the target path before writing."
     SEARCH_TOOLTIP = "File writing and creation"
     POLICY_CATEGORY = "Files"
     POLICY_LABELS = {"": "Write to files"}
@@ -23,9 +24,9 @@ class FileWriteAbility(Ability):
         "save this text to a file",
         "write this configuration to /etc/myapp/config.yaml",
         "create a new script file",
-        "append this line to the log file",
         "save the output to a temporary file",
         "write this JSON to a file so I can use it later",
+        "overwrite the contents of that file",
     ]
     INPUT_SCHEMA = {
         "type": "object",
@@ -34,60 +35,40 @@ class FileWriteAbility(Ability):
                 "type": "string",
                 "description": "Absolute path to write to.",
             },
-            "content": {
+            "contents": {
                 "type": "string",
                 "description": "Content to write to the file.",
             },
-            "mode": {
-                "type": "string",
-                "enum": ["write", "append"],
-                "description": "Write mode: 'write' overwrites, 'append' adds to end. Default: write.",
-            },
         },
-        "required": ["path", "content"],
+        "required": ["path", "contents"],
     }
-    TIMEOUT = 15
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         path_str = params.get("path", "")
-        content = params.get("content", "")
-        mode = params.get("mode", "write")
+        contents = params.get("contents", "")
 
         if not path_str:
-            return {"text": "Error: 'path' must not be empty."}
-        if not content:
-            return {"text": "Error: 'content' must not be empty."}
-        if mode not in ("write", "append"):
-            return {"text": f"Error: invalid mode '{mode}'. Must be 'write' or 'append'."}
+            return {"text": "Error: 'path' is required."}
+        if not contents:
+            return {"text": "Error: 'contents' is required."}
 
         target = Path(path_str).resolve()
 
-        if not target.parent.exists():
-            return {"text": f"Error writing to {target}: parent directory does not exist."}
-
-        from services.database_service import get_shared_db_service
-        guard_error = self._check_read_guard(get_shared_db_service(), target)
-        if guard_error:
-            return {"text": guard_error}
+        if target.exists():
+            from services.database_service import get_shared_db_service
+            guard_error = self._check_read_guard(get_shared_db_service(), target)
+            if guard_error:
+                return {"text": guard_error}
 
         try:
-            if mode == "append":
-                with open(target, "a", encoding="utf-8") as f:
-                    f.write(content)
-            else:
-                with open(target, "w", encoding="utf-8") as f:
-                    f.write(content)
-
-            stat = target.stat()
-            size_kb = round(stat.st_size / 1024, 2)
-            perms = oct(stat.st_mode)[-3:]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                f.write(contents)
             return {"text": json.dumps({
-                "status": "success",
+                "success": True,
                 "path": str(target),
-                "permission": perms,
-                "size": f"{size_kb}kb",
+                "file_size": target.stat().st_size,
             })}
-
         except OSError as exc:
             return {"text": f"Error writing to {target}: {exc}"}
 
