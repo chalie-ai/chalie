@@ -34,7 +34,10 @@ class WebDownloadAbility(Ability):
     SUMMARY = "Download a file from the internet to a temporary location for later reading or processing."
     SEARCH_TOOLTIP = "File download from URL"
     POLICY_CATEGORY = "Web"
-    POLICY_LABELS = {"": "Download file from URL"}
+    POLICY_LABELS = {
+        "tmp": "Download to temp directory",
+        "system": "Download to filesystem path",
+    }
     EXAMPLES: ClassVar[list[str]] = [
         "download this PDF so I can read it",
         "fetch the CSV file from this URL",
@@ -46,13 +49,21 @@ class WebDownloadAbility(Ability):
     INPUT_SCHEMA: ClassVar[dict] = {
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["tmp", "system"],
+                "description": (
+                    "By default downloads to /tmp. To download to a "
+                    "specific path, set action to 'system' and supply 'path'."
+                ),
+            },
             "url": {
                 "type": "string",
                 "description": "URL of the file to download",
             },
-            "destination": {
+            "path": {
                 "type": "string",
-                "description": "Destination file path. Defaults to /tmp/chalie_downloads/ if not specified.",
+                "description": "Absolute destination path. Required when action is 'system', ignored for 'tmp'.",
             },
         },
         "required": ["url"],
@@ -60,22 +71,25 @@ class WebDownloadAbility(Ability):
     TIMEOUT = 120
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> str:
+        action = params.get("action", "tmp")
         url = params.get("url", "").strip()
         if not url:
             return "There was an error downloading this file: url parameter is required"
-
-        destination = params.get("destination", "").strip() or None
 
         error = _validate_url(url)
         if error:
             return f"There was an error downloading this file: {error}"
 
-        if destination is not None:
-            error = _validate_destination(destination)
+        if action == "system":
+            path = params.get("path", "").strip()
+            if not path:
+                return "There was an error downloading this file: 'path' is required when action is 'system'"
+            error = _validate_destination(path)
             if error:
                 return f"There was an error downloading this file: {error}"
-
-        dest_path = _resolve_destination(url, destination)
+            dest_path = path
+        else:
+            dest_path = _resolve_destination(url)
 
         try:
             _perform_download(url, dest_path)
@@ -102,11 +116,9 @@ def _validate_destination(destination: str) -> str | None:
     return None
 
 
-def _resolve_destination(url: str, destination: str | None) -> str:
-    if destination is None:
-        filename = _extract_filename(url)
-        return os.path.join(_DOWNLOAD_DIR, f"{uuid.uuid4().hex}_{filename}")
-    return destination
+def _resolve_destination(url: str) -> str:
+    filename = _extract_filename(url)
+    return os.path.join(_DOWNLOAD_DIR, f"{uuid.uuid4().hex}_{filename}")
 
 
 def _extract_filename(url: str) -> str:

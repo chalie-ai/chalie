@@ -24,6 +24,7 @@ from abilities.web_download import (
     _extract_filename,
     _resolve_destination,
     _validate_url,
+    WebDownloadAbility,
 )
 
 pytestmark = pytest.mark.unit
@@ -111,32 +112,21 @@ def test_extract_filename_fallback_for_slash_only():
 
 
 # ---------------------------------------------------------------------------
-# Destination resolution
+# Destination resolution (tmp action only — system uses caller-supplied path)
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_destination_none_goes_to_tmp(tmp_path):
-    """None destination resolves to the chalie_downloads tmp directory."""
-    result = _resolve_destination("https://example.com/file.csv", None)
+def test_resolve_destination_goes_to_tmp():
+    """_resolve_destination always targets the chalie_downloads tmp directory."""
+    result = _resolve_destination("https://example.com/file.csv")
     assert result.startswith("/tmp/chalie_downloads/")
     assert "file.csv" in result
 
 
-def test_resolve_destination_explicit_tmp_path_honoured():
-    result = _resolve_destination("https://example.com/file.pdf", "/tmp/somewhere/file.pdf")
-    assert result == "/tmp/somewhere/file.pdf"
-
-
-def test_resolve_destination_absolute_path_returned_as_is():
-    """A non-/tmp absolute destination path is returned unchanged."""
-    result = _resolve_destination("https://example.com/file.json", "/root/downloads/file.json")
-    assert result == "/root/downloads/file.json"
-
-
 def test_resolve_destination_generates_unique_names():
-    """Two calls with the same URL and no destination must produce different paths."""
-    a = _resolve_destination("https://example.com/file.csv", None)
-    b = _resolve_destination("https://example.com/file.csv", None)
+    """Two calls with the same URL must produce different paths (UUID prefix)."""
+    a = _resolve_destination("https://example.com/file.csv")
+    b = _resolve_destination("https://example.com/file.csv")
     assert a != b
 
 
@@ -162,12 +152,18 @@ def test_real_download_creates_file_on_disk(tmp_path):
 
 
 @pytest.mark.integration
-def test_execute_returns_path_message_on_success(tmp_path):
-    """WebDownloadAbility.execute() with a real URL returns a success message citing the path."""
-    from abilities.web_download import WebDownloadAbility
-
+def test_execute_tmp_returns_path_message_on_success(tmp_path):
+    """WebDownloadAbility.execute() with action=tmp returns a success message citing /tmp path."""
     ability = WebDownloadAbility()
     result = ability.execute("text", {"url": "https://httpbin.org/bytes/32"}, None)
 
     assert "downloaded" in result.lower() or "/tmp/chalie_downloads/" in result
     assert "error" not in result.lower()
+
+
+def test_execute_system_requires_path():
+    """action=system without path must return an error."""
+    ability = WebDownloadAbility()
+    result = ability.execute("text", {"action": "system", "url": "https://example.com/f.txt"}, None)
+    assert "error" in result.lower()
+    assert "'path' is required" in result

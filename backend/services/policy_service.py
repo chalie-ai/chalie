@@ -142,6 +142,7 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
+    "web_download.tmp": "allow",
 }
 
 _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
@@ -173,6 +174,7 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
+    "web_download.tmp": "allow",
 }
 
 _EXTERNAL_AGENT_DENY: dict[str, State] = {
@@ -200,7 +202,7 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
     "schedule.create": "deny",
     "schedule.cancel": "deny",
     "subagent": "deny",
-    "web_download": "deny",
+    "web_download.system": "deny",
 }
 
 
