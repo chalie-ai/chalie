@@ -18,7 +18,7 @@ from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
-CHALIE_TMP = (FileMapperService._CHALIE_ROOT / "tmp").resolve()
+CHALIE_TMP = FileMapperService.get_chalie_root("tmp").resolve()
 
 
 class FileWriteAbility(Ability):
