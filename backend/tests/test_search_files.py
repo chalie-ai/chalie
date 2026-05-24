@@ -15,8 +15,8 @@ from abilities.search_files import SearchFilesAbility, _HINT
 pytestmark = pytest.mark.unit
 
 
-def _run(action: str, query: str, directory: str | None = None) -> dict:
-    params: dict = {"action": action, "query": query}
+def _run(action: str, query: str, directory: str | None = None, **extra) -> dict:
+    params: dict = {"action": action, "query": query, **extra}
     if directory is not None:
         params["directory"] = directory
     raw = SearchFilesAbility().execute("user", params, None)
@@ -38,19 +38,12 @@ def test_missing_query_returns_error(tmp_path: Path):
     assert out["error"] == "query-required"
 
 
-# ── blocked system paths ─────────────────────────────────────────────────────
+# ── no blocked paths — LLM can search anywhere ──────────────────────────────
 
 
-def test_blocked_path_etc_rejected():
-    out = _run("glob", "*", "/etc")
-    assert out["status"] == "error"
-    assert out["error"] == "system-path-blocked"
-
-
-def test_blocked_path_proc_rejected():
-    out = _run("grep", "x", "/proc")
-    assert out["status"] == "error"
-    assert out["error"] == "system-path-blocked"
+def test_etc_is_searchable():
+    out = _run("glob", "*.conf", "/etc", max_files=2)
+    assert out["status"] == "success"
 
 
 def test_missing_directory_returns_error(tmp_path: Path):
@@ -98,18 +91,6 @@ def test_glob_recursive_with_double_star(tmp_path: Path):
     assert names == ["found.log", "top.log"]
 
 
-def test_glob_skips_vcs_and_cache_dirs(tmp_path: Path):
-    for skip in (".git", "node_modules", "__pycache__", ".venv"):
-        d = tmp_path / skip
-        d.mkdir()
-        (d / "hidden.py").write_text("x")
-    (tmp_path / "real.py").write_text("x")
-
-    out = _run("glob", "*.py", str(tmp_path))
-    names = sorted(os.path.basename(p) for p in out["paths"])
-    assert names == ["real.py"]
-
-
 def test_glob_returns_hint_on_empty_match(tmp_path: Path):
     out = _run("glob", "*.nope", str(tmp_path))
     assert out["status"] == "success"
@@ -118,38 +99,69 @@ def test_glob_returns_hint_on_empty_match(tmp_path: Path):
     assert out["hint"] == _HINT
 
 
-def test_glob_result_cap_truncates_and_flags(tmp_path: Path):
-    for i in range(250):
+def test_glob_max_files_truncates_and_flags(tmp_path: Path):
+    for i in range(20):
+        (tmp_path / f"f{i}.dat").write_text("x")
+    out = _run("glob", "*.dat", str(tmp_path), max_files=5)
+    assert out["status"] == "success"
+    assert out["count"] == 5
+    assert out["truncated"] is True
+    assert len(out["paths"]) == 5
+
+
+def test_glob_default_max_files_is_10(tmp_path: Path):
+    for i in range(15):
         (tmp_path / f"f{i}.dat").write_text("x")
     out = _run("glob", "*.dat", str(tmp_path))
-    assert out["status"] == "success"
-    assert out["count"] == 200
+    assert out["count"] == 10
     assert out["truncated"] is True
-    assert len(out["paths"]) == 200
-
-
-def test_glob_payload_contains_no_excerpts_or_line_numbers(tmp_path: Path):
-    (tmp_path / "x.py").write_text("PolicyService\n" * 5)
-    out = _run("glob", "*.py", str(tmp_path))
-    # Forbidden fields — payload must stay path-list-only
-    assert "matches" not in out
-    assert "excerpts" not in out
-    assert "line" not in out
-    assert "text" not in out
 
 
 # ── grep behaviour ───────────────────────────────────────────────────────────
 
 
-def test_grep_finds_literal_match(tmp_path: Path):
-    (tmp_path / "a.py").write_text("class PolicyService:\n    pass\n")
+def test_grep_finds_literal_match_with_context(tmp_path: Path):
+    content = "\n".join(f"line {i}" for i in range(1, 11))
+    (tmp_path / "a.py").write_text(content + "\n")
+    (tmp_path / "a.py").write_text(
+        "line 1\nline 2\nline 3\nline 4\nTARGET\nline 6\nline 7\nline 8\nline 9\nline 10\n"
+    )
     (tmp_path / "b.py").write_text("nothing here\n")
 
-    out = _run("grep", "PolicyService", str(tmp_path))
+    out = _run("grep", "TARGET", str(tmp_path), context_lines=3)
     assert out["status"] == "success"
     assert out["count"] == 1
-    assert out["paths"][0].endswith("a.py")
     assert out["hint"] == _HINT
+
+    result = out["results"][0]
+    assert result["file"].endswith("a.py")
+    snippet = result["matches"][0]
+    assert "ln 5: TARGET" in snippet
+    assert "ln 2: line 2" in snippet
+    assert "ln 8: line 8" in snippet
+
+
+def test_grep_context_lines_default_is_3(tmp_path: Path):
+    lines = [f"L{i}" for i in range(1, 12)]
+    lines[5] = "NEEDLE"
+    (tmp_path / "f.txt").write_text("\n".join(lines) + "\n")
+
+    out = _run("grep", "NEEDLE", str(tmp_path))
+    snippet = out["results"][0]["matches"][0]
+    assert "ln 3: L3" in snippet  # line 6 - 3 = line 3
+    assert "ln 9: L9" in snippet  # line 6 + 3 = line 9
+    assert "ln 6: NEEDLE" in snippet
+
+
+def test_grep_context_lines_clamps_at_file_boundaries(tmp_path: Path):
+    (tmp_path / "f.txt").write_text("FIRST\nsecond\n")
+
+    out = _run("grep", "FIRST", str(tmp_path), context_lines=5)
+    snippet = out["results"][0]["matches"][0]
+    assert "ln 1: FIRST" in snippet
+    assert "ln 2: second" in snippet
+    lines = snippet.strip().split("\n")
+    assert len(lines) == 2
 
 
 def test_grep_supports_regex(tmp_path: Path):
@@ -158,7 +170,7 @@ def test_grep_supports_regex(tmp_path: Path):
 
     out = _run("grep", r"foo\d+", str(tmp_path))
     assert out["count"] == 1
-    assert out["paths"][0].endswith("a.py")
+    assert out["results"][0]["file"].endswith("a.py")
 
 
 def test_grep_invalid_regex_returns_error(tmp_path: Path):
@@ -169,30 +181,32 @@ def test_grep_invalid_regex_returns_error(tmp_path: Path):
 
 def test_grep_skips_large_files(tmp_path: Path):
     big = tmp_path / "big.txt"
-    # Just over 5 MB
     big.write_bytes(b"NEEDLE\n" + b"x" * (5 * 1024 * 1024 + 100))
     small = tmp_path / "small.txt"
     small.write_text("NEEDLE here\n")
 
     out = _run("grep", "NEEDLE", str(tmp_path))
-    paths = [os.path.basename(p) for p in out["paths"]]
-    assert "small.txt" in paths
-    assert "big.txt" not in paths
+    files = [r["file"] for r in out["results"]]
+    basenames = [os.path.basename(f) for f in files]
+    assert "small.txt" in basenames
+    assert "big.txt" not in basenames
 
 
-def test_grep_payload_contains_no_excerpts_or_line_numbers(tmp_path: Path):
-    (tmp_path / "a.py").write_text("PolicyService\n" * 10)
-    (tmp_path / "b.py").write_text("PolicyService line one\nPolicyService line two\n")
+def test_grep_max_files_caps_results(tmp_path: Path):
+    for i in range(10):
+        (tmp_path / f"f{i}.py").write_text(f"MATCH {i}\n")
+    out = _run("grep", "MATCH", str(tmp_path), max_files=3)
+    assert out["count"] == 3
+    assert out["truncated"] is True
 
-    out = _run("grep", "PolicyService", str(tmp_path))
-    assert out["status"] == "success"
-    # Result must be paths-only — guards against re-introducing per-match excerpts
-    assert "matches" not in out
-    assert "excerpts" not in out
-    assert "line" not in out
-    for p in out["paths"]:
-        assert isinstance(p, str)
-        assert p.startswith("/")
+
+def test_grep_multiple_matches_in_one_file(tmp_path: Path):
+    (tmp_path / "f.py").write_text("AAA\nbbb\nccc\nAAA\nddd\neee\n")
+    out = _run("grep", "AAA", str(tmp_path), context_lines=1)
+    result = out["results"][0]
+    assert len(result["matches"]) == 2
+    assert "ln 1: AAA" in result["matches"][0]
+    assert "ln 4: AAA" in result["matches"][1]
 
 
 # ── default directory ───────────────────────────────────────────────────────
@@ -215,7 +229,6 @@ def test_symlink_loop_does_not_hang(tmp_path: Path):
     inner = tmp_path / "inner"
     inner.mkdir()
     (inner / "real.py").write_text("x")
-    # self-referencing symlink — followlinks=False keeps the walk finite
     loop = inner / "loop"
     try:
         os.symlink(str(inner), str(loop))
@@ -224,6 +237,5 @@ def test_symlink_loop_does_not_hang(tmp_path: Path):
 
     out = _run("glob", "*.py", str(tmp_path))
     assert out["status"] == "success"
-    # Should find the single real file, not recurse into the loop
     assert out["count"] == 1
     assert out["paths"][0].endswith("real.py")

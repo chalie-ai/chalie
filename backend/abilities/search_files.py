@@ -1,9 +1,9 @@
 """SearchFilesAbility — locate files by name (glob) or content (grep).
 
-Safe purpose-built alternative to ``bash find`` / ``bash grep`` so the LLM
-does not need shell to discover files. Returns a minimal JSON list of
-absolute file paths (no excerpts, no line numbers) plus a ``hint`` pointing
-to the ``read`` tool for follow-up.
+Cross-platform alternative to ``bash find`` / ``bash grep`` so the LLM
+gets consistent behaviour across macOS, Linux, and Windows — including
+mounted drives and connected storage.  No path restrictions: the LLM may
+search any directory on the system.
 """
 
 import json
@@ -18,12 +18,9 @@ from abilities._base import Ability
 
 logger = logging.getLogger(__name__)
 
-_RESULT_CAP = 200
+_DEFAULT_MAX_FILES = 10
 _GREP_MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
-_SKIP_DIR_NAMES: frozenset[str] = frozenset({
-    ".git", ".venv", "venv", "node_modules", "__pycache__", ".cache",
-    ".mypy_cache", ".pytest_cache", ".tox",
-})
+_DEFAULT_CONTEXT_LINES = 3
 _HINT = "To read the contents of the file use the 'read' tool"
 
 
@@ -78,17 +75,30 @@ class SearchFilesAbility(Ability):
                     "user's home directory. Must be an absolute path."
                 ),
             },
+            "max_files": {
+                "type": "integer",
+                "description": (
+                    "Maximum number of files to return. Defaults to 10."
+                ),
+            },
+            "context_lines": {
+                "type": "integer",
+                "description": (
+                    "Grep only. Number of lines to show above AND below "
+                    "each matched line. Defaults to 3."
+                ),
+            },
         },
         "required": ["action", "query"],
     }
     TIMEOUT = 15
 
-    _BLOCKED_PATH_PREFIXES: ClassVar[tuple] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
-
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "")
         query = (params.get("query") or "").strip()
         directory = (params.get("directory") or "").strip()
+        max_files = params.get("max_files") or _DEFAULT_MAX_FILES
+        context_lines = params.get("context_lines") or _DEFAULT_CONTEXT_LINES
 
         if action not in ("glob", "grep"):
             return _error("invalid-action", action=action)
@@ -101,8 +111,6 @@ class SearchFilesAbility(Ability):
         except (OSError, RuntimeError) as exc:
             return _error("invalid-directory", action=action, directory=root_str, detail=str(exc)[:120])
 
-        if _is_blocked(root) or _is_blocked(Path(os.path.expanduser(root_str))):
-            return _error("system-path-blocked", action=action, directory=str(root))
         if not root.exists():
             return _error("directory-not-found", action=action, directory=str(root))
         if not root.is_dir():
@@ -110,9 +118,29 @@ class SearchFilesAbility(Ability):
 
         try:
             if action == "glob":
-                paths, truncated = _do_glob(root, query)
+                paths, truncated = _do_glob(root, query, max_files)
+                return {"text": json.dumps({
+                    "status": "success",
+                    "action": action,
+                    "query": query,
+                    "directory": str(root),
+                    "count": len(paths),
+                    "truncated": truncated,
+                    "paths": paths,
+                    "hint": _HINT,
+                })}
             else:
-                paths, truncated = _do_grep(root, query)
+                results, truncated = _do_grep(root, query, max_files, context_lines)
+                return {"text": json.dumps({
+                    "status": "success",
+                    "action": action,
+                    "query": query,
+                    "directory": str(root),
+                    "count": len(results),
+                    "truncated": truncated,
+                    "results": results,
+                    "hint": _HINT,
+                })}
         except re.error as exc:
             return _error("invalid-regex", action=action, query=query, detail=str(exc)[:120])
         except ValueError as exc:
@@ -121,32 +149,15 @@ class SearchFilesAbility(Ability):
             logger.exception("[SEARCH_FILES] Unexpected error action=%s query=%r: %s", action, query, exc)
             return _error("search-failed", action=action, query=query, detail=str(exc)[:120])
 
-        return {"text": json.dumps({
-            "status": "success",
-            "action": action,
-            "query": query,
-            "directory": str(root),
-            "count": len(paths),
-            "truncated": truncated,
-            "paths": paths,
-            "hint": _HINT,
-        })}
-
-
-def _is_blocked(path: Path) -> bool:
-    s = str(path)
-    return any(s == p or s.startswith(p + os.sep) for p in SearchFilesAbility._BLOCKED_PATH_PREFIXES)
-
 
 def _iter_files(root: Path):
-    """Yield absolute file paths under *root*, skipping VCS/cache dirs and symlinks."""
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIR_NAMES]
+    """Yield absolute file paths under *root*."""
+    for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
         for name in filenames:
             yield os.path.join(dirpath, name)
 
 
-def _do_glob(root: Path, pattern: str) -> tuple[list[str], bool]:
+def _do_glob(root: Path, pattern: str, max_files: int) -> tuple[list[str], bool]:
     matches: list[tuple[float, str]] = []
     recursive = "**" in pattern or "/" in pattern
     for fp in _iter_files(root):
@@ -164,13 +175,13 @@ def _do_glob(root: Path, pattern: str) -> tuple[list[str], bool]:
         matches.append((mtime, fp))
 
     matches.sort(key=lambda t: t[0], reverse=True)
-    truncated = len(matches) > _RESULT_CAP
-    return [p for _, p in matches[:_RESULT_CAP]], truncated
+    truncated = len(matches) > max_files
+    return [p for _, p in matches[:max_files]], truncated
 
 
-def _do_grep(root: Path, query: str) -> tuple[list[str], bool]:
+def _do_grep(root: Path, query: str, max_files: int, context_lines: int) -> tuple[list[dict], bool]:
     pattern = re.compile(query)
-    hits: list[tuple[float, str]] = []
+    results: list[tuple[float, dict]] = []
     truncated = False
     for fp in _iter_files(root):
         try:
@@ -181,18 +192,50 @@ def _do_grep(root: Path, query: str) -> tuple[list[str], bool]:
             continue
         try:
             with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
-                if not pattern.search(fh.read()):
-                    continue
-            mtime = os.path.getmtime(fp)
+                lines = fh.readlines()
         except OSError:
             continue
-        hits.append((mtime, fp))
-        if len(hits) > _RESULT_CAP:
+
+        file_matches = _extract_context(fp, lines, pattern, context_lines)
+        if not file_matches:
+            continue
+
+        try:
+            mtime = os.path.getmtime(fp)
+        except OSError:
+            mtime = 0.0
+        results.append((mtime, file_matches))
+        if len(results) > max_files:
             truncated = True
             break
 
-    hits.sort(key=lambda t: t[0], reverse=True)
-    return [p for _, p in hits[:_RESULT_CAP]], truncated
+    results.sort(key=lambda t: t[0], reverse=True)
+    return [r for _, r in results[:max_files]], truncated
+
+
+def _extract_context(fp: str, lines: list[str], pattern: re.Pattern, context_lines: int) -> dict | None:
+    """Build a context-annotated result for a single file, or None if no matches."""
+    match_indices: list[int] = []
+    for i, line in enumerate(lines):
+        if pattern.search(line):
+            match_indices.append(i)
+
+    if not match_indices:
+        return None
+
+    snippets: list[str] = []
+    for idx in match_indices:
+        start = max(0, idx - context_lines)
+        end = min(len(lines), idx + context_lines + 1)
+        snippet_lines: list[str] = []
+        for ln in range(start, end):
+            snippet_lines.append(f"ln {ln + 1}: {lines[ln].rstrip()}")
+        snippets.append("\n".join(snippet_lines))
+
+    return {
+        "file": fp,
+        "matches": snippets,
+    }
 
 
 def _error(code: str, **fields) -> dict:
