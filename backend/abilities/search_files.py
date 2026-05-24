@@ -106,10 +106,14 @@ class SearchFilesAbility(Ability):
         action = params.get("action", "")
         query = (params.get("query") or "").strip()
         directory = (params.get("directory") or "").strip()
-        raw_max = params.get("max_files")
-        max_files = max(1, min(int(raw_max), _MAX_MAX_FILES)) if raw_max is not None else _DEFAULT_MAX_FILES
-        raw_ctx = params.get("context_lines")
-        context_lines = max(0, min(int(raw_ctx), _MAX_CONTEXT_LINES)) if raw_ctx is not None else _DEFAULT_CONTEXT_LINES
+        try:
+            max_files = max(1, min(int(params["max_files"]), _MAX_MAX_FILES))
+        except (KeyError, TypeError, ValueError):
+            max_files = _DEFAULT_MAX_FILES
+        try:
+            context_lines = max(0, min(int(params["context_lines"]), _MAX_CONTEXT_LINES))
+        except (KeyError, TypeError, ValueError):
+            context_lines = _DEFAULT_CONTEXT_LINES
 
         if action not in ("glob", "grep"):
             return _error("invalid-action", action=action)
