@@ -201,12 +201,38 @@ def test_grep_max_files_caps_results(tmp_path: Path):
 
 
 def test_grep_multiple_matches_in_one_file(tmp_path: Path):
-    (tmp_path / "f.py").write_text("AAA\nbbb\nccc\nAAA\nddd\neee\n")
+    (tmp_path / "f.py").write_text("AAA\nbbb\nccc\nddd\neee\nfff\nggg\nAAA\nhhh\niii\n")
     out = _run("grep", "AAA", str(tmp_path), context_lines=1)
     result = out["results"][0]
     assert len(result["matches"]) == 2
     assert "ln 1: AAA" in result["matches"][0]
-    assert "ln 4: AAA" in result["matches"][1]
+    assert "ln 8: AAA" in result["matches"][1]
+
+
+def test_grep_adjacent_matches_merge_context(tmp_path: Path):
+    (tmp_path / "f.py").write_text("a\nMATCH1\nc\nMATCH2\ne\nf\n")
+    out = _run("grep", "MATCH", str(tmp_path), context_lines=1)
+    result = out["results"][0]
+    assert len(result["matches"]) == 1
+    snippet = result["matches"][0]
+    assert "ln 2: MATCH1" in snippet
+    assert "ln 4: MATCH2" in snippet
+    assert snippet.count("ln 3: c") == 1
+
+
+def test_negative_max_files_clamps_to_1(tmp_path: Path):
+    (tmp_path / "a.py").write_text("x")
+    (tmp_path / "b.py").write_text("x")
+    out = _run("glob", "*.py", str(tmp_path), max_files=-5)
+    assert out["status"] == "success"
+    assert out["count"] == 1
+
+
+def test_negative_context_lines_clamps_to_0(tmp_path: Path):
+    (tmp_path / "f.txt").write_text("aaa\nTARGET\nzzz\n")
+    out = _run("grep", "TARGET", str(tmp_path), context_lines=-3)
+    snippet = out["results"][0]["matches"][0]
+    assert snippet == "ln 2: TARGET"
 
 
 # ── default directory ───────────────────────────────────────────────────────

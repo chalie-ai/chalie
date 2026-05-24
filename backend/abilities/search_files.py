@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import time
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import ClassVar
@@ -19,8 +20,11 @@ from abilities._base import Ability
 logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_FILES = 10
+_MAX_MAX_FILES = 200
 _GREP_MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
 _DEFAULT_CONTEXT_LINES = 3
+_MAX_CONTEXT_LINES = 50
+_WALK_DEADLINE_SECONDS = 14  # must finish before TIMEOUT (15s)
 _HINT = "To read the contents of the file use the 'read' tool"
 
 
@@ -72,7 +76,8 @@ class SearchFilesAbility(Ability):
                 "type": "string",
                 "description": (
                     "Optional directory to search under. Defaults to the "
-                    "user's home directory. Must be an absolute path."
+                    "user's home directory. Absolute path or ~-prefixed "
+                    "home-relative path."
                 ),
             },
             "max_files": {
@@ -80,6 +85,8 @@ class SearchFilesAbility(Ability):
                 "description": (
                     "Maximum number of files to return. Defaults to 10."
                 ),
+                "minimum": 1,
+                "maximum": 200,
             },
             "context_lines": {
                 "type": "integer",
@@ -87,6 +94,8 @@ class SearchFilesAbility(Ability):
                     "Grep only. Number of lines to show above AND below "
                     "each matched line. Defaults to 3."
                 ),
+                "minimum": 0,
+                "maximum": 50,
             },
         },
         "required": ["action", "query"],
@@ -97,8 +106,10 @@ class SearchFilesAbility(Ability):
         action = params.get("action", "")
         query = (params.get("query") or "").strip()
         directory = (params.get("directory") or "").strip()
-        max_files = params.get("max_files") or _DEFAULT_MAX_FILES
-        context_lines = params.get("context_lines") or _DEFAULT_CONTEXT_LINES
+        raw_max = params.get("max_files")
+        max_files = max(1, min(int(raw_max), _MAX_MAX_FILES)) if raw_max is not None else _DEFAULT_MAX_FILES
+        raw_ctx = params.get("context_lines")
+        context_lines = max(0, min(int(raw_ctx), _MAX_CONTEXT_LINES)) if raw_ctx is not None else _DEFAULT_CONTEXT_LINES
 
         if action not in ("glob", "grep"):
             return _error("invalid-action", action=action)
@@ -150,17 +161,20 @@ class SearchFilesAbility(Ability):
             return _error("search-failed", action=action, query=query, detail=str(exc)[:120])
 
 
-def _iter_files(root: Path):
-    """Yield absolute file paths under *root*."""
+def _iter_files(root: Path, deadline: float):
+    """Yield absolute file paths under *root*, stopping at *deadline*."""
     for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        if time.monotonic() > deadline:
+            return
         for name in filenames:
             yield os.path.join(dirpath, name)
 
 
 def _do_glob(root: Path, pattern: str, max_files: int) -> tuple[list[str], bool]:
+    deadline = time.monotonic() + _WALK_DEADLINE_SECONDS
     matches: list[tuple[float, str]] = []
     recursive = "**" in pattern or "/" in pattern
-    for fp in _iter_files(root):
+    for fp in _iter_files(root, deadline):
         if recursive:
             rel = os.path.relpath(fp, root)
             if not (fnmatch(rel, pattern) or fnmatch(fp, pattern)):
@@ -180,10 +194,11 @@ def _do_glob(root: Path, pattern: str, max_files: int) -> tuple[list[str], bool]
 
 
 def _do_grep(root: Path, query: str, max_files: int, context_lines: int) -> tuple[list[dict], bool]:
+    deadline = time.monotonic() + _WALK_DEADLINE_SECONDS
     pattern = re.compile(query)
     results: list[tuple[float, dict]] = []
     truncated = False
-    for fp in _iter_files(root):
+    for fp in _iter_files(root, deadline):
         try:
             size = os.path.getsize(fp)
         except OSError:
@@ -223,10 +238,17 @@ def _extract_context(fp: str, lines: list[str], pattern: re.Pattern, context_lin
     if not match_indices:
         return None
 
-    snippets: list[str] = []
+    regions: list[tuple[int, int]] = []
     for idx in match_indices:
         start = max(0, idx - context_lines)
         end = min(len(lines), idx + context_lines + 1)
+        if regions and start <= regions[-1][1]:
+            regions[-1] = (regions[-1][0], end)
+        else:
+            regions.append((start, end))
+
+    snippets: list[str] = []
+    for start, end in regions:
         snippet_lines: list[str] = []
         for ln in range(start, end):
             snippet_lines.append(f"ln {ln + 1}: {lines[ln].rstrip()}")
