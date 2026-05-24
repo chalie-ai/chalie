@@ -164,6 +164,7 @@ class MessageProcessor:
         "contacts",
         "document",
         "email",
+        "file_permissions",
         "file_write",
         "home",
         "list",
@@ -188,6 +189,12 @@ class MessageProcessor:
             "If you only need the contents of a web-page use the `read` tool"
             " as first preference. Keep `browser` for complex website"
             " interactive actions after you have tried `read`."
+        ),
+        "file_permissions": (
+            "`file_permissions` changes Unix permissions (chmod) on a single"
+            " file or directory. Use this INSTEAD of `bash` for `chmod`."
+            " Provide an absolute `path` and a 3- or 4-digit octal"
+            " `permissions` string (e.g. '755', '644', '600')."
         ),
         "file_write": (
             "`file_write` requires an absolute `path` and `content`. You"

@@ -200,7 +200,7 @@ _DEFAULT_ALWAYS = frozenset({"find_skills", "find_tools", "memory"})
 
 _DEFAULT_DISCOVERABLE = frozenset({
     "browser", "calendar", "chalie_docs", "code_eval", "contacts", "document",
-    "email", "file_write", "home", "list", "news", "place", "programming_docs_search", "read",
+    "email", "file_permissions", "file_write", "home", "list", "news", "place", "programming_docs_search", "read",
     "review_tool_calls", "review_transcript", "schedule", "search",
     "skill_builder", "subagent", "timer", "ubiquiti", "weather", "web_download",
 })
