@@ -87,7 +87,6 @@ _CHAT_ALLOW: dict[str, State] = {
     # Reversible writes
     "document.create": "allow", "document.restore": "allow",
     "email.draft": "allow",
-    "web_download.tmp": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
@@ -114,7 +113,7 @@ _CHAT_ASK: dict[str, State] = {
     "ubiquiti.authorize_guest": "ask",
     "list.delete": "ask",
     "memory.forget": "ask",
-    "web_download.system": "ask",
+    "web_download": "ask",
 }
 
 _SUBCONSCIOUS_ALLOW: dict[str, State] = {
@@ -145,7 +144,6 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
-    "web_download.tmp": "allow",
 }
 
 _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
@@ -178,7 +176,6 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
-    "web_download.tmp": "allow",
 }
 
 _EXTERNAL_AGENT_DENY: dict[str, State] = {
@@ -207,7 +204,6 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
     "schedule.create": "deny",
     "schedule.cancel": "deny",
     "subagent": "deny",
-    "web_download.system": "deny",
 }
 
 

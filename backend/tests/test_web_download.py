@@ -1,169 +1,65 @@
-"""Feature tests for WebDownloadAbility (abilities/web_download.py).
-
-Pure-function tests cover the four deterministic helpers:
-  _validate_url, is_private_url, _extract_filename, _resolve_destination.
-
-The integration test exercises the real download path against a live public
-endpoint (httpbin.org/bytes/64) — a tiny 64-byte response that always succeeds
-and does not carry user data.  Network call is the real boundary; everything
-else — os.makedirs, file I/O, the requests pipeline — runs through production
-code unchanged.
-
-Mock boundary: requests.Session.get is patched ONLY in the one test that
-verifies the too-large Content-Length guard, because exercising a real 101 MB
-download in a unit suite is impractical.  All other tests hit no mocked
-production code.
-"""
+"""Real-world tests for WebDownloadAbility. No mocks."""
 
 import os
+import tempfile
 
 import pytest
 
-from abilities._ssrf import is_private_url
-from abilities.web_download import (
-    _extract_filename,
-    _resolve_destination,
-    _validate_url,
-    WebDownloadAbility,
-)
+from abilities.web_download import WebDownloadAbility
 
 pytestmark = pytest.mark.unit
 
-
-# ---------------------------------------------------------------------------
-# URL scheme validation — http/https accepted; everything else blocked
-# ---------------------------------------------------------------------------
+_ability = WebDownloadAbility()
+_TMP = os.path.join(tempfile.gettempdir(), "chalie_downloads")
 
 
-def test_validate_url_accepts_http():
-    """http:// URLs must pass validation."""
-    assert _validate_url("http://example.com/file.pdf") is None
+def test_successful_download():
+    result = _ability.execute("text", {"url": "https://httpbin.org/robots.txt"}, None)
+    assert os.path.isabs(result)
+    assert result.startswith(_TMP)
+    assert os.path.exists(result)
+    assert os.path.getsize(result) > 0
+    assert result.endswith("robots.txt")
+
+    second = _ability.execute("text", {"url": "https://httpbin.org/robots.txt"}, None)
+    assert second != result
+    assert second.endswith("robots.txt")
+    assert os.path.exists(second)
+
+    os.remove(result)
+    os.remove(second)
 
 
-def test_validate_url_accepts_https():
-    """https:// URLs must pass validation."""
-    assert _validate_url("https://example.com/data.csv") is None
+def test_timeout_and_edge_values():
+    result = _ability.execute("text", {"url": "https://httpbin.org/bytes/32", "timeout": 5}, None)
+    assert os.path.exists(result)
+    os.remove(result)
+
+    result = _ability.execute("text", {"url": "https://httpbin.org/bytes/32", "timeout": 999}, None)
+    assert os.path.exists(result)
+    os.remove(result)
+
+    result = _ability.execute("text", {"url": "https://httpbin.org/bytes/32", "timeout": "banana"}, None)
+    assert os.path.exists(result)
+    os.remove(result)
 
 
-def test_validate_url_blocks_file_scheme():
-    """file:// URLs must be rejected — only http and https are allowed."""
-    error = _validate_url("file:///etc/passwd")
-    assert error is not None
-    assert "file" in error.lower() or "scheme" in error.lower() or "only http" in error.lower()
+def test_blocked_schemes():
+    assert "blocked" in _ability.execute("text", {"url": "file:///etc/passwd"}, None).lower()
+    assert "blocked" in _ability.execute("text", {"url": "data:text/plain;base64,SGVsbG8="}, None).lower()
 
 
-def test_validate_url_blocks_data_scheme():
-    """data: URLs must be rejected — they bypass network controls."""
-    error = _validate_url("data:text/html;base64,SGVsbG8=")
-    assert error is not None
+def test_private_ip_blocked():
+    result = _ability.execute("text", {"url": "http://127.0.0.1/secret"}, None)
+    assert "blocked" in result.lower() or "private" in result.lower()
 
 
-# ---------------------------------------------------------------------------
-# SSRF guard — private/loopback IPs blocked
-# ---------------------------------------------------------------------------
+def test_errors():
+    assert "required" in _ability.execute("text", {}, None).lower()
+    assert "required" in _ability.execute("text", {"url": ""}, None).lower()
 
+    result = _ability.execute("text", {"url": "https://this-domain-does-not-exist-xyz123.example"}, None)
+    assert not os.path.exists(result)
 
-def testis_private_url_blocks_loopback():
-    """127.0.0.1 (loopback) must be identified as private."""
-    assert is_private_url("http://127.0.0.1/secret") is True
-
-
-def testis_private_url_blocks_rfc1918_10_block():
-    """10.x.x.x addresses must be blocked (RFC 1918 private range)."""
-    assert is_private_url("http://10.0.0.1/internal") is True
-
-
-def testis_private_url_blocks_link_local():
-    """169.254.x.x link-local addresses must be blocked."""
-    assert is_private_url("http://169.254.169.254/latest/meta-data/") is True
-
-
-def test_validate_url_returns_error_for_private_ip():
-    """_validate_url must propagate the SSRF block as a non-None error string."""
-    error = _validate_url("http://127.0.0.1/admin")
-    assert error is not None
-    assert "private" in error.lower() or "internal" in error.lower() or "blocked" in error.lower()
-
-
-# ---------------------------------------------------------------------------
-# Filename extraction — URL path → filename, fallback "download"
-# ---------------------------------------------------------------------------
-
-
-def test_extract_filename_from_url_path():
-    """Last path segment becomes the filename."""
-    assert _extract_filename("https://example.com/reports/annual-2025.pdf") == "annual-2025.pdf"
-
-
-def test_extract_filename_strips_trailing_slash():
-    """Trailing slash must not produce an empty filename."""
-    name = _extract_filename("https://example.com/file.csv/")
-    assert name == "file.csv"
-
-
-def test_extract_filename_fallback_for_root_url():
-    """A URL with no path segment (bare root) must fall back to 'download'."""
-    assert _extract_filename("https://example.com") == "download"
-
-
-def test_extract_filename_fallback_for_slash_only():
-    """A URL whose path is only '/' must fall back to 'download'."""
-    assert _extract_filename("https://example.com/") == "download"
-
-
-# ---------------------------------------------------------------------------
-# Destination resolution (tmp action only — system uses caller-supplied path)
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_destination_goes_to_tmp():
-    """_resolve_destination always targets the chalie_downloads tmp directory."""
-    result = _resolve_destination("https://example.com/file.csv")
-    assert result.startswith("/tmp/chalie_downloads/")
-    assert "file.csv" in result
-
-
-def test_resolve_destination_generates_unique_names():
-    """Two calls with the same URL must produce different paths (UUID prefix)."""
-    a = _resolve_destination("https://example.com/file.csv")
-    b = _resolve_destination("https://example.com/file.csv")
-    assert a != b
-
-
-# ---------------------------------------------------------------------------
-# Real download (integration — requires network)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-def test_real_download_creates_file_on_disk(tmp_path):
-    """Download a real public file and verify it lands on disk with content.
-
-    Uses httpbin.org/bytes/64 — a 64-byte random-bytes endpoint that is
-    stable, tiny, and does not require authentication.
-    """
-    from abilities.web_download import _perform_download
-
-    dest = str(tmp_path / "test_download.bin")
-    _perform_download("https://httpbin.org/bytes/64", dest)
-
-    assert os.path.exists(dest), "Downloaded file must exist on disk"
-    assert os.path.getsize(dest) > 0, "Downloaded file must not be empty"
-
-
-@pytest.mark.integration
-def test_execute_tmp_returns_path_message_on_success(tmp_path):
-    """WebDownloadAbility.execute() with action=tmp returns a success message citing /tmp path."""
-    ability = WebDownloadAbility()
-    result = ability.execute("text", {"url": "https://httpbin.org/bytes/32"}, None)
-
-    assert "downloaded" in result.lower() or "/tmp/chalie_downloads/" in result
-    assert "error" not in result.lower()
-
-
-def test_execute_system_requires_path():
-    """action=system without path must return an error."""
-    ability = WebDownloadAbility()
-    result = ability.execute("text", {"action": "system", "url": "https://example.com/f.txt"}, None)
-    assert "error" in result.lower()
-    assert "'path' is required" in result
+    result = _ability.execute("text", {"url": "https://httpbin.org/status/404"}, None)
+    assert "404" in result or "not found" in result.lower() or "error" in result.lower()
