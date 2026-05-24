@@ -78,6 +78,7 @@ _CHAT_ALLOW: dict[str, State] = {
     "document.upload": "allow",
     "schedule.cancel": "allow", "schedule.create": "allow", "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
+    "search_files.glob": "allow", "search_files.grep": "allow",
     "skill_builder.create": "allow",
     "skill_builder.delete": "allow",
     "skill_builder.edit": "allow",
@@ -136,6 +137,7 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "read": "allow",
     "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
+    "search_files.glob": "allow", "search_files.grep": "allow",
     "weather": "allow",
     # Internal writes
     "document.create": "allow", "document.restore": "allow",
@@ -167,6 +169,7 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "read": "allow",
     "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
+    "search_files.glob": "allow", "search_files.grep": "allow",
     "weather": "allow",
     # Reversible writes
     "document.create": "allow", "document.restore": "allow",
