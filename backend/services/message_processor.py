@@ -164,6 +164,7 @@ class MessageProcessor:
         "contacts",
         "document",
         "email",
+        "file_write",
         "home",
         "list",
         "news",
@@ -186,6 +187,14 @@ class MessageProcessor:
             "If you only need the contents of a web-page use the `read` tool"
             " as first preference. Keep `browser` for complex website"
             " interactive actions after you have tried `read`."
+        ),
+        "file_write": (
+            "To use the `file_write` tool you must first use the `read` tool"
+            " on the same path you're going to write to. This ensures you see"
+            " the contents of the file prior to writing (if it exists). Also,"
+            " if you're creating notes or reference documents you should use"
+            " the `document` tool instead which allows you to find the file"
+            " more easily when you need it."
         ),
     }
     MAX_ITERATIONS: int = 30
