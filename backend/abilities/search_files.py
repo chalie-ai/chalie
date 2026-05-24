@@ -2,15 +2,12 @@
 
 Cross-platform alternative to ``bash find`` / ``bash grep`` so the LLM
 gets consistent behaviour across macOS, Linux, and Windows — including
-mounted drives and connected storage.  No path restrictions: the LLM may
-search any directory on the system.
+mounted drives and connected storage.
 """
 
-import json
 import logging
 import os
 import re
-import time
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import ClassVar
@@ -19,13 +16,11 @@ from abilities._base import Ability
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MAX_FILES = 10
+_GLOB_DEFAULT_MAX_FILES = 10
+_GREP_DEFAULT_MAX_FILES = 5
 _MAX_MAX_FILES = 200
-_GREP_MAX_FILE_BYTES = 5 * 1024 * 1024  # 5 MB
-_DEFAULT_CONTEXT_LINES = 3
-_MAX_CONTEXT_LINES = 50
-_WALK_DEADLINE_SECONDS = 14  # must finish before TIMEOUT (15s)
-_HINT = "To read the contents of the file use the 'read' tool"
+_DEFAULT_CONTEXT_LINES = 5
+_MAX_CONTEXT_LINES = 20
 
 
 class SearchFilesAbility(Ability):
@@ -83,19 +78,16 @@ class SearchFilesAbility(Ability):
             "max_files": {
                 "type": "integer",
                 "description": (
-                    "Maximum number of files to return. Defaults to 10."
+                    "Maximum number of files to return. "
+                    "Defaults to 10 for glob, 5 for grep. Maximum 200."
                 ),
-                "minimum": 1,
-                "maximum": 200,
             },
             "context_lines": {
                 "type": "integer",
                 "description": (
                     "Grep only. Number of lines to show above AND below "
-                    "each matched line. Defaults to 3."
+                    "each matched line. Defaults to 5. Maximum 20."
                 ),
-                "minimum": 0,
-                "maximum": 50,
             },
         },
         "required": ["action", "query"],
@@ -106,79 +98,70 @@ class SearchFilesAbility(Ability):
         action = params.get("action", "")
         query = (params.get("query") or "").strip()
         directory = (params.get("directory") or "").strip()
-        try:
-            max_files = max(1, min(int(params["max_files"]), _MAX_MAX_FILES))
-        except (KeyError, TypeError, ValueError):
-            max_files = _DEFAULT_MAX_FILES
-        try:
-            context_lines = max(0, min(int(params["context_lines"]), _MAX_CONTEXT_LINES))
-        except (KeyError, TypeError, ValueError):
-            context_lines = _DEFAULT_CONTEXT_LINES
 
         if action not in ("glob", "grep"):
-            return _error("invalid-action", action=action)
+            return {"text": f"Invalid action '{action}'. Must be 'glob' or 'grep'."}
         if not query:
-            return _error("query-required", action=action)
+            return {"text": "query is required and must not be empty."}
+
+        default_max = _GREP_DEFAULT_MAX_FILES if action == "grep" else _GLOB_DEFAULT_MAX_FILES
+        max_files_raw = params.get("max_files")
+        if max_files_raw is not None:
+            try:
+                max_files = int(max_files_raw)
+            except (TypeError, ValueError):
+                return {"text": f"max_files must be an integer, got '{max_files_raw}'."}
+            if max_files < 1 or max_files > _MAX_MAX_FILES:
+                return {"text": f"max_files must be between 1 and {_MAX_MAX_FILES}, got {max_files}."}
+        else:
+            max_files = default_max
+
+        context_lines = _DEFAULT_CONTEXT_LINES
+        if action == "grep":
+            cl_raw = params.get("context_lines")
+            if cl_raw is not None:
+                try:
+                    context_lines = int(cl_raw)
+                except (TypeError, ValueError):
+                    return {"text": f"context_lines must be an integer, got '{cl_raw}'."}
+                if context_lines < 0 or context_lines > _MAX_CONTEXT_LINES:
+                    return {"text": f"context_lines must be between 0 and {_MAX_CONTEXT_LINES}, got {context_lines}."}
 
         root_str = directory or str(Path.home())
         try:
             root = Path(os.path.expanduser(root_str)).resolve()
         except (OSError, RuntimeError) as exc:
-            return _error("invalid-directory", action=action, directory=root_str, detail=str(exc)[:120])
+            return {"text": f"Invalid directory '{root_str}': {str(exc)[:120]}"}
 
         if not root.exists():
-            return _error("directory-not-found", action=action, directory=str(root))
+            return {"text": f"Directory not found: {root}"}
         if not root.is_dir():
-            return _error("not-a-directory", action=action, directory=str(root))
+            return {"text": f"Not a directory: {root}"}
 
         try:
             if action == "glob":
-                paths, truncated = _do_glob(root, query, max_files)
-                return {"text": json.dumps({
-                    "status": "success",
-                    "action": action,
-                    "query": query,
-                    "directory": str(root),
-                    "count": len(paths),
-                    "truncated": truncated,
-                    "paths": paths,
-                    "hint": _HINT,
-                })}
+                paths = _do_glob(root, query, max_files)
+                return {"text": "\n".join(paths) if paths else "No files matched."}
             else:
-                results, truncated = _do_grep(root, query, max_files, context_lines)
-                return {"text": json.dumps({
-                    "status": "success",
-                    "action": action,
-                    "query": query,
-                    "directory": str(root),
-                    "count": len(results),
-                    "truncated": truncated,
-                    "results": results,
-                    "hint": _HINT,
-                })}
+                text = _do_grep(root, query, max_files, context_lines)
+                return {"text": text if text else "No matches found."}
         except re.error as exc:
-            return _error("invalid-regex", action=action, query=query, detail=str(exc)[:120])
-        except ValueError as exc:
-            return _error("invalid-glob", action=action, query=query, detail=str(exc)[:120])
+            return {"text": f"Invalid regex '{query}': {str(exc)[:120]}"}
         except Exception as exc:
             logger.exception("[SEARCH_FILES] Unexpected error action=%s query=%r: %s", action, query, exc)
-            return _error("search-failed", action=action, query=query, detail=str(exc)[:120])
+            return {"text": f"Search failed: {str(exc)[:120]}"}
 
 
-def _iter_files(root: Path, deadline: float):
-    """Yield absolute file paths under *root*, stopping at *deadline*."""
-    for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
-        if time.monotonic() > deadline:
-            return
+def _iter_files(root: Path):
+    for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
             yield os.path.join(dirpath, name)
 
 
-def _do_glob(root: Path, pattern: str, max_files: int) -> tuple[list[str], bool]:
-    deadline = time.monotonic() + _WALK_DEADLINE_SECONDS
+def _do_glob(root: Path, pattern: str, max_files: int) -> list[str]:
     matches: list[tuple[float, str]] = []
     recursive = "**" in pattern or "/" in pattern
-    for fp in _iter_files(root, deadline):
+    for fp in _iter_files(root):
         if recursive:
             rel = os.path.relpath(fp, root)
             if not (fnmatch(rel, pattern) or fnmatch(fp, pattern)):
@@ -193,47 +176,36 @@ def _do_glob(root: Path, pattern: str, max_files: int) -> tuple[list[str], bool]
         matches.append((mtime, fp))
 
     matches.sort(key=lambda t: t[0], reverse=True)
-    truncated = len(matches) > max_files
-    return [p for _, p in matches[:max_files]], truncated
+    return [p for _, p in matches[:max_files]]
 
 
-def _do_grep(root: Path, query: str, max_files: int, context_lines: int) -> tuple[list[dict], bool]:
-    deadline = time.monotonic() + _WALK_DEADLINE_SECONDS
+def _do_grep(root: Path, query: str, max_files: int, context_lines: int) -> str:
     pattern = re.compile(query)
-    results: list[tuple[float, dict]] = []
-    truncated = False
-    for fp in _iter_files(root, deadline):
-        try:
-            size = os.path.getsize(fp)
-        except OSError:
-            continue
-        if size > _GREP_MAX_FILE_BYTES:
-            continue
+    file_blocks: list[tuple[float, str]] = []
+    for fp in _iter_files(root):
         try:
             with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
                 lines = fh.readlines()
         except OSError:
             continue
 
-        file_matches = _extract_context(fp, lines, pattern, context_lines)
-        if not file_matches:
+        block = _format_file_block(fp, lines, pattern, context_lines)
+        if not block:
             continue
 
         try:
             mtime = os.path.getmtime(fp)
         except OSError:
             mtime = 0.0
-        results.append((mtime, file_matches))
-        if len(results) > max_files:
-            truncated = True
+        file_blocks.append((mtime, block))
+        if len(file_blocks) >= max_files:
             break
 
-    results.sort(key=lambda t: t[0], reverse=True)
-    return [r for _, r in results[:max_files]], truncated
+    file_blocks.sort(key=lambda t: t[0], reverse=True)
+    return "\n----\n".join(b for _, b in file_blocks)
 
 
-def _extract_context(fp: str, lines: list[str], pattern: re.Pattern, context_lines: int) -> dict | None:
-    """Build a context-annotated result for a single file, or None if no matches."""
+def _format_file_block(fp: str, lines: list[str], pattern: re.Pattern, context_lines: int) -> str | None:
     match_indices: list[int] = []
     for i, line in enumerate(lines):
         if pattern.search(line):
@@ -251,20 +223,9 @@ def _extract_context(fp: str, lines: list[str], pattern: re.Pattern, context_lin
         else:
             regions.append((start, end))
 
-    snippets: list[str] = []
+    snippet_lines: list[str] = [fp]
     for start, end in regions:
-        snippet_lines: list[str] = []
         for ln in range(start, end):
             snippet_lines.append(f"ln {ln + 1}: {lines[ln].rstrip()}")
-        snippets.append("\n".join(snippet_lines))
 
-    return {
-        "file": fp,
-        "matches": snippets,
-    }
-
-
-def _error(code: str, **fields) -> dict:
-    payload = {"status": "error", "error": code}
-    payload.update({k: v for k, v in fields.items() if v not in (None, "")})
-    return {"text": json.dumps(payload)}
+    return "\n".join(snippet_lines)
