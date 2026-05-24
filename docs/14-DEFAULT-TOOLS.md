@@ -31,3 +31,11 @@ Executes Python snippets in a restricted sandbox. Used to verify formulas, test 
 ## Programming Docs Search
 
 Searches and reads official documentation for 12 languages and 11 major frameworks. Languages: PHP, Python, JavaScript/TypeScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL. Frameworks: Django, Flask, NumPy, Pandas, Laravel, Node.js, React, Vue, Spring, Rails, Flutter. No API key required.
+
+## Search Files
+
+Cross-platform alternative to `bash find`/`bash grep` — ensures consistent behaviour across macOS, Linux, and Windows including mounted drives and connected storage. No path restrictions: the LLM may search any directory on the system.
+
+Two actions: `glob` (filename pattern matching via `fnmatch`) and `grep` (content search via regex). `query` is required; `directory` is optional (defaults to `$HOME`). Optional `max_files` (default 10) caps the number of returned files; optional `context_lines` (default 3, grep only) controls how many lines above and below each match are shown.
+
+`glob` returns a JSON list of absolute file paths (most-recently-modified first). `grep` returns per-file results with line-numbered context snippets around each match, plus a hint to call `read` for full file contents. Grep skips files >5 MiB; symlinks are not followed (loop-safe). All contexts default to `allow` for both actions. DISCOVERABLE on every user-facing processor.
