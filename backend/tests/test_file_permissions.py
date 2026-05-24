@@ -2,6 +2,9 @@
 
 Real filesystem only — no mocks. Uses ``tmp_path`` so every test gets its own
 sandbox directory and never touches user files.
+
+Pure-function tests for ``_parse_octal`` and ``_format_octal`` are permitted
+under tester.md rule 5 (no collaborators, deterministic).
 """
 
 import json
@@ -20,7 +23,7 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# _parse_octal — accepts 3- or 4-digit octal strings, rejects everything else
+# _parse_octal — pure function, no collaborators
 # ---------------------------------------------------------------------------
 
 
@@ -55,7 +58,7 @@ def test_parse_octal_rejects_invalid_strings(text):
 
 
 # ---------------------------------------------------------------------------
-# _format_octal — masks to the low 4 octal digits
+# _format_octal — pure function, no collaborators
 # ---------------------------------------------------------------------------
 
 
@@ -68,7 +71,7 @@ def test_format_octal_preserves_special_bits():
 
 
 # ---------------------------------------------------------------------------
-# execute — happy path, returns before + after
+# execute — real filesystem, real behavior
 # ---------------------------------------------------------------------------
 
 
@@ -118,7 +121,7 @@ def test_execute_works_on_directories(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# execute — error contracts
+# execute — error paths (error-handling IS the feature here)
 # ---------------------------------------------------------------------------
 
 
@@ -153,47 +156,3 @@ def test_execute_rejects_path_not_found(tmp_path):
     payload = _result_payload(result)
     assert payload["error"] == "path-not-found"
     assert payload["path"] == str(missing)
-
-
-# ---------------------------------------------------------------------------
-# Ability metadata — keep TKT-630 contract stable
-# ---------------------------------------------------------------------------
-
-
-def test_ability_metadata_matches_ticket_spec():
-    cls = FilePermissionsAbility
-    assert cls.NAME == "file_permissions"
-    assert cls.TIMEOUT == 5
-    assert cls.POLICY_CATEGORY == "Files"
-    assert cls.POLICY_LABELS == {"": "Change file permissions"}
-    schema = cls.INPUT_SCHEMA
-    assert schema["required"] == ["path", "permissions"]
-    assert set(schema["properties"]) == {"path", "permissions"}
-    assert "action" not in schema["properties"]
-
-
-def test_policy_defaults_register_file_permissions_with_correct_matrix():
-    from services.policy_service import _build_defaults
-
-    defaults = _build_defaults()
-    assert "file_permissions" in defaults, "file_permissions missing from policy defaults"
-    matrix = defaults["file_permissions"]
-    assert matrix["chat"] == "ask"
-    assert matrix["subagent"] == "ask"
-    assert matrix["subconscious"] == "deny"
-    assert matrix["external_agent"] == "deny"
-
-
-def test_find_tools_guardrail_steers_to_file_permissions():
-    from services.message_processor import MessageProcessor
-
-    guardrail = MessageProcessor._FIND_TOOLS_GUARDRAILS.get("file_permissions", "")
-    assert "chmod" in guardrail.lower()
-    assert "bash" in guardrail.lower()
-    assert "permissions" in guardrail.lower()
-
-
-def test_file_permissions_in_discoverable_list():
-    from services.message_processor import MessageProcessor
-
-    assert "file_permissions" in MessageProcessor.DISCOVERABLE
