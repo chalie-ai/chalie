@@ -31,3 +31,7 @@ Executes Python snippets in a restricted sandbox. Used to verify formulas, test 
 ## Programming Docs Search
 
 Searches and reads official documentation for 12 languages and 11 major frameworks. Languages: PHP, Python, JavaScript/TypeScript, Go, Rust, Java, Ruby, C#, Dart, C/C++, Bash, SQL. Frameworks: Django, Flask, NumPy, Pandas, Laravel, Node.js, React, Vue, Spring, Rails, Flutter. No API key required.
+
+## Search Files
+
+Locates files on disk by filename pattern (`action='glob'`) or by content (`action='grep'`). Safe alternative to spawning `bash find`/`grep`. `query` is required; `directory` is optional and defaults to `$HOME`. Returns a paths-only JSON payload (`{status, action, query, directory, count, truncated, paths, hint}`) — no excerpts, no line numbers — plus a hint telling the LLM to call `read` to inspect contents. Guards: rejects `/etc`, `/proc`, `/dev`, `/sys`, `/var/run`; skips `.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `.cache`, `.mypy_cache`, `.pytest_cache`, `.tox`; grep skips files >5 MiB; symlinks are not followed (loop-safe); results capped at 200 with `truncated=true` flag. All contexts default to `allow` for both actions. DISCOVERABLE on every user-facing processor.
