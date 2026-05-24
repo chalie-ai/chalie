@@ -196,13 +196,6 @@ class MessageProcessor:
             " creating notes or reference documents use the `document` tool"
             " instead."
         ),
-        "search_files": (
-            "Use `search_files` to locate files BEFORE asking for `bash`."
-            " Use action='glob' when you know the filename shape (e.g."
-            " '*.py'), action='grep' when you know what's inside the file."
-            " The result is a list of file paths — call `read` afterwards"
-            " to see the contents."
-        ),
     }
     MAX_ITERATIONS: int = 30
     ITERATION_TIMEOUT: int = 1800  # seconds — per-iteration safety wall (independent of ACT loop budget)
