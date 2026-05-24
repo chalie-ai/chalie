@@ -111,6 +111,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "contacts",
     "document",
     "email",
+    "file_permissions",
     "file_write",
     "find_skills",
     "find_tools",
