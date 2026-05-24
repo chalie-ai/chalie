@@ -13,11 +13,11 @@ import logging
 from pathlib import Path
 
 from abilities._base import Ability
-from paths import APP_ROOT
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
-CHALIE_TMP = (APP_ROOT / "tmp").resolve()
+CHALIE_TMP = (FileMapperService._CHALIE_ROOT / "tmp").resolve()
 
 
 class FileWriteAbility(Ability):
