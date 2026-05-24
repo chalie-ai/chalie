@@ -1,24 +1,16 @@
-"""FileWriteAbility — write or append content to filesystem files.
+"""FileWriteAbility — write or append content to a file at a caller-supplied path.
 
-Two policy sub-actions via ``action`` parameter:
-  - file_write.tmp   — writes to CHALIE_ROOT/tmp/{uuid}.txt, allow everywhere
-  - file_write.system — writes to caller-supplied ``path``, ask in chat, deny elsewhere
-
-Act-trail guard (system only): requires a prior ``read`` call on the same
-resolved path in the current transcript before any write is executed.
+Act-trail guard: requires a prior ``read`` call on the same resolved path in
+the current transcript before any write is executed.
 """
 
 import json
 import logging
-import uuid
 from pathlib import Path
 
 from abilities._base import Ability
-from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
-
-CHALIE_TMP = FileMapperService.get_chalie_root("tmp").resolve()
 
 
 class FileWriteAbility(Ability):
@@ -26,10 +18,7 @@ class FileWriteAbility(Ability):
     SUMMARY = "Write or append content to a file on the filesystem."
     SEARCH_TOOLTIP = "File writing and creation"
     POLICY_CATEGORY = "Files"
-    POLICY_LABELS = {
-        "tmp": "Write to temp directory",
-        "system": "Write to system files",
-    }
+    POLICY_LABELS = {"": "Write to files"}
     EXAMPLES = [
         "save this text to a file",
         "write this configuration to /etc/myapp/config.yaml",
@@ -41,17 +30,9 @@ class FileWriteAbility(Ability):
     INPUT_SCHEMA = {
         "type": "object",
         "properties": {
-            "action": {
-                "type": "string",
-                "enum": ["tmp", "system"],
-                "description": (
-                    "By default writes to /tmp. To write to an arbitrary "
-                    "path, set action to 'system' and supply 'path'."
-                ),
-            },
             "path": {
                 "type": "string",
-                "description": "Absolute path to write to. Required when action is 'system', ignored for 'tmp'.",
+                "description": "Absolute path to write to.",
             },
             "content": {
                 "type": "string",
@@ -63,37 +44,31 @@ class FileWriteAbility(Ability):
                 "description": "Write mode: 'write' overwrites, 'append' adds to end. Default: write.",
             },
         },
-        "required": ["content"],
+        "required": ["path", "content"],
     }
     TIMEOUT = 15
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        action = params.get("action", "tmp")
+        path_str = params.get("path", "")
         content = params.get("content", "")
         mode = params.get("mode", "write")
 
+        if not path_str:
+            return {"text": "Error: 'path' must not be empty."}
         if not content:
             return {"text": "Error: 'content' must not be empty."}
         if mode not in ("write", "append"):
             return {"text": f"Error: invalid mode '{mode}'. Must be 'write' or 'append'."}
 
-        if action == "system":
-            path_str = params.get("path", "")
-            if not path_str:
-                return {"text": "Error: 'path' is required when action is 'system'."}
-            target = Path(path_str).resolve()
-        else:
-            CHALIE_TMP.mkdir(parents=True, exist_ok=True)
-            target = CHALIE_TMP / f"{uuid.uuid4()}.txt"
+        target = Path(path_str).resolve()
 
-        if action == "system":
-            if not target.parent.exists():
-                return {"text": f"Error writing to {target}: parent directory does not exist."}
+        if not target.parent.exists():
+            return {"text": f"Error writing to {target}: parent directory does not exist."}
 
-            from services.database_service import get_shared_db_service
-            guard_error = self._check_read_guard(get_shared_db_service(), target)
-            if guard_error:
-                return {"text": guard_error}
+        from services.database_service import get_shared_db_service
+        guard_error = self._check_read_guard(get_shared_db_service(), target)
+        if guard_error:
+            return {"text": guard_error}
 
         try:
             if mode == "append":

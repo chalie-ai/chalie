@@ -190,11 +190,10 @@ class MessageProcessor:
             " interactive actions after you have tried `read`."
         ),
         "file_write": (
-            "By default `file_write` writes to /tmp — just supply content."
-            " To write to an arbitrary path, set action to 'system' and"
-            " supply 'path'. System writes require you to call the `read`"
-            " tool on the same path first. If you're creating notes or"
-            " reference documents use the `document` tool instead."
+            "`file_write` requires an absolute `path` and `content`. You"
+            " must call the `read` tool on the same path first. If you're"
+            " creating notes or reference documents use the `document` tool"
+            " instead."
         ),
     }
     MAX_ITERATIONS: int = 30
