@@ -189,7 +189,7 @@ class TestProvidersAPI:
         assert response.status_code == 409
         data = response.get_json()
         assert "error" in data
-        assert "selected" in data["error"]
+        assert data["error"] == "Invalid provider configuration"
 
     # ------------------------------------------------------------------
     # POST /providers/test  (ollama path)

@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request
 from utils.skills_io import (
     DEFAULT_VERSION,
     SKILLS_DB_PATH,
+    USER_SKILLS_DIR,
     ensure_user_skills_dir,
     open_skills_db,
     remove_search_entries,
@@ -257,7 +258,9 @@ def delete_skill(skill_id: int):
             conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
             conn.commit()
 
-            if path.exists():
+            if path.exists() and path.resolve().is_relative_to(
+                USER_SKILLS_DIR.resolve()
+            ):
                 path.unlink()
         finally:
             conn.close()

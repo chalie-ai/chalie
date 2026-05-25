@@ -89,13 +89,13 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     Each ability dict: {"name": str, "summary": str, "embedding": list[float]}.
     Populates vec + FTS5 (contentless FTS5 needs explicit INSERT).
     """
-    from utils.build_ability_db import _rebuild_schema, _load_sqlite_vec
+    from utils.build_ability_db import _create_schema, _load_sqlite_vec
     from services.embedding_utils import pack_embedding
 
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA foreign_keys = ON")
     _load_sqlite_vec(conn)
-    _rebuild_schema(conn)
+    _create_schema(conn)
 
     for ab in abilities:
         conn.execute(
@@ -333,12 +333,12 @@ def _build_stub_db(path: Path, abilities: list) -> None:
 
     Each ability dict: {"name": str, "summary": str, "embedding": np.ndarray}.
     """
-    from utils.build_ability_db import _rebuild_schema, _load_sqlite_vec
+    from utils.build_ability_db import _create_schema, _load_sqlite_vec
     from services.embedding_utils import pack_embedding
 
     conn = sqlite3.connect(str(path))
     _load_sqlite_vec(conn)
-    _rebuild_schema(conn)
+    _create_schema(conn)
     for ab in abilities:
         conn.execute(
             "INSERT INTO abilities(name, summary) VALUES (?, ?)",

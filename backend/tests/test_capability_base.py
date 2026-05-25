@@ -18,7 +18,6 @@ I/O (database interactions are mocked via in-process helpers).
 from __future__ import annotations
 
 from datetime import timedelta
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest

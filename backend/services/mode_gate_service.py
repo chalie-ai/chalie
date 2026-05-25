@@ -32,6 +32,8 @@ import logging
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
+from services.file_mapper_service import FileMapperService as _FMS
+
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[MODE-GATE]"
@@ -61,8 +63,6 @@ _DIRECTIVE_MATH_CODING = (
 )
 
 # ── Module-level config (loaded once) ─────────────────────────────────────────
-
-from services.file_mapper_service import FileMapperService as _FMS
 
 _CONFIG_PATH = str(_FMS.get_configs_path("mode_gate.yaml"))
 

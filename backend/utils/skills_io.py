@@ -38,6 +38,8 @@ def ensure_user_skills_dir() -> None:
 
 def write_skill_file(path: Path, meta: dict) -> None:
     """Write a skill metadata dict to a YAML frontmatter file."""
+    if not path.resolve().is_relative_to(USER_SKILLS_DIR.resolve()):
+        raise ValueError("Path outside user skills directory")
     frontmatter = {
         "title": meta["title"],
         "use_for": meta["use_for"],

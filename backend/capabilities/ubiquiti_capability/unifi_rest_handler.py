@@ -56,8 +56,9 @@ def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tu
         resp = session.post(login_url, json=body, verify=False, timeout=_TIMEOUT)
 
     if not resp.ok:
+        safe_body = resp.text[:300].replace("\n", " ").replace("\r", " ")
         logger.warning(
-            "[unifi] login %s returned %d: %s", login_url, resp.status_code, resp.text[:300],
+            "[unifi] login %s returned %d: %s", login_url, resp.status_code, safe_body,
         )
     resp.raise_for_status()
     csrf = resp.headers.get("x-csrf-token", "")

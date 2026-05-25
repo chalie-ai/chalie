@@ -5,7 +5,6 @@ is never touched. Marked as integration because the embedding model is required.
 """
 
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest

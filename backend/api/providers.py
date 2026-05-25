@@ -4,6 +4,7 @@ Providers blueprint — manage LLM provider configuration via REST API.
 
 import ipaddress
 import logging
+import socket
 from urllib.parse import urlparse
 
 import requests as req
@@ -14,6 +15,25 @@ from .auth import require_session
 logger = logging.getLogger(__name__)
 
 _ERR_PROVIDER_NOT_FOUND = "Provider not found"
+
+_SAFE_VALIDATION_MESSAGES = {
+    "'model' is required",
+    "openai_compatible provider requires 'host' field "
+    "(base URL, e.g. 'https://api.minimax.io/v1')",
+    "openai_compatible provider requires 'api_key' field",
+}
+
+
+def _safe_validation_msg(exc: ValueError) -> str:
+    """Return a user-facing message from a provider validation error.
+
+    Only allowlisted messages are returned verbatim; anything else is
+    replaced with a generic string to prevent internal detail leakage.
+    """
+    msg = str(exc)
+    if msg in _SAFE_VALIDATION_MESSAGES:
+        return msg
+    return "Invalid provider configuration"
 
 providers_bp = Blueprint('providers', __name__, url_prefix='/providers')
 
@@ -56,7 +76,17 @@ def _validate_ollama_host(host: str) -> tuple[str | None, str | None]:
         if addr.is_link_local or addr.is_multicast or addr.is_reserved or addr.is_unspecified:
             return None, "Host is not allowed"
     except ValueError:
-        pass  # hostname (not an IP literal) — fine
+        try:
+            resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+            for _, _, _, _, sockaddr in resolved:
+                ip_str = sockaddr[0]
+                if ip_str in _SSRF_BLOCKED_HOSTS:
+                    return None, "Host is not allowed"
+                ip = ipaddress.ip_address(ip_str)
+                if ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+                    return None, "Host is not allowed"
+        except socket.gaierror:
+            return None, "Cannot resolve hostname"
     return safe, None
 
 
@@ -277,7 +307,7 @@ def create_provider():
         return jsonify({"provider": provider}), 201
     except ValueError as e:
         logger.warning(f"[REST API] Provider validation error: {e}")
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": _safe_validation_msg(e)}), 400
     except Exception as e:
         logger.error(f"[REST API] Failed to create provider: {e}")
         return jsonify({"error": "Failed to create provider"}), 500
@@ -330,7 +360,7 @@ def update_provider(provider_id):
         return jsonify({"provider": provider}), 200
     except ValueError as e:
         logger.warning(f"[REST API] Provider validation error: {e}")
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": _safe_validation_msg(e)}), 400
     except Exception as e:
         logger.error(f"[REST API] Failed to update provider: {e}")
         return jsonify({"error": "Failed to update provider"}), 500
@@ -354,7 +384,7 @@ def delete_provider(provider_id):
         return jsonify({"status": "deleted"}), 200
     except ValueError as e:
         logger.warning(f"[REST API] Cannot delete provider {provider_id}: {e}")
-        return jsonify({"error": str(e)}), 409
+        return jsonify({"error": _safe_validation_msg(e)}), 409
     except Exception as e:
         logger.error(f"[REST API] Failed to delete provider: {e}")
         return jsonify({"error": "Failed to delete provider"}), 500
@@ -580,7 +610,7 @@ def set_selected_provider():
         return jsonify({"provider": provider}), 200
     except ValueError as e:
         logger.warning(f"[REST API] Provider validation error: {e}")
-        return jsonify({"error": str(e)}), 400
+        return jsonify({"error": _safe_validation_msg(e)}), 400
     except Exception as e:
         logger.error(f"[REST API] Failed to set selected provider: {e}")
         return jsonify({"error": "Failed to set selected provider"}), 500
