@@ -137,58 +137,44 @@ _PROVIDERS_INSTANCE = "services.providers.Providers.instance"
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-class TestColdBootZeroTranscriptsSkips:
-    """Test 1 — empty transcript table → step returns skip string, no cursor row."""
+class TestSkipsWhenDeltaBelowThreshold:
+    """Tests 1+2 — step returns 'skip' when delta is below the 50-transcript threshold.
 
-    def test_cold_boot_zero_transcripts_skips(self, db, store):
+    Case A: no transcripts at all (cold boot) → no cursor row written.
+    Case B: cursor=10, only 30 transcripts (delta=20) → cursor unchanged.
+    """
+
+    @pytest.mark.parametrize("scenario", ["cold_boot", "under_delta"])
+    def test_skips_when_below_threshold(self, scenario, db, store):
         from services.subconscious_worker import SubconsciousWorker
+
+        if scenario == "under_delta":
+            _seed_cursor(db, 10)
+            for i in range(30):
+                db.execute(
+                    "INSERT INTO transcript (channel, role, content) VALUES ('t', 'user', ?)",
+                    (f"msg {i}",),
+                )
+            db.commit()
 
         worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
-        # No transcripts, no cursor row.
         result = worker._step_pattern_match()
 
-        assert result.startswith("skip"), (
-            f"Expected result to start with 'skip', got: {result!r}"
-        )
-        # No cursor row should have been created.
-        cursor = _fetch_cursor(db)
-        assert cursor is None, (
-            f"Expected no cursor row on cold boot, but cursor={cursor}"
-        )
+        assert result.startswith("skip"), f"Expected skip for {scenario!r}, got: {result!r}"
 
-
-class TestUnder50DeltaSkipsCursorUnchanged:
-    """Test 2 — cursor=10, 30 transcripts (delta=30) → skip, cursor still 10."""
-
-    def test_under_50_delta_skips_cursor_unchanged(self, db, store):
-        from services.subconscious_worker import SubconsciousWorker
-
-        # Seed cursor at 10.
-        _seed_cursor(db, 10)
-        # Seed 30 transcript rows with ids > 10 (auto-increment from wherever we are).
-        # We need rows with id > cursor AND max(id) - cursor < 50.
-        # Insert 30 rows; since the table starts empty, ids will be 1..30.
-        # Actual delta = 30 - 10 = 20 < 50 → skip.
-        for i in range(30):
-            db.execute(
-                "INSERT INTO transcript (channel, role, content) VALUES ('t', 'user', ?)",
-                (f"msg {i}",),
+        if scenario == "cold_boot":
+            cursor = _fetch_cursor(db)
+            assert cursor is None, (
+                f"Expected no cursor row on cold boot, but cursor={cursor}"
             )
-        db.commit()
-
-        worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
-        result = worker._step_pattern_match()
-
-        assert result.startswith("skip"), f"Expected skip, got: {result!r}"
-
-        # Cursor must still be the raw seeded value (10), not updated.
-        row = db.execute(
-            "SELECT value FROM data_graph "
-            "WHERE kind='system' AND key='pattern_match_cursor' "
-            "ORDER BY last_confirmed_at DESC LIMIT 1"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "10", f"Expected cursor='10', got {row[0]!r}"
+        else:
+            row = db.execute(
+                "SELECT value FROM data_graph "
+                "WHERE kind='system' AND key='pattern_match_cursor' "
+                "ORDER BY last_confirmed_at DESC LIMIT 1"
+            ).fetchone()
+            assert row is not None
+            assert row[0] == "10", f"Expected cursor='10', got {row[0]!r}"
 
 
 class TestFiftyPlusDeltaFiresAndWritesPattern:
@@ -235,14 +221,18 @@ class TestFiftyPlusDeltaFiresAndWritesPattern:
         assert pattern["value"]["confidence"] == pytest.approx(7.0)
 
 
-class TestSavePatternReinforceExisting:
-    """Test 4 — existing pattern at confidence X; reinforce → min(10, X+7)."""
+class TestSavePatternConfidenceCap:
+    """Tests 4+5 — reinforce always caps at 10.0, whether starting below or at the cap.
 
-    def test_reinforce_existing_min_10_prev_plus_7(self, db, store):
+    seed_confidence=4.0 → 4+7=11 → capped to 10.0.
+    seed_confidence=10.0 → already at cap → stays 10.0.
+    """
+
+    @pytest.mark.parametrize("seed_confidence", [4.0, 10.0])
+    def test_reinforce_caps_at_10(self, seed_confidence, db, store):
         from services.subconscious_worker import SubconsciousWorker
 
-        # Pre-seed at confidence=4.0 → 4+7=11 → capped at 10.
-        _seed_pattern(db, "morning_run", confidence=4.0)
+        _seed_pattern(db, "morning_run", confidence=seed_confidence)
         _seed_transcripts(db, 60)
 
         tc = _tool_call(
@@ -273,48 +263,8 @@ class TestSavePatternReinforceExisting:
         pattern = _fetch_pattern(db, "morning_run")
         assert pattern is not None
         assert pattern["value"]["confidence"] == pytest.approx(10.0), (
-            f"Expected confidence=10.0 (4+7 capped), got {pattern['value']['confidence']}"
-        )
-
-
-class TestSavePatternAt10Caps:
-    """Test 5 — existing confidence=10.0 → caps at 10 after reinforce."""
-
-    def test_existing_confidence_10_caps(self, db, store):
-        from services.subconscious_worker import SubconsciousWorker
-
-        _seed_pattern(db, "morning_run", confidence=10.0)
-        _seed_transcripts(db, 60)
-
-        tc = _tool_call(
-            "save_pattern",
-            name="morning_run",
-            frequency="weekday",
-            time_anchor="07:00",
-            summary="goes for a run in the morning",
-            evidence_transcript_ids=[1, 2],
-        )
-        call_count = {"n": 0}
-
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
-                return _make_llm_response(tool_calls=[tc])
-            return _make_llm_response(tool_calls=None)
-
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-
-            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
-            worker._step_pattern_match()
-
-        pattern = _fetch_pattern(db, "morning_run")
-        assert pattern is not None
-        assert pattern["value"]["confidence"] == pytest.approx(10.0), (
-            f"Expected confidence=10.0 (already at cap), got {pattern['value']['confidence']}"
+            f"seed={seed_confidence}: expected confidence=10.0 (cap), "
+            f"got {pattern['value']['confidence']}"
         )
 
 

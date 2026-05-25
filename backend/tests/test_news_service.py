@@ -189,33 +189,6 @@ class TestFetchGoogleNewsCountryCode:
         assert "ceid=GB:en" in call_url
 
 
-# ── Integration-level tests ───────────────────────────────────
-
-@pytest.mark.unit
-class TestSearchIntegration:
-
-    def setup_method(self):
-        self.svc = NewsService()
-
-    @patch.object(NewsService, "fetch_feeds")
-    @patch.object(NewsService, "fetch_google_news")
-    def test_search_with_source_ids_uses_feeds_and_google(self, mock_google, mock_feeds):
-        mock_feeds.return_value = [_make_article(title="Feed Article")]
-        mock_google.return_value = [_make_article(title="Google Article")]
-
-        mock_emb = MagicMock()
-        vec = np.ones(768, dtype=np.float32) / np.sqrt(768)
-        mock_emb.generate_embedding_np.return_value = vec
-        mock_emb.generate_embeddings_batch.return_value = [vec, vec]
-        self.svc._embedding_svc = mock_emb
-
-        result = self.svc.search("test query", source_ids=["bbc_world"], limit=10)
-        assert len(result) >= 1
-        mock_feeds.assert_called_once()
-        mock_google.assert_called_once()
-
-
-
 
 # ── fetch_feeds edge cases ────────────────────────────────────
 

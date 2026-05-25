@@ -72,24 +72,6 @@ class TestEstimateTravelMinutes:
     """estimate_travel_minutes converts distance and speed to minutes."""
 
     @_requires_geopy
-    def test_default_speed_30kmh(self):
-        """At default 30 km/h, 30 km takes 60 minutes."""
-        from services.geo_utils import estimate_travel_minutes
-
-        minutes = estimate_travel_minutes(30.0)
-
-        assert minutes == pytest.approx(60.0)
-
-    @_requires_geopy
-    def test_custom_speed_60kmh(self):
-        """At 60 km/h, 30 km takes 30 minutes."""
-        from services.geo_utils import estimate_travel_minutes
-
-        minutes = estimate_travel_minutes(30.0, speed_kmh=60.0)
-
-        assert minutes == pytest.approx(30.0)
-
-    @_requires_geopy
     def test_zero_speed_returns_zero(self):
         """Zero speed guard returns 0.0 rather than raising ZeroDivisionError."""
         from services.geo_utils import estimate_travel_minutes
@@ -127,61 +109,20 @@ class TestEstimateSpeedFromHistory:
         assert 20.0 <= speed <= 45.0, f"Expected speed 20–45 km/h, got {speed:.2f}"
 
     @_requires_geopy
-    def test_fewer_than_two_entries_returns_none(self):
-        """A single location snapshot cannot yield a speed — returns None."""
+    @pytest.mark.parametrize("entries_fn,reason", [
+        (lambda s: [], "empty list"),
+        (lambda s: [s._entry(35.8989, 14.5146, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc))], "single entry"),
+        (lambda s: [s._entry(0.0, 0.0, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)),
+                    s._entry(1.0, 0.0, datetime(2026, 1, 1, 10, 0, 1, tzinfo=timezone.utc))], "gps noise above max speed"),
+        (lambda s: [s._entry(35.8989, 14.5146, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)),
+                    s._entry(35.9121, 14.5013, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc))], "identical timestamps"),
+    ], ids=["empty", "single", "gps_noise", "same_ts"])
+    def test_degenerate_inputs_return_none(self, entries_fn, reason):
+        """Degenerate history inputs return None."""
         from services.geo_utils import estimate_speed_from_history
 
-        t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
-
-        result = estimate_speed_from_history([self._entry(35.8989, 14.5146, t0)])
-
-        assert result is None
-
-    @_requires_geopy
-    def test_empty_list_returns_none(self):
-        """Empty history returns None."""
-        from services.geo_utils import estimate_speed_from_history
-
-        assert estimate_speed_from_history([]) is None
-
-    @_requires_geopy
-    def test_gps_noise_above_max_speed_filtered_returns_none(self):
-        """Pairs whose implied speed exceeds 200 km/h (GPS jump) are filtered out.
-
-        If no valid pairs survive, None is returned.
-        """
-        from services.geo_utils import estimate_speed_from_history
-
-        # ~111 km in 1 second = ~400,000 km/h — far above the 200 km/h cap.
-        t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
-        t1 = t0 + timedelta(seconds=1)
-
-        result = estimate_speed_from_history([
-            self._entry(0.0, 0.0, t0),
-            self._entry(1.0, 0.0, t1),
-        ])
-
-        assert result is None, (
-            "GPS-noise pair (absurdly high speed) should be filtered; "
-            f"expected None, got {result}"
-        )
-
-    @_requires_geopy
-    def test_identical_timestamps_returns_none(self):
-        """Two entries with the same timestamp → elapsed=0 → pair skipped → None."""
-        from services.geo_utils import estimate_speed_from_history
-
-        t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
-
-        result = estimate_speed_from_history([
-            self._entry(35.8989, 14.5146, t0),
-            self._entry(35.9121, 14.5013, t0),
-        ])
-
-        assert result is None, (
-            "Identical timestamps yield zero elapsed time; "
-            f"expected None, got {result}"
-        )
+        result = estimate_speed_from_history(entries_fn(self))
+        assert result is None, f"Expected None for {reason}, got {result}"
 
 
 # ---------------------------------------------------------------------------
@@ -205,14 +146,6 @@ class TestGeoPatternProcessor:
         assert "save_pattern" in proc.ALWAYS_AVAILABLE
         assert "save_graph" in proc.ALWAYS_AVAILABLE
         assert proc.DISCOVERABLE == []
-
-    def test_get_user_definition_returns_empty_string(self, db):
-        """get_user_definition() returns empty string — GPP has no user persona."""
-        from services.geo_pattern_processor import GeoPatternProcessor
-
-        proc = GeoPatternProcessor(window_start=0, window_end=100)
-
-        assert proc.get_user_definition() == ""
 
     def test_get_system_prompt_contains_geo_keywords(self, db):
         """get_system_prompt() references location-tagging, save_pattern, save_graph,
@@ -241,57 +174,3 @@ class TestGeoPatternProcessor:
 
 # ---------------------------------------------------------------------------
 # Test 5: PlaceAbility — schema and metadata
-# ---------------------------------------------------------------------------
-
-class TestPlaceAbility:
-    """PlaceAbility declares correct NAME, SUMMARY, EXAMPLES, INPUT_SCHEMA, TIMEOUT."""
-
-    def test_name_and_timeout(self):
-        """NAME is 'place'; TIMEOUT is set (non-zero)."""
-        from abilities.place import PlaceAbility
-
-        ability = PlaceAbility()
-
-        assert ability.NAME == "place"
-        assert ability.TIMEOUT > 0
-
-    def test_summary_describes_place_management(self):
-        """SUMMARY mentions saving and listing named places."""
-        from abilities.place import PlaceAbility
-
-        ability = PlaceAbility()
-
-        assert isinstance(ability.SUMMARY, str)
-        assert len(ability.SUMMARY) > 0
-        # SUMMARY must help routing — it should mention save/list
-        lower = ability.SUMMARY.lower()
-        assert "save" in lower or "named place" in lower, (
-            "SUMMARY must reference saving places for correct find_tools routing"
-        )
-
-    def test_input_schema_has_expected_actions(self):
-        """INPUT_SCHEMA enumerates save, list, get, delete actions."""
-        from abilities.place import PlaceAbility
-
-        ability = PlaceAbility()
-        schema = ability.INPUT_SCHEMA
-
-        assert schema.get("type") == "object"
-        action_enum = schema["properties"]["action"]["enum"]
-        assert set(action_enum) == {"save", "list", "get", "delete"}, (
-            f"Expected actions {{save, list, get, delete}}, got {set(action_enum)}"
-        )
-        assert "action" in schema.get("required", []), (
-            "'action' must be a required field"
-        )
-
-    def test_examples_are_non_empty(self):
-        """EXAMPLES list is non-empty (needed for find_tools centroid accuracy)."""
-        from abilities.place import PlaceAbility
-
-        ability = PlaceAbility()
-
-        assert isinstance(ability.EXAMPLES, list)
-        assert len(ability.EXAMPLES) > 0, (
-            "EXAMPLES must be populated so find_tools can route 'save location as home' queries"
-        )

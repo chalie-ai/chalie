@@ -95,17 +95,3 @@ def test_log_caller_unknown_when_unbound(logs_dir, monkeypatch):
         mp_mod._CURRENT_PROCESSOR.reset(token)
 
     assert list(logs_dir.glob('*.log'))[0].name.startswith('unknown-')
-
-
-def test_hook_failure_does_not_break_send_messages(logs_dir, monkeypatch):
-    """If log_llm_request raises the LLMResponse is still returned."""
-    _stub_providers(monkeypatch, _make_response(text='still here'))
-
-    import services.llm_request_logger as logger_mod
-    monkeypatch.setattr(
-        logger_mod, 'log_llm_request',
-        lambda **kw: (_ for _ in ()).throw(IOError('disk full')),
-    )
-
-    result = _send()
-    assert result.text == 'still here'

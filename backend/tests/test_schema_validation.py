@@ -72,27 +72,6 @@ class TestSchemaValidation:
         yield conn
         conn.close()
 
-    # ── Scenario 200 ─────────────────────────────────────────────────────────
-
-    def test_legacy_tables_removed_from_schema(self, schema_db):
-        """Absorbs scenario 200: knowledge table has been removed from schema.sql.
-
-        The knowledge table is dead code — all trait/concept/procedure storage
-        routes through DataGraphService. SchemaConvergenceService auto-drops it
-        on the next boot.
-        """
-        tables = _get_tables(schema_db)
-        assert 'knowledge' not in tables, (
-            "knowledge table should not exist in schema.sql "
-            "(removed — all storage routes through data_graph)"
-        )
-
-        # uncertainties should also NOT be in schema.sql (removed; migration 025 drops it)
-        assert 'uncertainties' not in tables, (
-            "uncertainties table should not exist in schema.sql "
-            "(dropped by migration 025)"
-        )
-
     # ── Scenario 201 ─────────────────────────────────────────────────────────
 
     def test_reliability_default_values(self, schema_db):

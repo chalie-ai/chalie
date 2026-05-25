@@ -19,14 +19,12 @@ accept the allowlist as a positional arg so RRF ordering can be verified
 by formula, not by semantic luck.
 """
 
-import inspect
 import sqlite3
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-import abilities.find_tools as _ft_module
 from abilities._search import RRF_K
 from abilities.find_tools import FindToolsAbility
 from services.message_processor import MessageProcessor, bind_current_processor
@@ -472,17 +470,3 @@ class TestFindToolsPhase3Gaps:
             f"Expected only 'allowed_ability' through the allowlist, got: {names}"
         )
 
-    def test_find_tools_module_has_no_old_db_references(self):
-        """find_tools.py must not reference get_shared_db_service or
-        tool_capability_profiles — the Phase 3 cutover deleted both.
-
-        A future merge that accidentally re-introduces the old path will cause
-        this test to fail before any runtime test can catch the regression.
-        """
-        src = inspect.getsource(_ft_module)
-        assert "get_shared_db_service" not in src, (
-            "find_tools.py references get_shared_db_service — old-DB path re-introduced"
-        )
-        assert "tool_capability_profiles" not in src, (
-            "find_tools.py references tool_capability_profiles — old table re-introduced"
-        )

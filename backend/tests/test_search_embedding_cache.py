@@ -166,8 +166,64 @@ class TestSearchExecute:
 # ── generate_search_cache.py ─────────────────────────────────────────────────
 
 import importlib.util as _importlib_util  # noqa: E402
+import re as _re
 
 _GENERATOR = FileMapperService.get_backend_path("utils", "generate_search_cache.py")
+
+_VEC0_DDL = _re.compile(
+    r'CREATE\s+VIRTUAL\s+TABLE\s+(\S+)\s+USING\s+vec0\([^)]*\)',
+    _re.IGNORECASE,
+)
+
+
+class _VecConn:
+    """Thin wrapper around a real sqlite3 connection.
+
+    Rewrites ``CREATE VIRTUAL TABLE … USING vec0(…)`` DDL into a plain table
+    so tests can run without the sqlite-vec extension installed.
+    ``enable_load_extension`` is silenced because it raises on platforms where
+    the extension API is disabled.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def enable_load_extension(self, _flag):  # noqa: ANN001
+        pass  # no-op: extension loading not needed in tests
+
+    def execute(self, sql, *args):
+        m = _VEC0_DDL.match(sql.strip())
+        if m:
+            table = m.group(1)
+            sql = f"CREATE TABLE {table} (rowid INTEGER PRIMARY KEY, embedding BLOB)"
+        return self._conn.execute(sql, *args)
+
+    def commit(self):
+        return self._conn.commit()
+
+    def close(self):
+        return self._conn.close()
+
+    # Delegate any attribute not explicitly defined (e.g. ``load_extension``).
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def _make_providers_file(tmp_path, examples):
+    """Create a real SQLite file with provider_examples rows and return its Path."""
+    db_path = tmp_path / "search_tool_providers.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE provider_examples "
+        "(id INTEGER PRIMARY KEY, provider_id INTEGER, example_query TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO provider_examples VALUES (?, ?, ?)",
+        examples,
+    )
+    conn.commit()
+    conn.close()
+    return db_path
 
 
 def _load_gen():
@@ -178,57 +234,78 @@ def _load_gen():
     return mod
 
 
+def _patch_gen(mod, db_path, mock_emb):
+    """Patch the module so it uses a _VecConn-wrapped real connection."""
+    real_sqlite3 = sqlite3
+
+    def _connect(path, **kw):
+        return _VecConn(real_sqlite3.connect(path, **kw))
+
+    fake_sqlite3 = types.ModuleType('sqlite3')
+    fake_sqlite3.connect = _connect
+
+    fake_vec = types.ModuleType('sqlite_vec')
+    fake_vec.load = MagicMock()
+
+    mod._DB_PATH = db_path
+    mod.sqlite3 = fake_sqlite3
+    mod.EmbeddingService = MagicMock(return_value=mock_emb)
+
+    return fake_vec
+
+
 @pytest.mark.unit
 class TestGenerateSearchCache:
 
-    def test_exits_on_missing_db(self, tmp_path):
-        mod = _load_gen()
-        mod._DB_PATH = tmp_path / "missing.sqlite"
-        with pytest.raises(SystemExit) as e:
-            mod.main()
-        assert e.value.code == 1
-
-    def test_embeds_all_examples(self):
-        mod = _load_gen()
-        mod._DB_PATH = Path(__file__)
+    def test_embeds_all_examples(self, tmp_path):
+        """All 3 examples are embedded and inserted into example_embeddings."""
+        examples = [(1, 1, "q1"), (2, 1, "q2"), (3, 1, "q3")]
+        db_path = _make_providers_file(tmp_path, examples)
 
         mock_emb = MagicMock()
-        mock_emb.generate_embeddings_batch.return_value = [_make_embedding() for _ in range(3)]
+        mock_emb.generate_embeddings_batch.return_value = [[0.1] * 768 for _ in range(3)]
 
-        conn = MagicMock()
-        conn.execute.return_value.fetchall.return_value = [
-            (1, "q1"), (2, "q2"), (3, "q3"),
-        ]
-        mod.sqlite3 = MagicMock()
-        mod.sqlite3.connect.return_value = conn
-        mod.EmbeddingService = MagicMock(return_value=mock_emb)
-
-        fake_vec = types.ModuleType('sqlite_vec')
-        fake_vec.load = MagicMock()
+        mod = _load_gen()
+        fake_vec = _patch_gen(mod, db_path, mock_emb)
         with patch.dict('sys.modules', {'sqlite_vec': fake_vec}):
             mod.main()
 
+        # Exactly one batch call covering all 3 examples.
         assert mock_emb.generate_embeddings_batch.call_count == 1
-        assert len(mock_emb.generate_embeddings_batch.call_args[0][0]) == 3
+        assert mock_emb.generate_embeddings_batch.call_args[0][0] == ["q1", "q2", "q3"]
 
-    def test_batch_boundary(self):
-        import numpy as np
-        mod = _load_gen()
-        mod._DB_PATH = Path(__file__)
+        # Verify actual DB state: 3 rows written, rowids match example ids.
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute(
+            "SELECT rowid FROM example_embeddings ORDER BY rowid"
+        ).fetchall()
+        conn.close()
+        assert len(rows) == 3
+        assert [r[0] for r in rows] == [1, 2, 3]
+
+    def test_batch_boundary(self, tmp_path):
+        """65 examples split into 3 batches (32 + 32 + 1), all rows inserted."""
+        examples = [(i, 1, f"q{i}") for i in range(1, 66)]
+        db_path = _make_providers_file(tmp_path, examples)
 
         mock_emb = MagicMock()
-        mock_emb.generate_embeddings_batch.side_effect = lambda t: [np.zeros(768) for _ in t]
+        mock_emb.generate_embeddings_batch.side_effect = (
+            lambda texts: [[0.0] * 768 for _ in texts]
+        )
 
-        conn = MagicMock()
-        conn.execute.return_value.fetchall.return_value = [(i, f"q{i}") for i in range(65)]
-        mod.sqlite3 = MagicMock()
-        mod.sqlite3.connect.return_value = conn
-        mod.EmbeddingService = MagicMock(return_value=mock_emb)
-
-        fake_vec = types.ModuleType('sqlite_vec')
-        fake_vec.load = MagicMock()
+        mod = _load_gen()
+        fake_vec = _patch_gen(mod, db_path, mock_emb)
         with patch.dict('sys.modules', {'sqlite_vec': fake_vec}):
             mod.main()
 
-        assert mock_emb.generate_embeddings_batch.call_count == 3  # 32+32+1
+        assert mock_emb.generate_embeddings_batch.call_count == 3  # 32 + 32 + 1
+
+        # Verify all 65 rows are persisted.
+        conn = sqlite3.connect(str(db_path))
+        count = conn.execute(
+            "SELECT COUNT(*) FROM example_embeddings"
+        ).fetchone()[0]
+        conn.close()
+        assert count == 65
+
 

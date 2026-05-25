@@ -5,11 +5,7 @@ Covers:
 - :class:`capabilities.base.AbstractCapability` — abstract interface,
   concrete stub instantiation, connection state, and credential helpers.
 - :func:`capabilities.load_capabilities` — filesystem-based discovery.
-- :func:`capabilities.caldav_capability.providers.resolve_provider` — provider
-  lookup including unknown name handling.
-- ``capabilities/caldav_capability/manifest.yaml`` — required manifest fields.
-- :data:`capabilities.caldav_capability.providers.PROVIDERS` — all 6 expected
-  provider entries are present.
+- Health tracking, backoff logic, and manifest loading for the mail capability.
 
 All tests use ``@pytest.mark.unit`` and perform no real network or file-system
 I/O (database interactions are mocked via in-process helpers).

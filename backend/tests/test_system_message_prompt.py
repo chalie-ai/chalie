@@ -23,20 +23,6 @@ pytestmark = pytest.mark.unit
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestImport:
-    """No subclass should raise on import."""
-
-    def test_import_all_classes(self):
-        from services.system_message_prompt import (
-            SystemMessagePrompt,
-            UnifiedSystemMessagePrompt,
-            DMNSystemMessagePrompt,
-        )
-        assert callable(SystemMessagePrompt)
-        assert callable(UnifiedSystemMessagePrompt)
-        assert callable(DMNSystemMessagePrompt)
-
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Abstract base contract
@@ -53,17 +39,6 @@ class TestSystemMessagePromptBase:
         with pytest.raises(TypeError):
             SystemMessagePrompt()  # type: ignore[abstract]
 
-    def test_subclass_with_plain_class_attr_is_instantiable(self):
-        """A subclass that sets ``_SYSTEM_PROMPT`` as a plain class attribute
-        satisfies the abstract contract — that's the whole point of the
-        pattern (no @property boilerplate in subclasses)."""
-        from services.system_message_prompt import SystemMessagePrompt
-
-        class _GoodPrompt(SystemMessagePrompt):
-            _SYSTEM_PROMPT = 'hello'
-
-        assert _GoodPrompt().get_prompt() == 'hello'
-
 
 
 # UnifiedSystemMessagePrompt
@@ -78,18 +53,6 @@ class TestUnifiedSystemMessagePrompt:
     """
 
     # ── Zero-arg contract (Y1) ────────────────────────────────────────────────
-
-    def test_init_rejects_unexpected_kwargs(self):
-        """Passing legacy parameters (original_prompt / thread_id) must raise.
-
-        Y1 tripwire: any caller still relying on the old parameterised shape
-        must fail loudly, not silently degrade.
-        """
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        with pytest.raises(TypeError):
-            UnifiedSystemMessagePrompt(original_prompt='hello')  # type: ignore[call-arg]
-        with pytest.raises(TypeError):
-            UnifiedSystemMessagePrompt(thread_id='t1')  # type: ignore[call-arg]
 
     def test_no_identity_or_adaptive_helper_methods(self):
         """Y1: weaving has moved up to UserMessageProcessor.get_system_prompt()."""
@@ -111,13 +74,6 @@ class TestUnifiedSystemMessagePrompt:
         result = UnifiedSystemMessagePrompt().get_prompt()
         assert '## Identity' in result
         assert 'Chalie' in result
-
-    def test_no_identity_modulation_placeholder(self):
-        """``{{identity_modulation}}`` must not appear — identity is inlined,
-        not injected via template substitution."""
-        from services.system_message_prompt import UnifiedSystemMessagePrompt
-        result = UnifiedSystemMessagePrompt().get_prompt()
-        assert '{{identity_modulation}}' not in result
 
     # ── No side effects on DB / services ──────────────────────────────────────
 

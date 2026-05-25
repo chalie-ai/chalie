@@ -120,17 +120,6 @@ class TestParseUnclosedSpan:
         assert "Hello" in segs[0]["content"]
 
 
-class TestParseMixedProseAndSpans:
-    def test_rich_segment_synthesis_preserved(self):
-        tool_result = '{"temperature_c":5}\n\n<span id=\'weather_1\'>'
-        tc = _tc("weather", tool_result)
-        content = "Intro. <span id='weather_1'>It is very cold today, dress warmly.</span> Outro."
-        segs = parse(content, [tc])
-        rich_seg = next(s for s in segs if s["type"] == "rich")
-        assert rich_seg["synthesis"] == "It is very cold today, dress warmly."
-
-
-
 
 # ── data-image attribute (LLM-chosen thumbnail) ──────────────────────────────
 

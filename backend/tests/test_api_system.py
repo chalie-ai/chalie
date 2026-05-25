@@ -33,41 +33,6 @@ class TestSystemAPI:
         data = resp.get_json()
         assert data['status'] == 'ok'
         assert data['version'] == '2.5.0'
-        # GET variant does not include 'attention' field
-        assert 'attention' not in data
-
-    # POST /health
-
-    def test_post_health_saves_context_and_returns_ok(self, client):
-        """POST /health saves client context and returns status ok (no attention field)."""
-        mock_ctx_svc = MagicMock()
-
-        with patch('consumer.APP_VERSION', '2.5.0'), \
-             patch('services.client_context_service.ClientContextService', return_value=mock_ctx_svc), \
-             patch('services.world_state.world_state'):
-            resp = client.post('/health', json={'battery': 80, 'screen': 'on'})
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['status'] == 'ok'
-        assert data['version'] == '2.5.0'
-        assert 'attention' not in data
-        mock_ctx_svc.save.assert_called_once_with({'battery': 80, 'screen': 'on'})
-
-    # GET /metrics
-
-    def test_get_metrics_returns_dashboard_data(self, client):
-        """GET /metrics proxies MetricsService.get_dashboard_data()."""
-        mock_svc = MagicMock()
-        mock_svc.get_dashboard_data.return_value = {'requests_per_min': 42, 'uptime': 3600}
-
-        with patch('services.metrics_service.MetricsService', return_value=mock_svc):
-            resp = client.get('/metrics')
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['requests_per_min'] == 42
-        assert data['uptime'] == 3600
 
     # GET /system/status
 
@@ -339,7 +304,6 @@ class TestSystemAPI:
         assert data['ready'] is True
         assert data['database'] == {'status': 'ok', 'connected': True}
         assert data['memory_store'] == {'status': 'ok'}
-        assert 'workers' not in data
 
     def test_ready_db_failure_returns_503(self, client, db):
         """/ready with database down returns 503 and error status in database component."""

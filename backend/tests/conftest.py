@@ -8,7 +8,7 @@ No real external connections. MemoryStore IS the production implementation.
 """
 
 import shutil
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -127,10 +127,6 @@ def store():
     legacy ``MemoryClientService.create_connection()`` shim so every code path
     sees the same isolated instance.
 
-    Prefer this fixture over ``mock_store`` for new tests.  The ``mock_store``
-    name is kept as a backward-compat alias so existing tests continue to work
-    without a big-bang rename.
-
     Yields:
         MemoryStore: A fresh, fully-functional in-process store instance.
     """
@@ -139,67 +135,6 @@ def store():
     with patch('services.memory_store.get_shared_store', return_value=_store), \
          patch('services.memory_client.MemoryClientService.create_connection', return_value=_store):
         yield _store
-
-
-@pytest.fixture
-def mock_store(store):
-    """Backward-compat alias for the ``store`` fixture.
-
-    .. deprecated::
-        Use ``store`` directly in new tests.
-        # TODO: remove after all references migrated
-
-    Yields:
-        MemoryStore: Delegates to the ``store`` fixture unchanged.
-    """
-    yield store
-
-
-
-@pytest.fixture
-def mock_ollama():
-    """Mock OllamaService — no real LLM calls."""
-    from services.llm_service import LLMResponse
-    mock = MagicMock()
-    mock.send_message.return_value = LLMResponse(
-        text='{"gists": [], "scope": "test"}',
-        model='test-model',
-        provider='ollama',
-    )
-    mock.generate_embedding.return_value = [0.0] * 256
-    with patch('services.ollama_service.OllamaService', return_value=mock):
-        yield mock
-
-
-
-
-@pytest.fixture
-def mock_llm():
-    """Configurable LLM mock — set mock_llm.response_text before calling.
-
-    Usage:
-        def test_something(self, mock_llm):
-            mock_llm.response_text = '{"verdict": "good"}'
-            # Now any service calling create_llm_service().send_message() gets that text
-    """
-    from services.llm_service import LLMResponse
-    mock = MagicMock()
-
-    # Default response — override via mock.response_text
-    mock.response_text = '{"result": "ok"}'
-
-    def _send_message(*args, **kwargs):
-        return LLMResponse(
-            text=mock.response_text,
-            model='test-model',
-            provider='mock',
-        )
-
-    mock.send_message.side_effect = _send_message
-    mock.generate_embedding.return_value = [0.0] * 256
-
-    with patch('services.llm_service.create_llm_service', return_value=mock):
-        yield mock
 
 
 @pytest.fixture
@@ -240,35 +175,7 @@ def authed_client(db):
 
 
 @pytest.fixture
-def mock_requests():
-    """Mock requests.get/post/head for HTTP tool handlers."""
-    with patch('requests.get') as mock_get, \
-         patch('requests.post') as mock_post, \
-         patch('requests.head') as mock_head:
-        yield {'get': mock_get, 'post': mock_post, 'head': mock_head}
-
-
-@pytest.fixture
 def tmp_state_file(tmp_path):
     """Temporary state file path for tools using JSON state."""
     state_file = tmp_path / "state.json"
     return state_file
-
-
-@pytest.fixture
-def flask_test_client(mock_store):
-    """Flask test client with mocked session for API tests."""
-    from flask import Flask
-
-    app = Flask(__name__)
-    app.config['TESTING'] = True
-
-    # Mock session in test client context
-    @app.before_request
-    def setup_session():
-        from flask import g
-        g.session = MagicMock()
-        g.session.get.return_value = 'test_user_id'
-
-    with app.test_client() as client:
-        yield client
