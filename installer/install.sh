@@ -543,10 +543,6 @@ _setup_venv() {
     fi
   fi
 
-  # Prime run.sh stamp files so the first `chalie start` skips redundant sync.
-  touch "$CHALIE_HOME/app/.deps-installed"
-  [[ "$_DISABLE_VOICE" != "true" ]] && touch "$CHALIE_HOME/app/.voice-deps-installed" || true
-
   _ok "Python environment ready"
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
   _info "Voice models (Kokoro TTS + Moonshine STT) download next, baked into the install"

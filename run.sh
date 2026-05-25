@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # run.sh — Canonical Chalie launcher (dev, installer, Docker)
 #
-# Handles venv resolution, incremental dep sync, then hands off to run.py.
-# Any context that already has deps installed (Docker, activated venv) skips
-# the sync step automatically.
+# Handles venv resolution, dep sync via uv, then hands off to run.py.
 #
 # Usage:
 #   ./run.sh                          # start on default port 31025
@@ -32,81 +30,43 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ─── Python + Pip Resolution ─────────────────────────────────────────────────
+# ─── Python + Venv Resolution ────────────────────────────────────────────────
 # Priority:
 #   1. Already in an activated venv (VIRTUAL_ENV is set)
 #   2. CHALIE_VENV env var — set by the installed `chalie` CLI wrapper
-#   3. Docker (/.dockerenv) — deps baked in at build time, use system Python
-#   4. .venv/ in repo root — local dev venv (already in .gitignore)
-#   5. ~/.chalie/venv — installed user running from a source clone
-#   6. None found — create .venv/ in repo root
-
-# Docker detection is separate from venv selection. Since install.sh creates a
-# venv in the container too, Docker no longer implies system-python; it only
-# determines where the dep-sync stamp lives (image layer vs ephemeral /tmp).
-_IN_DOCKER=false
-[[ -f "/.dockerenv" ]] && _IN_DOCKER=true
+#   3. .venv/ in repo root — local dev venv (already in .gitignore)
+#   4. ~/.chalie/venv — installed user running from a source clone
+#   5. None found — create .venv/ in repo root
 
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
   PYTHON="$VIRTUAL_ENV/bin/python"
-  PIP="$VIRTUAL_ENV/bin/pip"
 elif [[ -n "${CHALIE_VENV:-}" ]] && [[ -d "$CHALIE_VENV" ]]; then
   PYTHON="$CHALIE_VENV/bin/python"
-  PIP="$CHALIE_VENV/bin/pip"
 elif [[ -d "$SCRIPT_DIR/.venv" ]]; then
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
-  PIP="$SCRIPT_DIR/.venv/bin/pip"
 elif [[ -d "$HOME/.chalie/venv" ]]; then
   PYTHON="$HOME/.chalie/venv/bin/python"
-  PIP="$HOME/.chalie/venv/bin/pip"
 else
   echo "→ No virtual environment found. Creating .venv/ …"
   python3 -m venv "$SCRIPT_DIR/.venv"
   PYTHON="$SCRIPT_DIR/.venv/bin/python"
-  PIP="$SCRIPT_DIR/.venv/bin/pip"
 fi
 
-# ─── Incremental Dep Sync ────────────────────────────────────────────────────
-# Runs everywhere, including Docker. When backend/ is volume-mounted, the image's
-# baked-in packages can drift from the current pyproject.toml. The stamp file
-# ensures we only run uv/pip when pyproject.toml actually changes.
+# ─── Dep Sync ────────────────────────────────────────────────────────────────
+# uv is instant (~50ms) when deps are already satisfied — no stamp files needed.
+# Falls back to pip if uv isn't installed (slower but functional).
 
-# In Docker the stamp lives in /tmp (writable, ephemeral per container lifecycle)
-# so a fresh container always syncs once on first start.
-if [[ "$_IN_DOCKER" == "true" ]]; then
-  _STAMP_DIR="/tmp"
-else
-  _STAMP_DIR="$SCRIPT_DIR"
-fi
-
-PYPROJECT="$SCRIPT_DIR/backend/pyproject.toml"
-STAMP="$_STAMP_DIR/.deps-installed"
-
-# Prefer uv (10-50x faster than pip); fall back to pip if uv isn't installed.
 if command -v uv >/dev/null 2>&1; then
-  _INSTALL_CMD="uv pip install"
+  _install() { uv pip install --python "$PYTHON" "$@"; }
 else
-  _INSTALL_CMD="$PIP install"
+  _install() { "$PYTHON" -m pip install "$@"; }
 fi
 
-if [[ ! -f "$STAMP" ]] || [[ "$PYPROJECT" -nt "$STAMP" ]]; then
-  echo "→ Syncing dependencies from pyproject.toml …"
-  $_INSTALL_CMD -e "$SCRIPT_DIR/backend"
-  touch "$STAMP"
-fi
+_install -e "$SCRIPT_DIR/backend"
 
 if [[ "$_VOICE" == "true" ]]; then
-  VOICE_STAMP="$_STAMP_DIR/.voice-deps-installed"
-  if [[ ! -f "$VOICE_STAMP" ]] || [[ "$PYPROJECT" -nt "$VOICE_STAMP" ]]; then
-    echo "→ Syncing voice dependencies …"
-    # Stamp ONLY on success. A failed install (no libsndfile,
-    # network blip) leaves voice broken until next launch retry.
-    if $_INSTALL_CMD -e "$SCRIPT_DIR/backend[voice]"; then
-      touch "$VOICE_STAMP"
-    else
-      echo "  ⚠ Voice dep install failed — voice will be unavailable until next launch retries"
-    fi
-  fi
+  _install -e "$SCRIPT_DIR/backend[voice]" || \
+    echo "  ⚠ Voice dep install failed — voice will be unavailable"
 fi
 
 # ─── Launch ──────────────────────────────────────────────────────────────────
@@ -119,9 +79,5 @@ while true; do
     exit $_EXIT
   fi
   echo "→ Restart requested (exit 42). Re-syncing deps and relaunching..."
-  if [[ ! -f "$STAMP" ]] || [[ "$PYPROJECT" -nt "$STAMP" ]]; then
-    echo "→ Syncing dependencies from pyproject.toml …"
-    $_INSTALL_CMD -e "$SCRIPT_DIR/backend"
-    touch "$STAMP"
-  fi
+  _install -e "$SCRIPT_DIR/backend"
 done
