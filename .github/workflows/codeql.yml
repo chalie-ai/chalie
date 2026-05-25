@@ -1,16 +1,9 @@
 name: CodeQL
 
 on:
-  push:
-    branches:
-      - "rc-*"
-      - main
-  pull_request:
-    branches:
-      - "rc-*"
-      - main
   schedule:
     - cron: "0 9 * * 1" # Monday 09:00 UTC
+  workflow_dispatch:
 
 jobs:
   analyze:
