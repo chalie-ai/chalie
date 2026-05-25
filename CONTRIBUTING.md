@@ -53,9 +53,9 @@ backend/
 ### Setup
 
 ```bash
-cd backend
-pip install -r requirements.txt
-source .venv/bin/activate  # or use poetry
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e backend/          # core deps from pyproject.toml
+pip install -e backend/[voice]   # optional: TTS/STT
 # Optional: copy .env.example to .env only if you need a non-default PORT or VOICE_ENABLED=false
 ```
 

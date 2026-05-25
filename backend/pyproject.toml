@@ -1,0 +1,67 @@
+[project]
+name = "chalie"
+version = "0.8.0"
+description = "A personal intelligence layer"
+requires-python = ">=3.11"
+
+dependencies = [
+    "requests>=2.32.5",
+    "brotli>=1.1.0",
+    "sqlite-vec>=0.1.9",
+    "flask-sock>=0.7.0",
+    "transformers>=4.48.0",
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+    "numpy>=1.24.0",
+    "anthropic>=0.39.0",
+    "openai>=1.0.0",
+    "google-genai>=1.0.0",
+    "trafilatura>=2.0.0",
+    "pdfplumber>=0.11.0",
+    "python-docx>=1.1.0",
+    "python-pptx>=1.0.0",
+    # onnxruntime is installed by installer/install.sh so the right wheel
+    # (onnxruntime / onnxruntime-gpu / onnxruntime-rocm) is picked for the host.
+    # Pulled in transitively by rapidocr-onnxruntime for dev workflows; the
+    # installer swaps the wheel when a GPU is detected.
+    "onnx>=1.17.0",
+    "rapidocr_onnxruntime>=1.4.0",
+    "ddgs>=0.1.0",
+    "RestrictedPython>=7.3",
+    "cryptography>=43.0.0",
+    "playwright>=1.40.0",
+    "imapclient>=3.0.0",
+    "caldav>=1.3.0",
+    "icalendar>=5.0.0",
+    "PyYAML>=6.0",
+    "vobject>=0.9.7",
+    "nltk>=3.8",
+    "nh3>=0.2.0",
+    "markdown-it-py>=3.0.0",
+    "mcp>=1.24.0",
+    "uvicorn>=0.34.0",
+    "geopy>=2.4.0",
+    "pytest>=8.0.0",
+]
+
+[project.optional-dependencies]
+voice = [
+    "kokoro-onnx>=0.5.0",
+    "useful-moonshine-onnx>=20251121",
+    "soundfile>=0.13.0",
+    "numpy>=1.24.0",
+    "silero-vad-lite>=0.2.1",
+    "noisereduce>=3.0.3",
+]
+gpu-nvidia = ["onnxruntime-gpu>=1.20.0"]
+gpu-rocm = ["onnxruntime-rocm>=1.20.0"]
+
+[tool.setuptools]
+# backend/ is not an importable package — it's run directly via run.py.
+# This config prevents setuptools from scanning for packages; pyproject.toml
+# is used purely as a dependency manifest.
+packages = []
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

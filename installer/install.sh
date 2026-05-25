@@ -20,8 +20,8 @@ CHALIE_REPO="chalie-ai/chalie"
 GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
 
 # onnxruntime: version must match across the three wheels (CPU, CUDA, ROCm).
-# Changing this line is the single source of truth — requirements.txt no longer
-# pins it; _install_onnxruntime_variant() picks the right wheel for the host.
+# Changing this line is the single source of truth — pyproject.toml does not
+# pin it; _install_onnxruntime_variant() picks the right wheel for the host.
 ORT_VERSION="1.20.1"
 
 # AMD's public ROCm Python wheel index. Microsoft doesn't ship onnxruntime-rocm
@@ -220,7 +220,7 @@ _install_build_deps() {
 }
 
 # ─── ONNX Runtime (GPU wheel swap) ──────────────────────────────────────────
-# requirements.txt pulls the CPU `onnxruntime` wheel in transitively via
+# pyproject.toml pulls the CPU `onnxruntime` wheel in transitively via
 # rapidocr-onnxruntime. If the host has a GPU, we swap that wheel for the
 # matching accelerator build. On any failure the CPU wheel stays in place,
 # so Chalie still boots — just without GPU acceleration. This is the
@@ -404,7 +404,7 @@ _fetch_latest_tag() {
 _download_release() {
   local is_upgrade=false
   local current_version="unknown"
-  if [[ -f "$CHALIE_HOME/app/backend/requirements.txt" ]]; then
+  if [[ -f "$CHALIE_HOME/app/backend/pyproject.toml" ]] || [[ -f "$CHALIE_HOME/app/backend/requirements.txt" ]]; then
     is_upgrade=true
     current_version="$(cat "$CHALIE_HOME/app/VERSION" 2>/dev/null || echo unknown)"
   fi
@@ -486,35 +486,64 @@ _download_release() {
 }
 
 # ─── Python Virtualenv + Dependencies ───────────────────────────────────────
+_ensure_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    _ok "uv already installed"
+    return
+  fi
+  _info "Installing uv (fast Python package manager)…"
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! command -v uv >/dev/null 2>&1; then
+    _error "uv installation failed. Falling back to pip."
+    return 1
+  fi
+  _ok "uv installed"
+}
+
 _setup_venv() {
   _section "Python Environment"
   local venv="$CHALIE_HOME/venv"
+  local use_uv=true
+
+  _ensure_uv || use_uv=false
 
   if [[ ! -d "$venv" ]]; then
     _info "Creating virtual environment…"
-    "$PYTHON" -m venv "$venv"
+    if [[ "$use_uv" == "true" ]]; then
+      uv venv "$venv" --python "$PYTHON"
+    else
+      "$PYTHON" -m venv "$venv"
+    fi
   else
     _info "Reusing existing virtual environment"
   fi
 
-  _info "Upgrading pip…"
-  "$venv/bin/pip" install --upgrade pip
-
   _info "Installing core dependencies (this may take a few minutes)…"
-  "$venv/bin/pip" install -r "$CHALIE_HOME/app/backend/requirements.txt"
-
-  # Voice dependencies (separate file, skipped if --disable-voice)
-  local voice_req="$CHALIE_HOME/app/backend/requirements-voice.txt"
-  if [[ "$_DISABLE_VOICE" != "true" ]] && [[ -f "$voice_req" ]]; then
-    _info "Installing voice dependencies (STT/TTS)…"
-    "$venv/bin/pip" install -r "$voice_req" 2>/dev/null || {
-      _warn "Voice dependency install failed — voice will be unavailable"
-      _warn "You can retry later: $venv/bin/pip install -r $voice_req"
-    }
+  if [[ "$use_uv" == "true" ]]; then
+    uv pip install --python "$venv/bin/python" -e "$CHALIE_HOME/app/backend"
+  else
+    "$venv/bin/pip" install --upgrade pip
+    "$venv/bin/pip" install -e "$CHALIE_HOME/app/backend"
   fi
 
-  # Prime run.sh stamp files so the first `chalie start` skips redundant pip sync.
-  # Stamp lives in the source tree (or for Docker, /tmp is handled inside run.sh).
+  # Voice dependencies (optional group, skipped if --disable-voice)
+  if [[ "$_DISABLE_VOICE" != "true" ]]; then
+    _info "Installing voice dependencies (STT/TTS)…"
+    if [[ "$use_uv" == "true" ]]; then
+      uv pip install --python "$venv/bin/python" -e "$CHALIE_HOME/app/backend[voice]" || {
+        _warn "Voice dependency install failed — voice will be unavailable"
+        _warn "You can retry later: uv pip install -e $CHALIE_HOME/app/backend[voice]"
+      }
+    else
+      "$venv/bin/pip" install -e "$CHALIE_HOME/app/backend[voice]" 2>/dev/null || {
+        _warn "Voice dependency install failed — voice will be unavailable"
+        _warn "You can retry later: pip install -e $CHALIE_HOME/app/backend[voice]"
+      }
+    fi
+  fi
+
+  # Prime run.sh stamp files so the first `chalie start` skips redundant sync.
   touch "$CHALIE_HOME/app/.deps-installed"
   [[ "$_DISABLE_VOICE" != "true" ]] && touch "$CHALIE_HOME/app/.voice-deps-installed" || true
 

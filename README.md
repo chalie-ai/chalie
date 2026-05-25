@@ -62,8 +62,9 @@ chalie                 # choose Ollama → http://localhost:11434
 ```bash
 git clone https://github.com/chalie-ai/chalie.git && cd chalie
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r backend/requirements.txt
-python backend/run.py  # → http://localhost:31025/on-boarding/
+pip install -e backend/          # core deps
+pip install -e backend/[voice]   # optional: TTS/STT
+./run.sh  # → http://localhost:31025/on-boarding/
 ```
 
 ---

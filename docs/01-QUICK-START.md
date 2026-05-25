@@ -75,8 +75,8 @@ Remove the `export PATH="$HOME/.local/bin:$PATH"` line from `~/.bashrc` or `~/.z
 ```bash
 git clone https://github.com/chalie-ai/chalie.git && cd chalie
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r backend/requirements.txt
-python backend/run.py          # http://localhost:31025
+pip install -e backend/        # core deps from pyproject.toml
+./run.sh                       # http://localhost:31025
 ```
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for contribution guidelines.

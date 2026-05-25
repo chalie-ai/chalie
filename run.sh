@@ -68,8 +68,8 @@ fi
 
 # ─── Incremental Dep Sync ────────────────────────────────────────────────────
 # Runs everywhere, including Docker. When backend/ is volume-mounted, the image's
-# baked-in packages can drift from the current requirements.txt. The stamp file
-# ensures we only run pip when requirements.txt actually changes.
+# baked-in packages can drift from the current pyproject.toml. The stamp file
+# ensures we only run uv/pip when pyproject.toml actually changes.
 
 # In Docker the stamp lives in /tmp (writable, ephemeral per container lifecycle)
 # so a fresh container always syncs once on first start.
@@ -79,27 +79,29 @@ else
   _STAMP_DIR="$SCRIPT_DIR"
 fi
 
-REQ="$SCRIPT_DIR/backend/requirements.txt"
+PYPROJECT="$SCRIPT_DIR/backend/pyproject.toml"
 STAMP="$_STAMP_DIR/.deps-installed"
 
-if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
-  echo "→ Syncing dependencies from requirements.txt …"
-  "$PIP" install -r "$REQ"
+# Prefer uv (10-50x faster than pip); fall back to pip if uv isn't installed.
+if command -v uv >/dev/null 2>&1; then
+  _INSTALL_CMD="uv pip install"
+else
+  _INSTALL_CMD="$PIP install"
+fi
+
+if [[ ! -f "$STAMP" ]] || [[ "$PYPROJECT" -nt "$STAMP" ]]; then
+  echo "→ Syncing dependencies from pyproject.toml …"
+  $_INSTALL_CMD -e "$SCRIPT_DIR/backend"
   touch "$STAMP"
 fi
 
 if [[ "$_VOICE" == "true" ]]; then
-  VOICE_REQ="$SCRIPT_DIR/backend/requirements-voice.txt"
   VOICE_STAMP="$_STAMP_DIR/.voice-deps-installed"
-  if [[ -f "$VOICE_REQ" ]] && { [[ ! -f "$VOICE_STAMP" ]] || [[ "$VOICE_REQ" -nt "$VOICE_STAMP" ]]; }; then
+  if [[ ! -f "$VOICE_STAMP" ]] || [[ "$PYPROJECT" -nt "$VOICE_STAMP" ]]; then
     echo "→ Syncing voice dependencies …"
     # Stamp ONLY on success. A failed install (no libsndfile,
-    # network blip) used to be papered over by an unconditional `touch`, which
-    # left voice permanently broken until requirements-voice.txt changed. Now
-    # the stamp is created only when pip exits 0, so the next launch retries
-    # automatically and the user sees the failure surface in the UI via
-    # /voice/health → status:"unavailable" + reason:"deps_missing".
-    if "$PIP" install -r "$VOICE_REQ"; then
+    # network blip) leaves voice broken until next launch retry.
+    if $_INSTALL_CMD -e "$SCRIPT_DIR/backend[voice]"; then
       touch "$VOICE_STAMP"
     else
       echo "  ⚠ Voice dep install failed — voice will be unavailable until next launch retries"
@@ -117,9 +119,9 @@ while true; do
     exit $_EXIT
   fi
   echo "→ Restart requested (exit 42). Re-syncing deps and relaunching..."
-  if [[ ! -f "$STAMP" ]] || [[ "$REQ" -nt "$STAMP" ]]; then
-    echo "→ Syncing dependencies from requirements.txt …"
-    "$PIP" install -r "$REQ"
+  if [[ ! -f "$STAMP" ]] || [[ "$PYPROJECT" -nt "$STAMP" ]]; then
+    echo "→ Syncing dependencies from pyproject.toml …"
+    $_INSTALL_CMD -e "$SCRIPT_DIR/backend"
     touch "$STAMP"
   fi
 done

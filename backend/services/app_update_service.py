@@ -328,8 +328,9 @@ class AppUpdateService:
             if src.exists():
                 shutil.copy2(str(src), str(APP_ROOT / filename))
 
-        for req_file in source_dir.glob("requirements*.txt"):
-            shutil.copy2(str(req_file), str(APP_ROOT / req_file.name))
+        pyproject = source_dir / "pyproject.toml"
+        if pyproject.exists():
+            shutil.copy2(str(pyproject), str(APP_ROOT / "pyproject.toml"))
 
         deps_stamp = APP_ROOT / ".deps-installed"
         if deps_stamp.exists():
