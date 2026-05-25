@@ -51,6 +51,14 @@ class Ability(ABC):
         ):
             raise TypeError(f"{cls.__name__} must define a non-empty SEARCH_TOOLTIP")
 
+    def pre_dispatch(self, params: dict) -> dict:
+        """Called before policy enforcement; may return a modified params dict.
+
+        Override to normalise or escalate parameters before ActDispatcher runs
+        the policy check.  The default returns *params* unchanged.
+        """
+        return params
+
     def get_description(self) -> str:
         """Return the tool description for LLM tool presentation.
 

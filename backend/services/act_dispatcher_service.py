@@ -284,6 +284,18 @@ class ActDispatcherService:
                 'notes': '',
             }
 
+        # ── Pre-dispatch hook ───────────────────────────────────────────
+        from abilities._registry import AbilityRegistry
+        ability_instance = None
+        try:
+            ability_instance = AbilityRegistry.get(action_type)
+            stripped = {k: v for k, v in action.items() if k not in ('type', 'exchange_id')}
+            corrected = ability_instance.pre_dispatch(stripped)
+            if corrected is not None:
+                action.update(corrected)
+        except KeyError:
+            pass
+
         # ── Policy enforcement ──────────────────────────────────────────
         try:
             policy_result = self._enforce_policy(action_type, action, channel)
@@ -295,10 +307,9 @@ class ActDispatcherService:
         # Determine effective timeout: ability TIMEOUT ClassVar overrides the default.
         # Falls back to self.timeout when the action type is not a registered ability.
         effective_timeout = self.timeout
-        from abilities._registry import AbilityRegistry
         try:
-            ability_timeout = AbilityRegistry.get(action_type).TIMEOUT
-        except KeyError:
+            ability_timeout = ability_instance.TIMEOUT if ability_instance else None
+        except AttributeError:
             ability_timeout = None
         if ability_timeout and ability_timeout > effective_timeout:
             effective_timeout = float(ability_timeout)

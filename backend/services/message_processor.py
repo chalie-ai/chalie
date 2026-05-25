@@ -158,6 +158,7 @@ class MessageProcessor:
     # ``find_tools`` is gated to ``WHERE name IN DISCOVERABLE`` so a
     # processor can never discover anything outside this list.
     DISCOVERABLE: list[str] = [
+        "bash",
         "browser",
         "calendar",
         "chalie_docs",

@@ -54,6 +54,7 @@ def _get_system_tools() -> frozenset[str]:
 
 _CHAT_ALLOW: dict[str, State] = {
     # Reads
+    "bash.read": "allow",
     "browser.interact": "allow", "browser.render": "allow",
     "browser.screenshot": "allow", "browser.monitor": "allow",
     "calendar.list_events": "allow", "calendar.get_event": "allow",
@@ -101,6 +102,12 @@ _CHAT_ASK: dict[str, State] = {
     "email.manage": "ask",
     "email.reply": "ask",
     "email.send": "ask",
+    "bash.compound": "ask",
+    "bash.execute": "ask",
+    "bash.installation": "ask",
+    "bash.modify_file": "ask",
+    "bash.remote_execution": "ask",
+    "bash.web_fetch": "ask",
     "file_permissions": "ask",
     "file_write": "ask",
     "home.control": "ask",
@@ -180,6 +187,13 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
 
 _EXTERNAL_AGENT_DENY: dict[str, State] = {
     # Sensitive actions — no user to confirm, so deny by default
+    "bash.read": "deny",
+    "bash.execute": "deny",
+    "bash.modify_file": "deny",
+    "bash.web_fetch": "deny",
+    "bash.installation": "deny",
+    "bash.remote_execution": "deny",
+    "bash.compound": "deny",
     "browser.interact": "deny",
     "calendar.update_event": "deny",
     "code_eval": "deny",
