@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Chalie Installer
 # Usage: curl -fsSL https://chalie.ai/install | bash
-# Usage (no voice): curl -fsSL https://chalie.ai/install | bash -s -- --disable-voice
 #
 # Behaviour:
 #   - Idempotent: safe to re-run. Updates, upgrades, and fresh installs all use
@@ -19,18 +18,7 @@ CHALIE_BIN="$HOME/.local/bin"
 CHALIE_REPO="chalie-ai/chalie"
 GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
 
-# onnxruntime: version must match across the three wheels (CPU, CUDA, ROCm).
-# Changing this line is the single source of truth — pyproject.toml does not
-# pin it; _install_onnxruntime_variant() picks the right wheel for the host.
-ORT_VERSION="1.20.1"
-
-# AMD's public ROCm Python wheel index. Microsoft doesn't ship onnxruntime-rocm
-# to PyPI; AMD hosts pre-built wheels here, updated per ROCm release. Override
-# via $CHALIE_ROCM_INDEX for air-gapped installs.
-ROCM_PIP_INDEX="${CHALIE_ROCM_INDEX:-https://repo.radeon.com/rocm/manylinux/latest/}"
-
 # Installer flags (parsed from args)
-_DISABLE_VOICE=false
 _BRANCH=""
 _TAG=""
 
@@ -62,7 +50,6 @@ _parse_args() {
   while [[ $# -gt 0 ]]; do
     local arg="$1"
     case "$arg" in
-      --disable-voice)         _DISABLE_VOICE=true; shift ;;
       --branch=*)              _BRANCH="${arg#--branch=}"; shift ;;
       --branch)                _BRANCH="$2"; shift 2 ;;
       --tag=*)                 _TAG="${arg#--tag=}"; shift ;;
@@ -107,31 +94,6 @@ _detect_linux_distro() {
   else
     echo "unknown"
   fi
-}
-
-# Emits "cuda" | "rocm" | "cpu" — nothing else. Only Linux can have GPU wheels;
-# macOS hands CoreML to the default onnxruntime wheel, so it always reports cpu.
-#
-# NVIDIA: nvidia-smi must exist AND succeed (driver loaded). A stale symlink with
-# no kernel module returns non-zero and we fall through to cpu — correct, because
-# onnxruntime-gpu would fail to initialise CUDA at runtime anyway.
-#
-# AMD: /dev/kfd is the ROCm kernel compute interface; /sys/module/amdgpu confirms
-# the kernel driver is loaded. Both must be present — a Radeon with only the
-# display driver (no ROCm stack) would have /sys/module/amdgpu but no /dev/kfd.
-_detect_gpu_variant() {
-  local os
-  os="$(_detect_os)"
-  if [[ "$os" != "linux" ]]; then
-    echo "cpu"; return
-  fi
-  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
-    echo "cuda"; return
-  fi
-  if [[ -e /dev/kfd ]] && [[ -d /sys/module/amdgpu ]]; then
-    echo "rocm"; return
-  fi
-  echo "cpu"
 }
 
 # ─── Python 3.11+ Check ─────────────────────────────────────────────────────
@@ -217,176 +179,6 @@ _install_build_deps() {
       ;;
   esac
   _ok "Build dependencies ready"
-}
-
-# ─── ONNX Runtime (GPU wheel swap) ──────────────────────────────────────────
-# pyproject.toml pulls the CPU `onnxruntime` wheel in transitively via
-# rapidocr-onnxruntime. If the host has a GPU, we swap that wheel for the
-# matching accelerator build. On any failure the CPU wheel stays in place,
-# so Chalie still boots — just without GPU acceleration. This is the
-# fallback guarantee: the baseline wheel never gets removed until the
-# replacement is confirmed.
-_install_onnxruntime_variant() {
-  local variant
-  variant="$(_detect_gpu_variant)"
-  if [[ "$variant" == "cpu" ]]; then
-    return 0
-  fi
-
-  _section "ONNX Runtime GPU Wheel ($variant)"
-  local venv="$CHALIE_HOME/venv"
-  local pip="$venv/bin/pip"
-
-  local wheel extra=()
-  case "$variant" in
-    cuda)
-      wheel="onnxruntime-gpu==$ORT_VERSION"
-      ;;
-    rocm)
-      wheel="onnxruntime-rocm==$ORT_VERSION"
-      extra=(--extra-index-url "$ROCM_PIP_INDEX")
-      ;;
-    *)
-      _error "Unknown ONNX Runtime variant: $variant"
-      return 1
-      ;;
-  esac
-
-  _info "Detected $variant — installing $wheel"
-
-  # Swap wheels atomically from Python's point of view: uninstall the CPU wheel
-  # only after the accelerator wheel downloads cleanly. --dry-run reserves the
-  # package and catches registry/index errors before we touch the working set.
-  if ! "$pip" install --dry-run "${extra[@]}" "$wheel" >/dev/null 2>&1; then
-    _warn "$wheel not reachable — keeping CPU onnxruntime"
-    _warn "Chalie will run on CPU providers. Fix the GPU toolkit and re-run installer."
-    return 0
-  fi
-
-  "$pip" uninstall -y onnxruntime >/dev/null 2>&1 || true
-  if "$pip" install "${extra[@]}" "$wheel"; then
-    _ok "ONNX Runtime GPU wheel ready ($wheel)"
-  else
-    _warn "$wheel install failed post-download — restoring CPU onnxruntime"
-    "$pip" install "onnxruntime==$ORT_VERSION"
-  fi
-}
-
-# ─── Voice Dependencies (native, no Docker) ────────────────────────────────
-_install_voice_deps() {
-  if [[ "$_DISABLE_VOICE" == "true" ]]; then
-    _section "Voice (skipped — --disable-voice)"
-    _info "Voice disabled at install time. STT/TTS will not be available."
-    _info "Re-run installer without --disable-voice to enable later."
-    return
-  fi
-
-  _section "Voice Dependencies"
-  local os
-  os="$(_detect_os)"
-
-  # Install system-level dependencies for soundfile + ffmpeg.
-  # kokoro-onnx pulls in espeakng-loader (wheel-shipped espeak-ng binary),
-  # so the system-level espeak-ng package is not required.
-  if [[ "$os" == "darwin" ]]; then
-    if command -v brew >/dev/null 2>&1; then
-      _info "Installing libsndfile and ffmpeg via Homebrew…"
-      brew install libsndfile ffmpeg 2>/dev/null || true
-    else
-      _warn "Homebrew not found — voice system deps may need manual install"
-      _warn "  brew install libsndfile ffmpeg"
-    fi
-  else
-    local distro
-    distro="$(_detect_linux_distro)"
-    _info "Installing voice system dependencies…"
-    case "$distro" in
-      *debian*|*ubuntu*)
-        _run_privileged apt-get install -y libsndfile1 ffmpeg 2>/dev/null || true
-        ;;
-      *fedora*|*rhel*|*centos*)
-        _run_privileged dnf install -y libsndfile ffmpeg 2>/dev/null || true
-        ;;
-      *alpine*)
-        _run_privileged apk add --no-cache libsndfile ffmpeg 2>/dev/null || true
-        ;;
-      *arch*|*manjaro*)
-        _run_privileged pacman -S --needed --noconfirm libsndfile ffmpeg 2>/dev/null || true
-        ;;
-      *opensuse*|*suse*)
-        _run_privileged zypper install -y libsndfile ffmpeg 2>/dev/null || true
-        ;;
-      *)
-        _warn "Cannot auto-install voice deps on distro: $distro"
-        _warn "Install manually: libsndfile, ffmpeg"
-        ;;
-    esac
-  fi
-  _ok "Voice system dependencies ready"
-}
-
-# ─── Voice Models (baked into the install) ─────────────────────────────────
-#
-# Kokoro TTS (~310 MB ONNX + ~28 MB voices) and Moonshine STT (~150 MB ONNX
-# encoder + decoder) live under $CHALIE_HOME/app/resources/voice-models/. This
-# directory is OUTSIDE the data/ bind mount, so the files travel with the
-# image when Docker builds, and survive `chalie update` on native installs.
-#
-# All downloads are idempotent — if the file already exists at the expected
-# path, the curl is skipped. Failures here are non-fatal: voice will return
-# 503 at runtime with a clear hint, but the rest of Chalie still boots.
-_download_voice_models() {
-  if [[ "$_DISABLE_VOICE" == "true" ]]; then
-    return 0
-  fi
-
-  _section "Voice Models"
-  local voice_root="$CHALIE_HOME/app/resources/voice-models"
-  local kokoro_dir="$voice_root/kokoro"
-  local moonshine_dir="$voice_root/moonshine/base"
-  mkdir -p "$kokoro_dir" "$moonshine_dir"
-
-  local kokoro_release="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
-  local moonshine_hf="https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/merged/base/float"
-
-  local fetched=0
-  _fetch_model() {
-    local url="$1" dest="$2" label="$3"
-    if [[ -f "$dest" ]] && [[ "$(stat -c%s "$dest" 2>/dev/null || stat -f%z "$dest" 2>/dev/null)" -gt 1024 ]]; then
-      return 0
-    fi
-    _info "Downloading ${label}…"
-    if ! curl -fL --progress-bar -o "$dest" "$url"; then
-      _warn "$label download failed — voice will be unavailable until you re-run the installer"
-      rm -f "$dest"
-      return 1
-    fi
-    fetched=$((fetched + 1))
-  }
-
-  _fetch_model "$kokoro_release/kokoro-v1.0.onnx" "$kokoro_dir/kokoro-v1.0.onnx" "Kokoro TTS model (~310 MB)" || true
-  _fetch_model "$kokoro_release/voices-v1.0.bin"   "$kokoro_dir/voices-v1.0.bin"   "Kokoro voices (~28 MB)"     || true
-  _fetch_model "$moonshine_hf/encoder_model.onnx"        "$moonshine_dir/encoder_model.onnx"        "Moonshine encoder" || true
-  _fetch_model "$moonshine_hf/decoder_model_merged.onnx" "$moonshine_dir/decoder_model_merged.onnx" "Moonshine decoder" || true
-
-  if [[ "$fetched" -eq 0 ]]; then
-    local missing=()
-    [[ -f "$kokoro_dir/kokoro-v1.0.onnx" ]]             || missing+=("resources/voice-models/kokoro/kokoro-v1.0.onnx")
-    [[ -f "$kokoro_dir/voices-v1.0.bin" ]]               || missing+=("resources/voice-models/kokoro/voices-v1.0.bin")
-    [[ -f "$moonshine_dir/encoder_model.onnx" ]]         || missing+=("resources/voice-models/moonshine/base/encoder_model.onnx")
-    [[ -f "$moonshine_dir/decoder_model_merged.onnx" ]]  || missing+=("resources/voice-models/moonshine/base/decoder_model_merged.onnx")
-    if [[ "${#missing[@]}" -eq 0 ]]; then
-      _ok "Voice models already present at $voice_root"
-    else
-      _warn "Voice models missing — no downloads were attempted but the following files are absent:"
-      for f in "${missing[@]}"; do
-        _warn "  $f"
-      done
-      _warn "Re-run the installer to download them."
-    fi
-  else
-    _ok "Voice models ready at $voice_root"
-  fi
 }
 
 # ─── Download Latest Release ────────────────────────────────────────────────
@@ -527,53 +319,9 @@ _setup_venv() {
     "$venv/bin/pip" install -e "$CHALIE_HOME/app/backend"
   fi
 
-  # Voice dependencies (optional group, skipped if --disable-voice)
-  if [[ "$_DISABLE_VOICE" != "true" ]]; then
-    _info "Installing voice dependencies (STT/TTS)…"
-    if [[ "$use_uv" == "true" ]]; then
-      uv pip install --python "$venv/bin/python" -e "$CHALIE_HOME/app/backend[voice]" || {
-        _warn "Voice dependency install failed — voice will be unavailable"
-        _warn "You can retry later: uv pip install -e $CHALIE_HOME/app/backend[voice]"
-      }
-    else
-      "$venv/bin/pip" install -e "$CHALIE_HOME/app/backend[voice]" 2>/dev/null || {
-        _warn "Voice dependency install failed — voice will be unavailable"
-        _warn "You can retry later: pip install -e $CHALIE_HOME/app/backend[voice]"
-      }
-    fi
-  fi
-
   _ok "Python environment ready"
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
-  _info "Voice models (Kokoro TTS + Moonshine STT) download next, baked into the install"
 }
-
-# ─── Playwright Browsers ────────────────────────────────────────────────────
-# playwright pip-installs the Python bindings; the Chromium binary is a separate
-# download. Without this step the browser tool fails at runtime with
-# "Executable doesn't exist at …/chromium_headless_shell/" — the bug this
-# installer step exists to prevent. Failure is fatal; re-run the installer.
-_install_playwright_browsers() {
-  _section "Browser Runtime (Playwright Chromium)"
-  local venv="$CHALIE_HOME/venv"
-  local os
-  os="$(_detect_os)"
-
-  # Linux needs OS-level deps for Chromium (fonts, libnss, libatk, …);
-  # --with-deps calls apt-get/dnf internally and requires privileged access.
-  local pw_cmd=("$venv/bin/playwright" install chromium)
-  if [[ "$os" == "linux" ]]; then
-    pw_cmd+=(--with-deps)
-    if _needs_sudo; then
-      pw_cmd=(sudo "${pw_cmd[@]}")
-    fi
-  fi
-
-  "${pw_cmd[@]}"
-  _ok "Playwright Chromium ready"
-  return 0
-}
-
 
 # ─── Install CLI Wrapper ─────────────────────────────────────────────────────
 _install_cli() {
@@ -733,12 +481,9 @@ main() {
 
   _check_python
   _install_build_deps
-  _install_voice_deps
+  _ensure_uv
   _download_release
   _setup_venv
-  _install_onnxruntime_variant
-  _install_playwright_browsers
-  _download_voice_models
   _install_cli
   _print_success
 

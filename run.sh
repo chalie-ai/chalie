@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # run.sh — Canonical Chalie launcher (dev, installer, Docker)
 #
-# Handles venv resolution, dep sync via uv, then hands off to run.py.
+# Handles venv resolution, core dep sync via uv, then hands off to run.py.
+# Voice and playwright are managed at runtime by RuntimeDepsService.
 #
 # Usage:
 #   ./run.sh                          # start on default port 31025
 #   ./run.sh --port=9000              # custom port
 #   ./run.sh --host=127.0.0.1         # bind to specific address
-#   ./run.sh --no-voice               # skip voice dep sync
 #   CHALIE_VENV=~/.chalie/venv ./run.sh   # explicit venv (set by installer CLI)
 set -euo pipefail
 
@@ -16,7 +16,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ─── Arg Parsing ─────────────────────────────────────────────────────────────
 _PORT=31025
 _HOST="0.0.0.0"
-_VOICE=true
 
 while [[ $# -gt 0 ]]; do
   _arg="$1"
@@ -25,7 +24,6 @@ while [[ $# -gt 0 ]]; do
     --port)     _PORT="$2"; shift 2 ;;
     --host=*)   _HOST="${_arg#--host=}"; shift ;;
     --host)     _HOST="$2"; shift 2 ;;
-    --no-voice) _VOICE=false; shift ;;
     *) shift ;;
   esac
 done
@@ -53,8 +51,8 @@ else
 fi
 
 # ─── Dep Sync ────────────────────────────────────────────────────────────────
-# uv is instant (~50ms) when deps are already satisfied — no stamp files needed.
-# Falls back to pip if uv isn't installed (slower but functional).
+# Syncs core deps only. Voice/playwright are runtime-managed (RuntimeDepsService).
+# uv is instant (~50ms) when deps are already satisfied.
 
 if command -v uv >/dev/null 2>&1; then
   _install() { uv pip install --python "$PYTHON" "$@"; }
@@ -63,11 +61,6 @@ else
 fi
 
 _install -e "$SCRIPT_DIR/backend"
-
-if [[ "$_VOICE" == "true" ]]; then
-  _install -e "$SCRIPT_DIR/backend[voice]" || \
-    echo "  ⚠ Voice dep install failed — voice will be unavailable"
-fi
 
 # ─── Launch ──────────────────────────────────────────────────────────────────
 # Loop: Python exits with code 42 to request a restart (e.g. after in-place update).

@@ -45,16 +45,33 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-voice = [
+voice-cpu = [
     "kokoro-onnx>=0.5.0",
     "useful-moonshine-onnx>=20251121",
     "soundfile>=0.13.0",
     "numpy>=1.24.0",
     "silero-vad-lite>=0.2.1",
     "noisereduce>=3.0.3",
+    "onnxruntime>=1.20.0",
 ]
-gpu-nvidia = ["onnxruntime-gpu>=1.20.0"]
-gpu-rocm = ["onnxruntime-rocm>=1.20.0"]
+voice-cuda = [
+    "kokoro-onnx>=0.5.0",
+    "useful-moonshine-onnx>=20251121",
+    "soundfile>=0.13.0",
+    "numpy>=1.24.0",
+    "silero-vad-lite>=0.2.1",
+    "noisereduce>=3.0.3",
+    "onnxruntime-gpu>=1.20.0",
+]
+voice-rocm = [
+    "kokoro-onnx>=0.5.0",
+    "useful-moonshine-onnx>=20251121",
+    "soundfile>=0.13.0",
+    "numpy>=1.24.0",
+    "silero-vad-lite>=0.2.1",
+    "noisereduce>=3.0.3",
+    "onnxruntime-rocm>=1.20.0",
+]
 
 [tool.setuptools]
 # backend/ is not an importable package — it's run directly via run.py.

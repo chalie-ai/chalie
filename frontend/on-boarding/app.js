@@ -81,7 +81,9 @@ async function submitAccountForm() {
         });
 
         if (res.ok) {
-            globalThis.location.replace('/brain/');
+            // Account created — show voice setup phase
+            document.getElementById('accountPhase').style.display = 'none';
+            document.getElementById('voicePhase').style.display = '';
         } else if (res.status === 409) {
             showToast('Account already exists', 'error');
             btn.disabled = false;
@@ -97,6 +99,26 @@ async function submitAccountForm() {
         btn.disabled = false;
         btn.textContent = 'Create Account';
     }
+}
+
+// ==========================================
+// Voice Setup
+// ==========================================
+async function enableVoice() {
+    try {
+        await fetch('/api/voice-settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ enabled: true }),
+        });
+    } catch (e) {
+        console.warn('[on-boarding] voice enable request failed:', e);
+    }
+    globalThis.location.replace('/brain/');
+}
+
+function skipVoice() {
+    globalThis.location.replace('/brain/');
 }
 
 // ==========================================

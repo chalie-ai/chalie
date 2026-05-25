@@ -326,6 +326,11 @@ def main():
     _check_asset_caches()
     _warmup_models()
 
+    # Background-install optional runtime deps (playwright, voice if enabled)
+    from services.runtime_deps_service import RuntimeDepsService
+    RuntimeDepsService.ensure_playwright()
+    RuntimeDepsService.init_voice_from_settings(database_service)
+
     from consumer import WorkerManager
     manager = WorkerManager()
     _register_workers(manager, host, port)

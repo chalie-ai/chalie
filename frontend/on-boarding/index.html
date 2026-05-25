@@ -50,6 +50,25 @@
                 </form>
             </div>
         </div>
+
+        <div id="voicePhase" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <h1>Voice Support</h1>
+                    <p>Chalie can speak responses and listen to voice input.</p>
+                </div>
+
+                <div class="info-box">
+                    <p>Enabling voice will download additional dependencies (~500 MB) in the background. Your GPU will be detected automatically for optimal performance.</p>
+                    <p>You can change this later in the Brain dashboard settings.</p>
+                </div>
+
+                <div class="form-actions">
+                    <button class="btn btn-primary" onclick="enableVoice()">Enable Voice</button>
+                    <button class="btn btn-secondary" onclick="skipVoice()">Skip</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Toast Container -->
