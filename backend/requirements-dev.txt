@@ -1,6 +1,0 @@
-# Dev/testing tools — NOT loaded in production
-# Install: pip install -r requirements-dev.txt
--r requirements.txt
-ruff>=0.9.0
-radon>=6.0.0
-vulture>=2.14
