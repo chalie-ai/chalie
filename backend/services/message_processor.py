@@ -645,6 +645,8 @@ class MessageProcessor:
                 self.CHANNEL, {**tc_input, 'type': tool_name}
             )
             result_text = str(dispatch.get('result', ''))
+            if dispatch.get('status') == 'error':
+                ok = False
 
             # Merge any params updates from the ability back into tc_input
             # so they appear in the recorded tool_calls row.

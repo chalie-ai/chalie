@@ -409,18 +409,28 @@ class ActDispatcherService:
         reply_actions = None
         _discovered_tools = None
         _params_update = None
+        error_msg = None
         if isinstance(raw_result, dict) and 'text' in raw_result:
             reply_actions = raw_result.get('reply_actions')
             _discovered_tools = raw_result.get('_discovered_tools')
             _params_update = raw_result.get('_params_update')
-            raw_result = raw_result['text']
+            error_msg = raw_result.get('error')
+            text_body = raw_result['text']
+            if error_msg:
+                logging.getLogger(__name__).error(
+                    "[ActDispatcher] %s returned error: %s",
+                    action_type, error_msg,
+                )
+                raw_result = f"[ERROR] {error_msg}" if not text_body else f"[ERROR] {error_msg}\n{text_body}"
+            else:
+                raw_result = text_body
 
         confidence = _estimate_confidence(action_type, raw_result)
         notes = _extract_notes(action_type, action, raw_result)
 
         dispatch_result = {
             'action_type': action_type,
-            'status': 'success',
+            'status': 'error' if error_msg else 'success',
             'result': raw_result,
             'execution_time': execution_time,
             'confidence': confidence,
