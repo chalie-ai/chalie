@@ -63,11 +63,29 @@ class RuntimeDepsService:
 
     @classmethod
     def init_voice_from_settings(cls, database_service) -> None:
-        """Check DB settings on boot — if voice is enabled, trigger install."""
+        """Check DB settings on boot — if voice is enabled, trigger install.
+
+        Migration: if voice_enabled is not yet in the DB but the legacy
+        .voice-deps-installed stamp exists, the user had voice before this
+        runtime-managed architecture.  Honour that by writing "true" and
+        removing the stale stamp (one-time migration).
+        """
         try:
             from services.settings_service import SettingsService
             settings = SettingsService(database_service)
             voice_enabled = settings.get("voice_enabled")
+
+            if voice_enabled is None:
+                stamp = FileMapperService.get_chalie_root() / ".voice-deps-installed"
+                if stamp.exists():
+                    voice_enabled = "true"
+                    settings.set("voice_enabled", "true")
+                    stamp.unlink()
+                    logger.info("[RuntimeDeps] Migrated legacy voice stamp → voice_enabled=true")
+                else:
+                    cls._voice_status = "unavailable"
+                    return
+
             if voice_enabled == "true":
                 if cls.check_voice_available():
                     cls._voice_status = "available"

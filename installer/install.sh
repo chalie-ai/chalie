@@ -196,7 +196,7 @@ _fetch_latest_tag() {
 _download_release() {
   local is_upgrade=false
   local current_version="unknown"
-  if [[ -f "$CHALIE_HOME/app/backend/pyproject.toml" ]] || [[ -f "$CHALIE_HOME/app/backend/requirements.txt" ]]; then
+  if [[ -d "$CHALIE_HOME/app" ]]; then
     is_upgrade=true
     current_version="$(cat "$CHALIE_HOME/app/VERSION" 2>/dev/null || echo unknown)"
   fi

@@ -13,6 +13,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Ensure ~/.local/bin is in PATH — uv installs there and non-login shells
+# (e.g. docker exec) won't have it via .bashrc.
+export PATH="$HOME/.local/bin:$PATH"
+
 # ─── Arg Parsing ─────────────────────────────────────────────────────────────
 _PORT=31025
 _HOST="0.0.0.0"
