@@ -36,7 +36,7 @@ LOG_PREFIX = "[SUBAGENT SKILL]"
 # can signal cooperative cancellation. Entries are added before thread.start()
 # and removed in the thread's finally block, guaranteeing no leaked entries.
 # Each entry: {"processor": SubagentProcessor, "agent_type": str,
-#               "description": str, "started_at": str}
+#               "description": str, "started_at": str, "prompt": str}
 
 _active_subagents: dict[str, dict] = {}
 _subagent_lock = threading.Lock()
@@ -194,74 +194,97 @@ def _build_envelope(response_text: str, agent_type: str, status: str = "success"
 
 class SubagentAbility(Ability):
     NAME = "subagent"
-    SEARCH_TOOLTIP = "delegate task to subagent"
+    SEARCH_TOOLTIP = "delegate task to subagent, list or stop active subagents"
     POLICY_CATEGORY = "Subagent"
-    POLICY_LABELS = {"": "Spawn subagent"}
+    POLICY_LABELS = {
+        "spawn": "Spawn subagent",
+        "list": "List active subagents",
+        "stop": "Stop a subagent",
+        "direct": "Redirect a subagent",
+    }
     SUMMARY = """\
-ONLY use this tool if multi-step actions are needed OR you need to process
+Three actions: spawn (default), list, stop.
+
+action=spawn — launch a subagent (requires prompt):
+ONLY use this if multi-step actions are needed OR you need to process
 a large volume of data (call summariser in this case). For a single tool
 lookup, call the tool directly — do not wrap it in a subagent. Multiple
 calls to the same tool (e.g. weather for two cities) is NOT multi-step —
 call the tool once per item.
 
 Each subagent gets its own tool surface based on `agent_type`:
-
-- web_surfer (60m): search and crawl web pages; can browse. Use for
-  multi-source web research and live page lookups. Web research is SLOW —
-  multi-site crawls routinely take many minutes. **Strongly prefer
-  wait=false** (fire-and-forget). The result is delivered back to you
-  asynchronously when ready, so you can keep talking to the user or fan
-  out more subagents in parallel.
+- web_surfer (60m): search and crawl web pages; can browse. Web research
+  is SLOW — strongly prefer wait=false (fire-and-forget).
 - summariser (10m): read and summarise long documents or web pages.
-  Use to compress large content before pulling it into your context.
-- general_purpose (30m): parallelise different long-running work — spawn
-  multiple subagents to do different things at once.
+- general_purpose (30m): parallelise different long-running work.
 
 Sync vs async (wait):
-- wait=false (default): returns immediately with an ack. The completed
-  envelope arrives later as a fresh turn. Use this for any
-  web_surfer call and for anything you don't need to act on inside this
-  same turn.
-- wait=true: blocks the parent ACT iteration until the subagent finishes.
-  Capped per type — web_surfer 30 min, summariser/general_purpose 5 min.
-  Only use this when the subagent's answer is the next thing you must
-  reason about and the task is genuinely fast.
+- wait=false (default): returns immediately. The completed envelope
+  arrives later as a fresh turn. Use this for web_surfer and anything you
+  don't need to act on inside this same turn.
+- wait=true: blocks until the subagent finishes. Capped per type —
+  web_surfer 30 min, summariser/general_purpose 5 min.
 
 Parallelism:
-- Fan out aggressively. Three wait=false web_surfers (one per source) beat
-  one monolith trying to crawl everything sequentially.
-
-When NOT to use:
-- For a single quick lookup with a known URL or query — use the tool
-  directly.
-- For tasks under ~30 seconds that fit in your turn — answer inline.
+- Fan out aggressively. Three wait=false web_surfers beat one monolith.
 
 Briefing rules:
 - The subagent has none of your conversation context. State the task
   fully.
 - Include success criteria and any data you already have.
-- Be specific about output shape (summary length, format, key fields).\
+- Be specific about output shape (summary length, format, key fields).
+
+action=list — show all active subagents:
+Returns sub_id, agent_type, description, and started_at for each running
+subagent. Use this to check on progress or get sub_ids for stopping.
+
+action=stop — cancel a running subagent (requires sub_id):
+Sends a cooperative cancel signal. The subagent stops at the next
+iteration boundary. Get the sub_id from action=list.
+
+action=direct — redirect a running subagent (requires sub_id + prompt):
+Stops the subagent identified by sub_id and spawns a new one with the
+same agent_type. The new subagent's prompt is the original prompt
+concatenated with the new prompt you provide. Use this when the user
+sends a follow-up or correction while a subagent is mid-flight.
+Workflow: call action=list to get the sub_id, then action=direct.\
 """
     EXAMPLES = [
         "research the top 3 health benefits of cold water swimming as a background task",
         "do a deep dive on the competitive landscape for electric vehicles",
-        "investigate thoroughly how LLM context windows affect reasoning quality",
         "comprehensive analysis of the housing market in Malta over the last 5 years",
-        "research multiple sources on the best diet for endurance athletes",
-        "background task: compare React vs Vue for a large enterprise project",
         "deep research on the history and current state of quantum computing",
         "find out everything about carbon capture technology and write me a brief",
+        "what subagents are currently running",
+        "show me active background tasks",
+        "stop the web research subagent",
     ]
     INPUT_SCHEMA = {
         "type": "object",
         "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["spawn", "list", "stop", "direct"],
+                "default": "spawn",
+                "description": (
+                    "spawn (default): launch a new subagent. Requires prompt.\n"
+                    "list: return all currently active subagents with their "
+                    "sub_id, type, description, and start time.\n"
+                    "stop: cancel a running subagent. Requires sub_id "
+                    "(get it from action=list).\n"
+                    "direct: stop a running subagent and respawn it with "
+                    "the original prompt + new prompt concatenated. Requires "
+                    "sub_id + prompt. Same agent_type is reused."
+                ),
+            },
             "prompt": {
                 "type": "string",
                 "description": (
                     "Detailed task brief. The subagent has none of your "
                     "conversation context. State the task fully, include any "
                     "context, data, success criteria, and output shape "
-                    "(summary length, bullet list vs prose, key fields)."
+                    "(summary length, bullet list vs prose, key fields). "
+                    "Required when action=spawn."
                 ),
             },
             "agent_type": {
@@ -298,8 +321,16 @@ Briefing rules:
                 ),
                 "default": False,
             },
+            "sub_id": {
+                "type": "string",
+                "description": (
+                    "The sub_id of the target subagent. Required when "
+                    "action=stop or action=direct. Get sub_ids from "
+                    "action=list."
+                ),
+            },
         },
-        "required": ["prompt"],
+        "required": [],
     }
     # Parent-dispatch timeout. wait=false returns in ms; wait=true blocks the
     # parent ACT iteration up to the per-type wait_cap (currently max 1800s
@@ -312,7 +343,27 @@ Briefing rules:
     TIMEOUT = 1805
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        prompt = params.get("prompt", "").strip()
+        action = params.get("action", "spawn")
+
+        if action == "list":
+            return self._list_active()
+
+        if action == "stop":
+            sub_id = (params.get("sub_id") or "").strip()
+            if not sub_id:
+                return {"text": _skill_tag("subagent", error="sub_id-required")}
+            return self._stop(sub_id)
+
+        if action == "direct":
+            sub_id = (params.get("sub_id") or "").strip()
+            new_prompt = (params.get("prompt") or "").strip()
+            if not sub_id:
+                return {"text": _skill_tag("subagent", error="sub_id-required")}
+            if not new_prompt:
+                return {"text": _skill_tag("subagent", error="prompt-required")}
+            return self._direct(sub_id, new_prompt)
+
+        prompt = (params.get("prompt") or "").strip()
         if not prompt:
             return {"text": _skill_tag("subagent", error="prompt-required")}
 
@@ -324,10 +375,6 @@ Briefing rules:
         type_entry = SUBAGENT_TYPES[agent_type]
         timeout = type_entry["default_timeout"]
         if wait:
-            # wait=true caps per-type via wait_cap. web_surfer = 1800s (web
-            # research is genuinely slow); other types = 300s. Always <=
-            # default_timeout so the SubagentProcessor's own deadline still
-            # bounds it.
             timeout = min(timeout, type_entry["wait_cap"])
 
         sub_id = uuid.uuid4().hex
@@ -335,6 +382,56 @@ Briefing rules:
         if wait:
             return self._run_sync(prompt, agent_type, timeout, sub_id)
         return self._run_async(prompt, agent_type, timeout, sub_id)
+
+    # ── List / stop ─────────────────────────────────────────────────────────
+
+    def _list_active(self) -> dict:
+        snapshot = get_active_subagents()
+        if not snapshot:
+            body = json.dumps({"active_subagents": [], "count": 0})
+            return {"text": _skill_tag("subagent", body, action="list")}
+
+        items = []
+        for sub_id, entry in snapshot.items():
+            items.append({
+                "sub_id": sub_id,
+                "agent_type": entry["agent_type"],
+                "description": entry["description"],
+                "started_at": entry["started_at"],
+            })
+
+        body = json.dumps({"active_subagents": items, "count": len(items)})
+        return {"text": _skill_tag("subagent", body, action="list")}
+
+    def _stop(self, sub_id: str) -> dict:
+        if cancel_subagent(sub_id):
+            logger.info("%s Stop signal delivered via tool to subagent %s", LOG_PREFIX, sub_id[:8])
+            body = json.dumps({"sub_id": sub_id, "cancelled": True})
+            return {"text": _skill_tag("subagent", body, action="stop")}
+        body = json.dumps({"sub_id": sub_id, "cancelled": False, "reason": "not_found"})
+        return {"text": _skill_tag("subagent", body, action="stop", error="not-found")}
+
+    def _direct(self, sub_id: str, new_prompt: str) -> dict:
+        with _subagent_lock:
+            entry = _active_subagents.get(sub_id)
+        if entry is None:
+            body = json.dumps({"sub_id": sub_id, "reason": "not_found"})
+            return {"text": _skill_tag("subagent", body, action="direct", error="not-found")}
+
+        original_prompt = entry.get("prompt", "")
+        agent_type = entry["agent_type"]
+
+        cancel_subagent(sub_id)
+
+        combined_prompt = original_prompt + "\n\n" + new_prompt
+        timeout = SUBAGENT_TYPES[agent_type]["default_timeout"]
+        new_sub_id = uuid.uuid4().hex
+
+        logger.info(
+            "%s Direct: stopped %s, spawning %s (%s)",
+            LOG_PREFIX, sub_id[:8], new_sub_id[:8], agent_type,
+        )
+        return self._run_async(combined_prompt, agent_type, timeout, new_sub_id)
 
     # ── Execution paths ───────────────────────────────────────────────────────
 
@@ -359,6 +456,7 @@ Briefing rules:
                 "agent_type": agent_type,
                 "description": description,
                 "started_at": utc_now().isoformat(),
+                "prompt": prompt,
             }
 
         def _run():

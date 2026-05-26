@@ -72,21 +72,35 @@ export class TaskStrip {
 
   /**
    * Fetch and render active tasks and pending reminders.
+   * Also hydrates the active subagents map from the server so the drawer
+   * survives page reloads (WS push events are missed when disconnected).
    * Public — called on init and from the event router.
    */
   async loadActiveTasks() {
     try {
-      const schedData = await this._api._get('/scheduler?status=pending').catch((e) => { if (e?.message === 'AUTH') throw e; return {}; });
+      const [schedData, subagentData] = await Promise.all([
+        this._api._get('/scheduler?status=pending').catch((e) => { if (e?.message === 'AUTH') throw e; return {}; }),
+        this._api._get('/chat/subagents/active').catch(() => ({})),
+      ]);
       const reminders = (schedData.items || []).filter(
         r => r.status === 'pending' && r.due_at
       );
       this._cachedReminders = reminders;
+
+      for (const sa of (subagentData.subagents || [])) {
+        if (!this._activeSubagents.has(sa.sub_id)) {
+          this._activeSubagents.set(sa.sub_id, {
+            agent_type: sa.agent_type,
+            description: sa.description,
+          });
+        }
+      }
+
       this._render(reminders);
     } catch (e) {
       if (e?.message === 'AUTH') {
         this._onAuthFailureCb?.();
       }
-      // Other errors: silently fail — drawer is supplementary
     }
   }
 

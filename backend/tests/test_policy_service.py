@@ -73,8 +73,10 @@ class TestDefaults:
         assert "email.search" in defaults
         assert "email.manage" in defaults
         assert "code_eval" in defaults
-        assert "find_tools" in defaults
-        assert "subagent" in defaults
+        assert "subagent.spawn" in defaults
+        assert "subagent.list" in defaults
+        assert "subagent.stop" in defaults
+        assert "subagent.direct" in defaults
 
     def test_defaults_email_search_is_allow_in_chat(self):
         defaults = get_defaults()

@@ -92,7 +92,8 @@ _CHAT_ALLOW: dict[str, State] = {
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
     "memory.store": "allow",
     "place.save": "allow", "place.list": "allow", "place.get": "allow", "place.delete": "allow",
-    "subagent": "allow",
+    "subagent.spawn": "allow", "subagent.list": "allow",
+    "subagent.stop": "allow", "subagent.direct": "allow",
 }
 
 _CHAT_ASK: dict[str, State] = {
@@ -145,6 +146,7 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
     "search_files.glob": "allow", "search_files.grep": "allow",
+    "subagent.list": "allow", "subagent.stop": "allow",
     "weather": "allow",
     # Internal writes
     "document.create": "allow", "document.restore": "allow",
@@ -177,6 +179,8 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "schedule.list": "allow", "schedule.search": "allow",
     "search": "allow",
     "search_files.glob": "allow", "search_files.grep": "allow",
+    "subagent.spawn": "allow", "subagent.list": "allow",
+    "subagent.stop": "allow", "subagent.direct": "allow",
     "weather": "allow",
     # Reversible writes
     "document.create": "allow", "document.restore": "allow",
@@ -217,7 +221,12 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
     "memory.forget": "deny",
     "schedule.create": "deny",
     "schedule.cancel": "deny",
-    "subagent": "deny",
+}
+
+
+_SUBAGENT_OVERRIDE: dict[str, State] = {
+    "subagent.spawn": "ask",
+    "subagent.direct": "ask",
 }
 
 
@@ -237,9 +246,10 @@ def _build_defaults() -> dict[str, dict[Context, State]]:
 
     defaults: dict[str, dict[Context, State]] = {}
     for action_id in sorted(all_action_ids):
+        chat_default = _CHAT_ALLOW.get(action_id, _CHAT_ASK.get(action_id, "ask"))
         defaults[action_id] = {
-            "chat": _CHAT_ALLOW.get(action_id, _CHAT_ASK.get(action_id, "ask")),
-            "subagent": _CHAT_ALLOW.get(action_id, _CHAT_ASK.get(action_id, "ask")),
+            "chat": chat_default,
+            "subagent": _SUBAGENT_OVERRIDE.get(action_id, chat_default),
             "subconscious": _SUBCONSCIOUS_ALLOW.get(action_id, "deny"),
             "external_agent": _EXTERNAL_AGENT_ALLOW.get(action_id, _EXTERNAL_AGENT_DENY.get(action_id, "deny")),
         }

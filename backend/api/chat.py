@@ -297,6 +297,32 @@ def post_chat_stop():
     return post_chat_interrupt()
 
 
+@chat_bp.route("/chat/subagents/active", methods=["GET"])
+@require_auth
+def get_active_subagents():
+    """Return all currently active async subagents.
+
+    Used by the frontend to hydrate the task drawer on page load/reconnect,
+    since WS push events are missed if the client was disconnected.
+
+    Response JSON:
+        {subagents: [{sub_id, agent_type, description, started_at}, ...]}
+    """
+    from abilities.subagent import get_active_subagents as _get_active
+
+    snapshot = _get_active()
+    items = [
+        {
+            "sub_id": sid,
+            "agent_type": entry["agent_type"],
+            "description": entry["description"],
+            "started_at": entry["started_at"],
+        }
+        for sid, entry in snapshot.items()
+    ]
+    return jsonify({"subagents": items}), 200
+
+
 @chat_bp.route("/chat/subagent/<sub_id>/stop", methods=["POST"])
 @require_auth
 def post_subagent_stop(sub_id: str):
