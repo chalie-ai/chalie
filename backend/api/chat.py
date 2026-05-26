@@ -58,6 +58,14 @@ def _set_active_ump(proc) -> None:
         _active_ump = proc
 
 
+def _clear_active_ump(proc) -> None:
+    """Clear active UMP only if it still points to *proc*."""
+    global _active_ump
+    with _ump_lock:
+        if _active_ump is proc:
+            _active_ump = None
+
+
 # ── Background helpers ────────────────────────────────────────────────────────
 
 
@@ -75,6 +83,12 @@ def _run_chat_background(
     broker = WebSocketBroker()
     try:
         response = proc.send(request_id=request_id)
+
+        # Cancelled turn — skip broadcast entirely. The replacement turn
+        # (started by dispatch_message) owns the WS event stream now.
+        if proc._cancel_event.is_set():
+            _clear_active_ump(proc)
+            return
 
         metrics = proc._metrics.snapshot()
         transcript_ids = [proc._uid] if getattr(proc, "_uid", None) is not None else []
@@ -97,9 +111,7 @@ def _run_chat_background(
         if metrics:
             done_evt["metrics"] = metrics
 
-        # Clear active UMP BEFORE broadcasting so the frontend can immediately
-        # POST /chat on receiving the done event without racing active_ump.
-        _set_active_ump(None)
+        _clear_active_ump(proc)
         broker.broadcast(message_evt)
         broker.broadcast(done_evt)
 
@@ -112,21 +124,20 @@ def _run_chat_background(
                 partial_metrics["tokens_total_complete"] = False
         except Exception:
             pass
-        _set_active_ump(None)
-        broker.broadcast({
-            "type": "error",
-            "message": str(exc),
-            "recoverable": False,
-        })
-        broker.broadcast({
-            "type": "done",
-            "duration_ms": int((time.time() - turn_start) * 1000),
-            **({"metrics": partial_metrics} if partial_metrics else {}),
-        })
+        _clear_active_ump(proc)
+        if not proc._cancel_event.is_set():
+            broker.broadcast({
+                "type": "error",
+                "message": str(exc),
+                "recoverable": False,
+            })
+            broker.broadcast({
+                "type": "done",
+                "duration_ms": int((time.time() - turn_start) * 1000),
+                **({"metrics": partial_metrics} if partial_metrics else {}),
+            })
     finally:
-        # Safety net: ensure active_ump is cleared even if an unexpected path
-        # bypasses the explicit clears above (e.g. BaseException subclass).
-        _set_active_ump(None)
+        _clear_active_ump(proc)
 
 
 def dispatch_message(
@@ -137,10 +148,11 @@ def dispatch_message(
 ) -> None:
     """Single chokepoint for all message sources entering the user channel.
 
-    Always starts a fresh UMP turn. Mid-ACT user messages are handled by the
-    frontend via POST /chat/interrupt — the active turn self-cleans its DB rows
-    on cancellation, then the frontend calls dispatch_message with the combined
-    original+new message text.
+    If an ACT loop is already in-flight (active UMP exists), cancels it,
+    concatenates the original message with the new one (separated by two
+    newlines), and starts a fresh turn with the combined text. The cancelled
+    turn's DB rows are cleaned up by _cleanup_cancelled_turn() in the
+    processor thread.
 
     Args:
         text: Message content.
@@ -151,6 +163,14 @@ def dispatch_message(
                       (the synthesized assistant response still is).
     """
     attachments = attachments or []
+
+    active = _get_active_ump()
+    if active is not None and not hidden_input:
+        original = getattr(active, "_raw_input", "") or ""
+        active.cancel()
+        text = original + "\n\n" + text
+        logger.info("[Chat API] Mid-turn message — cancelled active UMP, combined text")
+
     _start_turn(text, source, attachments, hidden_input)
 
 

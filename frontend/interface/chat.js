@@ -17,15 +17,7 @@ export class Chat {
     // Send state
     this._isSending = false;
     this._pendingForm = null;
-
-    // The text of the most recently sent message; used to combine with a
-    // mid-ACT redirect message when the user types while a turn is in-flight.
-    this._lastSentText = '';
-
-    // When set, _finaliseTurn redirects to a new turn with this payload
-    // instead of settling into a normal response. Set by sendMessage() when
-    // the user submits a message while a turn is already in-flight.
-    this._pendingRedirect = null;
+    this._lastUserBubble = null;
 
     // Scroll-up pagination state
     this._historyOffset = 0;
@@ -93,11 +85,9 @@ export class Chat {
 
   /**
    * Request a clean stop of the active turn.
-   * Clears any pending redirect (plain stop, not a redirect), disables the
-   * ACT-cycle stop button, and POSTs to /chat/interrupt.
+   * Disables the ACT-cycle stop button and POSTs to /chat/interrupt.
    */
   async requestStop() {
-    this._pendingRedirect = null;
     const stopBtn = this._pendingForm?.querySelector('.act-stop-btn');
     if (stopBtn) {
       stopBtn.disabled = true;
@@ -113,10 +103,9 @@ export class Chat {
   /**
    * Main send orchestrator.
    *
-   * If a turn is already in-flight, shows the new message as a user bubble,
-   * stores a pending redirect (combined message), and POSTs /chat/interrupt.
-   * The done event from the interrupted turn triggers _finaliseTurn, which
-   * detects the redirect and starts a fresh turn with the combined text.
+   * If a turn is already in-flight, appends the new text to the existing user
+   * bubble and POSTs /chat. The backend cancels the active turn, concatenates
+   * the original + new message, and starts a fresh turn with the combined text.
    *
    * @param {string} [source='text']
    */
@@ -130,20 +119,23 @@ export class Chat {
     // Block send while any upload is still in-flight.
     if (this._imageAttach?.isUploading) return;
 
-    // Mid-ACT interrupt — cancel the current turn and redirect with a combined
-    // message (original text + separator + new text).
+    // Mid-ACT: append to existing user bubble, remove old ACT cycle, and
+    // POST /chat. The backend cancels the active turn, concatenates original +
+    // new message, and starts a fresh turn whose events arrive on fresh callbacks.
     if (this._isSending) {
       textarea.value = '';
       textarea.style.height = 'auto';
-      this._renderer.appendUserForm(text, null, {});
-      const combined = this._lastSentText + '\n\n' + text;
-      this._pendingRedirect = { text: combined, source };
-      this._postInterrupt();
+      if (this._lastUserBubble) {
+        const textEl = this._lastUserBubble.querySelector('.speech-form__text');
+        if (textEl) textEl.textContent += '\n\n' + text;
+      }
+      if (this._pendingForm?.isConnected) this._pendingForm.remove();
+      this._pendingForm = null;
+      this._startTurn(text, source, false);
       return;
     }
 
     this._isSending = true;
-    this._lastSentText = text || '[File attached]';
     this._presence.setState('processing');
     textarea.value = '';
     textarea.style.height = 'auto';
@@ -230,7 +222,7 @@ export class Chat {
    */
   _startTurn(text, source, showUserBubble = true, attachments = []) {
     if (showUserBubble) {
-      this._renderer.appendUserForm(text || '[File attached]', null, {});
+      this._lastUserBubble = this._renderer.appendUserForm(text || '[File attached]', null, {});
     }
 
     const actEl = this._renderer.createActCycle();
@@ -280,25 +272,9 @@ export class Chat {
 
   /**
    * Finalise a completed send turn.
-   *
-   * If _pendingRedirect is set (mid-ACT interrupt case), removes the current
-   * ACT element and immediately starts a new turn with the combined message.
-   * Otherwise, swaps or removes the ACT placeholder and resets send state.
+   * Swaps or removes the ACT placeholder and resets send state.
    */
   _finaliseTurn(actEl, responseContent, responseMeta, doneData) {
-    // Redirect: the previous turn was interrupted; start a fresh turn with
-    // the combined original+new message. No user bubble — the new message
-    // bubble was already rendered when the user typed it mid-ACT.
-    if (this._pendingRedirect) {
-      const { text, source } = this._pendingRedirect;
-      this._pendingRedirect = null;
-      if (actEl.isConnected) actEl.remove();
-      this._pendingForm = null;
-      this._lastSentText = text;
-      this._startTurn(text, source, false);
-      return;
-    }
-
     if (responseContent) {
       responseMeta.duration_ms = doneData.duration_ms;
       // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.

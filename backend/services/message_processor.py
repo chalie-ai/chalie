@@ -1006,10 +1006,15 @@ class MessageProcessor:
                         break  # 'break' — unrecoverable
                     self._metrics.accumulate(llm_response)
 
+                    if self._cancel_event.is_set():
+                        break
+
                     trail_before = len(self._act_trail)
 
                     with self._metrics.stage('post_tool_records'):
                         for tc in list(llm_response.tool_calls or []):
+                            if self._cancel_event.is_set():
+                                break
                             self.handle_tool(tc)
 
                     if len(self._act_trail) == trail_before:
