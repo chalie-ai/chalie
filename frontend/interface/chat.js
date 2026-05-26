@@ -84,16 +84,33 @@ export class Chat {
   // ---------------------------------------------------------------------------
 
   /**
-   * Request a clean stop of the active turn.
-   * Disables the ACT-cycle stop button and POSTs to /chat/interrupt.
+   * Stop + undo: cancel the active turn, remove the ACT cycle and user
+   * bubble, and restore the message text to the input box.
    */
   async requestStop() {
-    const stopBtn = this._pendingForm?.querySelector('.act-stop-btn');
-    if (stopBtn) {
-      stopBtn.disabled = true;
-      stopBtn.classList.add('act-stop-btn--stopping');
+    // Restore message text to textarea
+    const textarea = document.getElementById('messageInput');
+    if (this._lastUserBubble) {
+      const textEl = this._lastUserBubble.querySelector('.speech-form__text');
+      if (textEl && textarea) textarea.value = textEl.textContent || '';
+      this._lastUserBubble.remove();
+      this._lastUserBubble = null;
     }
-    await this._postInterrupt();
+
+    // Remove ACT cycle element
+    if (this._pendingForm?.isConnected) this._pendingForm.remove();
+    this._pendingForm = null;
+
+    // Abort WS callbacks so stale events are ignored
+    this._ws.abort();
+
+    // Reset send state
+    this._isSending = false;
+    this._presence.setState('resting');
+    this._onSendCompleteCb?.();
+
+    // Fire cancel to backend (best-effort, cleanup happens server-side)
+    this._postInterrupt();
   }
 
   // ---------------------------------------------------------------------------

@@ -196,8 +196,9 @@ export class Renderer {
     const logo = this._createEl('span', 'act-logo');
     const narrative = this._createEl('span', 'act-narrative');
     const stopBtn = this._createEl('button', 'act-stop-btn');
-    stopBtn.setAttribute('aria-label', 'Stop');
-    stopBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="2"/></svg>`;
+    stopBtn.setAttribute('aria-label', 'Stop and undo');
+    stopBtn.title = 'Stop & undo';
+    stopBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 2L1 5.5L4.5 9V6.5H10a3.5 3.5 0 0 1 0 7H7v2h3a5.5 5.5 0 0 0 0-11H4.5V2Z"/></svg>`;
     row.appendChild(logo);
     row.appendChild(narrative);
     row.appendChild(stopBtn);
