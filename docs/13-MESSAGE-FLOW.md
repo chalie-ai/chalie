@@ -67,7 +67,7 @@ User (WebSocket)
 
 ## ACT Loop
 
-Every processor runs the same ACT loop. The loop continues until the model produces a response with no tool calls, a cooperative cancel signal is received (`_cancel_event`), or the processor's iteration cap is reached. User-facing processors (UMP, SubagentProcessor) have no iteration cap — they run until the model finishes or the user stops them. Background processors retain hard caps (DMN=100, EAMP=200, PatternMatch=100, GeoPattern=100). The user can stop an active UMP turn via `POST /chat/stop` or a running subagent via `POST /chat/subagent/<sub_id>/stop`.
+Every processor runs the same ACT loop. The loop continues until the model produces a response with no tool calls, a cooperative cancel signal is received (`_cancel_event`), or the processor's iteration cap is reached. User-facing processors (UMP, SubagentProcessor) have no iteration cap — they run until the model finishes or the user stops them. Background processors retain hard caps (DMN=100, EAMP=200, PatternMatch=100, GeoPattern=100). The user can stop an active UMP turn via `POST /chat/interrupt` or a running subagent via `POST /chat/subagent/<sub_id>/stop`. When a turn is cancelled, `_cleanup_cancelled_turn()` deletes all tool_call and transcript rows for that turn — the cancelled turn leaves no trace in the database. If the user sent a new message mid-turn, the frontend concatenates the original + new message (separated by `\n\n`) and starts a fresh turn with the combined text.
 
 ```
   ┌──────────────────────────────────────────┐
@@ -87,7 +87,7 @@ Every processor runs the same ACT loop. The loop continues until the model produ
   │                  · record tool in        │
   │                    metrics               │
   │                 │                        │
-  │  Drain any mid-turn user steering        │
+  │  Check _cancel_event (cooperative stop)   │
   │                 │                        │
   └─────────────────┘ (next iteration)
 ```
