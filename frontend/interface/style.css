@@ -1290,6 +1290,25 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   display: none;
 }
 
+/* Stop button — embedded in .act-row, disappears automatically when actEl is removed */
+.act-stop-btn {
+  background: transparent;
+  border: none;
+  color: var(--error);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  opacity: 0.7;
+  transition: opacity 180ms ease, transform 180ms ease;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.act-stop-btn:hover { opacity: 1; transform: scale(1.15); }
+.act-stop-btn:active { transform: scale(0.9); }
+.act-stop-btn--stopping { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
 /* Tool list — indented under the logo (logo width 12 + gap 12 = 24). */
 .act-tools {
   margin-left: 24px;
@@ -1387,18 +1406,6 @@ body.voice-loading .speech-form__speak-btn { display: none; }
     opacity: 1;
     box-shadow: 0 0 12px rgba(138, 92, 255, 0.7);
   }
-}
-
-.steer-bubble {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.82rem;
-  line-height: 1.4;
-  letter-spacing: -0.005em;
-  color: var(--dusk-blue);
-  font-style: italic;
-  padding: 4px 0;
-  word-break: break-word;
-  animation: formEntry 200ms var(--ease-out) both;
 }
 
 /* Error form */
@@ -1575,32 +1582,6 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 .btn-action--send:disabled {
   opacity: 0.3;
   cursor: not-allowed;
-}
-
-/* Stop button — shown while a turn is in-flight, replaces the send button */
-.btn-action--stop {
-  background: transparent;
-  color: var(--error);
-  transition: all 220ms ease;
-  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--error) 35%, transparent));
-}
-
-.btn-action--stop:hover {
-  transform: scale(1.1);
-  filter: drop-shadow(0 0 12px color-mix(in srgb, var(--error) 60%, transparent));
-}
-
-.btn-action--stop:active {
-  transform: scale(0.95);
-}
-
-/* Stopping state — disabled, muted colour while backend processes cancellation */
-.btn-action--stopping {
-  background: transparent;
-  color: var(--text-muted);
-  opacity: 0.55;
-  cursor: not-allowed;
-  transition: all 220ms ease;
 }
 
 /* + attach button — rotates to × when menu is open */

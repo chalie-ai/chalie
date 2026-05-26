@@ -122,7 +122,6 @@ class SkillSuggestionMessageProcessor(MessageProcessor):
             dispatch_input,
             source='skill_suggestion',
             hidden_input=True,
-            intercept=False,
         )
         logger.info("%s dispatched", _LOG_PREFIX)
 

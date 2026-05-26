@@ -29,7 +29,7 @@ _LOG_PREFIX = "[SKILL_BUILDER]"
 
 # Internal/meta tools that should not appear in skill content guidance.
 _META_TOOLS = frozenset({
-    "find_tools", "find_skills", "skill_builder", "steer",
+    "find_tools", "find_skills", "skill_builder",
     "subagent", "review_tool_calls", "review_transcript",
     "save_graph", "save_pattern",
 })

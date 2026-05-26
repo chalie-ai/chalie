@@ -179,14 +179,15 @@ export class Renderer {
    *
    * Structure:
    *   .act-cycle
-   *     .act-row          (logo + narrative line)
+   *     .act-row          (logo + narrative + stop button)
    *       .act-logo       (blinking violet disc, always present)
    *       .act-narrative  (italic text, mutated in-place by setActNarrative)
+   *       .act-stop-btn   (cancel button; wired in Chat._startTurn)
    *     .act-tools        (cumulative tool list, populated by appendToolPill)
    *
    * No background, no border, no padding — the logo IS the placeholder.
    * On final response, replaceActWithResponse swaps the whole node for a
-   * normal Chalie speech-form bubble.
+   * normal Chalie speech-form bubble, removing the stop button automatically.
    */
   createActCycle() {
     const el = this._createEl('div', 'act-cycle');
@@ -194,8 +195,12 @@ export class Renderer {
     const row = this._createEl('div', 'act-row');
     const logo = this._createEl('span', 'act-logo');
     const narrative = this._createEl('span', 'act-narrative');
+    const stopBtn = this._createEl('button', 'act-stop-btn');
+    stopBtn.setAttribute('aria-label', 'Stop');
+    stopBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="2" y="2" width="12" height="12" rx="2"/></svg>`;
     row.appendChild(logo);
     row.appendChild(narrative);
+    row.appendChild(stopBtn);
     el.appendChild(row);
 
     const tools = this._createEl('div', 'act-tools');
@@ -302,30 +307,6 @@ export class Renderer {
         statusEl.textContent = 'error';
       }
     }, wait);
-  }
-
-  /**
-   * Append a steer bubble inside the in-progress ACT cycle's tool list, so the
-   * user's mid-ACT redirect renders as part of the tool-calling section rather
-   * than as a separate chat bubble. Falls back to the spine if no live ACT.
-   *
-   * @param {string} text — the user's steering message
-   * @param {HTMLElement} [actEl] — the .act-cycle element for the running turn
-   */
-  appendSteerBubble(text, actEl) {
-    const bubble = this._createEl('div', 'steer-bubble');
-    bubble.textContent = text;
-
-    const tools = actEl?.isConnected
-      ? actEl.querySelector(':scope > .act-tools')
-      : null;
-    if (tools) {
-      tools.appendChild(bubble);
-    } else {
-      this._spine.appendChild(bubble);
-    }
-    this._scrollToBottom();
-    return bubble;
   }
 
   /**

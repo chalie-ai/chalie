@@ -2,13 +2,12 @@
 Chat API — HTTP endpoints for client→server communication.
 
 Routes:
-  POST /chat               — receive a user message; start a new UMP turn or
-                             inject a steer into the active ACT loop. Returns
-                             202 immediately; response arrives via
-                             WebSocketBroker.broadcast().
-  POST /chat/stop          — cooperatively cancel the active UMP turn. Sets
-                             the cancel_event on the active processor. Returns
-                             200 always with JSON body.
+  POST /chat               — receive a user message; always starts a new UMP
+                             turn. Returns 202 immediately; response arrives
+                             via WebSocketBroker.broadcast().
+  POST /chat/interrupt     — cooperatively cancel the active UMP turn. The
+                             cancelled turn deletes its own transcript and
+                             tool_call rows. Returns 200 always with JSON body.
   POST /action             — receive an action button click; dispatch via
                              ActDispatcherService. Returns 202 immediately;
                              response arrives via WebSocketBroker.broadcast().
@@ -17,8 +16,10 @@ Routes:
 
 Design:
   WS is receive-only push (server→client). All client→server requests use
-  HTTP. The /chat endpoint owns routing: if a UMP turn is in-flight it
-  dispatches a steer tool_call; otherwise it starts a new turn.
+  HTTP. The /chat endpoint always starts a new UMP turn. Mid-ACT user
+  messages are handled by the frontend: POST /chat/interrupt cancels the
+  active turn (which self-cleans its DB rows), then the frontend starts a
+  fresh turn with the combined original+new message text.
 """
 
 import logging
@@ -65,7 +66,12 @@ def _run_chat_background(
     request_id: str,
     turn_start: float,
 ) -> None:
-    """Background thread: process user message via UMP and broadcast response."""
+    """Background thread: process user message via UMP and broadcast response.
+
+    Clears the active UMP reference BEFORE broadcasting done so the frontend
+    can immediately POST /chat without hitting a race where active_ump is still
+    set when the new request arrives.
+    """
     broker = WebSocketBroker()
     try:
         response = proc.send(request_id=request_id)
@@ -85,12 +91,16 @@ def _run_chat_background(
             "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
         }
         message_evt["segments"] = SegmentService.build(content, transcript_ids)
-        broker.broadcast(message_evt)
 
         elapsed_ms = int((time.time() - turn_start) * 1000)
         done_evt = {"type": "done", "duration_ms": elapsed_ms}
         if metrics:
             done_evt["metrics"] = metrics
+
+        # Clear active UMP BEFORE broadcasting so the frontend can immediately
+        # POST /chat on receiving the done event without racing active_ump.
+        _set_active_ump(None)
+        broker.broadcast(message_evt)
         broker.broadcast(done_evt)
 
     except Exception as exc:
@@ -102,6 +112,7 @@ def _run_chat_background(
                 partial_metrics["tokens_total_complete"] = False
         except Exception:
             pass
+        _set_active_ump(None)
         broker.broadcast({
             "type": "error",
             "message": str(exc),
@@ -113,6 +124,8 @@ def _run_chat_background(
             **({"metrics": partial_metrics} if partial_metrics else {}),
         })
     finally:
+        # Safety net: ensure active_ump is cleared even if an unexpected path
+        # bypasses the explicit clears above (e.g. BaseException subclass).
         _set_active_ump(None)
 
 
@@ -121,9 +134,13 @@ def dispatch_message(
     source: str = "text",
     attachments: list | None = None,
     hidden_input: bool = False,
-    intercept: bool = False,
 ) -> None:
     """Single chokepoint for all message sources entering the user channel.
+
+    Always starts a fresh UMP turn. Mid-ACT user messages are handled by the
+    frontend via POST /chat/interrupt — the active turn self-cleans its DB rows
+    on cancellation, then the frontend calls dispatch_message with the combined
+    original+new message text.
 
     Args:
         text: Message content.
@@ -132,21 +149,8 @@ def dispatch_message(
         attachments: Optional file paths from POST /upload.
         hidden_input: When True the input row is NOT written to the transcript
                       (the synthesized assistant response still is).
-        intercept: When True, steers into the active UMP if one exists.
-                   When False, always starts a fresh UMP turn.
     """
     attachments = attachments or []
-
-    if intercept:
-        proc = _get_active_ump()
-        if proc:
-            proc.handle_tool({
-                'name': 'steer',
-                'input': {'text': text},
-                'id': f'steer_{uuid.uuid4().hex[:12]}',
-            })
-            return
-
     _start_turn(text, source, attachments, hidden_input)
 
 
@@ -212,7 +216,7 @@ def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = 
 @chat_bp.route("/chat", methods=["POST"])
 @require_auth
 def post_chat():
-    """Receive a user message and start or steer a UMP turn.
+    """Receive a user message and start a new UMP turn.
 
     Body (JSON):
         text (str): Message text.
@@ -235,33 +239,42 @@ def post_chat():
     if not text and attachments:
         text = "[File attached]"
 
-    dispatch_message(text, source=source, attachments=attachments, intercept=True)
+    dispatch_message(text, source=source, attachments=attachments)
     return jsonify({"status": "accepted"}), 202
 
 
-@chat_bp.route("/chat/stop", methods=["POST"])
+@chat_bp.route("/chat/interrupt", methods=["POST"])
 @require_auth
-def post_chat_stop():
-    """Cooperatively cancel the active UMP turn.
+def post_chat_interrupt():
+    """Interrupt the active UMP turn.
 
-    Sets the cancel_event on the active processor so the ACT loop exits at
-    the next iteration boundary. The turn still completes normally (store +
-    post_turn) with final_text=''. The frontend receives the normal 'done'
-    WS event when the loop actually exits.
+    Cancels the active processor so the ACT loop exits at the next iteration
+    boundary. The cancelled turn deletes its own transcript and tool_call rows
+    — no data persists for an interrupted turn.
 
-    Always returns HTTP 200 — the caller should not treat 200 as confirmation
-    that the turn has stopped, only that the stop signal was delivered.
+    Always returns HTTP 200.
 
     Response JSON:
-        {ok: true, cancelled: true}   — stop signal delivered to active turn
+        {ok: true, interrupted: true}        — cancel signal delivered
         {ok: true, reason: "no_active_turn"} — nothing was in-flight
     """
     proc = _get_active_ump()
     if proc is not None:
         proc.cancel()
-        logger.info("[Chat API] Stop signal delivered to active UMP turn")
-        return jsonify({"ok": True, "cancelled": True}), 200
+        logger.info("[Chat API] Interrupt signal delivered to active UMP turn")
+        return jsonify({"ok": True, "interrupted": True}), 200
     return jsonify({"ok": True, "reason": "no_active_turn"}), 200
+
+
+@chat_bp.route("/chat/stop", methods=["POST"])
+@require_auth
+def post_chat_stop():
+    """Deprecated alias for POST /chat/interrupt.
+
+    Retained for backwards compatibility. New callers should use
+    POST /chat/interrupt instead.
+    """
+    return post_chat_interrupt()
 
 
 @chat_bp.route("/chat/subagent/<sub_id>/stop", methods=["POST"])

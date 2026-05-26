@@ -18,6 +18,15 @@ export class Chat {
     this._isSending = false;
     this._pendingForm = null;
 
+    // The text of the most recently sent message; used to combine with a
+    // mid-ACT redirect message when the user types while a turn is in-flight.
+    this._lastSentText = '';
+
+    // When set, _finaliseTurn redirects to a new turn with this payload
+    // instead of settling into a normal response. Set by sendMessage() when
+    // the user submits a message while a turn is already in-flight.
+    this._pendingRedirect = null;
+
     // Scroll-up pagination state
     this._historyOffset = 0;
 
@@ -79,65 +88,22 @@ export class Chat {
   }
 
   // ---------------------------------------------------------------------------
-  // Stop
+  // Stop / Interrupt
   // ---------------------------------------------------------------------------
 
   /**
-   * Transition the send button to stop mode.
-   * Called immediately when a send turn starts.
-   */
-  _enterStopMode() {
-    const sendBtn = document.getElementById('sendBtn');
-    if (!sendBtn) return;
-    sendBtn.disabled = false;
-    sendBtn.classList.remove('btn-action--send');
-    sendBtn.classList.add('btn-action--stop');
-    sendBtn.setAttribute('aria-label', 'Stop');
-    sendBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-      <rect x="2" y="2" width="12" height="12" rx="2"/>
-    </svg>`;
-  }
-
-  /**
-   * Transition the send button to stopping mode (after stop clicked, before done).
-   */
-  _enterStoppingMode() {
-    const sendBtn = document.getElementById('sendBtn');
-    if (!sendBtn) return;
-    sendBtn.disabled = true;
-    sendBtn.classList.remove('btn-action--stop');
-    sendBtn.classList.add('btn-action--stopping');
-    sendBtn.setAttribute('aria-label', 'Stopping...');
-  }
-
-  /**
-   * Revert the send button to normal send mode.
-   * Called when a turn completes (done event) or is cancelled.
-   */
-  _exitStopMode() {
-    const sendBtn = document.getElementById('sendBtn');
-    if (!sendBtn) return;
-    sendBtn.disabled = true;
-    sendBtn.classList.remove('btn-action--stop', 'btn-action--stopping');
-    sendBtn.classList.add('btn-action--send');
-    sendBtn.setAttribute('aria-label', 'Send message');
-    sendBtn.innerHTML = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <line x1="22" y1="2" x2="11" y2="13"></line>
-      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-    </svg>`;
-  }
-
-  /**
-   * Request stop of the active turn. Posts to /api/chat/stop and enters
-   * stopping mode. The button remains disabled until the done event fires.
+   * Request a clean stop of the active turn.
+   * Clears any pending redirect (plain stop, not a redirect), disables the
+   * ACT-cycle stop button, and POSTs to /chat/interrupt.
    */
   async requestStop() {
-    this._enterStoppingMode();
-    try {
-      await this._api._post('/chat/stop', {});
-    } catch (err) {
-      console.warn('[Chat] Stop request failed:', err);
+    this._pendingRedirect = null;
+    const stopBtn = this._pendingForm?.querySelector('.act-stop-btn');
+    if (stopBtn) {
+      stopBtn.disabled = true;
+      stopBtn.classList.add('act-stop-btn--stopping');
     }
+    await this._postInterrupt();
   }
 
   // ---------------------------------------------------------------------------
@@ -147,9 +113,10 @@ export class Chat {
   /**
    * Main send orchestrator.
    *
-   * Reads #messageInput and #sendBtn from the DOM, detects steer routing,
-   * manages the pending-form lifecycle, calls ws.send() with all callbacks,
-   * and fires the registered completion hooks.
+   * If a turn is already in-flight, shows the new message as a user bubble,
+   * stores a pending redirect (combined message), and POSTs /chat/interrupt.
+   * The done event from the interrupted turn triggers _finaliseTurn, which
+   * detects the redirect and starts a fresh turn with the combined text.
    *
    * @param {string} [source='text']
    */
@@ -163,76 +130,26 @@ export class Chat {
     // Block send while any upload is still in-flight.
     if (this._imageAttach?.isUploading) return;
 
-    // Turn in-flight — route to server, which decides steer vs new turn.
-    // Server returns {routed: "steer"|"turn"} and _postChat fires
-    // onSteerSent on the active callbacks if it was a steer.
-    if (this._ws._chatCallbacks) {
+    // Mid-ACT interrupt — cancel the current turn and redirect with a combined
+    // message (original text + separator + new text).
+    if (this._isSending) {
       textarea.value = '';
       textarea.style.height = 'auto';
-      this._ws.send(text, source, {});
+      this._renderer.appendUserForm(text, null, {});
+      const combined = this._lastSentText + '\n\n' + text;
+      this._pendingRedirect = { text: combined, source };
+      this._postInterrupt();
       return;
     }
 
     this._isSending = true;
+    this._lastSentText = text || '[File attached]';
     this._presence.setState('processing');
     textarea.value = '';
     textarea.style.height = 'auto';
     if (this._imageAttach) this._imageAttach.clear();
-    this._enterStopMode();
 
-    this._renderer.appendUserForm(text || '[File attached]', null, {});
-
-    // ACT cycle host: blinking logo + (optional) narrative + cumulative tool list.
-    // Persists for the entire turn; replaced wholesale by the final response.
-    const actEl = this._renderer.createActCycle();
-    this._pendingForm = actEl;
-
-    let responseContent = '';
-    let responseMeta = {};
-
-    this._ws.send(text || '[File attached]', source, {
-      onStatus: (stage) => {
-        this._presence.setState(stage);
-      },
-      onNarration: (data) => {
-        // Each new narration REPLACES the previous one — no stacking.
-        this._presence.setState('narrating');
-        this._renderer.setActNarrative(actEl, data.text, data.step);
-      },
-      onToolStart: (msg) => {
-        // Tools accumulate in a single flat list spanning the whole ACT loop.
-        this._renderer.appendToolPill(actEl, msg.call_id, msg.name, msg.act_summary);
-      },
-      onToolEnd: (msg) => {
-        this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);
-      },
-      onSteerSent: (steerText) => {
-        this._renderer.appendSteerBubble(steerText, actEl);
-      },
-      onMessage: (data) => {
-        responseContent = data.content || '';
-        responseMeta = {
-          topic: data.topic,
-          exchange_id: data.exchange_id,
-          mode: data.mode || '',
-          confidence: data.confidence || 0,
-          segments: data.segments || null,
-          ts: data.timestamp || '',
-        };
-        this._presence.setState('responding');
-      },
-      onError: (data) => {
-        this._renderer.replaceActWithError(actEl, data.message);
-        if (!data.recoverable) {
-          this._onAuthFailureCb?.();
-        }
-      },
-      onDone: (data) => {
-        this._onResponseReceivedCb?.();
-        this._finaliseTurn(actEl, responseContent, responseMeta, data);
-      },
-    }, attachments);
-
+    this._startTurn(text || '[File attached]', source, true, attachments);
   }
 
   // ---------------------------------------------------------------------------
@@ -301,10 +218,87 @@ export class Chat {
   // ---------------------------------------------------------------------------
 
   /**
-   * Finalise a completed send turn: swap or remove the ACT placeholder,
-   * fire background notification if needed, then reset send state.
+   * Wire and launch a turn: create ACT cycle, register WS callbacks, post.
+   *
+   * Extracted from sendMessage() so the redirect path in _finaliseTurn can
+   * start a fresh turn without duplicating callback wiring.
+   *
+   * @param {string} text — message body to send
+   * @param {string} source — "text" | "voice" | "subagent" etc.
+   * @param {boolean} showUserBubble — whether to render a user speech-form
+   * @param {string[]} attachments — file paths from POST /upload
+   */
+  _startTurn(text, source, showUserBubble = true, attachments = []) {
+    if (showUserBubble) {
+      this._renderer.appendUserForm(text || '[File attached]', null, {});
+    }
+
+    const actEl = this._renderer.createActCycle();
+    this._pendingForm = actEl;
+
+    // Wire the stop button embedded in the ACT cycle element.
+    const stopBtn = actEl.querySelector('.act-stop-btn');
+    if (stopBtn) stopBtn.addEventListener('click', () => this.requestStop());
+
+    let responseContent = '';
+    let responseMeta = {};
+
+    this._ws.send(text, source, {
+      onStatus: (stage) => this._presence.setState(stage),
+      onNarration: (data) => {
+        this._presence.setState('narrating');
+        this._renderer.setActNarrative(actEl, data.text, data.step);
+      },
+      onToolStart: (msg) => {
+        this._renderer.appendToolPill(actEl, msg.call_id, msg.name, msg.act_summary);
+      },
+      onToolEnd: (msg) => {
+        this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);
+      },
+      onMessage: (data) => {
+        responseContent = data.content || '';
+        responseMeta = {
+          topic: data.topic,
+          exchange_id: data.exchange_id,
+          mode: data.mode || '',
+          confidence: data.confidence || 0,
+          segments: data.segments || null,
+          ts: data.timestamp || '',
+        };
+        this._presence.setState('responding');
+      },
+      onError: (data) => {
+        this._renderer.replaceActWithError(actEl, data.message);
+        if (!data.recoverable) this._onAuthFailureCb?.();
+      },
+      onDone: (data) => {
+        this._onResponseReceivedCb?.();
+        this._finaliseTurn(actEl, responseContent, responseMeta, data);
+      },
+    }, attachments);
+  }
+
+  /**
+   * Finalise a completed send turn.
+   *
+   * If _pendingRedirect is set (mid-ACT interrupt case), removes the current
+   * ACT element and immediately starts a new turn with the combined message.
+   * Otherwise, swaps or removes the ACT placeholder and resets send state.
    */
   _finaliseTurn(actEl, responseContent, responseMeta, doneData) {
+    // Redirect: the previous turn was interrupted; start a fresh turn with
+    // the combined original+new message. No user bubble — the new message
+    // bubble was already rendered when the user typed it mid-ACT.
+    if (this._pendingRedirect) {
+      const { text, source } = this._pendingRedirect;
+      this._pendingRedirect = null;
+      if (actEl.isConnected) actEl.remove();
+      this._pendingForm = null;
+      this._lastSentText = text;
+      this._startTurn(text, source, false);
+      return;
+    }
+
     if (responseContent) {
       responseMeta.duration_ms = doneData.duration_ms;
       // The ACT cycle UI vanishes entirely; a normal chat bubble takes its place.
@@ -312,14 +306,25 @@ export class Chat {
       this._pendingForm = null;
       this._notifyBackgroundIfUnfocused(responseContent);
     } else {
-      // No content response — remove the ACT placeholder
+      // No content response — remove the ACT placeholder.
       if (actEl.isConnected) actEl.remove();
       this._pendingForm = null;
     }
     this._presence.setState('resting');
     this._isSending = false;
-    this._exitStopMode();
     this._onSendCompleteCb?.();
+  }
+
+  /**
+   * POST to /chat/interrupt. Returns silently on failure — the cancel signal
+   * is best-effort; the UI handles the done event regardless.
+   */
+  async _postInterrupt() {
+    try {
+      await this._api._post('/chat/interrupt', {});
+    } catch (err) {
+      console.warn('[Chat] Interrupt request failed:', err);
+    }
   }
 
   /**

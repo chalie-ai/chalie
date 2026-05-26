@@ -1037,10 +1037,16 @@ class MessageProcessor:
                     )
                     break
 
+            # Cancelled turn — clean up DB rows and return immediately.
+            # No store(), no post_turn() — the turn leaves no trace in the DB.
+            if self._cancel_event.is_set():
+                self._cleanup_cancelled_turn()
+                return ''
+
             if loop_exited_cleanly:
                 final_text = (llm_response.text or '') if llm_response else ''
             else:
-                # Non-clean exit (cap / deadline / cancel / ITERATION_TIMEOUT).
+                # Non-clean exit (cap / deadline / ITERATION_TIMEOUT).
                 # The last iteration's narration is already captured as a narration
                 # DTO; we must NOT re-use it as the assistant row.
                 final_text = ''
@@ -1065,6 +1071,36 @@ class MessageProcessor:
         deadline, ITERATION_TIMEOUT, or clean exit).
         """
         return self._current_iteration >= self.MAX_ITERATIONS
+
+    def _cleanup_cancelled_turn(self) -> None:
+        """Delete all DB rows created during a cancelled turn.
+
+        Called when _cancel_event fires before a clean loop exit. Removes the
+        input transcript row and all associated tool_call rows so no trace of
+        the interrupted turn persists. The frontend redirects with the combined
+        original+new message as a fresh turn.
+        """
+        if self._uid is None:
+            return
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                conn.execute(
+                    "DELETE FROM tool_calls WHERE transcript_id = ?", (self._uid,)
+                )
+                conn.execute(
+                    "DELETE FROM transcript WHERE id = ?", (self._uid,)
+                )
+            logger.info(
+                "[MessageProcessor] %s: cleaned up cancelled turn (uid=%s)",
+                self.CHANNEL, self._uid,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[MessageProcessor] %s: failed to clean up cancelled turn (uid=%s): %s",
+                self.CHANNEL, self._uid, exc,
+            )
 
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Base no-op. UserMessageProcessor overrides in Commit 8 to push

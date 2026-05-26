@@ -121,11 +121,10 @@ class ChalieApp {
     this._eventRouter = new EventRouter({ ws: this.ws, renderer: this.renderer });
     this._wireEventRouter();
 
-    // Reset stop-mode if WS drops mid-turn so the send button doesn't stay bricked.
+    // Reset send state if WS drops mid-turn.
     this.ws.onDisconnect(() => {
       if (this._chat.isSending) {
         this._chat.isSending = false;
-        this._chat._exitStopMode();
       }
     });
 
@@ -590,28 +589,11 @@ class ChalieApp {
     textarea.addEventListener('input', () => {
       textarea.style.height = 'auto';
       textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-      // Do not override the stop/stopping button state while a turn is in-flight.
-      if (!this._chat.isSending) {
-        sendBtn.disabled = (!textarea.value.trim() && !this._imageAttach.count) || this._imageAttach.isUploading;
-      }
+      sendBtn.disabled = (!textarea.value.trim() && !this._imageAttach.count) || this._imageAttach.isUploading;
     });
 
-    // Enter to send (Shift+Enter for newline)
-    textarea.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        this._chat.sendMessage();
-      }
-    });
-
-    // Send button click — routes to stop if a turn is in-flight.
-    sendBtn.addEventListener('click', () => {
-      if (this._chat.isSending) {
-        this._chat.requestStop();
-      } else {
-        this._chat.sendMessage();
-      }
-    });
+    // Send button click — always sends (Enter = newline; stop button is in ACT cycle).
+    sendBtn.addEventListener('click', () => this._chat.sendMessage());
 
     // Re-enable input after send completes
     this._chat.onSendComplete(() => {

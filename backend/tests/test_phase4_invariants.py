@@ -129,7 +129,6 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "search",
     "search_files",
     "skill_builder",
-    "steer",
     "subagent",
     "timer",
     "ubiquiti",

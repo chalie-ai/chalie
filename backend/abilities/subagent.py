@@ -8,7 +8,7 @@ Three types, each with its own tool surface, system prompt, and default timeout:
 
 Default is fire-and-forget (wait=false). When the subagent finishes it
 delivers the result via the chat chokepoint (_start_turn with hidden_input),
-which either steers the active UMP or starts a fresh user-channel turn.
+which starts a fresh user-channel turn.
 
 When wait=true the parent ACT iteration blocks until the subagent finishes,
 capped per-type by ``wait_cap``: web_surfer caps at 30 min (web research is
@@ -219,7 +219,7 @@ Each subagent gets its own tool surface based on `agent_type`:
 
 Sync vs async (wait):
 - wait=false (default): returns immediately with an ack. The completed
-  envelope arrives later as a steer or a fresh turn. Use this for any
+  envelope arrives later as a fresh turn. Use this for any
   web_surfer call and for anything you don't need to act on inside this
   same turn.
 - wait=true: blocks the parent ACT iteration until the subagent finishes.
@@ -287,7 +287,7 @@ Briefing rules:
                 "description": (
                     "false (default, recommended): fire-and-forget. Returns an "
                     "ack immediately and the completed envelope arrives back "
-                    "later as a steer or a fresh turn. ALWAYS use this for "
+                    "later as a fresh turn. ALWAYS use this for "
                     "web_surfer — multi-site crawls regularly run for many "
                     "minutes and blocking your turn that long is wasteful. "
                     "true: synchronous — blocks this ACT iteration until the "
@@ -406,7 +406,7 @@ Briefing rules:
 
             try:
                 from api.chat import dispatch_message
-                dispatch_message(envelope, source='subagent', hidden_input=True, intercept=True)
+                dispatch_message(envelope, source='subagent', hidden_input=True)
             except Exception as exc:
                 logger.error(
                     "%s Subagent %s delivery failed: %s", LOG_PREFIX, sub_id[:8], exc, exc_info=True

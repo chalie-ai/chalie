@@ -2,9 +2,10 @@
  * WebSocket client — receive-only server→client push channel.
  *
  * All client→server requests use HTTP:
- *   POST /chat    — user message (new turn or steer)
- *   POST /action  — action button click
- *   POST /upload  — file attachment
+ *   POST /chat           — user message (always starts a new turn)
+ *   POST /chat/interrupt — cancel the active UMP turn
+ *   POST /action         — action button click
+ *   POST /upload         — file attachment
  *
  * The WebSocket delivers server-pushed events:
  *   ← status, message, act_narration, act_tool_start, act_tool_end,
@@ -150,8 +151,9 @@ export class WSClient {
   /**
    * Send a chat message via POST /chat. Response arrives via WS push.
    *
-   * If a chat is already in-flight and this is a steer (empty callbacks),
-   * the server routes it as a steer injection into the active ACT loop.
+   * Always registers fresh callbacks and starts a new UMP turn. Mid-ACT
+   * user messages are handled by Chat.sendMessage() via POST /chat/interrupt
+   * before calling this method.
    *
    * @param {string} text
    * @param {"text"|"voice"} source
@@ -161,19 +163,12 @@ export class WSClient {
    *   onNarration?: (data: object) => void,
    *   onError?:     (data: object) => void,
    *   onDone?:      (data: object) => void,
-   *   onSteerSent?: (text: string) => void,
    *   onToolStart?: (data: object) => void,
    *   onToolEnd?:   (data: object) => void,
    * }} callbacks
    * @param {string[]} [attachments] - tmp_paths from POST /upload
    */
   send(text, source, callbacks = {}, attachments = []) {
-    if (this._chatCallbacks) {
-      this._chatCallbacks.onSteerSent?.(text);
-      this._postChat(text, source, []);
-      return;
-    }
-
     this._chatCallbacks = callbacks;
 
     if (!this.isConnected) {
@@ -266,10 +261,15 @@ export class WSClient {
         case 'error':
           this._chatCallbacks.onError?.(data);
           return;
-        case 'done':
-          this._chatCallbacks.onDone?.(data);
+        case 'done': {
+          // Null _chatCallbacks BEFORE calling onDone so that if onDone
+          // triggers a new send() (redirect turn), the new callbacks are not
+          // immediately overwritten by this done handler.
+          const cb = this._chatCallbacks;
           this._chatCallbacks = null;
+          cb?.onDone?.(data);
           return;
+        }
       }
     }
 
