@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 # Lives here so both the boot backfill and any future tuning have one source.
 COMPACTION_THRESHOLD_RATIO = 0.80
 
+# Hard ceiling on any provider's reported context window. Ensures the system
+# never builds a request payload exceeding this size, regardless of what the
+# upstream API reports (e.g. Gemini 1M, future models with larger windows).
+MAX_CONTEXT_WINDOW = 200_000
+
 
 class Providers:
     """Singleton provider gateway. Resolves provider by job, sends messages."""
@@ -189,8 +194,8 @@ class Providers:
         return proc.get_tools()
 
     def get_context_limit(self, job='unified'):
-        """Delegate to resolved provider."""
-        return self._resolve(job).get_context_limit()
+        """Delegate to resolved provider, capped to MAX_CONTEXT_WINDOW."""
+        return min(self._resolve(job).get_context_limit(), MAX_CONTEXT_WINDOW)
 
     def get_compact_at(self) -> 'int | None':
         """Return the persisted compact_at threshold for the globally selected provider.

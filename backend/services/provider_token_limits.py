@@ -24,7 +24,7 @@ def backfill_one(conn, provider_id: int) -> bool:
     Returns True on successful UPDATE, False on any failure (failure is
     logged at warning; the row's previous values are left intact).
     """
-    from services.providers import COMPACTION_THRESHOLD_RATIO
+    from services.providers import COMPACTION_THRESHOLD_RATIO, MAX_CONTEXT_WINDOW
     from services.config_service import ConfigService
     from services.llm_service import create_llm_service
 
@@ -58,7 +58,7 @@ def backfill_one(conn, provider_id: int) -> bool:
                 name, max_tokens,
             )
             return False
-        max_tokens = int(max_tokens)
+        max_tokens = min(int(max_tokens), MAX_CONTEXT_WINDOW)
         compact_at = int(max_tokens * COMPACTION_THRESHOLD_RATIO)
         conn.execute(
             "UPDATE providers SET max_tokens = ?, compact_at = ?, "
