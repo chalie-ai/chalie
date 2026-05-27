@@ -340,7 +340,8 @@ const PanelCognition = (() => {
       <div class="stat-value">${BrainApp.escapeHtml(String(s.value ?? '—'))}</div>
       <div class="stat-label">${BrainApp.escapeHtml(s.label || '')}</div>
     </div>`).join('')}</div>
-    ${chart.length > 0 ? _renderChart(chart) : ''}`;
+    ${chart.length > 0 ? _renderChart(chart) : ''}
+    ${chart.length > 0 ? _renderUsageTable(chart) : ''}`;
 
     el.querySelector('#usageWindowTabs')?.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-win]');
@@ -354,6 +355,19 @@ const PanelCognition = (() => {
     if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
     if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
     return String(n);
+  }
+
+  function _renderUsageTable(chart) {
+    const dateHeader = (_usageWindow === 'hour' || _usageWindow === 'day') ? 'Hour' : 'Date';
+    const rows = chart.map(d => `<tr>
+      <td>${BrainApp.escapeHtml(String(d.label || ''))}</td>
+      <td class="num">${(d.input || 0).toLocaleString()}</td>
+      <td class="num">${(d.output || 0).toLocaleString()}</td>
+    </tr>`).join('');
+    return `<table class="usage-table">
+      <thead><tr><th>${dateHeader}</th><th>Input Tokens</th><th>Output Tokens</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
   }
 
   function _renderChart(chart) {

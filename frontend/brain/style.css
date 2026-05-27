@@ -479,6 +479,23 @@ input[type="checkbox"]:checked::after {
 .legend-local::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--violet); margin-right: 4px; vertical-align: middle; }
 .legend-cloud::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--magenta); margin-right: 4px; vertical-align: middle; }
 
+/* ── Usage table ─────────────────────────────────────────────── */
+.usage-table {
+  width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px;
+}
+.usage-table th {
+  text-align: left; padding: 8px 12px; font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-secondary); border-bottom: 1px solid var(--border);
+}
+.usage-table td {
+  padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, var(--border));
+  color: var(--text-primary);
+}
+.usage-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-table th:not(:first-child) { text-align: right; }
+.usage-table tbody tr:hover { background: var(--bg-surface-2); }
+
 /* ── Segmented controls (policies) ────────────────────────────── */
 .segmented { display: flex; gap: 2px; padding: 2px; background: var(--bg-surface); border-radius: 8px; border: 1px solid var(--border); }
 .seg-btn {
