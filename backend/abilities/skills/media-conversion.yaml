@@ -1,0 +1,14 @@
+---
+title: Media Conversion
+use_for: convert video or audio files between formats using ffmpeg, including re-encoding, resizing, extracting audio, creating GIFs, and adjusting quality settings
+tags: media, video, audio, ffmpeg, conversion, transcode, format, gif, mp3, mp4, resize, extract
+version: 1
+---
+
+1. Use `memory` to recall any prior media conversion preferences (preferred output format, quality settings, or common workflows).
+2. Ask the user for the source file path, desired output format, and any specific requirements (resolution, bitrate, audio-only extraction, start/end timestamps).
+3. Use `bash` with action read to run `ffmpeg -i <source_file> 2>&1` to probe the input file — report codec, resolution, duration, bitrate, and audio channels.
+4. Based on the probe results and user requirements, construct the ffmpeg command with appropriate flags — prefer `-c:v libx264 -crf 23` for video and `-c:a aac -b:a 192k` for audio as sensible defaults unless the user specifies otherwise.
+5. Use `bash` with action execute to run the ffmpeg conversion command, setting timeout_s proportional to the input file duration (estimate 1x real-time for re-encoding).
+6. Use `bash` with action read to run `ls -lh <output_file>` to confirm the output file exists and report its size.
+7. Present the result: output file path, size, and a comparison to the original (size reduction or format change).

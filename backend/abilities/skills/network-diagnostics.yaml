@@ -1,0 +1,13 @@
+---
+title: Network Diagnostics
+use_for: diagnose network connectivity issues by checking if hosts are reachable, resolving DNS, inspecting network interfaces, and measuring response times
+tags: network, connectivity, ping, dns, dig, interface, ip, troubleshoot, reachable, latency
+version: 1
+---
+
+1. Use `memory` to recall any prior network issues or known infrastructure details (DNS servers, expected IPs).
+2. Ask the user what they need to diagnose: can they reach a specific host, is DNS resolving correctly, or do they need a general network status check.
+3. For **connectivity check**: use `bash` with action read to run `ping -c 4 <host>` to test reachability and measure round-trip latency — report packet loss and average latency.
+4. For **DNS resolution**: use `bash` with action read to run `dig <domain> +short` to resolve the domain and report the IP addresses returned.
+5. For **general network status**: use `bash` with action read to run `ip addr show` to list all network interfaces with their IP addresses and link state — flag any interfaces that are DOWN.
+6. Present a clear summary: reachable or not, resolved IP, interface status, and any anomalies detected (high latency, packet loss, interfaces down).

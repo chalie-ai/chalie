@@ -1,0 +1,13 @@
+---
+title: Disk Cleanup
+use_for: find large files, old files, or directories consuming excessive disk space and produce a cleanup plan to reclaim storage
+tags: disk, cleanup, space, large-files, storage, du, reclaim, full, capacity
+version: 1
+---
+
+1. Use `memory` to recall any prior disk cleanup runs or known safe-to-delete paths.
+2. Use `bash` with action read to run `df -h` to show current disk usage across all partitions — identify which filesystem is under pressure.
+3. Use `bash` with action read to run `du -sh /* 2>/dev/null | sort -rh | head -15` to find the largest top-level directories on the target filesystem.
+4. Use `bash` with action read to run `find <target_dir> -type f -size +100M 2>/dev/null | head -20` to list individual files larger than 100 MB within the heaviest directory.
+5. Use `bash` with action read to run `find /tmp -type f -atime +30 2>/dev/null | wc -l` to count old temporary files that are candidates for removal.
+6. Present a cleanup plan: list each candidate for deletion with its size, explain why it is safe to remove (old temp file, cache, log rotation candidate), and estimate total reclaimable space — do NOT delete anything without user confirmation.

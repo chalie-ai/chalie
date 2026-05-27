@@ -1,0 +1,14 @@
+---
+title: Archive Management
+use_for: create, extract, or inspect archive files including tarballs, zip files, and compressed archives for backup or file bundling
+tags: archive, tar, zip, gzip, compress, extract, backup, bundle, tarball, unzip
+version: 1
+---
+
+1. Use `memory` to recall any prior archiving preferences or commonly used paths.
+2. Ask the user what they need: create an archive, extract an existing one, or list the contents of an archive without extracting.
+3. For **creating** an archive: ask for the source path and desired archive name, then use `bash` with action execute to run the appropriate command — `tar -czf <name>.tar.gz <path>` for tarballs or `zip -r <name>.zip <path>` for zip files.
+4. For **extracting** an archive: ask for the archive path and destination, then use `bash` with action execute to run `tar -xzf <archive> -C <dest>` or `unzip <archive> -d <dest>` depending on the format.
+5. For **listing** contents: use `bash` with action read to run `tar -tzf <archive> | head -50` or `unzip -l <archive> | head -50` to show the file listing without extracting.
+6. Use `bash` with action read to run `ls -lh <archive>` to report the final archive size.
+7. Present the result: archive path, size, and number of files included or extracted.

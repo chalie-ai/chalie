@@ -1,0 +1,15 @@
+---
+title: System Health Check
+use_for: check overall system health including disk space, memory usage, CPU load, and running processes to diagnose performance issues or confirm the machine is healthy
+tags: system, health, diagnostics, disk, memory, cpu, processes, monitoring, uptime, resources
+version: 1
+---
+
+1. Use `memory` to recall any prior health checks or known system issues the user has mentioned.
+2. Use `bash` with action read to run `uname -a` and `uptime` to identify the operating system, kernel version, and how long the machine has been running.
+3. Use `bash` with action read to run `df -h` to check disk usage across all mounted filesystems — flag any partition above 85% usage.
+4. Use `bash` with action read to run `free -h` to check total, used, and available memory — flag if available memory is below 500 MB.
+5. Use `bash` with action read to run `ps aux --sort=-%mem | head -10` to identify the top memory-consuming processes.
+6. Use `bash` with action read to run `ps aux --sort=-%cpu | head -10` to identify the top CPU-consuming processes.
+7. Present a summary with a clear healthy/warning/critical verdict for each category (disk, memory, CPU, uptime) and highlight any processes consuming excessive resources.
+8. Use `memory` to store the health check results with a timestamp so future checks can compare against this baseline.

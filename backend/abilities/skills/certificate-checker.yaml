@@ -1,0 +1,13 @@
+---
+title: Certificate Checker
+use_for: inspect SSL/TLS certificates on remote servers to check expiry dates, certificate chain validity, and issuer details
+tags: ssl, tls, certificate, expiry, openssl, https, security, cert, chain, inspect
+version: 1
+---
+
+1. Use `memory` to recall any prior certificate checks or domains the user monitors.
+2. Ask the user for the hostname (and optionally port, defaulting to 443) to inspect.
+3. Use `bash` with action read to run `echo | openssl s_client -connect <host>:<port> -servername <host> 2>/dev/null | openssl x509 -noout -subject -issuer -dates -serial` to retrieve the certificate subject, issuer, validity dates, and serial number.
+4. Use `bash` with action read to run `echo | openssl s_client -connect <host>:<port> -servername <host> 2>/dev/null | openssl x509 -noout -checkend 2592000` to check whether the certificate expires within 30 days — this returns exit code 1 if expiry is imminent.
+5. Present a clear report: domain, issuer, valid-from, valid-until, days remaining, and a verdict (OK if >30 days, WARNING if 7–30 days, CRITICAL if <7 days or expired).
+6. Use `memory` to store the certificate expiry date so future checks can alert if it is approaching.
