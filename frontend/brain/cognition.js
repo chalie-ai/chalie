@@ -394,16 +394,15 @@ const PanelCognition = (() => {
       .map(([k, v]) => ({ label: k.slice(11, 16), input: v.input, output: v.output }));
   }
 
-  /** Day window — all 24 hours 00:00–23:00, aggregated by hour across dates. */
+  /** Day window — all 24 hours 00:00–23:00 for today (UTC). */
   function _buildDaySlots(bucketMap) {
+    const todayPrefix = new Date().toISOString().slice(0, 10);
     const slots = [];
     for (let h = 0; h < 24; h++) {
-      const label = `${String(h).padStart(2, '0')}:00`;
-      let input = 0, output = 0;
-      for (const [k, v] of Object.entries(bucketMap)) {
-        if (k.slice(11, 16) === label) { input += v.input; output += v.output; }
-      }
-      slots.push({ label, input, output });
+      const hh = String(h).padStart(2, '0');
+      const key = `${todayPrefix}T${hh}:00:00`;
+      const data = bucketMap[key] || { input: 0, output: 0 };
+      slots.push({ label: `${hh}:00`, input: data.input, output: data.output });
     }
     return slots;
   }
