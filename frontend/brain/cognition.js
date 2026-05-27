@@ -341,7 +341,7 @@ const PanelCognition = (() => {
       <div class="stat-label">${BrainApp.escapeHtml(s.label || '')}</div>
     </div>`).join('')}</div>
     ${chart.length > 0 ? _renderChart(chart) : ''}
-    ${chart.length > 0 ? _renderUsageTable(chart) : ''}`;
+    ${_renderUsageTable(bucketMap)}`;
 
     el.querySelector('#usageWindowTabs')?.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-win]');
@@ -357,17 +357,110 @@ const PanelCognition = (() => {
     return String(n);
   }
 
-  function _renderUsageTable(chart) {
-    const dateHeader = (_usageWindow === 'hour' || _usageWindow === 'day') ? 'Hour' : 'Date';
-    const rows = chart.map(d => `<tr>
-      <td>${BrainApp.escapeHtml(String(d.label || ''))}</td>
-      <td class="num">${(d.input || 0).toLocaleString()}</td>
-      <td class="num">${(d.output || 0).toLocaleString()}</td>
+  const _MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const _DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const _TABLE_HEADERS = { hour: 'Hour', day: 'Hour', week: 'Day', month: 'Day', lifetime: 'Month' };
+
+  function _renderUsageTable(bucketMap) {
+    const slots = _buildTableSlots(bucketMap);
+    if (slots.length === 0) return '';
+    const header = _TABLE_HEADERS[_usageWindow] || 'Date';
+    const rows = slots.map(s => `<tr>
+      <td>${BrainApp.escapeHtml(s.label)}</td>
+      <td class="num">${(s.input || 0).toLocaleString()}</td>
+      <td class="num">${(s.output || 0).toLocaleString()}</td>
     </tr>`).join('');
     return `<table class="usage-table">
-      <thead><tr><th>${dateHeader}</th><th>Input Tokens</th><th>Output Tokens</th></tr></thead>
+      <thead><tr><th>${header}</th><th>Input Tokens</th><th>Output Tokens</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+  }
+
+  /** Generate one row per time slot for the active window, filling zeros where data is absent. */
+  function _buildTableSlots(bucketMap) {
+    const now = new Date();
+    if (_usageWindow === 'hour') return _buildHourSlots(bucketMap);
+    if (_usageWindow === 'day') return _buildDaySlots(bucketMap);
+    if (_usageWindow === 'week') return _buildWeekSlots(bucketMap, now);
+    if (_usageWindow === 'month') return _buildMonthSlots(bucketMap, now);
+    if (_usageWindow === 'lifetime') return _buildLifetimeSlots(bucketMap, now);
+    return [];
+  }
+
+  /** Hour window — show only buckets with data (typically 1–2 entries). */
+  function _buildHourSlots(bucketMap) {
+    return Object.entries(bucketMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => ({ label: k.slice(11, 16), input: v.input, output: v.output }));
+  }
+
+  /** Day window — all 24 hours 00:00–23:00, aggregated by hour across dates. */
+  function _buildDaySlots(bucketMap) {
+    const slots = [];
+    for (let h = 0; h < 24; h++) {
+      const label = `${String(h).padStart(2, '0')}:00`;
+      let input = 0, output = 0;
+      for (const [k, v] of Object.entries(bucketMap)) {
+        if (k.slice(11, 16) === label) { input += v.input; output += v.output; }
+      }
+      slots.push({ label, input, output });
+    }
+    return slots;
+  }
+
+  /** Week window — last 7 days with day-of-week names. */
+  function _buildWeekSlots(bucketMap, now) {
+    const slots = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const label = `${_DAY_NAMES[d.getUTCDay()]} ${dd}/${mm}`;
+      const data = bucketMap[key] || { input: 0, output: 0 };
+      slots.push({ label, input: data.input, output: data.output });
+    }
+    return slots;
+  }
+
+  /** Month window — every day of the current calendar month. */
+  function _buildMonthSlots(bucketMap, now) {
+    const year = now.getUTCFullYear();
+    const month = now.getUTCMonth();
+    const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    const slots = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const label = `${String(day).padStart(2, '0')} ${_MONTH_NAMES[month]}`;
+      const data = bucketMap[key] || { input: 0, output: 0 };
+      slots.push({ label, input: data.input, output: data.output });
+    }
+    return slots;
+  }
+
+  /** Lifetime window — one row per month, from earliest data to current month. */
+  function _buildLifetimeSlots(bucketMap, now) {
+    const keys = Object.keys(bucketMap).sort();
+    if (keys.length === 0) return [];
+    const monthAgg = {};
+    for (const [k, v] of Object.entries(bucketMap)) {
+      const mk = k.slice(0, 7);
+      if (!monthAgg[mk]) monthAgg[mk] = { input: 0, output: 0 };
+      monthAgg[mk].input += v.input;
+      monthAgg[mk].output += v.output;
+    }
+    const slots = [];
+    let [y, m] = keys[0].slice(0, 7).split('-').map(Number);
+    const endY = now.getUTCFullYear(), endM = now.getUTCMonth() + 1;
+    while (y < endY || (y === endY && m <= endM)) {
+      const mk = `${y}-${String(m).padStart(2, '0')}`;
+      const label = `${_MONTH_NAMES[m - 1]} ${String(y).slice(2)}`;
+      const data = monthAgg[mk] || { input: 0, output: 0 };
+      slots.push({ label, input: data.input, output: data.output });
+      if (++m > 12) { m = 1; y++; }
+    }
+    return slots;
   }
 
   function _renderChart(chart) {
