@@ -227,6 +227,10 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
 _SUBAGENT_OVERRIDE: dict[str, State] = {
     "subagent.spawn": "ask",
     "subagent.direct": "ask",
+    "skill_builder.create": "ask",
+    "skill_builder.edit": "ask",
+    "skill_builder.delete": "ask",
+    "skill_builder.list": "ask",
 }
 
 

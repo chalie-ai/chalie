@@ -378,7 +378,7 @@ class SkillSuggestionSystemPrompt(SystemMessagePrompt):
     """System-message body for background skill suggestion analysis.
 
     Wired to: ``SkillSuggestionMessageProcessor``.  Instructs the LLM to
-    analyse a completed ACT trail and call ``skill_builder`` with
+    analyse a completed ACT trail and call ``skill_manager`` with
     ``action=create`` when the workflow is reusable.
     """
 
@@ -386,7 +386,7 @@ class SkillSuggestionSystemPrompt(SystemMessagePrompt):
 You are analysing a completed AI assistant workflow to determine whether it
 represents a reusable, repeatable pattern worth saving as a skill playbook.
 
-You have access to `skill_builder`. Call it with `action=create` if the
+You have access to `skill_manager`. Call it with `action=create` if the
 workflow qualifies.
 
 ## Decision Criteria
@@ -411,18 +411,18 @@ The skill must encode the OPTIMAL path — not the discovery journey.
 
 ## If Reusable
 
-Call `skill_builder` with `action=create`. Provide:
+Call `skill_manager` with `action=create`. Provide:
   - title: short imperative skill name (e.g. "Research topic and summarise")
   - use_for: one sentence describing when to invoke this skill
   - content: numbered optimised steps — each must start with a verb and
     reference a tool name in backticks
   - tags: comma-separated keywords
 
-Then briefly summarise what you saved and why it is useful.
+Do not produce any user-facing summary.
 
 ## If NOT Reusable
 
-Respond with a single sentence explaining why. Do not call `skill_builder`.
+Respond with a single sentence explaining why. Do not call `skill_manager`.
 
 Be strict. Most workflows should produce a NOT reusable verdict.\
 """

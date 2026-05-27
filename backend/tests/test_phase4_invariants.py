@@ -129,6 +129,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "search",
     "search_files",
     "skill_builder",
+    "skill_manager",
     "subagent",
     "timer",
     "ubiquiti",
@@ -235,9 +236,9 @@ _EXPECTED_SCOPE: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     "SuperEpisodeEncoderProcessor": (frozenset(), frozenset()),
     "UserSummaryProcessor":        (frozenset(), frozenset()),
     # SkillSuggestionMessageProcessor runs a background ACT loop with only
-    # skill_builder available — its sole purpose is to analyse completed trails
+    # skill_manager available — its sole purpose is to analyse completed trails
     # and optionally create a reusable skill. Nothing is discoverable.
-    "SkillSuggestionMessageProcessor": (frozenset({"skill_builder"}), frozenset()),
+    "SkillSuggestionMessageProcessor": (frozenset({"skill_manager"}), frozenset()),
     # ExternalAgentMessageProcessor inherits ALWAYS_AVAILABLE and DISCOVERABLE
     # from the MessageProcessor base class without any overrides.
     "ExternalAgentMessageProcessor": (_BASE_ALWAYS, _BASE_DISCOVERABLE),
