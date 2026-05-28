@@ -90,13 +90,12 @@ class TestDefaults:
         defaults = get_defaults()
         assert defaults["email.manage"]["subconscious"] == "deny"
 
-    def test_defaults_code_eval_is_allow_in_chat(self):
+    def test_defaults_code_eval_is_allow_in_all_contexts(self):
+        # code_eval runs in a RestrictedPython sandbox (no imports, file I/O, or
+        # subprocess), so it is allowed by default in every channel.
         defaults = get_defaults()
-        assert defaults["code_eval"]["chat"] == "allow"
-
-    def test_defaults_code_eval_is_deny_in_subconscious(self):
-        defaults = get_defaults()
-        assert defaults["code_eval"]["subconscious"] == "deny"
+        for context in VALID_CONTEXTS:
+            assert defaults["code_eval"][context] == "allow", context
 
     def test_defaults_schedule_create_is_allow_in_chat(self):
         defaults = get_defaults()
