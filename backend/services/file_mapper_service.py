@@ -56,14 +56,24 @@ class FileMapperService:
         return cls._SECURE_DIR
 
     @classmethod
-    def get_vault_backup_path(cls) -> Path:
-        """Return path to the current vault key-material backup file."""
-        return cls._SECURE_DIR / "vault_backup.json"
+    def get_vault_backup_path(cls, stamp: str) -> Path:
+        """Return path to a vault key-material backup file for the given stamp.
+
+        Backups are append-only and retained forever — each new DEK generation
+        writes a fresh, uniquely-stamped file. See ``VaultService._write_backup``.
+        """
+        return cls._SECURE_DIR / f"vault_backup_{stamp}.json"
 
     @classmethod
-    def get_vault_backup_prev_path(cls) -> Path:
-        """Return path to the previous-generation vault backup file."""
-        return cls._SECURE_DIR / "vault_backup.prev.json"
+    def list_vault_backups(cls) -> list[Path]:
+        """Return all vault backup files, newest first.
+
+        Ordered by filename descending; the fixed-width UTC timestamp stamp makes
+        lexical order match chronological order. Empty list if the dir is absent.
+        """
+        if not cls._SECURE_DIR.is_dir():
+            return []
+        return sorted(cls._SECURE_DIR.glob("vault_backup_*.json"), reverse=True)
 
     @classmethod
     def get_schema_path(cls) -> Path:

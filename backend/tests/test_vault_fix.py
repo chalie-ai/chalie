@@ -2,20 +2,25 @@
 Feature tests for the vault DEK backup and password-verified restore/wipe
 behaviors introduced by TKT-676.
 
-Scenarios covered (7 tests total — 5 new + 2 kept provider tests):
+Backup model (append-forever): every DEK generation writes a fresh, uniquely
+stamped ``vault_backup_<stamp>.json`` and never overwrites or deletes an earlier
+one. Recovery tries every retained backup, newest first — a corrupt latest
+backup is simply skipped and an older valid one restores the original DEK.
 
-1. initialize() writes vault_backup.json with hex-encoded key material, file
-   permissions 0o400, and directory permissions 0o700.
+Scenarios covered (7 tests total):
+
+1. initialize() writes one vault_backup_<stamp>.json with hex-encoded key
+   material, file permissions 0o400, and directory permissions 0o700.
 2. RESTORE: encrypt a secret, corrupt the live vault_config row, login with the
    correct password → 200, vault unlocked, the previously-encrypted secret still
    decrypts (no data loss — same DEK recovered from backup).
-3. Restore falls through to vault_backup.prev.json when the current backup file
-   is malformed but the previous-generation backup is valid.
+3. Restore skips a corrupt NEWER backup and falls through to an older valid one;
+   every retained backup survives and no new backup is written on restore.
 4. UNRECOVERABLE: no backup file exists AND vault_config row is corrupt → login
    returns 401 with onboarding_required=True, master_account row is wiped, and
-   backup files are removed (vault.reset() ran).
-5. Backup rotation: a second call to initialize() moves the existing
-   vault_backup.json to vault_backup.prev.json before writing the new one.
+   all backup files are removed (vault.reset() ran).
+5. Append-forever retention: a second call to initialize() leaves the first
+   backup in place and adds a second — both are retained.
 6. ProviderDbService.get_all_providers returns good providers alongside one
    that has a garbage (undecryptable) api_key, marking the bad row with
    decrypt_failed=True and still returning the good one intact.
@@ -26,9 +31,9 @@ Every test:
 - Uses the real ``db`` fixture (schema.sql via SchemaConvergenceService)
 - Uses the real ``store`` fixture (isolated MemoryStore, same production class)
 - Uses the real VaultService, real ProviderDbService, real user_auth blueprint
-- Zero mocks of production code; FileMapperService path methods are redirected
-  to ``tmp_path`` via ``monkeypatch.setattr`` — this is configuration redirection,
-  not a production-code mock.
+- Zero mocks of production code; FileMapperService._SECURE_DIR is redirected to
+  ``tmp_path`` via ``monkeypatch.setattr`` — every path helper derives from this
+  one attribute, so it is configuration redirection, not a production-code mock.
 
 NOTE on the transient-exception branch (login() returns 200 locked when
 unlock_or_restore raises an unexpected Exception): this path cannot be exercised
@@ -40,7 +45,6 @@ is a design-coupling signal, not an oversight.
 
 import base64
 import json
-import os
 import secrets
 import pytest
 from flask import Flask
@@ -54,7 +58,7 @@ from services.vault_service import _vault_state
 from services.provider_db_service import ProviderDbService
 
 
-# ── Shared helper ─────────────────────────────────────────────────────────────
+# ── Shared helpers ────────────────────────────────────────────────────────────
 
 def _seed_account(raw_conn, password: str = "testpassword123") -> str:
     """Insert a master_account row hashed with *password*; return the password."""
@@ -64,6 +68,11 @@ def _seed_account(raw_conn, password: str = "testpassword123") -> str:
     )
     raw_conn.commit()
     return password
+
+
+def _backups(secure_dir):
+    """Return all retained backup files, newest first (matches production glob)."""
+    return sorted(secure_dir.glob("vault_backup_*.json"), reverse=True)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -91,18 +100,15 @@ def secure_dir(tmp_path):
 
 @pytest.fixture
 def redirect_backup_paths(secure_dir, monkeypatch):
-    """Redirect FileMapperService backup paths to tmp_path so tests never
-    write to the real data/secure/ directory.
+    """Redirect FileMapperService's secure dir to tmp_path so tests never write
+    to the real data/secure/ directory.
 
-    This is configuration redirection — the production path logic is replaced
-    with a deterministic temp path. Not a mock of production behaviour.
+    Every backup path helper derives from the single ``_SECURE_DIR`` class
+    attribute, so patching it alone redirects ``get_secure_dir``,
+    ``get_vault_backup_path`` and ``list_vault_backups`` consistently. This is
+    configuration redirection, not a mock of production behaviour.
     """
-    monkeypatch.setattr(FileMapperService, "get_secure_dir",
-                        staticmethod(lambda: secure_dir))
-    monkeypatch.setattr(FileMapperService, "get_vault_backup_path",
-                        staticmethod(lambda: secure_dir / "vault_backup.json"))
-    monkeypatch.setattr(FileMapperService, "get_vault_backup_prev_path",
-                        staticmethod(lambda: secure_dir / "vault_backup.prev.json"))
+    monkeypatch.setattr(FileMapperService, "_SECURE_DIR", secure_dir)
 
 
 @pytest.fixture
@@ -130,15 +136,16 @@ class TestVaultBackupWrite:
     def test_initialize_writes_backup_file_with_hex_fields_and_secure_permissions(
         self, db, store, redirect_backup_paths, secure_dir
     ):
-        """initialize() creates vault_backup.json containing hex-encoded key
-        material (kdf_salt, wrapped_dek, dek_nonce), the directory is 0o700,
-        and the file is 0o400.  No plaintext secret appears in the JSON.
+        """initialize() creates exactly one vault_backup_<stamp>.json containing
+        hex-encoded key material (kdf_salt, wrapped_dek, dek_nonce), the directory
+        is 0o700, and the file is 0o400.  No plaintext secret appears in the JSON.
         """
         vault = _vault_mod.get_vault_service()
         vault.initialize("strongpassword99")
 
-        backup_path = secure_dir / "vault_backup.json"
-        assert backup_path.exists(), "vault_backup.json must be written by initialize()"
+        backups = _backups(secure_dir)
+        assert len(backups) == 1, "initialize() must write exactly one backup file"
+        backup_path = backups[0]
 
         # Directory and file permissions
         dir_perms = oct(secure_dir.stat().st_mode & 0o777)
@@ -151,7 +158,6 @@ class TestVaultBackupWrite:
         data = json.loads(backup_path.read_text(encoding="utf-8"))
         for field in ("kdf_salt", "wrapped_dek", "dek_nonce"):
             assert field in data, f"backup must contain field '{field}'"
-            # Must be valid hex strings
             decoded = bytes.fromhex(data[field])
             assert len(decoded) > 0, f"'{field}' must decode to non-empty bytes"
 
@@ -160,8 +166,7 @@ class TestVaultBackupWrite:
         assert "created_at" in data
 
         # No plaintext password in the backup
-        backup_text = backup_path.read_text(encoding="utf-8")
-        assert "strongpassword99" not in backup_text
+        assert "strongpassword99" not in backup_path.read_text(encoding="utf-8")
 
 
 # ── Restore: data survives vault_config corruption ────────────────────────────
@@ -203,7 +208,7 @@ class TestVaultRestore:
         )
         raw_conn.commit()
 
-        # Login — should restore from vault_backup.json
+        # Login — should restore from the retained backup
         resp = client.post(
             "/auth/login",
             json={"username": "admin", "password": pw},
@@ -222,47 +227,41 @@ class TestVaultRestore:
             "DEK recovered from backup must decrypt secrets encrypted before corruption"
         )
 
-    def test_login_restores_from_prev_backup_when_current_backup_is_malformed(
+    def test_login_skips_corrupt_newest_backup_and_restores_from_older(
         self, auth_client, secure_dir
     ):
-        """When vault_backup.json is malformed, restore falls through to
-        vault_backup.prev.json (previous generation).
+        """Recovery iterates every retained backup newest-first.
 
-        The previous-generation backup is written by the first initialize() call.
-        A second initialize() rotates it to .prev.json and writes a fresh
-        vault_backup.json.  If the fresh backup is then corrupted, the prev
-        backup must be able to serve as the restore source.
+        With one valid backup on disk, drop a NEWER (lexically-greater stamp)
+        corrupt backup file alongside it.  When vault_config is wiped, login must
+        skip the unreadable newest backup and restore from the older valid one.
+        Every retained backup must survive and no new backup is written on restore.
         """
         client, raw_conn = auth_client
         pw = _seed_account(raw_conn)
 
-        vault = _vault_mod.get_vault_service()
-
-        # First initialize — writes vault_backup.json (this becomes .prev after step 2)
-        vault.initialize(pw)
-        _vault_state.dek = None
-        _vault_mod._vault_service_instance = None
-
-        # Second initialize — rotates first backup to .prev.json, writes new .json
+        # Register/initialize — writes the first (valid) backup
         vault = _vault_mod.get_vault_service()
         vault.initialize(pw)
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
 
-        # Confirm both files exist
-        assert (secure_dir / "vault_backup.prev.json").exists()
+        valid_backups = _backups(secure_dir)
+        assert len(valid_backups) == 1
+        valid_path = valid_backups[0]
 
-        # Corrupt the current backup (make it invalid JSON)
-        backup_path = secure_dir / "vault_backup.json"
-        backup_path.chmod(0o600)
-        backup_path.write_text("{not valid json content}")
-        backup_path.chmod(0o400)
+        # Drop a NEWER corrupt backup (lexically-greater stamp => sorts first)
+        corrupt_path = secure_dir / "vault_backup_99999999T999999999999.json"
+        corrupt_path.write_text("{not valid json content}", encoding="utf-8")
+        corrupt_path.chmod(0o400)
 
-        # Delete vault_config to force restore path
+        # Newest-first ordering must place the corrupt file ahead of the valid one
+        assert _backups(secure_dir)[0] == corrupt_path
+
+        # Wipe vault_config to force the restore path
         raw_conn.execute("DELETE FROM vault_config WHERE id = 1")
         raw_conn.commit()
 
-        # Login — current backup garbage, should fall through to .prev.json
         resp = client.post(
             "/auth/login",
             json={"username": "admin", "password": pw},
@@ -273,6 +272,12 @@ class TestVaultRestore:
         data = resp.get_json()
         assert data["ok"] is True
         assert data["vault_state"] == "unlocked"
+
+        # Both backups must still be on disk — restore never writes or deletes
+        after = _backups(secure_dir)
+        assert valid_path in after, "valid backup must be retained after restore"
+        assert corrupt_path in after, "corrupt backup must be retained after restore"
+        assert len(after) == 2, "restore must not write a new backup file"
 
 
 # ── Unrecoverable: account wiped, re-onboarding required ─────────────────────
@@ -285,7 +290,7 @@ class TestVaultUnrecoverable:
         self, auth_client, secure_dir
     ):
         """When vault_config is corrupt AND no valid backup file exists, login
-        must wipe the master_account row, call vault.reset() (removing backup
+        must wipe the master_account row, call vault.reset() (removing all backup
         files), and return 401 with onboarding_required=True so the frontend
         drives a clean re-onboarding.
         """
@@ -297,13 +302,13 @@ class TestVaultUnrecoverable:
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
 
-        # Verify vault_backup.json was written
-        assert (secure_dir / "vault_backup.json").exists()
-
-        # Delete the backup file so there is no recovery path
-        backup_path = secure_dir / "vault_backup.json"
-        backup_path.chmod(0o600)
-        backup_path.unlink()
+        # Verify a backup was written, then delete every backup so there is no
+        # recovery path.
+        backups = _backups(secure_dir)
+        assert len(backups) == 1
+        for path in backups:
+            path.chmod(0o600)
+            path.unlink()
 
         # Corrupt vault_config
         raw_conn.execute(
@@ -332,56 +337,48 @@ class TestVaultUnrecoverable:
             "master_account must be wiped so re-onboarding produces a clean account"
         )
 
-        # vault.reset() must have deleted any remaining backup files
-        assert not (secure_dir / "vault_backup.json").exists(), (
-            "vault.reset() must remove vault_backup.json"
-        )
+        # vault.reset() must have deleted all backup files
+        assert _backups(secure_dir) == [], "vault.reset() must remove all backups"
 
 
-# ── Backup rotation ───────────────────────────────────────────────────────────
+# ── Append-forever retention ──────────────────────────────────────────────────
 
 @pytest.mark.unit
-class TestVaultBackupRotation:
-    """Each initialize() rotates the current backup to .prev.json."""
+class TestVaultBackupRetention:
+    """Each initialize() appends a new backup and retains all earlier ones."""
 
-    def test_second_initialize_moves_first_backup_to_prev(
+    def test_second_initialize_retains_first_backup_and_adds_a_second(
         self, db, store, redirect_backup_paths, secure_dir
     ):
-        """After a first initialize(), vault_backup.json exists.
-        A second initialize() must rename it to vault_backup.prev.json before
-        writing a new vault_backup.json, preserving one generation of history.
+        """After a first initialize(), one backup exists.  A second initialize()
+        must leave the first backup untouched and add a second — both retained,
+        each owner-read-only.
         """
         vault = _vault_mod.get_vault_service()
         vault.initialize("passwordone99")
 
-        backup_path = secure_dir / "vault_backup.json"
-        prev_path = secure_dir / "vault_backup.prev.json"
+        first = _backups(secure_dir)
+        assert len(first) == 1, "one backup must exist after first initialize()"
+        first_path = first[0]
+        first_content = first_path.read_text(encoding="utf-8")
 
-        assert backup_path.exists(), "backup must exist after first initialize()"
-        assert not prev_path.exists(), "prev backup must not exist yet"
-
-        # Read the first backup content so we can confirm rotation preserved it
-        first_backup_content = backup_path.read_text(encoding="utf-8")
-
-        # Lock and reset vault instance to allow a clean second initialize()
+        # Lock and reset the instance to allow a clean second initialize()
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
 
         vault = _vault_mod.get_vault_service()
-        vault.initialize("passwordone99")
+        vault.initialize("passwordtwo99")
 
-        assert backup_path.exists(), "new vault_backup.json must be written"
-        assert prev_path.exists(), "first backup must have been rotated to .prev.json"
-
-        prev_content = prev_path.read_text(encoding="utf-8")
-        assert prev_content == first_backup_content, (
-            "vault_backup.prev.json must contain the exact content of the first backup"
+        after = _backups(secure_dir)
+        assert len(after) == 2, "second initialize() must retain the first backup"
+        assert first_path in after, "first backup must be retained, not overwritten"
+        assert first_path.read_text(encoding="utf-8") == first_content, (
+            "first backup content must be untouched by the second initialize()"
         )
 
-        prev_perms = oct(prev_path.stat().st_mode & 0o777)
-        assert prev_perms == "0o400", (
-            f"rotated prev backup must be 0o400, got {prev_perms}"
-        )
+        for path in after:
+            perms = oct(path.stat().st_mode & 0o777)
+            assert perms == "0o400", f"each backup must be 0o400, got {perms}"
 
 
 # ── ProviderDbService decrypt tolerance (kept from original — still valid) ────
