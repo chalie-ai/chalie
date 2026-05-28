@@ -128,6 +128,18 @@ def _summarize_params(action: dict, max_keys: int = 4) -> dict:
     return preview
 
 
+def _timeout_result_text(action_type: str, action: Dict[str, Any], effective_timeout: float) -> str:
+    """Build the LLM-facing result string when an action exceeds its timeout.
+
+    Document operations report a clear, document-named failure so the model can
+    surface the affected document; all other actions report the generic timeout.
+    """
+    if action_type == 'document':
+        name = action.get('name') or action.get('id') or 'document'
+        return f"Failed to process document {name}"
+    return f"Action exceeded {effective_timeout}s timeout"
+
+
 def _build_action_description(action_id: str, action: dict) -> str:
     """Build a human-readable one-liner describing the action for the permission card."""
     _VERBS = {
@@ -358,7 +370,7 @@ class ActDispatcherService:
                 return {
                     'action_type': action_type,
                     'status': 'timeout',
-                    'result': f"Action exceeded {effective_timeout}s timeout",
+                    'result': _timeout_result_text(action_type, action, effective_timeout),
                     'execution_time': execution_time,
                     'confidence': 0.0,
                     'notes': '',

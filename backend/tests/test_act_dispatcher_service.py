@@ -3,7 +3,7 @@
 import time
 import pytest
 
-from services.act_dispatcher_service import ActDispatcherService
+from services.act_dispatcher_service import ActDispatcherService, _timeout_result_text
 
 
 pytestmark = pytest.mark.unit
@@ -92,6 +92,52 @@ class TestTimeout:
 
         assert result['status'] == 'timeout'
         assert result['confidence'] == pytest.approx(0.0, abs=1e-9)
+        assert result['result'] == 'Action exceeded 0.1s timeout'
+
+
+# ── Timeout Result Text (pure helper) ──────────────────────────
+
+
+class TestTimeoutResultText:
+
+    def test_document_uses_name(self):
+        """A document timeout names the document via the `name` field."""
+        text = _timeout_result_text('document', {'name': 'report.md'}, 120.0)
+        assert text == 'Failed to process document report.md'
+
+    def test_document_falls_back_to_id(self):
+        """When `name` is absent, the document timeout names it via `id`."""
+        text = _timeout_result_text('document', {'id': 'doc-42'}, 120.0)
+        assert text == 'Failed to process document doc-42'
+
+    def test_document_falls_back_to_literal(self):
+        """With neither `name` nor `id`, the document timeout uses 'document'."""
+        text = _timeout_result_text('document', {}, 120.0)
+        assert text == 'Failed to process document document'
+
+    def test_non_document_uses_generic_message(self):
+        """Non-document actions keep the generic timeout message."""
+        text = _timeout_result_text('browser', {'url': 'https://x'}, 30.0)
+        assert text == 'Action exceeded 30.0s timeout'
+
+
+# ── Effective Timeout Resolution (real registry) ───────────────
+
+
+class TestEffectiveTimeout:
+
+    def test_document_ability_resolves_120s_timeout(self, db):
+        """The real ActDispatcherService + AbilityRegistry raise the document
+        timeout to the ability's TIMEOUT (120s) over the default."""
+        from abilities._registry import AbilityRegistry
+
+        svc = ActDispatcherService(timeout=10.0)
+        ability = AbilityRegistry.get('document')
+
+        effective = max(svc.timeout, float(ability.TIMEOUT))
+
+        assert ability.TIMEOUT == 120
+        assert effective == pytest.approx(120.0)
 
 
 # ── Confidence Estimation ──────────────────────────────────────
