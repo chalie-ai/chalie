@@ -151,7 +151,9 @@ class ScheduleAbility(Ability):
             "due_at": {
                 "type": "string",
                 "description": (
-                    "Required for create: ISO 8601 timestamp with timezone offset "
+                    "Required for create UNLESS destination_location is provided "
+                    "(location-triggered reminders do not need a time). "
+                    "ISO 8601 timestamp with timezone offset "
                     "(e.g. '2026-03-20T09:00:00+02:00'). Use the user's timezone offset. "
                     "Must be in the future. If off by a few seconds, the scheduler will auto-correct."
                 ),
@@ -206,7 +208,13 @@ class ScheduleAbility(Ability):
             },
             "destination_location": {
                 "type": "string",
-                "description": "Name of a saved place or address for the destination. Used for departure-time reminders.",
+                "description": (
+                    "Name of a saved place or address for the destination. "
+                    "Used for location-triggered reminders — both departure-time "
+                    "and arrival-based (e.g. 'remind me when I get home'). "
+                    "When provided without due_at, the reminder fires on arrival "
+                    "at the destination."
+                ),
             },
         },
         "required": ["action"],
@@ -290,6 +298,8 @@ def _resolve_due_at(params: dict, past_due_grace: int):
     """Parse due_at, apply grace if past, return (due_at, error_response | None)."""
     due_at_str = params.get("due_at", "").strip()
     if not due_at_str:
+        if params.get("destination_location", "").strip():
+            return utc_now() + timedelta(days=30), None
         return None, {"status": "error", "error": "due_at (ISO 8601 with timezone) is required"}
 
     from services.time_utils import parse_utc

@@ -565,6 +565,7 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
         from services.data_graph_service import (
             get_data_graph_service,
             KIND_BEHAVIORAL_PATTERN,
+            KIND_PLACE,
             KIND_USER_SPECIFIC,
             KIND_SYSTEM,
             KIND_MISC,
@@ -575,7 +576,7 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
         rows = dgs.recall(
             query=query,
             kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT,
-                   KIND_BEHAVIORAL_PATTERN],
+                   KIND_BEHAVIORAL_PATTERN, KIND_PLACE],
             limit=limit,
         )
 

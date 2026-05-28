@@ -8,6 +8,7 @@ mounted drives and connected storage.
 import logging
 import os
 import re
+import time
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import ClassVar
@@ -21,6 +22,7 @@ _GREP_DEFAULT_MAX_FILES = 5
 _MAX_MAX_FILES = 200
 _DEFAULT_CONTEXT_LINES = 5
 _MAX_CONTEXT_LINES = 20
+_BUDGET_RATIO = 0.8
 
 
 class SearchFilesAbility(Ability):
@@ -71,8 +73,9 @@ class SearchFilesAbility(Ability):
                 "type": "string",
                 "description": (
                     "Optional directory to search under. Defaults to the "
-                    "user's home directory. Absolute path or ~-prefixed "
-                    "home-relative path."
+                    "filesystem root (/). Provide a narrower path when "
+                    "possible for faster results. Absolute path or "
+                    "~-prefixed home-relative path."
                 ),
             },
             "max_files": {
@@ -92,7 +95,7 @@ class SearchFilesAbility(Ability):
         },
         "required": ["action", "query"],
     }
-    TIMEOUT = 15
+    TIMEOUT = 30
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "")
@@ -127,7 +130,7 @@ class SearchFilesAbility(Ability):
                 if context_lines < 0 or context_lines > _MAX_CONTEXT_LINES:
                     return {"text": f"context_lines must be between 0 and {_MAX_CONTEXT_LINES}, got {context_lines}."}
 
-        root_str = directory or str(Path.home())
+        root_str = directory or "/"
         try:
             root = Path(os.path.expanduser(root_str)).resolve()
         except (OSError, RuntimeError) as exc:
@@ -138,13 +141,29 @@ class SearchFilesAbility(Ability):
         if not root.is_dir():
             return {"text": f"Not a directory: {root}"}
 
+        budget = self.TIMEOUT * _BUDGET_RATIO
+        deadline = time.monotonic() + budget
+
         try:
             if action == "glob":
-                paths = _do_glob(root, query, max_files)
-                return {"text": "\n".join(paths) if paths else "No files matched."}
+                paths, exhausted = _do_glob(root, query, max_files, deadline)
+                text = "\n".join(paths) if paths else "No files matched."
+                if exhausted:
+                    text += (
+                        f"\n\n(search stopped after {budget:.0f}s — "
+                        "try narrowing the directory for complete results)"
+                    )
+                return {"text": text}
             else:
-                text = _do_grep(root, query, max_files, context_lines)
-                return {"text": text if text else "No matches found."}
+                text, exhausted = _do_grep(root, query, max_files, context_lines, deadline)
+                if not text:
+                    text = "No matches found."
+                if exhausted:
+                    text += (
+                        f"\n\n(search stopped after {budget:.0f}s — "
+                        "try narrowing the directory for complete results)"
+                    )
+                return {"text": text}
         except re.error as exc:
             return {"text": f"Invalid regex '{query}': {str(exc)[:120]}"}
         except Exception as exc:
@@ -152,16 +171,19 @@ class SearchFilesAbility(Ability):
             return {"text": f"Search failed: {str(exc)[:120]}"}
 
 
-def _iter_files(root: Path):
+def _iter_files(root: Path, deadline: float):
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
+            if time.monotonic() > deadline:
+                return
             yield os.path.join(dirpath, name)
 
 
-def _do_glob(root: Path, pattern: str, max_files: int) -> list[str]:
+def _do_glob(root: Path, pattern: str, max_files: int, deadline: float) -> tuple[list[str], bool]:
     matches: list[tuple[float, str]] = []
     recursive = "**" in pattern or "/" in pattern
-    for fp in _iter_files(root):
+    exhausted = False
+    for fp in _iter_files(root, deadline):
         if recursive:
             rel = os.path.relpath(fp, root)
             if not (fnmatch(rel, pattern) or fnmatch(fp, pattern)):
@@ -175,14 +197,18 @@ def _do_glob(root: Path, pattern: str, max_files: int) -> list[str]:
             continue
         matches.append((mtime, fp))
 
+    if time.monotonic() > deadline:
+        exhausted = True
+
     matches.sort(key=lambda t: t[0], reverse=True)
-    return [p for _, p in matches[:max_files]]
+    return [p for _, p in matches[:max_files]], exhausted
 
 
-def _do_grep(root: Path, query: str, max_files: int, context_lines: int) -> str:
+def _do_grep(root: Path, query: str, max_files: int, context_lines: int, deadline: float) -> tuple[str, bool]:
     pattern = re.compile(query)
     file_blocks: list[tuple[float, str]] = []
-    for fp in _iter_files(root):
+    exhausted = False
+    for fp in _iter_files(root, deadline):
         try:
             with open(fp, "r", encoding="utf-8", errors="ignore") as fh:
                 lines = fh.readlines()
@@ -201,8 +227,11 @@ def _do_grep(root: Path, query: str, max_files: int, context_lines: int) -> str:
         if len(file_blocks) >= max_files:
             break
 
+    if time.monotonic() > deadline:
+        exhausted = True
+
     file_blocks.sort(key=lambda t: t[0], reverse=True)
-    return "\n----\n".join(b for _, b in file_blocks)
+    return "\n----\n".join(b for _, b in file_blocks), exhausted
 
 
 def _format_file_block(fp: str, lines: list[str], pattern: re.Pattern, context_lines: int) -> str | None:
