@@ -18,12 +18,25 @@ module-level singleton that is safe for a single-process, single-account
 architecture.  It is cleared on ``lock()`` or server restart.
 """
 
+import json
 import logging
 import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+# FileMapperService owns every repository-layout path (CLAUDE.md rule #9). The
+# vault key-material backup lives under data/secure/ so it persists on the same
+# Docker volume as the database — see FileMapperService.get_secure_dir().
+from services.file_mapper_service import FileMapperService
+
 logger = logging.getLogger(__name__)
+
+# ── Vault-open outcome codes ────────────────────────────────────────────────────
+# Shared between VaultService.unlock_or_restore() and the login endpoint so the
+# safety-critical "wipe on unrecoverable" branch can never break on a typo.
+OUTCOME_UNLOCKED = "unlocked"
+OUTCOME_RESTORED = "restored"
+OUTCOME_UNRECOVERABLE = "unrecoverable"
 
 # ── Nonce / key constants ──────────────────────────────────────────────────────
 _NONCE_SIZE = 12          # AES-GCM recommended nonce length (bytes)
@@ -31,6 +44,10 @@ _DEK_SIZE = 32            # AES-256 key length (bytes)
 _KDF_SALT_SIZE = 32       # PBKDF2 salt length (bytes)
 _KDF_ITERATIONS = 600_000 # PBKDF2-HMAC-SHA256 iteration count
 _KDF_ALGORITHM = "pbkdf2_sha256"
+
+# ── Backup filesystem permissions ───────────────────────────────────────────────
+_SECURE_DIR_MODE = 0o700  # owner rwx only — the data/secure/ backup directory
+_SECURE_FILE_MODE = 0o400 # owner read-only — each backup file
 
 
 # ── Custom exception ───────────────────────────────────────────────────────────
@@ -62,6 +79,22 @@ class _VaultState:
 
 # Single shared instance for the whole process.
 _vault_state = _VaultState()
+
+
+@dataclass(frozen=True)
+class _VaultKeyMaterial:
+    """The password-protected key material for one vault generation.
+
+    Groups the six fields that ``vault_config`` and the filesystem backup both
+    store so they always travel together — eliminating long parameter lists and
+    the risk of passing them out of order.
+    """
+    salt: bytes
+    kdf_algorithm: str
+    kdf_iterations: int
+    wrapped_dek: bytes
+    nonce: bytes
+    created_at: str
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -192,24 +225,16 @@ class VaultService:
         now_iso = utc_now().isoformat()
         reinit_at = now_iso if mark_reinit else None
 
-        with self._db.connection() as conn:
-            conn.execute("DELETE FROM vault_config WHERE id = 1")
-            conn.execute(
-                """
-                INSERT INTO vault_config
-                    (id, kdf_salt, kdf_algorithm, kdf_iterations,
-                     wrapped_dek, dek_nonce, created_at, updated_at,
-                     reinitialized_at)
-                VALUES
-                    (1, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (salt, _KDF_ALGORITHM, _KDF_ITERATIONS, wrapped_dek, nonce,
-                 now_iso, now_iso, reinit_at),
-            )
+        km = _VaultKeyMaterial(
+            salt, _KDF_ALGORITHM, _KDF_ITERATIONS, wrapped_dek, nonce, now_iso,
+        )
+        self._persist_vault_config(km, reinit_at)
+        self._write_backup(km)
 
         logger.info(
             "[Vault] Vault initialised — new DEK wrapped "
-            "with password-derived KEK"
+            "with password-derived KEK; key material backed up to %s",
+            FileMapperService.get_vault_backup_path(),
         )
 
     def unlock(self, password: str) -> bool:
@@ -257,6 +282,54 @@ class VaultService:
         logger.info("[Vault] Vault unlocked — DEK cached in memory")
         return True
 
+    def unlock_or_restore(self, password: str) -> str:
+        """Open the vault with *password*, recovering from backup if needed.
+
+        Callers pass a password that has ALREADY been verified against the
+        master account hash, so any failure to open the vault means the live
+        ``vault_config`` row is missing or corrupt — not a wrong password.
+
+        Recovery order:
+          1. Try the live ``vault_config`` row.
+          2. If it is missing or corrupt, try every filesystem backup key
+             (current, then previous). The first key that unwraps is written
+             back into ``vault_config`` and promoted to the latest backup.
+          3. If nothing opens, the DEK is permanently lost.
+
+        Args:
+            password: The already-verified master password.
+
+        Returns:
+            ``"unlocked"``      — opened via the live ``vault_config`` row.
+            ``"restored"``      — live row was missing/corrupt; a backup matched
+                                  and the vault was rebuilt and opened. No data loss.
+            ``"unrecoverable"`` — neither the live row nor any backup could be
+                                  opened. The caller MUST wipe the account to
+                                  force re-onboarding (encrypted data is lost).
+        """
+        try:
+            if self.unlock(password):
+                return OUTCOME_UNLOCKED
+            logger.error(
+                "[Vault] Live vault_config did not unlock with the verified "
+                "password — row is corrupt. Attempting backup recovery."
+            )
+        except RuntimeError:
+            logger.error(
+                "[Vault] vault_config row is missing at unlock time. "
+                "Attempting backup recovery."
+            )
+
+        if self._restore_from_backup(password):
+            return OUTCOME_RESTORED
+
+        logger.error(
+            "[Vault] UNRECOVERABLE — the vault key is corrupted and no valid "
+            "backup exists. The DEK is permanently lost; encrypted data cannot "
+            "be decrypted. The account must be re-onboarded."
+        )
+        return OUTCOME_UNRECOVERABLE
+
     def is_unlocked(self) -> bool:
         """Return ``True`` if the vault has been unlocked and the DEK is in memory."""
         return _vault_state.dek is not None
@@ -282,6 +355,27 @@ class VaultService:
         """Seal the vault by clearing the in-memory DEK."""
         _vault_state.dek = None
         logger.info("[Vault] Vault locked — DEK cleared from memory")
+
+    def reset(self) -> None:
+        """Tear down all vault state for a re-onboarding.
+
+        Deletes the ``vault_config`` row, clears the in-memory DEK, and removes
+        the (now-useless) backup files. Called only after recovery has failed
+        and the account is being wiped — the backups have already been tried and
+        none matched the verified password, so they protect nothing.
+        """
+        with self._db.connection() as conn:
+            conn.execute("DELETE FROM vault_config WHERE id = 1")
+        _vault_state.dek = None
+        for path in (
+            FileMapperService.get_vault_backup_path(),
+            FileMapperService.get_vault_backup_prev_path(),
+        ):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("[Vault] Could not delete backup %s: %s", path, exc)
+        logger.warning("[Vault] Vault reset — vault_config and backups removed")
 
     # ------------------------------------------------------------------
     # Encryption / Decryption
@@ -370,6 +464,139 @@ class VaultService:
             row = cursor.fetchone()
             cursor.close()
         return row  # sqlite3.Row or None
+
+    def _persist_vault_config(
+        self, km: "_VaultKeyMaterial", reinit_at: Optional[str],
+    ) -> None:
+        """Replace the singleton ``vault_config`` row (id=1) with *km*.
+        Shared by :meth:`initialize` and backup restoration."""
+        with self._db.connection() as conn:
+            conn.execute("DELETE FROM vault_config WHERE id = 1")
+            conn.execute(
+                """
+                INSERT INTO vault_config
+                    (id, kdf_salt, kdf_algorithm, kdf_iterations,
+                     wrapped_dek, dek_nonce, created_at, updated_at,
+                     reinitialized_at)
+                VALUES
+                    (1, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (km.salt, km.kdf_algorithm, km.kdf_iterations, km.wrapped_dek,
+                 km.nonce, km.created_at, km.created_at, reinit_at),
+            )
+
+    # ------------------------------------------------------------------
+    # Filesystem key-material backup (TKT-676)
+    # ------------------------------------------------------------------
+
+    def _write_backup(self, km: "_VaultKeyMaterial") -> None:
+        """Write *km* as the backup at ``data/secure/vault_backup.json``.
+
+        The backup holds the same password-protected material as the
+        ``vault_config`` row, so it is no weaker than the database. Written
+        atomically (tmp + rename) and locked to owner-read-only inside an
+        owner-only directory. The existing backup is rotated to ``.prev.json``
+        first so one generation of history always survives an overwrite.
+        """
+        self._rotate_backup()
+        payload = {
+            "kdf_salt": km.salt.hex(),
+            "wrapped_dek": km.wrapped_dek.hex(),
+            "dek_nonce": km.nonce.hex(),
+            "kdf_algorithm": km.kdf_algorithm,
+            "kdf_iterations": km.kdf_iterations,
+            "created_at": km.created_at,
+        }
+        secure_dir = FileMapperService.get_secure_dir()
+        secure_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(secure_dir, _SECURE_DIR_MODE)
+
+        path = FileMapperService.get_vault_backup_path()
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # Never leave a wrapped-key tmp file behind if the atomic rename fails.
+        try:
+            os.replace(tmp, path)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
+        os.chmod(path, _SECURE_FILE_MODE)
+
+    def _rotate_backup(self) -> None:
+        """Move the current backup to ``vault_backup.prev.json`` (one generation)."""
+        path = FileMapperService.get_vault_backup_path()
+        if not path.exists():
+            return
+        prev = FileMapperService.get_vault_backup_prev_path()
+        os.replace(path, prev)
+        os.chmod(prev, _SECURE_FILE_MODE)
+
+    def _restore_from_backup(self, password: str) -> bool:
+        """Rebuild ``vault_config`` from the first backup that *password* opens.
+
+        Tries the current backup, then the previous generation. For each, derives
+        the KEK from *password* + the backup salt and attempts to unwrap the DEK.
+        The first success is written back into ``vault_config``, cached in memory,
+        and promoted to the latest backup. Returns ``True`` on success.
+        """
+        from cryptography.exceptions import InvalidTag
+        from services.time_utils import utc_now
+
+        for path in (
+            FileMapperService.get_vault_backup_path(),
+            FileMapperService.get_vault_backup_prev_path(),
+        ):
+            if not path.exists():
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                salt = bytes.fromhex(data["kdf_salt"])
+                nonce = bytes.fromhex(data["dek_nonce"])
+                wrapped_dek = bytes.fromhex(data["wrapped_dek"])
+                kdf_algorithm = data["kdf_algorithm"]
+                kdf_iterations = int(data["kdf_iterations"])
+            except (ValueError, KeyError, OSError) as exc:
+                logger.warning(
+                    "[Vault] Backup %s is unreadable or malformed: %s", path.name, exc
+                )
+                continue
+
+            kek = _derive_kek(password, salt, kdf_iterations)
+            try:
+                dek = _aesgcm_decrypt(kek, nonce, wrapped_dek)
+            except InvalidTag:
+                logger.warning(
+                    "[Vault] Backup %s did not match the password — trying next",
+                    path.name,
+                )
+                continue
+
+            # No reinit flag: restoration recovers the original DEK, so no
+            # sealed data is orphaned — the "data lost" banner must not fire.
+            km = _VaultKeyMaterial(
+                salt, kdf_algorithm, kdf_iterations, wrapped_dek, nonce,
+                utc_now().isoformat(),
+            )
+            self._persist_vault_config(km, None)
+            _vault_state.dek = dek
+            # The vault is already recovered (row rebuilt + DEK cached). Promoting
+            # the matching key to the latest backup is best-effort — a write
+            # failure here must not undo a successful recovery.
+            try:
+                self._write_backup(km)
+            except OSError as exc:
+                logger.warning(
+                    "[Vault] Recovered from backup %s but could not promote it to "
+                    "the latest backup: %s", path.name, exc,
+                )
+            logger.info(
+                "[Vault] Restored vault_config from backup %s — vault unlocked, "
+                "no data loss",
+                path.name,
+            )
+            return True
+
+        return False
 
 
 # ── Module-level factory ───────────────────────────────────────────────────────

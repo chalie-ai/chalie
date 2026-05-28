@@ -21,6 +21,7 @@ class FileMapperService:
     _BACKEND_DIR: Path = _CHALIE_ROOT / "backend"
     _FRONTEND_DIR: Path = _CHALIE_ROOT / "frontend"
     _DATA_DIR: Path = _CHALIE_ROOT / "data"
+    _SECURE_DIR: Path = _DATA_DIR / "secure"
     _RESOURCES_DIR: Path = _CHALIE_ROOT / "resources"
     _ABILITIES_DIR: Path = _BACKEND_DIR / "abilities"
     _CONFIGS_DIR: Path = _BACKEND_DIR / "configs"
@@ -44,6 +45,25 @@ class FileMapperService:
     def get_session_secret_path(cls) -> Path:
         """Return path to the persisted Flask session secret."""
         return cls._DATA_DIR / ".session_secret"
+
+    @classmethod
+    def get_secure_dir(cls) -> Path:
+        """Return the directory holding vault key-material backups.
+
+        Lives under the persistent data volume (``data/secure``) so the backup
+        survives container recreation — see ``Dockerfile`` ``VOLUME`` declaration.
+        """
+        return cls._SECURE_DIR
+
+    @classmethod
+    def get_vault_backup_path(cls) -> Path:
+        """Return path to the current vault key-material backup file."""
+        return cls._SECURE_DIR / "vault_backup.json"
+
+    @classmethod
+    def get_vault_backup_prev_path(cls) -> Path:
+        """Return path to the previous-generation vault backup file."""
+        return cls._SECURE_DIR / "vault_backup.prev.json"
 
     @classmethod
     def get_schema_path(cls) -> Path:

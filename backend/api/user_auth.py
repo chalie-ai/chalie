@@ -180,21 +180,32 @@ def register():
 def login():
     """Verify credentials and set session cookie. Returns 401 on invalid credentials.
 
-    After a successful password check the vault is unlocked with the same
-    password.  If the vault returns ``False`` from
-    :meth:`~services.vault_service.VaultService.unlock`
-    (wrong password or vault inconsistency) the endpoint returns 401.  If the
-    vault has never been initialised (``RuntimeError``) the login still succeeds
-    but ``vault_state`` is ``"locked"`` in the response and a warning is logged.
+    After the password is verified against the account hash, the vault is opened
+    with :meth:`~services.vault_service.VaultService.unlock_or_restore`, which:
 
-    On a successful vault unlock the post-unlock capability reconnection hook
+    * ``"unlocked"``      — the live ``vault_config`` row opened normally.
+    * ``"restored"``      — the live row was missing/corrupt but a filesystem
+                            backup key matched; the vault was rebuilt and opened
+                            with no data loss (TKT-676).
+    * ``"unrecoverable"`` — neither the live row nor any backup opened. The DEK is
+                            permanently lost, so the master account is wiped and a
+                            401 with ``onboarding_required: True`` is returned to
+                            force clean re-onboarding rather than logging the user
+                            into an unusable vault.
+
+    A transient error (DB locked, I/O) is caught and does NOT wipe the account —
+    the login still succeeds with ``vault_state: "locked"``.
+
+    On a successful open the post-unlock capability reconnection hook
     (:func:`_reconnect_capabilities`) is called so that capabilities that store
     encrypted credentials are re-connected immediately.
     """
     try:
         from services.database_service import get_shared_db_service
         from services.auth_session_service import create_session
-        from services.vault_service import get_vault_service
+        from services.vault_service import (
+            get_vault_service, OUTCOME_UNRECOVERABLE,
+        )
         from flask import make_response
 
         data = request.get_json() or {}
@@ -220,38 +231,48 @@ def login():
             if not row or not check_password_hash(row[0], password):
                 return jsonify({"error": "Invalid credentials"}), 401
 
-        # Unlock the vault so encrypted credentials are accessible.
-        # Existing users upgrading from pre-vault versions won't have a
-        # vault_config row yet — initialize it on first login using the
-        # password we just verified against the hash.
+        # The password is now verified against the account hash. Open the vault
+        # with it, recovering from a filesystem backup if the live vault_config
+        # row is missing or corrupt (TKT-676). If neither the row nor any backup
+        # opens, the DEK is permanently lost — wipe the account to force a clean
+        # re-onboarding rather than logging the user into an unusable vault.
         vault = get_vault_service()
         vault_state = "locked"
-        vault_reinitialized = False
         try:
-            if vault.get_state() == "uninitialized":
-                logger.error(
-                    "[Auth] Vault uninitialized at login time — "
-                    "auto-initializing with login password. "
-                    "Any previously sealed data (provider keys, etc.) is orphaned."
-                )
-                vault.initialize(password, mark_reinit=True)
-                vault_reinitialized = True
-            unlocked = vault.unlock(password)
-            if not unlocked:
-                logger.warning(
-                    "[Auth] vault.unlock() returned False "
-                    "despite correct password"
-                )
-                return jsonify({"error": "Invalid credentials"}), 401
-            vault_state = "unlocked"
-            _reconnect_capabilities()
+            outcome = vault.unlock_or_restore(password)
         except Exception as exc:
-            logger.error("[Auth] Vault unlock failed during login: %s", exc)
+            # Transient failure (DB locked, I/O error) — do NOT wipe the account.
+            logger.error("[Auth] Vault open failed unexpectedly during login: %s", exc)
+            resp = make_response(
+                jsonify({"ok": True, "vault_state": "locked",
+                         "vault_reinitialized": False}),
+                200,
+            )
+            create_session(resp)
+            return resp
+
+        if outcome == OUTCOME_UNRECOVERABLE:
+            logger.error(
+                "[Auth] Vault key corrupted with no valid backup — wiping the "
+                "master account to force re-onboarding."
+            )
+            with db.get_session() as session:
+                session.execute(text("DELETE FROM master_account"))
+                session.commit()
+            vault.reset()
+            return jsonify({
+                "error": "Your encryption key could not be recovered. "
+                "Please set up your account again.",
+                "onboarding_required": True,
+            }), 401
+
+        vault_state = "unlocked"
+        _reconnect_capabilities()
 
         # Create session and set cookie
         resp = make_response(
             jsonify({"ok": True, "vault_state": vault_state,
-                     "vault_reinitialized": vault_reinitialized}),
+                     "vault_reinitialized": False}),
             200,
         )
         create_session(resp)
