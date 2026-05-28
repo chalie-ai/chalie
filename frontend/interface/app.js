@@ -59,7 +59,6 @@ class ChalieApp {
 
     this._initPresence();
     this._initRenderer();
-    this._checkVaultReinit();
 
     // Notifications module
     this._notifications = new Notifications();
@@ -191,28 +190,6 @@ class ChalieApp {
 
     // Start the app
     await this._start();
-  }
-
-  // ---------------------------------------------------------------------------
-  // Vault Reinit Warning
-  // ---------------------------------------------------------------------------
-
-  async _checkVaultReinit() {
-    try {
-      const r = await fetch('/auth/vault-status', { credentials: 'same-origin' });
-      if (!r.ok) return;
-      const { reinitialized_at } = await r.json();
-      if (!reinitialized_at) return;
-      const banner = document.getElementById('vaultReinitBanner');
-      if (!banner) return;
-      banner.classList.remove('hidden');
-      document.getElementById('vaultReinitDismiss')?.addEventListener('click', async () => {
-        banner.classList.add('hidden');
-        await fetch('/auth/vault-status/dismiss', { method: 'POST', credentials: 'same-origin' });
-      }, { once: true });
-    } catch (err) {
-      console.debug('[vault-reinit] check failed (non-fatal):', err);
-    }
   }
 
   // ---------------------------------------------------------------------------
