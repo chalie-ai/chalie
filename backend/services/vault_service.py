@@ -194,7 +194,7 @@ class VaultService:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def initialize(self, password: str, mark_reinit: bool = False) -> None:
+    def initialize(self, password: str) -> None:
         """Generate a new DEK, wrap it with a password-derived KEK, and persist.
 
         Called **once** when the master account is first registered.  If a
@@ -206,9 +206,7 @@ class VaultService:
         needed at registration time.
 
         Args:
-            password:    The user's chosen master password (UTF-8 string).
-            mark_reinit: When True, sets ``reinitialized_at`` to the current
-                UTC time so the UI can warn that existing sealed data is orphaned.
+            password: The user's chosen master password (UTF-8 string).
 
         Raises:
             Exception: Propagates any database or cryptography error so the
@@ -223,12 +221,11 @@ class VaultService:
 
         from services.time_utils import utc_now
         now_iso = utc_now().isoformat()
-        reinit_at = now_iso if mark_reinit else None
 
         km = _VaultKeyMaterial(
             salt, _KDF_ALGORITHM, _KDF_ITERATIONS, wrapped_dek, nonce, now_iso,
         )
-        self._persist_vault_config(km, reinit_at)
+        self._persist_vault_config(km)
         self._write_backup(km)
 
         logger.info(
@@ -422,27 +419,6 @@ class VaultService:
         return self.decrypt(blob).decode("utf-8")
 
     # ------------------------------------------------------------------
-    # Reinit tracking
-    # ------------------------------------------------------------------
-
-    def get_reinitialized_at(self) -> Optional[str]:
-        """Return the ISO timestamp of the last auto-reinit, or None."""
-        row = self._load_vault_config()
-        if row is None:
-            return None
-        try:
-            return row["reinitialized_at"]
-        except (IndexError, KeyError):
-            return None
-
-    def clear_reinitialized_at(self) -> None:
-        """Clear the reinitialized_at flag (user dismissed the warning)."""
-        with self._db.connection() as conn:
-            conn.execute(
-                "UPDATE vault_config SET reinitialized_at = NULL WHERE id = 1"
-            )
-
-    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -457,17 +433,14 @@ class VaultService:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT kdf_salt, kdf_algorithm, kdf_iterations, "
-                "wrapped_dek, dek_nonce, created_at, updated_at, "
-                "reinitialized_at "
+                "wrapped_dek, dek_nonce, created_at, updated_at "
                 "FROM vault_config WHERE id = 1"
             )
             row = cursor.fetchone()
             cursor.close()
         return row  # sqlite3.Row or None
 
-    def _persist_vault_config(
-        self, km: "_VaultKeyMaterial", reinit_at: Optional[str],
-    ) -> None:
+    def _persist_vault_config(self, km: "_VaultKeyMaterial") -> None:
         """Replace the singleton ``vault_config`` row (id=1) with *km*.
         Shared by :meth:`initialize` and backup restoration."""
         with self._db.connection() as conn:
@@ -476,13 +449,12 @@ class VaultService:
                 """
                 INSERT INTO vault_config
                     (id, kdf_salt, kdf_algorithm, kdf_iterations,
-                     wrapped_dek, dek_nonce, created_at, updated_at,
-                     reinitialized_at)
+                     wrapped_dek, dek_nonce, created_at, updated_at)
                 VALUES
-                    (1, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (1, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (km.salt, km.kdf_algorithm, km.kdf_iterations, km.wrapped_dek,
-                 km.nonce, km.created_at, km.created_at, reinit_at),
+                 km.nonce, km.created_at, km.created_at),
             )
 
     # ------------------------------------------------------------------
@@ -577,7 +549,7 @@ class VaultService:
                 salt, kdf_algorithm, kdf_iterations, wrapped_dek, nonce,
                 utc_now().isoformat(),
             )
-            self._persist_vault_config(km, None)
+            self._persist_vault_config(km)
             _vault_state.dek = dek
             # The vault is already recovered (row rebuilt + DEK cached). Promoting
             # the matching key to the latest backup is best-effort — a write

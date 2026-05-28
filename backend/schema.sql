@@ -94,8 +94,7 @@ CREATE TABLE IF NOT EXISTS vault_config (
     wrapped_dek     BLOB    NOT NULL,
     dek_nonce       BLOB    NOT NULL,
     created_at      TEXT,
-    updated_at      TEXT,
-    reinitialized_at TEXT
+    updated_at      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS vault_secrets (

@@ -270,13 +270,6 @@ body.speaker-user   #ambientBloom {
   color: var(--text-primary);
 }
 
-.vault-reinit-banner {
-  background: rgba(240, 160, 32, 0.10);
-  border-color: rgba(240, 160, 32, 0.35);
-  color: var(--warning-banner-text);
-  max-width: 640px;
-}
-
 .update-dialog {
   background: transparent;
   border: none;
