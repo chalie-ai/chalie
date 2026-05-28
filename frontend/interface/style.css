@@ -2059,7 +2059,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 }
 
 .api-key-dialog__content {
-  background: rgba(12, 14, 24, 0.96);
+  background: color-mix(in oklab, var(--bg-2) 96%, transparent);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);

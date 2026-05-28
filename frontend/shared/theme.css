@@ -379,3 +379,5 @@ textarea::placeholder { color: var(--text-secondary); }
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  { background: rgba(255, 255, 255, 0.12); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.22); }
+[data-theme="light"] ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.08); }
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.15); }
