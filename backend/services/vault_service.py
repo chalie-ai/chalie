@@ -230,8 +230,7 @@ class VaultService:
 
         logger.info(
             "[Vault] Vault initialised — new DEK wrapped "
-            "with password-derived KEK; key material backed up to %s",
-            FileMapperService.get_vault_backup_path(),
+            "with password-derived KEK; key material backed up"
         )
 
     def unlock(self, password: str) -> bool:
@@ -364,10 +363,7 @@ class VaultService:
         with self._db.connection() as conn:
             conn.execute("DELETE FROM vault_config WHERE id = 1")
         _vault_state.dek = None
-        for path in (
-            FileMapperService.get_vault_backup_path(),
-            FileMapperService.get_vault_backup_prev_path(),
-        ):
+        for path in FileMapperService.list_vault_backups():
             try:
                 path.unlink(missing_ok=True)
             except OSError as exc:
@@ -462,15 +458,17 @@ class VaultService:
     # ------------------------------------------------------------------
 
     def _write_backup(self, km: "_VaultKeyMaterial") -> None:
-        """Write *km* as the backup at ``data/secure/vault_backup.json``.
+        """Append *km* as a fresh, uniquely-stamped backup under ``data/secure/``.
 
-        The backup holds the same password-protected material as the
-        ``vault_config`` row, so it is no weaker than the database. Written
-        atomically (tmp + rename) and locked to owner-read-only inside an
-        owner-only directory. The existing backup is rotated to ``.prev.json``
-        first so one generation of history always survives an overwrite.
+        Every DEK generation writes a new ``vault_backup_<stamp>.json`` and never
+        overwrites or deletes an earlier one — backups are retained forever so
+        recovery can fall back through every generation. The backup holds the
+        same password-protected material as the ``vault_config`` row, so it is no
+        weaker than the database. Written atomically (tmp + rename) and locked to
+        owner-read-only inside an owner-only directory.
         """
-        self._rotate_backup()
+        from services.time_utils import utc_now
+
         payload = {
             "kdf_salt": km.salt.hex(),
             "wrapped_dek": km.wrapped_dek.hex(),
@@ -483,7 +481,15 @@ class VaultService:
         secure_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(secure_dir, _SECURE_DIR_MODE)
 
-        path = FileMapperService.get_vault_backup_path()
+        stamp = utc_now().strftime("%Y%m%dT%H%M%S%f")
+        path = FileMapperService.get_vault_backup_path(stamp)
+        # Never clobber a retained backup if two writes land in the same
+        # microsecond — bump a suffix until the name is free.
+        suffix = 1
+        while path.exists():
+            path = FileMapperService.get_vault_backup_path(f"{stamp}_{suffix}")
+            suffix += 1
+
         tmp = path.with_name(path.name + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         # Never leave a wrapped-key tmp file behind if the atomic rename fails.
@@ -493,33 +499,22 @@ class VaultService:
             tmp.unlink(missing_ok=True)
             raise
         os.chmod(path, _SECURE_FILE_MODE)
-
-    def _rotate_backup(self) -> None:
-        """Move the current backup to ``vault_backup.prev.json`` (one generation)."""
-        path = FileMapperService.get_vault_backup_path()
-        if not path.exists():
-            return
-        prev = FileMapperService.get_vault_backup_prev_path()
-        os.replace(path, prev)
-        os.chmod(prev, _SECURE_FILE_MODE)
+        logger.info("[Vault] Key material backed up to %s", path.name)
 
     def _restore_from_backup(self, password: str) -> bool:
         """Rebuild ``vault_config`` from the first backup that *password* opens.
 
-        Tries the current backup, then the previous generation. For each, derives
-        the KEK from *password* + the backup salt and attempts to unwrap the DEK.
-        The first success is written back into ``vault_config``, cached in memory,
-        and promoted to the latest backup. Returns ``True`` on success.
+        Tries every retained backup, newest first. For each, derives the KEK from
+        *password* + the backup salt and attempts to unwrap the DEK; iterating all
+        generations means a corrupt latest backup is simply skipped. The first
+        success is written back into ``vault_config`` and cached in memory — the
+        recovered DEK is the original, so no fresh backup is taken. Returns
+        ``True`` on success.
         """
         from cryptography.exceptions import InvalidTag
         from services.time_utils import utc_now
 
-        for path in (
-            FileMapperService.get_vault_backup_path(),
-            FileMapperService.get_vault_backup_prev_path(),
-        ):
-            if not path.exists():
-                continue
+        for path in FileMapperService.list_vault_backups():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 salt = bytes.fromhex(data["kdf_salt"])
@@ -543,24 +538,14 @@ class VaultService:
                 )
                 continue
 
-            # No reinit flag: restoration recovers the original DEK, so no
-            # sealed data is orphaned — the "data lost" banner must not fire.
+            # Restoration recovers the original DEK, so no sealed data is
+            # orphaned. The backup already exists and is retained — no re-write.
             km = _VaultKeyMaterial(
                 salt, kdf_algorithm, kdf_iterations, wrapped_dek, nonce,
                 utc_now().isoformat(),
             )
             self._persist_vault_config(km)
             _vault_state.dek = dek
-            # The vault is already recovered (row rebuilt + DEK cached). Promoting
-            # the matching key to the latest backup is best-effort — a write
-            # failure here must not undo a successful recovery.
-            try:
-                self._write_backup(km)
-            except OSError as exc:
-                logger.warning(
-                    "[Vault] Recovered from backup %s but could not promote it to "
-                    "the latest backup: %s", path.name, exc,
-                )
             logger.info(
                 "[Vault] Restored vault_config from backup %s — vault unlocked, "
                 "no data loss",
