@@ -53,12 +53,16 @@ const BrainSidebar = (() => {
       </a>
       <nav class="sidebar-scroll" id="sidebarNav"></nav>
       <div class="sidebar-footer">
-        <button class="icon-btn theme-toggle" id="themeToggleBtn" aria-label="Toggle theme">
+        <button type="button" class="icon-btn theme-toggle" id="themeToggleBtn" aria-label="Toggle theme">
           ${Icons.Sun()}
         </button>
       </div>`;
 
-    document.getElementById('themeToggleBtn').addEventListener('click', BrainApp.toggleTheme);
+    document.getElementById('themeToggleBtn').addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      BrainApp.toggleTheme();
+    });
     _renderNav();
   }
 
