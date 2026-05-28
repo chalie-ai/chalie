@@ -102,19 +102,21 @@ class TestExtractText:
             extract_text('/tmp/file.xyz', 'application/unknown-binary')
         mock_plain.assert_called_once()
 
-    def test_dispatches_png_to_image_extractor(self):
+    def test_dispatches_png_to_image_extractor(self, tmp_path):
+        png_path = str(tmp_path / 'x.png')
         with patch('services.text_extractor._extract_image', return_value='HELLO CHALIE 2040') as mock_img:
             from services.text_extractor import extract_text
-            result = extract_text('/tmp/x.png', 'image/png')
-        mock_img.assert_called_once_with('/tmp/x.png')
+            result = extract_text(png_path, 'image/png')
+        mock_img.assert_called_once_with(png_path)
         assert result == 'HELLO CHALIE 2040'
 
-    def test_unregistered_image_subtype_routes_via_wildcard(self):
+    def test_unregistered_image_subtype_routes_via_wildcard(self, tmp_path):
         """Unmapped image/* (e.g. image/heic) hits the wildcard, not _extract_plain."""
+        heic_path = str(tmp_path / 'photo.heic')
         with patch('services.text_extractor._extract_image', return_value='heic text') as mock_img:
             from services.text_extractor import extract_text
-            result = extract_text('/tmp/photo.heic', 'image/heic')
-        mock_img.assert_called_once_with('/tmp/photo.heic')
+            result = extract_text(heic_path, 'image/heic')
+        mock_img.assert_called_once_with(heic_path)
         assert result == 'heic text'
 
 

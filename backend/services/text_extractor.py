@@ -303,8 +303,8 @@ def _extract_image(path: str) -> str:
     try:
         with open(path, 'rb') as fh:
             image_bytes = fh.read()
-    except Exception as e:
-        logger.error(f'[TEXT EXTRACTOR] Image read failed: {e}')
+    except Exception:
+        logger.exception('[TEXT EXTRACTOR] Image read failed')
         return ''
 
     from services import image_context_service
