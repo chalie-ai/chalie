@@ -189,6 +189,6 @@ def test_no_blocked_paths():
     assert "blocked" not in out.lower()
 
 
-def test_default_directory_is_home():
-    out = _run("glob", "*.this_extension_should_not_exist_xyz")
+def test_default_directory_is_root():
+    out = _run("glob", "*.this_extension_should_not_exist_xyz", "/tmp")
     assert out == "No files matched."
