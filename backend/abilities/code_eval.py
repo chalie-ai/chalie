@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import statistics
+import traceback
 from typing import ClassVar
 
 from RestrictedPython import compile_restricted, safe_builtins, safe_globals
@@ -60,6 +61,20 @@ class CodeEvalAbility(Ability):
     }
     TIMEOUT = 15
 
+    # Sandbox identity + result-contract messages. The error strings are the
+    # actionable signals the LLM receives in place of a silent empty success,
+    # which previously caused it to retry the same call until the iteration wall.
+    _FILENAME = "<scratchpad>"
+    _PRINT_VAR = "_print"
+    _ERR_NO_CODE = (
+        "You need to provide python code to be executed. "
+        "Pass the Python you want to run in the `code` parameter."
+    )
+    _ERR_NO_OUTPUT = (
+        "Your code did not produce any output. "
+        "Ensure you use `print` on whatever you want outputted / returned"
+    )
+
     # Pre-built restricted globals — assembled once at import time.
     _RESTRICTED_GLOBALS: ClassVar[dict] = {
         **safe_globals,
@@ -79,29 +94,46 @@ class CodeEvalAbility(Ability):
     }
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+        """Compile and run the supplied Python, returning its printed output or
+        an actionable error — never a silent empty success that the LLM would
+        misread as 'done' and retry."""
         code = (params.get("code") or "").strip()
-
         if not code:
-            return {"error": "No code provided", "text": ""}
+            return self._error(self._ERR_NO_CODE)
 
         try:
-            byte_code = compile_restricted(code, filename="<scratchpad>", mode="exec")
-        except SyntaxError as exc:
-            return {"text": "", "error": f"Syntax error: {exc}"}
+            byte_code = compile_restricted(code, filename=self._FILENAME, mode="exec")
+        except SyntaxError:
+            return self._error(traceback.format_exc())
 
+        return self._run(byte_code)
+
+    def _run(self, byte_code) -> dict:
+        """Execute compiled bytecode in fresh restricted globals, returning its
+        printed output, a full stack trace on failure, or a no-output error."""
         # Fresh globals copy per call so state never leaks between executions.
         exec_globals = dict(self._RESTRICTED_GLOBALS)
         exec_locals: dict = {}
 
         try:
             exec(byte_code, exec_globals, exec_locals)
-        except Exception as exc:
-            collector = exec_locals.get("_print")
-            captured = collector() if collector is not None else ""
-            error_msg = f"{type(exc).__name__}: {exc}"
-            text = f"{captured}{error_msg}".strip() if captured else error_msg
-            return {"text": text, "error": error_msg}
+        except Exception:
+            # Sandbox boundary: surface the full trace (and any partial output)
+            # to the LLM. The dispatcher logs the error key, so it is not swallowed.
+            return self._error(traceback.format_exc(), self._captured(exec_locals))
 
-        collector = exec_locals.get("_print")
-        captured = collector() if collector is not None else ""
+        captured = self._captured(exec_locals)
+        if not captured:
+            return self._error(self._ERR_NO_OUTPUT)
         return {"text": captured, "error": ""}
+
+    def _captured(self, exec_locals: dict) -> str:
+        """Return text accumulated by the sandbox PrintCollector, or '' if the
+        code never called print()."""
+        collector = exec_locals.get(self._PRINT_VAR)
+        return collector() if collector is not None else ""
+
+    def _error(self, message: str, captured: str = "") -> dict:
+        """Build an error result, preserving any partial print output as text so
+        the LLM keeps context alongside the failure."""
+        return {"text": captured, "error": message}
