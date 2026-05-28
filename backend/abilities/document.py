@@ -286,7 +286,10 @@ def _handle_view(service, params: dict) -> str:
     if not doc:
         return "[DOCUMENT] Document not found. Specify 'name' or 'id'."
 
-    if doc.get("status") != "ready":
+    status = doc.get("status")
+    if status != "ready":
+        if status == "failed":
+            return f"Failed to process document {doc['original_name']}"
         return f"[DOCUMENT] '{doc['original_name']}' is still being processed or awaiting confirmation."
 
     meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
@@ -454,7 +457,7 @@ def _handle_upload(service, params: dict) -> str:
     file_path_rel = f"{doc_id}/{name}"
 
     try:
-        from api.documents import _run_upload_extraction
+        from api.documents import _run_upload_extraction, _mark_upload_failed
         from services.file_mapper_service import FileMapperService
 
         dir_path = FileMapperService.get_documents_path(doc_id)
@@ -472,16 +475,26 @@ def _handle_upload(service, params: dict) -> str:
             source_type='upload',
             doc_id=doc_id,
         )
+    except Exception as e:
+        logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
+        return f"[DOCUMENT] Failed to upload document: {e}"
 
+    # Extraction runs synchronously: the ACT loop MUST block until the document
+    # reaches a terminal state (ready/failed) so a follow-up view in the same
+    # turn returns real text, never "still being processed".
+    try:
         _run_upload_extraction(doc_id)
+    except Exception as exc:
+        logger.exception(f"[DOCUMENT SKILL] Extraction failed for {doc_id}: {exc}")
+        _mark_upload_failed(doc_id, str(exc))
 
+    doc = service.get_document(doc_id)
+    if doc and doc.get("status") == "ready":
         return (
             f"[DOCUMENT] Uploaded '{name}' (id={doc_id}). "
             f"Call document(action='view', id='{doc_id}') to read contents."
         )
-    except Exception as e:
-        logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
-        return f"[DOCUMENT] Failed to upload document: {e}"
+    return f"Failed to process document {name}"
 
 
 def _handle_create(service, params: dict) -> str:

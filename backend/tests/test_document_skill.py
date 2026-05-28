@@ -199,6 +199,78 @@ class TestViewAction:
 
         assert "warranty.pdf" in result
 
+    def test_view_failed_status_returns_failure_string(self):
+        """A failed document surfaces a terminal failure, not 'still processing' (TKT-707)."""
+        mock_svc = MagicMock()
+        mock_svc.get_document.return_value = _make_doc(status="failed")
+        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
+            result = _handle_document("topic", {"action": "view", "id": "doc00001"})
+        assert "Failed to process document warranty.pdf" in result
+
+    def test_view_processing_status_returns_processing_message(self):
+        mock_svc = MagicMock()
+        mock_svc.get_document.return_value = _make_doc(status="processing")
+        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc):
+            result = _handle_document("topic", {"action": "view", "id": "doc00001"})
+        assert "still being processed" in result
+
+
+@pytest.mark.unit
+class TestUploadAction:
+    """Upload blocks to a terminal state and reports it accurately (TKT-707)."""
+
+    @staticmethod
+    def _patch_paths(tmp_path):
+        def _fake_path(doc_id, name=None):
+            base = tmp_path / doc_id
+            return str(base / name) if name else str(base)
+        return patch(
+            "services.file_mapper_service.FileMapperService.get_documents_path",
+            side_effect=_fake_path,
+        )
+
+    def test_upload_ready_returns_view_hint(self, tmp_path):
+        mock_svc = MagicMock()
+        mock_svc.get_document.return_value = _make_doc(status="ready")
+        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc), \
+             self._patch_paths(tmp_path), \
+             patch("api.documents._run_upload_extraction") as mock_extract, \
+             patch("api.documents._mark_upload_failed"):
+            result = _handle_document("topic", {
+                "action": "upload", "name": "note.txt",
+                "content": "aGVsbG8=", "content_type": "text/plain",
+            })
+        mock_extract.assert_called_once()
+        assert "Uploaded 'note.txt'" in result
+        assert "action='view'" in result
+
+    def test_upload_failed_status_returns_failure_string(self, tmp_path):
+        mock_svc = MagicMock()
+        mock_svc.get_document.return_value = _make_doc(status="failed")
+        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc), \
+             self._patch_paths(tmp_path), \
+             patch("api.documents._run_upload_extraction"), \
+             patch("api.documents._mark_upload_failed"):
+            result = _handle_document("topic", {
+                "action": "upload", "name": "broken.png",
+                "content": "aGVsbG8=", "content_type": "image/png",
+            })
+        assert "Failed to process document broken.png" in result
+
+    def test_upload_extraction_exception_marks_failed(self, tmp_path):
+        mock_svc = MagicMock()
+        mock_svc.get_document.return_value = _make_doc(status="failed")
+        with patch(_P_DB), patch(_P_DOC_SVC, return_value=mock_svc), \
+             self._patch_paths(tmp_path), \
+             patch("api.documents._run_upload_extraction", side_effect=RuntimeError("boom")), \
+             patch("api.documents._mark_upload_failed") as mock_failed:
+            result = _handle_document("topic", {
+                "action": "upload", "name": "doc.pdf",
+                "content": "aGVsbG8=", "content_type": "application/pdf",
+            })
+        mock_failed.assert_called_once()
+        assert "Failed to process document doc.pdf" in result
+
 
 @pytest.mark.unit
 class TestDeleteAction:

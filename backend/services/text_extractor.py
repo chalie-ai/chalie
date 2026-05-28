@@ -13,6 +13,7 @@ Supported formats:
   - Plain text  (direct read)
   - Markdown    (direct read)
   - Any text/*  (direct read)
+  - Image       (PNG/JPEG/WEBP/GIF/BMP/TIFF via RapidOCR)
 
 All heavy-library imports are lazy so missing optional deps degrade gracefully.
 """
@@ -45,11 +46,21 @@ def extract_text(file_path: str, mime_type: str = None) -> str:
         'text/html': _extract_html_file,
         'text/plain': _extract_plain,
         'text/markdown': _extract_plain,
+        'image/png': _extract_image,
+        'image/jpeg': _extract_image,
+        'image/webp': _extract_image,
+        'image/gif': _extract_image,
+        'image/bmp': _extract_image,
+        'image/tiff': _extract_image,
     }
 
     extractor = extractors.get(mime_type)
     if extractor:
         return extractor(file_path)
+
+    # Fallback: any image/* type (e.g. image/heic) via OCR
+    if mime_type and mime_type.startswith('image/'):
+        return _extract_image(file_path)
 
     # Fallback: any text/* type (code files, CSV, etc.)
     if mime_type and mime_type.startswith('text/'):
@@ -279,6 +290,28 @@ def _extract_plain(path: str) -> str:
     except Exception as e:
         logger.error(f'[TEXT EXTRACTOR] Plain text read failed: {e}')
         return ''
+
+
+def _extract_image(path: str) -> str:
+    """Extract text from an image file via RapidOCR.
+
+    Delegates to services.image_context_service.analyze, which applies safety
+    preprocessing (EXIF strip + dimension normalization) before OCR. Returns
+    empty string on any failure so the upload pipeline marks the doc 'failed'
+    cleanly rather than poisoning clean_text with garbage.
+    """
+    try:
+        with open(path, 'rb') as fh:
+            image_bytes = fh.read()
+    except Exception as e:
+        logger.error(f'[TEXT EXTRACTOR] Image read failed: {e}')
+        return ''
+
+    from services import image_context_service
+    result = image_context_service.analyze(image_bytes)
+    if result.get('error'):
+        logger.warning(f"[TEXT EXTRACTOR] Image OCR failed: {result['error']}")
+    return result.get('ocr_text') or ''
 
 
 def _strip_html_tags(html: str) -> str:

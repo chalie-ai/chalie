@@ -162,17 +162,4 @@ def test_normalize_dimensions_no_op_for_small_image(sample_png_bytes):
     assert result.size == original_size
 
 
-# ─── compute_hash() ───────────────────────────────────────────────────────────
-
-@pytest.mark.unit
-def test_compute_hash_is_deterministic(sample_png_bytes):
-    """compute_hash() returns the same hash for identical bytes."""
-    from services.image_context_service import compute_hash
-
-    h1 = compute_hash(sample_png_bytes)
-    h2 = compute_hash(sample_png_bytes)
-    assert h1 == h2
-    assert len(h1) == 64  # SHA-256 hex length
-
-
 

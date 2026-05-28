@@ -102,6 +102,48 @@ class TestExtractText:
             extract_text('/tmp/file.xyz', 'application/unknown-binary')
         mock_plain.assert_called_once()
 
+    def test_dispatches_png_to_image_extractor(self):
+        with patch('services.text_extractor._extract_image', return_value='HELLO CHALIE 2040') as mock_img:
+            from services.text_extractor import extract_text
+            result = extract_text('/tmp/x.png', 'image/png')
+        mock_img.assert_called_once_with('/tmp/x.png')
+        assert result == 'HELLO CHALIE 2040'
+
+    def test_unregistered_image_subtype_routes_via_wildcard(self):
+        """Unmapped image/* (e.g. image/heic) hits the wildcard, not _extract_plain."""
+        with patch('services.text_extractor._extract_image', return_value='heic text') as mock_img:
+            from services.text_extractor import extract_text
+            result = extract_text('/tmp/photo.heic', 'image/heic')
+        mock_img.assert_called_once_with('/tmp/photo.heic')
+        assert result == 'heic text'
+
+
+# ─── _extract_image — delegates to image_context_service ─────────────────────
+
+@pytest.mark.unit
+class TestExtractImage:
+    def test_returns_ocr_text_from_analyze(self, tmp_path):
+        img_file = tmp_path / "scan.png"
+        img_file.write_bytes(b"\x89PNG fake bytes")
+        with patch('services.image_context_service.analyze',
+                   return_value={'ocr_text': 'HELLO CHALIE 2040', 'error': None}) as mock_analyze:
+            from services.text_extractor import _extract_image
+            result = _extract_image(str(img_file))
+        assert result == 'HELLO CHALIE 2040'
+        mock_analyze.assert_called_once_with(b"\x89PNG fake bytes")
+
+    def test_empty_ocr_returns_empty_string(self, tmp_path):
+        img_file = tmp_path / "blank.png"
+        img_file.write_bytes(b"data")
+        with patch('services.image_context_service.analyze',
+                   return_value={'ocr_text': '', 'error': None}):
+            from services.text_extractor import _extract_image
+            assert _extract_image(str(img_file)) == ''
+
+    def test_unreadable_file_returns_empty(self):
+        from services.text_extractor import _extract_image
+        assert _extract_image('/nonexistent/path/x.png') == ''
+
 
 
 

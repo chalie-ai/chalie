@@ -6,10 +6,8 @@ Uses local RapidOCR for text extraction. No external provider APIs required.
 Safety invariants applied before OCR:
   - EXIF metadata stripped (removes GPS, device IDs, timestamps)
   - Dimensions normalized to max 2048px
-  - SHA-256 hash deduplication (same image → same image_id in same session)
 """
 
-import hashlib
 import io
 import logging
 import time
@@ -67,11 +65,6 @@ def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
 
     result['analysis_time_ms'] = int((time.time() - start) * 1000)
     return result
-
-
-def compute_hash(image_bytes: bytes) -> str:
-    """Compute the SHA-256 hash of image bytes for within-session deduplication."""
-    return hashlib.sha256(image_bytes).hexdigest()
 
 
 # ─── Preprocessing ───────────────────────────────────────────────────────────
