@@ -195,14 +195,36 @@ const PanelDocuments = (() => {
     } catch { BrainApp.showToast('Network error', 'error'); _renderDocs(); }
   }
 
-  async function _deleteDoc(id) {
+  function _showConfirm({ title, desc, confirmLabel, confirmClass, onConfirm }) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    const esc = BrainApp.escapeHtml;
+    overlay.innerHTML = `<div class="modal modal-sm">
+      <div class="modal-header"><h3>${esc(title)}</h3></div>
+      <p class="modal-desc">${desc}</p>
+      <div class="modal-actions"><button class="btn btn-secondary" data-cancel>Cancel</button><button class="btn ${confirmClass}" data-confirm>${esc(confirmLabel)}</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-cancel]').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('[data-confirm]').addEventListener('click', () => { overlay.remove(); onConfirm(); });
+  }
+
+  function _deleteDoc(id) {
     const doc = _docs.find(d => String(d.id) === String(id));
-    if (!confirm(`Delete "${doc?.original_name || 'this document'}"? This cannot be undone.`)) return;
-    try {
-      const res = await BrainApp.apiFetch(`/documents/${id}`, { method: 'DELETE' });
-      if (res.ok) { BrainApp.showToast('Document deleted', 'success'); _loaded = false; _load(); }
-      else BrainApp.showToast('Delete failed', 'error');
-    } catch { BrainApp.showToast('Network error', 'error'); }
+    _showConfirm({
+      title: 'Delete Document',
+      desc: `Delete "${BrainApp.escapeHtml(doc?.original_name || 'this document')}"? This cannot be undone.`,
+      confirmLabel: 'Delete',
+      confirmClass: 'btn-danger',
+      onConfirm: async () => {
+        try {
+          const res = await BrainApp.apiFetch(`/documents/${id}`, { method: 'DELETE' });
+          if (res.ok) { BrainApp.showToast('Document deleted', 'success'); _loaded = false; _load(); }
+          else BrainApp.showToast('Delete failed', 'error');
+        } catch { BrainApp.showToast('Network error', 'error'); }
+      }
+    });
   }
 
   function _uploadDoc() {

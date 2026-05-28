@@ -140,13 +140,35 @@ const PanelScheduler = (() => {
     });
   }
 
-  async function _cancelSchedule(id) {
-    if (!confirm('Cancel this scheduled item?')) return;
-    try {
-      const res = await BrainApp.apiFetch(`/scheduler/${id}`, { method: 'DELETE' });
-      if (res.ok) { BrainApp.showToast('Schedule cancelled', 'success'); _loaded = false; _load(); }
-      else BrainApp.showToast('Cancel failed', 'error');
-    } catch { BrainApp.showToast('Network error', 'error'); }
+  function _showConfirm({ title, desc, confirmLabel, confirmClass, onConfirm }) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    const esc = BrainApp.escapeHtml;
+    overlay.innerHTML = `<div class="modal modal-sm">
+      <div class="modal-header"><h3>${esc(title)}</h3></div>
+      <p class="modal-desc">${desc}</p>
+      <div class="modal-actions"><button class="btn btn-secondary" data-cancel>Cancel</button><button class="btn ${confirmClass}" data-confirm>${esc(confirmLabel)}</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-cancel]').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('[data-confirm]').addEventListener('click', () => { overlay.remove(); onConfirm(); });
+  }
+
+  function _cancelSchedule(id) {
+    _showConfirm({
+      title: 'Cancel Schedule',
+      desc: 'Cancel this scheduled item?',
+      confirmLabel: 'Cancel Item',
+      confirmClass: 'btn-danger',
+      onConfirm: async () => {
+        try {
+          const res = await BrainApp.apiFetch(`/scheduler/${id}`, { method: 'DELETE' });
+          if (res.ok) { BrainApp.showToast('Schedule cancelled', 'success'); _loaded = false; _load(); }
+          else BrainApp.showToast('Cancel failed', 'error');
+        } catch { BrainApp.showToast('Network error', 'error'); }
+      }
+    });
   }
 
   return { mount, unmount };

@@ -225,10 +225,11 @@ const PanelSkills = (() => {
   function _showConfirm({ title, desc, confirmLabel, confirmClass, onConfirm }) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
+    const esc = BrainApp.escapeHtml;
     overlay.innerHTML = `<div class="modal modal-sm">
-      <div class="modal-header"><h3>${title}</h3></div>
+      <div class="modal-header"><h3>${esc(title)}</h3></div>
       <p class="modal-desc">${desc}</p>
-      <div class="modal-actions"><button class="btn btn-secondary" data-cancel>Cancel</button><button class="btn ${confirmClass}" data-confirm>${confirmLabel}</button></div>
+      <div class="modal-actions"><button class="btn btn-secondary" data-cancel>Cancel</button><button class="btn ${confirmClass}" data-confirm>${esc(confirmLabel)}</button></div>
     </div>`;
     document.body.appendChild(overlay);
     overlay.querySelector('[data-cancel]').addEventListener('click', () => overlay.remove());
