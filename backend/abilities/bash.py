@@ -60,6 +60,42 @@ _DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"rm\s+-\w*rf\w*\s+/\*"),
 )
 
+
+def _has_recursive_flag(tokens: list[str]) -> bool:
+    for t in tokens[1:]:
+        if t == "--recursive":
+            return True
+        if t.startswith("-") and not t.startswith("--") and ("r" in t or "R" in t):
+            return True
+        if not t.startswith("-"):
+            break
+    return False
+
+
+def _is_rm_rf(command: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] != "rm":
+        return False
+    has_r = False
+    has_f = False
+    for t in tokens[1:]:
+        if t == "--recursive":
+            has_r = True
+        elif t == "--force":
+            has_f = True
+        elif t.startswith("-") and not t.startswith("--"):
+            if "r" in t or "R" in t:
+                has_r = True
+            if "f" in t:
+                has_f = True
+        elif not t.startswith("-"):
+            break
+    return has_r and has_f
+
+
 _SECRET_SUFFIXES: tuple[str, ...] = (
     "KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PRIVATE",
 )
@@ -218,6 +254,8 @@ def _classify_heuristic(command: str) -> str | None:
         return "web_fetch"
     if first_word in _INSTALL_WORDS:
         return "installation"
+    if first_word == "rm" and _has_recursive_flag(tokens):
+        return "compound"
     if first_word in _FILE_MOD_WORDS:
         return "modify_file"
 
@@ -255,6 +293,11 @@ def _has_redirect(command: str) -> bool:
 
 
 def _check_destructive(command: str) -> str | None:
+    if _is_rm_rf(command):
+        return (
+            "BLOCKED: Destructive command pattern detected. "
+            "This command cannot be executed."
+        )
     for pattern in _DESTRUCTIVE_PATTERNS:
         if pattern.search(command):
             return (

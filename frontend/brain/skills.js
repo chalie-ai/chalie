@@ -220,6 +220,22 @@ const PanelSkills = (() => {
       .join('');
   }
 
+  // ── Confirm modal ─────────────────────────────────────────────────
+
+  function _showConfirm({ title, desc, confirmLabel, confirmClass, onConfirm }) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `<div class="modal modal-sm">
+      <div class="modal-header"><h3>${title}</h3></div>
+      <p class="modal-desc">${desc}</p>
+      <div class="modal-actions"><button class="btn btn-secondary" data-cancel>Cancel</button><button class="btn ${confirmClass}" data-confirm>${confirmLabel}</button></div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('[data-cancel]').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    overlay.querySelector('[data-confirm]').addEventListener('click', () => { overlay.remove(); onConfirm(); });
+  }
+
   // ── Event binding ─────────────────────────────────────────────────
 
   function _bindEvents(el) {
@@ -248,17 +264,25 @@ const PanelSkills = (() => {
     el.querySelectorAll('[data-delete-skill]').forEach(btn => {
       btn.addEventListener('click', () => {
         const title = btn.dataset.skillTitle;
-        if (confirm(`Delete skill "${title}"? This cannot be undone.`)) {
-          _deleteSkill(Number(btn.dataset.deleteSkill));
-        }
+        _showConfirm({
+          title: 'Delete Skill',
+          desc: `Delete "${BrainApp.escapeHtml(title)}"? This cannot be undone.`,
+          confirmLabel: 'Delete',
+          confirmClass: 'btn-danger',
+          onConfirm: () => _deleteSkill(Number(btn.dataset.deleteSkill)),
+        });
       });
     });
     el.querySelectorAll('[data-copy-skill]').forEach(btn => {
       btn.addEventListener('click', () => {
         const title = btn.dataset.skillTitle;
-        if (confirm(`Copy "${title}" as a customisable user skill? The curated version will be disabled.`)) {
-          _copySkill(Number(btn.dataset.copySkill));
-        }
+        _showConfirm({
+          title: 'Customise Skill',
+          desc: `Copy "${BrainApp.escapeHtml(title)}" as a customisable skill? The curated version will be disabled.`,
+          confirmLabel: 'Customise',
+          confirmClass: 'btn-primary',
+          onConfirm: () => _copySkill(Number(btn.dataset.copySkill)),
+        });
       });
     });
     el.querySelectorAll('.skill-edit-form').forEach(form => {
