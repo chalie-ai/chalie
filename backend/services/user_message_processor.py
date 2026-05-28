@@ -1,4 +1,4 @@
-# Copyright 2026 Dylan Grech
+# Copyright 2026 Chalie AI
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -90,7 +90,7 @@ class UserMessageProcessor(MessageProcessor):
 
         Reads the user_summary record (kind='system', key='user_summary') from data_graph
         and returns its value. This is a human-readable sentence that describes the user
-        (e.g. "Dylan is a software engineer based in Malta").
+        (e.g. "The user is a software engineer based in Berlin").
 
         Falls back to a static peer-to-peer framing on empty or missing record, or on
         any exception. When the row is missing, the static fallback is returned immediately.

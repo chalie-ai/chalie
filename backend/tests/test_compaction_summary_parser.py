@@ -12,9 +12,9 @@ pytestmark = pytest.mark.unit
 class TestExtractCompactionSummary:
     def test_extracts_summary_from_full_output(self):
         from services.message_processor import _extract_compaction_summary
-        raw = '<analysis>notes here</analysis><summary>Person: Dylan\nNow: coding</summary>'
+        raw = '<analysis>notes here</analysis><summary>Person: Alex\nNow: coding</summary>'
         result = _extract_compaction_summary(raw)
-        assert result == 'Person: Dylan\nNow: coding'
+        assert result == 'Person: Alex\nNow: coding'
 
     def test_extracts_summary_only_tag(self):
         from services.message_processor import _extract_compaction_summary

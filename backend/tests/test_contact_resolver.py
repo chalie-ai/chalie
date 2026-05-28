@@ -88,7 +88,7 @@ def test_resolve_filters_non_contact_keys():
     mock = _mock_dgs(recall_return=[
         {"id": 1, "key": "contact:alice@corp.com", "value": "Alice",
          "retrieval_weight": 0.9, "evidence_count": 1, "composite_score": 2.0},
-        {"id": 2, "key": "user_name", "value": "Dylan",
+        {"id": 2, "key": "user_name", "value": "Sam",
          "retrieval_weight": 0.8, "evidence_count": 1, "composite_score": 1.5},
     ])
     with patch("capabilities.contact_resolver._dgs", return_value=mock):

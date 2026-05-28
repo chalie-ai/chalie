@@ -26,7 +26,7 @@ class FilePermissionsAbility(Ability):
     POLICY_LABELS = {"": "Change file permissions"}
     EXAMPLES: ClassVar[list[str]] = [
         "make this script executable",
-        "chmod 755 /home/dylan/scripts/deploy.sh",
+        "chmod 755 /home/user/scripts/deploy.sh",
         "make this file read-only",
         "give this file 644 permissions",
         "set permissions to 600 on my ssh key",

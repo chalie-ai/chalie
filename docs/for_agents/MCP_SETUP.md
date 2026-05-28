@@ -75,7 +75,7 @@ This is the primary tool for communicating with Chalie.
 {
   "name": "talk_to_chalie",
   "arguments": {
-    "message": "What meetings does Dylan have today?",
+    "message": "What meetings do I have today?",
     "agent_name": "Claude Code",
     "project_or_task_name": "Sprint planning prep",
     "loop_in_human": false

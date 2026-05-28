@@ -1,4 +1,4 @@
-# Copyright 2026 Dylan Grech
+# Copyright 2026 Chalie AI
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 _LOGS_DIR = FileMapperService.get_logs_path()
 
 # First-failure-warning flag. Disk-full / permission errors are shouted once
-# per process so Dylan notices in the logs; subsequent failures drop to debug
+# per process so it's visible in the logs; subsequent failures drop to debug
 # to avoid spamming an already broken disk.
 _warned_on_failure = False
 _warn_lock = threading.Lock()

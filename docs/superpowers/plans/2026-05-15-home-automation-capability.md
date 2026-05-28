@@ -1331,5 +1331,5 @@ nightly tests, and Docker Compose service."
 - [ ] **Step 5: Restart chalie-dev**
 
 ```bash
-ssh grck.lan 'sudo docker restart chalie-dev'
+ssh your-server 'sudo docker restart chalie-dev'
 ```

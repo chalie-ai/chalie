@@ -258,12 +258,12 @@ class TestStore:
 
     def test_store_new_row(self, svc, db_service):
         """Basic insert: all required columns populated, FTS synced."""
-        result = svc.store(KIND_USER_SPECIFIC, 'user_name', 'Dylan')
+        result = svc.store(KIND_USER_SPECIFIC, 'user_name', 'Jordan')
 
         assert result is not None
         assert result['kind'] == KIND_USER_SPECIFIC
         assert result['key'] == 'user_name'
-        assert result['value'] == 'Dylan'
+        assert result['value'] == 'Jordan'
         assert result['evidence_count'] == 1
         assert result['retrieval_weight'] == pytest.approx(1.0)
         assert result['storage_strength'] == pytest.approx(0.5)
@@ -277,7 +277,7 @@ class TestStore:
         assert raw['deleted_at'] is None
 
         # FTS indexed — the value token should be findable
-        fts_hits = _raw_fts(db_service, '"Dylan"*')
+        fts_hits = _raw_fts(db_service, '"Jordan"*')
         assert row_id in fts_hits
 
     def test_store_reinforce_same_value_bumps_evidence(self, svc, db_service):
@@ -502,7 +502,7 @@ class TestFetch:
 
     def test_fetch_basic_returns_active_non_deleted(self, svc, db_service):
         """Default fetch returns only active, non-deleted rows."""
-        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='name', value='Dylan')
+        _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='name', value='Jordan')
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='gone', value='x',
                     deleted_at=utc_now().isoformat())
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='inactive', value='y', active=0)

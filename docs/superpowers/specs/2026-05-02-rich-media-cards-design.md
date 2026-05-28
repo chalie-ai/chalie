@@ -3,7 +3,7 @@
 **Date:** 2026-05-02
 **Status:** Approved (post-research reconciliation 2026-05-02)
 **Branch target:** rc-0.6.0 → `feature/rich-media-cards`
-**Author / sign-off:** Dylan
+**Author / sign-off:** —
 
 ## 1. Summary
 

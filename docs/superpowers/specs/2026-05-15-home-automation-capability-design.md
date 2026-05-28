@@ -367,4 +367,4 @@ Added to docker-compose.yml and registered in `ALLOWED_EXTERNAL_SERVICES` in the
 1. `cd backend && python -m utils.build_ability_db` — rebuild ability index
 2. Commit `abilities.sqlite` + `abilities_sha.json`
 3. `cd backend && pytest -m unit -q` — all unit tests pass
-4. Restart chalie-dev: `ssh grck.lan 'sudo docker restart chalie-dev'`
+4. Restart chalie-dev: `ssh your-server 'sudo docker restart chalie-dev'`
