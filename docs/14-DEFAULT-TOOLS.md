@@ -1,6 +1,6 @@
 # First-Party Abilities
 
-These abilities ship with Chalie as `Ability` subclasses under `backend/abilities/` and are invoked in-process via the ACT loop. Tool tiers are centralised on `MessageProcessor`: `ALWAYS_AVAILABLE` defaults to `["find_skills", "find_tools", "memory"]` and `DISCOVERABLE` defaults to all 21 first-party abilities. Most processors inherit these defaults; subclasses override only where needed (e.g. `_BLOCKED` to exclude specific tools). `find_tools` and `find_skills` both inherit from `SearchableAbility` (`abilities/_search.py`) which provides shared vec+FTS5 RRF fusion search.
+These abilities ship with Chalie as `Ability` subclasses under `backend/abilities/` and are invoked in-process via the ACT loop. Tool tiers are centralised on `MessageProcessor`: `ALWAYS_AVAILABLE` defaults to `["find_skills", "find_tools", "memory"]` and `DISCOVERABLE` defaults to all 22 first-party abilities. Most processors inherit these defaults; subclasses override only where needed (e.g. `_BLOCKED` to exclude specific tools). `find_tools` and `find_skills` both inherit from `SearchableAbility` (`abilities/_search.py`) which provides shared vec+FTS5 RRF fusion search.
 
 See `docs/09-TOOLS.md` for how the always-available and discoverable tiers stack and when each fires.
 
@@ -39,3 +39,17 @@ Cross-platform alternative to `bash find`/`bash grep` — ensures consistent beh
 Two actions: `glob` (filename pattern matching via `fnmatch`) and `grep` (content search via regex). `query` is required; `directory` is optional (defaults to `$HOME`). Optional `max_files` (default 10) caps the number of returned files; optional `context_lines` (default 3, grep only) controls how many lines above and below each match are shown.
 
 `glob` returns a JSON list of absolute file paths (most-recently-modified first). `grep` returns per-file results with line-numbered context snippets around each match, plus a hint to call `read` for full file contents. Grep skips files >5 MiB; symlinks are not followed (loop-safe). All contexts default to `allow` for both actions. DISCOVERABLE on every user-facing processor.
+
+## Git
+
+Read and write GitHub and GitLab repositories. Requires the Git capability to be enabled and configured in Brain → Capabilities.
+
+**Authentication:** works without a token (public repos, read-only). Add a Personal Access Token to unlock private repo access and all write actions.
+
+**Self-hosted:** set the `host` field (e.g. `https://gitlab.example.com`) to target a self-hosted GitHub Enterprise or GitLab instance. The host must be reachable over HTTPS; private/loopback ranges are blocked via the shared SSRF guard.
+
+**Architecture:** hybrid — git CLI (`clone`, `diff`, `commit`, `push`) plus REST API (`get_repo`, `list_branches`, `list_commits`, `get_commit`, `list_prs`, `get_pr`, `list_issues`, `get_issue`, `list_releases`, `search_repos`, `read_file`, `create_pr`, `merge_pr`). 17 actions total.
+
+**Workspace lifecycle:** `clone` creates a shallow temp directory (`--depth 1` by default; `full=true` for a complete clone). Use existing file tools (`file_write`, `search_files`, `bash`) to edit files in the workspace, then call `commit` (stage explicit paths only) and `push`. Force-push and pushes to default/protected branches are unconditionally blocked. Stale workspaces older than 6 hours are cleaned at the start of each `clone`.
+
+**Policy:** all READ actions are `allow` in every channel. WRITE actions (`commit`, `push`, `create_pr`, `merge_pr`) are `ask` in chat and subagent, `deny` in subconscious and external_agent. TIMEOUT = 120 s. DISCOVERABLE only.

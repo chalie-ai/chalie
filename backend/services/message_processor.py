@@ -168,6 +168,7 @@ class MessageProcessor:
         "email",
         "file_permissions",
         "file_write",
+        "git",
         "home",
         "list",
         "news",

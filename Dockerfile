@@ -10,7 +10,7 @@ ARG BRANCH=
 ARG TAG=
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates bash tar \
+ && apt-get install -y --no-install-recommends curl ca-certificates bash tar git \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://raw.githubusercontent.com/chalie-ai/chalie/main/installer/install.sh -o /tmp/install.sh \
  && bash /tmp/install.sh ${BRANCH:+--branch="$BRANCH"} ${TAG:+--tag="$TAG"} \

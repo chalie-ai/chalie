@@ -1,0 +1,25 @@
+id: git
+name: Git
+version: 1.0.0
+entry_class: GitCapability
+description: "Read public repos with no token; with a Personal Access Token, read private repos and push code / open & merge PRs/MRs. Works with GitHub and GitLab (incl. self-hosted)."
+providers:
+  - local
+fields:
+  - name: provider
+    label: Provider
+    type: select
+    required: true
+    default: github
+    options:
+      - {value: github, label: GitHub}
+      - {value: gitlab, label: GitLab}
+  - name: host
+    label: Custom host (self-hosted GHE / GitLab)
+    type: text
+    required: false
+    placeholder: "https://gitlab.example.com"
+  - name: token
+    label: "Personal Access Token (optional — blank = public read-only)"
+    type: password
+    required: false
