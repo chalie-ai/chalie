@@ -252,16 +252,19 @@ class GitCapability(AbstractCapability):
         return env
 
     @staticmethod
-    def _write_askpass_script(path: str) -> None:
-        """Write a minimal GIT_ASKPASS script that emits GIT_TOKEN to stdout.
+    def _write_askpass_script() -> str:
+        """Create a GIT_ASKPASS script in its own temp file and return its path.
 
-        Mode is 0o700 — readable and executable only by the owner.
-        Deleted in a finally block by the caller.
+        The script MUST NOT live inside a workspace: for clone the workspace is
+        the destination directory and git refuses to clone into a non-empty dir;
+        for commit a stray script in the tree risks being staged. Mode is 0o700.
+        The caller deletes it in a finally block.
         """
-        content = "#!/bin/sh\nprintf '%s' \"$GIT_TOKEN\"\n"
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(content)
+        fd, path = tempfile.mkstemp(prefix="chalie_git_askpass_", suffix=".sh")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("#!/bin/sh\nprintf '%s' \"$GIT_TOKEN\"\n")
         os.chmod(path, stat.S_IRWXU)
+        return path
 
     def _git(self, args: list[str], cwd: str | None = None,
              env: dict | None = None, timeout: int = 60) -> tuple[int, str, str]:
@@ -300,8 +303,8 @@ class GitCapability(AbstractCapability):
             return f"https://github.com/{owner}/{repo}.git"
         # GitLab
         host_part = self._host or "gitlab.com"
-        # Strip scheme for URL assembly
-        host_part = host_part.replace("https://", "").replace("http://", "").rstrip("/")
+        # _host is validated https:// at configure time; strip the scheme for URL assembly.
+        host_part = host_part.removeprefix("https://").rstrip("/")
         if self._authenticated:
             return f"https://oauth2@{host_part}/{owner}/{repo}.git"
         return f"https://gitlab.com/{owner}/{repo}.git"
@@ -528,10 +531,10 @@ class GitCapability(AbstractCapability):
 
         self._sweep_old_workspaces()
         workspace = tempfile.mkdtemp(prefix="chalie_git_")
-        askpass = os.path.join(workspace, ".askpass.sh")
+        askpass = ""
 
         try:
-            self._write_askpass_script(askpass)
+            askpass = self._write_askpass_script()
             env = self._build_clone_env(askpass)
             clone_url = self._clone_url(owner, repo)
 
@@ -605,9 +608,9 @@ class GitCapability(AbstractCapability):
                 return {"status": "error", "error": str(exc)}
             diff_args += [ref]
 
-        askpass = os.path.join(workspace, ".askpass.sh")
+        askpass = ""
         try:
-            self._write_askpass_script(askpass)
+            askpass = self._write_askpass_script()
             env = self._build_clone_env(askpass)
             rc, stdout, stderr = self._git(diff_args, cwd=workspace, env=env)
             if rc != 0:
@@ -654,9 +657,9 @@ class GitCapability(AbstractCapability):
         except ValueError as exc:
             return {"status": "error", "error": str(exc)}
 
-        askpass = os.path.join(workspace, ".askpass.sh")
+        askpass = ""
         try:
-            self._write_askpass_script(askpass)
+            askpass = self._write_askpass_script()
             env = self._build_clone_env(askpass)
 
             if new_branch:
@@ -708,9 +711,9 @@ class GitCapability(AbstractCapability):
             except ValueError as exc:
                 return {"status": "error", "error": str(exc)}
 
-        askpass = os.path.join(workspace, ".askpass.sh")
+        askpass = ""
         try:
-            self._write_askpass_script(askpass)
+            askpass = self._write_askpass_script()
             env = self._build_clone_env(askpass)
 
             # Determine local branch.

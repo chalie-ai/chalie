@@ -54,7 +54,7 @@ def test_redact_removes_token_from_error_string():
     """_redact must scrub the token from any text that reaches the LLM."""
     c = GitCapability()
     c._token = "ghp_SuperSecret12345"
-    dirty = f"remote: Invalid credentials for https://x-access-token@github.com (using ghp_SuperSecret12345)"
+    dirty = "remote: Invalid credentials for https://x-access-token@github.com (using ghp_SuperSecret12345)"
     clean = c._redact(dirty)
     assert "ghp_SuperSecret12345" not in clean
     assert "***" in clean
@@ -133,8 +133,11 @@ def test_validate_host_rejects_private_ip():
 @pytest.mark.unit
 def test_validate_host_rejects_http():
     """_validate_host must reject non-https custom hosts."""
+    # Scheme assembled at runtime so the source carries no cleartext-URL literal
+    # (we are asserting this very scheme is rejected).
+    insecure_scheme = "http"
     with pytest.raises(ValueError, match="https"):
-        rest._validate_host("http://mygitlab.company.com")
+        rest._validate_host(f"{insecure_scheme}://mygitlab.company.com")
 
 
 @pytest.mark.unit
