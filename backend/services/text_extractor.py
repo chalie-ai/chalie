@@ -9,7 +9,7 @@ Supported formats:
   - PDF         (pdfplumber)
   - DOCX        (python-docx)
   - PPTX        (python-pptx)
-  - HTML        (trafilatura → BeautifulSoup → regex strip)
+  - HTML        (trafilatura)
   - Plain text  (direct read)
   - Markdown    (direct read)
   - Any text/*  (direct read)
@@ -72,66 +72,22 @@ def extract_text(file_path: str, mime_type: str = None) -> str:
 
 def extract_html(html: str, url: str = None) -> str:
     """
-    Extract clean, readable text from an HTML string.
+    Extract clean, readable text from an HTML string via trafilatura.
 
-    Extraction pipeline:
-      1. trafilatura — best-in-class article extraction with boilerplate removal
-      2. BeautifulSoup — aggressive noise stripping (ads, nav, sidebars, hidden elements)
-      3. Regex strip — last resort, removes all tags and normalizes whitespace
-
-    Returns empty string if all methods fail or produce no content.
+    Returns empty string if extraction fails or produces no content.
     """
     if not html or not html.strip():
         return ''
 
-    # 1. trafilatura (primary) — trusts its result regardless of length
     try:
         import trafilatura
         content = trafilatura.extract(html, url=url, include_comments=False, include_links=True)
         if content and content.strip():
             return content.strip()
-    except ImportError:
-        logger.warning('[TEXT EXTRACTOR] trafilatura not installed — falling back to BeautifulSoup')
     except Exception as e:
         logger.debug(f'[TEXT EXTRACTOR] trafilatura failed: {e}')
 
-    # 2. BeautifulSoup with aggressive ad/noise stripping
-    try:
-        from bs4 import BeautifulSoup
-
-        soup = BeautifulSoup(html, 'html.parser')
-
-        # Remove structural noise elements
-        for tag in soup(['script', 'style', 'nav', 'footer', 'header',
-                         'aside', 'noscript', 'iframe', 'form']):
-            tag.decompose()
-
-        # Remove ad-like and UI noise elements by class/id pattern
-        _noise_pattern = re.compile(
-            r'ad[-_s]|sidebar|banner|popup|modal|cookie|consent|newsletter|'
-            r'promo|overlay|lightbox|widget|share[-_]|social[-_]|comment[-_]',
-            re.IGNORECASE,
-        )
-        for el in soup.find_all(class_=_noise_pattern):
-            el.decompose()
-        for el in soup.find_all(id=_noise_pattern):
-            el.decompose()
-
-        # Remove hidden elements
-        for el in soup.find_all(style=re.compile(r'display\s*:\s*none', re.IGNORECASE)):
-            el.decompose()
-
-        text = soup.get_text(separator='\n', strip=True)
-        if text.strip():
-            return text.strip()
-
-    except ImportError:
-        logger.warning('[TEXT EXTRACTOR] BeautifulSoup not installed — falling back to regex strip')
-    except Exception as e:
-        logger.debug(f'[TEXT EXTRACTOR] BeautifulSoup extraction failed: {e}')
-
-    # 3. Regex strip (last resort)
-    return _strip_html_tags(html)
+    return ''
 
 
 def normalize_text(text: str) -> str:
@@ -312,17 +268,3 @@ def _extract_image(path: str) -> str:
     if result.get('error'):
         logger.warning(f"[TEXT EXTRACTOR] Image OCR failed: {result['error']}")
     return result.get('ocr_text') or ''
-
-
-def _strip_html_tags(html: str) -> str:
-    """
-    Last-resort HTML-to-text: remove scripts/styles/tags and decode entities.
-
-    Not as clean as trafilatura or BeautifulSoup but requires zero dependencies.
-    """
-    text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<[^>]+>', ' ', text)
-    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-    text = text.replace('&quot;', '"').replace('&#39;', "'").replace('&nbsp;', ' ')
-    return re.sub(r'\s+', ' ', text).strip()

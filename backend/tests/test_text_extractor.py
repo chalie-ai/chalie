@@ -46,18 +46,8 @@ class TestExtractHtml:
             result = te.extract_html(html, url='https://example.com')
         assert 'Real article content' in result
 
-    @pytest.mark.skipif(
-        __import__('importlib').util.find_spec('bs4') is None,
-        reason="beautifulsoup4 not installed",
-    )
-    def test_trafilatura_returns_none_falls_to_bs4(self):
-        html = (
-            "<html><body>"
-            "<nav>Nav noise</nav>"
-            "<article>Actual content.</article>"
-            "<footer>Footer noise</footer>"
-            "</body></html>"
-        )
+    def test_trafilatura_returns_none_returns_empty(self):
+        html = "<html><body><article>Actual content.</article></body></html>"
         mock_traf = MagicMock()
         mock_traf.extract.return_value = None
         with patch.dict('sys.modules', {'trafilatura': mock_traf}):
@@ -65,19 +55,16 @@ class TestExtractHtml:
             import services.text_extractor as te
             importlib.reload(te)
             result = te.extract_html(html)
-        # BS4 fallback should strip nav/footer
-        assert 'Actual content' in result
-        assert 'Nav noise' not in result
-        assert 'Footer noise' not in result
+        assert result == ''
 
-    def test_trafilatura_import_error_falls_to_bs4(self):
+    def test_trafilatura_import_error_returns_empty(self):
         html = "<html><body><p>Content here.</p></body></html>"
         with patch.dict('sys.modules', {'trafilatura': None}):
             import importlib
             import services.text_extractor as te
             importlib.reload(te)
             result = te.extract_html(html)
-        assert isinstance(result, str)
+        assert result == ''
 
     def test_empty_html_returns_empty(self):
         from services.text_extractor import extract_html
