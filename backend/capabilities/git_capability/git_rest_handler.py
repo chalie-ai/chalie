@@ -15,22 +15,19 @@ Auth:
 SSRF: custom hosts are validated via is_private_url() before any request.
 Rate-limit surfacing: GitHub 403/429 → read X-RateLimit-* headers; GitLab
   403/429 → read RateLimit-* headers. Never return empty-success on throttle.
-SSL: try verify=True, catch SSLError, retry verify=False with debug log.
+SSL: certificate validation is always on — this client carries a PAT, so a
+  silent verify=False fallback would risk leaking the token to a MITM.
 Output bounding: list endpoints honour per_page/max caps; file/diff capped.
 """
 
 from __future__ import annotations
 
-import logging
 from urllib.parse import quote
 
 import requests
-from requests.exceptions import SSLError
 
 # is_private_url reused from the shared SSRF guard (TKT-619).
 from abilities._ssrf import is_private_url
-
-logger = logging.getLogger(__name__)
 
 _TIMEOUT = 20
 _MAX_PER_PAGE = 30
@@ -96,36 +93,18 @@ def _validate_host(host: str) -> None:
 
 
 def _get(url: str, headers: dict, params: dict | None = None) -> requests.Response:
-    """GET with SSL fallback; returns raw Response for caller inspection."""
-    try:
-        return requests.get(url, headers=headers, params=params,
-                            timeout=_TIMEOUT, verify=True)
-    except SSLError:
-        logger.debug("[git] SSL verify failed for %s; retrying with verify=False", url)
-        return requests.get(url, headers=headers, params=params,
-                            timeout=_TIMEOUT, verify=False)
+    """GET with certificate validation always on; returns raw Response."""
+    return requests.get(url, headers=headers, params=params, timeout=_TIMEOUT)
 
 
 def _post(url: str, headers: dict, json_body: dict) -> requests.Response:
-    """POST with SSL fallback; returns raw Response for caller inspection."""
-    try:
-        return requests.post(url, headers=headers, json=json_body,
-                             timeout=_TIMEOUT, verify=True)
-    except SSLError:
-        logger.debug("[git] SSL verify failed for %s; retrying with verify=False", url)
-        return requests.post(url, headers=headers, json=json_body,
-                             timeout=_TIMEOUT, verify=False)
+    """POST with certificate validation always on; returns raw Response."""
+    return requests.post(url, headers=headers, json=json_body, timeout=_TIMEOUT)
 
 
 def _put(url: str, headers: dict, json_body: dict) -> requests.Response:
-    """PUT with SSL fallback; returns raw Response for caller inspection."""
-    try:
-        return requests.put(url, headers=headers, json=json_body,
-                            timeout=_TIMEOUT, verify=True)
-    except SSLError:
-        logger.debug("[git] SSL verify failed for %s; retrying with verify=False", url)
-        return requests.put(url, headers=headers, json=json_body,
-                            timeout=_TIMEOUT, verify=False)
+    """PUT with certificate validation always on; returns raw Response."""
+    return requests.put(url, headers=headers, json=json_body, timeout=_TIMEOUT)
 
 
 def _check_rate_limit(resp: requests.Response, provider: str) -> dict | None:
