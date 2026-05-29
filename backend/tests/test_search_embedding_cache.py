@@ -8,7 +8,6 @@ EmbeddingService is always mocked (569MB ONNX model).
 import sqlite3
 import sys
 import types
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -166,7 +165,7 @@ class TestSearchExecute:
 # ── generate_search_cache.py ─────────────────────────────────────────────────
 
 import importlib.util as _importlib_util  # noqa: E402
-import re as _re
+import re as _re  # noqa: E402
 
 _GENERATOR = FileMapperService.get_backend_path("utils", "generate_search_cache.py")
 
