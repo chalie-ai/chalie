@@ -29,9 +29,10 @@ import requests
 # is_private_url reused from the shared SSRF guard (TKT-619).
 from abilities._ssrf import is_private_url
 
-_TIMEOUT = 20
+# 30-minute safety net on REST calls — only guards against a hung connection,
+# never against slow-but-valid responses.
+_TIMEOUT = 1800
 _MAX_PER_PAGE = 30
-_MAX_FILE_BYTES = 512_000   # 500 KB cap on raw file content surfaced to LLM
 
 _GH_API_BASE = "https://api.github.com"
 _GH_VERSION_HEADER = "2022-11-28"
@@ -155,7 +156,7 @@ def _raise_for_status(resp: requests.Response, provider: str, context: str) -> d
         body = resp.json()
         message = body.get("message") or body.get("error") or str(body)
     except Exception:
-        message = resp.text[:500]
+        message = resp.text
     return {
         "status": "error",
         "error": f"[git:{context}] HTTP {resp.status_code}: {message}",
@@ -281,14 +282,14 @@ def list_commits(provider: str, host: str | None, token: str | None,
     for c in raw:
         if provider == "github":
             commits.append({
-                "sha": c.get("sha", "")[:10],
+                "sha": c.get("sha", ""),
                 "message": (c.get("commit", {}).get("message") or "").split("\n")[0],
                 "author": c.get("commit", {}).get("author", {}).get("name"),
                 "date": c.get("commit", {}).get("author", {}).get("date"),
             })
         else:
             commits.append({
-                "sha": (c.get("id") or "")[:10],
+                "sha": (c.get("id") or ""),
                 "message": (c.get("title") or ""),
                 "author": c.get("author_name"),
                 "date": c.get("committed_date"),
@@ -311,11 +312,11 @@ def get_commit(provider: str, host: str | None, token: str | None,
         files = [
             {"filename": f.get("filename"), "status": f.get("status"),
              "additions": f.get("additions"), "deletions": f.get("deletions")}
-            for f in data.get("files", [])[:20]
+            for f in data.get("files", [])
         ]
         return {
             "status": "ok",
-            "sha": data.get("sha", "")[:10],
+            "sha": data.get("sha", ""),
             "message": data.get("commit", {}).get("message"),
             "author": data.get("commit", {}).get("author", {}).get("name"),
             "date": data.get("commit", {}).get("author", {}).get("date"),
@@ -331,9 +332,9 @@ def get_commit(provider: str, host: str | None, token: str | None,
     files = [
         {"filename": d.get("new_path"), "status": "modified",
          "additions": None, "deletions": None}
-        for d in diffs[:20]
+        for d in diffs
     ]
-    return {"status": "ok", "sha": sha[:10], "files": files}
+    return {"status": "ok", "sha": sha, "files": files}
 
 
 def list_prs(provider: str, host: str | None, token: str | None,
@@ -386,8 +387,7 @@ def get_pr(provider: str, host: str | None, token: str | None,
             "status": "ok",
             "number": data.get("number"),
             "title": data.get("title"),
-            "body": raw_body[:2000],
-            "body_truncated": len(raw_body) > 2000,
+            "body": raw_body,
             "state": data.get("state"),
             "author": data.get("user", {}).get("login"),
             "branch": data.get("head", {}).get("ref"),
@@ -407,8 +407,7 @@ def get_pr(provider: str, host: str | None, token: str | None,
         "status": "ok",
         "number": data.get("iid"),
         "title": data.get("title"),
-        "body": raw_body[:2000],
-        "body_truncated": len(raw_body) > 2000,
+        "body": raw_body,
         "state": data.get("state"),
         "author": data.get("author", {}).get("username"),
         "branch": data.get("source_branch"),
@@ -470,8 +469,7 @@ def get_issue(provider: str, host: str | None, token: str | None,
             "status": "ok",
             "number": data.get("number"),
             "title": data.get("title"),
-            "body": raw_body[:2000],
-            "body_truncated": len(raw_body) > 2000,
+            "body": raw_body,
             "state": data.get("state"),
             "author": data.get("user", {}).get("login"),
             "labels": [lb.get("name") for lb in data.get("labels", [])],
@@ -489,8 +487,7 @@ def get_issue(provider: str, host: str | None, token: str | None,
         "status": "ok",
         "number": data.get("iid"),
         "title": data.get("title"),
-        "body": raw_body[:2000],
-        "body_truncated": len(raw_body) > 2000,
+        "body": raw_body,
         "state": data.get("state"),
         "author": data.get("author", {}).get("username"),
         "labels": data.get("labels", []),
@@ -569,7 +566,7 @@ def read_file(provider: str, host: str | None, token: str | None,
               owner: str, repo: str, path: str, ref: str | None = None) -> dict:
     """Read a single file from a repository without cloning.
 
-    Uses the REST contents/blob API; caps output at _MAX_FILE_BYTES.
+    Uses the REST contents/blob API; returns the full file content.
     """
     import base64
     base = _base_url(provider, host)
@@ -585,18 +582,14 @@ def read_file(provider: str, host: str | None, token: str | None,
             return err
         data = resp.json()
         if data.get("encoding") == "base64":
-            raw = base64.b64decode(data["content"].replace("\n", ""))
-            content = raw[:_MAX_FILE_BYTES].decode("utf-8", errors="replace")
-            truncated = len(raw) > _MAX_FILE_BYTES
+            content = base64.b64decode(data["content"].replace("\n", "")).decode("utf-8", errors="replace")
         else:
-            content = data.get("content", "")[:_MAX_FILE_BYTES]
-            truncated = False
+            content = data.get("content", "")
         return {
             "status": "ok",
             "path": data.get("path"),
             "size": data.get("size"),
             "content": content,
-            "truncated": truncated,
         }
     pid = _gl_project_id(owner, repo)
     encoded_path = quote(path, safe="")
@@ -608,18 +601,14 @@ def read_file(provider: str, host: str | None, token: str | None,
         return err
     data = resp.json()
     if data.get("encoding") == "base64":
-        raw = base64.b64decode(data.get("content", ""))
-        content = raw[:_MAX_FILE_BYTES].decode("utf-8", errors="replace")
-        truncated = len(raw) > _MAX_FILE_BYTES
+        content = base64.b64decode(data.get("content", "")).decode("utf-8", errors="replace")
     else:
-        content = data.get("content", "")[:_MAX_FILE_BYTES]
-        truncated = False
+        content = data.get("content", "")
     return {
         "status": "ok",
         "path": data.get("file_path"),
         "size": data.get("size"),
         "content": content,
-        "truncated": truncated,
     }
 
 
@@ -678,7 +667,7 @@ def merge_pr(provider: str, host: str | None, token: str | None,
         if err:
             return err
         data = resp.json()
-        return {"status": "ok", "merged": data.get("merged"), "sha": (data.get("sha") or "")[:10]}
+        return {"status": "ok", "merged": data.get("merged"), "sha": (data.get("sha") or "")}
     pid = _gl_project_id(owner, repo)
     url = f"{api_base}/projects/{pid}/merge_requests/{pr_number}/merge"
     body = {}
@@ -690,4 +679,4 @@ def merge_pr(provider: str, host: str | None, token: str | None,
         return err
     data = resp.json()
     return {"status": "ok", "merged": data.get("state") == "merged",
-            "sha": (data.get("merge_commit_sha") or "")[:10]}
+            "sha": (data.get("merge_commit_sha") or "")}

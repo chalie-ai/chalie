@@ -208,8 +208,8 @@ def test_anonymous_clone_read_file_and_diff_on_public_repo(cap, github_online):
             f"diff failed: {diff_result.get('error')}"
         )
         # An unmodified shallow clone produces an empty diff — that is expected.
+        # The full diff is returned untruncated (no size cap, no truncated flag).
         assert "diff" in diff_result
-        assert diff_result.get("truncated") is False
 
     finally:
         shutil.rmtree(workspace, ignore_errors=True)

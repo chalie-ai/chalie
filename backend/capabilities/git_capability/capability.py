@@ -52,9 +52,10 @@ _UNSAFE_ARG_RE = re.compile(r"[;&|`$<>!\\\"'{}()\[\]*?\s]")
 # Rejects path traversal (e.g. "org/../../admin") and double-dot segments.
 _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
-# Maximum diff / workspace file-listing output bytes surfaced to the LLM.
-_MAX_DIFF_BYTES = 256_000
-_MAX_LISTING = 200
+# Safety-net timeout for every git subprocess and REST call (30 minutes).
+# Git clone/push on large repos legitimately runs for several minutes; this only
+# guards against a genuinely hung process, never against slow-but-valid work.
+_TIMEOUT_SECONDS = 1800
 
 
 class GitCapability(AbstractCapability):
@@ -267,7 +268,7 @@ class GitCapability(AbstractCapability):
         return path
 
     def _git(self, args: list[str], cwd: str | None = None,
-             env: dict | None = None, timeout: int = 60) -> tuple[int, str, str]:
+             env: dict | None = None, timeout: int = _TIMEOUT_SECONDS) -> tuple[int, str, str]:
         """Run a git command and return (returncode, stdout, stderr).
 
         Always injects -c core.hooksPath=/dev/null and -c credential.helper=
@@ -547,21 +548,21 @@ class GitCapability(AbstractCapability):
                 clone_args.append("--")
             clone_args += [clone_url, workspace]
 
-            rc, stdout, stderr = self._git(clone_args, timeout=120, env=env)
+            rc, stdout, stderr = self._git(clone_args, env=env)
             if rc != 0:
                 shutil.rmtree(workspace, ignore_errors=True)
                 return {"status": "error", "error": f"git clone failed: {stderr.strip()}"}
 
-            # Collect top-level file listing (bounded).
+            # Collect top-level file listing.
             try:
                 entries = sorted(os.listdir(workspace))
-                files = [e for e in entries if e != ".git"][:_MAX_LISTING]
+                files = [e for e in entries if e != ".git"]
             except OSError:
                 files = []
 
             # Read HEAD sha.
             rc2, head_sha, _ = self._git(["rev-parse", "HEAD"], cwd=workspace, env=env)
-            head = head_sha.strip()[:10] if rc2 == 0 else ""
+            head = head_sha.strip() if rc2 == 0 else ""
 
             # Detect checked-out branch.
             rc3, branch_out, _ = self._git(
@@ -615,9 +616,7 @@ class GitCapability(AbstractCapability):
             rc, stdout, stderr = self._git(diff_args, cwd=workspace, env=env)
             if rc != 0:
                 return {"status": "error", "error": f"git diff failed: {stderr.strip()}"}
-            output = stdout[:_MAX_DIFF_BYTES]
-            truncated = len(stdout) > _MAX_DIFF_BYTES
-            return {"status": "ok", "diff": output, "truncated": truncated}
+            return {"status": "ok", "diff": stdout}
         finally:
             try:
                 os.remove(askpass)
@@ -682,7 +681,7 @@ class GitCapability(AbstractCapability):
                 return {"status": "error", "error": f"git commit failed: {stderr.strip()}"}
 
             rc2, sha_out, _ = self._git(["rev-parse", "HEAD"], cwd=workspace, env=env)
-            sha = sha_out.strip()[:10] if rc2 == 0 else ""
+            sha = sha_out.strip() if rc2 == 0 else ""
             return {"status": "ok", "sha": sha, "paths_committed": paths}
         finally:
             try:
@@ -742,11 +741,11 @@ class GitCapability(AbstractCapability):
             else:
                 push_args += [local_branch]
 
-            rc, stdout, stderr = self._git(push_args, cwd=workspace, env=env, timeout=120)
+            rc, stdout, stderr = self._git(push_args, cwd=workspace, env=env)
             if rc != 0:
                 return {"status": "error", "error": f"git push failed: {stderr.strip()}"}
             full = (stdout + stderr).strip()
-            return {"status": "ok", "branch": target, "output": full[:500], "truncated": len(full) > 500}
+            return {"status": "ok", "branch": target, "output": full}
         finally:
             try:
                 os.remove(askpass)
@@ -807,21 +806,21 @@ class GitCapability(AbstractCapability):
             {
                 "name": "get_repo",
                 "handler": self._th_get_repo,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Fetch metadata for a GitHub or GitLab repository.",
                 "parameters": _repo_params,
             },
             {
                 "name": "list_branches",
                 "handler": self._th_list_branches,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "List branches for a repository.",
                 "parameters": _repo_params,
             },
             {
                 "name": "list_commits",
                 "handler": self._th_list_commits,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "List recent commits for a repository.",
                 "parameters": {
                     **_repo_params,
@@ -831,7 +830,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "get_commit",
                 "handler": self._th_get_commit,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Fetch details and changed files for a single commit.",
                 "parameters": {
                     **_repo_params,
@@ -841,7 +840,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "list_prs",
                 "handler": self._th_list_prs,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "List pull/merge requests for a repository.",
                 "parameters": {
                     **_repo_params,
@@ -852,7 +851,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "get_pr",
                 "handler": self._th_get_pr,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Fetch details for a single pull/merge request.",
                 "parameters": {
                     **_repo_params,
@@ -862,7 +861,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "list_issues",
                 "handler": self._th_list_issues,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "List issues for a repository.",
                 "parameters": {
                     **_repo_params,
@@ -873,7 +872,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "get_issue",
                 "handler": self._th_get_issue,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Fetch details for a single issue.",
                 "parameters": {
                     **_repo_params,
@@ -883,14 +882,14 @@ class GitCapability(AbstractCapability):
             {
                 "name": "list_releases",
                 "handler": self._th_list_releases,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "List releases for a repository.",
                 "parameters": _repo_params,
             },
             {
                 "name": "search_repos",
                 "handler": self._th_search_repos,
-                "timeout": 15,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Search public repositories by keyword.",
                 "parameters": {
                     "query": {"type": "string", "description": "Search keywords."},
@@ -899,7 +898,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "read_file",
                 "handler": self._th_read_file,
-                "timeout": 20,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Read a single file from a repository without cloning.",
                 "parameters": {
                     **_repo_params,
@@ -911,7 +910,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "clone",
                 "handler": self._th_clone,
-                "timeout": 120,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": (
                     "Clone a repository to a local workspace for editing. "
                     "Returns workspace path, branch, and top-level file listing. "
@@ -926,7 +925,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "diff",
                 "handler": self._th_diff,
-                "timeout": 30,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Show git diff for a workspace (unstaged, staged, or vs a ref).",
                 "parameters": {
                     "workspace": {"type": "string", "description": "Path to an existing cloned workspace."},
@@ -938,7 +937,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "commit",
                 "handler": self._th_commit,
-                "timeout": 30,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": (
                     "Stage explicit file paths and create a commit in a cloned workspace. "
                     "Never stages all files; 'paths' must be provided explicitly. "
@@ -955,7 +954,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "push",
                 "handler": self._th_push,
-                "timeout": 120,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": (
                     "Push the current workspace branch to the remote. "
                     "Blocked on protected/default branches (main, master, develop, trunk). "
@@ -970,7 +969,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "create_pr",
                 "handler": self._th_create_pr,
-                "timeout": 30,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Open a new pull request (GitHub) or merge request (GitLab).",
                 "parameters": {
                     **_repo_params,
@@ -983,7 +982,7 @@ class GitCapability(AbstractCapability):
             {
                 "name": "merge_pr",
                 "handler": self._th_merge_pr,
-                "timeout": 30,
+                "timeout": _TIMEOUT_SECONDS,
                 "description": "Merge an open pull/merge request. Requires a Personal Access Token.",
                 "parameters": {
                     **_repo_params,

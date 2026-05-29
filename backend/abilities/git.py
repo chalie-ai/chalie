@@ -188,7 +188,7 @@ class GitAbility(Ability):
         },
         "required": ["action"],
     }
-    TIMEOUT = 120  # clone and push can be slow on large repos
+    TIMEOUT = 1800  # 30-minute safety net — clone/push on large repos can run for minutes
 
     def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         """Delegate to GitCapability.act() — the single source of name→handler dispatch."""
