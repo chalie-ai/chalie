@@ -2,12 +2,17 @@
 
 Runs the generator against the real YAML and a temp DB so the production asset
 is never touched. Marked as integration because the embedding model is required.
+
+Row counts are derived dynamically from the source YAML the generator reads, so
+the suite never goes stale when concepts or aliases are added/removed. The LUT
+stores one row per *label* (canonical_key + every alias), so the total row count
+is always >= the number of distinct canonical keys.
 """
 
 import sqlite3
-from pathlib import Path
 
 import pytest
+import yaml
 
 from services.file_mapper_service import FileMapperService
 
@@ -16,9 +21,29 @@ pytestmark = pytest.mark.integration
 _YAML_PATH = FileMapperService.get_concept_lut_yaml_path()
 
 
+def _canonical_keys_from_yaml() -> set[str]:
+    """Return the set of distinct canonical keys declared in the source YAML."""
+    with open(_YAML_PATH) as f:
+        data = yaml.safe_load(f)
+    return {c["canonical_key"] for c in data.get("concepts", [])}
+
+
+def _encoder_available() -> bool:
+    """True when the ONNX embedding encoder can produce an embedding locally."""
+    try:
+        from services.embedding_service import EmbeddingService
+
+        EmbeddingService().generate_embeddings_batch(["probe"])
+        return True
+    except Exception:
+        return False
+
+
 def _run_generator(db_path: str) -> None:
     """Invoke the generator with an overridden output path."""
     import utils.generate_concept_lut as gen
+    from pathlib import Path
+
     original_db = gen._DB_PATH
     try:
         gen._DB_PATH = Path(db_path)
@@ -38,28 +63,43 @@ def _open_lut(db_path: str) -> sqlite3.Connection:
     return conn
 
 
+def _require_generator_prereqs() -> None:
+    """Skip when the YAML asset or the embedding encoder is unavailable."""
+    if not _YAML_PATH.exists():
+        pytest.skip(f"YAML not found at {_YAML_PATH}")
+    if not _encoder_available():
+        pytest.skip("ONNX embedding encoder unavailable")
+
+
 class TestGenerateConceptLut:
 
-    def test_produces_27_concepts(self, tmp_path):
-        """Generator embeds all 27 canonical keys from the v3 YAML."""
-        if not _YAML_PATH.exists():
-            pytest.skip(f"YAML not found at {_YAML_PATH}")
+    def test_row_count_covers_every_canonical_key(self, tmp_path):
+        """Generator embeds one row per label — at least one per canonical key."""
+        _require_generator_prereqs()
 
+        expected_canonical = len(_canonical_keys_from_yaml())
         db_path = str(tmp_path / "concept_lut_test.sqlite")
         _run_generator(db_path)
 
         conn = _open_lut(db_path)
         try:
-            count = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
+            total = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
+            distinct = conn.execute(
+                "SELECT count(DISTINCT canonical_key) FROM lut_concepts"
+            ).fetchone()[0]
         finally:
             conn.close()
 
-        assert count == 27, f"Expected 27 concepts (v3 LUT), got {count}"
+        assert distinct == expected_canonical, (
+            f"Expected {expected_canonical} distinct canonical keys, got {distinct}"
+        )
+        assert total >= expected_canonical, (
+            f"Expected at least {expected_canonical} label rows, got {total}"
+        )
 
     def test_embeddings_count_matches_concepts(self, tmp_path):
         """One embedding row per concept — no orphan or missing embeddings."""
-        if not _YAML_PATH.exists():
-            pytest.skip(f"YAML not found at {_YAML_PATH}")
+        _require_generator_prereqs()
 
         db_path = str(tmp_path / "concept_lut_test.sqlite")
         _run_generator(db_path)
@@ -74,26 +114,24 @@ class TestGenerateConceptLut:
         assert n_embeddings == n_concepts
 
     def test_idempotent_second_run_replaces_cleanly(self, tmp_path):
-        """Running the generator twice produces the same 27-row result — no duplicates."""
-        if not _YAML_PATH.exists():
-            pytest.skip(f"YAML not found at {_YAML_PATH}")
+        """Running the generator twice produces the same result — no duplicates."""
+        _require_generator_prereqs()
 
+        expected_canonical = len(_canonical_keys_from_yaml())
         db_path = str(tmp_path / "concept_lut_test.sqlite")
         _run_generator(db_path)
+        first = _row_count(db_path)
         _run_generator(db_path)  # second run — must not duplicate rows
+        second = _row_count(db_path)
 
-        conn = _open_lut(db_path)
-        try:
-            count = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
-        finally:
-            conn.close()
-
-        assert count == 27, f"After 2 runs: expected 27, got {count}"
+        assert first == second, f"Row count changed between runs: {first} -> {second}"
+        assert second >= expected_canonical, (
+            f"After 2 runs: expected at least {expected_canonical}, got {second}"
+        )
 
     def test_rules_are_valid_values(self, tmp_path):
         """Every rule column value must be one of: temporal, coexist, immutable."""
-        if not _YAML_PATH.exists():
-            pytest.skip(f"YAML not found at {_YAML_PATH}")
+        _require_generator_prereqs()
 
         valid_rules = {'temporal', 'coexist', 'immutable'}
         db_path = str(tmp_path / "concept_lut_test.sqlite")
@@ -108,21 +146,34 @@ class TestGenerateConceptLut:
         invalid = [r[0] for r in rows if r[0] not in valid_rules]
         assert not invalid, f"Invalid rule values found: {invalid}"
 
-    def test_canonical_keys_are_unique(self, tmp_path):
-        """No duplicate canonical_key values in lut_concepts."""
-        if not _YAML_PATH.exists():
-            pytest.skip(f"YAML not found at {_YAML_PATH}")
+    def test_canonical_keys_match_yaml(self, tmp_path):
+        """The distinct canonical keys in the DB match the source YAML set.
 
+        Each alias gets its own row pointing to the same canonical_key, so the
+        invariant is on the *distinct* canonical keys, not total row count.
+        """
+        _require_generator_prereqs()
+
+        expected_keys = _canonical_keys_from_yaml()
         db_path = str(tmp_path / "concept_lut_test.sqlite")
         _run_generator(db_path)
 
         conn = _open_lut(db_path)
         try:
-            total = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
-            distinct = conn.execute(
-                "SELECT count(DISTINCT canonical_key) FROM lut_concepts"
-            ).fetchone()[0]
+            rows = conn.execute("SELECT DISTINCT canonical_key FROM lut_concepts").fetchall()
         finally:
             conn.close()
 
-        assert total == distinct, f"Duplicate canonical keys found: total={total}, distinct={distinct}"
+        db_keys = {r[0] for r in rows}
+        assert db_keys == expected_keys, (
+            f"Canonical keys diverge from YAML: "
+            f"missing={expected_keys - db_keys}, extra={db_keys - expected_keys}"
+        )
+
+
+def _row_count(db_path: str) -> int:
+    conn = _open_lut(db_path)
+    try:
+        return conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
+    finally:
+        conn.close()
