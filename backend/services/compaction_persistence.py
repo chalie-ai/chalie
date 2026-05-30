@@ -27,7 +27,8 @@ def get_compaction(channel: str) -> Optional[Dict]:
     orders by tool_calls.id DESC so append-only history is honoured.
     Failure rows are invisible to this query.
 
-    Returns dict with: compacted_text, compacted_up_to_id, tool_call_id.
+    Returns dict with: compacted_text, compacted_up_to_id, tool_call_id,
+    created_at (the row's UTC timestamp, used by the Brain observability tab).
     Returns None if no success compaction exists for the channel.
     Never raises — DB errors are logged and treated as "no compaction".
     """
@@ -38,7 +39,7 @@ def get_compaction(channel: str) -> Optional[Dict]:
         with db.connection() as conn:
             row = conn.execute(
                 """
-                SELECT tc.result, tc.params, tc.id
+                SELECT tc.result, tc.params, tc.id, tc.created_at
                 FROM tool_calls tc
                 JOIN transcript t ON t.id = tc.transcript_id
                 WHERE tc.tool_name = 'compaction'
@@ -58,6 +59,7 @@ def get_compaction(channel: str) -> Optional[Dict]:
             'compacted_text': row[0],
             'compacted_up_to_id': params.get('compacted_up_to_id', 0),
             'tool_call_id': row[2],
+            'created_at': row[3],
         }
     except Exception as exc:
         logger.warning("%s Failed to get compaction for %s: %s", LOG_PREFIX, channel, exc)

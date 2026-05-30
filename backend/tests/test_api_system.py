@@ -1,5 +1,7 @@
 """Tests for api/system.py — /health, /metrics, /system/status, /system/observability/* endpoints."""
 
+import json
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -239,6 +241,95 @@ class TestSystemAPI:
             assert 'count' in tool
             assert 'last_used_at' in tool
 
+
+    # GET /system/observability/compaction
+
+    @staticmethod
+    def _seed_compaction(db, *, channel, status, summary, watermark, created_at):
+        """Insert a transcript anchor + a compaction tool_calls row for *channel*."""
+        cur = db.execute(
+            "INSERT INTO transcript (role, content, channel, created_at) "
+            "VALUES ('user', 'anchor', ?, '2026-01-01 00:00:00')",
+            (channel,),
+        )
+        t_id = cur.lastrowid
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
+            "VALUES (?, 'compaction', ?, ?, 0, ?)",
+            (t_id, json.dumps({'status': status, 'compacted_up_to_id': watermark}), summary, created_at),
+        )
+        db.commit()
+        return t_id
+
+    def test_observability_compaction_returns_null_when_none(self, client, db):
+        """No compaction rows → 200 with {"compaction": null} (drives the empty-state card)."""
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        assert resp.get_json() == {'compaction': None}
+
+    def test_observability_compaction_returns_summary_and_formatted_timestamp(self, client, db):
+        """A success compaction on the 'user' channel surfaces its summary, watermark, and a
+        backend-formatted timestamp (locale_service, for_ui — UTC fallback with no telemetry)."""
+        self._seed_compaction(
+            db, channel='user', status='success',
+            summary='Earlier turns condensed here.', watermark=42,
+            created_at='2026-01-01 00:00:01',
+        )
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        comp = resp.get_json()['compaction']
+        assert comp is not None
+        assert comp['summary'] == 'Earlier turns condensed here.'
+        assert comp['compacted_up_to_id'] == 42
+        # Timestamp is pre-formatted server-side; tests have no telemetry → UTC.
+        assert comp['compacted_at'] == '2026-01-01 00:00'
+
+    def test_observability_compaction_formats_production_iso_timestamp(self, client, db):
+        """Production writes created_at via utc_now().isoformat() — an ISO-8601 string with a
+        'T' separator and a '+00:00' offset. The tab must render it as a clean human-readable
+        string with NO 'T', NO offset, and NO 'Z' (the exact regression the UI scenario guards)."""
+        self._seed_compaction(
+            db, channel='user', status='success',
+            summary='Condensed.', watermark=99,
+            created_at='2026-05-30T22:45:01.123456+00:00',
+        )
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        compacted_at = resp.get_json()['compaction']['compacted_at']
+        assert compacted_at == '2026-05-30 22:45'
+        assert 'T' not in compacted_at
+        assert '+' not in compacted_at and not compacted_at.endswith('Z')
+
+    def test_observability_compaction_channel_isolation(self, client, db):
+        """A compaction on a non-user channel must never appear in the chat tab."""
+        self._seed_compaction(
+            db, channel='subagent', status='success',
+            summary='subagent only', watermark=7,
+            created_at='2026-01-01 00:00:01',
+        )
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        assert resp.get_json()['compaction'] is None
+
+    def test_observability_compaction_latest_success_wins_over_failure(self, client, db):
+        """Newest success row is returned; a later failure row never poisons the panel."""
+        self._seed_compaction(
+            db, channel='user', status='success',
+            summary='old summary', watermark=10, created_at='2026-01-01 00:00:01',
+        )
+        self._seed_compaction(
+            db, channel='user', status='success',
+            summary='new summary', watermark=20, created_at='2026-01-02 00:00:01',
+        )
+        self._seed_compaction(
+            db, channel='user', status='failure',
+            summary='failed attempt', watermark=30, created_at='2026-01-03 00:00:01',
+        )
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        comp = resp.get_json()['compaction']
+        assert comp['summary'] == 'new summary'
+        assert comp['compacted_up_to_id'] == 20
 
 
     # GET /ready

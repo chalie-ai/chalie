@@ -107,6 +107,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "calendar",
     "chalie_docs",
     "code_eval",
+    "compaction",
     "contacts",
     "document",
     "email",
