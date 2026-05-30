@@ -37,10 +37,14 @@ from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
-# ── Compaction summary parser ─────────────────────────────────────────────────
+# ── Compaction rendering helpers (shared with CompactionAbility) ───────────────
 #
-# Parses the <summary>…</summary> block produced by ContinuityCompactionProcessor.
-# Used by _run_full_compaction to extract the stored result from raw LLM output.
+# These parse/format helpers live alongside the other transcript-rendering
+# infrastructure in this module (TimeFormatterService, _MISSING_TS_PLACEHOLDER).
+# They are imported and called by CompactionAbility.execute()
+# (abilities/compaction.py), which owns the compaction orchestration that
+# _run_full_compaction triggers. _SUMMARY_RE parses the <summary>…</summary>
+# block produced by ContinuityCompactionProcessor.
 
 _SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>", re.IGNORECASE)
 _COMPACTION_FAILURE_FMT = "[COMPACTION] %s: continuity failure — reason=%s"
