@@ -363,7 +363,7 @@ const PanelCognition = (() => {
   }
 
   function _renderCompaction(el) {
-    if (!_compaction || !_compaction.summary) {
+    if (!_compaction?.summary) {
       el.innerHTML = `<p class="panel-desc">The continuity summary the chat carries forward after its context overflows and is compacted.</p>
       <div class="empty-state"><p>No compaction has run yet — the chat context has not overflowed.</p></div>`;
       return;

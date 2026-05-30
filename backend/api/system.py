@@ -371,8 +371,8 @@ def observability_compaction():
                 'compacted_at': locale_service.format_date(record['created_at'], for_ui=True),
             },
         }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/compaction error: {e}")
+    except Exception:
+        logger.exception("[REST API] observability/compaction error")
         return jsonify({"error": "Failed to retrieve compaction summary"}), 500
 
 
