@@ -159,7 +159,6 @@ def _build_action_description(action_id: str, action: dict) -> str:
         'document.delete': 'Deleting a document',
         'document.create': 'Creating a document',
         'list.delete': 'Deleting a list',
-        'memory.forget': 'Forgetting a memory',
         'code_eval': 'Running code',
     }
 

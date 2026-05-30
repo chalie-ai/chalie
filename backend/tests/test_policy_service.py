@@ -6,6 +6,8 @@ import pytest
 from services.policy_service import (
     PolicyService,
     get_defaults,
+    get_policy_meta,
+    _get_system_tools,
     VALID_STATES,
     VALID_CONTEXTS,
     USAGE_CLASS_TO_CONTEXT,
@@ -255,3 +257,45 @@ class TestResolve:
         assert USAGE_CLASS_TO_CONTEXT["chat"] == "chat"
         assert USAGE_CLASS_TO_CONTEXT["subagent"] == "subagent"
         assert USAGE_CLASS_TO_CONTEXT["subconscious"] == "subconscious"
+
+
+# ── Memory is a SYSTEM tool — always allowed, never listed ──────────────────
+
+_MEMORY_ACTION_IDS = ("memory.store", "memory.recall", "memory.reflect", "memory.forget")
+
+
+class TestMemorySystemTool:
+    """The memory ability is a system tool: always allowed in every context and
+    absent from the Policy Manager UI / default matrix.  Mirrors skill_manager.
+    """
+
+    def test_memory_is_a_system_tool(self):
+        assert "memory" in _get_system_tools()
+
+    def test_memory_actions_absent_from_defaults(self):
+        defaults = get_defaults()
+        for action_id in _MEMORY_ACTION_IDS:
+            assert action_id not in defaults, action_id
+
+    def test_memory_excluded_from_policy_meta(self):
+        meta = get_policy_meta()
+        action_ids = {entry["action_id"] for entry in meta}
+        categories = {entry["category"] for entry in meta}
+        for action_id in _MEMORY_ACTION_IDS:
+            assert action_id not in action_ids, action_id
+        assert "Memory" not in categories
+
+    def test_memory_always_allowed_in_all_contexts(self, svc):
+        # No DB rows seeded — proves the system-tool short-circuit, not a default.
+        for action_id in _MEMORY_ACTION_IDS:
+            for context in VALID_CONTEXTS:
+                assert svc.check(action_id, context) == "allow", f"{action_id}/{context}"
+
+    def test_memory_allowed_even_with_stale_deny_row(self, svc):
+        # A row left over from when memory was policy-visible must not gate it.
+        svc.upsert([{"action_id": "memory.forget", "context": "external_agent", "state": "deny"}])
+        assert svc.check("memory.forget", "external_agent") == "allow"
+
+    def test_get_all_excludes_stale_memory_rows(self, svc):
+        svc.upsert([{"action_id": "memory.forget", "context": "chat", "state": "ask"}])
+        assert "memory.forget" not in svc.get_all()

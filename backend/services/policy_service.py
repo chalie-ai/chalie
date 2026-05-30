@@ -47,6 +47,20 @@ def _get_system_tools() -> frozenset[str]:
     )
     return _system_tools_cache
 
+
+def _is_system_action(action_id: str) -> bool:
+    """True when *action_id* belongs to a SYSTEM ability.
+
+    ``_get_system_tools()`` records bare ability names (e.g. ``memory``), but
+    enforcement resolves ids that may carry a sub-action (``memory.recall``).
+    A sub-action of a system ability is itself a system action, so match the
+    name prefix as well as the full id.
+    """
+    system_tools = _get_system_tools()
+    if action_id in system_tools:
+        return True
+    return action_id.split(".", 1)[0] in system_tools
+
 # ── Default policy matrix ────────────────────────────────────────────────────
 #
 # Keys: action_id → {context: state}.  Missing context = "deny" for
@@ -71,7 +85,6 @@ _CHAT_ALLOW: dict[str, State] = {
     "ubiquiti.list_devices": "allow", "ubiquiti.list_clients": "allow",
     "ubiquiti.get_info": "allow",
     "list.list_all": "allow", "list.view": "allow",
-    "memory.recall": "allow", "memory.reflect": "allow",
     "news": "allow",
     "programming_docs_search": "allow",
     "read": "allow",
@@ -90,7 +103,6 @@ _CHAT_ALLOW: dict[str, State] = {
     "email.draft": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
-    "memory.store": "allow",
     "place.save": "allow", "place.list": "allow", "place.get": "allow", "place.delete": "allow",
     "subagent.spawn": "allow", "subagent.list": "allow",
     "subagent.stop": "allow", "subagent.direct": "allow",
@@ -120,7 +132,6 @@ _CHAT_ASK: dict[str, State] = {
     "ubiquiti.manage_traffic_rule": "ask",
     "ubiquiti.authorize_guest": "ask",
     "list.delete": "ask",
-    "memory.forget": "ask",
     "web_download": "ask",
 }
 
@@ -139,7 +150,6 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "ubiquiti.list_devices": "allow", "ubiquiti.list_clients": "allow",
     "ubiquiti.get_info": "allow",
     "list.list_all": "allow", "list.view": "allow",
-    "memory.recall": "allow", "memory.reflect": "allow",
     "news": "allow",
     "programming_docs_search": "allow",
     "read": "allow",
@@ -153,7 +163,6 @@ _SUBCONSCIOUS_ALLOW: dict[str, State] = {
     "document.create": "allow", "document.restore": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
-    "memory.store": "allow",
 }
 
 _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
@@ -173,7 +182,6 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "ubiquiti.list_devices": "allow", "ubiquiti.list_clients": "allow",
     "ubiquiti.get_info": "allow",
     "list.list_all": "allow", "list.view": "allow",
-    "memory.recall": "allow", "memory.reflect": "allow",
     "news": "allow",
     "programming_docs_search": "allow",
     "read": "allow",
@@ -188,7 +196,6 @@ _EXTERNAL_AGENT_ALLOW: dict[str, State] = {
     "document.create": "allow", "document.restore": "allow",
     "list.create": "allow", "list.add": "allow", "list.check": "allow",
     "list.remove": "allow", "list.clear": "allow", "list.rename": "allow",
-    "memory.store": "allow",
 }
 
 _EXTERNAL_AGENT_DENY: dict[str, State] = {
@@ -219,7 +226,6 @@ _EXTERNAL_AGENT_DENY: dict[str, State] = {
     "ubiquiti.manage_traffic_rule": "deny",
     "ubiquiti.authorize_guest": "deny",
     "list.delete": "deny",
-    "memory.forget": "deny",
     "schedule.create": "deny",
     "schedule.cancel": "deny",
 }
@@ -340,7 +346,7 @@ class PolicyService:
 
         Falls back to defaults if no DB row exists.
         """
-        if action_id in _get_system_tools():
+        if _is_system_action(action_id):
             return "allow"
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -370,7 +376,7 @@ class PolicyService:
             cursor.execute("SELECT action_id, context, state FROM policy_rules")
             for row in cursor.fetchall():
                 aid, ctx, state = row[0], row[1], row[2]
-                if aid in _get_system_tools():
+                if _is_system_action(aid):
                     continue
                 if aid not in result:
                     result[aid] = {}
