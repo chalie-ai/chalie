@@ -792,7 +792,6 @@ body.speaker-user   #ambientBloom {
 /* Active form — newest Chalie message gets a top-edge highlight */
 .speech-form--active {
   border-color: rgba(138, 92, 255, 0.18);
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.40);
 }
 
 /* Thin top-edge highlight — like light catching a glass panel edge */
@@ -2069,6 +2068,10 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   max-width: 400px;
   margin: auto;
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.60);
+}
+
+[data-theme="light"] .api-key-dialog__content {
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.25);
 }
 
 .api-key-dialog__title {
@@ -3749,6 +3752,11 @@ details.block-section[open] > summary.block-section__title::before {
   transition: transform var(--duration-normal) ease,
               opacity var(--duration-normal) ease,
               border-color var(--duration-fast) ease;
+}
+
+/* Light theme: soften the lift so it reads as depth, not a dark halo */
+[data-theme="light"] .perm-card {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 8px 32px rgba(0, 0, 0, 0.12);
 }
 
 .perm-card--visible {
