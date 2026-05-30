@@ -1,4 +1,4 @@
-// Cognition panel — 6 sub-views: memory, tools, world, personality, errors, usage.
+// Cognition panel — 7 sub-views: memory, tools, world, personality, errors, usage, compaction.
 const PanelCognition = (() => {
   let _root = null;
   let _sub = 'memory';
@@ -35,6 +35,7 @@ const PanelCognition = (() => {
           case 'personality': await _fetchPersonality(); break;
           case 'errors': await _fetchErrors(); break;
           case 'usage': await _fetchUsage(); break;
+          case 'compaction': await _fetchCompaction(); break;
         }
         if (_sub !== targetSub) return;
         _loaded[targetSub] = true;
@@ -125,6 +126,15 @@ const PanelCognition = (() => {
     _usage = await res.json();
   }
 
+  // ── Compacted Summary ──
+  let _compaction = null;
+  async function _fetchCompaction() {
+    const res = await BrainApp.apiFetch('/system/observability/compaction');
+    if (!res.ok) throw new Error('fetch failed');
+    const data = await res.json();
+    _compaction = data.compaction || null;
+  }
+
   // ── Sub Renderers ──
   function _renderSub(el) {
     switch (_sub) {
@@ -134,6 +144,7 @@ const PanelCognition = (() => {
       case 'personality': _renderPersonality(el); break;
       case 'errors': _renderErrors(el); break;
       case 'usage': _renderUsage(el); break;
+      case 'compaction': _renderCompaction(el); break;
     }
   }
 
@@ -349,6 +360,24 @@ const PanelCognition = (() => {
       _usageWindow = btn.dataset.win;
       _loaded.usage = false; _loadSub();
     });
+  }
+
+  function _renderCompaction(el) {
+    if (!_compaction || !_compaction.summary) {
+      el.innerHTML = `<p class="panel-desc">The continuity summary the chat carries forward after its context overflows and is compacted.</p>
+      <div class="empty-state"><p>No compaction has run yet — the chat context has not overflowed.</p></div>`;
+      return;
+    }
+    const meta = [
+      { value: _compaction.compacted_at || '—', label: 'Last Compacted' },
+      { value: _compaction.compacted_up_to_id ? `#${_compaction.compacted_up_to_id}` : '—', label: 'Compacted Up To (transcript id)' },
+    ];
+    el.innerHTML = `<p class="panel-desc">The continuity summary injected into the chat context after the conversation overflowed. This is what Chalie carries forward in place of the older turns.</p>
+    <div class="stat-grid">${meta.map(s => `<div class="stat-card">
+      <div class="stat-value">${BrainApp.escapeHtml(String(s.value))}</div>
+      <div class="stat-label">${BrainApp.escapeHtml(s.label)}</div>
+    </div>`).join('')}</div>
+    <div class="code-block"><pre><code>${BrainApp.escapeHtml(_compaction.summary)}</code></pre></div>`;
   }
 
   function _fmtTokens(n) {

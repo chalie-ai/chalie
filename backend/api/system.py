@@ -349,6 +349,33 @@ def observability_world_state():
     }), 200
 
 
+@system_bp.route('/system/observability/compaction', methods=['GET'])
+@require_session
+def observability_compaction():
+    """Continuity-compaction synthesis for the chat ('user') channel.
+
+    Returns the durable summary the ACT loop carries forward after a
+    context-overflow compaction — the same text prepended to the
+    UserMessageProcessor prompt in place of the older turns. Read-only.
+    Returns ``{"compaction": null}`` when no compaction has run yet.
+    """
+    try:
+        from services import compaction_persistence, locale_service
+        record = compaction_persistence.get_compaction('user')
+        if not record:
+            return jsonify({'compaction': None}), 200
+        return jsonify({
+            'compaction': {
+                'summary': record['compacted_text'],
+                'compacted_up_to_id': record['compacted_up_to_id'],
+                'compacted_at': locale_service.format_date(record['created_at'], for_ui=True),
+            },
+        }), 200
+    except Exception as e:
+        logger.error(f"[REST API] observability/compaction error: {e}")
+        return jsonify({"error": "Failed to retrieve compaction summary"}), 500
+
+
 @system_bp.route('/system/observability/write-queue', methods=['GET'])
 @require_session
 def observability_write_queue():

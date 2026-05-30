@@ -10,6 +10,7 @@ const BrainSidebar = (() => {
         { id: 'personality', label: 'Personality' },
         { id: 'errors', label: 'Errors' },
         { id: 'usage', label: 'Usage' },
+        { id: 'compaction', label: 'Compacted Summary' },
       ]},
     { id: 'scheduler', label: 'Scheduler', icon: 'Calendar', group: 'cognition',
       sub: [
