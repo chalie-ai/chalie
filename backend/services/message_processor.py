@@ -32,7 +32,6 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from services.llm_service import PayloadTooLargeError
 from services.metrics_accumulator import MetricsAccumulator
 from services.system_message_prompt import SystemMessagePrompt
-from services.time_utils import utc_now
 from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
