@@ -443,6 +443,42 @@ class McpClientService:
         finally:
             conn.close()
 
+    def get_online_mcp_tools_index(self) -> list[tuple[str, str]]:
+        """Return (call_name, display_name) pairs for enabled+online tools.
+
+        ``call_name`` is the prefixed ``_mcp_<server>_<tool>`` identifier the
+        model must invoke; ``display_name`` is the bare server-reported
+        ``tool.name`` (e.g. ``list_tickets``).  Used by find_tools to list MCP
+        tools in the discoverability hint by their native names without losing
+        the prefixed call target.
+        """
+        with self._db.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, name FROM mcp_client_servers "
+                "WHERE enabled = 1 AND status = ?",
+                (_STATUS_ONLINE,),
+            ).fetchall()
+        if not rows:
+            return []
+        server_name_by_id = {r[0]: r[1] for r in rows}
+        conn = _open_tools_db()
+        try:
+            all_rows = conn.execute(
+                "SELECT server_id, tool_name FROM mcp_tools"
+            ).fetchall()
+        finally:
+            conn.close()
+        index: list[tuple[str, str]] = []
+        for r in all_rows:
+            server_id = r["server_id"]
+            if server_id not in server_name_by_id:
+                continue
+            call_name = r["tool_name"]
+            prefix = f"_mcp_{_sanitize_name(server_name_by_id[server_id])}_"
+            display = call_name[len(prefix):] if call_name.startswith(prefix) else call_name
+            index.append((call_name, display))
+        return index
+
     # ── Dispatch ──────────────────────────────────────────────────────────────
 
     def dispatch_mcp_tool(self, tool_name: str, params: dict) -> dict:

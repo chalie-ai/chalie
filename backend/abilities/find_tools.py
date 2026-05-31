@@ -75,14 +75,20 @@ class FindToolsAbility(SearchableAbility):
             except KeyError:
                 pass
 
-        # Append online MCP tool names with a short tooltip.
-        for mcp_name in self._get_online_mcp_names():
-            if mcp_name not in blocked:
-                index[mcp_name] = "remote MCP tool"
+        # MCP tools are listed by their bare server-reported name only
+        # (e.g. `list_tickets`), no tooltip.  The MCP protocol's per-tool
+        # `description` is matched at search time (FTS over mcp_tools.sqlite),
+        # not surfaced in this browse hint.  Gate on the prefixed call name.
+        mcp_display = [
+            display for call_name, display in self._get_online_mcp_tools_index()
+            if call_name not in blocked
+        ]
 
-        if not index:
+        if not index and not mcp_display:
             return ""
-        return ", ".join(f"`{k}` ({v})" for k, v in index.items())
+        parts = [f"`{k}` ({v})" for k, v in index.items()]
+        parts.extend(f"`{n}`" for n in mcp_display)
+        return ", ".join(parts)
 
     @staticmethod
     def _get_online_mcp_names() -> list[str]:
@@ -96,6 +102,20 @@ class FindToolsAbility(SearchableAbility):
             return McpClientService().get_online_mcp_tool_names()
         except Exception as exc:
             logger.debug("[FIND_TOOLS] Could not fetch MCP tool names: %s", exc)
+            return []
+
+    @staticmethod
+    def _get_online_mcp_tools_index() -> list[tuple[str, str]]:
+        """Return (call_name, display_name) pairs for enabled+online MCP tools.
+
+        Gracefully returns [] when no servers are configured or the service
+        is unavailable — never raises so find_tools always completes.
+        """
+        try:
+            from services.mcp_client_service import McpClientService
+            return McpClientService().get_online_mcp_tools_index()
+        except Exception as exc:
+            logger.debug("[FIND_TOOLS] Could not fetch MCP tool index: %s", exc)
             return []
 
     def get_input_schema(self) -> dict:
