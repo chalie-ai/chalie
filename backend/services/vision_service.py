@@ -65,22 +65,3 @@ def send_image_with_config(config: Dict[str, Any], image_bytes: bytes,
     except Exception as exc:
         logger.warning("[Vision] send_image_with_config failed: %s", exc)
         return None
-
-
-def describe_image(image_bytes: bytes, prompt: str = DOCUMENT_VISION_PROMPT,
-                   mime_type: str = 'image/png') -> Optional[str]:
-    """Describe an image using the configured vision provider, or None.
-
-    Resolves the provider via ProviderDbService.get_vision_provider().
-    """
-    try:
-        from services.database_service import get_shared_db_service
-        from services.provider_db_service import ProviderDbService
-        provider = ProviderDbService(get_shared_db_service()).get_vision_provider()
-        if not provider:
-            return None
-        config = build_vision_config(provider)
-        return send_image_with_config(config, image_bytes, prompt, mime_type)
-    except Exception as exc:
-        logger.warning("[Vision] describe_image failed: %s", exc)
-        return None

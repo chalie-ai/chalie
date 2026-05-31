@@ -38,11 +38,3 @@ def test_send_image_returns_none_on_exception():
     from services import vision_service
     with patch("services.llm_service.create_llm_service", side_effect=RuntimeError("boom")):
         assert vision_service.send_image_with_config({}, b"x", "p") is None
-
-
-def test_describe_image_none_when_no_vision_provider():
-    from services import vision_service
-    with patch("services.provider_db_service.ProviderDbService.get_vision_provider",
-               return_value=None), \
-         patch("services.database_service.get_shared_db_service", return_value=MagicMock()):
-        assert vision_service.describe_image(b"x") is None

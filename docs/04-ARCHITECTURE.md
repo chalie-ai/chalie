@@ -267,16 +267,16 @@ Singleton with an `RLock`. Exposes only `get(name)` and `all()`. Lazily walks `b
 
 ## Chat File Attachments
 
-When a WebSocket `chat` frame carries a `files` array, the frontend has already read each file as base64 and included it in the payload (`{name, data, content_type}`). No separate upload endpoint is called for chat-attached files.
+Chat attachments use HTTP only — the WebSocket is server→client push (see the WebSocket section). The frontend uploads each file via `POST /upload`, which stores it under `/tmp/chalie_*` and returns that `tmp_path`. The send then `POST`s `/chat` with the message text plus an `attachments` array of those paths (capped at 10); `dispatch_message()` forwards them to the processor as `metadata['attachments']`.
 
-`_handle_chat()` in `backend/api/websocket.py` extracts `files` (capped at 5) and passes them via `metadata['files']` to the processor. `UserMessageProcessor._process_file_attachments()` iterates each file and dispatches two tool calls through `handle_tool()`:
+After `pre_act()`, `UserMessageProcessor._process_file_attachments()` iterates each `tmp_path` — rejecting any path that does not resolve under `/tmp/chalie_` (traversal guard) — reads and base64-encodes the file, then dispatches two tool calls through `handle_tool()`:
 
-1. `document(action='upload', name=..., data=..., content_type=...)` — decodes base64, persists to disk, runs text extraction synchronously, returns a document ID.
+1. `document(action='upload', name=..., content=..., content_type=...)` — persists to permanent storage, runs extraction synchronously, returns a document ID; the `/tmp` file is deleted afterwards.
 2. `document(action='view', id=<doc_id>)` — retrieves the extracted content.
 
 Both calls go through `ActDispatcher` — policy enforcement, WS tool events, and `tool_calls` audit rows are generated naturally. The results land in `_act_trail` so the LLM sees file content on iter-0 of the ACT loop.
 
-Images sent via `POST /chat/image` (source_type `chat_image`) still trigger OCR + scene analysis through the existing `chat_image.py` pipeline. The `/documents/upload` REST endpoint remains available for the Brain document management UI but is no longer used by the chat flow.
+Image attachments are handled by the document pipeline: `image_context_service.analyze()` uses the configured vision provider for a comprehensive description when one is set (TKT-715), otherwise local OCR. The `/documents/upload` REST endpoint remains available for the Brain document-management UI.
 
 ---
 
