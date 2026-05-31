@@ -34,3 +34,28 @@ def test_create_clears_supports_vision_when_probe_fails(db):
 def test_infer_vision_support_is_gone():
     import services.provider_db_service as mod
     assert not hasattr(mod, "_infer_vision_support")
+
+
+def _make(db, svc, name="p", model="m", vision=0):
+    with patch("services.vision_probe.probe_provider", return_value=bool(vision)):
+        return svc.create_provider(
+            {"name": name, "platform": "ollama", "model": model})
+
+
+def test_update_name_only_does_not_probe(db):
+    svc = _svc(db)
+    p = _make(db, svc, name="orig", vision=1)
+    with patch("services.vision_probe.probe_provider", return_value=False) as pp:
+        svc.update_provider(p["id"], {"name": "renamed"})
+    assert not pp.called
+    # supports_vision untouched (still True from create)
+    assert svc.get_provider_by_id(p["id"])["supports_vision"] is True
+
+
+def test_update_model_reprobes(db):
+    svc = _svc(db)
+    p = _make(db, svc, model="old", vision=1)
+    with patch("services.vision_probe.probe_provider", return_value=False) as pp:
+        svc.update_provider(p["id"], {"model": "new"})
+    assert pp.called
+    assert svc.get_provider_by_id(p["id"])["supports_vision"] is False

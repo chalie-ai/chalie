@@ -275,23 +275,36 @@ class ProviderDbService:
                 updates.append(f"{key} = ?")
                 params.append(data[key])
 
-        if "supports_vision" in data:
-            updates.append("supports_vision = ?")
-            params.append(1 if data["supports_vision"] else 0)
-
         if "is_active" in data:
             updates.append("is_active = ?")
             params.append(1 if data["is_active"] else 0)
 
-        # Auto-infer vision support if platform or model changed
-        # and supports_vision not explicit
-        if 'supports_vision' not in data and ('platform' in data or 'model' in data):
-            current = self.get_provider_by_id(provider_id)
-            if current:
-                platform = data.get('platform', current.get('platform', ''))
-                model = data.get('model', current.get('model', ''))
+        # Re-probe vision support only when a probe-relevant field changes
+        # (platform/model/host/api_key). Name-only edits never re-probe.
+        _probe_fields = {'platform', 'model', 'host', 'api_key'}
+        if _probe_fields & set(data.keys()):
+            current = self.get_provider_by_id(provider_id) or {}
+            eff_platform = data.get('platform', current.get('platform', ''))
+            eff_model = data.get('model', current.get('model', ''))
+            eff_host = data.get('host', current.get('host'))
+            # explicit new api_key wins; else reuse current (decrypted) value
+            eff_api_key = data['api_key'] if 'api_key' in data else current.get('api_key')
+            needs_key = eff_platform in self._KEY_REQUIRING
+            if needs_key and not eff_api_key:
+                # vault locked / no credential — cannot probe, leave column as-is
+                logger.warning(
+                    "[Provider] Skipping vision re-probe for id=%s — no api_key available",
+                    provider_id,
+                )
+            else:
+                from services.vision_probe import probe_provider
+                probe_config = {
+                    'platform': eff_platform, 'model': eff_model,
+                    'api_key': eff_api_key, 'host': eff_host,
+                    'name': current.get('name'),
+                }
                 updates.append("supports_vision = ?")
-                params.append(1 if _infer_vision_support(platform, model) else 0)
+                params.append(1 if probe_provider(probe_config) else 0)
 
         # Handle api_key separately for encryption
         if "api_key" in data:
