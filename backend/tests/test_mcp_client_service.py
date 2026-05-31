@@ -343,3 +343,115 @@ def test_get_tool_schema_round_trips_stored_input_schema(db, tmp_path, monkeypat
     assert svc.get_tool_schema("_mcp_taskie_does_not_exist") is None, (
         "get_tool_schema must return None for an unknown tool name"
     )
+
+
+# ---------------------------------------------------------------------------
+# Dedup / idempotent upsert on add (TKT-785)
+# ---------------------------------------------------------------------------
+
+from services.mcp_client_service import _normalize_host, _open_tools_db  # noqa: E402
+
+
+@pytest.mark.parametrize("a,b", [
+    ("https://mcp.example.com/mcp", "https://mcp.example.com/mcp/"),
+    ("https://MCP.Example.com/mcp", "https://mcp.example.com/mcp"),
+    ("https://mcp.example.com:443/mcp", "https://mcp.example.com/mcp"),
+    ("http://mcp.example.com:80/x", "http://mcp.example.com/x"),
+    ("  https://mcp.example.com/mcp  ", "https://mcp.example.com/mcp"),
+    ("mcp.example.com/mcp", "https://mcp.example.com/mcp"),
+])
+def test_normalize_host_treats_variants_as_equal(a, b):
+    assert _normalize_host(a) == _normalize_host(b)
+
+
+@pytest.mark.parametrize("a,b", [
+    ("https://mcp.example.com/mcp", "https://mcp.example.com/other"),
+    ("https://a.example.com/mcp", "https://b.example.com/mcp"),
+    ("https://mcp.example.com:9000/mcp", "https://mcp.example.com/mcp"),
+    ("http://mcp.example.com/x", "https://mcp.example.com/x"),
+])
+def test_normalize_host_keeps_distinct_endpoints_distinct(a, b):
+    assert _normalize_host(a) != _normalize_host(b)
+
+
+def test_add_server_dedups_same_endpoint_variant(db):
+    """Re-adding the same endpoint (trailing-slash variant) updates the existing
+    row instead of creating a duplicate."""
+    svc = McpClientService()
+    a = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+                       headers={}, enabled=True)
+    b = svc.add_server(name="taskie", host="https://mcp.example.com/mcp/",
+                       headers={}, enabled=True)
+    assert b["id"] == a["id"]
+    assert len(svc.list_servers()) == 1
+
+
+def test_add_server_upsert_updates_fields_and_reenables(db):
+    """Re-adding a known endpoint refreshes headers and re-enables it."""
+    svc = McpClientService()
+    a = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+                       headers={}, enabled=False)
+    b = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+                       headers={"Authorization": "Bearer x"}, enabled=True)
+    assert b["id"] == a["id"]
+    assert b["enabled"] is True
+    assert b["headers"] == {"Authorization": "Bearer x"}
+    assert len(svc.list_servers()) == 1
+
+
+def test_add_server_distinct_endpoints_create_separate_rows(db):
+    """Genuinely different endpoints are kept as separate servers."""
+    svc = McpClientService()
+    svc.add_server(name="a", host="https://a.example.com/mcp", headers={}, enabled=True)
+    svc.add_server(name="b", host="https://b.example.com/mcp", headers={}, enabled=True)
+    assert len(svc.list_servers()) == 2
+
+
+def test_add_server_upsert_name_change_purges_old_prefix_rows(db, tmp_path, monkeypatch):
+    """When an upsert changes the server name, the old _mcp_<oldname>_* tool and
+    policy rows are purged so a later re-sync leaves no orphans."""
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+    svc = McpClientService()
+    s = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+                       headers={}, enabled=True)
+    old_tool = _tool_name("taskie", "create_document")
+
+    conn = _open_tools_db()
+    try:
+        conn.execute(
+            "INSERT INTO mcp_tools (server_id, tool_name, summary, raw_schema) "
+            "VALUES (?, ?, ?, ?)",
+            (s["id"], old_tool, "", "{}"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    with svc._db.connection() as c:
+        c.execute(
+            "INSERT OR IGNORE INTO policy_rules (action_id, context, state, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (old_tool, "chat", "ask", "2026-05-31T00:00:00+00:00"),
+        )
+        c.commit()
+
+    # Re-add the SAME endpoint under a NEW name → old-prefix rows must be purged.
+    svc.add_server(name="taskie2", host="https://mcp.example.com/mcp",
+                   headers={}, enabled=True)
+
+    conn = _open_tools_db()
+    try:
+        tool_count = conn.execute(
+            "SELECT COUNT(*) FROM mcp_tools WHERE tool_name = ?", (old_tool,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    with svc._db.connection() as c:
+        policy_count = c.execute(
+            "SELECT COUNT(*) FROM policy_rules WHERE action_id = ?", (old_tool,)
+        ).fetchone()[0]
+
+    assert tool_count == 0
+    assert policy_count == 0
+    servers = svc.list_servers()
+    assert len(servers) == 1
+    assert servers[0]["name"] == "taskie2"

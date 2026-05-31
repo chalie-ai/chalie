@@ -27,6 +27,7 @@ import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from services.database_service import get_shared_db_service
 from services.file_mapper_service import FileMapperService
@@ -70,6 +71,39 @@ def _tool_name(server_name: str, remote_tool: str) -> str:
     Example: server='taskie', tool='create_document' → '_mcp_taskie_create_document'
     """
     return f"_mcp_{_sanitize_name(server_name)}_{remote_tool}"
+
+
+def _normalize_host(host: str) -> str:
+    """Canonical dedup key for a remote MCP endpoint.
+
+    One connection per endpoint: lowercases scheme + hostname, drops default
+    ports (443/https, 80/http), trims surrounding whitespace, and strips a
+    single trailing slash from the path.  A bare host ("mcp.example.com/mcp")
+    is parsed as if https.  The original ``host`` is still stored verbatim for
+    display — this value is only the key used to detect re-adds of the same
+    endpoint.
+    """
+    raw = (host or "").strip()
+    parts = urlsplit(raw)
+    if not parts.scheme and not parts.netloc:
+        # Bare host like "mcp.example.com/mcp" — re-parse with a scheme so the
+        # hostname/port split correctly instead of landing in ``path``.
+        parts = urlsplit("https://" + raw)
+    scheme = (parts.scheme or "https").lower()
+    hostname = (parts.hostname or "").lower()
+    port = parts.port
+    is_default_port = (
+        (scheme == "https" and port == 443)
+        or (scheme == "http" and port == 80)
+    )
+    netloc = hostname if (port is None or is_default_port) else f"{hostname}:{port}"
+    if parts.username:
+        userinfo = parts.username
+        if parts.password:
+            userinfo = f"{userinfo}:{parts.password}"
+        netloc = f"{userinfo}@{netloc}"
+    path = parts.path.rstrip("/")
+    return urlunsplit((scheme, netloc, path, parts.query, ""))
 
 
 # ── mcp_tools.sqlite schema helpers ─────────────────────────────────────────
@@ -183,10 +217,18 @@ class McpClientService:
         return [self._row_to_dict(r) for r in rows]
 
     def add_server(self, name: str, host: str, headers: dict, enabled: bool) -> dict:
-        """Insert a new server row.  Succeeds even if host is unreachable.
+        """Add a remote server, deduping by normalized host.
 
-        Returns the newly created server dict.  Status starts as 'unknown'.
+        If an existing server resolves to the same endpoint (see
+        ``_normalize_host``), this is an idempotent upsert: the existing row's
+        name/host/headers are updated and it is re-enabled — no duplicate is
+        created.  Otherwise a new row is inserted.  Succeeds even if the host
+        is unreachable (new rows start with status 'unknown').
         """
+        existing = self._find_by_normalized_host(host)
+        if existing is not None:
+            return self._upsert_existing(existing, name, host, headers)
+
         server_id = str(uuid.uuid4())
         now = utc_now().isoformat()
         headers_json = json.dumps(headers or {})
@@ -201,6 +243,39 @@ class McpClientService:
             conn.commit()
         logger.info("%s Added server %r (id=%s)", _LOG_PREFIX, name, server_id)
         return self._get_server(server_id)
+
+    def _find_by_normalized_host(self, host: str) -> dict | None:
+        """Return an existing server resolving to the same endpoint, else None."""
+        key = _normalize_host(host)
+        for server in self.list_servers():
+            if _normalize_host(server["host"]) == key:
+                return server
+        return None
+
+    def _upsert_existing(self, existing: dict, name: str, host: str,
+                         headers: dict) -> dict:
+        """Re-add of a known endpoint: update fields and re-enable.
+
+        The local tool prefix is derived from the server name, so when the name
+        changes we purge the old ``_mcp_<oldname>_*`` tool + policy rows first —
+        otherwise the post-add re-sync would leave orphaned entries under the
+        stale prefix.
+        """
+        old_prefix = f"_mcp_{_sanitize_name(existing['name'])}_"
+        new_prefix = f"_mcp_{_sanitize_name(name)}_"
+        if old_prefix != new_prefix:
+            self._delete_tools_for_server(existing["id"])
+            self._delete_policy_rows(old_prefix)
+        logger.info(
+            "%s Re-add of existing endpoint %r → upsert id=%s",
+            _LOG_PREFIX, host, existing["id"],
+        )
+        return self.update_server(existing["id"], {
+            "name": name,
+            "host": host,
+            "headers": headers or {},
+            "enabled": True,
+        })
 
     def get_server(self, server_id: str) -> dict | None:
         """Return a single server dict, or None if not found."""
