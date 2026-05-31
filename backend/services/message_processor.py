@@ -677,15 +677,26 @@ class MessageProcessor:
                     for name in discovered:
                         if name in existing_names:
                             continue
-                        try:
-                            a = AbilityRegistry.get(name)
-                            schema = {
-                                'name': a.NAME,
-                                'description': a.SUMMARY,
-                                'input_schema': a.INPUT_SCHEMA,
-                            }
-                        except KeyError:
-                            continue
+                        if name.startswith('_mcp_'):
+                            # MCP tools are dynamic — not in AbilityRegistry.
+                            # Their inputSchema is captured in mcp_tools.sqlite
+                            # at sync time; retrieve it here so the model sees
+                            # the correct parameters instead of a bare tool call.
+                            # Depends on: McpClientService.get_tool_schema().
+                            from services.mcp_client_service import McpClientService  # noqa: PLC0415
+                            schema = McpClientService().get_tool_schema(name)
+                            if schema is None:
+                                continue
+                        else:
+                            try:
+                                a = AbilityRegistry.get(name)
+                                schema = {
+                                    'name': a.NAME,
+                                    'description': a.SUMMARY,
+                                    'input_schema': a.INPUT_SCHEMA,
+                                }
+                            except KeyError:
+                                continue
                         self._discovered_tools.append(schema)
                         existing_names.add(name)
 

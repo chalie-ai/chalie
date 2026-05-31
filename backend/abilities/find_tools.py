@@ -213,8 +213,13 @@ class FindToolsAbility(SearchableAbility):
                     """,
                     (query, *mcp_names, limit),
                 ).fetchall()
+                # Cap MCP score at 0.12 — ability RRF max is ~0.125 (best of
+                # both vector+FTS signals: 2×(1/16)).  This keeps strong MCP
+                # matches just below the best ability score so a highly-relevant
+                # ability can still edge them out, while weak MCP matches rank
+                # low.  bm25() is negative in SQLite; abs() normalizes it.
                 return [
-                    {"key": r[0], "label": r[1] or "", "score": 0.5}
+                    {"key": r[0], "label": r[1] or "", "score": min(0.12, abs(r[2]))}
                     for r in rows
                 ]
             finally:

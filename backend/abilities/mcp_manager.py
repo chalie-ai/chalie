@@ -18,7 +18,6 @@ conversationally ("connect to the taskie MCP server at …"), without the
 user having to open the Brain UI.  This ability handles that path.
 """
 
-import json
 import logging
 
 from abilities._base import Ability

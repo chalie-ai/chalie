@@ -1,0 +1,345 @@
+"""Feature tests for McpClientService — network-free behaviors.
+
+The nightly scenario 163-mcp-client-taskie-e2e.yaml owns the end-to-end
+MCP-over-HTTP path.  These tests cover only the deterministic, network-free
+behaviors that can be exercised against a real temporary SQLite database
+without any mocks.
+
+Each test drives the REAL McpClientService against a real fully-converged
+SQLite database (via the conftest `db` fixture) and asserts observable
+state — rows in policy_rules, mcp_client_servers, and mcp_tools.sqlite.
+"""
+
+import pytest
+
+from services.file_mapper_service import FileMapperService
+from services.mcp_client_service import McpClientService, _sanitize_name, _tool_name
+
+pytestmark = pytest.mark.unit
+
+
+# ---------------------------------------------------------------------------
+# Test 1 — tool-name sanitization and _mcp_ prefixing
+# ---------------------------------------------------------------------------
+
+
+def test_tool_name_sanitization_produces_valid_prefix():
+    """Mixed-case, punctuated server names are reduced to [a-z0-9_] fragments
+    and combined with the remote tool name under the _mcp_ prefix.
+
+    This asserts the contract that downstream dispatch, policy seeding, and
+    find_tools gating all depend on: the key format _mcp_<sanitized>_<tool>.
+    """
+    # Server name with capitals, hyphens, spaces, and leading/trailing noise
+    result = _tool_name("My-Taskie Server!", "create_document")
+    assert result == "_mcp_my_taskie_server_create_document"
+
+    # Purely numeric server name
+    result = _tool_name("42services", "ping")
+    assert result == "_mcp_42services_ping"
+
+    # Unicode / special chars collapse to underscores then stripped
+    result = _tool_name("home-assistant", "toggle_light")
+    assert result == "_mcp_home_assistant_toggle_light"
+
+    # All punctuation collapses to a single underscore (then stripped); falls back to 'server'
+    result = _tool_name("!!!---!!!", "foo")
+    assert result == "_mcp_server_foo"
+
+
+# ---------------------------------------------------------------------------
+# Test 2 — _resolve_tool longest-prefix routing + disabled-server guard
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_tool_routes_to_longest_prefix_server(db):
+    """With two registered servers whose sanitized names share a prefix,
+    _resolve_tool picks the LONGER match.
+
+    Also verifies that calling _resolve_tool on a disabled server's tool
+    raises ValueError — the disabled gate is enforced before any network
+    call happens.
+    """
+    svc = McpClientService()
+
+    # Register two servers: 'task' and 'taskie' — 'task_' is a prefix of 'taskie_'
+    server_a = svc.add_server(name="task", host="http://nowhere:1111", headers={}, enabled=True)
+    server_b = svc.add_server(name="taskie", host="http://nowhere:2222", headers={}, enabled=True)
+
+    # Seed tool rows directly into mcp_tools.sqlite so _resolve_tool has something to match.
+    # We do NOT call ping_and_sync (that requires the network); we test _resolve_tool's
+    # lookup logic in isolation by seeding the servers table only.
+    # _resolve_tool reads from mcp_client_servers via list_servers(), NOT mcp_tools.sqlite.
+    # The tool name encodes the server: _mcp_taskie_create_document → server 'taskie'.
+    server, remote_tool = svc._resolve_tool("_mcp_taskie_create_document")
+    assert server["id"] == server_b["id"], (
+        "Expected _mcp_taskie_create_document to resolve to the 'taskie' server, "
+        f"but got server id={server['id']!r} (name={server['name']!r})"
+    )
+    assert remote_tool == "create_document"
+
+    # The shorter-prefix server ('task') still resolves its own tools correctly.
+    server_a_resolved, remote_tool_a = svc._resolve_tool("_mcp_task_ping")
+    assert server_a_resolved["id"] == server_a["id"]
+    assert remote_tool_a == "ping"
+
+    # Disabling server_b and then trying to resolve its tool raises ValueError.
+    svc.update_server(server_b["id"], {"enabled": False})
+    with pytest.raises(ValueError, match="disabled"):
+        svc._resolve_tool("_mcp_taskie_create_document")
+
+
+# ---------------------------------------------------------------------------
+# Test 3 — policy seeding on add + policy purge on delete
+# ---------------------------------------------------------------------------
+
+
+def test_policy_rows_seeded_on_sync_and_purged_on_delete(db):
+    """_seed_policy_rows inserts one row per (action_id, context) pair into
+    policy_rules; delete_server purges those rows alongside the server row.
+
+    This is the deterministic path through the policy lifecycle:
+    seed (simulating what ping_and_sync calls after a successful list_tools)
+    → assert rows exist → delete → assert rows gone.
+    """
+    from services.policy_service import VALID_CONTEXTS
+
+    svc = McpClientService()
+    server = svc.add_server(name="taskie", host="http://nowhere:5100", headers={}, enabled=True)
+    server_id = server["id"]
+
+    # Simulate what ping_and_sync does after receiving tools from the remote server,
+    # without touching the network.
+    fake_tools = [
+        {"name": "create_document", "description": "Create a doc", "inputSchema": {}},
+        {"name": "delete_document", "description": "Delete a doc", "inputSchema": {}},
+    ]
+    svc._seed_policy_rows("taskie", fake_tools)
+
+    # Assert policy rows were seeded for each tool × context.
+    expected_action_ids = {
+        "_mcp_taskie_create_document",
+        "_mcp_taskie_delete_document",
+    }
+    with svc._db.connection() as conn:
+        rows = conn.execute(
+            "SELECT action_id, context, state FROM policy_rules "
+            "WHERE action_id LIKE '_mcp_taskie_%'"
+        ).fetchall()
+
+    assert len(rows) == len(expected_action_ids) * len(VALID_CONTEXTS), (
+        f"Expected {len(expected_action_ids) * len(VALID_CONTEXTS)} policy rows, "
+        f"got {len(rows)}"
+    )
+
+    seeded_action_ids = {r[0] for r in rows}
+    assert seeded_action_ids == expected_action_ids
+
+    # States must match _MCP_POLICY_DEFAULTS (ask for chat/subagent, deny otherwise).
+    state_by_key = {(r[0], r[1]): r[2] for r in rows}
+    assert state_by_key[("_mcp_taskie_create_document", "chat")] == "ask"
+    assert state_by_key[("_mcp_taskie_create_document", "subconscious")] == "deny"
+    assert state_by_key[("_mcp_taskie_delete_document", "external_agent")] == "deny"
+
+    # delete_server must purge the policy rows AND the server row.
+    svc.delete_server(server_id)
+
+    with svc._db.connection() as conn:
+        remaining_policy = conn.execute(
+            "SELECT COUNT(*) FROM policy_rules WHERE action_id LIKE '_mcp_taskie_%'"
+        ).fetchone()[0]
+        remaining_server = conn.execute(
+            "SELECT COUNT(*) FROM mcp_client_servers WHERE id = ?", (server_id,)
+        ).fetchone()[0]
+
+    assert remaining_policy == 0, (
+        f"Expected 0 policy_rules rows after delete_server, got {remaining_policy}"
+    )
+    assert remaining_server == 0, (
+        f"Expected 0 mcp_client_servers rows after delete_server, got {remaining_server}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 4 — get_online_mcp_tool_names gates on enabled=1 AND status=online
+# ---------------------------------------------------------------------------
+
+
+def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db, tmp_path, monkeypatch):
+    """get_online_mcp_tool_names returns tool names ONLY for servers that are
+    both enabled=1 AND status='online'.
+
+    A disabled-but-online server and an enabled-but-offline server both
+    contribute ZERO tool names.  Only the enabled+online combination
+    contributes to the discoverable set.
+
+    This is the gate that find_tools uses; if it's wrong, disabled/offline
+    servers' tools would appear to the LLM.
+
+    Isolation: _DATA_DIR is redirected to tmp_path so mcp_tools.sqlite is
+    written to a fresh temp directory.  get_mcp_tools_db_path() reads
+    cls._DATA_DIR at call time (file_mapper_service.py:106), so the redirect
+    takes effect for every _open_tools_db() call in this test.  The conftest
+    db fixture patches get_shared_db_service (not _DATA_DIR), so the two
+    redirects are independent — svc._db is unaffected.
+    """
+    # Redirect mcp_tools.sqlite to a fresh temp directory via the class attribute
+    # that get_mcp_tools_db_path() reads.  monkeypatch auto-undoes this at teardown.
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+
+    svc = McpClientService()
+
+    # Server A: enabled=1, status='online' → should appear.
+    server_a = svc.add_server(name="online_svc", host="http://a:1", headers={}, enabled=True)
+    # Server B: enabled=0, status='online' (disabled) → must NOT appear.
+    server_b = svc.add_server(name="disabled_svc", host="http://b:1", headers={}, enabled=False)
+    # Server C: enabled=1, status='offline' → must NOT appear.
+    server_c = svc.add_server(name="offline_svc", host="http://c:1", headers={}, enabled=True)
+
+    # Manually write status values to the DB (bypassing ping_and_sync which needs network).
+    with svc._db.connection() as conn:
+        conn.execute(
+            "UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_a["id"],)
+        )
+        conn.execute(
+            "UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_b["id"],)
+        )
+        conn.execute(
+            "UPDATE mcp_client_servers SET status='offline' WHERE id=?", (server_c["id"],)
+        )
+        conn.commit()
+
+    # Seed fake tool rows directly into mcp_tools.sqlite via the real production writer.
+    from services.mcp_client_service import _open_tools_db
+
+    conn_tools = _open_tools_db()
+    try:
+        for srv_id, srv_name in [
+            (server_a["id"], "online_svc"),
+            (server_b["id"], "disabled_svc"),
+            (server_c["id"], "offline_svc"),
+        ]:
+            tool_name = f"_mcp_{_sanitize_name(srv_name)}_fetch"
+            conn_tools.execute(
+                "INSERT OR REPLACE INTO mcp_tools "
+                "(server_id, tool_name, summary, raw_schema) VALUES (?, ?, ?, ?)",
+                (srv_id, tool_name, "test tool", "{}"),
+            )
+        conn_tools.commit()
+    finally:
+        conn_tools.close()
+
+    online_names = svc.get_online_mcp_tool_names()
+
+    assert "_mcp_online_svc_fetch" in online_names, (
+        "Enabled+online server's tool must be discoverable"
+    )
+    assert "_mcp_disabled_svc_fetch" not in online_names, (
+        "Disabled server's tool must NOT be discoverable (even if status=online)"
+    )
+    assert "_mcp_offline_svc_fetch" not in online_names, (
+        "Offline server's tool must NOT be discoverable (even if enabled)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — add_server persists row with correct defaults + enabled flag
+# ---------------------------------------------------------------------------
+
+
+def test_add_server_persists_row_with_correct_defaults(db):
+    """add_server writes a row to mcp_client_servers with status='unknown',
+    the supplied enabled flag, and proper JSON-serialized headers.
+
+    Tests that the row actually reaches the DB and that the contract the
+    nightly scenario's step 3 checks is met: row exists with enabled=1.
+    """
+    svc = McpClientService()
+    server = svc.add_server(
+        name="my-server",
+        host="http://example.lan:9000",
+        headers={"Authorization": "Bearer token123"},
+        enabled=True,
+    )
+
+    assert server["status"] == "unknown", (
+        "New server status must start as 'unknown' — "
+        "not 'online' (which requires a successful ping)"
+    )
+    assert server["enabled"] is True
+    assert server["name"] == "my-server"
+    assert server["host"] == "http://example.lan:9000"
+
+    # Headers round-trip correctly.
+    assert server["headers"]["Authorization"] == "Bearer token123"
+
+    # Row is actually in the DB — not just in the returned dict.
+    with svc._db.connection() as conn:
+        row = conn.execute(
+            "SELECT id, name, status, enabled FROM mcp_client_servers WHERE id = ?",
+            (server["id"],),
+        ).fetchone()
+
+    assert row is not None
+    assert row[1] == "my-server"
+    assert row[2] == "unknown"
+    assert row[3] == 1  # enabled=True → INTEGER 1
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — get_tool_schema round-trips the stored inputSchema
+# ---------------------------------------------------------------------------
+
+
+def test_get_tool_schema_round_trips_stored_input_schema(db, tmp_path, monkeypatch):
+    """get_tool_schema returns the exact inputSchema written by _write_tools.
+
+    This is the schema the LLM sees when find_tools surfaces an _mcp_* tool.
+    Without this round-trip the model receives a parameter-less tool spec and
+    must brute-force its arguments (nightly finding #5, 30-iteration failure).
+
+    Isolation: _DATA_DIR is redirected so mcp_tools.sqlite lands in tmp_path.
+    The seed is done via the real production writer _write_tools — no hand-
+    crafted SQL — so the test exercises the real store→read path end to end.
+    """
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+
+    svc = McpClientService()
+
+    # Seed via the real production writer.  server_id can be any string since
+    # mcp_tools has no FK to mcp_client_servers.
+    svc._write_tools(
+        "srv-1",
+        "taskie",
+        [
+            {
+                "name": "create_document",
+                "description": "Create a doc",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"title": {"type": "string"}},
+                    "required": ["title"],
+                },
+            }
+        ],
+    )
+
+    # Positive path — existing tool.
+    result = svc.get_tool_schema("_mcp_taskie_create_document")
+
+    assert result is not None, "get_tool_schema must return a dict for a stored tool"
+    assert result["name"] == "_mcp_taskie_create_document"
+    assert result["description"] == "Create a doc"
+    assert result["input_schema"] == {
+        "type": "object",
+        "properties": {"title": {"type": "string"}},
+        "required": ["title"],
+    }, (
+        "inputSchema must survive the json.dumps→json.loads round-trip intact — "
+        "this is the schema the LLM will use to build its tool call"
+    )
+
+    # Negative path — tool absent from the DB.
+    assert svc.get_tool_schema("_mcp_taskie_does_not_exist") is None, (
+        "get_tool_schema must return None for an unknown tool name"
+    )

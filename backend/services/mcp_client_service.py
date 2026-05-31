@@ -72,19 +72,6 @@ def _tool_name(server_name: str, remote_tool: str) -> str:
     return f"_mcp_{_sanitize_name(server_name)}_{remote_tool}"
 
 
-def _parse_tool_name(prefixed: str) -> tuple[str, str]:
-    """Parse _mcp_<server>_<tool> back into (sanitized_server, remote_tool).
-
-    The tool portion may contain underscores, so we must look up all known
-    server sanitized names to split correctly.  Callers provide the full
-    server record list.
-    """
-    # Strip the leading '_mcp_' prefix.
-    if not prefixed.startswith("_mcp_"):
-        raise ValueError(f"Not an MCP tool name: {prefixed!r}")
-    return prefixed[5:], ""  # callers use lookup instead; this is a helper.
-
-
 # ── mcp_tools.sqlite schema helpers ─────────────────────────────────────────
 
 _TOOLS_SCHEMA = """
@@ -321,6 +308,39 @@ class McpClientService:
                 }
                 for r in rows
             ]
+        finally:
+            conn.close()
+
+    def get_tool_schema(self, tool_name: str) -> dict | None:
+        """Return the LLM tool spec for a single _mcp_* tool, or None if unknown.
+
+        Reads from mcp_tools.sqlite by exact tool_name match.  The returned dict
+        has the same shape as the ability-backed schema dicts built in
+        message_processor.py — {name, description, input_schema} — so it can be
+        appended to self._discovered_tools without any conversion.
+
+        Consumer: message_processor._handle_tool_call() uses this in the
+        find_tools side-effect loop to inject MCP tool schemas into the LLM
+        context.  Without it the model sees a parameter-less tool and must
+        brute-force its arguments.
+        """
+        conn = _open_tools_db()
+        try:
+            row = conn.execute(
+                "SELECT summary, raw_schema FROM mcp_tools WHERE tool_name = ?",
+                (tool_name,),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                input_schema = json.loads(row["raw_schema"]) if row["raw_schema"] else {}
+            except json.JSONDecodeError:
+                input_schema = {}
+            return {
+                "name": tool_name,
+                "description": row["summary"] or "",
+                "input_schema": input_schema,
+            }
         finally:
             conn.close()
 
