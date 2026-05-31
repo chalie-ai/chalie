@@ -467,6 +467,30 @@ CREATE INDEX IF NOT EXISTS idx_memory_recall_log_caller
     ON memory_recall_log (caller, created_at DESC);
 
 -- ────────────────────────────────────────────────────────────────
+-- MCP_CLIENT_SERVERS — outbound MCP client connections
+--
+-- Chalie connects OUT to remote MCP servers (inverse of the inbound
+-- MCP server in mcp_server/server.py, which uses wrapper_tokens for
+-- auth).  Each row represents one configured remote server.
+-- status:  'unknown' | 'online' | 'offline'  — updated by heartbeat.
+-- headers: JSON object of extra HTTP headers (e.g. Authorization).
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS mcp_client_servers (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL,
+    host          TEXT NOT NULL,
+    headers       TEXT NOT NULL DEFAULT '{}',
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    status        TEXT NOT NULL DEFAULT 'unknown',
+    last_pinged_at TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_client_servers_enabled
+    ON mcp_client_servers(enabled);
+
+-- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT — persistent, channel-scoped conversation record
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS transcript (

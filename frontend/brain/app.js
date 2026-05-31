@@ -25,7 +25,7 @@ const BrainApp = (() => {
   const LABELS = {
     providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
     lists: 'Lists', documents: 'Documents', capabilities: 'Capabilities',
-    policies: 'Policies', skills: 'Skills', mcp: 'MCP Server',
+    policies: 'Policies', skills: 'Skills', mcp: 'MCP',
     memory: 'Memory', tools: 'Tools', world: 'World state',
     personality: 'Personality', errors: 'Errors', usage: 'Usage',
     compaction: 'Compacted Summary',
@@ -167,7 +167,7 @@ const BrainApp = (() => {
       { kind: 'Jump', label: 'Capabilities', icon: 'Capability', section: 'capabilities' },
       { kind: 'Jump', label: 'Policies · Chat', icon: 'Policy', section: 'policies', sub: 'chat' },
       { kind: 'Jump', label: 'Skills', icon: 'Skill', section: 'skills' },
-      { kind: 'Jump', label: 'MCP Server', icon: 'Server', section: 'mcp' },
+      { kind: 'Jump', label: 'MCP', icon: 'Server', section: 'mcp' },
     ];
 
     const q = query.toLowerCase();

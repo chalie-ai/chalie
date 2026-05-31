@@ -96,6 +96,16 @@ class FileMapperService:
         return cls._ABILITIES_DIR / "assets" / "skills.sqlite"
 
     @classmethod
+    def get_mcp_tools_db_path(cls) -> Path:
+        """Return path to the runtime MCP-tools index (gitignored, data/).
+
+        Separate from abilities.sqlite so build_ability_db rebuilds never
+        destroy the dynamically-synced _mcp_* tool rows.  Managed exclusively
+        by McpClientService — never by build_ability_db.
+        """
+        return cls._DATA_DIR / "mcp_tools.sqlite"
+
+    @classmethod
     def get_search_providers_db_path(cls) -> Path:
         """Return path to the search-provider routing database."""
         return cls._BACKEND_DIR / "tools" / "search" / "assets" / "search_tool_providers.sqlite"

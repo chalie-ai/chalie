@@ -244,6 +244,8 @@ def _register_workers(manager, host: str, port: int) -> None:
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
     _try_register(manager, "mcp-server", "mcp_server.server", "run_mcp_server")
+    _try_register(manager, "mcp-client-heartbeat",
+                  "workers.mcp_client_worker", "mcp_client_worker")
 
     def _flask_worker():
         from api import create_app

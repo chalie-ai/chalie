@@ -5,6 +5,8 @@
 backend/.env
 backend/.key
 # Runtime state — entire /data tree is local-only, never committed.
+# Includes data/mcp_tools.sqlite — the dynamic MCP client tool index
+# managed by McpClientService (rebuilt from remote servers at runtime).
 data/
 # Install-time artifact — voice models created by install.sh, not git-tracked.
 resources/
