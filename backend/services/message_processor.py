@@ -174,6 +174,9 @@ class MessageProcessor:
         "file_write",
         "home",
         "list",
+        # mcp_manager is DISCOVERABLE (find_tools can surface it) but SYSTEM-for-policy
+        # (always-allowed, never shown in Policy Manager).  See McpManagerAbility.
+        "mcp_manager",
         "news",
         "place",
         "programming_docs_search",

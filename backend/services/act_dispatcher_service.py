@@ -280,6 +280,12 @@ class ActDispatcherService:
         # Get handler
         handler = self.handlers.get(action_type)
         if not handler:
+            # _mcp_* tools: route to McpClientService before trying wrapper intents.
+            # Policy enforcement for these tools is handled via dynamically-seeded
+            # policy_rules rows (see McpClientService._seed_policy_rows).
+            if action_type.startswith('_mcp_'):
+                return self._dispatch_mcp_tool(action_type, action, channel, start_time)
+
             # Try wrapper intent routing before falling through to error
             wrapper_result = self._try_wrapper_intent(action_type, action)
             if wrapper_result:
@@ -327,6 +333,122 @@ class ActDispatcherService:
 
         return self._execute_with_timeout(action_type, channel, action, handler, effective_timeout, start_time)
 
+
+    def _dispatch_mcp_tool(
+        self,
+        action_type: str,
+        action: Dict[str, Any],
+        channel: str,
+        start_time: float,
+    ) -> Dict[str, Any]:
+        """Route an _mcp_<server>_<tool> call through McpClientService.
+
+        Enforces dynamically-seeded policy rows (ask/deny gates) before
+        executing.  Records the call in tool_calls via the normal result path
+        so the nightly scenario's tool_calls assertion passes.
+
+        Called by dispatch_action() when action_type.startswith('_mcp_').
+        Depends on: McpClientService._seed_policy_rows() having inserted rows
+        into policy_rules when the server was synced — those rows are what
+        make the ask-gate fire here.
+        """
+        # Policy enforcement for _mcp_* tools uses DB rows directly (not
+        # get_defaults(), which only covers registry-backed abilities).
+        policy_result = self._enforce_mcp_policy(action_type, action, channel)
+        if policy_result is not None:
+            return policy_result
+
+        params = {
+            k: v for k, v in action.items()
+            if k not in ('type', 'exchange_id', '_rich_media_ordinal')
+        }
+        try:
+            from services.mcp_client_service import McpClientService
+            raw = McpClientService().dispatch_mcp_tool(action_type, params)
+        except Exception as exc:
+            execution_time = time.time() - start_time
+            logging.warning(f"[ACT DISPATCH] MCP tool {action_type!r} failed: {exc}")
+            return {
+                'action_type': action_type,
+                'status': 'error',
+                'result': f"MCP tool error: {exc}",
+                'execution_time': execution_time,
+                'confidence': 0.0,
+                'notes': '',
+            }
+        return self._build_success_result(action_type, action, raw, time.time() - start_time)
+
+    def _enforce_mcp_policy(
+        self, action_type: str, action: Dict[str, Any], channel: str
+    ) -> Dict[str, Any] | None:
+        """Policy enforcement for _mcp_* tools via DB rows (bypasses get_defaults()).
+
+        McpClientService.ping_and_sync() seeds per-tool rows into policy_rules
+        with chat=ask, subagent=ask, subconscious=deny, external_agent=deny.
+        We read those rows here directly rather than going through get_defaults()
+        (which only covers AbilityRegistry-backed abilities).
+
+        Returns a policy-denied result dict if blocked, or None to proceed.
+        """
+        from services.policy_service import (
+            PolicyService, USAGE_CLASS_TO_CONTEXT, _is_system_action,
+        )
+        from services.message_processor import current_processor
+        from services.database_service import get_shared_db_service
+
+        if _is_system_action(action_type):
+            return None  # Should not happen for _mcp_* but guard anyway.
+
+        proc = current_processor()
+        usage_class = getattr(proc, 'USAGE_CLASS', 'chat') if proc else 'chat'
+        context = USAGE_CLASS_TO_CONTEXT.get(usage_class, 'chat')
+
+        svc = PolicyService(get_shared_db_service())
+        # check() falls back to 'ask' when no DB row exists — safe default.
+        state = svc.check(action_type, context)
+
+        if state == 'allow':
+            return None
+
+        if state == 'deny':
+            svc.log_blocked(action_type, context, 'policy_deny', _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': self._POLICY_DENY_MSG.format(action_id=action_type),
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_type}/{context}=deny',
+            }
+
+        # state == 'ask'
+        if context == 'subconscious':
+            svc.log_blocked(action_type, context, 'user_unavailable', _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': self._POLICY_UNAVAILABLE_MSG.format(action_id=action_type),
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_type}/{context}=ask(auto-reject)',
+            }
+
+        # Chat / subagent: request user permission via REST → threading.Event.
+        verdict = self._request_permission(action_type, action, context)
+        if verdict != 'approved':
+            reason = 'user_denied' if verdict == 'denied' else 'timeout'
+            msg = (self._POLICY_USER_DENIED_MSG if verdict == 'denied'
+                   else self._POLICY_TIMEOUT_MSG).format(action_id=action_type)
+            svc.log_blocked(action_type, context, reason, _summarize_params(action))
+            return {
+                'action_type': action_type,
+                'status': 'policy_denied',
+                'result': msg,
+                'execution_time': 0.0,
+                'confidence': 0.0,
+                'notes': f'policy:{action_type}/{context}=ask({verdict})',
+            }
+        return None  # Approved — proceed.
 
     def _execute_with_timeout(
         self,

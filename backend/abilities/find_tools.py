@@ -1,6 +1,7 @@
 import copy
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import ClassVar
 
@@ -45,10 +46,18 @@ class FindToolsAbility(SearchableAbility):
     TIMEOUT = 10
 
     _DB_PATH: ClassVar[Path] = FileMapperService.get_abilities_db_path()
+    # Separate runtime DB for dynamically-synced MCP client tools.
+    # Queried in addition to _DB_PATH so build_ability_db rebuilds never
+    # destroy _mcp_* rows.  See McpClientService and FileMapperService.
+    _MCP_DB_PATH: ClassVar[Path] = FileMapperService.get_mcp_tools_db_path()
     _LOG_PREFIX = "[FIND_TOOLS]"
 
     def _build_tools_index(self) -> str:
-        """Return a formatted tools index string, or '' if unavailable."""
+        """Return a formatted tools index string for discoverable tools.
+
+        Includes both registered abilities (from AbilityRegistry) and
+        enabled+online MCP client tools (from McpClientService).
+        """
         from abilities._registry import AbilityRegistry
         from services.message_processor import current_processor
 
@@ -66,9 +75,28 @@ class FindToolsAbility(SearchableAbility):
             except KeyError:
                 pass
 
+        # Append online MCP tool names with a short tooltip.
+        for mcp_name in self._get_online_mcp_names():
+            if mcp_name not in blocked:
+                index[mcp_name] = "remote MCP tool"
+
         if not index:
             return ""
         return ", ".join(f"`{k}` ({v})" for k, v in index.items())
+
+    @staticmethod
+    def _get_online_mcp_names() -> list[str]:
+        """Return names of tools from enabled+online MCP servers.
+
+        Gracefully returns [] when no servers are configured or the service
+        is unavailable — never raises so find_tools always completes.
+        """
+        try:
+            from services.mcp_client_service import McpClientService
+            return McpClientService().get_online_mcp_tool_names()
+        except Exception as exc:
+            logger.debug("[FIND_TOOLS] Could not fetch MCP tool names: %s", exc)
+            return []
 
     def get_input_schema(self) -> dict:
         tools_index = self._build_tools_index()
@@ -89,7 +117,12 @@ class FindToolsAbility(SearchableAbility):
         from services.message_processor import current_processor
         proc = current_processor()
         allow = list(getattr(proc, "DISCOVERABLE", []) or []) if proc is not None else []
-        if not allow:
+        # Augment the allow-list with enabled+online MCP tool names so the
+        # find_tools query gate accepts them.
+        mcp_names = self._get_online_mcp_names()
+        effective_allow = list(set(allow) | set(mcp_names))
+
+        if not effective_allow:
             return {
                 "text": _skill_tag("find_tools", self._no_results_text(query), query=query),
                 "_discovered_tools": [],
@@ -102,10 +135,13 @@ class FindToolsAbility(SearchableAbility):
             query_embedding = EmbeddingService().generate_embedding(query)
         except Exception as e:
             logger.warning(f"{self._LOG_PREFIX} Embedding generation failed: {e}")
-            return self._fallback(query, limit, allow)
+            return self._fallback(query, limit, effective_allow)
 
         blob = pack_embedding(query_embedding)
+        # Query both abilities.sqlite (registered abilities) and mcp_tools.sqlite.
         rows = self._query(query, blob, limit, allow)
+        mcp_rows = self._query_mcp(query, blob, limit, mcp_names)
+        rows = self._merge_and_truncate(rows + mcp_rows, limit)
 
         if not rows:
             return {
@@ -152,6 +188,53 @@ class FindToolsAbility(SearchableAbility):
             fts_params=(query, *allow),
         )
 
+    def _query_mcp(self, query: str, blob: bytes, limit: int, mcp_names: list[str]) -> list:
+        """FTS-only search against mcp_tools.sqlite for enabled+online tools.
+
+        MCP tools don't have vector embeddings (they are dynamic and not passed
+        through the embedding pipeline), so this uses FTS keyword search only.
+        Returns rows in the same format as _hybrid_search: {key, label, score}.
+        """
+        if not mcp_names or not self._MCP_DB_PATH.exists():
+            return []
+        placeholders = ",".join("?" * len(mcp_names))
+        try:
+            conn = sqlite3.connect(str(self._MCP_DB_PATH))
+            try:
+                rows = conn.execute(
+                    f"""
+                    SELECT mt.tool_name, mt.summary, bm25(mcp_tools_fts) AS score
+                    FROM mcp_tools_fts
+                    JOIN mcp_tools mt ON mt.id = mcp_tools_fts.rowid
+                    WHERE mcp_tools_fts MATCH ?
+                      AND mt.tool_name IN ({placeholders})
+                    ORDER BY score ASC
+                    LIMIT ?
+                    """,
+                    (query, *mcp_names, limit),
+                ).fetchall()
+                return [
+                    {"key": r[0], "label": r[1] or "", "score": 0.5}
+                    for r in rows
+                ]
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.debug("[FIND_TOOLS] mcp_tools FTS failed: %s", exc)
+            return []
+
+    @staticmethod
+    def _merge_and_truncate(rows: list[dict], limit: int) -> list[dict]:
+        """Deduplicate by key and keep the top `limit` results by score."""
+        seen: set[str] = set()
+        merged = []
+        for row in rows:
+            if row["key"] not in seen:
+                seen.add(row["key"])
+                merged.append(row)
+        merged.sort(key=lambda r: r["score"], reverse=True)
+        return merged[:limit]
+
     def _format(self, rows: list) -> str:
         entries = [
             {"name": t["key"], "relevance": round(min(1.0, t["score"] * 8.0), 2)}
@@ -164,34 +247,49 @@ class FindToolsAbility(SearchableAbility):
         return f'INFO: The best tools for "{query}" are already available.'
 
     def _fallback(self, query: str, limit: int, allow: list[str]) -> dict:
+        """FTS-only fallback for abilities.sqlite when embedding fails."""
         if not allow:
             return {
                 "text": _skill_tag("find_tools", self._no_results_text(query), query=query),
                 "_discovered_tools": [],
             }
-        placeholders = ",".join("?" * len(allow))
-        rows = self._fts_only_search(
-            fts_sql=f"""
-                SELECT a.name
-                FROM ability_search_fts
-                JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
-                JOIN abilities a ON a.id = e.ability_id
-                WHERE ability_search_fts MATCH ?
-                  AND a.name IN ({placeholders})
-                GROUP BY a.id
-                ORDER BY a.name
-                LIMIT ?
-            """,
-            fts_params=(query, *allow, limit),
-        )
+        # Split allow list into ability names (abilities.sqlite) vs MCP names.
+        mcp_names = [n for n in allow if n.startswith("_mcp_")]
+        ability_names = [n for n in allow if not n.startswith("_mcp_")]
 
-        if not rows:
+        discovered: list[str] = []
+
+        if ability_names:
+            placeholders = ",".join("?" * len(ability_names))
+            rows = self._fts_only_search(
+                fts_sql=f"""
+                    SELECT a.name
+                    FROM ability_search_fts
+                    JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
+                    JOIN abilities a ON a.id = e.ability_id
+                    WHERE ability_search_fts MATCH ?
+                      AND a.name IN ({placeholders})
+                    GROUP BY a.id
+                    ORDER BY a.name
+                    LIMIT ?
+                """,
+                fts_params=(query, *ability_names, limit),
+            )
+            discovered.extend(row[0] for row in rows)
+
+        # Also fallback-search the MCP tools DB.
+        for row in self._query_mcp(query, b"", limit, mcp_names):
+            if row["key"] not in discovered:
+                discovered.append(row["key"])
+
+        discovered = discovered[:limit]
+
+        if not discovered:
             return {
                 "text": _skill_tag("find_tools", self._no_results_text(query), query=query),
                 "_discovered_tools": [],
             }
 
-        discovered = [row[0] for row in rows]
         entries = [{"name": n, "relevance": 0.5} for n in discovered]
         raw_text = json.dumps({"added_tools": entries})
         return {
