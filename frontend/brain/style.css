@@ -368,6 +368,7 @@ body::before {
 .provider-meta { font-size: 12px; color: var(--text-secondary); margin-top: 2px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .provider-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .provider-warn { color: var(--warning); font-size: 14px; }
+.provider-card.disabled { opacity: 0.55; }
 
 /* ── Badges ───────────────────────────────────────────────────── */
 .badge {
