@@ -257,8 +257,7 @@ class NewsService:
             return sorted(articles, key=lambda a: a.published_at, reverse=True)
 
         # Sort by score desc, then date desc
-        relevant.sort(key=lambda x: (-x[1], x[0].published_at), reverse=False)
-        relevant.sort(key=lambda x: x[1], reverse=True)
+        relevant.sort(key=lambda x: (x[1], x[0].published_at), reverse=True)
         return [a for a, _ in relevant]
 
     # ── Convenience methods ───────────────────────────────────

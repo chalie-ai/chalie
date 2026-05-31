@@ -220,6 +220,30 @@ class TestRanking:
         assert result[0].title == "Newer Article"
         assert result[-1].title == "Older Article"
 
+    def test_rank_by_relevance_breaks_score_ties_newest_first(self):
+        """Articles with identical cosine scores rank newest-first.
+
+        The two title embeddings are constructed to produce identical dot products
+        against the query embedding (both 0.8, above RELEVANCE_FLOOR), so ordering is
+        decided purely by published_at — which must be newest-first per the documented
+        'score desc, then date desc' contract.
+        """
+        import numpy as np
+        older = _make_article(title="Older Equal", published_at="2026-03-24T08:00:00+00:00")
+        newer = _make_article(title="Newer Equal", published_at="2026-03-24T12:00:00+00:00")
+
+        mock_emb = MagicMock()
+        mock_emb.generate_embedding_np.return_value = np.array([1.0, 0.0])
+        mock_emb.generate_embeddings_batch.return_value = [
+            np.array([0.8, 0.6]),   # older → dot product 0.8
+            np.array([0.8, -0.6]),  # newer → dot product 0.8 (tie)
+        ]
+        self.svc._embedding_svc = mock_emb
+
+        result = self.svc.rank_by_relevance([older, newer], "query")
+
+        assert [a.title for a in result] == ["Newer Equal", "Older Equal"]
+
 
 # ── fetch_feeds edge cases ────────────────────────────────────
 
