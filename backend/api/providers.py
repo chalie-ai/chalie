@@ -614,3 +614,52 @@ def set_selected_provider():
     except Exception as e:
         logger.error(f"[REST API] Failed to set selected provider: {e}")
         return jsonify({"error": "Failed to set selected provider"}), 500
+
+
+@providers_bp.route('/vision', methods=['GET'])
+@require_session
+def get_vision_provider():
+    """Return the configured vision provider + how it was resolved."""
+    try:
+        service = get_provider_service()
+        status = service.get_vision_provider_status()
+        provider = status['provider']
+        if provider and provider.get('api_key'):
+            provider['api_key'] = '***'
+        return jsonify({'provider': provider, 'source': status['source']}), 200
+    except Exception as e:
+        logger.error(f"[REST API] Failed to get vision provider: {e}")
+        return jsonify({"error": "Failed to get vision provider"}), 500
+
+
+@providers_bp.route('/vision', methods=['PUT'])
+@require_session
+def set_vision_provider():
+    """Set (or clear) the explicit vision provider id."""
+    try:
+        data = request.get_json() or {}
+        if 'provider_id' not in data:
+            return jsonify({"error": "Request body must contain 'provider_id'"}), 400
+
+        service = get_provider_service()
+        pid = data['provider_id']
+
+        if pid is None:
+            service.set_vision_provider(None)
+            return jsonify({'provider': None, 'source': 'none'}), 200
+
+        provider = service.get_provider_by_id(int(pid))
+        if not provider:
+            return jsonify({"error": _ERR_PROVIDER_NOT_FOUND}), 404
+        if not provider.get('supports_vision'):
+            return jsonify({"error": "Provider does not support vision"}), 400
+
+        service.set_vision_provider(int(pid))
+        if provider.get('api_key'):
+            provider['api_key'] = '***'
+        return jsonify({'provider': provider, 'source': 'explicit'}), 200
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid provider_id"}), 400
+    except Exception as e:
+        logger.error(f"[REST API] Failed to set vision provider: {e}")
+        return jsonify({"error": "Failed to set vision provider"}), 500
