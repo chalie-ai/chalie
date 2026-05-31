@@ -688,8 +688,23 @@ def _anthropic_convert_messages(messages: list) -> list:
             continue  # Skip the i += 1 at the bottom
 
         else:
-            # Regular message — pass through
-            result.append(msg)
+            img = msg.get('image')
+            if img:
+                blocks = []
+                if msg.get('content'):
+                    blocks.append({"type": "text", "text": msg['content']})
+                blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img['mime_type'],
+                        "data": img['data'],
+                    },
+                })
+                result.append({"role": msg['role'], "content": blocks})
+            else:
+                # Regular message — pass through
+                result.append(msg)
 
         i += 1
     return result
@@ -1016,7 +1031,20 @@ def _openai_convert_messages(messages: list) -> list:
                 "content": msg.get('content', ''),
             })
         else:
-            result.append(msg)
+            img = msg.get('image')
+            if img:
+                parts = []
+                if msg.get('content'):
+                    parts.append({"type": "text", "text": msg['content']})
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{img['mime_type']};base64,{img['data']}"
+                    },
+                })
+                result.append({"role": msg['role'], "content": parts})
+            else:
+                result.append(msg)
     return result
 
 
@@ -1357,8 +1385,14 @@ def _gemini_convert_messages(messages: list) -> list:
                 })
             result.append({"role": "model", "parts": parts})
         else:
-            result.append({
-                "role": role,
-                "parts": [{"text": msg.get('content', '')}],
-            })
+            parts = [{"text": msg.get('content', '')}]
+            img = msg.get('image')
+            if img:
+                parts.append({
+                    "inline_data": {
+                        "mime_type": img['mime_type'],
+                        "data": img['data'],
+                    }
+                })
+            result.append({"role": role, "parts": parts})
     return result
