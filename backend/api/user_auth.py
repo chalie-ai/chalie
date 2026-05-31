@@ -92,11 +92,23 @@ def auth_status():
         if has_session and vault_state == "locked":
             has_session = False
 
+        # Vision availability — gates the image-upload affordance in the chat UI.
+        try:
+            from services.database_service import get_shared_db_service
+            from services.provider_db_service import ProviderDbService
+            has_vision = (
+                ProviderDbService(get_shared_db_service()).get_vision_provider()
+                is not None
+            )
+        except Exception:
+            has_vision = False
+
         return jsonify({
             "has_master_account": account_count > 0,
             "has_providers": provider_count > 0,
             "has_session": has_session,
             "vault_state": vault_state,
+            "has_vision_provider": has_vision,
         }), 200
     except Exception as e:
         logger.error(f"[REST API] Auth status error: {e}")

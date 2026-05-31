@@ -293,3 +293,94 @@ class TestProvidersAPI:
         assert response.status_code == 404
         data = response.get_json()
         assert "not found" in data["error"].lower()
+
+    # ------------------------------------------------------------------
+    # GET /providers/vision
+    # ------------------------------------------------------------------
+
+    def test_get_vision_provider_masks_key(self, client, mock_service):
+        """GET /providers/vision masks api_key and returns the resolution source."""
+        mock_service.get_vision_provider_status.return_value = {
+            "provider": {"id": 7, "name": "v", "platform": "ollama",
+                         "api_key": "secret", "supports_vision": True},
+            "source": "explicit",
+        }
+
+        response = client.get('/providers/vision')
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["source"] == "explicit"
+        assert data["provider"]["id"] == 7
+        assert data["provider"]["api_key"] == "***"
+
+    def test_get_vision_provider_none(self, client, mock_service):
+        """GET /providers/vision returns provider None / source none when unset."""
+        mock_service.get_vision_provider_status.return_value = {
+            "provider": None, "source": "none",
+        }
+
+        response = client.get('/providers/vision')
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["provider"] is None
+        assert data["source"] == "none"
+
+    # ------------------------------------------------------------------
+    # PUT /providers/vision
+    # ------------------------------------------------------------------
+
+    def test_set_vision_provider_success(self, client, mock_service):
+        """PUT /providers/vision with a vision-capable id sets it (source explicit)."""
+        mock_service.get_provider_by_id.return_value = {
+            "id": 2, "name": "v", "platform": "ollama",
+            "api_key": None, "supports_vision": True,
+        }
+
+        response = client.put('/providers/vision', json={"provider_id": 2})
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["source"] == "explicit"
+        assert data["provider"]["id"] == 2
+        mock_service.set_vision_provider.assert_called_once_with(2)
+
+    def test_set_vision_provider_clear(self, client, mock_service):
+        """PUT /providers/vision with provider_id null clears the setting."""
+        response = client.put('/providers/vision', json={"provider_id": None})
+
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["provider"] is None
+        assert data["source"] == "none"
+        mock_service.set_vision_provider.assert_called_once_with(None)
+
+    def test_set_vision_provider_not_found(self, client, mock_service):
+        """PUT /providers/vision with unknown id returns 404."""
+        mock_service.get_provider_by_id.return_value = None
+
+        response = client.put('/providers/vision', json={"provider_id": 999})
+
+        assert response.status_code == 404
+        assert "not found" in response.get_json()["error"].lower()
+
+    def test_set_vision_provider_not_vision_capable(self, client, mock_service):
+        """PUT /providers/vision with a non-vision provider returns 400."""
+        mock_service.get_provider_by_id.return_value = {
+            "id": 3, "name": "plain", "platform": "ollama",
+            "api_key": None, "supports_vision": False,
+        }
+
+        response = client.put('/providers/vision', json={"provider_id": 3})
+
+        assert response.status_code == 400
+        assert "does not support vision" in response.get_json()["error"].lower()
+        mock_service.set_vision_provider.assert_not_called()
+
+    def test_set_vision_provider_missing_field(self, client, mock_service):
+        """PUT /providers/vision without provider_id returns 400."""
+        response = client.put('/providers/vision', json={})
+
+        assert response.status_code == 400
+        assert "provider_id" in response.get_json()["error"]

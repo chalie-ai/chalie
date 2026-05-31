@@ -149,3 +149,41 @@ class TestMissingDependency:
         assert result == ''
 
 
+# ─── no-vision note ───────────────────────────────────────────────────────────
+
+_NOTE = 'note: only text can be extracted. vision model not configured'
+
+
+@pytest.mark.unit
+def test_extract_image_appends_note_when_no_vision(tmp_path):
+    from services import text_extractor
+    img = tmp_path / "x.png"
+    img.write_bytes(b"fake")
+    with patch("services.image_context_service.analyze",
+               return_value={"ocr_text": "SOME TEXT", "vision_used": False, "error": None}):
+        out = text_extractor._extract_image(str(img))
+    assert out == f"SOME TEXT\n{_NOTE}"
+
+
+@pytest.mark.unit
+def test_extract_image_note_only_when_no_text_no_vision(tmp_path):
+    from services import text_extractor
+    img = tmp_path / "x.png"
+    img.write_bytes(b"fake")
+    with patch("services.image_context_service.analyze",
+               return_value={"ocr_text": "", "vision_used": False, "error": None}):
+        out = text_extractor._extract_image(str(img))
+    assert out == _NOTE
+
+
+@pytest.mark.unit
+def test_extract_image_no_note_when_vision_used(tmp_path):
+    from services import text_extractor
+    img = tmp_path / "x.png"
+    img.write_bytes(b"fake")
+    with patch("services.image_context_service.analyze",
+               return_value={"ocr_text": "a detailed description", "vision_used": True, "error": None}):
+        out = text_extractor._extract_image(str(img))
+    assert out == "a detailed description"
+
+

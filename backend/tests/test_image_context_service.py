@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 pytest_plugins = []
 
+pytestmark = pytest.mark.unit
+
 
 @pytest.fixture
 def sample_png_bytes():
@@ -162,4 +164,37 @@ def test_normalize_dimensions_no_op_for_small_image(sample_png_bytes):
     assert result.size == original_size
 
 
+# ─── Vision-vs-OCR branch ─────────────────────────────────────────────────────
+
+def _png_bytes():
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', (40, 40), (200, 30, 30)).save(buf, format='PNG')
+    return buf.getvalue()
+
+
+def test_analyze_uses_vision_when_provider_configured():
+    from services import image_context_service
+    with patch("services.provider_db_service.ProviderDbService.get_vision_provider",
+               return_value={"platform": "ollama", "model": "llava", "supports_vision": True}), \
+         patch("services.database_service.get_shared_db_service"), \
+         patch("services.vision_service.send_image_with_config",
+               return_value="a red square with a logo") as send, \
+         patch("services.ocr_service._extract_text") as ocr:
+        result = image_context_service.analyze(_png_bytes())
+    assert result["vision_used"] is True
+    assert result["ocr_text"] == "a red square with a logo"
+    assert send.called
+    assert not ocr.called          # vision path skips OCR entirely
+
+
+def test_analyze_falls_back_to_ocr_when_no_vision_provider():
+    from services import image_context_service
+    with patch("services.provider_db_service.ProviderDbService.get_vision_provider",
+               return_value=None), \
+         patch("services.database_service.get_shared_db_service"), \
+         patch("services.ocr_service._extract_text", return_value="HELLO WORLD TEXT"):
+        result = image_context_service.analyze(_png_bytes())
+    assert result["vision_used"] is False
+    assert result["ocr_text"] == "HELLO WORLD TEXT"
 

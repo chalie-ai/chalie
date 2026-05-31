@@ -688,8 +688,23 @@ def _anthropic_convert_messages(messages: list) -> list:
             continue  # Skip the i += 1 at the bottom
 
         else:
-            # Regular message — pass through
-            result.append(msg)
+            img = msg.get('image')
+            if img:
+                blocks = []
+                if msg.get('content'):
+                    blocks.append({"type": "text", "text": msg['content']})
+                blocks.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": img['mime_type'],
+                        "data": img['data'],
+                    },
+                })
+                result.append({"role": msg['role'], "content": blocks})
+            else:
+                # Regular message — pass through
+                result.append(msg)
 
         i += 1
     return result
@@ -1016,7 +1031,20 @@ def _openai_convert_messages(messages: list) -> list:
                 "content": msg.get('content', ''),
             })
         else:
-            result.append(msg)
+            img = msg.get('image')
+            if img:
+                parts = []
+                if msg.get('content'):
+                    parts.append({"type": "text", "text": msg['content']})
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{img['mime_type']};base64,{img['data']}"
+                    },
+                })
+                result.append({"role": msg['role'], "content": parts})
+            else:
+                result.append(msg)
     return result
 
 
@@ -1327,38 +1355,58 @@ def _gemini_accumulate_part(part, text_parts: list, tool_calls: list) -> None:
         })
 
 
+def _gemini_tool_message(msg: dict) -> dict:
+    """Gemini function-response message (a tool result delivered as a user turn)."""
+    return {
+        "role": "user",
+        "parts": [{
+            "function_response": {
+                "name": msg.get('name', ''),
+                "response": {"content": msg.get('content', '')},
+            }
+        }],
+    }
+
+
+def _gemini_assistant_message(msg: dict) -> dict:
+    """Gemini model message carrying optional text plus function calls."""
+    parts = []
+    text = msg.get('content', '')
+    if text:
+        parts.append({"text": text})
+    for tc in msg['tool_calls']:
+        parts.append({
+            "function_call": {
+                "name": tc['name'],
+                "args": tc['input'],
+            }
+        })
+    return {"role": "model", "parts": parts}
+
+
+def _gemini_plain_message(msg: dict, role: str) -> dict:
+    """Gemini user/model message with text and an optional inline image."""
+    parts = [{"text": msg.get('content', '')}]
+    img = msg.get('image')
+    if img:
+        parts.append({
+            "inline_data": {
+                "mime_type": img['mime_type'],
+                "data": img['data'],
+            }
+        })
+    return {"role": role, "parts": parts}
+
+
 def _gemini_convert_messages(messages: list) -> list:
     """Convert normalized messages to Gemini format."""
     result = []
     for msg in messages:
         role = "model" if msg['role'] == 'assistant' else msg['role']
         if msg['role'] == 'tool':
-            # Gemini expects function responses as user messages
-            result.append({
-                "role": "user",
-                "parts": [{
-                    "function_response": {
-                        "name": msg.get('name', ''),
-                        "response": {"content": msg.get('content', '')},
-                    }
-                }],
-            })
+            result.append(_gemini_tool_message(msg))
         elif msg['role'] == 'assistant' and msg.get('tool_calls'):
-            parts = []
-            text = msg.get('content', '')
-            if text:
-                parts.append({"text": text})
-            for tc in msg['tool_calls']:
-                parts.append({
-                    "function_call": {
-                        "name": tc['name'],
-                        "args": tc['input'],
-                    }
-                })
-            result.append({"role": "model", "parts": parts})
+            result.append(_gemini_assistant_message(msg))
         else:
-            result.append({
-                "role": role,
-                "parts": [{"text": msg.get('content', '')}],
-            })
+            result.append(_gemini_plain_message(msg, role))
     return result
