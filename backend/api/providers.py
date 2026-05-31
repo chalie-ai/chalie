@@ -627,8 +627,8 @@ def get_vision_provider():
         if provider and provider.get('api_key'):
             provider['api_key'] = '***'
         return jsonify({'provider': provider, 'source': status['source']}), 200
-    except Exception as e:
-        logger.error(f"[REST API] Failed to get vision provider: {e}")
+    except Exception:
+        logger.exception("[REST API] Failed to get vision provider")
         return jsonify({"error": "Failed to get vision provider"}), 500
 
 
@@ -660,6 +660,6 @@ def set_vision_provider():
         return jsonify({'provider': provider, 'source': 'explicit'}), 200
     except (ValueError, TypeError):
         return jsonify({"error": "Invalid provider_id"}), 400
-    except Exception as e:
-        logger.error(f"[REST API] Failed to set vision provider: {e}")
+    except Exception:
+        logger.exception("[REST API] Failed to set vision provider")
         return jsonify({"error": "Failed to set vision provider"}), 500

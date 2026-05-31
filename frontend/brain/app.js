@@ -38,7 +38,7 @@ const BrainApp = (() => {
 
   const PANELS = {
     providers: typeof PanelProviders !== 'undefined' ? PanelProviders : null,
-    vision: typeof PanelVision !== 'undefined' ? PanelVision : null,
+    vision: typeof PanelVision === 'undefined' ? null : PanelVision,
     cognition: typeof PanelCognition !== 'undefined' ? PanelCognition : null,
     scheduler: typeof PanelScheduler !== 'undefined' ? PanelScheduler : null,
     lists: typeof PanelLists !== 'undefined' ? PanelLists : null,

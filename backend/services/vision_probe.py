@@ -41,7 +41,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
     """Best-effort parse of the first JSON object in the model reply."""
     if not text:
         return None
-    fenced = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+    fenced = re.search(r'```(?:json)?\s*(\{.*\})\s*```', text, re.DOTALL)
     if fenced:
         candidate = fenced.group(1)
     else:
