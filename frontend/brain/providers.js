@@ -62,6 +62,7 @@ const PanelProviders = (() => {
           <div class="provider-name">${BrainApp.escapeHtml(p.name)}${warn}</div>
           <div class="provider-meta">
             <span class="badge badge-${p.platform}">${BrainApp.escapeHtml(p.platform)}</span>
+            ${p.supports_vision ? `<span class="badge badge-success" title="Verified image understanding">Vision</span>` : ''}
             <span>${BrainApp.escapeHtml(p.model || 'no model')}</span>
             ${p.host ? `<span>· ${BrainApp.escapeHtml(p.host)}</span>` : ''}
           </div>
