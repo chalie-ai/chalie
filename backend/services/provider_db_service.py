@@ -3,6 +3,8 @@
 import logging
 from typing import Dict, Any, Optional, List
 
+from services.log_utils import safe
+
 logger = logging.getLogger(__name__)
 
 
@@ -214,7 +216,7 @@ class ProviderDbService:
             logger.warning(
                 "[Provider] Skipping vision probe on create for '%s' — "
                 "no api_key available",
-                data.get('name'),
+                safe(data.get('name')),
             )
             vision = 0
         else:

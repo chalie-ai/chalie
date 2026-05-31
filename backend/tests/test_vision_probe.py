@@ -92,8 +92,8 @@ def test_prose_then_json_is_parsed():
 
 def test_garbage_scores_zero():
     from services.vision_probe import score_probe_response
-    assert score_probe_response("no json here") == 0.0
-    assert score_probe_response("") == 0.0
+    assert score_probe_response("no json here") == pytest.approx(0.0)
+    assert score_probe_response("") == pytest.approx(0.0)
 
 
 def test_duplicate_correct_shape_counts_once():
