@@ -12,6 +12,7 @@ const BrainApp = (() => {
 
   const SUB_ROUTES = {
     providers: null,
+    vision: null,
     cognition: ['memory', 'tools', 'world', 'personality', 'errors', 'usage'],
     scheduler: ['all', 'pending', 'fired', 'failed', 'cancelled'],
     lists: null,
@@ -25,6 +26,7 @@ const BrainApp = (() => {
   const LABELS = {
     providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
     lists: 'Lists', documents: 'Documents', capabilities: 'Capabilities',
+    vision: 'Vision',
     policies: 'Policies', skills: 'Skills', mcp: 'MCP',
     memory: 'Memory', tools: 'Tools', world: 'World state',
     personality: 'Personality', errors: 'Errors', usage: 'Usage',
@@ -36,6 +38,7 @@ const BrainApp = (() => {
 
   const PANELS = {
     providers: typeof PanelProviders !== 'undefined' ? PanelProviders : null,
+    vision: typeof PanelVision === 'undefined' ? null : PanelVision,
     cognition: typeof PanelCognition !== 'undefined' ? PanelCognition : null,
     scheduler: typeof PanelScheduler !== 'undefined' ? PanelScheduler : null,
     lists: typeof PanelLists !== 'undefined' ? PanelLists : null,
@@ -156,6 +159,7 @@ const BrainApp = (() => {
     const overlay = document.getElementById('cpOverlay');
     const allItems = [
       { kind: 'Jump', label: 'Providers', icon: 'Providers', section: 'providers' },
+      { kind: 'Jump', label: 'Vision', icon: 'Eye', section: 'vision' },
       { kind: 'Jump', label: 'Cognition · Memory', icon: 'Memory', section: 'cognition', sub: 'memory' },
       { kind: 'Jump', label: 'Cognition · Tools', icon: 'Tool', section: 'cognition', sub: 'tools' },
       { kind: 'Jump', label: 'Cognition · Personality', icon: 'Sparkles', section: 'cognition', sub: 'personality' },

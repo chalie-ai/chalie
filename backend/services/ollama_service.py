@@ -467,5 +467,13 @@ def _ollama_convert_messages(messages: list) -> list:
                 "content": msg.get('content', ''),
             })
         else:
-            result.append(msg)
+            img = msg.get('image')
+            if img:
+                result.append({
+                    "role": msg['role'],
+                    "content": msg.get('content', ''),
+                    "images": [img['data']],
+                })
+            else:
+                result.append(msg)
     return result

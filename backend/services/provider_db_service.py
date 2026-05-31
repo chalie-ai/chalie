@@ -3,21 +3,9 @@
 import logging
 from typing import Dict, Any, Optional, List
 
+from services.log_utils import safe
+
 logger = logging.getLogger(__name__)
-
-
-def _infer_vision_support(platform: str, model: str) -> bool:
-    """Infer vision support from platform and model name."""
-    model_lower = model.lower()
-    if platform == 'anthropic':
-        return any(x in model_lower for x in ('sonnet', 'opus', 'haiku'))
-    elif platform == 'openai':
-        return any(x in model_lower for x in ('gpt-4', 'gpt-5'))
-    elif platform == 'gemini':
-        return True  # All Gemini models support vision
-    elif platform == 'ollama':
-        return any(x in model_lower for x in ('llava', 'vision', 'bakllava'))
-    return False
 
 
 class ProviderDbService:
@@ -219,15 +207,28 @@ class ProviderDbService:
         api_key_val = data.get("api_key")
         encrypted_key = self._seal_api_key(api_key_val) if api_key_val else None
 
-        # Auto-infer vision support if not explicitly provided
-        if 'supports_vision' in data:
-            vision = 1 if data['supports_vision'] else 0
-        else:
-            vision = (
-                1 if _infer_vision_support(
-                    data.get('platform', ''), default_model,
-                ) else 0
+        # Verify vision support with a live probe (content-verifying).
+        # Uses the plaintext api_key from `data` (pre-seal). Any failure → 0.
+        # A key-requiring platform with no key cannot be probed — skip the
+        # (guaranteed-to-fail) network call and default to 0; a later key edit
+        # re-probes. Mirrors the update-path guard for create/update symmetry.
+        if platform in self._KEY_REQUIRING and not api_key_val:
+            logger.warning(
+                "[Provider] Skipping vision probe on create for '%s' — "
+                "no api_key available",
+                safe(data.get('name')),
             )
+            vision = 0
+        else:
+            from services.vision_probe import probe_provider
+            probe_config = {
+                'platform': data.get('platform', ''),
+                'model': default_model,
+                'api_key': api_key_val,
+                'host': data.get('host'),
+                'name': data.get('name'),
+            }
+            vision = 1 if probe_provider(probe_config) else 0
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -287,23 +288,36 @@ class ProviderDbService:
                 updates.append(f"{key} = ?")
                 params.append(data[key])
 
-        if "supports_vision" in data:
-            updates.append("supports_vision = ?")
-            params.append(1 if data["supports_vision"] else 0)
-
         if "is_active" in data:
             updates.append("is_active = ?")
             params.append(1 if data["is_active"] else 0)
 
-        # Auto-infer vision support if platform or model changed
-        # and supports_vision not explicit
-        if 'supports_vision' not in data and ('platform' in data or 'model' in data):
-            current = self.get_provider_by_id(provider_id)
-            if current:
-                platform = data.get('platform', current.get('platform', ''))
-                model = data.get('model', current.get('model', ''))
+        # Re-probe vision support only when a probe-relevant field changes
+        # (platform/model/host/api_key). Name-only edits never re-probe.
+        _probe_fields = {'platform', 'model', 'host', 'api_key'}
+        if _probe_fields & set(data.keys()):
+            current = self.get_provider_by_id(provider_id) or {}
+            eff_platform = data.get('platform', current.get('platform', ''))
+            eff_model = data.get('model', current.get('model', ''))
+            eff_host = data.get('host', current.get('host'))
+            # explicit new api_key wins; else reuse current (decrypted) value
+            eff_api_key = data['api_key'] if 'api_key' in data else current.get('api_key')
+            needs_key = eff_platform in self._KEY_REQUIRING
+            if needs_key and not eff_api_key:
+                # vault locked / no credential — cannot probe, leave column as-is
+                logger.warning(
+                    "[Provider] Skipping vision re-probe for id=%s — no api_key available",
+                    provider_id,
+                )
+            else:
+                from services.vision_probe import probe_provider
+                probe_config = {
+                    'platform': eff_platform, 'model': eff_model,
+                    'api_key': eff_api_key, 'host': eff_host,
+                    'name': current.get('name'),
+                }
                 updates.append("supports_vision = ?")
-                params.append(1 if _infer_vision_support(platform, model) else 0)
+                params.append(1 if probe_provider(probe_config) else 0)
 
         # Handle api_key separately for encryption
         if "api_key" in data:
@@ -368,4 +382,64 @@ class ProviderDbService:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
                 (str(provider_id),)
             )
+            cursor.close()
+
+    # ── Vision Provider ────────────────────────────────────────────
+
+    _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
+
+    def _resolve_vision_provider(self):
+        """Resolve (provider_or_None, source) where source ∈ explicit|auto|none.
+
+        explicit — an active, vision-capable provider id is stored in settings.
+        auto     — no explicit id, but the active selected provider supports
+                   vision (NOT persisted; surfaced to the UI so the user can
+                   lock it in).
+        none     — nothing usable.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT value FROM settings WHERE key = 'vision_provider_id'"
+            )
+            row = cursor.fetchone()
+            cursor.close()
+        if row and row[0]:
+            try:
+                pid = int(row[0])
+                provider = self.get_provider_by_id(pid)  # active-only
+                if provider and provider.get('supports_vision'):
+                    return provider, 'explicit'
+            except (ValueError, TypeError):
+                pass
+        selected = self.get_selected_provider()
+        if selected and selected.get('supports_vision'):
+            return selected, 'auto'
+        return None, 'none'
+
+    def get_vision_provider(self) -> Optional[Dict[str, Any]]:
+        """Runtime resolver — the provider to use for image understanding, or None."""
+        provider, _ = self._resolve_vision_provider()
+        return provider
+
+    def get_vision_provider_status(self) -> Dict[str, Any]:
+        """UI-facing — {'provider': dict|None, 'source': 'explicit'|'auto'|'none'}."""
+        provider, source = self._resolve_vision_provider()
+        return {'provider': provider, 'source': source}
+
+    def set_vision_provider(self, provider_id: Optional[int]) -> None:
+        """Persist the explicit vision provider id, or clear it when None."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            if provider_id is None:
+                cursor.execute(
+                    "DELETE FROM settings WHERE key = 'vision_provider_id'"
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
+                    "VALUES ('vision_provider_id', ?, 'int', 'ID of the provider used for image understanding', 0) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                    (str(provider_id),)
+                )
             cursor.close()

@@ -688,6 +688,17 @@ class ChalieApp {
       attachBtn.classList.remove('active');
       document.getElementById('imageFileInput')?.click();
     });
+
+    // Hide image upload when no vision provider is configured — images can only
+    // be understood by a vision-capable provider. Documents still upload (OCR).
+    fetch('/auth/status', { credentials: 'same-origin' })
+      .then(r => r.json())
+      .then(d => {
+        if (!d.has_vision_provider) {
+          document.getElementById('attachImageBtn')?.classList.add('hidden');
+        }
+      })
+      .catch(() => { /* leave visible on error */ });
   }
 
   // ---------------------------------------------------------------------------

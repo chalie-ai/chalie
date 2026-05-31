@@ -2,6 +2,7 @@
 const BrainSidebar = (() => {
   const NAV = [
     { id: 'providers', label: 'Providers', icon: 'Providers', group: 'cognition' },
+    { id: 'vision', label: 'Vision', icon: 'Eye', group: 'cognition' },
     { id: 'cognition', label: 'Cognition', icon: 'Brain', group: 'cognition',
       sub: [
         { id: 'memory', label: 'Memory' },

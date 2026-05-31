@@ -266,5 +266,9 @@ def _extract_image(path: str) -> str:
     from services import image_context_service
     result = image_context_service.analyze(image_bytes)
     if result.get('error'):
-        logger.warning(f"[TEXT EXTRACTOR] Image OCR failed: {result['error']}")
-    return result.get('ocr_text') or ''
+        logger.warning(f"[TEXT EXTRACTOR] Image analysis: {result['error']}")
+    text = result.get('ocr_text') or ''
+    if result.get('vision_used') is False:
+        note = 'note: only text can be extracted. vision model not configured'
+        text = f'{text}\n{note}' if text else note
+    return text

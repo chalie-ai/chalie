@@ -104,24 +104,6 @@ export class ImageAttach {
   }
 
   /**
-   * Kept for backward compat — returns empty array since images now go through
-   * the unified attachments path, not a separate image_ids list.
-   * @returns {string[]}
-   */
-  getImageIds() {
-    return [];
-  }
-
-  /**
-   * Kept for backward compat — returns empty array since files now go through
-   * the unified attachments path, not a separate base64 files list.
-   * @returns {Array}
-   */
-  getPendingFiles() {
-    return [];
-  }
-
-  /**
    * Clears the preview strip.
    *
    * Called when a message is sent or the user navigates away.
