@@ -185,7 +185,7 @@ const PanelMcp = (() => {
         </div>
         <div class="form-group">
           <label for="mcpOutHost">Host (incl. port)</label>
-          <input type="text" id="mcpOutHost" placeholder="http://grck.lan:5100/mcp" class="form-input">
+          <input type="text" id="mcpOutHost" placeholder="https://mcp.example.com/mcp" class="form-input">
         </div>
         <div class="form-group">
           <label>Additional Headers</label>
