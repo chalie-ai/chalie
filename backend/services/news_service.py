@@ -2,23 +2,32 @@
 News Service — RSS fetching, caching, ranking, clustering, and deduplication.
 """
 
+import calendar
 import hashlib
+import html as _html
 import json
 import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
-from datetime import timezone
-from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote_plus, urlparse
-from xml.etree import ElementTree
 
+# feedparser: tolerant RSS/Atom/RDF parsing + media/date normalisation,
+# replaces hand-rolled ElementTree pipeline (TKT-733)
+import feedparser
+
+# rapidfuzz: SIMD-accelerated Levenshtein, replaces two-row DP implementation (TKT-733)
+from rapidfuzz.distance import Levenshtein as _Levenshtein
+
+# nh3: HTML sanitiser strips tags from feed descriptions (TKT-733; same lib used in services/markup.py)
+import nh3
 import numpy as np
 import requests
 
-from services.time_utils import utc_now, parse_utc
+from services.time_utils import utc_now
 from services import news_sources
 
 logger = logging.getLogger(__name__)
@@ -33,8 +42,6 @@ TOTAL_BUDGET = 8.0
 RELEVANCE_FLOOR = 0.3
 LEVENSHTEIN_THRESHOLD = 5
 
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_ENTITY_MAP = {"&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#039;": "'", "&nbsp;": " "}
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -139,7 +146,7 @@ class NewsService:
         return all_articles
 
     def _parse_feed(self, src, timeout: float) -> list:
-        """Fetch and parse a single RSS/Atom feed."""
+        """Fetch and parse a single RSS/Atom feed via feedparser."""
         try:
             resp = requests.get(
                 src.feed_url,
@@ -154,104 +161,16 @@ class NewsService:
             logger.debug(f"{LOG_PREFIX} Failed to fetch {src.id}: {e}")
             return []
 
-        try:
-            root = ElementTree.fromstring(resp.content)
-        except ElementTree.ParseError as e:
-            logger.debug(f"{LOG_PREFIX} XML parse error for {src.id}: {e}")
-            return []
-
-        # Try RSS items first, then Atom entries
-        items = root.findall(".//item")
-        if items:
-            return self._parse_rss_items(items, src)
-
-        # Atom namespace
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
-        entries = root.findall(".//atom:entry", ns)
-        if not entries:
-            entries = root.findall(".//{http://www.w3.org/2005/Atom}entry")
-        if not entries:
-            # Try without namespace
-            entries = root.findall(".//entry")
-        if entries:
-            return self._parse_atom_entries(entries, src)
-
-        return []
-
-    def _parse_rss_items(self, items, src) -> list:
-        articles = []
-        for item in items:
-            title = self._text(item, "title")
-            if not title:
-                continue
-            desc = _strip_html(self._text(item, "description") or "")[:400]
-            url = self._text(item, "link") or self._text(item, "guid") or ""
-            pub_date = self._text(item, "pubDate")
-            if not pub_date:
-                # Try dc:date
-                for child in item:
-                    if child.tag.endswith("}date") or child.tag == "date":
-                        pub_date = child.text
-                        break
-            published_at = _parse_date(pub_date)
-            articles.append(NewsArticle(
-                title=title.strip(),
-                description=desc.strip(),
-                url=url.strip(),
-                published_at=published_at,
-                source=src.name,
-                source_id=src.id,
-                category=src.category,
-                image_url=_rss_item_image(item),
-            ))
-        return articles
-
-    def _parse_atom_entries(self, entries, src) -> list:
-        articles = []
-        for entry in entries:
-            ns = {"atom": "http://www.w3.org/2005/Atom"}
-            title = self._text_ns(entry, "title", ns) or self._text(entry, "title")
-            if not title:
-                continue
-            desc = self._text_ns(entry, "summary", ns) or self._text_ns(entry, "content", ns)
-            if not desc:
-                desc = self._text(entry, "summary") or self._text(entry, "content") or ""
-            desc = _strip_html(desc)[:400]
-            # Link
-            url = ""
-            for link_el in entry.findall("atom:link", ns) + entry.findall("link"):
-                rel = link_el.get("rel", "alternate")
-                if rel == "alternate":
-                    url = link_el.get("href", "")
-                    break
-            if not url:
-                url = self._text_ns(entry, "id", ns) or self._text(entry, "id") or ""
-            pub_date = (self._text_ns(entry, "published", ns) or
-                        self._text_ns(entry, "updated", ns) or
-                        self._text(entry, "published") or
-                        self._text(entry, "updated"))
-            published_at = _parse_date(pub_date)
-            articles.append(NewsArticle(
-                title=title.strip(),
-                description=desc.strip(),
-                url=url.strip(),
-                published_at=published_at,
-                source=src.name,
-                source_id=src.id,
-                category=src.category,
-                image_url=_atom_entry_image(entry),
-            ))
-        return articles
-
-    @staticmethod
-    def _text(el, tag: str) -> Optional[str]:
-        child = el.find(tag)
-        return child.text if child is not None and child.text else None
-
-    @staticmethod
-    def _text_ns(el, tag: str, ns: dict) -> Optional[str]:
-        child = el.find(f"atom:{tag}", ns)
-        return child.text if child is not None and child.text else None
+        # feedparser is tolerant of malformed XML (sets feed.bozo but recovers what it can).
+        # We return [] only when feedparser yields zero usable entries, not on bozo alone.
+        feed = feedparser.parse(resp.content)
+        feed_image = getattr(getattr(feed, "feed", None), "image", None)
+        feed_image_url = getattr(feed_image, "href", "") if feed_image else ""
+        return [
+            article
+            for entry in feed.entries
+            if (article := _entry_to_article(entry, src, feed_image_url)) is not None
+        ]
 
     # ── Google News ───────────────────────────────────────────
 
@@ -275,13 +194,17 @@ class NewsService:
                 headers={"User-Agent": USER_AGENT},
             )
             resp.raise_for_status()
-            root = ElementTree.fromstring(resp.content)
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Google News fetch failed: {e}")
             return []
 
+        feed = feedparser.parse(resp.content)
         dummy_src = news_sources.Source("google_news", "Google News", "international", url, "US")
-        articles = self._parse_rss_items(root.findall(".//item"), dummy_src)
+        articles = [
+            article
+            for entry in feed.entries
+            if (article := _entry_to_article(entry, dummy_src, "")) is not None
+        ]
 
         if articles:
             store.setex(cache_key, FEED_CACHE_TTL, json.dumps([a.to_dict() for a in articles]))
@@ -298,11 +221,10 @@ class NewsService:
         result = []
         for article in articles:
             norm = _normalize_title(article.title)
-            is_dup = False
-            for prev in seen:
-                if _levenshtein(norm, prev) <= LEVENSHTEIN_THRESHOLD:
-                    is_dup = True
-                    break
+            is_dup = any(
+                _Levenshtein.distance(norm, prev) <= LEVENSHTEIN_THRESHOLD
+                for prev in seen
+            )
             if not is_dup:
                 seen.append(norm)
                 result.append(article)
@@ -356,119 +278,87 @@ class NewsService:
 # ── Module-level helpers ──────────────────────────────────────
 
 def _strip_html(text: str) -> str:
-    text = _HTML_TAG_RE.sub(" ", text)
-    for entity, char in _ENTITY_MAP.items():
-        text = text.replace(entity, char)
-    return _WHITESPACE_RE.sub(" ", text).strip()
+    """Strip HTML tags and decode entities, normalising whitespace."""
+    if not text:
+        return ""
+    cleaned = nh3.clean(text, tags=set())
+    return _WHITESPACE_RE.sub(" ", _html.unescape(cleaned).replace("\xa0", " ")).strip()
 
 
-def _parse_date(date_str: Optional[str]) -> str:
-    """Parse RFC 2822 or ISO 8601 date string to ISO 8601 UTC."""
-    if not date_str:
+def _feedparser_date_to_utc_str(parsed) -> str:
+    """Convert feedparser's UTC struct_time to an ISO 8601 UTC string.
+
+    feedparser normalises all date formats (RFC 2822, ISO 8601, W3CDTF, POSIX)
+    to a UTC struct_time. Returns utc_now() when parsed is None.
+    """
+    if parsed is None:
         return utc_now().isoformat()
-    # Try RFC 2822 first (common in RSS)
-    try:
-        dt = parsedate_to_datetime(date_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.isoformat()
-    except Exception:
-        pass
-    # Try ISO 8601
-    try:
-        dt = parse_utc(date_str)
-        return dt.isoformat()
-    except Exception:
-        pass
-    return utc_now().isoformat()
+    ts = calendar.timegm(parsed)  # treats struct_time as UTC (not local)
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+def _feedparser_image(entry, feed_image_url: str = "") -> str:
+    """Extract a thumbnail URL from a feedparser entry (RSS or Atom unified).
+
+    Priority: media:thumbnail → media:content (image/* or medium=image)
+    → enclosures (image/*, feedparser key is 'href' not 'url')
+    → feed-level channel image fallback.
+    """
+    thumbs = entry.get("media_thumbnail") or []
+    if thumbs:
+        url = thumbs[0].get("url", "")
+        if url:
+            return url.strip()
+
+    for media in (entry.get("media_content") or []):
+        t = (media.get("type") or "").lower()
+        m = (media.get("medium") or "").lower()
+        if t.startswith("image/") or m == "image":
+            url = media.get("url", "")
+            if url:
+                return url.strip()
+
+    for enc in (entry.get("enclosures") or []):
+        t = (enc.get("type") or "").lower()
+        if t.startswith("image/"):
+            href = enc.get("href", "")
+            if href:
+                return href.strip()
+
+    return feed_image_url.strip() if feed_image_url else ""
+
+
+def _entry_to_article(entry, src, feed_image_url: str) -> Optional[NewsArticle]:
+    """Build a NewsArticle from a feedparser entry.
+
+    Shared by _parse_feed and fetch_google_news so there is one parsing path.
+    Returns None when the entry has no usable title.
+    """
+    title = (entry.get("title") or "").strip()
+    if not title:
+        return None
+
+    content = entry.get("content") or []
+    raw_desc = entry.get("summary") or (content[0].get("value", "") if content else "")
+    desc = _strip_html(raw_desc)[:400]
+    url = (entry.get("link") or entry.get("id") or "").strip()
+    published_at = _feedparser_date_to_utc_str(
+        entry.get("published_parsed") or entry.get("updated_parsed")
+    )
+    return NewsArticle(
+        title=title,
+        description=desc.strip(),
+        url=url,
+        published_at=published_at,
+        source=src.name,
+        source_id=src.id,
+        category=src.category,
+        image_url=_feedparser_image(entry, feed_image_url),
+    )
 
 
 def _normalize_title(title: str) -> str:
     return _WHITESPACE_RE.sub(" ", _PUNCT_RE.sub("", title.lower())).strip()
-
-
-def _levenshtein(s1: str, s2: str) -> int:
-    """Two-row DP Levenshtein distance."""
-    if not s1:
-        return len(s2)
-    if not s2:
-        return len(s1)
-    m, n = len(s1), len(s2)
-    prev = list(range(n + 1))
-    curr = [0] * (n + 1)
-    for i in range(1, m + 1):
-        curr[0] = i
-        for j in range(1, n + 1):
-            cost = 0 if s1[i - 1] == s2[j - 1] else 1
-            curr[j] = min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost)
-        prev, curr = curr, prev
-    return prev[n]
-
-
-_MEDIA_NS = "{http://search.yahoo.com/mrss/}"
-
-
-def _rss_item_image(item) -> str:
-    """Extract a thumbnail URL from an RSS <item>.
-
-    Order: media:thumbnail → media:content (image/*) → enclosure (image/*)
-    → <image><url>. Returns empty string if none present.
-    """
-    thumb = item.find(f"{_MEDIA_NS}thumbnail")
-    if thumb is not None:
-        url = thumb.get("url")
-        if url:
-            return url.strip()
-    for media in item.findall(f"{_MEDIA_NS}content"):
-        media_type = (media.get("type") or "").lower()
-        medium = (media.get("medium") or "").lower()
-        if media_type.startswith("image/") or medium == "image":
-            url = media.get("url")
-            if url:
-                return url.strip()
-    enc = item.find("enclosure")
-    if enc is not None:
-        enc_type = (enc.get("type") or "").lower()
-        if enc_type.startswith("image/"):
-            url = enc.get("url")
-            if url:
-                return url.strip()
-    image_el = item.find("image")
-    if image_el is not None:
-        url_el = image_el.find("url")
-        if url_el is not None and url_el.text:
-            return url_el.text.strip()
-    return ""
-
-
-def _atom_entry_image(entry) -> str:
-    """Extract a thumbnail URL from an Atom <entry>.
-
-    Honours media:thumbnail, media:content, and atom:link[rel=enclosure,
-    type=image/*]. Returns empty string if none present.
-    """
-    thumb = entry.find(f"{_MEDIA_NS}thumbnail")
-    if thumb is not None:
-        url = thumb.get("url")
-        if url:
-            return url.strip()
-    for media in entry.findall(f"{_MEDIA_NS}content"):
-        media_type = (media.get("type") or "").lower()
-        medium = (media.get("medium") or "").lower()
-        if media_type.startswith("image/") or medium == "image":
-            url = media.get("url")
-            if url:
-                return url.strip()
-    atom_ns = "{http://www.w3.org/2005/Atom}"
-    for link_el in entry.findall(f"{atom_ns}link") + entry.findall("link"):
-        if link_el.get("rel") != "enclosure":
-            continue
-        link_type = (link_el.get("type") or "").lower()
-        if link_type.startswith("image/"):
-            href = link_el.get("href")
-            if href:
-                return href.strip()
-    return ""
 
 
 def _derive_domain(feed_url: str) -> Optional[str]:
