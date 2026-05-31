@@ -6,20 +6,6 @@ from typing import Dict, Any, Optional, List
 logger = logging.getLogger(__name__)
 
 
-def _infer_vision_support(platform: str, model: str) -> bool:
-    """Infer vision support from platform and model name."""
-    model_lower = model.lower()
-    if platform == 'anthropic':
-        return any(x in model_lower for x in ('sonnet', 'opus', 'haiku'))
-    elif platform == 'openai':
-        return any(x in model_lower for x in ('gpt-4', 'gpt-5'))
-    elif platform == 'gemini':
-        return True  # All Gemini models support vision
-    elif platform == 'ollama':
-        return any(x in model_lower for x in ('llava', 'vision', 'bakllava'))
-    return False
-
-
 class ProviderDbService:
     """Manages provider configuration in database."""
 
@@ -219,15 +205,17 @@ class ProviderDbService:
         api_key_val = data.get("api_key")
         encrypted_key = self._seal_api_key(api_key_val) if api_key_val else None
 
-        # Auto-infer vision support if not explicitly provided
-        if 'supports_vision' in data:
-            vision = 1 if data['supports_vision'] else 0
-        else:
-            vision = (
-                1 if _infer_vision_support(
-                    data.get('platform', ''), default_model,
-                ) else 0
-            )
+        # Verify vision support with a live probe (content-verifying).
+        # Uses the plaintext api_key from `data` (pre-seal). Any failure → 0.
+        from services.vision_probe import probe_provider
+        probe_config = {
+            'platform': data.get('platform', ''),
+            'model': default_model,
+            'api_key': api_key_val,
+            'host': data.get('host'),
+            'name': data.get('name'),
+        }
+        vision = 1 if probe_provider(probe_config) else 0
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
