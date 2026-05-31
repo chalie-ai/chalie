@@ -14,6 +14,7 @@ import time
 import logging
 from dataclasses import dataclass
 from typing import Optional
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -1349,7 +1350,9 @@ def _gemini_accumulate_part(part, text_parts: list, tool_calls: list) -> None:
     fc = getattr(part, 'function_call', None)
     if fc:
         tool_calls.append({
-            'id': f"gemini_{fc.name}_{int(time.time()*1000)}",
+            # Unique per call: a ms timestamp collides when the same tool is
+            # emitted twice in one response (same millisecond) — see TKT-786.
+            'id': f"gemini_{fc.name}_{uuid4().hex[:8]}",
             'name': fc.name,
             'input': dict(fc.args) if fc.args else {},
         })

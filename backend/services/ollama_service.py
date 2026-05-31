@@ -12,6 +12,7 @@ import logging
 import re
 import time
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from services.llm_service import _app_user_agent
 
@@ -424,13 +425,17 @@ def _parse_chat_response(data: dict, default_model: str) -> LLMResponse:
     tool_calls = None
     raw_tool_calls = msg.get('tool_calls')
     if raw_tool_calls:
+        # call_id must be globally unique across the whole turn, not just
+        # within one response: the index resets every LLM call, so an
+        # index-only id collides across ACT iterations and strands the
+        # ACT-trail spinner (TKT-786). A uuid suffix guarantees uniqueness.
         tool_calls = [
             {
-                'id': f"ollama_{tc.get('function', {}).get('name', 'unknown')}_{i}",
+                'id': f"ollama_{tc.get('function', {}).get('name', 'unknown')}_{uuid4().hex[:8]}",
                 'name': tc.get('function', {}).get('name', ''),
                 'input': tc.get('function', {}).get('arguments', {}),
             }
-            for i, tc in enumerate(raw_tool_calls)
+            for tc in raw_tool_calls
         ]
     return LLMResponse(
         text=text,
