@@ -24,11 +24,13 @@ MIME allowlist (images + documents accepted by text_extractor):
 
 import logging
 import os
-import re
 import secrets
 
 from flask import Blueprint, jsonify, request
 
+# safe_filename: shared werkzeug-backed sanitizer (services/filename_utils.py),
+# also used by api/documents.py — single source of truth for upload filenames.
+from services.filename_utils import safe_filename
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -66,36 +68,15 @@ _MIME_TO_EXT: dict[str, str] = {
     'text/html': '.html',
 }
 
-_CONTROL_CHARS_RE = re.compile(r'[\x00-\x1f\x7f]')
-
-
 def _sanitize_filename(original: str, mime: str) -> str:
-    """Return a safe filename derived from the uploaded original name.
+    """Return a safe upload filename, falling back to a MIME-derived name.
 
-    Strips path separators, null bytes, control characters, and leading dots.
-    Falls back to a MIME-derived name when the result is empty or too short.
-
-    Args:
-        original: Raw filename from the multipart upload (may be empty).
-        mime:     MIME type string used to derive the extension as fallback.
-
-    Returns:
-        A sanitised, non-empty filename string (length <= 255).
+    Delegates name hardening to ``safe_filename``; when that yields nothing
+    safe, substitutes ``upload<ext>`` using the MIME-derived extension.
     """
-    name = original or ''
-    name = name.replace('/', '').replace('\\', '').replace('\x00', '')
-    name = _CONTROL_CHARS_RE.sub('', name)
-    name = name.lstrip('.')
-    name = re.sub(r'\s+', ' ', name).strip()
-
+    name = safe_filename(original)
     if not name:
-        ext = _MIME_TO_EXT.get(mime, '.bin')
-        name = f'upload{ext}'
-
-    if len(name) > 255:
-        ext = os.path.splitext(name)[1]
-        name = name[:255 - len(ext)] + ext
-
+        name = f'upload{_MIME_TO_EXT.get(mime, ".bin")}'
     return name
 
 

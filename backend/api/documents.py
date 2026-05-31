@@ -26,7 +26,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import mimetypes
 import threading
 from datetime import datetime
@@ -34,6 +33,9 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request, send_file
 
 from services.file_mapper_service import FileMapperService
+# safe_filename: shared werkzeug-backed sanitizer (services/filename_utils.py),
+# also used by api/upload.py — single source of truth for upload filenames.
+from services.filename_utils import safe_filename
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,10 @@ _ERR_NOT_FOUND = "Not found"
 _ERR_FILE_NOT_FOUND = "File not found on disk"
 
 documents_bp = Blueprint("documents", __name__)
+
+# Fallback when an uploaded name reduces to nothing safe (e.g. ".." or
+# non-ASCII-only). secure_filename returns '' in those cases.
+_FALLBACK_DOCUMENT_NAME = 'unnamed_document'
 
 # Max upload size (50MB)
 MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -103,22 +109,8 @@ def _serialize_doc(doc: dict) -> dict:
 
 
 def _sanitize_filename(name: str) -> str:
-    """Sanitize filename: strip path separators, null bytes, control chars."""
-    # Remove path separators and null bytes
-    name = name.replace('/', '').replace('\\', '').replace('\x00', '')
-    # Remove control characters
-    name = re.sub(r'[\x00-\x1f\x7f]', '', name)
-    # Prevent directory traversal
-    name = name.lstrip('.')
-    # Collapse whitespace
-    name = re.sub(r'\s+', ' ', name).strip()
-    if not name:
-        name = 'unnamed_document'
-    # Limit length
-    if len(name) > 255:
-        ext = os.path.splitext(name)[1]
-        name = name[:255 - len(ext)] + ext
-    return name
+    """Sanitize a document filename, falling back to a generic name."""
+    return safe_filename(name) or _FALLBACK_DOCUMENT_NAME
 
 
 def _validate_file_path(full_path: str) -> bool:

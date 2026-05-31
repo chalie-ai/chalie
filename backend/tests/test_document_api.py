@@ -295,12 +295,13 @@ class TestDocumentsAPI:
 class TestHelpers:
     """Test helper functions in the documents API module."""
 
-    def test_sanitize_filename_security(self):
+    def test_sanitize_filename_security_and_fallback(self):
         from api.documents import _sanitize_filename
+        # Hardening is delegated to safe_filename (covered in test_filename_utils);
+        # here we assert the document wrapper's fallback for empty results.
         assert '/' not in _sanitize_filename('../../etc/passwd')
-        assert '\\' not in _sanitize_filename('..\\windows\\system32')
-        assert '\x00' not in _sanitize_filename('file\x00.txt')
-        assert not _sanitize_filename('...hidden').startswith('.')
+        assert _sanitize_filename('..') == 'unnamed_document'
+        assert _sanitize_filename('') == 'unnamed_document'
 
     def test_validate_file_path_rejects_traversal(self, tmp_path):
         from api.documents import _validate_file_path
