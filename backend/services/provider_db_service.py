@@ -369,3 +369,63 @@ class ProviderDbService:
                 (str(provider_id),)
             )
             cursor.close()
+
+    # ── Vision Provider ────────────────────────────────────────────
+
+    _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
+
+    def _resolve_vision_provider(self):
+        """Resolve (provider_or_None, source) where source ∈ explicit|auto|none.
+
+        explicit — an active, vision-capable provider id is stored in settings.
+        auto     — no explicit id, but the active selected provider supports
+                   vision (NOT persisted; surfaced to the UI so the user can
+                   lock it in).
+        none     — nothing usable.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT value FROM settings WHERE key = 'vision_provider_id'"
+            )
+            row = cursor.fetchone()
+            cursor.close()
+        if row and row[0]:
+            try:
+                pid = int(row[0])
+                provider = self.get_provider_by_id(pid)  # active-only
+                if provider and provider.get('supports_vision'):
+                    return provider, 'explicit'
+            except (ValueError, TypeError):
+                pass
+        selected = self.get_selected_provider()
+        if selected and selected.get('supports_vision'):
+            return selected, 'auto'
+        return None, 'none'
+
+    def get_vision_provider(self) -> Optional[Dict[str, Any]]:
+        """Runtime resolver — the provider to use for image understanding, or None."""
+        provider, _ = self._resolve_vision_provider()
+        return provider
+
+    def get_vision_provider_status(self) -> Dict[str, Any]:
+        """UI-facing — {'provider': dict|None, 'source': 'explicit'|'auto'|'none'}."""
+        provider, source = self._resolve_vision_provider()
+        return {'provider': provider, 'source': source}
+
+    def set_vision_provider(self, provider_id: Optional[int]) -> None:
+        """Persist the explicit vision provider id, or clear it when None."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            if provider_id is None:
+                cursor.execute(
+                    "DELETE FROM settings WHERE key = 'vision_provider_id'"
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
+                    "VALUES ('vision_provider_id', ?, 'int', 'ID of the provider used for image understanding', 0) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                    (str(provider_id),)
+                )
+            cursor.close()
