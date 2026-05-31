@@ -30,6 +30,10 @@ PROBE_PROMPT = """Analyse the image attached and return back this EXACT json wit
 # Answer key for backend/vision/vision-test.png
 _EXPECTED_COUNT = 3
 _EXPECTED_SHAPES = {('rectangle', 'red'), ('circle', 'yellow'), ('hexagon', 'green')}
+# Deliberately lowercase: score_probe_response compares the model's reply via
+# .strip().lower(), so this constant MUST be lowercase. The image itself reads
+# "Chalie can read!" — do not "correct" the capitalisation here or the text
+# score silently drops to 0 and every provider fails the 0.80 threshold.
 _EXPECTED_TEXT = 'chalie can read!'
 
 

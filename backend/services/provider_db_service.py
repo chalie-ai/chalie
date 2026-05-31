@@ -207,15 +207,26 @@ class ProviderDbService:
 
         # Verify vision support with a live probe (content-verifying).
         # Uses the plaintext api_key from `data` (pre-seal). Any failure → 0.
-        from services.vision_probe import probe_provider
-        probe_config = {
-            'platform': data.get('platform', ''),
-            'model': default_model,
-            'api_key': api_key_val,
-            'host': data.get('host'),
-            'name': data.get('name'),
-        }
-        vision = 1 if probe_provider(probe_config) else 0
+        # A key-requiring platform with no key cannot be probed — skip the
+        # (guaranteed-to-fail) network call and default to 0; a later key edit
+        # re-probes. Mirrors the update-path guard for create/update symmetry.
+        if platform in self._KEY_REQUIRING and not api_key_val:
+            logger.warning(
+                "[Provider] Skipping vision probe on create for '%s' — "
+                "no api_key available",
+                data.get('name'),
+            )
+            vision = 0
+        else:
+            from services.vision_probe import probe_provider
+            probe_config = {
+                'platform': data.get('platform', ''),
+                'model': default_model,
+                'api_key': api_key_val,
+                'host': data.get('host'),
+                'name': data.get('name'),
+            }
+            vision = 1 if probe_provider(probe_config) else 0
 
         with self.db.connection() as conn:
             cursor = conn.cursor()

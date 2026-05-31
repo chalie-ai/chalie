@@ -36,6 +36,19 @@ def test_infer_vision_support_is_gone():
     assert not hasattr(mod, "_infer_vision_support")
 
 
+def test_create_keyless_key_requiring_provider_skips_probe(db):
+    """A key-requiring platform (openai/anthropic/gemini/openai_compatible) with
+    no api_key cannot be probed: the probe is skipped (no guaranteed-to-fail
+    network call) and supports_vision defaults to 0. Mirrors the update guard."""
+    svc = _svc(db)
+    with patch("services.vision_probe.probe_provider", return_value=True) as pp:
+        p = svc.create_provider(
+            {"name": "keyless-openai", "platform": "openai", "model": "gpt-4o"}
+        )
+    assert not pp.called
+    assert p["supports_vision"] is False
+
+
 def _make(db, svc, name="p", model="m", vision=0):
     with patch("services.vision_probe.probe_provider", return_value=bool(vision)):
         return svc.create_provider(
