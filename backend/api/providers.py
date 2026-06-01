@@ -208,6 +208,62 @@ def _fetch_anthropic_models(api_key: str):
         return None, "Anthropic API request failed"
 
 
+_GEMINI_MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
+# Cap pagination follow-through so a misbehaving upstream cannot loop forever.
+_GEMINI_MAX_PAGES = 10
+
+
+def _fetch_gemini_models(api_key: str):
+    """Fetch chat-capable model IDs from the Gemini ListModels REST API.
+
+    Keeps only models advertising ``generateContent`` and strips the leading
+    ``models/`` prefix from each name so the IDs match what the provider form
+    and ``GeminiService`` expect (e.g. ``gemini-2.5-flash``). The key travels
+    in the ``x-goog-api-key`` header — never the URL — to keep it out of access
+    and proxy logs, mirroring the other helpers.
+    """
+    if not api_key:
+        return None, "API key is required"
+    try:
+        models = []
+        page_token = None
+        for _ in range(_GEMINI_MAX_PAGES):
+            params = {'pageSize': 1000}
+            if page_token:
+                params['pageToken'] = page_token
+            r = req.get(
+                _GEMINI_MODELS_URL,
+                params=params,
+                headers={'x-goog-api-key': api_key},
+                timeout=_LIST_MODELS_TIMEOUT,
+            )
+            if r.status_code in (400, 401, 403):
+                return None, "Invalid API key"
+            if not r.ok:
+                return None, f"Gemini API returned {r.status_code}"
+            data = r.json()
+            for m in (data.get('models') or []):
+                methods = m.get('supportedGenerationMethods') or []
+                if 'generateContent' not in methods:
+                    continue
+                name = m.get('name') or ''
+                mid = name[len('models/'):] if name.startswith('models/') else name
+                if not mid:
+                    continue
+                models.append({"id": mid, "display_name": m.get('displayName')})
+            page_token = data.get('nextPageToken')
+            if not page_token:
+                break
+        return models, None
+    except req.exceptions.ConnectionError:
+        return None, "Cannot connect to Gemini API"
+    except req.exceptions.Timeout:
+        return None, "Gemini API request timed out"
+    except Exception as e:
+        logger.warning(f"[REST API] Gemini model list failed: {type(e).__name__}: {e}")
+        return None, "Gemini API request failed"
+
+
 def _fetch_openai_compatible_models(host: str, api_key: str):
     """Fetch models from an OpenAI-compatible endpoint via GET {host}/models."""
     if not host:
@@ -396,8 +452,9 @@ def list_models():
     """Live model-list fetch for the brain provider form.
 
     Body JSON:
-      {"platform": "ollama" | "openai" | "anthropic" | "openai_compatible",
-       "api_key": "...",   # openai / anthropic / openai_compatible
+      {"platform": "ollama" | "openai" | "anthropic" | "gemini"
+                   | "openai_compatible",
+       "api_key": "...",   # openai / anthropic / gemini / openai_compatible
        "host": "..."}      # ollama / openai_compatible
 
     Always returns HTTP 200 — auth/network/parse failures land in the body's
@@ -417,6 +474,8 @@ def list_models():
         models, err = _fetch_openai_models((body.get('api_key') or '').strip())
     elif platform == 'anthropic':
         models, err = _fetch_anthropic_models((body.get('api_key') or '').strip())
+    elif platform == 'gemini':
+        models, err = _fetch_gemini_models((body.get('api_key') or '').strip())
     elif platform == 'openai_compatible':
         models, err = _fetch_openai_compatible_models(
             body.get('host') or '', (body.get('api_key') or '').strip(),
