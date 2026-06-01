@@ -327,11 +327,10 @@ class UserMessageProcessor(MessageProcessor):
         self._last_response = llm_response
 
     def post_turn(self) -> None:
-        """Two-step fan-out, each individually error-isolated.
+        """Post-turn fan-out, each step individually error-isolated.
 
         Order is load-bearing (see plan § "Ordering constraints"):
-          1. ConversationPhaseService — two calls
-          2. MetricsService — last ("turn closed" signal)
+          1. MetricsService — last ("turn closed" signal)
 
         DMN is no longer a service with an idle timer — it runs as step 5 of
         SubconsciousWorker, gated by the worker's own user-idle check.
@@ -343,24 +342,7 @@ class UserMessageProcessor(MessageProcessor):
         pressure, not a post-turn consequence. Mid-ACT Stage 1/2 in
         send() owns it.
         """
-        channel = self.CHANNEL   # 'user'
-        text = self._raw_input
-        response = self._last_response
-
-        # 1. Conversation phase — TWO calls (user text + assistant response).
-        # Skip the assistant-side update on empty response (cap-exit turns):
-        # feeding '' would drift the phase model toward "silence" wrongly
-        # (Commit 8 critic P1-3).
-        try:
-            from services.conversation_phase_service import get_conversation_phase_service
-            phase = get_conversation_phase_service()
-            phase.update(channel, text, is_user=True, topic=channel)
-            if response:
-                phase.update(channel, response, is_user=False, topic=channel)
-        except Exception as e:
-            logger.debug(f"[POSTTURN] Phase update failed: {e}", exc_info=True)
-
-        # 2. Metrics (sync) — last: requests_total is the "turn closed" signal.
+        # 1. Metrics (sync) — last: requests_total is the "turn closed" signal.
         # WARNING level — observability hole if it silently fails
         # (Commit 8 critic P1-2).
         try:
@@ -371,7 +353,7 @@ class UserMessageProcessor(MessageProcessor):
         except Exception as e:
             logger.warning(f"[POSTTURN] Metrics failed: {e}", exc_info=True)
 
-        # 3. Proactive skill suggestion — fires only on clean ACT exits with 4+
+        # 2. Proactive skill suggestion — fires only on clean ACT exits with 4+
         # tool-calling iterations. Non-blocking (daemon thread inside the service).
         if self._loop_exited_cleanly and self._current_iteration >= 4:
             try:
