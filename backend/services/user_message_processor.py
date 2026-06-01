@@ -241,13 +241,13 @@ class UserMessageProcessor(MessageProcessor):
 
         Runs once at turn start (after self._uid is populated by write_input_row).
         Calls handle_memory directly so the result is a canonical tag block,
-        records the row via ToolRenderAndRecordService (ephemeral=False) — same
+        records the row via Ability.record() (ephemeral=False) — same
         storage path as any other durable tool call — and stores the block on
         self._memory_seed for get_user_prompt() to inject verbatim.
         """
+        from abilities._base import Ability
         from abilities._registry import AbilityRegistry
         from abilities.memory import MemoryAbility
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
 
         radius = MemoryAbility.SEED_RADIUS_BASELINE
         query = self._raw_input
@@ -280,13 +280,13 @@ class UserMessageProcessor(MessageProcessor):
             )
             return
 
-        ToolRenderAndRecordService(
+        Ability.record(
             tool_name='memory',
             params={'action': 'recall', 'query': query, 'radius': radius},
             result=block,
-            ephemeral=False,
             transcript_id=self._uid,
-        ).render_and_record()
+            ephemeral=False,
+        )
 
     def _emit_narration(self, text: str, iteration: int) -> None:
         """Push mid-loop narration text to the per-request SSE channel.

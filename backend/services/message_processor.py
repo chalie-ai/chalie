@@ -522,7 +522,6 @@ class MessageProcessor:
         del token_budget  # forward-compat placeholder; see docstring above
         from services import compaction_persistence, transcript_service
         from services.tool_call_service import ToolCallService
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
 
         compaction = compaction_persistence.get_compaction(self.CHANNEL)
         watermark = compaction['compacted_up_to_id'] if compaction else 0
@@ -571,11 +570,9 @@ class MessageProcessor:
                     continue
                 tc_params = _parse_tc_params(tc.get('params'))
                 tc_result = tc.get('result') or ''
-                lines.append(
-                    ToolRenderAndRecordService.render_static(
-                        tc_name, tc_params, tc_result
-                    )
-                )
+                # Old-path format (kept until T7/T8 migrates get_previous_messages
+                # to the flat-path build_user_prompt which uses Ability.render()).
+                lines.append(_render_tool_call_for_previous(tc_name, tc_params, tc_result))
 
         return '\n'.join(lines)
 
@@ -693,22 +690,27 @@ class MessageProcessor:
             if steers:
                 result_text += "\n\n" + "\n".join(steers)
 
-        # Render for old-path trail (T4 will replace this entirely).
-        # Ability.dispatch() already called Ability.record() which writes the DB row,
-        # so only render here without a second DB write.
+        # Render for old-path trail using Ability.render() — T4 replacement for
+        # the deleted ToolRenderAndRecordService.render_static().
+        # Ability.dispatch() already wrote the DB row via Ability.record(); only
+        # render here, no second write.  Full old-path migration in T7/T8.
         try:
-            from services.tool_render_and_record_service import ToolRenderAndRecordService  # noqa: PLC0415
+            from abilities._base import Ability  # noqa: PLC0415
             params_for_render = _sanitize_llm_args(dict(tc_input))
             params_for_render.pop('act_summary', None)
-            rendered = ToolRenderAndRecordService.render_static(
-                tool_name=tool_name,
-                params=params_for_render,
-                result=result_text,
-            )
+            import json as _json  # noqa: PLC0415
+            rendered = Ability.render({
+                "tool_name": tool_name,
+                "params": _json.dumps(params_for_render),
+                "result": result_text,
+                "id": None,
+                "created_at": None,
+                "ephemeral": 1,
+            })
         except Exception as exc:  # noqa: BLE001
-            rendered = f"[{tool_name}()] {result_text}"
+            rendered = f"[{tool_name}] {{}} → {result_text}"
             logger.error(
-                "[MessageProcessor.handle_tool] render_static failed tool=%s: %s",
+                "[MessageProcessor.handle_tool] render failed tool=%s: %s",
                 tool_name, exc, exc_info=True,
             )
 
@@ -718,17 +720,25 @@ class MessageProcessor:
     # ── send() helpers (extracted for S3776 cognitive complexity) ────────────
 
     def _record_iteration_narration(self, llm_response):
-        """Record mid-loop narration for the current iteration."""
+        """Record mid-loop narration for the current iteration (old-path send())."""
         if not llm_response.text:
             return
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
-        rendered = ToolRenderAndRecordService(
+        from abilities._base import Ability  # noqa: PLC0415
+        Ability.record(
             tool_name='narration',
             params={},
             result=llm_response.text,
-            ephemeral=True,
             transcript_id=self._uid,
-        ).render_and_record()
+            ephemeral=True,
+        )
+        rendered = Ability.render({
+            "tool_name": "narration",
+            "params": "{}",
+            "result": llm_response.text,
+            "id": None,
+            "created_at": None,
+            "ephemeral": 1,
+        })
         self._act_trail.append(rendered)
         try:
             self._emit_narration(llm_response.text, self._current_iteration)
@@ -872,7 +882,7 @@ class MessageProcessor:
 
         with bind_current_processor(self):
             # Write input row BEFORE the loop so transcript_id is available
-            # for ToolRenderAndRecordService during tool dispatch.
+            # for Ability.record() during tool dispatch.
             # Skipped for internal processors (SKIP_TRANSCRIPT_WRITE=True) so
             # they leave no trace in the transcript table.
             # SKIP_INPUT_ROW suppresses only the input row — store() still
@@ -1263,7 +1273,7 @@ class MessageProcessor:
     def store(self, llm_response: str) -> None:
         """Write the assistant transcript row. Input row was already written
         at the top of send(). Tool calls were recorded inline via
-        ToolRenderAndRecordService during the ACT loop.
+        Ability.record() during the ACT loop.
 
         When SKIP_TRANSCRIPT_WRITE is True (internal processors), this is a
         no-op — no rows are written and self._uid remains None.
@@ -1466,15 +1476,15 @@ class MessageProcessor:
         """
         if transcript_id is None or self._thinking_exploration is None:
             return
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        from abilities._base import Ability  # noqa: PLC0415
         try:
-            ToolRenderAndRecordService(
+            Ability.record(
                 tool_name='thinking',
                 params={},
                 result=self._thinking_exploration,
-                ephemeral=False,
                 transcript_id=transcript_id,
-            ).render_and_record()
+                ephemeral=False,
+            )
         except Exception as exc:
             logger.info(
                 "[THINKING] failed to persist exploration to tool_calls (%s)", exc
@@ -1611,6 +1621,9 @@ class MessageProcessor:
     def _record(self, response_text: str) -> None:
         """Post-loop.  Persist turn + fan-out side-effects.
 
+        Ephemeral trail rows are purged once here at turn end (spec §4c / F11).
+        Durable rows (ephemeral=0) survive for audit / previous-messages replay.
+
         Spec §4 / M4-M5 / C3-C4.
         """
         from services.transcript_service import write_assistant_row
@@ -1618,6 +1631,9 @@ class MessageProcessor:
         if self.cancel_event.is_set():
             self._cleanup_cancelled()
             return
+
+        # Purge ephemeral trail rows once at turn end (§4c / F11).
+        self._purge_ephemeral_tool_calls()
 
         if not self.config.skip_transcript:
             write_assistant_row(self.config.channel, response_text)
@@ -1685,14 +1701,62 @@ class MessageProcessor:
             lines.append(f"{role}: {content}")
         return "\n".join(lines)
 
-    # ── Trail stubs (implemented in T4/T5/T6) ────────────────────────────────
+    # ── Trail API (T4: act-trail-as-a-query) ─────────────────────────────────
+
+    def _purge_ephemeral_tool_calls(self) -> None:
+        """Delete all ephemeral=1 tool_calls rows for the current turn's uid.
+
+        Called once at turn end (_record) and on cancel (_cleanup_cancelled).
+        Durable rows (ephemeral=0, e.g. 'thinking', 'compaction') survive.
+        No-op when uid is None.
+
+        Spec §4c / F11.
+        """
+        if self.uid is None:
+            return
+        try:
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                conn.execute(
+                    "DELETE FROM tool_calls WHERE transcript_id = ? AND ephemeral = 1",
+                    (self.uid,),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[MessageProcessor] %s: failed to purge ephemeral tool_calls (uid=%s): %s",
+                self.config.channel, self.uid, exc,
+            )
 
     def _has_trail(self) -> bool:
         """True when a non-compaction trail row exists since last compaction.
 
-        Spec §4c / F9.  Real implementation in T4 (act-trail-as-query).
+        Queries tool_calls via Ability.fetch_by_transcript_id and slices from
+        the last trail_compaction row.  Returns True only when at least one
+        non-trail_compaction row exists in that slice.
+
+        Spec §4c / F9.
         """
-        return False
+        if self.uid is None:
+            return False
+        from abilities._base import Ability  # noqa: PLC0415
+        rows = _from_last_compaction(Ability.fetch_by_transcript_id(self.uid))
+        return any(r["tool_name"] != "trail_compaction" for r in rows)
+
+    def _render_act_trail(self) -> str:
+        """Assemble the ACT trail string for the current turn.
+
+        Fetches all tool_calls rows for self.uid ordered by id, slices from the
+        last trail_compaction row (inclusive), and renders each via Ability.render().
+        Returns '' when uid is None or no rows exist.
+
+        Spec §4c / _render_act_trail.
+        """
+        if self.uid is None:
+            return ""
+        from abilities._base import Ability  # noqa: PLC0415
+        rows = _from_last_compaction(Ability.fetch_by_transcript_id(self.uid))
+        return "\n".join(Ability.render(r) for r in rows)
 
     def _compact_trail(self) -> bool:
         """Trail compaction (>90%): summarise trail-so-far into one row.
@@ -1709,13 +1773,32 @@ class MessageProcessor:
         return True
 
     def _record_narration(self, response: "object") -> None:  # type: ignore[override]
-        """Mid-loop: persist LLM text between iterations as a trail row.
+        """Mid-loop: persist LLM text between iterations as an ephemeral trail row.
 
-        Full implementation depends on Ability.record (T4) and WS.emit (T7).
-        Stub at T2 — no-op.
+        Records a tool_calls row with tool_name='narration', ephemeral=True.
+        Emits an act_narration WS event gated on config.broadcast_to.
+        No-op when response.text is falsy.
 
-        Spec §4 / F14.
+        Spec §4 / F14 / F15 / N3.
         """
+        text = getattr(response, "text", None)
+        if not text:
+            return
+        from abilities._base import Ability, _emit  # noqa: PLC0415
+        Ability.record(
+            tool_name="narration",
+            params={},
+            result=text,
+            transcript_id=self.uid,
+            ephemeral=True,
+        )
+        # Gate on broadcast_to — background loops (broadcast_to=None) never emit (N1/N5).
+        if getattr(self.config, "broadcast_to", None) is not None:
+            _emit(self.config, {
+                "type": "act_narration",
+                "text": _sanitize_llm_args(text),
+                "step": self.current_iteration,
+            })
 
 
 # ── Module-private helpers ────────────────────────────────────────────────────
@@ -1842,6 +1925,45 @@ def _wrap_with_exploration(channel: str, user_body: str) -> str:
         "---\n\n"
         + user_body
     )
+
+
+def _from_last_compaction(rows: "list[dict]") -> "list[dict]":
+    """Return the tail of *rows* starting at the LAST 'trail_compaction' row (inclusive).
+
+    When no trail_compaction row exists, return all rows.
+
+    The history-compaction tool_name is 'compaction' (durable, channel-scoped).
+    Only 'trail_compaction' is a trail boundary.  'compaction' rows are
+    NOT boundaries and are included as-is in whatever slice they fall in.
+
+    Spec §4c / _from_last_compaction / F5 / F6 / F7.
+    """
+    last: "int | None" = None
+    for i, r in enumerate(rows):
+        if r.get("tool_name") == "trail_compaction":
+            last = i
+    return rows if last is None else rows[last:]
+
+
+def _render_tool_call_for_previous(tool_name: str, params: dict, result: str) -> str:
+    """Render a durable tool_call row for the old-path get_previous_messages().
+
+    Preserves the original format used by the deleted ToolRenderAndRecordService
+    so existing prompts and tests that were calibrated against that format are
+    not disturbed.  This function will be removed in T7/T8 when the old-path
+    get_previous_messages() is replaced by the flat-path build_user_prompt which
+    calls Ability.render() directly.
+
+    Format: '[tool_name(k="v",…)] result'
+    """
+    parts = []
+    for k, v in params.items():
+        if isinstance(v, str):
+            parts.append(f'{k}="{v}"')
+        else:
+            parts.append(f'{k}={v}')
+    param_str = ','.join(parts)
+    return f'[{tool_name}({param_str})] {result}'
 
 
 def _parse_tc_params(raw: object) -> dict:
