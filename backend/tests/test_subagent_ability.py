@@ -213,60 +213,6 @@ class TestSchemaCollisionPrevention:
         )
 
 
-class TestHandleToolDispatchCollisionGuard:
-    def test_handle_tool_routes_subagent_even_when_input_contains_type_key(self):
-        """handleTool() must dispatch to the 'subagent' handler even when the
-        LLM-emitted tool call input dict contains a key literally named 'type'
-        (the pre-fix collision vector).
-
-        Observable contract: the result string must NOT start with
-        'Unknown action type' and must start with '[subagent(' (the ack tag).
-
-        wait=False is used so the ack is returned synchronously without
-        invoking any LLM. The SubagentProcessor daemon thread is spawned and
-        discarded — we assert only on the synchronous return value."""
-        from services.act_dispatcher_service import ActDispatcherService
-        from services.message_processor import MessageProcessor
-
-        # Minimal concrete processor — skips transcript writes so no DB needed.
-        class _BareProcessor(MessageProcessor):
-            CHANNEL = "test"
-            ROLE = "test"
-            SKIP_TRANSCRIPT_WRITE = True
-
-            def get_user_prompt(self):
-                return "test"
-
-            def get_user_definition(self):
-                return "test user"
-
-        proc = _BareProcessor(raw_input="test")
-        proc._dispatcher = ActDispatcherService()
-
-        # This is the exact shape the model emitted during the 2026-05-02
-        # incident: input contains 'type' = 'web_surfer' (old field name).
-        # With the fix in place the spread order guarantees the envelope
-        # 'type' = 'subagent' wins; without the fix it was overwritten and
-        # the dispatcher saw 'web_surfer'.
-        tc = {
-            "name": "subagent",
-            "id": "test_collision_01",
-            "input": {
-                "prompt": "research something",
-                "type": "web_surfer",   # old colliding key — pre-fix field name
-                "wait": False,
-            },
-        }
-
-        result_text = proc.handle_tool(tc)
-
-        assert not result_text.startswith("Unknown action type"), (
-            f"Dispatcher received wrong action_type — collision guard failed. "
-            f"result={result_text!r}"
-        )
-        assert result_text.startswith("[subagent("), (
-            f"Expected ack tag starting with '[subagent(', got: {result_text!r}"
-        )
 
 
 

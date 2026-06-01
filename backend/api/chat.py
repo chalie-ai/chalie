@@ -369,35 +369,37 @@ def post_action():
     def _run_action():
         broker = WebSocketBroker()
         try:
-            from services.act_dispatcher_service import ActDispatcherService
+            import threading as _threading  # noqa: PLC0415
+            from abilities._base import Ability  # noqa: PLC0415
 
-            action = {
-                "type": skill,
-                **{k: v for k, v in body.items() if k != "skill"},
-            }
+            params = {k: v for k, v in body.items() if k != "skill"}
 
             broker.broadcast({"type": "status", "stage": "processing"})
 
-            dispatcher = ActDispatcherService()
-            dispatch_result = dispatcher.dispatch_action("action_button", action)
+            # Build a minimal dispatch context (no real MP needed for action buttons).
+            # Ability.dispatch() requires an mp-like object for channel, uid, etc.
+            class _ActionButtonCtx:
+                class config:
+                    channel = "action_button"
+                    broadcast_to = None
+                uid = None
+                cancel_event = _threading.Event()
+                discovered_tools = []
 
-            if dispatch_result.get("status") == "error":
-                result_text = dispatch_result.get("result", "")
-                if "Unknown action type" in result_text:
-                    broker.broadcast({
-                        "type": "error",
-                        "message": f"Unknown skill: {skill}",
-                        "recoverable": True,
-                    })
-                    broker.broadcast({"type": "done", "duration_ms": 0})
-                    return
+            ctx = _ActionButtonCtx()
+            result_text = Ability.dispatch(ctx, skill, params)
 
-            result = dispatch_result.get("result")
-            reply_actions = dispatch_result.get("reply_actions")
+            if result_text.startswith("Unknown tool:"):
+                broker.broadcast({
+                    "type": "error",
+                    "message": f"Unknown skill: {skill}",
+                    "recoverable": True,
+                })
+                broker.broadcast({"type": "done", "duration_ms": 0})
+                return
 
-            if isinstance(result, dict) and "text" in result:
-                reply_actions = reply_actions or result.get("reply_actions")
-                result = result["text"]
+            result = result_text
+            reply_actions = None
 
             elapsed_ms = int((time.time() - action_start) * 1000)
             content = sanitize(result or "Done.")

@@ -609,28 +609,42 @@ class MessageProcessor:
     def handle_tool(self, tc: dict) -> str:
         """Dispatch a single LLM tool call, record it, and add to context.
 
-        Uses self._dispatcher (created once per turn in send()) so that
-        tools discovered mid-turn via find_tools are registered as handlers
-        and dispatched through the same path as innate skills.
+        Routes through Ability.dispatch() — the single tool dispatch chokepoint.
+        Emission of start/end WS events and trail recording are handled inside
+        Ability.dispatch; the old-path narration trail (self._act_trail) is
+        still appended here until the trail API is fully wired in T4.
 
         Never re-raises — errors become strings the LLM sees next iteration.
         """
-        import time as _time
-        from uuid import uuid4
-        from services.tool_render_and_record_service import ToolRenderAndRecordService
+        from abilities._base import Ability  # noqa: PLC0415
+        from uuid import uuid4  # noqa: PLC0415
 
         tool_name = (tc.get('name') if isinstance(tc, dict) else None) or 'unknown'
         tc_input = tc.get('input', {}) if isinstance(tc, dict) else {}
         if not isinstance(tc_input, dict):
             tc_input = {}
-        tc_input = _sanitize_llm_args(tc_input)
-        act_summary = tc_input.pop('act_summary', None)
 
+        call_id = (tc.get('id') if isinstance(tc, dict) else None) or uuid4().hex[:12]
         self._metrics.record_tool(tool_name)
 
-        # Stable call_id: prefer the id field from the LLM; mint one if absent.
-        call_id = (tc.get('id') if isinstance(tc, dict) else None) or uuid4().hex[:12]
-        t_start = _time.monotonic()
+        # Build a compat mp-like object that satisfies Ability.dispatch()'s
+        # interface using the old processor's attributes.  This adapter is
+        # temporary — removed in T7/T8 when old processors are replaced by configs.
+        class _OldPathCtx:
+            class config:
+                channel = self.CHANNEL
+                # Old path uses callback-based emission; new dispatch gates on
+                # broadcast_to.  Set None here — the old _emit_tool_event handles
+                # start/end events via the old callbacks instead.
+                broadcast_to = None
+            uid = self._uid
+            cancel_event = self._cancel_event
+            discovered_tools = self._discovered_tools
+
+        ctx = _OldPathCtx()
+
+        # Emit start event via old callback before dispatching.
+        act_summary = _sanitize_llm_args(dict(tc_input)).get('act_summary')
         self._emit_tool_event({
             'type': 'act_tool_start',
             'call_id': call_id,
@@ -639,75 +653,15 @@ class MessageProcessor:
             **(({'act_summary': act_summary}) if act_summary else {}),
         })
 
+        import time as _time  # noqa: PLC0415
+        t_start = _time.monotonic()
         ok = True
-        result_text = ''
         try:
-            # 1. Dispatch via the per-turn dispatcher.
-            # Spread tc_input first so the action-envelope 'type' (the tool
-            # name) cannot be overwritten by a schema property of the same
-            # name. The dispatcher reserves 'type' for the action category;
-            # schemas must use a non-colliding key (e.g. 'agent_type').
-            dispatch = self._dispatcher.dispatch_action(
-                self.CHANNEL, {**tc_input, 'type': tool_name}
-            )
-            result_text = str(dispatch.get('result', ''))
-            if dispatch.get('status') == 'error':
+            result_text = Ability.dispatch(ctx, tool_name, tc_input, call_id=call_id)
+            # Check if result indicates an error (unknown tool / policy block).
+            if result_text.startswith(("Unknown tool:", "POLICY BLOCK:", "Error:")):
                 ok = False
-
-            # Merge any params updates from the ability back into tc_input
-            # so they appear in the recorded tool_calls row.
-            _params_upd = dispatch.get('_params_update')
-            if _params_upd and isinstance(_params_upd, dict):
-                tc_input.update(_params_upd)
-
-            # find_tools side effect — inject discovered schemas AND
-            # register discovered tools as handlers on self._dispatcher
-            # so subsequent iterations dispatch through the same path.
-            if (
-                tool_name == 'find_tools'
-                and dispatch.get('status') == 'success'
-            ):
-                discovered = dispatch.get('_discovered_tools', [])
-                if discovered:
-                    from abilities._registry import AbilityRegistry
-                    existing_names = {
-                        t.get('name') for t in self._discovered_tools
-                    }
-                    for name in discovered:
-                        if name in existing_names:
-                            continue
-                        if name.startswith('_mcp_'):
-                            # MCP tools are dynamic — not in AbilityRegistry.
-                            # Their inputSchema is captured in mcp_tools.sqlite
-                            # at sync time; retrieve it here so the model sees
-                            # the correct parameters instead of a bare tool call.
-                            # Depends on: McpClientService.get_tool_schema().
-                            from services.mcp_client_service import McpClientService  # noqa: PLC0415
-                            schema = McpClientService().get_tool_schema(name)
-                            if schema is None:
-                                continue
-                        else:
-                            try:
-                                a = AbilityRegistry.get(name)
-                                schema = {
-                                    'name': a.NAME,
-                                    'description': a.SUMMARY,
-                                    'input_schema': a.INPUT_SCHEMA,
-                                }
-                            except KeyError:
-                                continue
-                        self._discovered_tools.append(schema)
-                        existing_names.add(name)
-
-                    steers = [
-                        self._FIND_TOOLS_GUARDRAILS[n]
-                        for n in discovered
-                        if n in self._FIND_TOOLS_GUARDRAILS
-                    ]
-                    if steers:
-                        result_text += "\n\n" + "\n".join(steers)
-
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             ok = False
             result_text = f"ERROR: {tool_name} failed: {exc}"
             logger.exception(
@@ -722,23 +676,42 @@ class MessageProcessor:
                 'ok': ok,
             })
 
-        # 2. Render + Record
+        # find_tools guardrail steers (still needed on old path).
+        # Ability.dispatch already called _process_discovered_tools (updates
+        # ctx.discovered_tools which aliases self._discovered_tools).
+        # Apply steers to result_text here.
+        if tool_name == 'find_tools' and ok:
+            discovered_names = [
+                t.get('name') for t in self._discovered_tools
+                if isinstance(t, dict) and t.get('name')
+            ]
+            steers = [
+                self._FIND_TOOLS_GUARDRAILS[n]
+                for n in discovered_names
+                if n in self._FIND_TOOLS_GUARDRAILS
+            ]
+            if steers:
+                result_text += "\n\n" + "\n".join(steers)
+
+        # Render for old-path trail (T4 will replace this entirely).
+        # Ability.dispatch() already called Ability.record() which writes the DB row,
+        # so only render here without a second DB write.
         try:
-            rendered = ToolRenderAndRecordService(
+            from services.tool_render_and_record_service import ToolRenderAndRecordService  # noqa: PLC0415
+            params_for_render = _sanitize_llm_args(dict(tc_input))
+            params_for_render.pop('act_summary', None)
+            rendered = ToolRenderAndRecordService.render_static(
                 tool_name=tool_name,
-                params=tc_input,
+                params=params_for_render,
                 result=result_text,
-                ephemeral=True,
-                transcript_id=self._uid,
-            ).render_and_record()
-        except Exception as exc:
+            )
+        except Exception as exc:  # noqa: BLE001
             rendered = f"[{tool_name}()] {result_text}"
             logger.error(
-                "[MessageProcessor.handle_tool] renderAndRecord failed tool=%s: %s",
+                "[MessageProcessor.handle_tool] render_static failed tool=%s: %s",
                 tool_name, exc, exc_info=True,
             )
 
-        # 3. Add to context
         self._act_trail.append(rendered)
         return result_text
 
@@ -894,7 +867,6 @@ class MessageProcessor:
           thinking, not a final answer. Storing it would violate north star
           § Storage Model ("final ACT-loop response only").
         """
-        from services.act_dispatcher_service import ActDispatcherService
         from services.providers import Providers
         from services.transcript_service import write_input_row
 
@@ -907,14 +879,6 @@ class MessageProcessor:
             # writes the assistant row (hidden_input isolation).
             if not self.SKIP_TRANSCRIPT_WRITE and not self.SKIP_INPUT_ROW:
                 self._uid = write_input_row(self.CHANNEL, self.ROLE, self._raw_input)
-
-            # Single dispatcher for the entire turn. Tools discovered
-            # mid-turn via find_tools are registered as handlers on this
-            # instance so all tools dispatch through the same path.
-            self._dispatcher = ActDispatcherService()
-            # Explicit reset makes the per-turn ordinal contract enforceable
-            # even if dispatcher lifetime ever changes (Fix 1).
-            self._dispatcher.reset_turn_ordinals()
 
             with self._metrics.stage('pre_act'):
                 self.pre_act()

@@ -1,8 +1,8 @@
 """
 Policy Service — per-action permission control (allow / ask / deny).
 
-Enforcement point: ActDispatcherService.dispatch_action() calls
-PolicyService.check() between handler lookup and execution.
+Enforcement point: Ability.dispatch() calls PolicyService.enforce() between
+handler lookup and execution.
 
 Four independent contexts: chat, subagent, subconscious, external_agent.
 Three states: allow (proceed), ask (block for user confirmation), deny (reject).
@@ -20,6 +20,73 @@ logger = logging.getLogger(__name__)
 
 State = Literal["allow", "ask", "deny"]
 Context = Literal["chat", "subagent", "subconscious", "external_agent"]
+
+# ── Permission gate registry ──────────────────────────────────────────────────
+# Maps request_id → {'event': threading.Event, 'result': str}
+# The REST endpoint POST /api/policies/respond resolves a gate by calling
+# gate['event'].set() after writing gate['result'] = 'approved' | 'denied'.
+# Formerly lived in act_dispatcher_service; moved here in T3.
+_permission_gates: dict[str, dict] = {}
+
+
+def _build_action_description(action_id: str, action: dict) -> str:
+    """Build a human-readable one-liner describing the action for the permission card.
+
+    Formerly in act_dispatcher_service; moved here in T3 alongside the
+    permission-gate registry.
+    """
+    _VERBS = {
+        'email.read': 'Reading an email',
+        'email.search': 'Searching emails',
+        'email.draft': 'Drafting an email',
+        'email.send': 'Sending an email',
+        'email.reply': 'Replying to an email',
+        'email.forward': 'Forwarding an email',
+        'email.manage': 'Managing an email',
+        'calendar.update_event': 'Updating a calendar event',
+        'calendar.create_event': 'Creating a calendar event',
+        'schedule.create': 'Creating a scheduled task',
+        'schedule.cancel': 'Cancelling a scheduled task',
+        'browser.interact': 'Interacting with a webpage',
+        'browser.render': 'Reading a webpage',
+        'document.delete': 'Deleting a document',
+        'document.create': 'Creating a document',
+        'list.delete': 'Deleting a list',
+        'code_eval': 'Running code',
+    }
+    _CONTEXT_KEYS: dict[str, list[str]] = {
+        'email.manage': ['operation'],
+        'email.draft': ['to', 'subject'],
+        'email.send': ['to', 'subject'],
+        'email.reply': ['uid'],
+        'email.forward': ['uid', 'to'],
+        'email.search': ['sender', 'subject', 'keyword'],
+        'schedule.create': ['description'],
+        'schedule.cancel': ['description'],
+        'browser.interact': ['url'],
+        'browser.render': ['url'],
+        'document.delete': ['name'],
+        'document.create': ['name'],
+        'list.delete': ['list_name'],
+        'calendar.update_event': ['summary'],
+        'calendar.create_event': ['summary'],
+    }
+
+    base = _VERBS.get(action_id)
+    if not base:
+        base = action_id.replace('.', ' ').replace('_', ' ').title()
+
+    if action_id == 'email.manage':
+        op = action.get('operation', '')
+        if op:
+            base = op.replace('_', ' ').title() + ' an email'
+
+    context_keys = _CONTEXT_KEYS.get(action_id, [])
+    for key in context_keys:
+        val = action.get(key)
+        if val and isinstance(val, str) and key != 'operation':
+            return f"{base} — {val}"
+    return base
 
 VALID_STATES: set[str] = {"allow", "ask", "deny"}
 VALID_CONTEXTS: set[str] = {"chat", "subagent", "subconscious", "external_agent"}
@@ -516,3 +583,136 @@ class PolicyService:
             return "chat"
         usage_class = getattr(proc, "USAGE_CLASS", "chat")
         return USAGE_CLASS_TO_CONTEXT.get(usage_class, "chat")
+
+    @staticmethod
+    def enforce(tool_name: str, params: dict, channel: str) -> "dict | None":
+        """Check policy and return a block result dict if denied, or None to proceed.
+
+        This is the gate called by ``Ability.dispatch()`` between handler lookup
+        and execution.  It mirrors the logic from the old
+        ``ActDispatcherService._enforce_policy()`` but is a static method on
+        PolicyService so Ability.dispatch() can call it without importing the
+        dead ActDispatcherService.
+
+        Returns:
+            None — proceed with execution.
+            dict — a result dict with status='policy_denied' / 'error', caller
+                   records it and returns its 'result' text.
+
+        Spec §5 / I7 / I8 / AC-6.
+        """
+        _POLICY_DENY_MSG = (
+            "POLICY BLOCK: This action ({action_id}) is permanently blocked by the "
+            "user's policy settings (state=deny). Do NOT retry — the user must change "
+            "this in Brain → Policies before it can run."
+        )
+        _POLICY_UNAVAILABLE_MSG = (
+            "POLICY BLOCK: This action ({action_id}) requires explicit user approval "
+            "but cannot be requested during background processing. "
+            "It has been logged for the user to review."
+        )
+        _POLICY_USER_DENIED_MSG = (
+            "POLICY BLOCK: The user was shown a permission prompt for this action "
+            "({action_id}) and explicitly denied it. "
+            "Do NOT retry this action in this conversation."
+        )
+        _POLICY_TIMEOUT_MSG = (
+            "POLICY BLOCK: This action ({action_id}) requires user approval. "
+            "A permission prompt was shown but the user did not respond. "
+            "Do NOT retry this action unless the user asks."
+        )
+
+        action_id = PolicyService.resolve_action_id(tool_name, params)
+
+        # Unknown actions (not in default matrix) skip enforcement.
+        # _mcp_* tools carry explicit seeded policy_rules rows so they must
+        # always proceed to check().
+        if action_id not in get_defaults() and not tool_name.startswith("_mcp_"):
+            return None
+
+        # Derive context from the current processor's usage_class.
+        from services.message_processor import current_processor  # noqa: PLC0415
+        proc = current_processor()
+        usage_class = getattr(proc, "USAGE_CLASS", "chat") if proc else "chat"
+        context = USAGE_CLASS_TO_CONTEXT.get(usage_class, "chat")
+
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        svc = PolicyService(get_shared_db_service())
+        state = svc.check(action_id, context)
+
+        if state == "allow":
+            return None
+
+        def _preview(p: dict, max_keys: int = 4) -> dict:
+            skip = {"type", "action", "_rich_media_ordinal"}
+            out: dict = {}
+            for k, v in p.items():
+                if k in skip:
+                    continue
+                if len(out) >= max_keys:
+                    break
+                out[k] = v
+            return out
+
+        if state == "deny":
+            svc.log_blocked(action_id, context, "policy_deny", _preview(params))
+            return {
+                "status": "policy_denied",
+                "result": _POLICY_DENY_MSG.format(action_id=action_id),
+            }
+
+        # state == "ask"
+        if context == "subconscious":
+            svc.log_blocked(action_id, context, "user_unavailable", _preview(params))
+            return {
+                "status": "policy_denied",
+                "result": _POLICY_UNAVAILABLE_MSG.format(action_id=action_id),
+            }
+
+        # Chat / subagent: request user permission via REST → threading.Event.wait().
+        # This is the AC-6 blocking permission gate.
+        verdict = PolicyService._request_permission(action_id, params, context)
+        if verdict != "approved":
+            reason = "user_denied" if verdict == "denied" else "timeout"
+            msg = (
+                _POLICY_USER_DENIED_MSG if verdict == "denied" else _POLICY_TIMEOUT_MSG
+            ).format(action_id=action_id)
+            svc.log_blocked(action_id, context, reason, _preview(params))
+            return {"status": "policy_denied", "result": msg}
+
+        return None  # Approved — proceed.
+
+    @staticmethod
+    def _request_permission(action_id: str, params: dict, context: str) -> str:
+        """Broadcast a permission_request and wait for user response.
+
+        Uses threading.Event.wait() — zero CPU, OS-parked thread.  The REST
+        endpoint POST /api/policies/respond calls gate.set() to wake this thread.
+
+        Returns one of: 'approved', 'denied'.
+
+        Spec §5 / AC-6.
+        """
+        import uuid as _uuid  # noqa: PLC0415
+        try:
+            from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
+
+            request_id = str(_uuid.uuid4())
+            gate_entry: dict = {"event": threading.Event(), "result": None}
+            _permission_gates[request_id] = gate_entry
+
+            WebSocketBroker().broadcast({
+                "type": "permission_request",
+                "request_id": request_id,
+                "action_id": action_id,
+                "context": context,
+                "description": _build_action_description(action_id, params),
+            })
+
+            gate_entry["event"].wait()  # parks here until REST handler fires
+            result = gate_entry.get("result", "denied")
+            _permission_gates.pop(request_id, None)
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[PolicyService._request_permission] failed: %s", exc)
+            return "approved"  # Fail open on unexpected errors

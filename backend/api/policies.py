@@ -110,8 +110,8 @@ def respond_permission():
     """Wake the blocked ACT dispatch thread with the user's allow/deny decision.
 
     The ACT loop thread is parked on threading.Event.wait() inside
-    ActDispatcherService._request_permission().  This handler resolves the
-    gate so the thread wakes instantly with zero CPU overhead.
+    PolicyService._request_permission().  This handler resolves the gate so
+    the thread wakes instantly with zero CPU overhead.
     """
     body = request.get_json(silent=True) or {}
     request_id = body.get('request_id', '')
@@ -119,7 +119,7 @@ def respond_permission():
     if not request_id:
         return jsonify(error='request_id required'), 400
     try:
-        from services.act_dispatcher_service import _permission_gates
+        from services.policy_service import _permission_gates
         gate = _permission_gates.get(request_id)
         if gate is None:
             # Gate already resolved or request_id unknown — respond gracefully

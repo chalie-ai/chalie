@@ -57,25 +57,6 @@ class TestSubagentRegistry:
         assert isinstance(result, dict)
 
 
-# ── _params_update pipeline ──────────────────────────────────────────────────
-
-
-class TestParamsUpdate:
-
-    def test_propagated_through_dispatcher(self, db):
-        from services.act_dispatcher_service import ActDispatcherService
-
-        dispatcher = ActDispatcherService(timeout=5.0)
-        dispatcher.handlers["subagent"] = lambda ch, act: {
-            "text": "ack",
-            "_params_update": {"sub_id": "abc123"},
-        }
-
-        result = dispatcher.dispatch_action("user", {"type": "subagent", "prompt": "test"})
-        assert result["status"] == "success"
-        assert result["_params_update"]["sub_id"] == "abc123"
-
-
 # ── HTTP stop endpoints ─────────────────────────────────────────────────────
 
 
