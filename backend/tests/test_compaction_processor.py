@@ -7,7 +7,6 @@ Minimal — only asserts invariants that catch real regressions:
 4. MetricsAccumulator.merge() sums token and tool counts correctly.
 """
 
-import json
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -104,50 +103,45 @@ class TestCheckThresholdFullPayload:
         return _MinimalProcessor(raw_input='hi')
 
     def test_full_payload_exceeds_threshold_when_system_and_tools_are_large(self):
-        """A tiny user_body must NOT hide a large system_prompt + tools schema."""
+        """A tiny user_body must NOT hide a large system_prompt + tools schema.
+
+        _check_threshold delegates to Providers.calculate() which returns the
+        fraction of the context window consumed (0.0–1.0).  Returns True when
+        that fraction exceeds 0.80.  The fake exposes only calculate() — if the
+        implementation calls any deleted method (get_compact_at /
+        estimate_payload_tokens) the spec'd MagicMock raises AttributeError,
+        catching the regression immediately.
+        """
         from unittest.mock import patch, MagicMock
-        from services.llm_service import estimate_tokens
-
-        # 8000-word system prompt + large tools schema; user_body is tiny.
-        large_system = 'word ' * 8_000        # ~10 400 estimated tokens
-        large_tools = [{'name': f'tool_{i}', 'description': 'long description ' * 20}
-                       for i in range(50)]    # 50 tools × ~20 words each
-        small_user = 'hi'
-
-        # compact_at set to something smaller than the combined estimate
-        # but larger than user_body alone (proving the old code would have
-        # returned False while the new code returns True).
-        tools_json = json.dumps(large_tools, separators=(',', ':'))
-        total_est = (
-            estimate_tokens(large_system)
-            + estimate_tokens(tools_json)
-            + estimate_tokens(small_user)
-        )
-        user_only_est = estimate_tokens(small_user)
-        compact_at = user_only_est + 1   # just above user_body alone
-
-        # Sanity: total must exceed compact_at (otherwise test is meaningless)
-        assert total_est > compact_at, (
-            f"test setup error: total_est={total_est} must exceed compact_at={compact_at}"
-        )
 
         proc = self._make_processor()
-        fake_provider = MagicMock()
-        fake_provider.get_compact_at.return_value = compact_at
-        # estimate_payload_tokens delegates to provider.build_request_body —
-        # in production it returns the literal HTTP body's token estimate.
-        # Here we return our pre-computed `total_est` so the test asserts the
-        # comparison logic, not the provider's serialisation details.
-        fake_provider.estimate_payload_tokens.return_value = total_est
+
+        # spec_set against a class with only calculate() so that any call to a
+        # deleted method raises AttributeError rather than auto-fabricating it.
+        class _FakeProviders:
+            def calculate(self, system_prompt, user_body, tools, job='unified'):
+                return 0.0  # replaced per-test by side_effect
+
+        fake_provider = MagicMock(spec_set=_FakeProviders())
+        # Simulate >80 % usage → threshold must fire.
+        fake_provider.calculate.return_value = 0.85
 
         with patch('services.providers.Providers') as mock_providers_cls:
             mock_providers_cls.instance.return_value = fake_provider
-            result = proc._check_threshold(large_system, large_tools, small_user)
+            result_above = proc._check_threshold('system', [], 'hi')
 
-        assert result is True, (
-            f"_check_threshold should return True when system+tools+user "
-            f"({total_est} tokens) > compact_at ({compact_at}), "
-            f"but user_body alone ({user_only_est} tokens) is below it"
+        assert result_above is True, (
+            "_check_threshold must return True when calculate() returns 0.85 (>0.80)"
+        )
+
+        # Simulate ≤80 % usage → threshold must NOT fire.
+        fake_provider.calculate.return_value = 0.79
+        with patch('services.providers.Providers') as mock_providers_cls:
+            mock_providers_cls.instance.return_value = fake_provider
+            result_below = proc._check_threshold('system', [], 'hi')
+
+        assert result_below is False, (
+            "_check_threshold must return False when calculate() returns 0.79 (≤0.80)"
         )
 
 

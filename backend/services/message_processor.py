@@ -1115,32 +1115,21 @@ class MessageProcessor:
     def _check_threshold(
         self, system_prompt: str, tools: list, user_body: str
     ) -> bool:
-        """Return True if the actual provider payload exceeds the persisted
-        compact_at threshold for this processor's provider.
+        """Return True if the actual provider payload exceeds the history
+        compaction threshold (>0.80 of the model's context window).
 
-        Delegates to ``Providers.estimate_payload_tokens`` which calls the
-        resolved provider's ``build_request_body`` — the identical serialisation
-        path used by ``send_messages`` — so the measured byte count matches what
-        will be sent over the wire rather than a synthesised approximation.
-        compact_at is 80% of the provider's max_tokens (the full context window).
-        Strict greater-than: a payload exactly at compact_at is NOT eligible.
+        Delegates to ``Providers.calculate`` (spec §4b) which builds the real
+        request body via the provider's ``build_request_body`` — the identical
+        serialisation path used by ``send_messages`` — counts tokens, and
+        returns the fraction of the context window consumed (0.0–1.0).
+        Returns 0.0 on any error, which safely skips compaction this turn.
+        Strict greater-than: a payload exactly at 0.80 is NOT eligible.
         """
         from services.providers import Providers
-        compact_at = Providers.instance().get_compact_at()
-        if compact_at is None:
-            # Boot backfill should always populate compact_at. Missing value
-            # indicates a misconfigured provider row — log loudly and skip
-            # compaction this turn. Do NOT compute a fallback on the fly.
-            logger.error(
-                "[COMPACTION] %s: compact_at missing — skipping overflow check",
-                self.CHANNEL,
-            )
-            return False
-        messages = [{'role': 'user', 'content': user_body}]
-        estimated = Providers.instance().estimate_payload_tokens(
-            system_prompt, messages, tools, job=self.LOG_LABEL
+        pct = Providers.instance().calculate(
+            system_prompt, user_body, tools, job=self.LOG_LABEL
         )
-        return estimated > compact_at
+        return pct > 0.80
 
     def _handle_overflow(self) -> bool:
         """Single overflow-handling path: full compaction + ACT loop state reset.

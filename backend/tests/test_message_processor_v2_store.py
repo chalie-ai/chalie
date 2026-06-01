@@ -587,8 +587,7 @@ class TestHandleOverflowDbWrites:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            mock_inst.return_value.calculate.return_value = 0.0
             result = p._run_full_compaction()
 
         assert result == 'fresh compaction summary'
@@ -621,8 +620,7 @@ class TestHandleOverflowDbWrites:
              }):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            mock_inst.return_value.calculate.return_value = 0.0
             p._run_full_compaction()
 
         new_row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
@@ -647,8 +645,7 @@ class TestHandleOverflowDbWrites:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            mock_inst.return_value.calculate.return_value = 0.0
             result = p._run_full_compaction()
 
         assert result is None
@@ -707,8 +704,7 @@ class TestRunFullCompaction:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            mock_inst.return_value.calculate.return_value = 0.0
             result = p._run_full_compaction()
 
         assert result == 'happy path summary'
@@ -747,8 +743,7 @@ class TestRunFullCompaction:
              patch('services.compaction_persistence.get_compaction', return_value=None):
             mock_inst.return_value.send_messages.return_value = llm_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            mock_inst.return_value.calculate.return_value = 0.0
             p._run_full_compaction()
 
         row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
@@ -773,8 +768,8 @@ class TestActLoopOverflowEndToEnd:
     iter 1: prompt_assembly → _check_threshold(False after compaction) →
             send_messages → no tool_calls → break clean
 
-    Mocks: only the Providers singleton (estimate_payload_tokens returns >
-    compact_at on iter 0 then ≤ on iter 1; send_messages returns the
+    Mocks: only the Providers singleton (calculate() returns >0.80 on iter 0
+    to trigger overflow, then ≤0.80 on iter 1; send_messages returns the
     compaction LLM body on call 1 and a no-tool answer on call 2).
     Real DB, real ACT loop, real _handle_overflow, real _run_full_compaction.
     """
@@ -841,29 +836,24 @@ class TestActLoopOverflowEndToEnd:
         )
         final_resp = _make_compact_llm_response(text='final assistant answer')
 
-        # estimate_payload_tokens call sequence:
-        #   call 1: main ACT loop iter 0 _check_threshold — return >400 to
+        # calculate() call sequence (spec §4b — returns 0.0–1.0 fraction):
+        #   call 1: main ACT loop iter 0 _check_threshold — return >0.80 to
         #           trigger overflow handler
-        #   call 2: ContinuityCompactionProcessor's own ACT iter 0
-        #           _check_threshold (always returns False because
-        #           ContinuityCompactionProcessor overrides it; this call
-        #           never happens in practice but we keep a value just in
-        #           case the overrides change)
-        #   call 3: main ACT loop iter 1 _check_threshold after the
-        #           compaction reset — return ≤400 so the loop proceeds to
+        #   call 2: main ACT loop iter 1 _check_threshold after the
+        #           compaction reset — return ≤0.80 so the loop proceeds to
         #           send_messages
-        compact_at_value = 400
-        estimate_seq = iter([500, 100, 100, 100, 100])
+        # ContinuityCompactionProcessor overrides _check_threshold → always
+        # False, so it never calls calculate() — no entry needed for it.
+        calculate_seq = iter([0.85, 0.10, 0.10, 0.10, 0.10])
 
         with patch('services.providers.Providers.instance') as mock_inst:
             mock_inst.return_value.send_messages.side_effect = [
                 compaction_resp,
                 final_resp,
             ]
-            mock_inst.return_value.get_compact_at.return_value = compact_at_value
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.side_effect = (
-                lambda *a, **kw: next(estimate_seq)
+            mock_inst.return_value.calculate.side_effect = (
+                lambda *a, **kw: next(calculate_seq)
             )
 
             result = proc.send()
@@ -939,9 +929,8 @@ class TestActLoopCapExitOnOverflowFailure:
         proc._uid = input_uid
 
         with patch('services.providers.Providers.instance') as mock_inst:
-            mock_inst.return_value.get_compact_at.return_value = 10
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 9999
+            mock_inst.return_value.calculate.return_value = 0.95
             mock_resp = MagicMock()
             mock_resp.text = 'fallthrough answer'
             mock_resp.tool_calls = []
@@ -1053,8 +1042,7 @@ class TestHandleOverflowEphemeralPurge:
                    ]):
             mock_inst.return_value.send_messages.return_value = compaction_resp
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            mock_inst.return_value.calculate.return_value = 0.0
             success = proc._handle_overflow()
 
         assert success is True, "_handle_overflow should succeed with prior entries"
@@ -1135,8 +1123,7 @@ class TestRunFullCompactionExcludeId:
                    ]):
             mock_inst.return_value.send_messages.side_effect = fake_send
             mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+            mock_inst.return_value.calculate.return_value = 0.0
             result = p._run_full_compaction(exclude_id=current_id)
 
         assert result == 'compact result'

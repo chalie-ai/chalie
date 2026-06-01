@@ -159,11 +159,10 @@ class TestMessageProcessorSend413Recovery:
         fake = MagicMock()
         fake.send_messages.side_effect = send_messages_side_effects
         fake.get_context_limit.return_value = get_context_limit
-        fake.get_compact_at.return_value = get_context_limit
-        # Threshold check delegates to provider.estimate_payload_tokens; the
-        # 413 path under test is independent of pre-send threshold checking,
-        # so return a value well below compact_at to skip the overflow branch.
-        fake.estimate_payload_tokens.return_value = 100
+        # _check_threshold now calls Providers.calculate() → 0.0–1.0 fraction.
+        # The 413 path under test is independent of pre-send threshold checking,
+        # so return 0.0 (well below the 0.80 threshold) to skip the overflow branch.
+        fake.calculate.return_value = 0.0
         return patch.object(Providers, 'instance', return_value=fake), fake
 
     def test_first_413_runs_overflow_handler_then_succeeds(self, db):
@@ -241,17 +240,16 @@ class TestProactiveThresholdLoopGuard:
     """
 
     def _patch_providers_persistent_overflow(self):
-        """Threshold ALWAYS exceeds (estimate > compact_at), regardless of
-        how many times it's checked. send_messages returns a clean response
-        on first call so we can verify the loop reached the LLM call after
-        one compaction."""
+        """Threshold ALWAYS exceeds (calculate() > 0.80), regardless of how
+        many times it's checked. send_messages returns a clean response on
+        first call so we can verify the loop reached the LLM call after one
+        compaction."""
         from services.providers import Providers
         fake = MagicMock()
         fake.send_messages.side_effect = [_llm_response()]
         fake.get_context_limit.return_value = 200_000
-        fake.get_compact_at.return_value = 200_000
         # Always over threshold — simulates static system+tools dominance.
-        fake.estimate_payload_tokens.return_value = 500_000
+        fake.calculate.return_value = 0.95
         return patch.object(Providers, 'instance', return_value=fake), fake
 
     def test_persistent_threshold_trip_compacts_once_then_sends_anyway(self, db):

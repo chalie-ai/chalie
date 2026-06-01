@@ -353,8 +353,7 @@ class TestMCPServerToolCall:
         fake_provider = MagicMock()
         fake_provider.send_messages.return_value = fake_response
         fake_provider.get_context_limit.return_value = 128_000
-        fake_provider.get_compact_at.return_value = 100_000
-        fake_provider.estimate_payload_tokens.return_value = 500
+        fake_provider.calculate.return_value = 0.0
 
         url = f"{mcp_server['url']}/mcp"
 
