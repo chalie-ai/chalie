@@ -130,6 +130,9 @@ export class Chat {
     const textarea = document.getElementById('messageInput');
     const text = textarea.value.trim();
     const attachments = this._imageAttach ? this._imageAttach.getAttachmentPaths() : [];
+    // Capture preview metadata (object URLs, filenames) BEFORE clear() wipes the
+    // strip — used to render the attachments inside the user's own turn bubble.
+    const attachmentPreviews = this._imageAttach ? this._imageAttach.getAttachments() : [];
 
     if (!text && !attachments.length) return;
 
@@ -158,7 +161,7 @@ export class Chat {
     textarea.style.height = 'auto';
     if (this._imageAttach) this._imageAttach.clear();
 
-    this._startTurn(text || '[File attached]', source, true, attachments);
+    this._startTurn(text || '[File attached]', source, true, attachments, attachmentPreviews);
   }
 
   // ---------------------------------------------------------------------------
@@ -236,10 +239,14 @@ export class Chat {
    * @param {string} source — "text" | "voice" | "subagent" etc.
    * @param {boolean} showUserBubble — whether to render a user speech-form
    * @param {string[]} attachments — file paths from POST /upload
+   * @param {Array<{filename: string, objectUrl: string|null, isImage: boolean}>} attachmentPreviews
+   *        — preview metadata rendered inside the user bubble
    */
-  _startTurn(text, source, showUserBubble = true, attachments = []) {
+  _startTurn(text, source, showUserBubble = true, attachments = [], attachmentPreviews = []) {
     if (showUserBubble) {
-      this._lastUserBubble = this._renderer.appendUserForm(text || '[File attached]', null, {});
+      this._lastUserBubble = this._renderer.appendUserForm(text || '[File attached]', null, {
+        attachments: attachmentPreviews,
+      });
     }
 
     const actEl = this._renderer.createActCycle();
@@ -278,7 +285,15 @@ export class Chat {
       },
       onError: (data) => {
         this._renderer.replaceActWithError(actEl, data.message);
-        if (!data.recoverable) this._onAuthFailureCb?.();
+        // A turn-level error (provider failure, quota/429, tool error) is NOT
+        // an auth event — surface it in place and let the turn finalise via the
+        // `done` event that always follows. Genuine session loss is detected by
+        // its own channels: the heartbeat (/auth/status poll) and api.js (any
+        // 401 → 'AUTH'). Only an explicit auth signal triggers the login
+        // redirect — never a generic non-recoverable turn error, which used to
+        // bounce an authenticated user through /login/ and reload the page,
+        // discarding the turn.
+        if (data.auth_failed) this._onAuthFailureCb?.();
       },
       onDone: (data) => {
         this._onResponseReceivedCb?.();

@@ -57,8 +57,13 @@ export class ImageAttach {
     }
 
     const isImage = file.type.startsWith('image/');
+    // Object URL is created once and reused: the preview chip displays it now,
+    // and the sent-message bubble reuses it so the image stays visible in the
+    // user's own turn after send (the strip is cleared). Not revoked — the
+    // browser releases it on unload, and a handful per session is negligible.
+    const objectUrl = isImage ? URL.createObjectURL(file) : null;
     const chipEl = isImage
-      ? this._addImageChip(file)
+      ? this._addImageChip(file, objectUrl)
       : this._addDocChip(file.name);
 
     this._uploadsInProgress++;
@@ -79,7 +84,13 @@ export class ImageAttach {
         // Remove the in-progress spinner and mark as ready.
         chipEl.classList.remove('analyzing');
         chipEl.querySelector('.image-preview__spinner')?.remove();
-        this._attachments.push({ tmpPath: data.tmp_path, filename: data.filename, element: chipEl });
+        this._attachments.push({
+          tmpPath: data.tmp_path,
+          filename: data.filename,
+          element: chipEl,
+          objectUrl,
+          isImage,
+        });
       } else {
         chipEl.remove();
         this._updatePreviewVisibility();
@@ -101,6 +112,19 @@ export class ImageAttach {
    */
   getAttachmentPaths() {
     return this._attachments.map(a => a.tmpPath);
+  }
+
+  /**
+   * Returns preview metadata for rendering attachments inside the sent-message
+   * bubble. Must be read BEFORE clear() — clear() drops the attachment list.
+   * @returns {Array<{filename: string, objectUrl: string|null, isImage: boolean}>}
+   */
+  getAttachments() {
+    return this._attachments.map(a => ({
+      filename: a.filename,
+      objectUrl: a.objectUrl || null,
+      isImage: !!a.isImage,
+    }));
   }
 
   /**
@@ -198,9 +222,10 @@ export class ImageAttach {
    * The chip starts with the `analyzing` class and a spinner while uploading.
    *
    * @param {File} file
+   * @param {string} objectUrl — pre-created object URL for the file
    * @returns {HTMLElement}
    */
-  _addImageChip(file) {
+  _addImageChip(file, objectUrl) {
     const strip = document.getElementById('imagePreview');
     strip.classList.remove('hidden');
 
@@ -208,7 +233,7 @@ export class ImageAttach {
     thumb.className = 'image-preview__thumb analyzing';
 
     const img = document.createElement('img');
-    img.src = URL.createObjectURL(file);
+    img.src = objectUrl || URL.createObjectURL(file);
     img.alt = file.name;
     thumb.appendChild(img);
 

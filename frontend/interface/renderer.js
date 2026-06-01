@@ -59,20 +59,60 @@ export class Renderer {
    * Append a user speech form.
    * @param {string} text
    * @param {string|null} [ts]
-   * @param {{inWorkingMemory?: boolean}} [options]
+   * @param {{inWorkingMemory?: boolean, attachments?: Array}} [options]
    */
-  appendUserForm(text, ts = null, { inWorkingMemory = true } = {}) {
+  appendUserForm(text, ts = null, { inWorkingMemory = true, attachments = [] } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--user');
     if (!inWorkingMemory) el.classList.add('message--faded');
     _attachGlyph(el, 'user');
 
-    const textEl = this._createEl('div', 'speech-form__text');
-    textEl.textContent = text;
-    el.appendChild(textEl);
+    this._appendUserAttachments(el, attachments);
+
+    // Suppress the '[File attached]' placeholder when there is nothing typed but
+    // the attachments are already shown above — the media is the message.
+    if (!(text === '[File attached]' && attachments.length)) {
+      const textEl = this._createEl('div', 'speech-form__text');
+      textEl.textContent = text;
+      el.appendChild(textEl);
+    }
 
     this._spine.appendChild(el);
     this._scrollToBottom();
     return el;
+  }
+
+  /**
+   * Render attachment previews (image thumbnails / doc chips) inside a user
+   * speech-form, above the text. No-op when there are no attachments.
+   *
+   * @param {HTMLElement} el — the .speech-form--user element
+   * @param {Array<{filename: string, objectUrl: string|null, isImage: boolean}>} attachments
+   */
+  _appendUserAttachments(el, attachments = []) {
+    if (!attachments.length) return;
+
+    const wrap = this._createEl('div', 'speech-form__attachments');
+    for (const att of attachments) {
+      if (att.isImage && att.objectUrl) {
+        const img = document.createElement('img');
+        img.className = 'speech-form__attachment-img';
+        img.src = att.objectUrl;
+        img.alt = att.filename || 'attached image';
+        img.loading = 'lazy';
+        wrap.appendChild(img);
+      } else {
+        const chip = this._createEl('div', 'speech-form__attachment-doc');
+        const icon = this._createEl('span', 'speech-form__attachment-doc-icon');
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = '📄';
+        chip.appendChild(icon);
+        const name = this._createEl('span', 'speech-form__attachment-doc-name');
+        name.textContent = att.filename || 'attachment';
+        chip.appendChild(name);
+        wrap.appendChild(chip);
+      }
+    }
+    el.appendChild(wrap);
   }
 
   /**

@@ -819,6 +819,50 @@ body.speaker-user   #ambientBloom {
   font-weight: 600;
 }
 
+/* Attachment previews rendered inside the user's own turn bubble (above text) */
+.speech-form__attachments {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.speech-form__attachments:last-child {
+  margin-bottom: 0;
+}
+
+.speech-form__attachment-img {
+  max-width: min(320px, 100%);
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  object-fit: contain;
+  display: block;
+}
+
+.speech-form__attachment-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-chalie);
+  font-size: 0.85em;
+  max-width: 100%;
+}
+
+.speech-form__attachment-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Light theme: user bubble = 80% white. */
 [data-theme="light"] .speech-form--user {
   background: rgba(255, 255, 255, 0.8);
