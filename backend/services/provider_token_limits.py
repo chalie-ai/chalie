@@ -1,13 +1,10 @@
 """
 Provider token-limit backfill.
 
-Reads each provider's get_context_limit() and persists max_tokens +
-compact_at = max_tokens * COMPACTION_THRESHOLD_RATIO into the providers
-table. Used at boot (every active+inactive row) and on provider creation
-(single row).
-
-The 0.80 ratio constant lives in services.providers — there is no second
-copy in this module.
+Reads each provider's get_context_limit() and persists max_tokens into
+the providers table.  Used at boot (every row) and on provider creation
+(single row).  The compaction threshold is no longer a stored column —
+Provider.calculate() divides by max_tokens at call time.
 """
 import logging
 
@@ -24,7 +21,7 @@ def backfill_one(conn, provider_id: int) -> bool:
     Returns True on successful UPDATE, False on any failure (failure is
     logged at warning; the row's previous values are left intact).
     """
-    from services.providers import COMPACTION_THRESHOLD_RATIO, MAX_CONTEXT_WINDOW
+    from services.providers import MAX_CONTEXT_WINDOW
     from services.config_service import ConfigService
     from services.llm_service import create_llm_service
 
@@ -59,15 +56,14 @@ def backfill_one(conn, provider_id: int) -> bool:
             )
             return False
         max_tokens = min(int(max_tokens), MAX_CONTEXT_WINDOW)
-        compact_at = int(max_tokens * COMPACTION_THRESHOLD_RATIO)
         conn.execute(
-            "UPDATE providers SET max_tokens = ?, compact_at = ?, "
+            "UPDATE providers SET max_tokens = ?, "
             "updated_at = datetime('now') WHERE id = ?",
-            (max_tokens, compact_at, provider_id),
+            (max_tokens, provider_id),
         )
         logger.info(
-            "[provider_token_limits] '%s' max_tokens=%d compact_at=%d (%.0f%%)",
-            name, max_tokens, compact_at, COMPACTION_THRESHOLD_RATIO * 100,
+            "[provider_token_limits] '%s' max_tokens=%d",
+            name, max_tokens,
         )
         return True
     except Exception as exc:

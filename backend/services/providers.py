@@ -19,10 +19,6 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# Fraction of a provider's max_tokens that triggers continuity compaction.
-# Lives here so both the boot backfill and any future tuning have one source.
-COMPACTION_THRESHOLD_RATIO = 0.80
-
 # Hard ceiling on any provider's reported context window. Ensures the system
 # never builds a request payload exceeding this size, regardless of what the
 # upstream API reports (e.g. Gemini 1M, future models with larger windows).
@@ -197,60 +193,43 @@ class Providers:
         """Delegate to resolved provider, capped to MAX_CONTEXT_WINDOW."""
         return min(self._resolve(job).get_context_limit(), MAX_CONTEXT_WINDOW)
 
-    def get_compact_at(self) -> 'int | None':
-        """Return the persisted compact_at threshold for the globally selected provider.
+    def calculate(
+        self,
+        system_prompt: str,
+        user_body: str,
+        tools: list,
+        job: str = 'unified',
+    ) -> float:
+        """Return what fraction of the context window this request would use.
 
-        Reads providers.compact_at from the row referenced by the
-        selected_provider_id setting. Falls back to the first active row when
-        no provider is explicitly selected.
+        Builds the real request body (same serialisation path as send_messages),
+        counts tokens, divides by the provider's context window.
 
-        Returns None if no active provider row exists or compact_at is NULL
-        (boot backfill should always populate it; a NULL value signals a
-        misconfigured provider row).
+        Returns 0.0 on any error so the ACT loop safely skips compaction and
+        proceeds to send_messages() — the same safe behaviour as the old
+        estimate_payload_tokens() failure path.
+
+        Returns 0.0 when the provider reports a zero or missing context limit
+        to avoid zero-division.
+
+        Spec §4b / E1–E4.
         """
-        try:
-            from services.database_service import get_shared_db_service
-            from services.provider_db_service import ProviderDbService
-
-            db = get_shared_db_service()
-            service = ProviderDbService(db)
-            selected = service.get_selected_provider()
-            with db.connection() as conn:
-                if selected and selected.get('id'):
-                    row = conn.execute(
-                        "SELECT compact_at FROM providers WHERE id = ?",
-                        (selected['id'],),
-                    ).fetchone()
-                else:
-                    # Fallback: first provider
-                    row = conn.execute(
-                        "SELECT compact_at FROM providers ORDER BY id LIMIT 1",
-                    ).fetchone()
-            if row is None:
-                logger.warning("[COMPACTION] get_compact_at: no provider row found")
-                return None
-            return row[0]  # may be None if column is NULL
-        except Exception as exc:
-            logger.warning("[COMPACTION] get_compact_at() failed: %s", exc)
-            return None
-
-    def estimate_payload_tokens(self, system_prompt: str, messages: list, tools: list = None, job: str = 'unified') -> int:
-        """Return an estimated token count for the actual request body the provider will send.
-
-        Calls the resolved provider's ``build_request_body`` method — the same
-        method used by ``send_messages`` — so the measurement reflects the
-        literal serialised payload rather than a synthesised approximation.
-        Falls back to 0 on any error (safe: threshold check skips compaction
-        rather than triggering a false-positive).
-        """
-        from services.llm_service import estimate_tokens
+        from services.llm_service import estimate_tokens  # noqa: PLC0415
         try:
             provider = self._resolve(job)
-            body = provider.build_request_body(system_prompt, messages, tools)
-            return estimate_tokens(body)
-        except Exception as exc:
-            logger.warning("[COMPACTION] estimate_payload_tokens failed: %s", exc)
-            return 0
+            body = provider.build_request_body(
+                system_prompt,
+                [{'role': 'user', 'content': user_body}],
+                tools,
+            )
+            tokens = estimate_tokens(body)
+            max_tokens = provider.get_context_limit()
+            if not max_tokens:
+                return 0.0
+            return tokens / max_tokens
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[Provider.calculate] failed: %s", exc)
+            return 0.0
 
     def count_tokens(self, messages, system_prompt='', tools=None, job='unified'):
         """Delegate to resolved provider."""

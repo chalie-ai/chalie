@@ -139,7 +139,6 @@ CREATE TABLE IF NOT EXISTS providers (
     timeout INTEGER DEFAULT 120,
     supports_vision INTEGER DEFAULT 0,       -- BOOLEAN
     max_tokens INTEGER,
-    compact_at INTEGER,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
