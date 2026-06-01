@@ -12,10 +12,12 @@ Covers all endpoints in the providers blueprint:
   - PUT    /providers/selected
 """
 
+import sqlite3
+
 import pytest
 from unittest.mock import patch, MagicMock
 from flask import Flask
-from api.providers import providers_bp
+from api.providers import providers_bp, _DUPLICATE_NAME_MSG
 
 
 @pytest.mark.unit
@@ -113,6 +115,23 @@ class TestProvidersAPI:
         assert data["provider"]["id"] == 5
         mock_service.create_provider.assert_called_once()
 
+    def test_create_provider_duplicate_name_returns_409(self, client, mock_service):
+        """POST /providers with a name that collides on the UNIQUE index returns
+        409 with a friendly message (not a raw 500)."""
+        mock_service.create_provider.side_effect = sqlite3.IntegrityError(
+            "UNIQUE constraint failed: providers.name"
+        )
+
+        response = client.post('/providers', json={
+            "name": "dup",
+            "platform": "openai",
+            "model": "gpt-4o",
+            "api_key": "sk-x",
+        })
+
+        assert response.status_code == 409
+        assert response.get_json()["error"] == _DUPLICATE_NAME_MSG
+
     # ------------------------------------------------------------------
     # GET /providers/<id>
     # ------------------------------------------------------------------
@@ -162,6 +181,17 @@ class TestProvidersAPI:
             "name": "gemini-updated",
             "model": "gemini-2.0-flash",
         })
+
+    def test_update_provider_duplicate_name_returns_409(self, client, mock_service):
+        """PUT /providers/<id> renaming onto an existing name returns 409."""
+        mock_service.update_provider.side_effect = sqlite3.IntegrityError(
+            "UNIQUE constraint failed: providers.name"
+        )
+
+        response = client.put('/providers/3', json={"name": "taken"})
+
+        assert response.status_code == 409
+        assert response.get_json()["error"] == _DUPLICATE_NAME_MSG
 
     # ------------------------------------------------------------------
     # DELETE /providers/<id>

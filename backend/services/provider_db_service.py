@@ -14,7 +14,7 @@ class ProviderDbService:
     # Column list used by all SELECT queries — order matters for positional access
     _PROVIDER_COLS = (
         "id, name, platform, model, host, api_key, "
-        "dimensions, timeout, is_active, supports_vision"
+        "dimensions, timeout, supports_vision"
     )
 
     def __init__(self, database_service):
@@ -65,7 +65,7 @@ class ProviderDbService:
         """Convert a database row to a provider dict, decrypting api_key.
 
         Column order: id, name, platform, model, host, api_key,
-                      dimensions, timeout, is_active, supports_vision
+                      dimensions, timeout, supports_vision
 
         The ``api_key`` field is decrypted via :meth:`_unseal_api_key`.  If the
         vault is currently locked the field is returned as ``None`` so that
@@ -89,7 +89,6 @@ class ProviderDbService:
                 "api_key": None,
                 "dimensions": row['dimensions'],
                 "timeout": row['timeout'],
-                "is_active": bool(row['is_active']),
                 "supports_vision": bool(row.get('supports_vision', 0)),
             }
             if row.get('api_key'):
@@ -111,8 +110,7 @@ class ProviderDbService:
             "api_key": None,
             "dimensions": row[6],
             "timeout": row[7],
-            "is_active": bool(row[8]),
-            "supports_vision": bool(row[9]) if len(row) > 9 else False,
+            "supports_vision": bool(row[8]) if len(row) > 8 else False,
         }
         if row[5]:
             try:
@@ -125,26 +123,26 @@ class ProviderDbService:
         return result
 
     def get_all_providers(self) -> List[Dict[str, Any]]:
-        """Get all active providers."""
+        """Get all providers."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 f"SELECT {self._PROVIDER_COLS} "
-                "FROM providers WHERE is_active = 1 ORDER BY name"
+                "FROM providers ORDER BY name"
             )
             rows = cursor.fetchall()
             cursor.close()
             return [self._row_to_provider(row) for row in rows]
 
     def list_providers_summary(self) -> List[Dict[str, Any]]:
-        """Get all active providers without decrypting api_key (for REST listings)."""
+        """Get all providers without decrypting api_key (for REST listings)."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT id, name, platform, model, host, "
                 "(api_key IS NOT NULL) AS has_api_key, "
-                "dimensions, timeout, is_active, supports_vision "
-                "FROM providers WHERE is_active = 1 ORDER BY name"
+                "dimensions, timeout, supports_vision "
+                "FROM providers ORDER BY name"
             )
             rows = cursor.fetchall()
             cursor.close()
@@ -158,8 +156,7 @@ class ProviderDbService:
                     "api_key": "***" if row[5] else None,
                     "dimensions": row[6],
                     "timeout": row[7],
-                    "is_active": bool(row[8]),
-                    "supports_vision": bool(row[9]),
+                    "supports_vision": bool(row[8]),
                 }
                 for row in rows
             ]
@@ -170,7 +167,7 @@ class ProviderDbService:
             cursor = conn.cursor()
             cursor.execute(
                 f"SELECT {self._PROVIDER_COLS} "
-                "FROM providers WHERE id = ? AND is_active = 1",
+                "FROM providers WHERE id = ?",
                 (provider_id,)
             )
             row = cursor.fetchone()
@@ -234,8 +231,8 @@ class ProviderDbService:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO providers (name, platform, model, host, api_key, "
-                "dimensions, timeout, is_active, supports_vision) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "dimensions, timeout, supports_vision) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     data["name"],
                     data["platform"],
@@ -244,7 +241,6 @@ class ProviderDbService:
                     encrypted_key,
                     data.get("dimensions"),
                     data.get("timeout", 120),
-                    1 if data.get("is_active", True) else 0,
                     vision,
                 )
             )
@@ -270,8 +266,7 @@ class ProviderDbService:
         # the service layer so it cannot race with a concurrent UI selection.
         # ``get_selected_provider`` returns ``None`` when the settings row is
         # missing/empty OR when the previously-selected provider has been
-        # soft-deleted (is_active = 0) — in either case the new provider takes
-        # over the active slot.
+        # deleted — in either case the new provider takes over the active slot.
         if self.get_selected_provider() is None:
             self.set_selected_provider(new_id)
 
@@ -287,10 +282,6 @@ class ProviderDbService:
             if key in data:
                 updates.append(f"{key} = ?")
                 params.append(data[key])
-
-        if "is_active" in data:
-            updates.append("is_active = ?")
-            params.append(1 if data["is_active"] else 0)
 
         # Re-probe vision support only when a probe-relevant field changes
         # (platform/model/host/api_key). Name-only edits never re-probe.
@@ -343,11 +334,11 @@ class ProviderDbService:
         return self.get_provider_by_id(provider_id)
 
     def delete_provider(self, provider_id: int) -> bool:
-        """Delete a provider (sets is_active to FALSE)."""
+        """Permanently delete a provider row."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE providers SET is_active = 0 WHERE id = ?",
+                "DELETE FROM providers WHERE id = ?",
                 (provider_id,)
             )
             cursor.close()

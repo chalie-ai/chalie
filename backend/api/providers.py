@@ -5,6 +5,7 @@ Providers blueprint — manage LLM provider configuration via REST API.
 import ipaddress
 import logging
 import socket
+import sqlite3
 from urllib.parse import urlparse
 
 import requests as req
@@ -15,6 +16,7 @@ from .auth import require_session
 logger = logging.getLogger(__name__)
 
 _ERR_PROVIDER_NOT_FOUND = "Provider not found"
+_DUPLICATE_NAME_MSG = "A provider with that name already exists"
 
 _SAFE_VALIDATION_MESSAGES = {
     "'model' is required",
@@ -364,6 +366,9 @@ def create_provider():
     except ValueError as e:
         logger.warning(f"[REST API] Provider validation error: {e}")
         return jsonify({"error": _safe_validation_msg(e)}), 400
+    except sqlite3.IntegrityError as e:
+        logger.warning(f"[REST API] Provider name conflict: {e}")
+        return jsonify({"error": _DUPLICATE_NAME_MSG}), 409
     except Exception as e:
         logger.error(f"[REST API] Failed to create provider: {e}")
         return jsonify({"error": "Failed to create provider"}), 500
@@ -417,6 +422,9 @@ def update_provider(provider_id):
     except ValueError as e:
         logger.warning(f"[REST API] Provider validation error: {e}")
         return jsonify({"error": _safe_validation_msg(e)}), 400
+    except sqlite3.IntegrityError as e:
+        logger.warning(f"[REST API] Provider name conflict: {e}")
+        return jsonify({"error": _DUPLICATE_NAME_MSG}), 409
     except Exception as e:
         logger.error(f"[REST API] Failed to update provider: {e}")
         return jsonify({"error": "Failed to update provider"}), 500
@@ -425,7 +433,7 @@ def update_provider(provider_id):
 @providers_bp.route('/<int:provider_id>', methods=['DELETE'])
 @require_session
 def delete_provider(provider_id):
-    """Delete a provider (set is_active=FALSE)."""
+    """Permanently delete a provider."""
     try:
         service = get_provider_service()
         service.delete_provider(provider_id)

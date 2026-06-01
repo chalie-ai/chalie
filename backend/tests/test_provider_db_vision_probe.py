@@ -72,3 +72,18 @@ def test_update_model_reprobes(db):
         svc.update_provider(p["id"], {"model": "new"})
     assert pp.called
     assert svc.get_provider_by_id(p["id"])["supports_vision"] is False
+
+
+def test_delete_is_permanent_and_frees_the_name(db):
+    """Delete physically removes the row — no soft-delete flag survives — so the
+    name is immediately reusable (regression: soft-deleted rows held the UNIQUE
+    name and caused 'A provider with that name already exists' on re-create)."""
+    svc = _svc(db)
+    p = _make(db, svc, name="reusable", vision=0)
+    assert svc.delete_provider(p["id"]) is True
+    # row is gone
+    assert svc.get_provider_by_id(p["id"]) is None
+    assert all(row["id"] != p["id"] for row in svc.get_all_providers())
+    # the freed name can be reused without a UNIQUE collision
+    p2 = _make(db, svc, name="reusable", vision=0)
+    assert p2["id"] != p["id"]

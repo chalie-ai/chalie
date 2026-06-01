@@ -101,6 +101,23 @@ def _init_database():
     from services.schema_convergence_service import SchemaConvergenceService
 
     database_service = get_shared_db_service()
+
+    # Provider deletion is permanent — there is no longer a soft-delete flag.
+    # Any rows still parked at is_active=0 are previously-deleted providers;
+    # purge them BEFORE convergence drops the column, otherwise they resurface
+    # as active providers (and collide on the UNIQUE name index). Self-disabling:
+    # once convergence removes is_active this block is a no-op.
+    try:
+        with database_service.connection() as _conn:
+            _cols = [r[1] for r in _conn.execute("PRAGMA table_info(providers)").fetchall()]
+            if 'is_active' in _cols:
+                _purged = _conn.execute("DELETE FROM providers WHERE is_active = 0").rowcount
+                _conn.commit()
+                if _purged:
+                    logger.info("[Startup] Purged %d soft-deleted provider row(s)", _purged)
+    except Exception as _prov_err:
+        logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
+
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
     return database_service

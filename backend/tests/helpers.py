@@ -71,7 +71,7 @@ def make_episode_row(**overrides):
 
 # ─── providers ───────────────────────────────────────────────────────
 # Column order matches: SELECT id, name, platform, model, host, api_key,
-#   dimensions, timeout, is_active
+#   dimensions, timeout, supports_vision
 
 def make_provider_row(
     provider_id=1,
@@ -82,12 +82,12 @@ def make_provider_row(
     api_key=None,
     dimensions=256,
     timeout=30,
-    is_active=True,
+    supports_vision=0,
 ):
     """Return a 9-element tuple matching providers SELECT order."""
     return (
         provider_id, name, platform, model, host,
-        api_key, dimensions, timeout, is_active,
+        api_key, dimensions, timeout, supports_vision,
     )
 
 

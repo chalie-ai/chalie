@@ -218,16 +218,16 @@ class Providers:
             with db.connection() as conn:
                 if selected and selected.get('id'):
                     row = conn.execute(
-                        "SELECT compact_at FROM providers WHERE id = ? AND is_active = 1",
+                        "SELECT compact_at FROM providers WHERE id = ?",
                         (selected['id'],),
                     ).fetchone()
                 else:
-                    # Fallback: first active provider
+                    # Fallback: first provider
                     row = conn.execute(
-                        "SELECT compact_at FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1",
+                        "SELECT compact_at FROM providers ORDER BY id LIMIT 1",
                     ).fetchone()
             if row is None:
-                logger.warning("[COMPACTION] get_compact_at: no active provider row found")
+                logger.warning("[COMPACTION] get_compact_at: no provider row found")
                 return None
             return row[0]  # may be None if column is NULL
         except Exception as exc:

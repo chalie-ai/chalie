@@ -407,17 +407,17 @@ class TestProviderDecryptTolerance:
         ).decode()
 
         db.execute(
-            "INSERT INTO providers (name, platform, model, api_key, is_active) "
-            "VALUES (?, ?, ?, ?, ?)",
-            ("good-provider", "openai", "gpt-4o", good_key_encrypted, 1),
+            "INSERT INTO providers (name, platform, model, api_key) "
+            "VALUES (?, ?, ?, ?)",
+            ("good-provider", "openai", "gpt-4o", good_key_encrypted),
         )
 
         # Insert a provider whose api_key column contains garbage (old pre-vault
         # plaintext that can't be base64-decoded as AES-GCM)
         db.execute(
-            "INSERT INTO providers (name, platform, model, api_key, is_active) "
-            "VALUES (?, ?, ?, ?, ?)",
-            ("bad-provider", "openai", "gpt-4", "NOT_VALID_ENCRYPTED_DATA", 1),
+            "INSERT INTO providers (name, platform, model, api_key) "
+            "VALUES (?, ?, ?, ?)",
+            ("bad-provider", "openai", "gpt-4", "NOT_VALID_ENCRYPTED_DATA"),
         )
         db.commit()
 
@@ -445,14 +445,14 @@ class TestProviderDecryptTolerance:
         """
         # Insert two providers (no need to encrypt — vault is never unlocked)
         db.execute(
-            "INSERT INTO providers (name, platform, model, api_key, is_active) "
-            "VALUES (?, ?, ?, ?, ?)",
-            ("provider-a", "anthropic", "claude-sonnet", "some-blob", 1),
+            "INSERT INTO providers (name, platform, model, api_key) "
+            "VALUES (?, ?, ?, ?)",
+            ("provider-a", "anthropic", "claude-sonnet", "some-blob"),
         )
         db.execute(
-            "INSERT INTO providers (name, platform, model, api_key, is_active) "
-            "VALUES (?, ?, ?, ?, ?)",
-            ("provider-b", "ollama", "llama3", None, 1),
+            "INSERT INTO providers (name, platform, model, api_key) "
+            "VALUES (?, ?, ?, ?)",
+            ("provider-b", "ollama", "llama3", None),
         )
         db.commit()
 

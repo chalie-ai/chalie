@@ -10,12 +10,12 @@ def _svc(db):
     return ProviderDbService(_db_mod._shared_db_service)
 
 
-def _make_provider(db, name, vision, active=1):
+def _make_provider(db, name, vision):
     cur = db.cursor()
     cur.execute(
-        "INSERT INTO providers (name, platform, model, is_active, supports_vision) "
-        "VALUES (?, 'ollama', 'llava', ?, ?)",
-        (name, active, vision),
+        "INSERT INTO providers (name, platform, model, supports_vision) "
+        "VALUES (?, 'ollama', 'llava', ?)",
+        (name, vision),
     )
     db.commit()
     return cur.lastrowid

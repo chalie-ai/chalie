@@ -137,7 +137,6 @@ CREATE TABLE IF NOT EXISTS providers (
     api_key BLOB,                            -- encrypted storage
     dimensions INTEGER,
     timeout INTEGER DEFAULT 120,
-    is_active INTEGER DEFAULT 1,             -- BOOLEAN
     supports_vision INTEGER DEFAULT 0,       -- BOOLEAN
     max_tokens INTEGER,
     compact_at INTEGER,
