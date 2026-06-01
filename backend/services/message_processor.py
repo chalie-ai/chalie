@@ -1525,6 +1525,234 @@ class MessageProcessor:
         """
         pass
 
+    # ── Flat-MessageProcessor entry point (spec §4 / T2) ─────────────────────
+    #
+    # process() is the new single entry point for all channels.  It creates a
+    # MessageProcessor with per-turn state from the caller-supplied
+    # ProcessorConfig, runs the ACT lifecycle, and returns the response text.
+    # Old subclasses continue to work via send() until they are migrated in T7-T8.
+
+    @staticmethod
+    def process(
+        raw_input: str,
+        config: "ProcessorConfig",  # noqa: F821 — deferred import avoids circular dep
+        metadata: "dict | None" = None,
+        deadline: "float | None" = None,
+        cancel_event: "threading.Event | None" = None,
+    ) -> str:
+        """Single entry point.  Creates an MP, runs the turn, returns text.
+
+        Spec §4 / AC-1 / L1.
+        """
+        mp = object.__new__(MessageProcessor)
+        # Initialise old-path attributes (metrics, cancel, etc.) via old __init__.
+        MessageProcessor.__init__(mp, raw_input, metadata)
+        # New flat-path attributes (spec §4 field list).
+        mp.config = config
+        mp.uid: "int | None" = None
+        mp.current_iteration: int = 0
+        mp.deadline: "float | None" = deadline
+        mp.cancel_event: "threading.Event" = (
+            cancel_event if cancel_event is not None else threading.Event()
+        )
+        mp.thinking_level: str = "low"
+        mp.thinking_exploration: "str | None" = None
+        mp.discovered_tools: "list[dict]" = []
+        return mp._run()
+
+    def _run(self) -> str:
+        """Lifecycle wrapper — bind processor, run setup→loop→record.
+
+        Spec §4.
+        """
+        with bind_current_processor(self):
+            self._setup()
+            result = self._loop()
+            self._record(result)
+            return result
+
+    def _setup(self) -> None:
+        """Pre-loop.  Executes once per turn.
+
+        1. Write input row to transcript (unless skip_transcript / skip_input_row).
+        2. Run thinking gate (user channel only).
+        3. Seed turn 0 — framework tool calls before the first LLM turn.
+
+        Spec §4.
+        """
+        from services.transcript_service import write_input_row
+
+        if not self.config.skip_transcript and not self.config.skip_input_row:
+            self.uid = write_input_row(
+                self.config.channel, self.config.role, self._raw_input
+            )
+
+        if self.config.channel == "user":
+            self._run_thinking_gate()
+
+        self._seed_turn_zero()
+
+    def _seed_turn_zero(self) -> None:
+        """Framework-issued tool calls fired once before iteration 0.
+
+        Memory recall (memory_seed flag) and attachment uploads are built in T9.
+        Stub at T2 — no-op until seeding is wired.
+
+        Spec §4 / §4d.
+        """
+
+    def _loop(self) -> str:  # noqa: C901
+        """ACT game loop — spec §4 / AC-1.  ≤30 lines."""
+        from abilities._base import Ability  # noqa: PLC0415
+        from abilities._registry import AbilityRegistry  # noqa: PLC0415
+        from services.providers import Providers  # noqa: PLC0415
+        p = Providers.instance()
+        while True:
+            if self._should_stop(): return ""  # noqa: E701
+            prompt = self.config.build_user_prompt(self)
+            system = self.config.build_system_prompt(self)
+            tools = AbilityRegistry.build_tools(self)
+            pct = p.calculate(system, prompt, tools, job=self.config.job)
+            if pct > 0.90 and self._has_trail():
+                if not self._compact_trail(): return ""  # noqa: E701
+                continue
+            if pct > 0.80:
+                if not self._compact_history(): return ""  # noqa: E701
+                continue
+            response = p.send_messages(
+                system, [{"role": "user", "content": prompt}],
+                job=self.config.job, tools=tools, thinking_mode=self.thinking_level,
+            )
+            if not response.tool_calls: return response.text or ""  # noqa: E701
+            for tc in response.tool_calls:
+                if self.cancel_event.is_set(): return ""  # noqa: E701
+                Ability.dispatch(self, tc["name"], tc["input"], tc.get("id"))
+            self._record_narration(response)
+            self.current_iteration += 1
+
+    def _should_stop(self) -> bool:
+        """Single stop check: cancel OR deadline OR iteration cap.
+
+        Spec §4 / L3-L6.
+        """
+        if self.cancel_event.is_set():
+            return True
+        if self.deadline is not None and time.time() > self.deadline:
+            return True
+        if self.config.max_iterations is not None:
+            if self.current_iteration >= self.config.max_iterations:
+                return True
+        return False
+
+    def _record(self, response_text: str) -> None:
+        """Post-loop.  Persist turn + fan-out side-effects.
+
+        Spec §4 / M4-M5 / C3-C4.
+        """
+        from services.transcript_service import write_assistant_row
+
+        if self.cancel_event.is_set():
+            self._cleanup_cancelled()
+            return
+
+        if not self.config.skip_transcript:
+            write_assistant_row(self.config.channel, response_text)
+
+        if self.config.post_turn is not None:
+            self.config.post_turn(self, response_text)
+
+    def _cleanup_cancelled(self) -> None:
+        """Delete DB rows created during a cancelled turn.
+
+        Spec §4 / M5.
+        """
+        if self.uid is None:
+            return
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                conn.execute(
+                    "DELETE FROM tool_calls WHERE transcript_id = ?", (self.uid,)
+                )
+                conn.execute(
+                    "DELETE FROM transcript WHERE id = ?", (self.uid,)
+                )
+            logger.info(
+                "[MessageProcessor] %s: cleaned up cancelled turn (uid=%s)",
+                self.config.channel,
+                self.uid,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[MessageProcessor] %s: failed to clean up cancelled turn (uid=%s): %s",
+                self.config.channel,
+                self.uid,
+                exc,
+            )
+
+    def _flat_get_previous_messages(self) -> str:
+        """Flat-path previous messages assembly.
+
+        suppress_history → '' (M6).
+        Otherwise: channel-scoped, watermark-bounded (strict id > W, spec §4a).
+        No compaction → watermark 0, all channel rows, no summary (M8).
+
+        Spec §4 / AC-26 / AC-27 / M6-M8.
+        """
+        if self.config.suppress_history:
+            return ""
+
+        from services import compaction_persistence, transcript_service
+
+        compaction = compaction_persistence.get_compaction(self.config.channel)
+        watermark = compaction["compacted_up_to_id"] if compaction else 0
+
+        rows = transcript_service.get_recent(
+            self.config.channel, since_id=watermark
+        )
+
+        lines: list[str] = []
+        if compaction and compaction.get("compacted_text"):
+            lines.append(compaction["compacted_text"])
+        for row in rows:
+            role = row.get("role", "unknown")
+            content = row.get("content", "")
+            lines.append(f"{role}: {content}")
+        return "\n".join(lines)
+
+    # ── Trail stubs (implemented in T4/T5/T6) ────────────────────────────────
+
+    def _has_trail(self) -> bool:
+        """True when a non-compaction trail row exists since last compaction.
+
+        Spec §4c / F9.  Real implementation in T4 (act-trail-as-query).
+        """
+        return False
+
+    def _compact_trail(self) -> bool:
+        """Trail compaction (>90%): summarise trail-so-far into one row.
+
+        Spec §4a / D2.  Real implementation in T6.
+        """
+        return True
+
+    def _compact_history(self) -> bool:
+        """History compaction (>80%): summarise prior conversation turns.
+
+        Spec §4a / D4.  Real implementation in T6.
+        """
+        return True
+
+    def _record_narration(self, response: "object") -> None:  # type: ignore[override]
+        """Mid-loop: persist LLM text between iterations as a trail row.
+
+        Full implementation depends on Ability.record (T4) and WS.emit (T7).
+        Stub at T2 — no-op.
+
+        Spec §4 / F14.
+        """
+
 
 # ── Module-private helpers ────────────────────────────────────────────────────
 

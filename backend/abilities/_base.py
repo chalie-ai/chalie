@@ -76,6 +76,23 @@ class Ability(ABC):
         return self.INPUT_SCHEMA
 
     @staticmethod
+    def dispatch(
+        mp: "object",
+        tool_name: str,
+        params: dict,
+        call_id: "str | None" = None,
+    ) -> str:
+        """Single dispatch chokepoint — spec §4 / §5 / T3.
+
+        Real implementation is built in T3 (Ability.dispatch chokepoint).
+        This stub is a seam so _loop() can call it before T3 lands.
+        Tests mock this method via patch("abilities._base.Ability.dispatch").
+        """
+        raise NotImplementedError(
+            "Ability.dispatch is not yet implemented — built in T3"
+        )
+
+    @staticmethod
     def handle(handler, params: dict, telemetry: dict | None) -> dict:
         action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
         return handler(topic="", params=action_params, telemetry=telemetry)

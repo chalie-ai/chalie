@@ -75,6 +75,15 @@ class AbilityRegistry:
         return list(_get_registry().values())
 
     @staticmethod
+    def build_tools(mp: "object") -> list[dict]:
+        """Return the tool list for the given MessageProcessor instance.
+
+        Spec §4 / T3: this stub returns [] at T2; replaced with the real
+        implementation when Ability.dispatch is built in T3.
+        """
+        return []
+
+    @staticmethod
     def policy_visible() -> list[Ability]:
         """Return abilities that should appear in the policy UI.
 
