@@ -217,6 +217,8 @@ def _emit(config: object, event: dict) -> None:
     """
     if config is None or getattr(config, "broadcast_to", None) is None:
         return
+    if WebSocketBroker is None:
+        _populate_module_aliases()
     try:
         WebSocketBroker().broadcast(event)
     except Exception as exc:  # noqa: BLE001
@@ -340,6 +342,16 @@ class Ability(ABC):
         if cancel_ev is not None and cancel_ev.is_set():
             return ""
 
+        # The module-level aliases (AbilityRegistry / PolicyService / WebSocketBroker)
+        # are populated at import time by _populate_module_aliases(). When _registry
+        # is imported before _base (the real boot order), that populate runs mid
+        # circular-import and the registry class does not exist yet, so the import
+        # silently fails and the aliases stay None. By the time any tool is
+        # dispatched every module is fully loaded, so re-binding here is safe,
+        # idempotent and cheap (imports hit the sys.modules cache).
+        if AbilityRegistry is None or PolicyService is None or WebSocketBroker is None:
+            _populate_module_aliases()
+
         from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
 
         # 1. Sanitize params, pop act_summary (I2)
@@ -363,7 +375,10 @@ class Ability(ABC):
             # via seeded policy rows (same as the old ActDispatcherService path).
             result = _dispatch_mcp(mp, tool_name, params)
         else:
-            ability = AbilityRegistry.get(tool_name)
+            try:
+                ability = AbilityRegistry.get(tool_name)
+            except KeyError:
+                ability = None
             if ability is None:
                 result = {"status": "error", "result": f"Unknown tool: {tool_name}"}
             else:
