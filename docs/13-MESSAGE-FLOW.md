@@ -111,7 +111,7 @@ Two independent thresholds checked once per iteration via `Providers.calculate()
 | **>90% + trail exists** | `tool_calls` rows for this turn | `_compact_trail()` — summarises trail into one `trail_compaction` row, iteration resets to 0 |
 | **>80%** | Prior conversation transcript | `_compact_history()` — summarises prior turns into history watermark, iteration resets to 0 |
 
-The 90% check runs first. Compaction loops (`COMPACTION_CONFIG`, `SUBAGENT_COMPACTION_CONFIG`) hit a recursion guard — if they approach 80% they log a warning and proceed rather than compacting-of-compaction.
+The 90% check runs first. The compaction loop (`COMPACTION_CONFIG`) hits a recursion guard — if it approaches 80% it logs a warning and proceeds rather than compacting-of-compaction. There is one universal compaction config for every channel (delegates included); the old per-subagent config was removed.
 
 **Trail compaction** (`_compact_trail()`): assembles the current trail from `tool_calls` (everything since the last `trail_compaction` row), summarises it with `COMPACTION_CONFIG`, and records the result as a new `trail_compaction` row (`tool_name='trail_compaction'`, `ephemeral=1`). The next `_from_last_compaction()` slice begins at that row — every prior row silently drops out of the assembled trail without a DELETE.
 
