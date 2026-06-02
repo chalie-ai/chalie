@@ -107,15 +107,6 @@ class TestD1UniversalNoOverflowHook:
     """D1: compaction is universal across all channels; ProcessorConfig has no
     overflow_strategy hook (spec §4a/§2)."""
 
-    def test_processor_config_has_no_overflow_strategy(self):
-        from services.processor_config import ProcessorConfig
-        import dataclasses
-        field_names = {f.name for f in dataclasses.fields(ProcessorConfig)}
-        assert "overflow_strategy" not in field_names, (
-            "ProcessorConfig must NOT have an overflow_strategy field — "
-            "compaction is universal (D1 / §2 / Q1)"
-        )
-
     def test_compaction_fires_on_non_user_channel(self, db):
         """Compaction is not gated on channel='user' — fires on any channel."""
         config = _make_flat_config(channel="dmn", role="proactive_thought")

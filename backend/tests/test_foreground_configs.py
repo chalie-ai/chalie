@@ -45,42 +45,24 @@ pytestmark = pytest.mark.unit
 class TestUmpConfig:
     """B1: make_user_config returns the correct ProcessorConfig."""
 
-    def test_channel_and_role(self):
-        """channel='user', role='user'."""
+    def test_config_shape(self):
+        """B1: full field tuple for make_user_config (§3b / §4e / AC-28).
+
+        channel='user', role='user', max_iterations=None (unbounded loop),
+        suppress_history=False (conversational channel), broadcast_to='user'
+        (live output), memory_seed=True (seeds recall on turn 0), post_turn is a
+        callable (skill suggestion hook), usage_class='chat'.
+        """
         from configs.channels import make_user_config
         cfg = make_user_config()
         assert cfg.channel == "user"
         assert cfg.role == "user"
-
-    def test_max_iterations_is_none(self):
-        """max_iterations=None — UMP runs an unbounded loop (§3b)."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
         assert cfg.max_iterations is None
-
-    def test_suppress_history_false(self):
-        """suppress_history=False — UMP is a conversational channel (§3b)."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
         assert cfg.suppress_history is False
-
-    def test_broadcast_to_user(self):
-        """broadcast_to='user' — live output enabled for UMP (§3b / AC-28)."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
         assert cfg.broadcast_to == "user"
-
-    def test_memory_seed_true(self):
-        """memory_seed=True — UMP seeds memory recall on turn 0 (§3b)."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
         assert cfg.memory_seed is True
-
-    def test_post_turn_is_callable(self):
-        """post_turn is a callable (skill suggestion hook) (§3b / §4e)."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
         assert callable(cfg.post_turn)
+        assert cfg.usage_class == "chat"
 
     def test_skip_input_row_false_by_default(self):
         """skip_input_row=False when metadata has no hidden_input (§3b)."""
@@ -93,12 +75,6 @@ class TestUmpConfig:
         from configs.channels import make_user_config
         cfg = make_user_config(metadata={"hidden_input": True})
         assert cfg.skip_input_row is True
-
-    def test_usage_class_is_chat(self):
-        """usage_class='chat' (§3b)."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
-        assert cfg.usage_class == "chat"
 
 
 # ---------------------------------------------------------------------------
@@ -118,35 +94,23 @@ class TestEampConfig:
             wrapper_id="w1",
         )
 
-    def test_channel_is_exact(self):
-        """channel is exactly 'external-agent:{agent_name}' — no wrapper_id (§3b / B2)."""
+    def test_config_shape(self):
+        """B2: full field tuple for make_eamp_config (§3b).
+
+        channel is exactly 'external-agent:{agent_name}' — no wrapper_id,
+        role='external_agent', max_iterations=200, suppress_history=False
+        (conversational channel), memory_seed=True (seeds recall on turn 0),
+        broadcast_to=None (runs silently, no WS streaming),
+        usage_class='external_agent'.
+        """
         cfg = self._make()
         assert cfg.channel == "external-agent:testbot"
-
-    def test_role_is_external_agent(self):
-        """role='external_agent' (§3b)."""
-        cfg = self._make()
         assert cfg.role == "external_agent"
-
-    def test_max_iterations_is_200(self):
-        """max_iterations=200 (§3b)."""
-        cfg = self._make()
         assert cfg.max_iterations == 200
-
-    def test_suppress_history_false(self):
-        """suppress_history=False — EAMP is a conversational channel (§3b)."""
-        cfg = self._make()
         assert cfg.suppress_history is False
-
-    def test_memory_seed_true(self):
-        """memory_seed=True — EAMP seeds memory recall on turn 0 (§3b)."""
-        cfg = self._make()
         assert cfg.memory_seed is True
-
-    def test_broadcast_to_none(self):
-        """broadcast_to=None — EAMP runs silently, no WS streaming (§3b)."""
-        cfg = self._make()
         assert cfg.broadcast_to is None
+        assert cfg.usage_class == "external_agent"
 
     def test_post_turn_none_when_no_disclosure(self):
         """post_turn=None when loop_in_human=False (§3b)."""
@@ -157,11 +121,6 @@ class TestEampConfig:
         """post_turn is a callable when loop_in_human=True (§3b)."""
         cfg = self._make(loop_in_human=True)
         assert callable(cfg.post_turn)
-
-    def test_usage_class_is_external_agent(self):
-        """usage_class='external_agent' (§3b)."""
-        cfg = self._make()
-        assert cfg.usage_class == "external_agent"
 
 
 # ---------------------------------------------------------------------------

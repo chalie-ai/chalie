@@ -46,7 +46,7 @@ T8 covers:
 """
 
 import threading
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -61,47 +61,24 @@ pytestmark = pytest.mark.unit
 class TestDmnConfig:
     """B4: DMN_CONFIG has the exact shape §3a/§8b specifies."""
 
-    def test_channel(self):
+    def test_config_shape(self):
+        """§3a/§8b/§2/§4e: full field tuple for DMN_CONFIG.
+
+        channel='dmn', role='proactive_thought', max_iterations=100,
+        skip_transcript=False (writes transcript rows), suppress_history=True
+        (housekeeping loop, no replay), broadcast_to=None (silent background),
+        memory_seed=False (no auto-seed), post_turn=None (metrics at gateway),
+        job derived as 'dmn:proactive_thought'.
+        """
         from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.channel == "dmn"
-
-    def test_role(self):
-        from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.role == "proactive_thought"
-
-    def test_max_iterations(self):
-        """§3a: max_iterations=100."""
-        from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.max_iterations == 100
-
-    def test_skip_transcript_false(self):
-        """§3a: DMN does write transcript rows (no skip)."""
-        from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.skip_transcript is False
-
-    def test_suppress_history_true(self):
-        """§3a/§2: housekeeping loop — no conversation replay."""
-        from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.suppress_history is True
-
-    def test_broadcast_to_none(self):
-        """§3a/§8b: silent — background loop, no UI feed."""
-        from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.broadcast_to is None
-
-    def test_memory_seed_false(self):
-        """§3a/§8b: no auto-seed; DMN gets its own input."""
-        from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.memory_seed is False
-
-    def test_post_turn_none(self):
-        """§3a/§4e: metrics moved to send gateway; DMN had no other post_turn body."""
-        from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.post_turn is None
-
-    def test_job_derived_correctly(self):
-        """§2: job == 'dmn:proactive_thought' (channel:role)."""
-        from configs.channels import DMN_CONFIG
         assert DMN_CONFIG.job == "dmn:proactive_thought"
 
     def test_prompt_builders_callable(self):
@@ -135,24 +112,20 @@ class TestDmnConfig:
 class TestEpisodeEncoderConfig:
     """B5: EPISODE_ENCODER_CONFIG has the exact shape §3a specifies."""
 
-    def test_channel_and_role(self):
+    def test_config_shape(self):
+        """§3a: full field tuple for EPISODE_ENCODER_CONFIG.
+
+        channel/role='episode_encoder', max_iterations=1 (one-shot),
+        skip_transcript=True (no transcript writes), suppress_history=True,
+        always_available=[] (no tools).
+        """
         from configs.channels import EPISODE_ENCODER_CONFIG
         assert EPISODE_ENCODER_CONFIG.channel == "episode_encoder"
         assert EPISODE_ENCODER_CONFIG.role == "episode_encoder"
-
-    def test_max_iterations(self):
-        """§3a: max_iterations=1 (one-shot)."""
-        from configs.channels import EPISODE_ENCODER_CONFIG
         assert EPISODE_ENCODER_CONFIG.max_iterations == 1
-
-    def test_skip_transcript_true(self):
-        """§3a: no transcript writes."""
-        from configs.channels import EPISODE_ENCODER_CONFIG
         assert EPISODE_ENCODER_CONFIG.skip_transcript is True
-
-    def test_suppress_history_true(self):
-        from configs.channels import EPISODE_ENCODER_CONFIG
         assert EPISODE_ENCODER_CONFIG.suppress_history is True
+        assert EPISODE_ENCODER_CONFIG.always_available == []
 
     def test_post_turn_none_or_noop(self):
         """§3a: post_turn no-op (caller owns downstream)."""
@@ -162,11 +135,6 @@ class TestEpisodeEncoderConfig:
         if pt is not None:
             mp = MagicMock()
             pt(mp, "response")  # must not raise
-
-    def test_always_available_empty(self):
-        """§3a: no tools."""
-        from configs.channels import EPISODE_ENCODER_CONFIG
-        assert EPISODE_ENCODER_CONFIG.always_available == []
 
     def test_build_user_prompt_callable(self):
         from configs.channels import EPISODE_ENCODER_CONFIG
@@ -189,39 +157,24 @@ class TestEpisodeEncoderConfig:
 class TestSkillSuggestionConfig:
     """B6: SKILL_SUGGESTION_CONFIG has the exact shape §3a specifies."""
 
-    def test_channel_and_role(self):
+    def test_config_shape(self):
+        """§3a/§2: full field tuple for SKILL_SUGGESTION_CONFIG.
+
+        channel/role='skills_building', max_iterations=5,
+        skip_transcript=False (writes transcript rows), suppress_history=True
+        (each run independent — replaces the old get_previous_messages() override
+        on SkillSuggestionMessageProcessor; AC-26),
+        always_available includes 'skill_manager', broadcast_to=None,
+        memory_seed=False.
+        """
         from configs.channels import SKILL_SUGGESTION_CONFIG
         assert SKILL_SUGGESTION_CONFIG.channel == "skills_building"
         assert SKILL_SUGGESTION_CONFIG.role == "skills_building"
-
-    def test_max_iterations(self):
-        """§3a: max_iterations=5."""
-        from configs.channels import SKILL_SUGGESTION_CONFIG
         assert SKILL_SUGGESTION_CONFIG.max_iterations == 5
-
-    def test_skip_transcript_false(self):
-        """§3a: writes transcript rows."""
-        from configs.channels import SKILL_SUGGESTION_CONFIG
         assert SKILL_SUGGESTION_CONFIG.skip_transcript is False
-
-    def test_suppress_history_true(self):
-        """§3a/§2: each run is independent — suppress_history=True (replaces
-        the old get_previous_messages() override on SkillSuggestionMessageProcessor).
-        AC-26."""
-        from configs.channels import SKILL_SUGGESTION_CONFIG
         assert SKILL_SUGGESTION_CONFIG.suppress_history is True
-
-    def test_always_available_skill_manager(self):
-        """§3a: always_available=['skill_manager']."""
-        from configs.channels import SKILL_SUGGESTION_CONFIG
         assert "skill_manager" in SKILL_SUGGESTION_CONFIG.always_available
-
-    def test_broadcast_to_none(self):
-        from configs.channels import SKILL_SUGGESTION_CONFIG
         assert SKILL_SUGGESTION_CONFIG.broadcast_to is None
-
-    def test_memory_seed_false(self):
-        from configs.channels import SKILL_SUGGESTION_CONFIG
         assert SKILL_SUGGESTION_CONFIG.memory_seed is False
 
     def test_build_system_prompt_returns_skill_suggestion_prompt(self):
@@ -241,31 +194,20 @@ class TestSkillSuggestionConfig:
 class TestCompactionConfig:
     """B7: COMPACTION_CONFIG has the exact shape §3a specifies."""
 
-    def test_channel_and_role(self):
+    def test_config_shape(self):
+        """§3a/§4a: full field tuple for COMPACTION_CONFIG.
+
+        channel/role='compaction', max_iterations=30 (recursion guard),
+        skip_transcript=True (no transcript writes), suppress_history=True,
+        broadcast_to=None, memory_seed=False.
+        """
         from configs.channels import COMPACTION_CONFIG
         assert COMPACTION_CONFIG.channel == "compaction"
         assert COMPACTION_CONFIG.role == "compaction"
-
-    def test_max_iterations(self):
-        """§3a/§4a: bounded at 30 (recursion guard)."""
-        from configs.channels import COMPACTION_CONFIG
         assert COMPACTION_CONFIG.max_iterations == 30
-
-    def test_skip_transcript_true(self):
-        """§3a: no transcript writes."""
-        from configs.channels import COMPACTION_CONFIG
         assert COMPACTION_CONFIG.skip_transcript is True
-
-    def test_suppress_history_true(self):
-        from configs.channels import COMPACTION_CONFIG
         assert COMPACTION_CONFIG.suppress_history is True
-
-    def test_broadcast_to_none(self):
-        from configs.channels import COMPACTION_CONFIG
         assert COMPACTION_CONFIG.broadcast_to is None
-
-    def test_memory_seed_false(self):
-        from configs.channels import COMPACTION_CONFIG
         assert COMPACTION_CONFIG.memory_seed is False
 
 
@@ -277,23 +219,17 @@ class TestCompactionConfig:
 class TestSubagentCompactionConfig:
     """B8: SUBAGENT_COMPACTION_CONFIG has the exact shape §3a specifies."""
 
-    def test_channel_and_role(self):
+    def test_config_shape(self):
+        """§3a/§4a: full field tuple for SUBAGENT_COMPACTION_CONFIG.
+
+        channel/role='subagent_compaction', max_iterations=30 (bounded),
+        skip_transcript=True (no transcript writes), suppress_history=True.
+        """
         from configs.channels import SUBAGENT_COMPACTION_CONFIG
         assert SUBAGENT_COMPACTION_CONFIG.channel == "subagent_compaction"
         assert SUBAGENT_COMPACTION_CONFIG.role == "subagent_compaction"
-
-    def test_max_iterations(self):
-        """§3a/§4a: bounded at 30."""
-        from configs.channels import SUBAGENT_COMPACTION_CONFIG
         assert SUBAGENT_COMPACTION_CONFIG.max_iterations == 30
-
-    def test_skip_transcript_true(self):
-        """§3a: no transcript writes."""
-        from configs.channels import SUBAGENT_COMPACTION_CONFIG
         assert SUBAGENT_COMPACTION_CONFIG.skip_transcript is True
-
-    def test_suppress_history_true(self):
-        from configs.channels import SUBAGENT_COMPACTION_CONFIG
         assert SUBAGENT_COMPACTION_CONFIG.suppress_history is True
 
 
@@ -305,52 +241,26 @@ class TestSubagentCompactionConfig:
 class TestPatternMatchConfig:
     """B9: make_pattern_config returns the exact shape §3b specifies."""
 
-    def test_channel_and_role(self):
+    def test_config_shape(self):
+        """§3b/§2: full field tuple for make_pattern_config.
+
+        channel/role='pattern_match', max_iterations=100, suppress_history=True
+        (housekeeping loop), post_turn = confidence decay sweep (callable, not
+        None), always_available includes save_pattern and save_graph,
+        broadcast_to=None, memory_seed=False, skip_transcript=True (background).
+        """
         from configs.channels import make_pattern_config
         cfg = make_pattern_config(0, 100)
         assert cfg.channel == "pattern_match"
         assert cfg.role == "pattern_match"
-
-    def test_max_iterations(self):
-        """§3b: max_iterations=100."""
-        from configs.channels import make_pattern_config
-        cfg = make_pattern_config(0, 100)
         assert cfg.max_iterations == 100
-
-    def test_suppress_history_true(self):
-        """§3b/§2: housekeeping loop."""
-        from configs.channels import make_pattern_config
-        cfg = make_pattern_config(0, 100)
         assert cfg.suppress_history is True
-
-    def test_post_turn_is_confidence_decay_sweep(self):
-        """§3b: post_turn = confidence decay sweep (callable, not None)."""
-        from configs.channels import make_pattern_config
-        cfg = make_pattern_config(0, 100)
         assert cfg.post_turn is not None
         assert callable(cfg.post_turn)
-
-    def test_always_available_save_pattern_save_graph(self):
-        """§3b: always_available includes save_pattern and save_graph."""
-        from configs.channels import make_pattern_config
-        cfg = make_pattern_config(0, 100)
         assert "save_pattern" in cfg.always_available
         assert "save_graph" in cfg.always_available
-
-    def test_broadcast_to_none(self):
-        from configs.channels import make_pattern_config
-        cfg = make_pattern_config(0, 100)
         assert cfg.broadcast_to is None
-
-    def test_memory_seed_false(self):
-        from configs.channels import make_pattern_config
-        cfg = make_pattern_config(0, 100)
         assert cfg.memory_seed is False
-
-    def test_skip_transcript_true(self):
-        """§3b: no transcript writes (background)."""
-        from configs.channels import make_pattern_config
-        cfg = make_pattern_config(0, 100)
         assert cfg.skip_transcript is True
 
     def test_build_user_prompt_callable(self):
@@ -375,46 +285,25 @@ class TestPatternMatchConfig:
 class TestGeoPatternConfig:
     """B10: make_geo_config returns the exact shape §3b specifies."""
 
-    def test_channel_and_role(self):
+    def test_config_shape(self):
+        """§3b/§2: full field tuple for make_geo_config.
+
+        channel/role='geo_pattern', max_iterations=30, suppress_history=True
+        (housekeeping loop), post_turn logs counters only (callable, not None),
+        always_available includes save_pattern and save_graph, broadcast_to=None,
+        skip_transcript=True.
+        """
         from configs.channels import make_geo_config
         cfg = make_geo_config(0, 100)
         assert cfg.channel == "geo_pattern"
         assert cfg.role == "geo_pattern"
-
-    def test_max_iterations(self):
-        """§3b: max_iterations=30."""
-        from configs.channels import make_geo_config
-        cfg = make_geo_config(0, 100)
         assert cfg.max_iterations == 30
-
-    def test_suppress_history_true(self):
-        """§3b/§2: housekeeping loop."""
-        from configs.channels import make_geo_config
-        cfg = make_geo_config(0, 100)
         assert cfg.suppress_history is True
-
-    def test_post_turn_logs_counters_only(self):
-        """§3b: post_turn logs counters only (callable, not None)."""
-        from configs.channels import make_geo_config
-        cfg = make_geo_config(0, 100)
         assert cfg.post_turn is not None
         assert callable(cfg.post_turn)
-
-    def test_always_available_save_pattern_save_graph(self):
-        """§3b: always_available includes save_pattern and save_graph."""
-        from configs.channels import make_geo_config
-        cfg = make_geo_config(0, 100)
         assert "save_pattern" in cfg.always_available
         assert "save_graph" in cfg.always_available
-
-    def test_broadcast_to_none(self):
-        from configs.channels import make_geo_config
-        cfg = make_geo_config(0, 100)
         assert cfg.broadcast_to is None
-
-    def test_skip_transcript_true(self):
-        from configs.channels import make_geo_config
-        cfg = make_geo_config(0, 100)
         assert cfg.skip_transcript is True
 
     def test_build_system_prompt_returns_string(self):
@@ -434,50 +323,23 @@ class TestGeoPatternConfig:
 class TestUserSummaryConfig:
     """B11: make_user_summary_config returns the exact shape §3b specifies."""
 
-    def test_channel_and_role(self):
+    def test_config_shape(self):
+        """§3b/§2: full field tuple for make_user_summary_config.
+
+        channel/role='user_summary', max_iterations=1 (one-shot),
+        suppress_history=True (housekeeping loop), post_turn parses {short, long}
+        → data_graph (callable, not None), skip_transcript=True,
+        always_available=[] (no tools).
+        """
         from configs.channels import make_user_summary_config
         cfg = make_user_summary_config()
         assert cfg.channel == "user_summary"
         assert cfg.role == "user_summary"
-
-    def test_max_iterations(self):
-        """§3b: max_iterations=1 (one-shot)."""
-        from configs.channels import make_user_summary_config
-        cfg = make_user_summary_config()
         assert cfg.max_iterations == 1
-
-    def test_suppress_history_true(self):
-        """§3b/§2: housekeeping loop."""
-        from configs.channels import make_user_summary_config
-        cfg = make_user_summary_config()
         assert cfg.suppress_history is True
-
-    def test_post_turn_parses_json_writes_data_graph(self):
-        """§3b: post_turn parses {short, long} → data_graph. Must be callable."""
-        from configs.channels import make_user_summary_config
-        cfg = make_user_summary_config()
         assert cfg.post_turn is not None
         assert callable(cfg.post_turn)
-
-    def test_no_on_store_hook(self):
-        """§AC-29: there is NO on_store hook. post_turn receives response_text directly."""
-        from configs.channels import make_user_summary_config
-        from services.processor_config import ProcessorConfig
-        cfg = make_user_summary_config()
-        # ProcessorConfig has no on_store field — confirm at the dataclass level.
-        assert not hasattr(ProcessorConfig, "on_store")
-        # post_turn callable (if set) must accept (mp, response_text).
-        assert cfg.post_turn is not None
-
-    def test_skip_transcript_true(self):
-        from configs.channels import make_user_summary_config
-        cfg = make_user_summary_config()
         assert cfg.skip_transcript is True
-
-    def test_always_available_empty(self):
-        """§3b: no tools for user_summary."""
-        from configs.channels import make_user_summary_config
-        cfg = make_user_summary_config()
         assert cfg.always_available == []
 
     def test_build_user_prompt_callable(self):
@@ -525,23 +387,22 @@ class TestUserSummaryConfig:
 class TestSuperEpisodeConfig:
     """B12: make_super_episode_config returns the exact shape §3b specifies."""
 
-    def test_channel_and_role(self):
+    def test_config_shape(self):
+        """§3b/§2: full field tuple for make_super_episode_config.
+
+        channel/role='super_episode_encoder', max_iterations=1 (one-shot),
+        suppress_history=True (housekeeping loop), skip_transcript=True,
+        always_available=[] (no tools), broadcast_to=None.
+        """
         from configs.channels import make_super_episode_config
         cfg = make_super_episode_config("user", [], [])
         assert cfg.channel == "super_episode_encoder"
         assert cfg.role == "super_episode_encoder"
-
-    def test_max_iterations(self):
-        """§3b: max_iterations=1 (one-shot)."""
-        from configs.channels import make_super_episode_config
-        cfg = make_super_episode_config("user", [], [])
         assert cfg.max_iterations == 1
-
-    def test_suppress_history_true(self):
-        """§3b/§2: housekeeping loop."""
-        from configs.channels import make_super_episode_config
-        cfg = make_super_episode_config("user", [], [])
         assert cfg.suppress_history is True
+        assert cfg.skip_transcript is True
+        assert cfg.always_available == []
+        assert cfg.broadcast_to is None
 
     def test_post_turn_noop(self):
         """§3b: post_turn no-op (caller owns episode write). Either None or
@@ -552,22 +413,6 @@ class TestSuperEpisodeConfig:
         if pt is not None:
             mp = MagicMock()
             pt(mp, "response")  # must not raise
-
-    def test_skip_transcript_true(self):
-        from configs.channels import make_super_episode_config
-        cfg = make_super_episode_config("user", [], [])
-        assert cfg.skip_transcript is True
-
-    def test_always_available_empty(self):
-        """§3b: no tools for super_episode_encoder."""
-        from configs.channels import make_super_episode_config
-        cfg = make_super_episode_config("user", [], [])
-        assert cfg.always_available == []
-
-    def test_broadcast_to_none(self):
-        from configs.channels import make_super_episode_config
-        cfg = make_super_episode_config("user", [], [])
-        assert cfg.broadcast_to is None
 
     def test_build_user_prompt_callable(self):
         from configs.channels import make_super_episode_config
@@ -614,39 +459,25 @@ class TestPostTurnIsOnlyHook:
         from services.processor_config import ProcessorConfig
         assert not hasattr(ProcessorConfig, "process_attachments")
 
-    def test_no_overflow_strategy_hook(self):
-        """No overflow_strategy field on ProcessorConfig (Q1/AC-32)."""
-        from services.processor_config import ProcessorConfig
-        assert not hasattr(ProcessorConfig, "overflow_strategy")
-
     def test_no_on_store_hook(self):
-        """No on_store field on ProcessorConfig (AC-29/AC-32)."""
+        """No on_store field on ProcessorConfig (AC-29/AC-32).
+
+        Canonical hook-absence home (was duplicated in TestUserSummaryConfig).
+        """
         from services.processor_config import ProcessorConfig
         assert not hasattr(ProcessorConfig, "on_store")
 
     def test_post_turn_field_exists(self):
-        """post_turn is the one optional hook (AC-32)."""
+        """post_turn is the one optional hook (AC-32).
+
+        C1 positive home: post_turn exists and is the only Callable hook surface.
+        overflow_strategy structural-absence is asserted canonically by Q1 in
+        test_act_loop_regression_guards.py.
+        """
         from services.processor_config import ProcessorConfig
         import dataclasses
         field_names = {f.name for f in dataclasses.fields(ProcessorConfig)}
         assert "post_turn" in field_names
-
-    def test_post_turn_is_the_only_callable_field(self):
-        """Only post_turn accepts a Callable; no other field is a Callable hook."""
-        from services.processor_config import ProcessorConfig
-        import dataclasses
-        import typing
-        fields = dataclasses.fields(ProcessorConfig)
-        # Fields whose names end with the hook surface check.
-        hook_names = {
-            "pre_act", "on_store", "on_narration", "on_tool_event",
-            "process_attachments", "overflow_strategy",
-        }
-        field_names = {f.name for f in fields}
-        present_hooks = field_names & hook_names
-        assert not present_hooks, (
-            f"Unexpected hook fields still on ProcessorConfig: {sorted(present_hooks)}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -660,8 +491,6 @@ class TestPostTurnNoneIsNoop:
     def test_dmn_config_post_turn_none_no_error(self):
         """DMN_CONFIG.post_turn is None — _record() must not crash."""
         from configs.channels import DMN_CONFIG
-        from services.message_processor import MessageProcessor
-        import dataclasses
 
         # Verify the DMN config's post_turn is None.
         assert DMN_CONFIG.post_turn is None
@@ -849,7 +678,6 @@ class TestUserSummaryGateMovedToCaller:
     def test_make_user_summary_config_has_no_should_synthesise(self):
         """The config factory contains no gating logic — it always returns a config."""
         from configs.channels import make_user_summary_config
-        import inspect
         # make_user_summary_config must just return a ProcessorConfig.
         # Confirm calling it always produces a config, regardless of DB state.
         cfg = make_user_summary_config()

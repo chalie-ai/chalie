@@ -196,40 +196,23 @@ class TestProcessorConfigImmutable:
             post_turn=None,
         )
 
-    def test_channel_is_immutable(self):
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("channel", "hacked"),
+            ("role", "hacked"),
+            ("max_iterations", 9999),
+            ("suppress_history", False),
+            ("broadcast_to", "user"),
+            ("memory_seed", True),
+            ("post_turn", lambda _mp, _r: None),
+        ],
+    )
+    def test_field_is_immutable(self, field, value):
+        """Mutating any §2 field on a frozen ProcessorConfig fails (A3)."""
         cfg = self._make_config()
         with pytest.raises((dataclasses.FrozenInstanceError, AttributeError, TypeError)):
-            cfg.channel = "hacked"
-
-    def test_role_is_immutable(self):
-        cfg = self._make_config()
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError, TypeError)):
-            cfg.role = "hacked"
-
-    def test_max_iterations_is_immutable(self):
-        cfg = self._make_config()
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError, TypeError)):
-            cfg.max_iterations = 9999
-
-    def test_suppress_history_is_immutable(self):
-        cfg = self._make_config()
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError, TypeError)):
-            cfg.suppress_history = False
-
-    def test_broadcast_to_is_immutable(self):
-        cfg = self._make_config()
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError, TypeError)):
-            cfg.broadcast_to = "user"
-
-    def test_memory_seed_is_immutable(self):
-        cfg = self._make_config()
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError, TypeError)):
-            cfg.memory_seed = True
-
-    def test_post_turn_is_immutable(self):
-        cfg = self._make_config()
-        with pytest.raises((dataclasses.FrozenInstanceError, AttributeError, TypeError)):
-            cfg.post_turn = lambda _mp, _r: None
+            setattr(cfg, field, value)
 
     def test_all_fields_present(self):
         """All §2 fields are present on the dataclass."""
@@ -267,122 +250,76 @@ class TestStaticVsFactoryConfigs:
 
     # ── Static constants (§3a) ─────────────────────────────────────────────
 
-    def test_dmn_config_is_constant(self):
-        """DMN_CONFIG is a ProcessorConfig instance, not a callable."""
-        from configs.channels import DMN_CONFIG
+    @pytest.mark.parametrize(
+        ("name", "channel", "role"),
+        [
+            ("DMN_CONFIG", "dmn", "proactive_thought"),
+            ("EPISODE_ENCODER_CONFIG", "episode_encoder", "episode_encoder"),
+            ("SKILL_SUGGESTION_CONFIG", "skills_building", "skills_building"),
+            ("COMPACTION_CONFIG", "compaction", "compaction"),
+            ("SUBAGENT_COMPACTION_CONFIG", "subagent_compaction", "subagent_compaction"),
+        ],
+    )
+    def test_static_config_is_constant(self, name, channel, role):
+        """Static channels are ProcessorConfig instances, not callables (A4 §3a)."""
+        import configs.channels as channels
         from services.processor_config import ProcessorConfig
 
-        assert isinstance(DMN_CONFIG, ProcessorConfig), (
-            "DMN_CONFIG must be a ProcessorConfig constant"
+        cfg = getattr(channels, name)
+        assert isinstance(cfg, ProcessorConfig), (
+            f"{name} must be a ProcessorConfig constant"
         )
-        assert DMN_CONFIG.channel == "dmn"
-        assert DMN_CONFIG.role == "proactive_thought"
-
-    def test_episode_encoder_config_is_constant(self):
-        """EPISODE_ENCODER_CONFIG is a ProcessorConfig instance."""
-        from configs.channels import EPISODE_ENCODER_CONFIG
-        from services.processor_config import ProcessorConfig
-
-        assert isinstance(EPISODE_ENCODER_CONFIG, ProcessorConfig)
-        assert EPISODE_ENCODER_CONFIG.channel == "episode_encoder"
-        assert EPISODE_ENCODER_CONFIG.role == "episode_encoder"
-
-    def test_skill_suggestion_config_is_constant(self):
-        """SKILL_SUGGESTION_CONFIG is a ProcessorConfig instance."""
-        from configs.channels import SKILL_SUGGESTION_CONFIG
-        from services.processor_config import ProcessorConfig
-
-        assert isinstance(SKILL_SUGGESTION_CONFIG, ProcessorConfig)
-        assert SKILL_SUGGESTION_CONFIG.channel == "skills_building"
-        assert SKILL_SUGGESTION_CONFIG.role == "skills_building"
-
-    def test_compaction_config_is_constant(self):
-        """COMPACTION_CONFIG is a ProcessorConfig instance."""
-        from configs.channels import COMPACTION_CONFIG
-        from services.processor_config import ProcessorConfig
-
-        assert isinstance(COMPACTION_CONFIG, ProcessorConfig)
-        assert COMPACTION_CONFIG.channel == "compaction"
-        assert COMPACTION_CONFIG.role == "compaction"
-
-    def test_subagent_compaction_config_is_constant(self):
-        """SUBAGENT_COMPACTION_CONFIG is a ProcessorConfig instance."""
-        from configs.channels import SUBAGENT_COMPACTION_CONFIG
-        from services.processor_config import ProcessorConfig
-
-        assert isinstance(SUBAGENT_COMPACTION_CONFIG, ProcessorConfig)
-        assert SUBAGENT_COMPACTION_CONFIG.channel == "subagent_compaction"
-        assert SUBAGENT_COMPACTION_CONFIG.role == "subagent_compaction"
+        assert cfg.channel == channel
+        assert cfg.role == role
 
     # ── Factory functions (§3b) ────────────────────────────────────────────
 
-    def test_make_user_config_is_factory(self):
-        """make_user_config is a callable (factory) that returns ProcessorConfig."""
-        from configs.channels import make_user_config
+    @pytest.mark.parametrize(
+        ("name", "kwargs", "channel", "role"),
+        [
+            ("make_user_config", {"metadata": {}}, "user", "user"),
+            (
+                "make_eamp_config",
+                {
+                    "agent_name": "testbot",
+                    "project": "proj1",
+                    "loop_in_human": False,
+                    "wrapper_id": "w1",
+                },
+                "external-agent:testbot",
+                "external_agent",
+            ),
+            (
+                "make_pattern_config",
+                {"window_start": 0, "window_end": 100},
+                "pattern_match",
+                "pattern_match",
+            ),
+            (
+                "make_geo_config",
+                {"window_start": 0, "window_end": 100},
+                "geo_pattern",
+                "geo_pattern",
+            ),
+            ("make_user_summary_config", {}, "user_summary", "user_summary"),
+            (
+                "make_super_episode_config",
+                {"channel": "user", "sources": [], "spans": []},
+                "super_episode_encoder",
+                "super_episode_encoder",
+            ),
+        ],
+    )
+    def test_factory_config_is_callable_returning_config(
+        self, name, kwargs, channel, role
+    ):
+        """Per-instance channels are callable factories returning ProcessorConfig (A4 §3b)."""
+        import configs.channels as channels
         from services.processor_config import ProcessorConfig
 
-        assert callable(make_user_config), "make_user_config must be a factory function"
-        result = make_user_config(metadata={})
+        maker = getattr(channels, name)
+        assert callable(maker), f"{name} must be a factory function"
+        result = maker(**kwargs)
         assert isinstance(result, ProcessorConfig)
-        assert result.channel == "user"
-        assert result.role == "user"
-
-    def test_make_eamp_config_is_factory(self):
-        """make_eamp_config is a callable (factory) that returns ProcessorConfig."""
-        from configs.channels import make_eamp_config
-        from services.processor_config import ProcessorConfig
-
-        assert callable(make_eamp_config)
-        result = make_eamp_config(
-            agent_name="testbot",
-            project="proj1",
-            loop_in_human=False,
-            wrapper_id="w1",
-        )
-        assert isinstance(result, ProcessorConfig)
-        assert result.channel == "external-agent:testbot"
-        assert result.role == "external_agent"
-
-    def test_make_pattern_config_is_factory(self):
-        """make_pattern_config is a callable (factory) that returns ProcessorConfig."""
-        from configs.channels import make_pattern_config
-        from services.processor_config import ProcessorConfig
-
-        assert callable(make_pattern_config)
-        result = make_pattern_config(window_start=0, window_end=100)
-        assert isinstance(result, ProcessorConfig)
-        assert result.channel == "pattern_match"
-        assert result.role == "pattern_match"
-
-    def test_make_geo_config_is_factory(self):
-        """make_geo_config is a callable (factory) that returns ProcessorConfig."""
-        from configs.channels import make_geo_config
-        from services.processor_config import ProcessorConfig
-
-        assert callable(make_geo_config)
-        result = make_geo_config(window_start=0, window_end=100)
-        assert isinstance(result, ProcessorConfig)
-        assert result.channel == "geo_pattern"
-        assert result.role == "geo_pattern"
-
-    def test_make_user_summary_config_is_factory(self):
-        """make_user_summary_config is a callable (factory) that returns ProcessorConfig."""
-        from configs.channels import make_user_summary_config
-        from services.processor_config import ProcessorConfig
-
-        assert callable(make_user_summary_config)
-        result = make_user_summary_config()
-        assert isinstance(result, ProcessorConfig)
-        assert result.channel == "user_summary"
-        assert result.role == "user_summary"
-
-    def test_make_super_episode_config_is_factory(self):
-        """make_super_episode_config is a callable (factory) that returns ProcessorConfig."""
-        from configs.channels import make_super_episode_config
-        from services.processor_config import ProcessorConfig
-
-        assert callable(make_super_episode_config)
-        result = make_super_episode_config(channel="user", sources=[], spans=[])
-        assert isinstance(result, ProcessorConfig)
-        assert result.channel == "super_episode_encoder"
-        assert result.role == "super_episode_encoder"
+        assert result.channel == channel
+        assert result.role == role
