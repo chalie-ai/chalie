@@ -123,6 +123,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "place",
     "programming_docs_search",
     "read",
+    "research",
     "review_tool_calls",
     "review_transcript",
     "save_graph",
@@ -132,10 +133,13 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "search_files",
     "skill_builder",
     "skill_manager",
+    "summariser",
     "timer",
     "ubiquiti",
     "weather",
+    "web_browse",
     "web_download",
+    "web_search",
 })
 
 

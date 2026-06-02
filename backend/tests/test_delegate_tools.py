@@ -237,14 +237,50 @@ class TestK6RunsThroughNormalProcess:
         captured = _captured_config(name, params={"goal": "the goal", "query": "the goal"})
         assert captured["raw_input"] == "the goal"
 
-    def test_no_message_processor_subclass_exists(self):
-        """No subclass of MessageProcessor exists for delegate work."""
+    def test_delegates_are_not_message_processor_subclasses(self):
+        """K6 / §5b property #5: a delegate "reuses the same
+        MessageProcessor.process() — no subclass, no special loop. The delegate
+        IS a normal ACT loop with different config." Concretely, each delegate is
+        an ``Ability`` that calls the flat ``MessageProcessor.process()`` by
+        composition; it is NOT itself a ``MessageProcessor`` subclass, and there
+        is no dedicated delegate-specific ``MessageProcessor`` subclass.
+
+        Global ``MessageProcessor.__subclasses__() == []`` is the post-§9b
+        end-state and belongs to T13's regression guards (area P/Q), not T11 —
+        the old subclasses (UserMessageProcessor, DMNMessageProcessor,
+        GeoPatternProcessor, …) are sequenced for deletion there and still back
+        live code paths at T11 by design.
+        """
         from services.message_processor import MessageProcessor
-        subclasses = MessageProcessor.__subclasses__()
-        assert subclasses == [], (
-            f"MessageProcessor must have no subclasses, found: "
-            f"{[c.__name__ for c in subclasses]}"
-        )
+        from abilities._base import Ability
+
+        # Each delegate ability is an Ability (composition), not a
+        # MessageProcessor subclass.
+        for name in _DELEGATE_NAMES:
+            ability = _get_ability(name)
+            assert isinstance(ability, Ability), (
+                f"delegate {name!r} must be an Ability instance"
+            )
+            assert not isinstance(ability, MessageProcessor), (
+                f"delegate {name!r} must NOT be a MessageProcessor (it calls "
+                f"MessageProcessor.process() by composition — §5b property #5)"
+            )
+
+        # No class that subclasses MessageProcessor is a dedicated delegate
+        # processor (named for a delegate or marked "Delegate").
+        delegate_names_lower = {n.replace("_", "") for n in _DELEGATE_NAMES}
+        for sub in MessageProcessor.__subclasses__():
+            sub_lower = sub.__name__.lower()
+            assert "delegate" not in sub_lower, (
+                f"unexpected delegate-specific MessageProcessor subclass: "
+                f"{sub.__name__} (delegates must reuse the flat process())"
+            )
+            for dname in delegate_names_lower:
+                assert dname not in sub_lower, (
+                    f"MessageProcessor subclass {sub.__name__} is named for "
+                    f"delegate {dname!r}; delegates must reuse the flat "
+                    f"process(), not subclass it (§5b property #5)"
+                )
 
 
 # ---------------------------------------------------------------------------
