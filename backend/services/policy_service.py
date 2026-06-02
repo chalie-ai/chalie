@@ -173,6 +173,11 @@ _CHAT_ALLOW: dict[str, State] = {
     "place.save": "allow", "place.list": "allow", "place.get": "allow", "place.delete": "allow",
     "subagent.spawn": "allow", "subagent.list": "allow",
     "subagent.stop": "allow", "subagent.direct": "allow",
+    # Delegate tools (subagent-as-tools, spec §5b) — focused read/research
+    # agents that replace the former subagent types; allow by default in chat,
+    # mirroring the prior subagent allow defaults.
+    "web_search": "allow", "research": "allow",
+    "summariser": "allow", "web_browse": "allow",
 }
 
 _CHAT_ASK: dict[str, State] = {
