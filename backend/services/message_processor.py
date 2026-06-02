@@ -1041,7 +1041,9 @@ class MessageProcessor:
                         if action_413 == 'continue':
                             continue
                         break  # 'break' — unrecoverable
-                    self._metrics.accumulate(llm_response)
+                    # Token + request counting happens at the send gateway
+                    # (Providers._log_after_call, §4e) — not here. The loop
+                    # never calls .accumulate().
 
                     if self._cancel_event.is_set():
                         break
@@ -1483,7 +1485,7 @@ class MessageProcessor:
                 tools=tools,
                 thinking_mode='high',
             )
-            self._metrics.accumulate(response)
+            # Token accumulation happens at the send gateway (§4e), not here.
 
             if response.tool_calls:
                 logger.debug(

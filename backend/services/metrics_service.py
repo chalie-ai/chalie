@@ -1,9 +1,10 @@
 """
 Metrics Service — Redis-backed counters, timing records, and dashboard data.
 
-record_counter() is called by UserMessageProcessor, SubagentProcessor,
-and DMNMessageProcessor to increment daily turn counters.
-get_dashboard_data() is called by the /metrics API endpoint.
+record_counter() is called at the send gateway (Providers._log_after_call) to
+increment daily request / turn counters, bucketed by the bound processor's
+channel (§4e). get_dashboard_data() is called by the /metrics API endpoint and
+derives user_messages_total from an on-read COUNT over the transcript table.
 """
 
 import time
@@ -81,13 +82,18 @@ class MetricsService:
             'requests_total', 'responses_total', 'errors_total',
             'embeddings_total', 'facts_extracted',
             'memory_chunks_enqueued', 'episodes_generated',
-            'user_messages_total',
             'dmn_turns_total', 'subagent_turns_total', 'scheduled_turns_total',
         ]
         for name in counter_names:
             counter_key = f"metrics:counter:{name}:{day_key}"
             value = self.store.get(counter_key)
             dashboard['counters'][name] = int(value) if value else 0
+
+        # user_messages_total is no longer a stored counter (§4e). One user turn
+        # writes exactly one transcript row with channel='user' AND role='user'
+        # (UMP hardcodes both), so the value is an exact on-read COUNT. Exact as
+        # long as history compaction never hard-deletes user transcript rows.
+        dashboard['counters']['user_messages_total'] = self._count_user_messages()
 
         timing_operations = [
             'embedding', 'response_generation',
@@ -106,3 +112,22 @@ class MetricsService:
                 }
 
         return dashboard
+
+    @staticmethod
+    def _count_user_messages() -> int:
+        """COUNT of user-channel user-role transcript rows (§4e).
+
+        Best-effort: returns 0 if the transcript table is unavailable (e.g.
+        store-only test contexts) so the dashboard never fails on a missing DB.
+        """
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM transcript "
+                    "WHERE role = 'user' AND channel = 'user'"
+                ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0

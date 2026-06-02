@@ -79,10 +79,21 @@ class Providers:
         """Write the LLM request log file. Best-effort, never raises.
 
         Called by both :meth:`send` and :meth:`send_messages` so every LLM
-        request goes through a single logging chokepoint. Also records the
-        call's latency_ms into the bound processor's MetricsAccumulator so
-        the per-turn timing snapshot reflects every LLM round-trip
-        (ACT iterations, exploration, compaction).
+        request goes through a single logging chokepoint. This is also THE
+        metrics recording site (spec §4e): every send records, next to the
+        existing latency capture and bucketed by the bound processor's
+        ``config.channel``:
+
+          * the send's token totals (folded into the processor's
+            MetricsAccumulator — the loop never calls ``.accumulate()``);
+          * a per-send ``requests_total`` counter; and
+          * the per-channel turn counter (``dmn_turns_total`` for the dmn
+            channel, ``subagent_turns_total`` for delegate channels).
+
+        Recording once at the send means delegate / sub-processor token
+        attribution is correct for free (``current_processor()`` binds the
+        right accumulator), and the per-turn timing snapshot reflects every
+        LLM round-trip (ACT iterations, exploration, compaction).
         """
         try:
             from services.message_processor import current_processor
@@ -101,6 +112,14 @@ class Providers:
                         proc._metrics.record_llm_call(latency_ms)
                     except Exception as exc:
                         logger.debug(f"[LLM LOG] record_llm_call failed: {exc}")
+                # Token totals fold into the processor's accumulator at the send
+                # (§4e) — the loop no longer calls .accumulate().
+                try:
+                    proc._metrics.accumulate(response)
+                except Exception as exc:
+                    logger.debug(f"[LLM LOG] accumulate failed: {exc}")
+                # Per-send / per-channel counters (§4e).
+                self._record_send_counters(proc)
         except Exception as exc:
             logger.debug(f"[LLM LOG] processor lookup failed: {exc}")
         try:
@@ -120,6 +139,28 @@ class Providers:
             )
         except Exception as e:
             logger.debug(f"[LLM LOG] Hook failed: {e}", exc_info=True)
+
+    @staticmethod
+    def _record_send_counters(proc):
+        """Record the per-send, per-channel turn counters (spec §4e).
+
+        Every send increments ``requests_total``. The channel-specific turn
+        counter is selected from the bound processor's ``config.channel``:
+        ``dmn`` → ``dmn_turns_total``; a ``delegate:*`` channel →
+        ``subagent_turns_total``. Best-effort: a metrics failure must never
+        break the send path.
+        """
+        try:
+            channel = getattr(getattr(proc, 'config', None), 'channel', '') or ''
+            from services.metrics_service import MetricsService
+            m = MetricsService()
+            m.record_counter('requests_total')
+            if channel == 'dmn':
+                m.record_counter('dmn_turns_total')
+            elif channel.startswith('delegate:'):
+                m.record_counter('subagent_turns_total')
+        except Exception as exc:
+            logger.debug(f"[LLM LOG] send-counter record failed: {exc}")
 
     @staticmethod
     def _render_messages_for_log(messages):
