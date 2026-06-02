@@ -84,6 +84,36 @@ def _sanitize_llm_args(value):
     return value
 
 
+# ── Attachment reader — used by _seed_turn_zero() ─────────────────────────────
+
+def _read_attachment(path: str) -> "tuple[str, str, str]":
+    """Read a /tmp attachment and return (name, base64_content, content_type).
+
+    Applies a path-traversal guard: only paths under /tmp/chalie_ are
+    accepted (same constraint as UserMessageProcessor._validate_tmp_path).
+    Raises OSError if the path is rejected or the file cannot be read.
+
+    Returns:
+        (filename, base64-encoded file bytes, MIME type string)
+    """
+    import base64
+    import mimetypes
+    import os
+
+    real = os.path.realpath(path)
+    if not real.startswith("/tmp/chalie_") or not os.path.isfile(real):
+        raise OSError(f"Unsafe or missing attachment path: {path!r}")
+
+    with open(real, "rb") as fh:
+        file_bytes = fh.read()
+
+    name = os.path.basename(real)
+    content_type, _ = mimetypes.guess_type(real)
+    content_type = content_type or "application/octet-stream"
+    content_b64 = base64.b64encode(file_bytes).decode()
+    return name, content_b64, content_type
+
+
 # ── Current-processor context ─────────────────────────────────────────────────
 #
 # Innate skills and downstream services sometimes need to reach the
@@ -1591,11 +1621,33 @@ class MessageProcessor:
     def _seed_turn_zero(self) -> None:
         """Framework-issued tool calls fired once before iteration 0.
 
-        Memory recall (memory_seed flag) and attachment uploads are built in T9.
-        Stub at T2 — no-op until seeding is wired.
+        Two declarative behaviours, zero hooks.  Each call goes through
+        Ability.dispatch() so it BLOCKS, records a tool_calls row, and is
+        rendered into the trail exactly like an LLM-issued call.  The model's
+        first turn already sees memory matches and uploaded documents.
 
-        Spec §4 / §4d.
+        Spec §4 / §4d / AC-30 / AC-31.
         """
+        from abilities._base import Ability  # noqa: PLC0415
+
+        # a. Memory auto-seed — fire once when the declarative flag is set.
+        if self.config.memory_seed:
+            Ability.dispatch(self, "memory", {"action": "recall", "query": self._raw_input})
+
+        # b. Attachment uploads — presence-gated, one blocking document.upload
+        #    per file.  No second auto document.view: upload IS the ingest.
+        for path in (self._metadata.get("attachments") or []):
+            try:
+                name, content_b64, content_type = _read_attachment(path)
+            except OSError as exc:
+                logger.warning("[SEED] could not read attachment %s: %s", path, exc)
+                continue
+            Ability.dispatch(self, "document", {
+                "action": "upload",
+                "name": name,
+                "content": content_b64,
+                "content_type": content_type,
+            })
 
     #: Channels that are themselves compaction loops.  Inside these channels the
     #: compaction thresholds must NOT fire (D14 — recursion guard).
