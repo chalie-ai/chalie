@@ -133,7 +133,7 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
 
 def _build_sha_map() -> dict[str, str]:
     """SHA map covers every ability indexed in the search DB."""
-    return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all() if not getattr(a, 'INTERNAL', False)}
+    return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all()}
 
 
 def _build(db_path: Path, sha_path: Path) -> None:
@@ -141,7 +141,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
     # find_tools. Per-processor scoping (which abilities a given processor
     # may discover) is gated at find_tools query time via the calling
     # processor's DISCOVERABLE list.
-    abilities = [a for a in AbilityRegistry.all() if not getattr(a, 'INTERNAL', False)]
+    abilities = list(AbilityRegistry.all())
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 
     emb_service = EmbeddingService() if abilities else None

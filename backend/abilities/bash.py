@@ -188,21 +188,15 @@ class BashAbility(Ability):
         cwd = Path.home()
         return self.SUMMARY + f"Working directory: {cwd}. Use absolute paths or cd to operate elsewhere."
 
-    def pre_dispatch(self, params: dict) -> dict:
-        """Escalate the LLM's self-classification via heuristic inspection."""
-        command = (params.get("command") or "").strip()
-        if not command:
-            return params
-        llm_action = params.get("action", "execute")
-        resolved = _resolve_action(command, llm_action)
-        if resolved != llm_action:
-            return {**params, "action": resolved}
-        return params
-
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         command = (params.get("command") or "").strip()
         if not command:
             return {"text": "Error: command is required."}
+
+        # Escalate the LLM's self-classification via heuristic inspection so a
+        # destructive command can never be demoted to a benign action class.
+        llm_action = params.get("action", "execute")
+        params = {**params, "action": _resolve_action(command, llm_action)}
 
         destructive_error = _check_destructive(command)
         if destructive_error:

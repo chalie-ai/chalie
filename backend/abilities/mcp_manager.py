@@ -94,7 +94,7 @@ class McpManagerAbility(Ability):
     }
     TIMEOUT = 60  # ping_and_sync on add can take a few seconds
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         """Dispatch to the appropriate sub-action handler."""
         action = params.get("action", "").strip()
         dispatch = {

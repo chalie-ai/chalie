@@ -904,7 +904,7 @@ class ProgrammingDocsSearchAbility(Ability):
     }
     TIMEOUT = 15
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         language = (params.get("language") or "").strip()
         query = (params.get("query") or "").strip()
         if not language:

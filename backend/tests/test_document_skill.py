@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 def _handle_document(topic: str, params: dict) -> str:
     """Thin shim: invoke DocumentAbility.execute and return the text string."""
     from abilities.document import DocumentAbility
-    result = DocumentAbility().execute(topic, params, None)
+    result = DocumentAbility().run(topic, params, None)
     assert isinstance(result, dict), f"DocumentAbility.execute returned non-dict: {result!r}"
     return result["text"]
 

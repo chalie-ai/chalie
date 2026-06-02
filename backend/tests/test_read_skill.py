@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 class TestHandleRead:
     def test_empty_source_returns_error(self):
         from abilities.read import ReadAbility
-        raw = ReadAbility().execute('topic', {}, None)
+        raw = ReadAbility().run('topic', {}, None)
         assert raw is not None, "ReadAbility.execute() returned None"
         result = raw['text']
         assert '[read(' in result

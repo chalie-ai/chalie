@@ -86,7 +86,7 @@ class DocumentAbility(Ability):
     }
     TIMEOUT = 120
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "search")
 
         try:

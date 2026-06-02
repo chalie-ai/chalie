@@ -125,7 +125,7 @@ class SkillBuilderAbility(Ability):
     }
     TIMEOUT = 15
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "list")
         logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
 

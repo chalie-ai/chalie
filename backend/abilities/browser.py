@@ -144,7 +144,7 @@ class BrowserAbility(Ability):
     _NAV_TIMEOUT: ClassVar[int] = 30000
     _MAX_SCREENSHOT_HEIGHT: ClassVar[int] = 16384
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = (params.get("action") or "").lower().strip()
 
         if action == "render":

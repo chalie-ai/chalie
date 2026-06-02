@@ -52,7 +52,7 @@ class SaveGraph(Ability):
     }
     TIMEOUT = 10
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         proc = current_processor()
         count = getattr(proc, "_save_graph_calls", 0) if proc is not None else 0
         if count >= _BUDGET_CAP:

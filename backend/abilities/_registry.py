@@ -87,7 +87,7 @@ class AbilityRegistry:
     def policy_visible() -> list[Ability]:
         """Return abilities that should appear in the policy UI.
 
-        Excludes SYSTEM, INTERNAL, and actionless ALWAYS_AVAILABLE meta-tools
+        Excludes SYSTEM and actionless ALWAYS_AVAILABLE meta-tools
         (find_tools, find_skills) whose denial would break routing.
         """
         from services.message_processor import MessageProcessor
@@ -95,7 +95,6 @@ class AbilityRegistry:
         return [
             a for a in _get_registry().values()
             if not getattr(a, "SYSTEM", False)
-            and not getattr(a, "INTERNAL", False)
             and not (
                 a.NAME in always_available
                 and not a.INPUT_SCHEMA.get("properties", {}).get("action")

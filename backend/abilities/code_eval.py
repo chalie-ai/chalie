@@ -93,7 +93,7 @@ class CodeEvalAbility(Ability):
         "collections": collections,
     }
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         """Compile and run the supplied Python, returning its printed output or
         an actionable error — never a silent empty success that the LLM would
         misread as 'done' and retry."""

@@ -82,7 +82,7 @@ class PlaceAbility(Ability):
     }
     TIMEOUT = 10
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "").lower()
         name = (params.get("name") or "").strip().lower()
 

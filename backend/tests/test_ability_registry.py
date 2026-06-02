@@ -64,7 +64,7 @@ def test_get_raises_key_error_for_unknown_name_with_subclass_present():
         EXAMPLES = ["a", "b", "c", "d", "e", "f"]
         INPUT_SCHEMA = {}
 
-        def execute(self, channel, params, telemetry):
+        def run(self, channel, params, telemetry):
             return {}
 
     _reset_for_tests()
@@ -96,7 +96,7 @@ def test_registry_reflects_concrete_subclass_after_reset():
         EXAMPLES = ["do it", "run it", "start it", "go now", "begin", "execute"]
         INPUT_SCHEMA = {}
 
-        def execute(self, channel, params, telemetry):
+        def run(self, channel, params, telemetry):
             return {"text": "ok"}
 
     _reset_for_tests()

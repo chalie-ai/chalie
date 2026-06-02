@@ -18,7 +18,7 @@ pytestmark = pytest.mark.unit
 def _handle_memory(topic: str, params: dict) -> str:
     """Thin shim: call MemoryAbility.execute and return the text string."""
     from abilities.memory import MemoryAbility
-    result = MemoryAbility().execute(topic, params, None)
+    result = MemoryAbility().run(topic, params, None)
     assert result is not None, "MemoryAbility.execute() returned None"
     return result["text"]
 

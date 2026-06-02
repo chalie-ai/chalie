@@ -57,7 +57,7 @@ class FindSkillsAbility(SearchableAbility):
     _DB_PATH: ClassVar[Path] = FileMapperService.get_skills_db_path()
     _LOG_PREFIX = "[FIND_SKILLS]"
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         query = params.get("query", "").strip()
         logger.info(f"{self._LOG_PREFIX} query='{query}' limit={params.get('limit', 3)}")
         if not query:

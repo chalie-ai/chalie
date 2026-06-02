@@ -284,7 +284,6 @@ class Ability(ABC):
     INPUT_SCHEMA: ClassVar[dict]
     TIMEOUT: ClassVar[int] = 10
     ASYNC_CAPABLE: ClassVar[bool] = False
-    INTERNAL: ClassVar[bool] = False
     SEARCH_TOOLTIP: ClassVar[str] = ""
     POLICY_CATEGORY: ClassVar[str] = ""
     POLICY_LABELS: ClassVar[dict[str, str]] = {}
@@ -300,8 +299,6 @@ class Ability(ABC):
         for attr in ("NAME", "INPUT_SCHEMA"):
             if not hasattr(cls, attr):
                 raise TypeError(f"{cls.__name__} must define class attribute '{attr}'")
-        if getattr(cls, "INTERNAL", False):
-            return
         for attr in ("SUMMARY", "EXAMPLES"):
             if not hasattr(cls, attr):
                 raise TypeError(f"{cls.__name__} must define class attribute '{attr}'")
@@ -535,32 +532,17 @@ class Ability(ABC):
 
     # ── Instance method — the actual tool logic ───────────────────────────────
 
+    @abstractmethod
     def run(self, channel: str, params: dict, telemetry: "dict | None") -> "dict | str":
         """Execute the ability.  Called by dispatch() inside a timeout thread.
 
-        Default implementation delegates to execute() for backward compat with
-        the 36 existing abilities that implement execute() rather than run().
-        T13 will rename execute() → run() across all abilities and make run()
-        abstract at that point.
+        Override this method on every Ability subclass — it is the single tool
+        entrypoint.
 
         Must return either:
         - A dict with 'status' and 'result' keys (canonical form).
         - A dict without 'status' (legacy — treated as success).
         - A plain string (treated as success result text).
-
-        Spec §5.
-        """
-        return self.execute(channel, params, telemetry)
-
-    @abstractmethod
-    def execute(self, channel: str, params: dict, telemetry: "dict | None") -> "dict | str":
-        """Implement tool logic.
-
-        Override this method on every Ability subclass.  The old dispatch path
-        (ActDispatcherService) called execute() directly.  The new dispatch path
-        (Ability.dispatch) calls run(), which delegates here by default.
-
-        T13 will rename this to run() across all abilities.
 
         Args:
             channel: The conversation channel for this invocation.
@@ -569,6 +551,8 @@ class Ability(ABC):
 
         Returns:
             dict when the result is structured data, or str for plain text.
+
+        Spec §5.
         """
         ...
 
@@ -589,26 +573,6 @@ class Ability(ABC):
         the class-level INPUT_SCHEMA unchanged.
         """
         return self.INPUT_SCHEMA
-
-    # ── Legacy compat (kept for T13 removal) ─────────────────────────────────
-
-    def pre_dispatch(self, params: dict) -> dict:
-        """Legacy hook — no-op in the new dispatch path.
-
-        The old ActDispatcherService called this.  Ability.dispatch() does not
-        call pre_dispatch(); it is kept here temporarily so subclasses that
-        override it do not break at import time.  Will be deleted in T13.
-        """
-        return params
-
-    @staticmethod
-    def handle(handler: object, params: dict, telemetry: "dict | None") -> dict:
-        """Legacy helper — still called by a few abilities directly.
-
-        Will be deleted in T13.
-        """
-        action_params = {k: v for k, v in params.items() if not k.startswith("_") and k != "action"}
-        return handler(topic="", params=action_params, telemetry=telemetry)  # type: ignore[operator]
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:

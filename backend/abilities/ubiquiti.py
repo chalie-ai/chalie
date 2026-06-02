@@ -135,7 +135,7 @@ class UbiquitiAbility(Ability):
     }
     TIMEOUT = 30
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list_devices").lower()
 
         from capabilities import load_capabilities
@@ -161,6 +161,7 @@ class UbiquitiAbility(Ability):
             result = {"status": "error", "error": f"Unknown ubiquiti action: {action}"}
             return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
 
-        result = self.handle(handler, params, telemetry)
+        from services.innate_skills._capability import dispatch_capability_handler
+        result = dispatch_capability_handler(handler, params, telemetry)
 
         return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}

@@ -117,13 +117,13 @@ class TestSearchExecute:
 
     def test_empty_query(self):
         from abilities.search import SearchAbility
-        r = SearchAbility().execute("topic", {}, None)
+        r = SearchAbility().run("topic", {}, None)
         assert r['text'].startswith('EMPTY: no query supplied')
 
     def test_forced_ddg(self):
         with patch('abilities.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m:
             from abilities.search import SearchAbility
-            r = SearchAbility().execute("t", {"query": "test", "provider": "ddg"}, None)
+            r = SearchAbility().run("t", {"query": "test", "provider": "ddg"}, None)
         assert 'text' in r
         assert not r['text'].startswith('EMPTY:')
         m.assert_called_once()
@@ -135,7 +135,7 @@ class TestSearchExecute:
         with patch.object(SearchAbility, '_DB', str(db)), \
              patch('abilities.search.fetch_providers', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]) as m, \
              patch('abilities.search.fetch_ddg_fallback'):
-            r = SearchAbility().execute("t", {"query": "test", "provider": "brave"}, None)
+            r = SearchAbility().run("t", {"query": "test", "provider": "brave"}, None)
         assert 'text' in r
         assert not r['text'].startswith('EMPTY:')
         m.assert_called_once()
@@ -146,7 +146,7 @@ class TestSearchExecute:
         SearchAbility._providers = {}
         with patch('abilities.search.fetch_ddg_fallback', return_value=[{"title": "r", "url": "http://x.com", "snippet": ""}]), \
              patch('tools.search.router.route_query', side_effect=Exception("boom")):
-            r = SearchAbility().execute("t", {"query": "test"}, None)
+            r = SearchAbility().run("t", {"query": "test"}, None)
         assert 'text' in r
         assert not r['text'].startswith('EMPTY:')
 

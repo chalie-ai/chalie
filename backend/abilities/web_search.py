@@ -118,7 +118,3 @@ class WebSearchAbility(Ability):
             deadline=time.time() + DELEGATE_DEADLINE_SECONDS,
         )
         return {"status": "success", "result": result}
-
-    def execute(self, channel: str, params: dict, telemetry: "dict | None") -> dict:
-        """Delegate tools implement run() directly; execute() forwards to it."""
-        return self.run(channel, params, telemetry)

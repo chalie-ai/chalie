@@ -74,7 +74,7 @@ class TimerAbility(Ability):
     }
     TIMEOUT = 5
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         ordinal = params.get("_rich_media_ordinal")
         title = (params.get("title") or "").strip()
         duration_seconds = params.get("duration_seconds")

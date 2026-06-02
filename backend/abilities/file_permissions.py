@@ -53,7 +53,7 @@ class FilePermissionsAbility(Ability):
     }
     TIMEOUT = 5
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         path_str = (params.get("path") or "").strip()
         perm_str = (params.get("permissions") or "").strip()
 

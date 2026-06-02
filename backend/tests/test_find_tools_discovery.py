@@ -120,7 +120,7 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
 
 
 def _execute_with_discoverable(ability: FindToolsAbility, query: str, discoverable: list[str], limit: int | None = None):
-    """Run ``ability.execute()`` inside a stub processor binding.
+    """Run ``ability.run()`` inside a stub processor binding.
 
     The DISCOVERABLE list controls which abilities the gate allows through.
     """
@@ -129,7 +129,7 @@ def _execute_with_discoverable(ability: FindToolsAbility, query: str, discoverab
     if limit is not None:
         params["limit"] = limit
     with bind_current_processor(proc):
-        return ability.execute("text", params, None)
+        return ability.run("text", params, None)
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ def test_no_ordinal_returns_dict_without_trailer():
     from this dict too — only the rich-media render path needs a wall-clock
     anchor and that is injected by the parser."""
     ability = TimerAbility()
-    result = ability.execute(
+    result = ability.run(
         channel="subagent",
         params={"title": "Focus block", "duration_seconds": 1500},
         telemetry=None,
@@ -42,7 +42,7 @@ def test_ordinal_returns_string_with_trailer():
     ``started_at`` — keeping the LLM ignorant of the wall-clock is a hard
     invariant of the timer contract."""
     ability = TimerAbility()
-    result = ability.execute(
+    result = ability.run(
         channel="user",
         params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 2},
         telemetry=None,
@@ -60,7 +60,7 @@ def test_ordinal_returns_string_with_trailer():
 
 def test_missing_title_returns_error_dict():
     ability = TimerAbility()
-    result = ability.execute(
+    result = ability.run(
         channel="user",
         params={"duration_seconds": 60, "_rich_media_ordinal": 1},
         telemetry=None,
@@ -72,7 +72,7 @@ def test_missing_title_returns_error_dict():
 def test_invalid_duration_returns_error_dict():
     ability = TimerAbility()
     for bad in (0, -5, 86401, "30", None):
-        result = ability.execute(
+        result = ability.run(
             channel="user",
             params={"title": "Bad", "duration_seconds": bad, "_rich_media_ordinal": 1},
             telemetry=None,
@@ -84,7 +84,7 @@ def test_invalid_duration_returns_error_dict():
 def test_long_title_truncated_to_80_chars():
     ability = TimerAbility()
     long_title = "x" * 200
-    result = ability.execute(
+    result = ability.run(
         channel="subagent",
         params={"title": long_title, "duration_seconds": 60},
         telemetry=None,
@@ -99,7 +99,7 @@ def test_parser_skips_injection_when_created_at_missing():
     """
     from services.rich_media_parser import parse
 
-    raw = TimerAbility().execute(
+    raw = TimerAbility().run(
         channel="user",
         params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1},
         telemetry=None,
@@ -124,7 +124,7 @@ def test_parser_rejects_unparseable_created_at_sentinel():
     """
     from services.rich_media_parser import parse
 
-    raw = TimerAbility().execute(
+    raw = TimerAbility().run(
         channel="user",
         params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1},
         telemetry=None,
@@ -169,7 +169,7 @@ def test_parser_injects_started_at_from_tool_calls_created_at():
     from services.rich_media_parser import parse
 
     ability = TimerAbility()
-    raw = ability.execute(
+    raw = ability.run(
         channel="user",
         params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1},
         telemetry=None,
@@ -199,7 +199,7 @@ def test_parser_injects_started_at_from_tool_calls_created_at():
 def test_max_duration_accepted():
     """24-hour upper bound is the documented edge — exercise it explicitly."""
     ability = TimerAbility()
-    result = ability.execute(
+    result = ability.run(
         channel="subagent",
         params={"title": "Long", "duration_seconds": 86400},
         telemetry=None,

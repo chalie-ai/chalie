@@ -35,14 +35,14 @@ def ability(db):
 
 def _exec(ability, params):
     """Run ListAbility.execute on the user channel without rich-media."""
-    return ability.execute('user', params, telemetry=None)
+    return ability.run('user', params, telemetry=None)
 
 
 def _exec_rich(ability, params, ordinal=1):
     """Run ListAbility.execute with a rich-media ordinal injected."""
     p = dict(params)
     p['_rich_media_ordinal'] = ordinal
-    return ability.execute('user', p, telemetry=None)
+    return ability.run('user', p, telemetry=None)
 
 
 def _payload(result):

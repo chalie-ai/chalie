@@ -86,7 +86,7 @@ class WeatherAbility(Ability):
     _cache: ClassVar[dict] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         """
         Get current weather for a location.
 

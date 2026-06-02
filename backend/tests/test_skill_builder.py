@@ -171,7 +171,7 @@ class TestSkillBuilderCreateValidation:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        result = ability.execute("test", {"action": "create"}, None)
+        result = ability.run("test", {"action": "create"}, None)
 
         assert "error=title-required" in result["text"]
 
@@ -179,7 +179,7 @@ class TestSkillBuilderCreateValidation:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        result = ability.execute("test", {"action": "create", "title": "My Skill"}, None)
+        result = ability.run("test", {"action": "create", "title": "My Skill"}, None)
 
         assert "error=use_for-required" in result["text"]
 
@@ -187,7 +187,7 @@ class TestSkillBuilderCreateValidation:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        result = ability.execute(
+        result = ability.run(
             "test",
             {"action": "create", "title": "My Skill", "use_for": "tracking things"},
             None,
@@ -213,7 +213,7 @@ class TestSkillBuilderLifecycle:
         before = _skill_count(db_path)
 
         ability = SkillBuilderAbility()
-        result = ability.execute(
+        result = ability.run(
             "test",
             {
                 "action": "create",
@@ -252,8 +252,8 @@ class TestSkillBuilderLifecycle:
             "use_for": self._USE_FOR,
             "content": self._CONTENT,
         }
-        ability.execute("test", params, None)
-        result = ability.execute("test", params, None)
+        ability.run("test", params, None)
+        result = ability.run("test", params, None)
 
         assert "skill-already-exists" in result["text"]
 
@@ -262,7 +262,7 @@ class TestSkillBuilderLifecycle:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        ability.execute(
+        ability.run(
             "test",
             {
                 "action": "create",
@@ -274,7 +274,7 @@ class TestSkillBuilderLifecycle:
         )
 
         new_content = "1. Summarise tasks.\n2. Review blockers.\n3. Plan next week."
-        result = ability.execute(
+        result = ability.run(
             "test",
             {"action": "edit", "title": self._TITLE, "content": new_content},
             None,
@@ -293,7 +293,7 @@ class TestSkillBuilderLifecycle:
 
         db_path = skill_env["db_path"]
         ability = SkillBuilderAbility()
-        ability.execute(
+        ability.run(
             "test",
             {
                 "action": "create",
@@ -305,7 +305,7 @@ class TestSkillBuilderLifecycle:
         )
 
         before = _skill_count(db_path)
-        result = ability.execute(
+        result = ability.run(
             "test",
             {"action": "delete", "title": self._TITLE},
             None,
@@ -324,7 +324,7 @@ class TestSkillBuilderLifecycle:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        ability.execute(
+        ability.run(
             "test",
             {
                 "action": "create",
@@ -335,7 +335,7 @@ class TestSkillBuilderLifecycle:
             None,
         )
 
-        result = ability.execute("test", {"action": "list"}, None)
+        result = ability.run("test", {"action": "list"}, None)
 
         assert "action=list" in result["text"]
         assert self._TITLE in result["text"]

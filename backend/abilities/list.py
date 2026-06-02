@@ -101,7 +101,7 @@ class ListAbility(Ability):
     }
     TIMEOUT = 10
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list_all")
         ordinal = params.get("_rich_media_ordinal")
 

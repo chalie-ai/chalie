@@ -84,7 +84,7 @@ def test_execute_changes_permissions_and_reports_before_after(tmp_path):
     target.write_text("#!/bin/bash\necho hi\n")
     os.chmod(target, 0o644)
 
-    result = FilePermissionsAbility().execute(
+    result = FilePermissionsAbility().run(
         "user", {"path": str(target), "permissions": "755"}, None,
     )
     payload = _result_payload(result)
@@ -101,7 +101,7 @@ def test_execute_accepts_leading_zero_permissions(tmp_path):
     target.write_text("k: v\n")
     os.chmod(target, 0o644)
 
-    result = FilePermissionsAbility().execute(
+    result = FilePermissionsAbility().run(
         "user", {"path": str(target), "permissions": "0600"}, None,
     )
     assert _result_payload(result)["permissions_after"] == "0600"
@@ -113,7 +113,7 @@ def test_execute_works_on_directories(tmp_path):
     target.mkdir()
     os.chmod(target, 0o755)
 
-    result = FilePermissionsAbility().execute(
+    result = FilePermissionsAbility().run(
         "user", {"path": str(target), "permissions": "700"}, None,
     )
     assert _result_payload(result)["status"] == "success"
@@ -126,21 +126,21 @@ def test_execute_works_on_directories(tmp_path):
 
 
 def test_execute_rejects_missing_path():
-    result = FilePermissionsAbility().execute("user", {"permissions": "755"}, None)
+    result = FilePermissionsAbility().run("user", {"permissions": "755"}, None)
     assert _result_payload(result) == {"error": "path-required"}
 
 
 def test_execute_rejects_missing_permissions(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("x")
-    result = FilePermissionsAbility().execute("user", {"path": str(target)}, None)
+    result = FilePermissionsAbility().run("user", {"path": str(target)}, None)
     assert _result_payload(result) == {"error": "permissions-required"}
 
 
 def test_execute_rejects_invalid_octal(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("x")
-    result = FilePermissionsAbility().execute(
+    result = FilePermissionsAbility().run(
         "user", {"path": str(target), "permissions": "abc"}, None,
     )
     payload = _result_payload(result)
@@ -150,7 +150,7 @@ def test_execute_rejects_invalid_octal(tmp_path):
 
 def test_execute_rejects_path_not_found(tmp_path):
     missing = tmp_path / "does-not-exist.txt"
-    result = FilePermissionsAbility().execute(
+    result = FilePermissionsAbility().run(
         "user", {"path": str(missing), "permissions": "644"}, None,
     )
     payload = _result_payload(result)

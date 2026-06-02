@@ -43,7 +43,7 @@ class FileWriteAbility(Ability):
         "required": ["path", "contents"],
     }
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         path_str = params.get("path", "")
         contents = params.get("contents", "")
 

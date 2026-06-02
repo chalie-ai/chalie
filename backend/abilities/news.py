@@ -85,7 +85,7 @@ class NewsAbility(Ability):
         "united arab emirates": "AE", "saudi arabia": "SA",
     }
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         query = (params.get("query") or "").strip()
         if not query:
             return {"text": "", "error": "A 'query' parameter is required."}

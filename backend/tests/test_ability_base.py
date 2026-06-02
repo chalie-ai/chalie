@@ -19,7 +19,7 @@ pytestmark = pytest.mark.unit
 _VALID_EXAMPLES = ["ex one", "ex two", "ex three", "ex four", "ex five", "ex six"]
 
 
-def _noop_execute(self, channel, params, telemetry):  # noqa: ARG001
+def _noop_run(self, channel, params, telemetry):  # noqa: ARG001
     return {}
 
 
@@ -31,7 +31,7 @@ def _make_subclass(**attrs):
     because the test asserts on the side effect — TypeError raised mid-build —
     via ``pytest.raises``.
     """
-    namespace = {"execute": _noop_execute, **attrs}
+    namespace = {"run": _noop_run, **attrs}
     return type("_TestSubclass", (Ability,), namespace)
 
 
@@ -99,7 +99,7 @@ def test_examples_exactly_six_accepted():
         EXAMPLES = ["a", "b", "c", "d", "e", "f"]
         INPUT_SCHEMA = {}
 
-        def execute(self, channel, params, telemetry):
+        def run(self, channel, params, telemetry):
             return {}
 
     instance = _ExamplesSix()
@@ -110,24 +110,24 @@ def test_examples_exactly_six_accepted():
 
 
 # ---------------------------------------------------------------------------
-# execute() abstract enforcement
+# run() abstract enforcement
 # ---------------------------------------------------------------------------
 
 
-def test_subclass_without_execute_cannot_be_instantiated():
-    """Concrete subclass missing execute() cannot be instantiated — ABC blocks it."""
+def test_subclass_without_run_cannot_be_instantiated():
+    """Concrete subclass missing run() cannot be instantiated — ABC blocks it."""
 
-    class _NoExecute(Ability):
-        NAME = "no_execute"
+    class _NoRun(Ability):
+        NAME = "no_run"
         SUMMARY = "some summary"
         EXAMPLES = _VALID_EXAMPLES
         INPUT_SCHEMA = {}
-        # execute() intentionally omitted
+        # run() intentionally omitted
 
     with pytest.raises(TypeError):
-        _NoExecute()
+        _NoRun()
 
-    del _NoExecute
+    del _NoRun
     gc.collect()
 
 
@@ -145,7 +145,7 @@ def test_valid_concrete_subclass_constructs_cleanly():
         EXAMPLES = ["do the thing", "run the thing", "thing now", "quick thing", "thing please", "start thing"]
         INPUT_SCHEMA = {"type": "object", "properties": {}}
 
-        def execute(self, channel, params, telemetry):
+        def run(self, channel, params, telemetry):
             return {"text": "done"}
 
     instance = _ValidAbility()
@@ -171,7 +171,7 @@ def test_timeout_defaults_to_ten():
         EXAMPLES = ["a", "b", "c", "d", "e", "f"]
         INPUT_SCHEMA = {}
 
-        def execute(self, channel, params, telemetry):
+        def run(self, channel, params, telemetry):
             return {}
 
     assert _DefaultTimeout.TIMEOUT == 10

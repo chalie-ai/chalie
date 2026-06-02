@@ -16,7 +16,7 @@ pytestmark = pytest.mark.unit
 def _run(code) -> dict:
     """Execute CodeEvalAbility with the given code param and return the dict."""
     params = {} if code is None else {"code": code}
-    return CodeEvalAbility().execute("user", params, None)
+    return CodeEvalAbility().run("user", params, None)
 
 
 # ── 1. printed output is returned ─────────────────────────────────────

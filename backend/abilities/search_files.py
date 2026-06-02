@@ -97,7 +97,7 @@ class SearchFilesAbility(Ability):
     }
     TIMEOUT = 30
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "")
         query = (params.get("query") or "").strip()
         directory = (params.get("directory") or "").strip()

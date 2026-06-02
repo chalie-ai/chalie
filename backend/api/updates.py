@@ -171,7 +171,7 @@ def update_memory():
 
     try:
         from abilities._registry import AbilityRegistry
-        result = AbilityRegistry.get("memory").execute(
+        result = AbilityRegistry.get("memory").run(
             topic,
             {
                 "action": "store",

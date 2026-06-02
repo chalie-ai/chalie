@@ -107,7 +107,7 @@ class CalendarAbility(Ability):
     }
     TIMEOUT = 30
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list_events").lower()
         ordinal = params.get("_rich_media_ordinal")
 
@@ -139,7 +139,8 @@ class CalendarAbility(Ability):
             result = {"status": "error", "error": f"Unknown calendar action: {action}"}
             return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
 
-        result = self.handle(handler, params, telemetry)
+        from services.innate_skills._capability import dispatch_capability_handler
+        result = dispatch_capability_handler(handler, params, telemetry)
 
         if ordinal is not None and "error" not in result:
             return _serialise_rich(result, action, ordinal)

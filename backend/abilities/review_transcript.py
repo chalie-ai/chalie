@@ -70,7 +70,7 @@ class ReviewTranscriptAbility(Ability):
     }
     TIMEOUT = 10
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         date_time = (params.get("date_time") or "").strip()
         if not date_time:
             return {"text": _skill_tag("review_transcript", error="date-time-required")}

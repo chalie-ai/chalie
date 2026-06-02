@@ -76,7 +76,7 @@ def test_email_not_connected_returns_structured_error():
     """
     from abilities.email import EmailAbility
 
-    result = EmailAbility().execute(
+    result = EmailAbility().run(
         channel="test",
         params={"action": "search"},
         telemetry=None,
@@ -98,7 +98,7 @@ def test_calendar_read_returns_structured_error_without_db():
     """
     from abilities.calendar import CalendarAbility
 
-    result = CalendarAbility().execute(
+    result = CalendarAbility().run(
         channel="test",
         params={"action": "list_events"},
         telemetry=None,
@@ -113,7 +113,7 @@ def test_calendar_write_not_connected_returns_structured_error():
     """CalendarAbility.execute write ops return {status: error} when mail not connected."""
     from abilities.calendar import CalendarAbility
 
-    result = CalendarAbility().execute(
+    result = CalendarAbility().run(
         channel="test",
         params={"action": "update_event", "uid": "test-123", "summary": "New title"},
         telemetry=None,
@@ -129,7 +129,7 @@ def test_contacts_not_connected_returns_structured_error():
     """ContactsAbility.execute returns {status: error} when mail is not connected."""
     from abilities.contacts import ContactsAbility
 
-    result = ContactsAbility().execute(
+    result = ContactsAbility().run(
         channel="test",
         params={"action": "list"},
         telemetry=None,

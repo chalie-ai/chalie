@@ -223,7 +223,7 @@ class ScheduleAbility(Ability):
 
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
         action = params.get("action", "list").lower()
         ordinal = params.get("_rich_media_ordinal")
 

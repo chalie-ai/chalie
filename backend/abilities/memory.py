@@ -128,7 +128,7 @@ class MemoryAbility(Ability):
     EXPAND_MAX_DIST: ClassVar[float] = 0.55
     EXPAND_FACTOR_CEILING: ClassVar[float] = 2.2
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
         action = params.get("action", "recall")
 
         try:
