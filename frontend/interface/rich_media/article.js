@@ -4,7 +4,16 @@
  * Implements the rich-media card contract: exports render(payload, synthesis, root).
  * Both news and search use the same layout: optional image thumbnail on the right,
  * a single synthesis paragraph, and a row of source pills at the bottom.
+ *
+ * The synthesis text is rendered via ``renderMarkupTo`` — the exact same path a
+ * normal assistant text bubble uses — so the allowlisted formatting tags the
+ * backend ``services.markup.sanitize()`` chokepoint preserved (``<b>``, ``<i>``,
+ * ``<code>`` …) render as real markup instead of leaking as literal ``<b>``
+ * characters. The synthesis arrives already sanitised (chat.py sanitises before
+ * SegmentService.build parses it), so this file does no sanitisation itself.
  */
+
+import { renderMarkupTo } from '../markup_renderer.js';
 
 const SOURCE_COLORS = [
   '#4ea2ff', '#FF2FD1', '#F2C94C', '#00F0FF', '#34d399',
@@ -53,7 +62,7 @@ export function render(payload, synthesis, root) {
 
   const dek = document.createElement('p');
   dek.className = 'article-card__dek';
-  dek.textContent = synthesis || '';
+  renderMarkupTo(dek, synthesis || '');
   body.appendChild(dek);
 
   if (imageUrl) {

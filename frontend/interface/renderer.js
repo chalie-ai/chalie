@@ -409,7 +409,7 @@ export class Renderer {
     const fallback = (synText) => {
       const fallbackEl = this._createEl('div', 'speech-form speech-form--chalie');
       const textEl = this._createEl('div', 'speech-form__text');
-      textEl.textContent = synText || '';
+      renderMarkupTo(textEl, synText || '');
       fallbackEl.appendChild(textEl);
       this._spine.appendChild(fallbackEl);
     };
@@ -427,7 +427,7 @@ export class Renderer {
     const fallback = (synText) => {
       const fallbackEl = this._createEl('div', 'speech-form speech-form--chalie');
       const textEl = this._createEl('div', 'speech-form__text');
-      textEl.textContent = synText || '';
+      renderMarkupTo(textEl, synText || '');
       fallbackEl.appendChild(textEl);
       this._spine.prepend(fallbackEl);
     };
