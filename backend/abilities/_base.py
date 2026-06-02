@@ -239,12 +239,20 @@ def _run_async_delegate(
     Spec §5 / §5b / J5.
     """
     try:
-        result = _run_with_timeout(ability, channel, params, ability.TIMEOUT)
-        result_text = str(result.get("result", ""))
+        try:
+            result = _run_with_timeout(ability, channel, params, ability.TIMEOUT)
+            result_text = str(result.get("result", ""))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[Ability._run_async_delegate] execution failed for %s: %s",
+                delegate_id,
+                exc,
+            )
+            result_text = None
 
-        if not cancel_event.is_set():
+        if result_text is not None and not cancel_event.is_set():
             try:
-                from services.message_processor import dispatch_message  # noqa: PLC0415
+                from api.chat import dispatch_message  # noqa: PLC0415
                 dispatch_message(result_text, channel=channel, hidden_input=True)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
