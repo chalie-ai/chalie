@@ -361,40 +361,17 @@ class MessageProcessor:
     def get_user_prompt(self) -> str:
         """Build the body of the user-message for the current ACT iteration.
 
-        Called once per ACT iteration inside send(). Does NOT emit the
-        ``### Checkpoint`` / ``### Current State`` headers — those are added
-        by send().
-
-        Override this method or its camelCase alias getUserPrompt().
+        Old send()-path hook. The flat process() path builds the user body
+        via ``config.build_user_prompt(self)`` instead.
         """
-        if type(self).getUserPrompt is not MessageProcessor.getUserPrompt:
-            return self.getUserPrompt()
-        raise NotImplementedError
-
-    def getUserPrompt(self) -> str:  # noqa: N802
-        """CamelCase alias — override either this or get_user_prompt()."""
-        if type(self).get_user_prompt is not MessageProcessor.get_user_prompt:
-            return self.get_user_prompt()
         raise NotImplementedError
 
     def get_user_definition(self) -> str:
         """One-sentence description of who the 'user' is for this processor.
 
-        Injected as the first line of the system prompt. Examples:
-          UserMessageProcessor   → user synthesis string (real human)
-          DMNMessageProcessor    → "The user is 'proactive_thought' — ..."
-          SubagentProcessor      → "The user is 'subagent' — ..."
-
-        Override this method or its camelCase alias getUserDefinition().
+        Old send()-path hook. The flat process() path builds the system
+        prompt via ``config.build_system_prompt(self)`` instead.
         """
-        if type(self).getUserDefinition is not MessageProcessor.getUserDefinition:
-            return self.getUserDefinition()
-        raise NotImplementedError
-
-    def getUserDefinition(self) -> str:  # noqa: N802
-        """CamelCase alias — override either this or get_user_definition()."""
-        if type(self).get_user_definition is not MessageProcessor.get_user_definition:
-            return self.get_user_definition()
         raise NotImplementedError
 
     # ── Overridable hook ─────────────────────────────────────────────────────
@@ -641,27 +618,6 @@ class MessageProcessor:
     # ── CamelCase backward-compat shims ──────────────────────────────────────
     # Test suite calls these names directly. Each shim delegates to the
     # snake_case override so subclass method resolution works correctly.
-
-    def getSystemPrompt(self) -> str:  # noqa: N802
-        return self.get_system_prompt()
-
-    def getTools(self) -> list[dict]:  # noqa: N802
-        return self.get_tools()
-
-    def getDynamicTools(self) -> list[dict]:  # noqa: N802
-        return self.get_dynamic_tools()
-
-    def getActLoopTrail(self) -> str:  # noqa: N802
-        return self.get_act_loop_trail()
-
-    def getPreviousMessages(self, token_budget: int | None = None) -> str:  # noqa: N802
-        return self.get_previous_messages(token_budget)
-
-    def handleTool(self, tc: dict) -> str:  # noqa: N802
-        return self.handle_tool(tc)
-
-    def postTurn(self) -> None:  # noqa: N802
-        self.post_turn()
 
     # ── Tool dispatch ──────────────────────────────────────────────────────────
 
