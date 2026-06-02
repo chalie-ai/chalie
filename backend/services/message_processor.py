@@ -290,6 +290,38 @@ class MessageProcessor:
         """
         self._cancel_event.set()
 
+    # ── Old-path interface shims — required so Ability.dispatch() works when ──
+    # ── called with an old-path MessageProcessor instance.  T7 removes the   ──
+    # ── _OldPathCtx adapter; these properties provide the same bridge via the ──
+    # ── object itself.  Removed together with the old-path send() in T8/T10. ──
+
+    @property
+    def uid(self) -> 'int | None':
+        """Old-path alias for _uid (flat-path uses mp.uid directly)."""
+        return self._uid
+
+    @uid.setter
+    def uid(self, value: 'int | None') -> None:
+        self._uid = value
+
+    @property
+    def cancel_event(self) -> threading.Event:
+        """Old-path alias for _cancel_event (flat-path uses mp.cancel_event directly)."""
+        return self._cancel_event
+
+    @cancel_event.setter
+    def cancel_event(self, value: threading.Event) -> None:
+        self._cancel_event = value
+
+    @property
+    def discovered_tools(self) -> list:
+        """Old-path alias for _discovered_tools (flat-path uses mp.discovered_tools directly)."""
+        return self._discovered_tools
+
+    @discovered_tools.setter
+    def discovered_tools(self, value: list) -> None:
+        self._discovered_tools = value
+
     def set_turn_start(self, ts: float) -> None:
         """Override the accumulator start time (called from _handle_chat before thread spawn)."""
         self._metrics.start_time = ts
@@ -624,22 +656,6 @@ class MessageProcessor:
         call_id = (tc.get('id') if isinstance(tc, dict) else None) or uuid4().hex[:12]
         self._metrics.record_tool(tool_name)
 
-        # Build a compat mp-like object that satisfies Ability.dispatch()'s
-        # interface using the old processor's attributes.  This adapter is
-        # temporary — removed in T7/T8 when old processors are replaced by configs.
-        class _OldPathCtx:
-            class config:
-                channel = self.CHANNEL
-                # Old path uses callback-based emission; new dispatch gates on
-                # broadcast_to.  Set None here — the old _emit_tool_event handles
-                # start/end events via the old callbacks instead.
-                broadcast_to = None
-            uid = self._uid
-            cancel_event = self._cancel_event
-            discovered_tools = self._discovered_tools
-
-        ctx = _OldPathCtx()
-
         # Emit start event via old callback before dispatching.
         act_summary = _sanitize_llm_args(dict(tc_input)).get('act_summary')
         self._emit_tool_event({
@@ -654,7 +670,7 @@ class MessageProcessor:
         t_start = _time.monotonic()
         ok = True
         try:
-            result_text = Ability.dispatch(ctx, tool_name, tc_input, call_id=call_id)
+            result_text = Ability.dispatch(self, tool_name, tc_input, call_id=call_id)
             # Check if result indicates an error (unknown tool / policy block).
             if result_text.startswith(("Unknown tool:", "POLICY BLOCK:", "Error:")):
                 ok = False

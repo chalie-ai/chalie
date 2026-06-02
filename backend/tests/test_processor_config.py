@@ -340,7 +340,7 @@ class TestStaticVsFactoryConfigs:
             wrapper_id="w1",
         )
         assert isinstance(result, ProcessorConfig)
-        assert result.channel == "external-agent:testbot"
+        assert result.channel == "external-agent:w1:testbot"
         assert result.role == "external_agent"
 
     def test_make_pattern_config_is_factory(self):

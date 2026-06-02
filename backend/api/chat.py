@@ -8,8 +8,8 @@ Routes:
   POST /chat/interrupt     — cooperatively cancel the active UMP turn. The
                              cancelled turn deletes its own transcript and
                              tool_call rows. Returns 200 always with JSON body.
-  POST /action             — receive an action button click; dispatch via
-                             ActDispatcherService. Returns 202 immediately;
+  POST /action             — receive an action button click; dispatches via
+                             Ability.dispatch(). Returns 202 immediately;
                              response arrives via WebSocketBroker.broadcast().
   POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
                              subagent by its sub_id. Returns 200 always.
@@ -20,6 +20,12 @@ Design:
   messages are handled by the frontend: POST /chat/interrupt cancels the
   active turn (which self-cleans its DB rows), then the frontend starts a
   fresh turn with the combined original+new message text.
+
+  User-channel messages flow through MessageProcessor.process() with the
+  make_user_config() ProcessorConfig — no MessageProcessor subclass.
+  Live output (narration, tool events) is gated by broadcast_to='user' on
+  the config; the flat _loop() and Ability.dispatch() call WS.emit() which
+  broadcasts when broadcast_to is set (AC-28).
 """
 
 import logging
@@ -32,7 +38,7 @@ from flask import Blueprint, jsonify, request
 from .auth import require_auth
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.log_utils import safe
-from services.markup import actions_to_xml, sanitize
+from services.markup import sanitize
 from services.time_utils import utc_now
 from services.websocket_broker import WebSocketBroker
 from services.segment_service import SegmentService
@@ -58,40 +64,83 @@ def _set_active_ump(proc) -> None:
         _active_ump = proc
 
 
-def _clear_active_ump(proc) -> None:
-    """Clear active UMP only if it still points to *proc*."""
+def _clear_active_ump(turn) -> None:
+    """Clear active UMP only if it still points to *turn*."""
     global _active_ump
     with _ump_lock:
-        if _active_ump is proc:
+        if _active_ump is turn:
             _active_ump = None
+
+
+class _ActiveTurn:
+    """Minimal handle for an in-flight UMP turn.
+
+    Holds the cancel_event (so interrupt/stop endpoints can signal cancellation)
+    and the original raw_input (so dispatch_message can combine mid-turn
+    messages).  No MessageProcessor subclass reference — the flat
+    MessageProcessor.process() owns the turn lifecycle.
+    """
+
+    __slots__ = ("_cancel_event", "_raw_input")
+
+    def __init__(self, cancel_event: threading.Event, raw_input: str) -> None:
+        self._cancel_event = cancel_event
+        self._raw_input = raw_input
+
+    def cancel(self) -> None:
+        """Signal the ACT loop to exit at the next iteration boundary."""
+        self._cancel_event.set()
 
 
 # ── Background helpers ────────────────────────────────────────────────────────
 
 
 def _run_chat_background(
-    proc,
+    turn: _ActiveTurn,
+    cancel_event: threading.Event,
+    raw_input: str,
+    config: object,
+    metadata: dict,
     request_id: str,
     turn_start: float,
 ) -> None:
-    """Background thread: process user message via UMP and broadcast response.
+    """Background thread: process user message via flat MessageProcessor and broadcast.
+
+    Uses MessageProcessor.process() with the make_user_config() ProcessorConfig.
+    Live narration and tool events are emitted by the flat loop via WS.emit()
+    (gated on config.broadcast_to='user') — no callbacks required (AC-28).
 
     Clears the active UMP reference BEFORE broadcasting done so the frontend
     can immediately POST /chat without hitting a race where active_ump is still
     set when the new request arrives.
     """
+    from services.message_processor import MessageProcessor  # noqa: PLC0415
+
     broker = WebSocketBroker()
     try:
-        response = proc.send(request_id=request_id)
+        response = MessageProcessor.process(
+            raw_input, config, metadata, cancel_event=cancel_event
+        )
 
         # Cancelled turn — skip broadcast entirely. The replacement turn
         # (started by dispatch_message) owns the WS event stream now.
-        if proc._cancel_event.is_set():
-            _clear_active_ump(proc)
+        if cancel_event.is_set():
+            _clear_active_ump(turn)
             return
 
-        metrics = proc._metrics.snapshot()
-        transcript_ids = [proc._uid] if getattr(proc, "_uid", None) is not None else []
+        # Resolve the transcript id written during this turn for segment
+        # enrichment. Since UMP turns are serialized (one at a time) the most
+        # recent user-channel input row is this turn's row.
+        transcript_ids: list[int] = []
+        try:
+            from services.transcript_service import get_recent  # noqa: PLC0415
+            rows = get_recent("user", limit=1)
+            if rows:
+                uid = rows[-1].get("id")
+                if uid is not None:
+                    transcript_ids = [uid]
+        except Exception as exc:
+            logger.debug("[Chat API] transcript_id lookup failed: %s", exc)
 
         content = sanitize(response or "")
         message_evt = {
@@ -101,31 +150,22 @@ def _run_chat_background(
             "mode": "UNIFIED",
             "confidence": 1.0,
             "exchange_id": request_id,
-            "metrics": metrics,
+            "metrics": {},
             "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
         }
         message_evt["segments"] = SegmentService.build(content, transcript_ids)
 
         elapsed_ms = int((time.time() - turn_start) * 1000)
         done_evt = {"type": "done", "duration_ms": elapsed_ms}
-        if metrics:
-            done_evt["metrics"] = metrics
 
-        _clear_active_ump(proc)
+        _clear_active_ump(turn)
         broker.broadcast(message_evt)
         broker.broadcast(done_evt)
 
     except Exception as exc:
         logger.exception("[Chat API] UMP error for %s: %s", request_id, exc)
-        partial_metrics = {}
-        try:
-            if getattr(proc, "_metrics", None) is not None:
-                partial_metrics = proc._metrics.snapshot()
-                partial_metrics["tokens_total_complete"] = False
-        except Exception:
-            pass
-        _clear_active_ump(proc)
-        if not proc._cancel_event.is_set():
+        _clear_active_ump(turn)
+        if not cancel_event.is_set():
             broker.broadcast({
                 "type": "error",
                 "message": str(exc),
@@ -134,10 +174,9 @@ def _run_chat_background(
             broker.broadcast({
                 "type": "done",
                 "duration_ms": int((time.time() - turn_start) * 1000),
-                **({"metrics": partial_metrics} if partial_metrics else {}),
             })
     finally:
-        _clear_active_ump(proc)
+        _clear_active_ump(turn)
 
 
 def dispatch_message(
@@ -145,22 +184,23 @@ def dispatch_message(
     source: str = "text",
     attachments: list | None = None,
     hidden_input: bool = False,
+    channel: str = "user",
 ) -> None:
     """Single chokepoint for all message sources entering the user channel.
 
     If an ACT loop is already in-flight (active UMP exists), cancels it,
     concatenates the original message with the new one (separated by two
     newlines), and starts a fresh turn with the combined text. The cancelled
-    turn's DB rows are cleaned up by _cleanup_cancelled_turn() in the
-    processor thread.
+    turn's DB rows are cleaned up by _cleanup_cancelled() in the processor.
 
     Args:
         text: Message content.
-        source: Origin identifier (``"text"``, ``"voice"``, ``"subagent"``,
-                ``"scheduled"``, ``"external_agent"``).
+        source: Origin identifier (``"text"``, ``"voice"``, ``"scheduled"``,
+                ``"external_agent"``).
         attachments: Optional file paths from POST /upload.
         hidden_input: When True the input row is NOT written to the transcript
                       (the synthesized assistant response still is).
+        channel: Channel name; currently always ``"user"``.
     """
     attachments = attachments or []
 
@@ -175,32 +215,27 @@ def dispatch_message(
 
 
 def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = False) -> str:
-    """Start a new UMP turn in a background thread. Returns the new request_id."""
-    from services.user_message_processor import UserMessageProcessor
+    """Start a new UMP turn via MessageProcessor.process() in a background thread.
+
+    Uses make_user_config() to build the ProcessorConfig and passes it to
+    MessageProcessor.process().  Live WS events (narration, tool start/end) are
+    emitted by the flat loop via WS.emit() — no per-turn callbacks (AC-28).
+
+    Returns the new request_id.
+    """
+    from configs.channels import make_user_config  # noqa: PLC0415
 
     request_id = str(uuid.uuid4())
     turn_start = time.time()
 
     try:
-        from services.world_state import world_state, Signal
+        from services.world_state import world_state, Signal  # noqa: PLC0415
         world_state.absorb(Signal(source="http_chat", kind="user_message", payload={"text": text[:200]}))
     except Exception as exc:
         logger.debug("[Chat API] world_state.absorb failed: %s", exc)
 
     broker = WebSocketBroker()
     broker.broadcast({"type": "status", "stage": "processing"})
-
-    def _on_narration(text_val, step=0):
-        if text_val:
-            broker.broadcast({
-                "type": "act_narration",
-                "text": sanitize(text_val),
-                "step": step,
-            })
-
-    def _on_tool_event(event):
-        if isinstance(event, dict) and event.get("type") in ("act_tool_start", "act_tool_end"):
-            broker.broadcast(event)
 
     metadata = {
         "uuid": request_id,
@@ -211,18 +246,14 @@ def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = 
         "hidden_input": hidden_input,
     }
 
-    proc = UserMessageProcessor(
-        raw_input=text,
-        metadata=metadata,
-        on_narration=_on_narration,
-        on_tool_event=_on_tool_event,
-    )
-    proc.set_turn_start(turn_start)
-    _set_active_ump(proc)
+    config = make_user_config(metadata)
+    cancel_event = threading.Event()
+    turn = _ActiveTurn(cancel_event=cancel_event, raw_input=text)
+    _set_active_ump(turn)
 
     thread = threading.Thread(
         target=_run_chat_background,
-        args=(proc, request_id, turn_start),
+        args=(turn, cancel_event, text, config, metadata, request_id, turn_start),
         daemon=True,
         name=f"chat-{request_id[:8]}",
     )
@@ -349,7 +380,7 @@ def post_subagent_stop(sub_id: str):
 @chat_bp.route("/action", methods=["POST"])
 @require_auth
 def post_action():
-    """Receive an action button click and dispatch via ActDispatcherService.
+    """Receive an action button click and dispatch via Ability.dispatch().
 
     Body (JSON):
         skill (str): The ability name to invoke.
@@ -369,24 +400,43 @@ def post_action():
     def _run_action():
         broker = WebSocketBroker()
         try:
-            import threading as _threading  # noqa: PLC0415
             from abilities._base import Ability  # noqa: PLC0415
+            from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
             params = {k: v for k, v in body.items() if k != "skill"}
 
             broker.broadcast({"type": "status", "stage": "processing"})
 
-            # Build a minimal dispatch context (no real MP needed for action buttons).
-            # Ability.dispatch() requires an mp-like object for channel, uid, etc.
-            class _ActionButtonCtx:
-                class config:
-                    channel = "action_button"
-                    broadcast_to = None
-                uid = None
-                cancel_event = _threading.Event()
-                discovered_tools = []
+            # Build a minimal flat-path context for action-button dispatches.
+            # Ability.dispatch() requires an mp-like object with config, uid,
+            # cancel_event, and discovered_tools.  broadcast_to=None keeps these
+            # dispatches silent (no live WS events for action buttons).
+            _action_config = ProcessorConfig(
+                channel="action_button",
+                role="action_button",
+                usage_class="chat",
+                build_user_prompt=lambda _: "",
+                build_user_definition=lambda _: "",
+                build_system_prompt=lambda _: "",
+                always_available=[],
+                discoverable=[],
+                blocked=frozenset(),
+                max_iterations=1,
+                skip_transcript=True,
+                skip_input_row=True,
+                suppress_history=True,
+                broadcast_to=None,
+                memory_seed=False,
+                post_turn=None,
+            )
 
-            ctx = _ActionButtonCtx()
+            class _ActionCtx:
+                config = _action_config
+                uid = None
+                cancel_event = threading.Event()
+                discovered_tools: list = []
+
+            ctx = _ActionCtx()
             result_text = Ability.dispatch(ctx, skill, params)
 
             if result_text.startswith("Unknown tool:"):
@@ -398,13 +448,8 @@ def post_action():
                 broker.broadcast({"type": "done", "duration_ms": 0})
                 return
 
-            result = result_text
-            reply_actions = None
-
             elapsed_ms = int((time.time() - action_start) * 1000)
-            content = sanitize(result or "Done.")
-            if reply_actions:
-                content += actions_to_xml(reply_actions)
+            content = sanitize(result_text or "Done.")
 
             message_evt = {
                 "type": "message",
@@ -413,12 +458,7 @@ def post_action():
                 "mode": "ACT",
                 "confidence": 0.95,
                 "exchange_id": "",
-                "metrics": {
-                    "tokens_total": 0,
-                    "tokens_total_complete": False,
-                    "tools": {},
-                    "response_time_s": round(time.time() - action_start, 3),
-                },
+                "metrics": {},
                 "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
             }
             message_evt["segments"] = SegmentService.build(content, [])
@@ -431,12 +471,6 @@ def post_action():
                 "type": "error",
                 "message": str(exc),
                 "recoverable": True,
-                "metrics": {
-                    "tokens_total": 0,
-                    "tokens_total_complete": False,
-                    "tools": {},
-                    "response_time_s": round(time.time() - action_start, 3),
-                },
             })
             broker.broadcast({"type": "done", "duration_ms": 0})
 

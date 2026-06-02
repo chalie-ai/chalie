@@ -160,7 +160,8 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
         if errors:
             return "Invalid parameters:\n" + "\n".join(f"- {e}" for e in errors)
 
-        from services.external_agent_message_processor import ExternalAgentMessageProcessor
+        from configs.channels import make_eamp_config  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         wrapper_id = _current_wrapper_id.get()
         logger.info(
@@ -169,14 +170,13 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
         )
 
         def _run():
-            proc = ExternalAgentMessageProcessor(
-                raw_input=message,
+            config = make_eamp_config(
                 agent_name=agent_name,
-                project_or_task_name=project_or_task_name,
+                project=project_or_task_name,
                 loop_in_human=loop_in_human,
-                wrapper_id=wrapper_id,
+                wrapper_id=wrapper_id or "",
             )
-            return proc.send()
+            return MessageProcessor.process(message, config)
 
         response = await asyncio.to_thread(_run)
         return response or "(No response generated)"
