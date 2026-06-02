@@ -473,12 +473,11 @@ class ChalieApp {
       if (now - pinDebounce < 250) return; // 250ms debounce
       pinDebounce = now;
 
-      const { text, meta } = e.detail;
-      const body = {
-        message_text: text,
-        exchange_id: meta.exchange_id || '',
-        topic: meta.topic || '',
-      };
+      const { text } = e.detail;
+      // The client never holds the assistant transcript row id (the WS event
+      // carries only a per-request exchange UUID, which the transcript table
+      // does not store). The backend resolves the turn from the rendered text.
+      const body = { message_text: text };
 
       try {
         const base = backendHost ? backendHost.replace(/\/$/, '') : '';
@@ -491,11 +490,12 @@ class ChalieApp {
 
         if (res.ok) {
           const data = await res.json();
-          const momentId = data.item?.id;
+          // Forget is keyed by transcript_id (the moment key encodes it).
+          const transcriptId = data.item?.transcript_id;
           const isDuplicate = data.duplicate;
 
           const msg = isDuplicate ? 'Already remembered' : 'Remembered';
-          showToast(msg, momentId ? () => this._undoMoment(momentId) : null);
+          showToast(msg, transcriptId ? () => this._undoMoment(transcriptId) : null);
         }
       } catch (err) {
         console.warn('Pin moment failed:', err);
@@ -508,10 +508,10 @@ class ChalieApp {
     }
   }
 
-  async _undoMoment(momentId) {
+  async _undoMoment(transcriptId) {
     try {
       const base = this._backendHost ? this._backendHost.replace(/\/$/, '') : '';
-      await fetch(base + `/moments/${momentId}/forget`, {
+      await fetch(base + `/moments/${transcriptId}/forget`, {
         method: 'POST',
         credentials: 'same-origin',
       });
