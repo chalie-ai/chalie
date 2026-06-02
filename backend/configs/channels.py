@@ -23,10 +23,8 @@ Per-instance channels (§3b) — factory functions:
   make_user_summary_config() -> ProcessorConfig
   make_super_episode_config(channel, sources, spans) -> ProcessorConfig
 
-Prompt builder implementations are stubs at T1 (no callers wired yet).
-They are replaced with real implementations in T7 (UMP/EAMP) and T8
-(background channels).  The structural contract — frozen dataclass, correct
-channel/role/limits — is established here.
+T7 wired UMP and EAMP with real implementations.
+T8 wired all background/housekeeping channels with real implementations.
 """
 
 from __future__ import annotations
@@ -77,13 +75,114 @@ DEFAULT_DISCOVERABLE: list[str] = [
 
 # ── §3a — Static configs (no per-instance args) ───────────────────────────────
 
+# ── DMN prompt builders ───────────────────────────────────────────────────────
+
+_EPISODE_RETRIEVAL_WEIGHT_FLOOR = 0.3
+_DMN_EPISODE_LOOKBACK_DAYS = 30
+_DMN_EPISODE_LIMIT = 50
+
+
+def _dmn_build_user_definition(_mp: object) -> str:
+    """DMN runs as a background process — no human user definition needed."""
+    return (
+        "The user is 'proactive_thought' — a special background process "
+        "that represents your own reflections on recent activity."
+    )
+
+
+def _dmn_fetch_user_synthesis() -> str:
+    """Read user synthesis from data_graph.
+
+    Prefers user_summary_long for richer DMN reflection context.
+    Falls back to user_summary. Returns '' when neither row exists.
+    """
+    import logging  # noqa: PLC0415
+    _log = logging.getLogger(__name__)
+    try:
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT key, value FROM data_graph "
+                "WHERE kind = 'system' "
+                "  AND key IN ('user_summary', 'user_summary_long') "
+                "  AND active = 1 AND deleted_at IS NULL",
+            ).fetchall()
+        by_key = {row[0]: row[1] for row in rows if row[1]}
+        return by_key.get("user_summary_long") or by_key.get("user_summary") or ""
+    except Exception as exc:
+        _log.warning("[DMN_CONFIG] _dmn_fetch_user_synthesis failed: %s", exc)
+        return ""
+
+
+def _dmn_fetch_recent_episodes() -> str:
+    """Retrieve recent, non-decayed user-channel episodes as a numbered list."""
+    import logging  # noqa: PLC0415
+    _log = logging.getLogger(__name__)
+    try:
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, gist, salience, created_at "
+                "FROM episodes "
+                "WHERE deleted_at IS NULL "
+                "  AND channel = 'user' "
+                "  AND retrieval_weight >= ? "
+                "  AND ( "
+                "      last_accessed_at >= datetime('now', ?) "
+                "      OR created_at >= datetime('now', ?) "
+                "  ) "
+                "ORDER BY retrieval_weight DESC, created_at DESC "
+                "LIMIT ?",
+                (
+                    _EPISODE_RETRIEVAL_WEIGHT_FLOOR,
+                    f"-{_DMN_EPISODE_LOOKBACK_DAYS} days",
+                    f"-{_DMN_EPISODE_LOOKBACK_DAYS} days",
+                    _DMN_EPISODE_LIMIT,
+                ),
+            ).fetchall()
+        lines = []
+        for i, (ep_id, gist, salience, created_at) in enumerate(rows, 1):
+            ts = (created_at or "")[:16].replace("T", " ")
+            lines.append(f"{i}. [{ts}] (salience={salience}) {gist or ''}")
+        return "\n".join(lines)
+    except Exception as exc:
+        _log.warning("[DMN_CONFIG] _dmn_fetch_recent_episodes failed: %s", exc)
+        return ""
+
+
+def _dmn_build_user_prompt(mp: object) -> str:
+    """DMN user-message: user synthesis + filtered recent episodes + ACT trail."""
+    parts: list[str] = []
+    synthesis = _dmn_fetch_user_synthesis()
+    if synthesis:
+        parts.append(f"## About the User\n{synthesis}")
+    episodes_text = _dmn_fetch_recent_episodes()
+    if episodes_text:
+        parts.append(f"## Episodes\n{episodes_text}")
+    try:
+        trail = mp.get_act_loop_trail()  # type: ignore[attr-defined]
+        if trail and isinstance(trail, str):
+            parts.append(trail)
+    except Exception:
+        pass
+    return "\n\n".join(parts)
+
+
+def _dmn_build_system_prompt(_mp: object) -> str:
+    """DMN system prompt from DMNSystemMessagePrompt."""
+    from services.system_message_prompt import DMNSystemMessagePrompt  # noqa: PLC0415
+    return DMNSystemMessagePrompt().get_prompt()
+
+
 DMN_CONFIG = ProcessorConfig(
     channel="dmn",
     role="proactive_thought",
     usage_class="subconscious",
-    build_user_prompt=lambda _mp: "",
-    build_user_definition=lambda _mp: "",
-    build_system_prompt=lambda _mp: "",
+    build_user_prompt=_dmn_build_user_prompt,
+    build_user_definition=_dmn_build_user_definition,
+    build_system_prompt=_dmn_build_system_prompt,
     always_available=DEFAULT_ALWAYS_AVAILABLE,
     discoverable=DEFAULT_DISCOVERABLE,
     blocked=frozenset({"subagent"}),
@@ -95,15 +194,54 @@ DMN_CONFIG = ProcessorConfig(
     memory_seed=False,
     post_turn=None,
 )
-"""DMN background channel.  §3a / §8b."""
+"""DMN background channel.  §3a / §8b.  post_turn=None (metrics moved to gateway §4e)."""
+
+# ── Episode encoder prompt builders ──────────────────────────────────────────
+
+
+def _episode_encoder_build_user_definition(_mp: object) -> str:
+    return (
+        "The user is 'episode_encoder' — a background process that "
+        "summarises transcript windows into memory snapshots."
+    )
+
+
+def _episode_encoder_build_user_prompt(mp: object) -> str:
+    """Episode encoder user-prompt: transcript window + referenced episodes.
+
+    Reads _window and _referenced from the mp instance (set by the caller
+    before calling MessageProcessor.process()).
+    """
+    window = getattr(mp, "_window", "") or ""
+    referenced = getattr(mp, "_referenced", "") or ""
+    parts = [
+        "Transcript window — each line is `[id] (timestamp) role: content`:",
+        "",
+        window,
+    ]
+    if referenced:
+        parts.extend([
+            "",
+            "Episodes referenced during these turns (candidates for update / delete):",
+            "",
+            referenced,
+        ])
+    return "\n".join(parts)
+
+
+def _episode_encoder_build_system_prompt(_mp: object) -> str:
+    """Episode encoder system prompt from EpisodeEncoderSystemPrompt."""
+    from services.system_message_prompt import EpisodeEncoderSystemPrompt  # noqa: PLC0415
+    return EpisodeEncoderSystemPrompt().get_prompt()
+
 
 EPISODE_ENCODER_CONFIG = ProcessorConfig(
     channel="episode_encoder",
     role="episode_encoder",
     usage_class="subconscious",
-    build_user_prompt=lambda _mp: "",
-    build_user_definition=lambda _mp: "",
-    build_system_prompt=lambda _mp: "",
+    build_user_prompt=_episode_encoder_build_user_prompt,
+    build_user_definition=_episode_encoder_build_user_definition,
+    build_system_prompt=_episode_encoder_build_system_prompt,
     always_available=[],
     discoverable=[],
     blocked=frozenset(),
@@ -117,13 +255,46 @@ EPISODE_ENCODER_CONFIG = ProcessorConfig(
 )
 """Episode encoder — one-shot, no tools, no transcript writes.  §3a."""
 
+# ── Skill suggestion prompt builders ─────────────────────────────────────────
+
+
+def _skill_suggestion_build_user_prompt(mp: object) -> str:
+    """Skill suggestion user-prompt: original request + ACT trail.
+
+    Reads _original_trail, _original_input, _iteration_count from mp (set by
+    the caller before calling MessageProcessor.process()).
+    """
+    original_trail = getattr(mp, "_original_trail", []) or []
+    original_input = getattr(mp, "_original_input", "") or ""
+    iteration_count = getattr(mp, "_iteration_count", len(original_trail))
+    parts = [
+        f"## Original User Request\n{original_input}",
+        f"\n## Completed ACT Loop Trail ({iteration_count} iterations)",
+    ]
+    for entry in original_trail:
+        parts.append(entry)
+    try:
+        trail = mp.get_act_loop_trail()  # type: ignore[attr-defined]
+        if trail:
+            parts.append(f"\n{trail}")
+    except Exception:
+        pass
+    return "\n".join(parts)
+
+
+def _skill_suggestion_build_system_prompt(_mp: object) -> str:
+    """Skill suggestion system prompt from SkillSuggestionSystemPrompt."""
+    from services.system_message_prompt import SkillSuggestionSystemPrompt  # noqa: PLC0415
+    return SkillSuggestionSystemPrompt().get_prompt()
+
+
 SKILL_SUGGESTION_CONFIG = ProcessorConfig(
     channel="skills_building",
     role="skills_building",
     usage_class="subconscious",
-    build_user_prompt=lambda _mp: "",
+    build_user_prompt=_skill_suggestion_build_user_prompt,
     build_user_definition=lambda _mp: "",
-    build_system_prompt=lambda _mp: "",
+    build_system_prompt=_skill_suggestion_build_system_prompt,
     always_available=["skill_manager"],
     discoverable=[],
     blocked=frozenset(),
@@ -135,7 +306,8 @@ SKILL_SUGGESTION_CONFIG = ProcessorConfig(
     memory_seed=False,
     post_turn=None,
 )
-"""Skill suggestion — housekeeping, suppress_history=True.  §3a."""
+"""Skill suggestion — housekeeping, suppress_history=True replaces old
+get_previous_messages() override.  §3a / AC-26."""
 
 def _compaction_system_prompt(_mp: object) -> str:
     """System prompt for continuity (history) compaction.  §3a / §4a."""
@@ -592,21 +764,202 @@ def make_eamp_config(
     )
 
 
+# ── Pattern-match prompt builders and post_turn ───────────────────────────────
+
+_TOP_PATTERN_CAP = 50
+
+
+def _pattern_existing_patterns_block() -> str:
+    """Return the top-confidence active behavioral_pattern rows as JSON."""
+    import json as _json  # noqa: PLC0415
+    import logging as _logging  # noqa: PLC0415
+    _log = _logging.getLogger(__name__)
+    try:
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT value FROM data_graph "
+                "WHERE kind='behavioral_pattern' AND active=1 "
+                "AND deleted_at IS NULL "
+                "AND json_extract(value, '$.confidence') IS NOT NULL "
+                "ORDER BY CAST(json_extract(value, '$.confidence') AS REAL) "
+                "DESC LIMIT ?",
+                (_TOP_PATTERN_CAP,),
+            ).fetchall()
+        if not rows:
+            return "(none yet)"
+        patterns = {}
+        for (val,) in rows:
+            try:
+                d = _json.loads(val) or {}
+                name = d.get("name")
+                if name:
+                    patterns[name] = d.get("summary", "")
+            except Exception:
+                continue
+        return _json.dumps(patterns, indent=2) if patterns else "(none yet)"
+    except Exception as exc:
+        _log.warning("[PATTERN_CONFIG] existing_patterns_block failed: %s", exc)
+        return "(none yet)"
+
+
+def _pattern_build_user_prompt(mp: object, window_start: int, window_end: int) -> str:
+    """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
+    import logging as _logging  # noqa: PLC0415
+    _log = _logging.getLogger(__name__)
+    try:
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, role, content, created_at FROM transcript "
+                "WHERE id > ? AND id <= ? "
+                "AND content IS NOT NULL AND content != '' "
+                "ORDER BY id ASC",
+                (window_start, window_end),
+            ).fetchall()
+        if not rows:
+            return "(no transcripts in window)"
+        transcript_block = "\n".join(
+            f"[id={r[0]} | {r[1]} | {r[3]}] {r[2]}" for r in rows
+        )
+    except Exception as exc:
+        _log.warning("[PATTERN_CONFIG] transcript fetch failed: %s", exc)
+        transcript_block = "(transcript fetch failed)"
+
+    existing = _pattern_existing_patterns_block()
+    parts = [f"Existing patterns:\n{existing}", transcript_block]
+    try:
+        trail = mp.get_act_loop_trail()  # type: ignore[attr-defined]
+        if trail:
+            parts.append(trail)
+    except Exception:
+        pass
+    return "\n\n".join(parts)
+
+
+def _pattern_build_system_prompt(_mp: object) -> str:
+    """Pattern-match system prompt (inlined from PatternMatchProcessor.get_system_prompt)."""
+    return (
+        "You are analysing the user's recent transcripts to detect "
+        "repeating behavioural patterns and surface durable life-graph "
+        "facts.\n\n"
+        "You have ONE forward pass. Emit ALL tool calls in parallel. Do "
+        "NOT loop — results are intentionally minimal.\n\n"
+        "save_pattern summaries must be 1 sentence and concise. "
+        "Examples:\n"
+        "- User walks to work every morning at 09:00\n"
+        "- User prefers cold-beverages\n"
+        "- User goes to the gym daily, except Sundays\n"
+        "- User's gym schedule is: Monday weights, Tuesday boxing\n"
+        "Do NOT write narratives, episode summaries, or date-stamped "
+        "event logs. The summary is a distilled habit, not a story.\n\n"
+        "Rules:\n"
+        "- save_pattern requires >=2 evidence rows in this batch.\n"
+        "- Mirror existing pattern names exactly when reinforcing — "
+        "case-sensitive.\n"
+        "- Do NOT use save_graph for repeating behaviours — use "
+        "save_pattern.\n"
+        "- Skip noise. Skip one-offs. Skip ambiguous interpretations.\n"
+        "- Emit everything in this single pass."
+    )
+
+
+def _pattern_post_turn(mp: object, _response_text: str) -> None:
+    """Confidence decay sweep: -0.005 on untouched active rows; soft-delete at <=0.
+
+    §3b / §4e — no metrics recorded here (metrics moved to send gateway).
+    """
+    import logging as _logging  # noqa: PLC0415
+    _log = _logging.getLogger(__name__)
+    try:
+        touched_ids: set = getattr(mp, "_touched_pattern_ids", set()) or set()
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        from services.time_utils import utc_now  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            # Decrement confidence on untouched rows.
+            params: list = []
+            touched_filter = ""
+            if touched_ids:
+                placeholders = ",".join("?" * len(touched_ids))
+                touched_filter = f"AND id NOT IN ({placeholders})"
+                params = list(touched_ids)
+            conn.execute(
+                f"""
+                UPDATE data_graph
+                SET value = json_set(
+                      value,
+                      '$.confidence',
+                      MAX(0.0, CAST(json_extract(value, '$.confidence') AS REAL) - 0.005)
+                    )
+                WHERE kind = 'behavioral_pattern'
+                  AND active = 1
+                  AND deleted_at IS NULL
+                  AND json_extract(value, '$.confidence') IS NOT NULL
+                  {touched_filter}
+                """,
+                params,
+            )
+            # Soft-delete rows whose confidence dropped to <=0.
+            conn.execute(
+                """
+                UPDATE data_graph
+                SET active = 0
+                WHERE kind = 'behavioral_pattern'
+                  AND active = 1
+                  AND CAST(json_extract(value, '$.confidence') AS REAL) <= 0.0
+                """,
+            )
+        save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
+        save_graph_calls = getattr(mp, "_save_graph_calls", 0)
+        now_iso = utc_now().isoformat()
+        _log.info(
+            "[PATTERN_CONFIG] done save_pattern=%d save_graph=%d "
+            "touched=%d at=%s",
+            save_pattern_calls,
+            save_graph_calls,
+            len(touched_ids),
+            now_iso,
+        )
+    except Exception as exc:
+        _log.warning("[PATTERN_CONFIG] decay sweep failed: %s", exc)
+
+
+def _pattern_init_instance_state(mp: object) -> None:
+    """Initialise per-instance counter/state attrs that SavePattern/SaveGraph read."""
+    if not hasattr(mp, "_save_pattern_calls"):
+        mp._save_pattern_calls = 0  # type: ignore[attr-defined]
+    if not hasattr(mp, "_save_graph_calls"):
+        mp._save_graph_calls = 0  # type: ignore[attr-defined]
+    if not hasattr(mp, "_save_graph_seen"):
+        mp._save_graph_seen = set()  # type: ignore[attr-defined]
+    if not hasattr(mp, "_touched_pattern_ids"):
+        mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
+
+
 def make_pattern_config(window_start: int, window_end: int) -> ProcessorConfig:
     """Pattern-match config — per-window background pattern recognition.
 
     channel/role='pattern_match', suppress_history=True, max_iterations=100.
     post_turn = confidence decay sweep (§3b).
 
-    Prompt builders are stubbed for T1; real implementations land in T8.
+    Counter/state attrs are lazily initialised by build_user_prompt on the first
+    call so the caller does not need to pre-set them.
     """
+    def _build_user_prompt(mp: object) -> str:
+        # Lazy-init per-instance state so SavePattern/SaveGraph find it.
+        _pattern_init_instance_state(mp)
+        return _pattern_build_user_prompt(mp, window_start, window_end)
+
     return ProcessorConfig(
         channel="pattern_match",
         role="pattern_match",
         usage_class="subconscious",
-        build_user_prompt=lambda _mp: "",
+        build_user_prompt=_build_user_prompt,
         build_user_definition=lambda _mp: "",
-        build_system_prompt=lambda _mp: "",
+        build_system_prompt=_pattern_build_system_prompt,
         always_available=["save_pattern", "save_graph"],
         discoverable=[],
         blocked=frozenset(),
@@ -616,8 +969,99 @@ def make_pattern_config(window_start: int, window_end: int) -> ProcessorConfig:
         suppress_history=True,
         broadcast_to=None,
         memory_seed=False,
-        post_turn=None,
+        post_turn=_pattern_post_turn,
     )
+
+
+# ── Geo-pattern prompt builders and post_turn ─────────────────────────────────
+
+
+def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> str:
+    """Fetch location-tagged transcripts from the window and format them."""
+    import logging as _logging  # noqa: PLC0415
+    _log = _logging.getLogger(__name__)
+    try:
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, role, content, created_at, "
+                "location_lat, location_lon, location_name "
+                "FROM transcript "
+                "WHERE id > ? AND id <= ? "
+                "AND location_lat IS NOT NULL AND location_lon IS NOT NULL "
+                "AND content IS NOT NULL AND content != '' "
+                "ORDER BY id ASC",
+                (window_start, window_end),
+            ).fetchall()
+        if not rows:
+            return "(no location-tagged transcripts in window)"
+        lines = []
+        for r in rows:
+            row_id, role, content, created_at, lat, lon, place_name = r
+            location_str = f"{lat},{lon}"
+            if place_name:
+                location_str = f"{lat},{lon} {place_name}"
+            lines.append(
+                f"[id={row_id} | {role} | {created_at} | {location_str}] {content}"
+            )
+        return "\n".join(lines)
+    except Exception as exc:
+        _log.warning("[GEO_CONFIG] transcript block failed: %s", exc)
+        return "(transcript fetch failed)"
+
+
+def _geo_pattern_build_system_prompt(_mp: object) -> str:
+    """Geo-pattern system prompt (inlined from GeoPatternProcessor.get_system_prompt)."""
+    return (
+        "You are analysing the user's recent location-tagged transcripts "
+        "to detect geo-spatial behavioural patterns — routines, habits, "
+        "and durable facts tied to specific physical places.\n\n"
+        "You have ONE forward pass. Emit ALL tool calls in parallel. Do "
+        "NOT loop — results are intentionally minimal.\n\n"
+        "save_pattern summaries must be 1 sentence and concise. "
+        "Examples:\n"
+        "- User walks to work every morning at 09:00\n"
+        "- User goes to the gym daily, except Sundays\n"
+        "- User's gym schedule is: Monday weights, Tuesday boxing\n"
+        "Do NOT write narratives, episode summaries, or date-stamped "
+        "event logs. The summary is a distilled habit, not a story.\n\n"
+        "Rules:\n"
+        "- save_pattern requires >=2 evidence rows in this batch.\n"
+        "- Mirror existing pattern names exactly when reinforcing — "
+        "case-sensitive.\n"
+        "- Only emit patterns where physical place is central. Another "
+        "processor handles location-independent patterns.\n"
+        "- Do NOT use save_graph for repeating behaviours — use "
+        "save_pattern.\n"
+        "- Skip noise. Skip one-offs. Skip ambiguous interpretations.\n"
+        "- Emit everything in this single pass."
+    )
+
+
+def _geo_pattern_post_turn(mp: object, _response_text: str) -> None:
+    """Log completion counters. Decay is handled by pattern_match, not geo_pattern.
+
+    §3b — no metrics, no decay sweep.
+    """
+    import logging as _logging  # noqa: PLC0415
+    _log = _logging.getLogger(__name__)
+    try:
+        from services.time_utils import utc_now  # noqa: PLC0415
+        save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
+        save_graph_calls = getattr(mp, "_save_graph_calls", 0)
+        touched_ids = getattr(mp, "_touched_pattern_ids", set()) or set()
+        now_iso = utc_now().isoformat()
+        _log.info(
+            "[GEO_CONFIG] done save_pattern=%d save_graph=%d "
+            "touched=%d at=%s",
+            save_pattern_calls,
+            save_graph_calls,
+            len(touched_ids),
+            now_iso,
+        )
+    except Exception as exc:
+        _log.warning("[GEO_CONFIG] post_turn logging failed: %s", exc)
 
 
 def make_geo_config(window_start: int, window_end: int) -> ProcessorConfig:
@@ -626,15 +1070,43 @@ def make_geo_config(window_start: int, window_end: int) -> ProcessorConfig:
     channel/role='geo_pattern', suppress_history=True, max_iterations=30.
     post_turn = log counters only (§3b).
 
-    Prompt builders are stubbed for T1; real implementations land in T8.
+    Counter/state attrs are lazily initialised by build_user_prompt on the first
+    call so the caller does not need to pre-set them.
     """
+    def _build_user_prompt(mp: object) -> str:
+        # Lazy-init per-instance state so SavePattern/SaveGraph find it.
+        if not hasattr(mp, "_save_pattern_calls"):
+            mp._save_pattern_calls = 0  # type: ignore[attr-defined]
+        if not hasattr(mp, "_save_graph_calls"):
+            mp._save_graph_calls = 0  # type: ignore[attr-defined]
+        if not hasattr(mp, "_save_graph_seen"):
+            mp._save_graph_seen = set()  # type: ignore[attr-defined]
+        if not hasattr(mp, "_touched_pattern_ids"):
+            mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
+        # Cache the transcript block across multiple iterations (same as GPP).
+        cached = getattr(mp, "_cached_transcript_block", None)
+        if cached is None:
+            block = _geo_pattern_load_transcript_block(window_start, window_end)
+            mp._cached_transcript_block = block  # type: ignore[attr-defined]
+        else:
+            block = cached
+        existing = _pattern_existing_patterns_block()
+        parts = [f"Existing patterns:\n{existing}", block]
+        try:
+            trail = mp.get_act_loop_trail()  # type: ignore[attr-defined]
+            if trail:
+                parts.append(trail)
+        except Exception:
+            pass
+        return "\n\n".join(parts)
+
     return ProcessorConfig(
         channel="geo_pattern",
         role="geo_pattern",
         usage_class="subconscious",
-        build_user_prompt=lambda _mp: "",
+        build_user_prompt=_build_user_prompt,
         build_user_definition=lambda _mp: "",
-        build_system_prompt=lambda _mp: "",
+        build_system_prompt=_geo_pattern_build_system_prompt,
         always_available=["save_pattern", "save_graph"],
         discoverable=[],
         blocked=frozenset(),
@@ -644,25 +1116,254 @@ def make_geo_config(window_start: int, window_end: int) -> ProcessorConfig:
         suppress_history=True,
         broadcast_to=None,
         memory_seed=False,
-        post_turn=None,
+        post_turn=_geo_pattern_post_turn,
     )
+
+
+# ── User-summary prompt builders and post_turn ────────────────────────────────
+
+_MAX_TRAIT_ROWS = 200
+_MAX_PATTERN_ROWS = 25
+
+
+def _format_pattern_line(content: dict) -> str:
+    """Render a single behavioral_pattern content dict as a compact one-liner."""
+    name = content.get("name", "unknown")
+    freq = content.get("frequency", "?")
+    anchor = content.get("time_anchor") or ""
+    summary = content.get("summary", "")
+    confidence = content.get("confidence", 0)
+    last_seen = (content.get("last_seen_at") or "")[:10] or "?"
+    anchor_part = f" @ {anchor}" if anchor else ""
+    return (
+        f"{name} ({freq}{anchor_part}): {summary} "
+        f"[confidence={confidence}, last {last_seen}]"
+    )
+
+
+def _user_summary_build_user_prompt(_mp: object) -> str:
+    """User-summary user-prompt: user_specific traits + behavioral_patterns."""
+    import json as _json  # noqa: PLC0415
+    import logging as _logging  # noqa: PLC0415
+    _log = _logging.getLogger(__name__)
+
+    # Section 1: user_specific traits
+    try:
+        from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
+        rows = get_data_graph_service().fetch(
+            kinds=["user_specific"],
+            limit=_MAX_TRAIT_ROWS,
+            order_by="retrieval_weight DESC",
+        )
+    except Exception as exc:
+        _log.warning("[USER_SUMMARY_CONFIG] trait fetch failed: %s", exc)
+        rows = []
+
+    if not rows:
+        facts_section = "Facts:\n(no facts available)"
+    else:
+        lines = [
+            f"{r['key']}: {r['value']}"
+            for r in rows
+            if r.get("key") and r.get("value")
+        ]
+        facts_section = "Facts:\n" + "\n".join(lines) if lines else "Facts:\n(no facts available)"
+
+    # Section 2: active behavioral_patterns
+    active_patterns = []
+    try:
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            pattern_rows = conn.execute(
+                """
+                SELECT value
+                FROM data_graph
+                WHERE kind = 'behavioral_pattern'
+                  AND active = 1
+                  AND deleted_at IS NULL
+                ORDER BY last_confirmed_at DESC
+                LIMIT ?
+                """,
+                (_MAX_PATTERN_ROWS,),
+            ).fetchall()
+        for (value_json,) in pattern_rows:
+            try:
+                content = _json.loads(value_json)
+                if content:
+                    active_patterns.append(content)
+            except Exception:
+                continue
+    except Exception as exc:
+        _log.warning("[USER_SUMMARY_CONFIG] active pattern fetch failed: %s", exc)
+
+    if not active_patterns:
+        return facts_section
+
+    pattern_lines = [_format_pattern_line(p) for p in active_patterns]
+    patterns_section = (
+        "## Behavioural patterns (frequency, last seen)\n"
+        + "\n".join(f"- {line}" for line in pattern_lines)
+    )
+    return facts_section + "\n\n" + patterns_section
+
+
+def _user_summary_build_system_prompt(_mp: object) -> str:
+    """User-summary system prompt from UserSummarySystemPrompt."""
+    from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
+    return UserSummarySystemPrompt().get_prompt()
+
+
+def _user_summary_post_turn(_mp: object, response_text: str) -> None:
+    """Parse JSON {short, long} from response_text and write to data_graph.
+
+    AC-29: receives response_text directly — no on_store hook, no _last_response cache.
+    §3b: post_turn(mp, response_text) is the only callback.
+    """
+    import json as _json  # noqa: PLC0415
+    import logging as _logging  # noqa: PLC0415
+    _log = _logging.getLogger(__name__)
+
+    text = (response_text or "").strip()
+    if not text:
+        _log.warning("[USER_SUMMARY_CONFIG] post_turn: empty LLM response — skipping write")
+        return
+
+    # Strip markdown code fences if the model wrapped the JSON.
+    stripped = text.removeprefix("```json").removeprefix("```").lstrip()
+    stripped = stripped.removesuffix("```").rstrip()
+
+    try:
+        parsed = _json.loads(stripped)
+    except _json.JSONDecodeError as exc:
+        _log.warning(
+            "[USER_SUMMARY_CONFIG] post_turn: JSON parse failed (%s) — skipping write. raw=%r",
+            exc,
+            text[:200],
+        )
+        return
+
+    if not isinstance(parsed, dict):
+        _log.warning(
+            "[USER_SUMMARY_CONFIG] post_turn: parsed value is not a dict — skipping write"
+        )
+        return
+
+    short = (parsed.get("short") or "").strip()
+    long_ = (parsed.get("long") or "").strip()
+
+    if not short or not long_:
+        _log.warning(
+            "[USER_SUMMARY_CONFIG] post_turn: 'short' or 'long' missing/empty — skipping write"
+        )
+        return
+
+    try:
+        from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
+        dgs = get_data_graph_service()
+        # Write user_summary_long FIRST so crash recovery works correctly.
+        # See UserSummaryProcessor.post_turn() docstring for the ordering rationale.
+        dgs.store(
+            kind="system",
+            key="user_summary_long",
+            value=long_,
+            source="user_summary_config",
+        )
+        dgs.store(
+            kind="system",
+            key="user_summary",
+            value=short,
+            source="user_summary_config",
+        )
+        _log.info(
+            "[USER_SUMMARY_CONFIG] post_turn: wrote user_summary (%d chars) and "
+            "user_summary_long (%d chars)",
+            len(short),
+            len(long_),
+        )
+    except Exception as exc:
+        _log.warning("[USER_SUMMARY_CONFIG] post_turn: data_graph write failed: %s", exc)
+
+
+def _should_synthesise() -> bool:
+    """Return True when re-synthesis is warranted.
+
+    Logic:
+    - latest_trait_ts = MAX(last_confirmed_at) WHERE kind IN
+      ('user_specific', 'behavioral_pattern') AND active=1
+    - current_summary = row WHERE kind='system' AND key='user_summary' AND active=1
+
+    Cases:
+    - No traits or patterns at all → False (nothing to synthesise).
+    - Traits/patterns exist, no summary → True (first synthesis needed).
+    - Both exist → True only when latest trait/pattern is newer than the summary row.
+    """
+    import logging as _logging  # noqa: PLC0415
+    _log = _logging.getLogger(__name__)
+    try:
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        from services.time_utils import parse_utc  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT MAX(last_confirmed_at)
+                FROM data_graph
+                WHERE kind IN ('user_specific', 'behavioral_pattern')
+                  AND active = 1
+                  AND deleted_at IS NULL
+                """
+            ).fetchone()
+            latest_trait_ts = row[0] if row else None
+            if latest_trait_ts is None:
+                return False
+            summary_row = conn.execute(
+                """
+                SELECT last_confirmed_at
+                FROM data_graph
+                WHERE kind = 'system'
+                  AND key = 'user_summary'
+                  AND active = 1
+                  AND deleted_at IS NULL
+                LIMIT 1
+                """
+            ).fetchone()
+        if summary_row is None:
+            return True
+        try:
+            trait_dt = parse_utc(latest_trait_ts)
+            summary_dt = parse_utc(summary_row[0])
+        except Exception as exc:
+            _log.error(
+                "[USER_SUMMARY_CONFIG] _should_synthesise: parse_utc failed "
+                "trait_ts=%r summary_ts=%r: %s",
+                latest_trait_ts,
+                summary_row[0],
+                exc,
+            )
+            return False
+        return trait_dt > summary_dt
+    except Exception as exc:
+        _log.warning("[USER_SUMMARY_CONFIG] _should_synthesise failed: %s", exc)
+        return False
 
 
 def make_user_summary_config() -> ProcessorConfig:
     """User-summary config — one-shot user synthesis.
 
     channel/role='user_summary', suppress_history=True, max_iterations=1.
-    post_turn parses {short, long} → data_graph (§3b).
+    post_turn parses {short, long} → data_graph (§3b / AC-29).
 
-    Prompt builders are stubbed for T1; real implementations land in T8.
+    The caller gates on _should_synthesise() BEFORE calling
+    MessageProcessor.process() — §3c / O1.
     """
     return ProcessorConfig(
         channel="user_summary",
         role="user_summary",
         usage_class="subconscious",
-        build_user_prompt=lambda _mp: "",
-        build_user_definition=lambda _mp: "",
-        build_system_prompt=lambda _mp: "",
+        build_user_prompt=_user_summary_build_user_prompt,
+        build_user_definition=lambda _mp: "You are a synthesiser. The user is a real human whose traits you are distilling.",
+        build_system_prompt=_user_summary_build_system_prompt,
         always_available=[],
         discoverable=[],
         blocked=frozenset(),
@@ -672,29 +1373,60 @@ def make_user_summary_config() -> ProcessorConfig:
         suppress_history=True,
         broadcast_to=None,
         memory_seed=False,
-        post_turn=None,
+        post_turn=_user_summary_post_turn,
     )
+
+
+# ── Super-episode prompt builders ────────────────────────────────────────────
+
+
+def _super_episode_build_system_prompt(_mp: object) -> str:
+    """Super-episode system prompt from SuperEpisodeEncoderSystemPrompt."""
+    from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
+    return SuperEpisodeEncoderSystemPrompt().get_prompt()
 
 
 def make_super_episode_config(
     channel: str,
     sources: list[Any],
-    spans: list[Any],
+    spans: Any,
 ) -> ProcessorConfig:
     """Super-episode encoder config — per-cluster episode synthesis.
 
     channel/role='super_episode_encoder', suppress_history=True, max_iterations=1.
-    post_turn = no-op (caller owns episode write) (§3b).
+    post_turn = None (caller owns episode write — §3b / O2).
 
-    Prompt builders are stubbed for T1; real implementations land in T8.
+    sources and spans are captured at factory time so the build_user_prompt
+    closure is self-contained per cluster (§3c: cluster loop moves to caller).
+
+    Args:
+        channel: The user channel being consolidated (e.g. 'user').
+        sources: List of episode dicts for this cluster (each with 'id', 'gist').
+        spans:   Raw transcript spans string covering these episodes.
     """
+    _sources = sources
+    _spans = spans
+
+    def _build_user_prompt(_mp: object) -> str:
+        src = "\n\n".join(f"[{e['id']}] {e['gist']}" for e in _sources)
+        return (
+            f"Source episodes:\n\n{src}\n\n"
+            f"Raw transcript spans covering these episodes:\n\n{_spans}"
+        )
+
+    def _build_user_definition(_mp: object) -> str:
+        return (
+            "The user is 'super_episode_encoder' — a background process that "
+            "consolidates clusters of related episodes into a single super-episode."
+        )
+
     return ProcessorConfig(
         channel="super_episode_encoder",
         role="super_episode_encoder",
         usage_class="subconscious",
-        build_user_prompt=lambda _mp: "",
-        build_user_definition=lambda _mp: "",
-        build_system_prompt=lambda _mp: "",
+        build_user_prompt=_build_user_prompt,
+        build_user_definition=_build_user_definition,
+        build_system_prompt=_super_episode_build_system_prompt,
         always_available=[],
         discoverable=[],
         blocked=frozenset(),

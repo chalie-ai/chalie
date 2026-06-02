@@ -218,24 +218,121 @@ class SubconsciousWorker:
     def _step_consolidate(self) -> str:
         """Step 1 — consolidate apex episodes into super-episodes (channel='user' only).
 
+        §3c / O2: cluster loop lives here, not inside the processor.  One
+        MessageProcessor.process() call per cluster.
+
         Iterates only channel='user' episodes. This is both a performance
         optimisation (the only channel that produces episodes post-masterplan,
         since _maybe_trigger_extraction is gated to channel='user' upstream)
         and a correctness guarantee: legacy pre-migration channels with residual
         episodes are intentionally excluded.
-
-        SuperEpisodeEncoderProcessor is self-gating: ``send()``
-        returns '' immediately when ``find_super_candidates(channel)`` finds
-        nothing, so the call is cheap when nothing has accumulated.
         """
-        from services.super_episode_encoder_processor import SuperEpisodeEncoderProcessor
+        from configs.channels import make_super_episode_config  # noqa: PLC0415
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        from services.embedding_service import get_embedding_service  # noqa: PLC0415
+        from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER  # noqa: PLC0415
+        from services.episodic_service import (  # noqa: PLC0415
+            EpisodicService,
+            find_super_candidates,
+            _fetch_novelty_comparison_set,
+            compute_novelty,
+        )
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from services.salience_service import compute_salience  # noqa: PLC0415
+        from services.super_episode_encoder_processor import (  # noqa: PLC0415
+            _safe_json_load_object,
+            _collect_transcript_ids,
+            _fetch_transcript_spans,
+        )
 
         try:
-            summary = SuperEpisodeEncoderProcessor(channel='user').send()
+            clusters = find_super_candidates("user")
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} consolidate channel=user failed: {exc}")
+            logger.warning(f"{LOG_PREFIX} find_super_candidates failed: {exc}")
             raise
-        return summary if summary else "checked channel=user, no clusters formed"
+
+        if not clusters:
+            return "checked channel=user, no clusters formed"
+
+        db = get_shared_db_service()
+        episodic_svc = EpisodicService(db)
+        emb_svc = get_embedding_service()
+
+        try:
+            prior_embeddings = _fetch_novelty_comparison_set("user")
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} _fetch_novelty_comparison_set failed: {exc}")
+            prior_embeddings = []
+
+        supers_written = 0
+
+        for cluster_ids in clusters:
+            try:
+                sources = [
+                    ep for ep in (
+                        episodic_svc.get_episode_by_id(eid) for eid in cluster_ids
+                    )
+                    if ep
+                ]
+                if len(sources) < SUPER_EPISODE_MIN_CLUSTER:
+                    continue
+
+                all_t_ids = _collect_transcript_ids(sources)
+                transcript_spans = _fetch_transcript_spans(all_t_ids, db)
+
+                config = make_super_episode_config("user", sources, transcript_spans)
+                response = MessageProcessor.process("", config)
+
+                if not response:
+                    logger.warning(
+                        f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response "
+                        f"for cluster {cluster_ids}"
+                    )
+                    continue
+
+                super_ep = _safe_json_load_object(response)
+                if not super_ep or not super_ep.get("gist"):
+                    logger.warning(
+                        f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "
+                        f"gist for cluster {cluster_ids}"
+                    )
+                    continue
+
+                super_ep["channel"] = "user"
+                unique_t_ids = sorted(all_t_ids)
+                super_ep["transcript_ids"] = unique_t_ids
+                super_ep["transcript_id_start"] = min(unique_t_ids) if unique_t_ids else None
+                super_ep["transcript_id_end"] = max(unique_t_ids) if unique_t_ids else None
+                super_ep["consolidated_from"] = [ep["id"] for ep in sources]
+
+                gist = super_ep["gist"]
+                embedding = emb_svc.generate_embedding(gist)
+                novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+                super_ep["salience"] = compute_salience(
+                    valence=float(super_ep.get("emotional_valence") or 0.0),
+                    arousal=float(super_ep.get("emotional_arousal") or 0.0),
+                    has_open_loop=bool(super_ep.get("has_open_loop", False)),
+                    novelty=novelty,
+                )
+                super_ep.pop("has_open_loop", None)
+
+                new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
+                for src_id in cluster_ids:
+                    episodic_svc.set_consolidated_into(src_id, new_id)
+
+                logger.info(
+                    f"{LOG_PREFIX} Super-episode {new_id} created from cluster {cluster_ids}"
+                )
+                supers_written += 1
+
+            except Exception as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} Super-episode creation failed for cluster {cluster_ids}: {exc}"
+                )
+
+        if supers_written == 0:
+            return f"checked channel=user, {len(clusters)} cluster(s) found, 0 written"
+        return f"consolidated {len(clusters)} cluster(s), {supers_written} super-ep(s) written"
 
     def _step_decay(self) -> str:
         """Step 2 — run the unified decay cycle.
@@ -262,7 +359,6 @@ class SubconsciousWorker:
         """
         from services.data_graph_service import get_data_graph_service
         from services.database_service import get_shared_db_service
-        from services.pattern_match_processor import PatternMatchProcessor
 
         _DG_KEY_CURSOR = "pattern_match_cursor"
         _MIN_DELTA = 50
@@ -302,9 +398,24 @@ class SubconsciousWorker:
             )
             return f"skip cursor={cursor} latest={latest} delta={delta}"
 
-        # 3. Fire processor
-        pmp = PatternMatchProcessor(window_start=cursor, window_end=latest)
-        pmp.send()
+        # 3. Fire processor via flat path (§3b / T8 migration).
+        # build_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
+        from configs.channels import make_pattern_config  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+
+        config = make_pattern_config(cursor, latest)
+        # Build the mp manually so we can inspect _touched_pattern_ids after _run().
+        pmp = object.__new__(MessageProcessor)
+        MessageProcessor.__init__(pmp, "", None)
+        pmp.config = config
+        pmp.uid = None
+        pmp.current_iteration = 0
+        pmp.deadline = None
+        pmp.cancel_event = threading.Event()
+        pmp.thinking_level = "low"
+        pmp.thinking_exploration = None
+        pmp.discovered_tools = []
+        pmp._run()
 
         # Layer 2: update skill-personalisation associations for touched patterns
         touched = getattr(pmp, "_touched_pattern_ids", set())
@@ -344,19 +455,24 @@ class SubconsciousWorker:
     def _step_synthesis(self) -> str:
         """Step 4 — refresh the user synopsis (short + long).
 
-        UserSummaryProcessor self-gates via ``_should_synthesise()`` — when no
-        new traits or behavioural patterns have arrived since the last
-        synthesis it silently returns ''.  Inputs are now the union of
-        Episodes + Data Graph + Extracted Patterns.
+        §3c / O1: _should_synthesise() gate lives HERE, not inside the config.
+        When no new traits or behavioural patterns have arrived since the last
+        synthesis, skip.  Inputs are the union of Episodes + Data Graph + Patterns.
 
         The resulting ``user_summary`` / ``user_summary_long`` rows in
         data_graph are the prerequisite for step 5 (DMN). Sequential execution
         guarantees step 5 sees the freshest synthesis output.
         """
-        from services.user_summary_processor import UserSummaryProcessor
+        from configs.channels import _should_synthesise, make_user_summary_config  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        result = UserSummaryProcessor().send()
-        return "ok" if result else "no new traits/patterns; skipped"
+        if not _should_synthesise():
+            logger.info(f"{LOG_PREFIX} No new traits since last synthesis; skipping")
+            return "no new traits/patterns; skipped"
+
+        config = make_user_summary_config()
+        MessageProcessor.process("", config)
+        return "ok"
 
     def _step_dmn(self) -> str:
         """Step 5 — background DMN reflection via DMNMessageProcessor.
@@ -378,8 +494,9 @@ class SubconsciousWorker:
             logger.info(f"{LOG_PREFIX} Skipping DMN — no user synthesis available")
             return "skipped: no user synthesis"
 
-        from services.dmn_message_processor import DMNMessageProcessor
-        DMNMessageProcessor(raw_input='').send()
+        from configs.channels import DMN_CONFIG  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        MessageProcessor.process("", DMN_CONFIG)
         return "ok"
 
     def _step_capability_sync(self) -> str:
@@ -403,12 +520,11 @@ class SubconsciousWorker:
 
         Reads a cursor from data_graph (kind='system' key='geo_pattern_cursor').
         If the count of location-tagged transcripts beyond the cursor is below
-        the minimum delta (30), skip. Else fire GeoPatternProcessor and advance
-        the cursor on success.
+        the minimum delta (30), skip. Else fire via flat MessageProcessor.process()
+        with make_geo_config and advance the cursor on success.
         """
         from services.data_graph_service import get_data_graph_service
         from services.database_service import get_shared_db_service
-        from services.geo_pattern_processor import GeoPatternProcessor
 
         _DG_KEY_CURSOR = "geo_pattern_cursor"
         _MIN_DELTA = 30
@@ -449,7 +565,23 @@ class SubconsciousWorker:
             )
             return f"skip cursor={cursor} latest={latest} delta={delta}"
 
-        GeoPatternProcessor(window_start=cursor, window_end=latest).send()
+        # Fire via flat path (§3b / T8 migration).
+        # build_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
+        from configs.channels import make_geo_config  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+
+        config = make_geo_config(cursor, latest)
+        gmp = object.__new__(MessageProcessor)
+        MessageProcessor.__init__(gmp, "", None)
+        gmp.config = config
+        gmp.uid = None
+        gmp.current_iteration = 0
+        gmp.deadline = None
+        gmp.cancel_event = threading.Event()
+        gmp.thinking_level = "low"
+        gmp.thinking_exploration = None
+        gmp.discovered_tools = []
+        gmp._run()
 
         try:
             get_data_graph_service().store(
