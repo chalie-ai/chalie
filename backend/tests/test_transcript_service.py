@@ -125,7 +125,10 @@ class TestDbStateExtractionTrigger:
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        channel = 'ch-fire'
+        # Episodes are only produced for the 'user' channel — the production gate
+        # in _maybe_trigger_extraction returns early for any other channel
+        # (transcript_service.py, commit cdc3c832). Seed the gated channel.
+        channel = 'user'
 
         for _ in range(threshold):
             db.execute(
@@ -165,7 +168,9 @@ class TestDbStateExtractionTrigger:
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        stale = 'ch-stale'
+        # 'user' is the only channel the production gate fires for; an episode in
+        # a different channel must still not mask the 'user' tail.
+        stale = 'user'
         other = 'ch-other'
 
         for _ in range(threshold):
@@ -194,7 +199,7 @@ class TestDbStateExtractionTrigger:
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        channel = 'ch-covered'
+        channel = 'user'  # production gate only fires for the 'user' channel
 
         # Seed transcripts 1..threshold
         for _ in range(threshold):
@@ -238,7 +243,7 @@ class TestDbStateExtractionTrigger:
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        channel = 'ch-soft-del'
+        channel = 'user'  # production gate only fires for the 'user' channel
 
         for _ in range(threshold):
             db.execute(
