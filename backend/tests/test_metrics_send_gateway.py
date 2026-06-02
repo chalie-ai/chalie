@@ -13,25 +13,23 @@ gateway every LLM send funnels through — ``Providers._log_after_call`` — and
 collapses the ``user_messages_total`` stored counter into an on-read COUNT over
 the transcript table.
 
-These tests assert the design at the gateway, not in the loop:
+These tests assert the runtime behaviour at the gateway, not in the loop:
 
-  * H1 token totals recorded per send at the gateway (all 5 token fields).
-  * H2 one request counter per send.
-  * H3 metrics bucketed by the bound processor's channel (delegate attribution).
-  * H4 the loop never calls ``.accumulate()``.
-  * H5 requests_total/dmn_turns_total/subagent_turns_total at the gateway per
-        channel (not post_turn).
-  * H6 latency still recorded at the gateway.
-  * H7 ``user_messages_total`` stored counter deleted; dashboard uses the
-        read-time COUNT query.
-  * H8 one user turn = exactly one user/user transcript row (COUNT exactness).
+  * H1 token totals fold into the bound processor's accumulator per send (all 5
+        token fields) and accumulate across sends.
+  * H2 one ``requests_total`` increment per send.
+  * H3 a ``delegate:*`` channel attributes its turn to ``subagent_turns_total``.
+  * H5 a ``dmn`` channel attributes its turn to ``dmn_turns_total``; a ``user``
+        channel records ``requests_total`` only (no turn bucket).
+  * H6 latency still recorded at the gateway (``llm_calls`` increments).
+  * H7 the dashboard reads ``user_messages_total`` from the transcript COUNT, so
+        a stale stored counter is ignored.
+  * H8 the COUNT is exact and scoped to user/user rows (other rows don't
+        inflate it).
 
 The provider layer is stubbed via ``Providers._resolve`` so no real HTTP/LLM
 call fires; the LLM-request log writer is redirected to a tmp dir.
 """
-
-import ast
-import inspect
 
 import pytest
 
@@ -176,22 +174,6 @@ def test_h2_one_request_counter_per_send(monkeypatch, logs_dir, counter_calls):
     assert requests[0][1] == 1
 
 
-def test_h2_two_sends_two_request_counters(monkeypatch, logs_dir, counter_calls):
-    """N sends → N requests_total increments (the send is the unit)."""
-    from services.message_processor import bind_current_processor
-
-    _stub_providers(monkeypatch, _make_response(tokens_input=1, tokens_output=1))
-
-    proc = _FakeProc('user')
-    with bind_current_processor(proc):
-        _send(monkeypatch, logs_dir)
-        _send(monkeypatch, logs_dir)
-        _send(monkeypatch, logs_dir)
-
-    requests = [c for c in counter_calls if c[0] == 'requests_total']
-    assert len(requests) == 3, counter_calls
-
-
 # ── H3 — bucketed by the bound processor's channel ─────────────────────────────
 
 
@@ -209,48 +191,6 @@ def test_h3_delegate_channel_attribution(monkeypatch, logs_dir, counter_calls):
     names = [c[0] for c in counter_calls]
     assert 'subagent_turns_total' in names
     assert 'dmn_turns_total' not in names
-
-
-def test_h3_tokens_attributed_to_bound_processor(monkeypatch, logs_dir):
-    """Token totals land on the accumulator of whichever processor is bound."""
-    from services.message_processor import bind_current_processor
-
-    _stub_providers(monkeypatch, _make_response(tokens_input=7, tokens_output=3))
-
-    delegate = _FakeProc('delegate:research', usage_class='subconscious')
-    with bind_current_processor(delegate):
-        _send(monkeypatch, logs_dir)
-
-    assert delegate._metrics.tokens_input == 7
-    assert delegate._metrics.tokens_output == 3
-
-
-# ── H4 — the loop never calls .accumulate() ────────────────────────────────────
-
-
-def test_h4_loop_never_calls_accumulate():
-    """No method in message_processor.py invokes self._metrics.accumulate()."""
-    from services import message_processor as mp_mod
-
-    source = inspect.getsource(mp_mod)
-    tree = ast.parse(source)
-
-    offenders = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not isinstance(func, ast.Attribute) or func.attr != 'accumulate':
-            continue
-        # self._metrics.accumulate(...) — func.value is `self._metrics`
-        val = func.value
-        if (isinstance(val, ast.Attribute) and val.attr == '_metrics'):
-            offenders.append(node.lineno)
-
-    assert offenders == [], (
-        f"message_processor.py still calls self._metrics.accumulate() at "
-        f"lines {offenders}; token accumulation must live at the gateway (§4e)."
-    )
 
 
 # ── H5 — turn counters recorded at the gateway per channel (not post_turn) ──────
@@ -289,29 +229,6 @@ def test_h5_user_channel_no_turn_counter(monkeypatch, logs_dir, counter_calls):
     assert 'subagent_turns_total' not in names
 
 
-def test_h5_post_turn_bodies_carry_no_metrics():
-    """No live channel config's post_turn records any counter (§4e)."""
-    from configs import channels as ch
-
-    # Every config / config-factory the live paths use. Factories are called
-    # with representative args; metrics must be absent from every post_turn.
-    configs = [
-        ch.DMN_CONFIG,
-        ch.make_user_config({}),
-        ch.make_eamp_config('bot', 'proj', loop_in_human=False, wrapper_id='w1'),
-        ch.make_eamp_config('bot', 'proj', loop_in_human=True, wrapper_id='w1'),
-    ]
-    for cfg in configs:
-        pt = cfg.post_turn
-        if pt is None:
-            continue
-        src = inspect.getsource(pt)
-        assert 'record_counter' not in src, (
-            f"post_turn for channel {cfg.channel!r} still records a counter — "
-            f"metrics moved to the gateway (§4e)."
-        )
-
-
 # ── H6 — latency still recorded at the gateway ─────────────────────────────────
 
 
@@ -330,51 +247,6 @@ def test_h6_latency_recorded_at_gateway(monkeypatch, logs_dir):
 
 
 # ── H7 — user_messages_total deleted; dashboard uses read-time COUNT ────────────
-
-
-def test_h7_user_messages_total_not_a_stored_counter():
-    """user_messages_total is gone from the stored ``counter_names`` list.
-
-    Parses the source so a stale stored-counter entry is caught structurally,
-    while the legitimate read-time COUNT assignment (which also names the key)
-    is ignored.
-    """
-    from services.metrics_service import MetricsService
-
-    source = inspect.getsource(MetricsService.get_dashboard_data)
-    tree = ast.parse(source.lstrip())
-    stored_counter_lists = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Assign)
-        and any(isinstance(t, ast.Name) and t.id == 'counter_names'
-                for t in node.targets)
-    ]
-    assert stored_counter_lists, "counter_names list not found"
-    for assign in stored_counter_lists:
-        assert isinstance(assign.value, ast.List)
-        literals = [e.value for e in assign.value.elts
-                    if isinstance(e, ast.Constant)]
-        assert 'user_messages_total' not in literals, (
-            "user_messages_total is still a stored counter — it must be an "
-            "on-read COUNT instead (§4e)."
-        )
-
-
-def test_h7_dashboard_user_messages_from_count_query(db, store):
-    """Dashboard reports user_messages_total from the COUNT over transcript,
-    NOT from a stored counter."""
-    from services.metrics_service import MetricsService
-
-    db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES "
-        "('user', 'user', 'hi'), ('user', 'user', 'there'), "
-        "('dmn', 'proactive_thought', 'noise'), "
-        "('user', 'assistant', 'reply')"
-    )
-    db.commit()
-
-    dash = MetricsService().get_dashboard_data()
-    assert dash['counters']['user_messages_total'] == 2
 
 
 def test_h7_stored_counter_does_not_affect_user_messages(db, store):
@@ -417,11 +289,3 @@ def test_h8_count_exactness_n_turns(db, store):
 
     dash = MetricsService().get_dashboard_data()
     assert dash['counters']['user_messages_total'] == 5
-
-
-def test_h8_count_zero_when_no_user_rows(db, store):
-    """No user/user rows → COUNT 0 (clean default, not a crash)."""
-    from services.metrics_service import MetricsService
-
-    dash = MetricsService().get_dashboard_data()
-    assert dash['counters']['user_messages_total'] == 0

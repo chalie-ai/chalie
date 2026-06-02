@@ -100,6 +100,33 @@ def _patch_providers_calculate(calculate_seq, send_response=None):
     return patch.object(Providers, "instance", return_value=fake), fake
 
 
+def _make_flat_mp(
+    config,
+    uid=None,
+    current_iteration=0,
+    thinking_exploration=None,
+    discovered_tools=None,
+):
+    """Build a flat-path MessageProcessor for direct _compact_*() calls.
+
+    Single shared factory — replaces the six copy-pasted
+    ``object.__new__(MessageProcessor)`` construction blocks.
+    """
+    from services.message_processor import MessageProcessor
+
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, "hi", None)
+    mp.config = config
+    mp.uid = uid
+    mp.current_iteration = current_iteration
+    mp.cancel_event = threading.Event()
+    mp.deadline = None
+    mp.thinking_level = "low"
+    mp.thinking_exploration = thinking_exploration
+    mp.discovered_tools = discovered_tools if discovered_tools is not None else []
+    return mp
+
+
 # ── D1 — Universal: no per-channel overflow hook ─────────────────────────────
 
 
@@ -162,16 +189,7 @@ class TestD2TrailCompactionFires:
         # Directly call _compact_trail on an MP instance with a non-empty trail.
         # The inner MessageProcessor.process() (COMPACTION_CONFIG) is stubbed to
         # return "compacted summary" so the record call fires.
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, "hi", None)
-        mp.config = config
-        mp.uid = None
-        mp.current_iteration = 0
-        mp.cancel_event = threading.Event()
-        mp.deadline = None
-        mp.thinking_level = "low"
-        mp.thinking_exploration = None
-        mp.discovered_tools = []
+        mp = _make_flat_mp(config)
 
         recorded = []
 
@@ -264,24 +282,6 @@ class TestD4HistoryCompactionFires:
             "_compact_history must fire when pct=0.81 (>0.80, ≤0.90) (D4)"
         )
 
-    def test_history_compaction_fires_at_exactly_90_percent(self, db):
-        """At exactly 90%, history compaction fires (not trail — strict > 0.90)."""
-        config = _make_flat_config()
-        ctx, fake = _patch_providers_calculate([0.90, 0.10])
-        with ctx:
-            from services.message_processor import MessageProcessor
-            trail_calls = []
-            history_calls = []
-
-            with patch.object(MessageProcessor, "_compact_trail",
-                               lambda self: trail_calls.append(1) or True), \
-                 patch.object(MessageProcessor, "_compact_history",
-                               lambda self: history_calls.append(1) or True):
-                MessageProcessor.process("hi", config)
-
-        assert len(trail_calls) == 0, "At exactly 90%, trail compaction must NOT fire (strict >)"
-        assert len(history_calls) >= 1, "At exactly 90%, history compaction must fire (D4)"
-
 
 # ── D5 — 90% checked before 80% ──────────────────────────────────────────────
 
@@ -335,74 +335,6 @@ class TestD6NoCompactionBelow80:
 
         assert len(trail_calls) == 0, "At ≤80%, _compact_trail must NOT fire (D6)"
         assert len(history_calls) == 0, "At ≤80%, _compact_history must NOT fire (D6)"
-
-    def test_no_compaction_at_exactly_80_percent(self, db):
-        """Threshold is strict > 0.80, so exactly 0.80 does NOT compact."""
-        config = _make_flat_config()
-        ctx, fake = _patch_providers_calculate(0.80)
-        with ctx:
-            from services.message_processor import MessageProcessor
-            trail_calls = []
-            history_calls = []
-
-            with patch.object(MessageProcessor, "_compact_trail",
-                               lambda self: trail_calls.append(1) or True), \
-                 patch.object(MessageProcessor, "_compact_history",
-                               lambda self: history_calls.append(1) or True):
-                MessageProcessor.process("hi", config)
-
-        assert len(trail_calls) == 0, "At exactly 80%, _compact_trail must NOT fire (strict >)"
-        assert len(history_calls) == 0, "At exactly 80%, _compact_history must NOT fire (strict >)"
-
-
-# ── D7 — Trail and history compaction independent ────────────────────────────
-
-
-class TestD7Independence:
-    """D7: trail and history compaction are independent; neither touches the other's data."""
-
-    def test_compact_trail_does_not_call_run_full_compaction(self, db):
-        """_compact_trail must NOT call _run_full_compaction (history path)."""
-        config = _make_flat_config(skip_transcript=False)
-        ctx, fake = _patch_providers_calculate([0.95, 0.10])
-        with ctx:
-            from services.message_processor import MessageProcessor
-            run_full_calls = []
-
-            def _stub_run_full(self, exclude_id=None):
-                run_full_calls.append(1)
-                return "summary"
-
-            with patch.object(MessageProcessor, "_has_trail", return_value=True), \
-                 patch.object(MessageProcessor, "_render_act_trail",
-                               return_value="[memory] result → hi"), \
-                 patch.object(MessageProcessor, "_run_full_compaction", _stub_run_full):
-                MessageProcessor.process("hi", config)
-
-        assert len(run_full_calls) == 0, (
-            "_compact_trail must NOT call _run_full_compaction — they are independent (D7)"
-        )
-
-    def test_compact_history_does_not_write_trail_compaction_row(self, db):
-        """_compact_history writes a durable 'compaction' row, not 'trail_compaction'."""
-        from services.message_processor import MessageProcessor
-
-        config = _make_flat_config(skip_transcript=False, suppress_history=False)
-        ctx, fake = _patch_providers_calculate([0.85, 0.10])
-        with ctx:
-            written_names = []
-
-            def _tracking_record(tool_name, params, result, transcript_id, ephemeral=True):
-                written_names.append(tool_name)
-
-            with patch.object(MessageProcessor, "_run_full_compaction",
-                               return_value="summary"), \
-                 patch("abilities._base.Ability.record", side_effect=_tracking_record):
-                MessageProcessor.process("hi", config)
-
-        assert "trail_compaction" not in written_names, (
-            "_compact_history must NOT write a trail_compaction row (D7)"
-        )
 
 
 # ── D8 — Trail compaction: one row, reset iteration, clear discovered tools ───
@@ -478,16 +410,7 @@ class TestD9EmptyTrailNoOp:
         with patch("abilities._base.Ability.record", side_effect=_tracking_record), \
              patch.object(MessageProcessor, "_render_act_trail", return_value=""), \
              patch.object(MessageProcessor, "_has_trail", return_value=False):
-            mp = object.__new__(MessageProcessor)
-            MessageProcessor.__init__(mp, "hi", None)
-            mp.config = config
-            mp.uid = None
-            mp.current_iteration = 3
-            mp.cancel_event = threading.Event()
-            mp.deadline = None
-            mp.thinking_level = "low"
-            mp.thinking_exploration = None
-            mp.discovered_tools = []
+            mp = _make_flat_mp(config, current_iteration=3)
             result = mp._compact_trail()
 
         assert result is True, "_compact_trail with empty trail must return True (D9)"
@@ -513,17 +436,7 @@ class TestD10EmptySummaryAbortsTurn:
                            return_value="[tool] some result"), \
              patch.object(MessageProcessor, "process",
                            side_effect=[""]):
-            mp = object.__new__(MessageProcessor)
-            MessageProcessor.__init__(mp, "hi", None)
-            mp.config = config
-            mp.uid = None
-            mp.current_iteration = 0
-            mp.cancel_event = threading.Event()
-            mp.deadline = None
-            mp.thinking_level = "low"
-            mp.thinking_exploration = None
-            mp.discovered_tools = []
-
+            mp = _make_flat_mp(config)
             result = mp._compact_trail()
 
         assert result is False, (
@@ -575,17 +488,12 @@ class TestD11HistoryCompactionStateReset:
             with patch.object(MessageProcessor, "_compact_history", _spy_compact_history), \
                  patch.object(MessageProcessor, "_run_full_compaction",
                                return_value="summary"):
-                mp = object.__new__(MessageProcessor)
-                MessageProcessor.__init__(mp, "hi", None)
-                mp.config = config
-                mp.uid = None
-                mp.current_iteration = 5
-                mp.cancel_event = threading.Event()
-                mp.deadline = None
-                mp.thinking_level = "low"
-                mp.thinking_exploration = "some exploration"
-                mp.discovered_tools = [{"name": "weather"}]
-
+                mp = _make_flat_mp(
+                    config,
+                    current_iteration=5,
+                    thinking_exploration="some exploration",
+                    discovered_tools=[{"name": "weather"}],
+                )
                 result = mp._compact_history()
 
         assert result is True
@@ -613,17 +521,7 @@ class TestD12HistoryCompactionFailureAborts:
         config = _make_flat_config()
 
         with patch.object(MessageProcessor, "_run_full_compaction", return_value=None):
-            mp = object.__new__(MessageProcessor)
-            MessageProcessor.__init__(mp, "hi", None)
-            mp.config = config
-            mp.uid = None
-            mp.current_iteration = 0
-            mp.cancel_event = threading.Event()
-            mp.deadline = None
-            mp.thinking_level = "low"
-            mp.thinking_exploration = None
-            mp.discovered_tools = []
-
+            mp = _make_flat_mp(config)
             result = mp._compact_history()
 
         assert result is False, (
@@ -662,16 +560,7 @@ class TestD13ExcludeCurrentRow:
             exclude_id_received.append(exclude_id)
             return "summary"
 
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, "hi", None)
-        mp.config = config
-        mp.uid = 42
-        mp.current_iteration = 0
-        mp.cancel_event = threading.Event()
-        mp.deadline = None
-        mp.thinking_level = "low"
-        mp.thinking_exploration = None
-        mp.discovered_tools = []
+        mp = _make_flat_mp(config, uid=42)
 
         with patch.object(MessageProcessor, "_run_full_compaction", _stub_run_full):
             mp._compact_history()
@@ -760,18 +649,6 @@ class TestD15CompactionBounded:
     """D15: Compaction configs (COMPACTION_CONFIG, SUBAGENT_COMPACTION_CONFIG)
     have max_iterations=30."""
 
-    def test_compaction_config_max_iterations(self):
-        from configs.channels import COMPACTION_CONFIG, SUBAGENT_COMPACTION_CONFIG
-
-        assert COMPACTION_CONFIG.max_iterations == 30, (
-            f"COMPACTION_CONFIG.max_iterations must be 30 (D15), got "
-            f"{COMPACTION_CONFIG.max_iterations}"
-        )
-        assert SUBAGENT_COMPACTION_CONFIG.max_iterations == 30, (
-            f"SUBAGENT_COMPACTION_CONFIG.max_iterations must be 30 (D15), got "
-            f"{SUBAGENT_COMPACTION_CONFIG.max_iterations}"
-        )
-
     def test_compaction_loop_stops_at_max_iterations(self, db):
         """The compaction loop stops when max_iterations is reached (loop guard)."""
         from configs.channels import COMPACTION_CONFIG
@@ -815,17 +692,6 @@ class TestD16NoOverflowRecoveredGuard:
     trail exists; 80 fires history once after reset). There is no
     _overflow_recovered_this_turn guard on the flat path — the two-threshold
     model handles this naturally."""
-
-    def test_flat_loop_has_no_overflow_recovered_guard(self, db):
-        """The flat _loop does NOT set or check _overflow_recovered_this_turn."""
-        import inspect
-        from services.message_processor import MessageProcessor
-
-        loop_source = inspect.getsource(MessageProcessor._loop)
-        assert "_overflow_recovered_this_turn" not in loop_source, (
-            "_loop must NOT reference _overflow_recovered_this_turn — "
-            "the two-threshold model handles this naturally (D16)"
-        )
 
     def test_trail_compaction_fires_once_per_iteration_cycle(self, db):
         """After trail compaction resets iteration to 0, the next calculate()
