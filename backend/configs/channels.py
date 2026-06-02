@@ -137,13 +137,25 @@ SKILL_SUGGESTION_CONFIG = ProcessorConfig(
 )
 """Skill suggestion — housekeeping, suppress_history=True.  §3a."""
 
+def _compaction_system_prompt(_mp: object) -> str:
+    """System prompt for continuity (history) compaction.  §3a / §4a."""
+    from services.system_message_prompt import ContinuityCompactionSystemPrompt
+    return ContinuityCompactionSystemPrompt().get_prompt()
+
+
+def _subagent_compaction_system_prompt(_mp: object) -> str:
+    """System prompt for subagent trail compaction.  §3a / §4a."""
+    from services.system_message_prompt import SubagentTrailCompactionSystemPrompt
+    return SubagentTrailCompactionSystemPrompt().get_prompt()
+
+
 COMPACTION_CONFIG = ProcessorConfig(
     channel="compaction",
     role="compaction",
     usage_class="subconscious",
-    build_user_prompt=lambda _mp: "",
+    build_user_prompt=lambda mp: mp._raw_input,
     build_user_definition=lambda _mp: "",
-    build_system_prompt=lambda _mp: "",
+    build_system_prompt=_compaction_system_prompt,
     always_available=[],
     discoverable=[],
     blocked=frozenset(),
@@ -161,9 +173,9 @@ SUBAGENT_COMPACTION_CONFIG = ProcessorConfig(
     channel="subagent_compaction",
     role="subagent_compaction",
     usage_class="subconscious",
-    build_user_prompt=lambda _mp: "",
+    build_user_prompt=lambda mp: mp._raw_input,
     build_user_definition=lambda _mp: "",
-    build_system_prompt=lambda _mp: "",
+    build_system_prompt=_subagent_compaction_system_prompt,
     always_available=[],
     discoverable=[],
     blocked=frozenset(),

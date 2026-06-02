@@ -1564,24 +1564,37 @@ class MessageProcessor:
         Spec §4 / §4d.
         """
 
+    #: Channels that are themselves compaction loops.  Inside these channels the
+    #: compaction thresholds must NOT fire (D14 — recursion guard).
+    _COMPACTION_CHANNELS: frozenset[str] = frozenset({"compaction", "subagent_compaction"})
+
     def _loop(self) -> str:  # noqa: C901
         """ACT game loop — spec §4 / AC-1.  ≤30 lines."""
         from abilities._base import Ability  # noqa: PLC0415
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         from services.providers import Providers  # noqa: PLC0415
         p = Providers.instance()
+        in_compaction = self.config.channel in self._COMPACTION_CHANNELS
         while True:
             if self._should_stop(): return ""  # noqa: E701
             prompt = self.config.build_user_prompt(self)
             system = self.config.build_system_prompt(self)
             tools = AbilityRegistry.build_tools(self)
             pct = p.calculate(system, prompt, tools, job=self.config.job)
-            if pct > 0.90 and self._has_trail():
-                if not self._compact_trail(): return ""  # noqa: E701
-                continue
             if pct > 0.80:
-                if not self._compact_history(): return ""  # noqa: E701
-                continue
+                if in_compaction:
+                    # D14: recursion guard — never compact-of-compaction.
+                    logger.warning(
+                        "[COMPACTION] recursion guard: %s payload at %.0f%% — "
+                        "proceeding without compaction",
+                        self.config.channel, pct * 100,
+                    )
+                elif pct > 0.90 and self._has_trail():
+                    if not self._compact_trail(): return ""  # noqa: E701
+                    continue
+                else:
+                    if not self._compact_history(): return ""  # noqa: E701
+                    continue
             response = p.send_messages(
                 system, [{"role": "user", "content": prompt}],
                 job=self.config.job, tools=tools, thinking_mode=self.thinking_level,
@@ -1748,17 +1761,74 @@ class MessageProcessor:
         return "\n".join(Ability.render(r) for r in rows)
 
     def _compact_trail(self) -> bool:
-        """Trail compaction (>90%): summarise trail-so-far into one row.
+        """Trail compaction (>90%): summarise the trail-so-far into ONE
+        'trail_compaction' tool_calls row.
 
-        Spec §4a / D2.  Real implementation in T6.
+        Compaction is itself a tool call. We assemble the current trail
+        (everything since the last 'trail_compaction' row — §4c), summarise
+        it via MessageProcessor.process() with COMPACTION_CONFIG, and record
+        the summary as a new 'trail_compaction' row. Because trail assembly
+        always starts at the LATEST 'trail_compaction' row, that one row
+        instantly becomes the new head of the trail and every prior row drops
+        out of view. No watermark field, no list surgery, no mid-turn deletes.
+
+        Returns True on success (incl. empty-trail no-op), False on failure
+        (caller should abort the turn by returning '').
+
+        Spec §4a / D2 / D8 / D9 / D10 / AC-23.
         """
+        from abilities._base import Ability  # noqa: PLC0415
+        from configs.channels import COMPACTION_CONFIG  # noqa: PLC0415
+
+        trail_text = self._render_act_trail()
+        if not trail_text.strip():
+            return True  # D9: nothing to compact — no-op success
+
+        compacted = MessageProcessor.process(
+            f"## Tool Results\n{trail_text}", COMPACTION_CONFIG
+        )
+        if not compacted.strip():
+            logger.warning(
+                "[COMPACTION] %s: trail compaction returned empty summary — aborting turn",
+                self.config.channel,
+            )
+            return False  # D10: empty summary → abort turn
+
+        # Record the summary AS a trail tool call — it becomes the head of the
+        # trail on the next assembly (distinct tool_name from history 'compaction').
+        Ability.record(
+            tool_name="trail_compaction",
+            params={},
+            result=compacted,
+            transcript_id=self.uid,
+            ephemeral=True,
+        )
+        self.discovered_tools.clear()  # D8
+        self.current_iteration = 0     # D8
         return True
 
     def _compact_history(self) -> bool:
         """History compaction (>80%): summarise prior conversation turns.
 
-        Spec §4a / D4.  Real implementation in T6.
+        Summarises this channel's history using _run_full_compaction, which
+        calls CompactionAbility → ContinuityCompactionProcessor. Independent
+        of the trail — operates on the transcript, not tool_calls.
+
+        Returns True on success, False on failure (caller should abort the turn).
+
+        Spec §4a / D4 / D11 / D12 / D13.
         """
+        summary = self._run_full_compaction(exclude_id=self.uid)  # D13
+        if summary is None:
+            logger.warning(
+                "[COMPACTION] %s: history compaction failed — aborting turn",
+                self.config.channel,
+            )
+            return False  # D12
+
+        self.discovered_tools.clear()       # D11
+        self.thinking_exploration = None    # D11
+        self.current_iteration = 0          # D11
         return True
 
     def _record_narration(self, response: "object") -> None:  # type: ignore[override]
