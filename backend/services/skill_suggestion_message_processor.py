@@ -1,11 +1,11 @@
 """
-SkillSuggestionMessageProcessor — fully subconscious proactive skill creation.
+Proactive skill creation — fully subconscious.
 
-When a user's ACT loop completes with 4+ tool-calling iterations, this processor
+When a user's ACT loop completes with 4+ tool-calling iterations, this module
 runs a background ACT loop with ``skill_manager`` available.  It analyses the
 completed trail, eliminates dead ends, and calls ``skill_manager`` with
 ``action=create`` if the workflow is reusable.  No output is ever sent to the
-user — the processor operates entirely in the background.
+user — the run operates entirely in the background.
 
 Entry point: ``maybe_suggest_skill(act_trail, raw_input)`` — non-blocking,
 never raises.
@@ -15,72 +15,12 @@ import logging
 import threading
 
 from services.file_mapper_service import FileMapperService
-from services.message_processor import MessageProcessor
-from services.system_message_prompt import SkillSuggestionSystemPrompt
 
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[SKILL_SUGGEST]"
 
 _SKILLS_DB_PATH = FileMapperService.get_skills_db_path()
-
-
-class SkillSuggestionMessageProcessor(MessageProcessor):
-    """Background processor that analyses completed ACT trails for reusable workflows.
-
-    Runs a standard ACT loop with ``skill_manager`` as the sole tool.  The
-    system prompt instructs the LLM to analyse the original trail, eliminate
-    dead ends, and call ``skill_manager`` with ``action=create`` when the
-    workflow is reusable.  If not reusable, the processor exits without
-    calling any tools.
-
-    No result is dispatched to the user — the processor is fully subconscious.
-    """
-
-    CHANNEL = 'skills_building'
-    ROLE = 'skill_suggestion'
-    USAGE_CLASS = 'subconscious'
-    LOG_LABEL = 'skill_suggestion'
-    SYSTEM_PROMPT_CLASS = SkillSuggestionSystemPrompt
-    ALWAYS_AVAILABLE: list[str] = ['skill_manager']
-    DISCOVERABLE: list[str] = []
-    MAX_ITERATIONS = 5
-    SKIP_TRANSCRIPT_WRITE = False
-
-    def __init__(
-        self,
-        original_trail: list[str],
-        original_input: str,
-        iteration_count: int,
-        metadata: dict | None = None,
-    ):
-        super().__init__(raw_input='', metadata=metadata)
-        self._original_trail = original_trail
-        self._original_input = original_input
-        self._iteration_count = iteration_count
-
-    def get_user_definition(self) -> str:
-        """No user definition — internal background processor."""
-        return ""
-
-    def get_user_prompt(self) -> str:
-        """Build the analysis prompt from the original request and ACT trail."""
-        parts = [
-            f"## Original User Request\n{self._original_input}",
-            f"\n## Completed ACT Loop Trail ({self._iteration_count} iterations)",
-        ]
-        for entry in self._original_trail:
-            parts.append(entry)
-
-        trail = self.get_act_loop_trail()
-        if trail:
-            parts.append(f"\n{trail}")
-
-        return '\n'.join(parts)
-
-    def get_previous_messages(self, token_budget: int | None = None) -> str:
-        """Each run is independent — no prior context injected."""
-        return ''
 
 
 def maybe_suggest_skill(act_trail: list[str], raw_input: str) -> None:
@@ -116,13 +56,29 @@ def _run_suggestion_processor(
     raw_input: str,
     iteration_count: int,
 ) -> None:
-    """Thread target: instantiate and run the processor. Never raises."""
+    """Thread target: run the flat skill-suggestion channel. Never raises.
+
+    _original_trail / _original_input / _iteration_count are read by
+    SKILL_SUGGESTION_CONFIG's build_user_prompt; set them on the instance
+    before _run().
+    """
     try:
-        processor = SkillSuggestionMessageProcessor(
-            original_trail=act_trail,
-            original_input=raw_input,
-            iteration_count=iteration_count,
-        )
-        processor.send()
+        from configs.channels import SKILL_SUGGESTION_CONFIG
+        from services.message_processor import MessageProcessor
+
+        mp = object.__new__(MessageProcessor)
+        MessageProcessor.__init__(mp, "", None)
+        mp.config = SKILL_SUGGESTION_CONFIG
+        mp.uid = None
+        mp.current_iteration = 0
+        mp.deadline = None
+        mp.cancel_event = threading.Event()
+        mp.thinking_level = "low"
+        mp.thinking_exploration = None
+        mp.discovered_tools = []
+        mp._original_trail = act_trail
+        mp._original_input = raw_input
+        mp._iteration_count = iteration_count
+        mp._run()
     except Exception as exc:
         logger.warning("%s processor failed: %s", _LOG_PREFIX, exc)

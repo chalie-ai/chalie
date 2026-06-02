@@ -327,8 +327,11 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
     """
     def _run():
         try:
+            import threading
+
+            from configs.channels import EPISODE_ENCODER_CONFIG
             from services.database_service import get_shared_db_service
-            from services.episode_encoder_processor import EpisodeEncoderProcessor
+            from services.message_processor import MessageProcessor
             from services.episodic_service import (
                 EpisodicService, _fetch_novelty_comparison_set, compute_novelty,
             )
@@ -379,8 +382,22 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             referenced_episodes = _fetch_referenced_episodes(entries, db)
             referenced_str = _format_episodes_for_prompt(referenced_episodes)
 
-            # ── 4. Call EpisodeEncoderProcessor ─────────────────────────────
-            response = EpisodeEncoderProcessor(window_str, referenced_str).send()
+            # ── 4. Encode the window via the flat episode-encoder channel ────
+            # _window / _referenced are read by EPISODE_ENCODER_CONFIG's
+            # build_user_prompt; set them on the instance before _run().
+            emp = object.__new__(MessageProcessor)
+            MessageProcessor.__init__(emp, "", None)
+            emp.config = EPISODE_ENCODER_CONFIG
+            emp.uid = None
+            emp.current_iteration = 0
+            emp.deadline = None
+            emp.cancel_event = threading.Event()
+            emp.thinking_level = "low"
+            emp.thinking_exploration = None
+            emp.discovered_tools = []
+            emp._window = window_str
+            emp._referenced = referenced_str
+            response = emp._run()
             snapshots = _safe_json_load(response)
             if not snapshots:
                 return

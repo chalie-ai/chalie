@@ -126,34 +126,34 @@ class TestEstimateSpeedFromHistory:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: GeoPatternProcessor — constructor and static methods
+# Test 4: geo-pattern channel config (make_geo_config — flat path)
 # ---------------------------------------------------------------------------
 
-class TestGeoPatternProcessor:
-    """GeoPatternProcessor sets expected class attributes and prompt content."""
+class TestGeoPatternConfig:
+    """make_geo_config produces the expected channel config and prompt content."""
 
-    def test_constructor_sets_expected_attributes(self, db):
-        """GeoPatternProcessor constructor sets CHANNEL, ROLE, SKIP_TRANSCRIPT_WRITE,
-        MAX_ITERATIONS, ALWAYS_AVAILABLE, and DISCOVERABLE."""
-        from services.geo_pattern_processor import GeoPatternProcessor
+    def test_config_sets_expected_attributes(self, db):
+        """make_geo_config sets channel, role, skip_transcript, max_iterations,
+        always_available, and discoverable."""
+        from configs.channels import make_geo_config
 
-        proc = GeoPatternProcessor(window_start=0, window_end=100)
+        config = make_geo_config(window_start=0, window_end=100)
 
-        assert proc.CHANNEL == "geo_pattern"
-        assert proc.ROLE == "background"
-        assert proc.SKIP_TRANSCRIPT_WRITE is True
-        assert proc.MAX_ITERATIONS == 30
-        assert "save_pattern" in proc.ALWAYS_AVAILABLE
-        assert "save_graph" in proc.ALWAYS_AVAILABLE
-        assert proc.DISCOVERABLE == []
+        assert config.channel == "geo_pattern"
+        assert config.role == "geo_pattern"
+        assert config.skip_transcript is True
+        assert config.max_iterations == 30
+        assert "save_pattern" in config.always_available
+        assert "save_graph" in config.always_available
+        assert config.discoverable == []
 
-    def test_get_system_prompt_contains_geo_keywords(self, db):
-        """get_system_prompt() references location-tagging, save_pattern, save_graph,
-        and geo-spatial — the four pillars of the GPP's task description."""
-        from services.geo_pattern_processor import GeoPatternProcessor
+    def test_system_prompt_contains_geo_keywords(self, db):
+        """build_system_prompt() references location-tagging, save_pattern, save_graph,
+        and geo-spatial — the four pillars of the geo-pattern task description."""
+        from configs.channels import make_geo_config
 
-        proc = GeoPatternProcessor(window_start=0, window_end=100)
-        prompt = proc.get_system_prompt()
+        config = make_geo_config(window_start=0, window_end=100)
+        prompt = config.build_system_prompt(None)
 
         assert "location-tagged" in prompt, "System prompt must mention 'location-tagged'"
         assert "save_pattern" in prompt, "System prompt must reference the save_pattern tool"
@@ -161,11 +161,10 @@ class TestGeoPatternProcessor:
         assert "geo" in prompt.lower(), "System prompt must reference geo-spatial context"
 
     def test_existing_patterns_block_empty_db_returns_none_yet(self, db):
-        """_existing_patterns_block() with no behavioral_pattern rows returns '(none yet)'."""
-        from services.geo_pattern_processor import GeoPatternProcessor
+        """_pattern_existing_patterns_block() with no behavioral_pattern rows returns '(none yet)'."""
+        from configs.channels import _pattern_existing_patterns_block
 
-        proc = GeoPatternProcessor(window_start=0, window_end=100)
-        block = proc._existing_patterns_block()
+        block = _pattern_existing_patterns_block()
 
         assert block == "(none yet)", (
             f"Expected '(none yet)' on empty DB, got: {block!r}"

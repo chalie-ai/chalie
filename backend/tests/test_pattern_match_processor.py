@@ -367,13 +367,13 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
         # No processor is bound here — getattr falls back to 0, validation
         # short-circuits before any DB write.
         instance = SaveGraph()
-        result = instance.execute(
+        result = instance.run(
             "test",
             {"kind": "behavioral_pattern", "key": "x", "value": "y"},
             None,
         )
 
-        assert isinstance(result, dict), f"SaveGraph.execute returned non-dict: {result!r}"
+        assert isinstance(result, dict), f"SaveGraph.run returned non-dict: {result!r}"
         assert result.get("error") == "invalid_kind", (
             f"Expected error='invalid_kind', got: {result}"
         )
@@ -451,7 +451,7 @@ class TestSaveGraphBudgetCapAt50:
 
         with bind_current_processor(stub_processor):
             results = [
-                instance.execute(
+                instance.run(
                     "test",
                     {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
                     None,
