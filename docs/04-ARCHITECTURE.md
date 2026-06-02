@@ -40,20 +40,20 @@ See `docs/13-MESSAGE-FLOW.md` for the full turn lifecycle.
 
 ## Message Processors
 
-`MessageProcessor` is the abstract base for every LLM turn in the system. The architectural rules are simple:
+`MessageProcessor` is the **single class** behind every LLM turn — there are no per-channel subclasses. What varies between channels is *data, not type*: each channel is described by a frozen [`ProcessorConfig`](backend/services/processor_config.py). The architectural rules are simple:
 
-- **One class per channel.** User messages, DMN thoughts, goal pursuit, scheduled prompts, compaction calls, and internal encoders each have their own subclass. There is no shared dispatcher or central router.
-- **One instance per turn.** All turn state lives on the instance. No singletons, no shared instances.
-- **Subclasses hardcode their channel and role.** A processor knows what it is. Context scoping flows from that identity.
-- **Atomic store at the end.** `store()` commits everything in one transaction when the ACT loop finishes.
-- **`Ability.dispatch()` is the single dispatch chokepoint.** Every ACT-loop tool call — user channel, DMN, subagent, action buttons — routes through this one static method. `handle_tool()` is a thin wrapper that adapts the old-path MP state into the new API. Tool errors return structured strings to the LLM; they never surface to the user or crash the loop.
-- **`post_turn()` is where channel-specific fan-out lives.** Shared plumbing goes in the base; subclass-specific services go in the subclass.
+- **One flat class, one config per channel.** `MessageProcessor.process(raw_input, config)` is the single entry point. The config carries the channel's identity (`channel`, `role`, `usage_class`), its three prompt builders (`build_user_prompt`, `build_user_definition`, `build_system_prompt`), its tool tiers (`always_available`, `discoverable`, `blocked`), and loop control (`max_iterations`, `skip_transcript`, `suppress_history`, …). There is no shared dispatcher, no central router, and no subclass holding channel state.
+- **One instance per turn.** `process()` builds a fresh instance, attaches the config, and runs `_run()` → `_setup()` → `_loop()` → `_record()`. All turn state lives on that instance; nothing is shared between turns.
+- **Configs are module constants or factories.** Constant channels expose a module-level instance (`DMN_CONFIG`, `EPISODE_ENCODER_CONFIG`, `COMPACTION_CONFIG`, …); per-request channels expose a factory (e.g. `make_user_config(metadata=…)`). All live under `backend/configs/channels/`.
+- **Atomic record at the end.** `_record()` persists the assistant row and turn metrics once the ACT loop finishes, then purges the turn's ephemeral trail rows.
+- **`Ability.dispatch()` is the single dispatch chokepoint.** Every ACT-loop tool call — user channel, DMN, delegates, action buttons, even the framework's turn-0 seed calls — routes through this one static method (`sanitize → policy → timeout thread → execute → record`). Tool errors return structured strings to the LLM; they never surface to the user or crash the loop.
+- **`post_turn` is the only optional hook.** It is a `ProcessorConfig` field (`(mp, response_text) -> None`), not a subclass method; `None` means no fan-out. Channel-specific side-effects hang off it.
 
 History reaches the LLM as a literal `## Previous Messages` text block inside the user message body. The provider always receives a single-element `messages[]` array — not a multi-turn array. This is an intentional design choice: it gives the system full control over what context the model sees on each turn.
 
-Compaction dispatches through the `MessageProcessor` hierarchy. Full channel compaction is reached through the **INTERNAL `CompactionAbility`** (`abilities/compaction.py`, `INTERNAL=True`, never LLM-callable) so it earns an ACT-trail pill + durable audit row like any tool call; the ability constructs and runs `ContinuityCompactionProcessor`. `SubagentTrailCompactionProcessor` handles mid-ACT trail compression for subagents only. Both subclasses set `LOG_LABEL='compaction'`, `ALWAYS_AVAILABLE=[]`, `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard so a compaction call never triggers a nested compaction. Their system-prompt bodies live as constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` folds the sub-processor's token and tool counts into the parent turn's metrics so per-turn reporting reflects the full cost. The SQL helper `compaction_persistence.get_compaction(channel)` queries `tool_calls` rows with `tool_name='compaction'` — there is no separate `compactions` table.
+Compaction is just another flat turn: `MessageProcessor.process(<input>, COMPACTION_CONFIG)`. **One universal config** serves every channel (delegates included) and **both** compaction kinds — there is no per-channel or per-subagent compaction config. The two kinds differ only in input and output row, never in config: **trail compaction** (>90% context) summarises this turn's tool-call trail into an *ephemeral* `tool_name='trail_compaction'` row; **history compaction** (>80%) summarises older transcript into a *durable* `tool_name='compaction'` row. A recursion guard — `_COMPACTION_CHANNELS = frozenset({"compaction"})` — stops a compaction turn from compacting itself. `compaction_persistence.get_compaction(channel)` reads the latest durable success row; there is no separate `compactions` table. Both kinds currently share a single system-prompt body, `ContinuityCompactionSystemPrompt` (in `system_message_prompt.py`).
 
-Internal processors (episode encoders, the user summary synthesiser, and compaction processors) set a flag that suppresses transcript writes — they run the ACT loop without polluting the conversation record.
+Background channels (episode encoders, the user-summary synthesiser, and the compaction turn) set `config.skip_transcript = True`, so they run the full ACT loop without writing to the conversation record.
 
 ---
 
@@ -169,13 +169,13 @@ The pre-shipped `<task>-classifier_meta.json` is the authoritative calibration s
 
 Two loading tiers stack on every user turn and are merged first-seen, so the unconditional tier can never be shadowed by a dynamic entry of the same name:
 
-**Tool scope is centralised on the `MessageProcessor` base class** and overridden only where needed. Three `ClassVar`s control visibility:
+**Tool scope lives on each channel's `ProcessorConfig`**, not on a base class — there are no `MessageProcessor` subclasses. Three fields control visibility (defaults in `configs/channels/_common.py`):
 
-- `ALWAYS_AVAILABLE` — ability names pre-injected as native tools on every ACT iteration via `get_tools()`. Base default: `["find_skills", "find_tools", "memory"]`.
-- `DISCOVERABLE` — ability names that `find_tools` may surface for this processor at runtime. Base default: all 23 first-party abilities (`bash`, `browser`, `calendar`, `chalie_docs`, `code_eval`, `contacts`, `document`, `email`, `home`, `list`, `news`, `place`, `programming_docs_search`, `read`, `review_tool_calls`, `review_transcript`, `schedule`, `search`, `subagent`, `timer`, `ubiquiti`, `weather`, `web_download`). The SQL query inside `find_tools` filters candidates to `WHERE name IN (DISCOVERABLE - _BLOCKED)`, so a processor can never discover anything outside its own list.
-- `_BLOCKED` — `frozenset` of ability names excluded from both `DISCOVERABLE` and the `find_tools` index. Base default: empty. Subclasses override to exclude specific tools without redeclaring the full list.
+- `always_available` — ability names pre-injected as native tools on every ACT iteration by `AbilityRegistry.build_tools()`. `DEFAULT_ALWAYS_AVAILABLE` = `["find_skills", "find_tools", "memory"]`.
+- `discoverable` — ability names that `find_tools` may surface for this config at runtime. `DEFAULT_DISCOVERABLE` lists every first-party ability a normal channel may reach, including the delegate tools (`research`, `summariser`, `web_browse`, `web_search`). The SQL query inside `find_tools` filters candidates to `WHERE name IN (discoverable - blocked)`, so a config can never discover anything outside its own list.
+- `blocked` — `frozenset` of ability names excluded from both `discoverable` and the `find_tools` index. Default: empty. A config sets it to exclude specific tools without redeclaring the full list.
 
-`UserMessageProcessor`, `DMNMessageProcessor`, and `ExternalAgentMessageProcessor` inherit `ALWAYS_AVAILABLE` and `DISCOVERABLE` from the base class unchanged. `DMNMessageProcessor` and `SubagentProcessor` both set `_BLOCKED = frozenset({"subagent"})` — preventing background processes from spawning further background work. `find_skills` is ALWAYS_AVAILABLE (not DISCOVERABLE) because it is a meta-tool like `find_tools` and `memory`: returning procedural playbooks is infrastructure, not a task-specific capability. Scheduled prompts and external agent HITL flows create fresh UMP instances via `dispatch_message()` with `hidden_input=True` — the UMP reads this from metadata and sets `SKIP_INPUT_ROW=True` so the raw trigger never enters the user transcript while the synthesized response does. `PatternMatchProcessor` overrides to `ALWAYS_AVAILABLE = ["save_pattern", "save_graph"]` and `DISCOVERABLE = []`. `SubagentProcessor` sets `ALWAYS_AVAILABLE` per-instance from `SUBAGENT_TYPES[agent_type]['native_tools']` and inherits `DISCOVERABLE` from the base.
+The user and external-agent configs use `DEFAULT_ALWAYS_AVAILABLE` and `DEFAULT_DISCOVERABLE` unchanged (`blocked` empty). `DMN_CONFIG` shares those defaults but sets `blocked = frozenset({"web_search", "research", "web_browse", "summariser"})` — a background reflection pass may not spawn delegate work. `find_skills` is always-available rather than discoverable because, like `find_tools` and `memory`, it is a meta-tool: returning procedural playbooks is infrastructure, not a task-specific capability. The user config maps `skip_input_row = bool(metadata["hidden_input"])`, so scheduled-prompt and external-agent triggers (which pass `hidden_input`) keep the raw trigger out of the user transcript while the synthesized response still lands. The pattern and geo-pattern configs set `always_available = ["save_pattern", "save_graph"]` with `discoverable = []`.
 
 **Discoverable abilities** are never pre-injected. The `find_tools` ability performs semantic search against the abilities index at runtime. When the LLM invokes `find_tools`, the matching abilities become available for the remainder of that ACT loop. All first-party abilities are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
 
@@ -197,7 +197,7 @@ Every ability result uses the canonical tag block format from `backend/services/
 
 This is the single source of truth — no ability constructs its own format string. See `docs/09-TOOLS.md`.
 
-**`pre_act()` hook.** `MessageProcessor.pre_act()` is called from `send()` after the input transcript row is written (so `self._uid` is populated) but before the ACT loop starts. The base implementation is a no-op. `UserMessageProcessor` overrides it to run the memory seed: it calls `handle_memory()` directly (same path as an LLM-invoked recall) with `_auto=True` so `_handle_recall` skips its `document.search` delegation (the auto-seed runs every turn — it must not pollute the ACT trail with a tool result the LLM never requested). Stores the result via `ToolRenderAndRecordService(ephemeral=False)` — making the seed a durable, auditable tool call row — and places the canonical tag block in `self._memory_seed` for `get_user_prompt()` to inject verbatim.
+**Turn-zero seeding.** There is no `pre_act()`/`send()` hook — both were removed with the subclasses. Instead, `_setup()` calls `_seed_turn_zero()` after the input transcript row is written (so `self._uid` is populated) but before iteration 0. It performs two declarative, config-gated behaviours, each via `Ability.dispatch()` so the call blocks, records a durable `tool_calls` row, and is rendered into the trail exactly like an LLM-issued call: (a) when `config.memory_seed` is set (the user channel), one `memory` `recall` keyed on the raw input; (b) one `document` `upload` per file in `metadata["attachments"]` (upload is the ingest — no second auto `view`). The model's first turn already sees the memory matches and uploaded documents in its trail — they are not injected into the user prompt.
 
 ---
 
@@ -218,7 +218,7 @@ Every concrete ability subclasses `Ability` (`backend/abilities/_base.py`) and d
 | `INPUT_SCHEMA` | `dict` | JSON Schema for `execute()` params. |
 | `TIMEOUT` | `int` | Per-call timeout in seconds (default 10). |
 
-Tool scope (always-available vs discoverable) is **not** declared on the `Ability` ABC. It is owned by each `MessageProcessor` subclass via its `ALWAYS_AVAILABLE` and `DISCOVERABLE` `ClassVar` lists (see Tools and Skills section).
+Tool scope (always-available vs discoverable) is **not** declared on the `Ability` ABC. It is owned by each channel's `ProcessorConfig` via its `always_available` and `discoverable` lists (see Tools and Skills section).
 
 The `execute(channel, params, telemetry)` method is the sole per-ability execution surface. `pre_dispatch(params) -> dict` is called by `Ability.dispatch()` before policy enforcement — abilities override it to normalise or escalate parameters (e.g. `BashAbility` uses it to upgrade the LLM's self-classification via heuristic inspection). The default is a pass-through. `ASYNC_CAPABLE: ClassVar[bool] = False` opts an ability into async delivery on user-channel calls (daemon thread, immediate ack, result delivered via `dispatch_message` on completion).
 
@@ -261,7 +261,7 @@ Per-ability implementation notes:
 
 ### Registry (`backend/abilities/_registry.py`)
 
-Singleton with an `RLock`. Exposes only `get(name)` and `all()`. Lazily walks `backend/abilities/` on first access via shallow `glob("*.py")` (skipping files starting with `_`), then traverses `Ability.__subclasses__()` filtering out abstract classes. The registry is the single source of truth for which abilities are active in the process and is the only path an `Ability` instance is created — no module elsewhere instantiates an ability directly. Tool scope (which processor sees which ability) is not the registry's concern; that belongs to each `MessageProcessor` subclass.
+Singleton with an `RLock`. Exposes only `get(name)` and `all()`. Lazily walks `backend/abilities/` on first access via shallow `glob("*.py")` (skipping files starting with `_`), then traverses `Ability.__subclasses__()` filtering out abstract classes. The registry is the single source of truth for which abilities are active in the process and is the only path an `Ability` instance is created — no module elsewhere instantiates an ability directly. Tool scope (which channel sees which ability) is not the registry's concern; that belongs to each channel's `ProcessorConfig`.
 
 ---
 
@@ -269,10 +269,11 @@ Singleton with an `RLock`. Exposes only `get(name)` and `all()`. Lazily walks `b
 
 Chat attachments use HTTP only — the WebSocket is server→client push (see the WebSocket section). The frontend uploads each file via `POST /upload`, which stores it under `/tmp/chalie_*` and returns that `tmp_path`. The send then `POST`s `/chat` with the message text plus an `attachments` array of those paths (capped at 10); `dispatch_message()` forwards them to the processor as `metadata['attachments']`.
 
-After `pre_act()`, `UserMessageProcessor._process_file_attachments()` iterates each `tmp_path` — rejecting any path that does not resolve under `/tmp/chalie_` (traversal guard) — reads and base64-encodes the file, then dispatches two tool calls through `handle_tool()`:
+On turn 0 — before the first LLM iteration — `_seed_turn_zero()` iterates each `tmp_path` in `metadata['attachments']`. `_read_attachment()` realpath-resolves each path, rejects anything that does not resolve under `/tmp/chalie_` (traversal guard), and base64-encodes it. For each file it then issues **one** blocking tool call through `Ability.dispatch()`:
 
 1. `document(action='upload', name=..., content=..., content_type=...)` — persists to permanent storage, runs extraction synchronously, returns a document ID; the `/tmp` file is deleted afterwards.
-2. `document(action='view', id=<doc_id>)` — retrieves the extracted content.
+
+Upload *is* the ingest: there is no second auto `document(action='view')` call. Because the seed call routes through `Ability.dispatch()`, it records a `tool_calls` row rendered into the turn-0 trail, so the model's first turn already sees the uploaded document.
 
 Both calls go through `Ability.dispatch()` — policy enforcement, WS tool events, and `tool_calls` audit rows are generated naturally. The results land in the ACT trail so the LLM sees file content on iter-0 of the ACT loop.
 
@@ -373,8 +374,8 @@ These are invariants, not conventions. Violating them creates systemic problems.
 
 | Term | Meaning |
 |------|---------|
-| **MessageProcessor** | Abstract base for all LLM turns. One instance per turn, one subclass per channel. |
-| **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `subagent`). |
+| **MessageProcessor** | Single class for all LLM turns. One instance per turn; channel behaviour comes from a frozen `ProcessorConfig`, not a subclass. |
+| **Channel** | Stable string scoping transcript and compaction data (e.g. `user`, `dmn`, `delegate:web_search`). |
 | **HTML Markup Format** | Content format: single `content` string of HTML, backend → frontend. Backend `services.markup.sanitize()` (nh3) is the chokepoint. LLM emits 8 formatting tags (no `<a>`); backend programmatically emits `<img>`, `<actions>`, `<action>`. Frontend trusts the chokepoint, auto-linkifies plain-text URLs via `linkifyjs`. Rich-media turns additionally carry a `segments` array (see Rich-Media Segments above). |
 | **DMN** | Default Mode Network — Step 5 of the subconscious worker tick. Reflective pass that reads the user synthesis + recent user-channel episodes and saves findings via the memory tool. No chat-UI broadcast. |
 | **Episode** | Narrative memory unit extracted from transcript windows. Has salience score and decaying retrieval weight. |
