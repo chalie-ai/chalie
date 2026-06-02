@@ -30,13 +30,17 @@ User (WebSocket)
        │
        ▼
   ┌─────────────────────────────┐
-  │  pre_act()                  │
-  │  · memory recall via        │
-  │    handle_memory() —        │
-  │    canonical tool dispatch, │
-  │    stored ephemeral=0       │
+  │  _setup()                   │
+  │  · write input transcript   │
+  │    row (captures uid)       │
   │  · deliberation-score gate  │
-  │    (exploration pass)       │
+  │    (exploration pass, user  │
+  │    channel only)            │
+  │  · _seed_turn_zero():       │
+  │    - memory recall dispatch │
+  │      (if memory_seed=True)  │
+  │    - document.upload per    │
+  │      attachment (if any)    │
   └────────────┬────────────────┘
                │
                ▼
@@ -94,38 +98,36 @@ Every processor runs the same ACT loop. The loop continues until the model produ
 
 Tool errors are returned to the model as structured result strings. They are never raised to the caller or surfaced to the user directly.
 
-All tool call records accumulate in memory during the loop. Nothing is written to the database until the loop finishes.
+Each tool call is written to `tool_calls` immediately via `Ability.record()` — the trail is the table, not an in-memory list. Ephemeral rows are purged at turn end (`_purge_ephemeral_tool_calls`); durable rows (compaction, thinking) persist.
 
 ---
 
 ## Mid-ACT Compaction
 
-When the rendered `user_body` exceeds 80% of the provider's context limit, or when the provider returns a `PayloadTooLargeError` (HTTP 413), `_handle_overflow()` fires. There is a single overflow path — no Stage 1 / Stage 2 distinction.
+Two independent thresholds checked once per iteration via `Providers.calculate()`:
 
-**Overflow path — `_handle_overflow()`:**
+| Threshold | Data source | Action |
+|-----------|-------------|--------|
+| **>90% + trail exists** | `tool_calls` rows for this turn | `_compact_trail()` — summarises trail into one `trail_compaction` row, iteration resets to 0 |
+| **>80%** | Prior conversation transcript | `_compact_history()` — summarises prior turns into history watermark, iteration resets to 0 |
 
-1. `_run_full_compaction(exclude_id=self._uid)` is called. This is a thin wrapper that emits `act_tool_start`/`act_tool_end` around an internal invoke of the **INTERNAL `CompactionAbility`** (`abilities/compaction.py`, `NAME='compaction'`, `INTERNAL=True`) — so compaction earns the same ACT-trail pill and durable audit row as any other tool call, while staying automatic and never LLM-callable (`INTERNAL=True` excludes it from `abilities.sqlite`, `policy_visible()`, and every processor's tool-scope lists). The ability constructs a `ContinuityCompactionProcessor`, builds an LLM input from the previous compaction summary (if any) plus all transcript turns since the last success watermark (excluding the current in-flight turn so the model is not tempted to answer the user question instead of summarising), and returns the new summary (or `None`) to the wrapper, which merges the compaction LLM's token usage back into the turn metrics.
-2. The LLM response is parsed for `<summary>...</summary>`. The extracted body is the new compaction text.
-   - **Success** — writes a `tool_calls` row with `tool_name='compaction'`, `ephemeral=0`, `params={"compacted_up_to_id": <max included id>, "status": "success"}`, `result=<summary body>`. Emits `[COMPACTION] {channel}: continuity success — in=… chars, out=… chars, watermark …→…`.
-   - **Failure** (parse error, empty output, LLM error) — writes a row with `status=failure` and `result=''`. Emits `[COMPACTION] {channel}: continuity failure — reason=…`. The lookup ignores failure rows, so the previous success summary remains active. The caller breaks to cap-exit and the turn cannot proceed.
-3. On success, in-flight ACT loop state is cleared: `_act_trail`, `_discovered_tools`, `_pending_tool_calls`, and `_thinking_exploration` are all reset. Any `tool_calls` rows with `transcript_id = self._uid AND ephemeral = 1` (in-flight ACT artifacts from the aborted iteration) are deleted. The iteration counter resets to 0 and the ACT loop restarts.
+The 90% check runs first. Compaction loops (`COMPACTION_CONFIG`, `SUBAGENT_COMPACTION_CONFIG`) hit a recursion guard — if they approach 80% they log a warning and proceed rather than compacting-of-compaction.
 
-A second `PayloadTooLargeError` after a successful recovery breaks immediately to cap-exit (tracked via `_payload_too_large_recovered`) — the summary itself is too large for the provider.
+**Trail compaction** (`_compact_trail()`): assembles the current trail from `tool_calls` (everything since the last `trail_compaction` row), summarises it with `COMPACTION_CONFIG`, and records the result as a new `trail_compaction` row (`tool_name='trail_compaction'`, `ephemeral=1`). The next `_from_last_compaction()` slice begins at that row — every prior row silently drops out of the assembled trail without a DELETE.
 
-**Compaction storage** is append-only. Results are `tool_calls` rows, not a separate table. `compaction_persistence.get_compaction(channel)` returns `{compacted_text, compacted_up_to_id, tool_call_id, created_at}` for the most recent success row, or `None` if none exists. The current `'user'`-channel summary is surfaced read-only in the Brain dashboard under **Cognition → Compacted Summary** via `GET /system/observability/compaction`, which formats `created_at` server-side through `locale_service.format_date(for_ui=True)`.
+**History compaction** (`_compact_history()`): calls `_run_full_compaction()` which writes a durable `tool_calls` row with `tool_name='compaction'`, `ephemeral=0`, `params={"compacted_up_to_id": <max id>, "status": "success"|"failure"}`, `result=<summary body>`. `compaction_persistence.get_compaction(channel)` returns the most recent success row. The current `'user'`-channel summary is surfaced read-only in the Brain dashboard under **Cognition → Compacted Summary** via `GET /system/observability/compaction`.
 
-**Subagent overflow** is handled differently. `SubagentProcessor._handle_overflow()` overrides the base: it calls `SubagentTrailCompactionProcessor` to compress `self._act_trail` in place, writes a `tool_calls` audit row with `tool_name='subagent_trail_compaction'` and `ephemeral=1`, and continues from the same iteration — no restart, because a subagent is one-shot and cannot rebuild channel history.
+**Two compaction kinds must not collide.** History rows use `tool_name='compaction'`; trail rows use `tool_name='trail_compaction'`. The history lookup filters `params.status='success'`, which trail rows never carry — so the two selectors are disjoint.
 
 ---
 
 ## Post-Turn Fan-Out (User Path Only)
 
-After the turn is stored, the user processor triggers a set of services synchronously. Because the response is already on the wire (sent via narration callbacks during the loop), this fan-out does not affect perceived latency.
+After the turn is stored, `config.post_turn(mp, response_text)` is called if non-None. This is the only post-turn hook. For the user channel it fires proactive skill suggestion (when iteration ≥ 4 and the loop exited cleanly). For all background channels it is `None`.
 
-- **Conversation phase tracking** — updates the current phase based on both the user message and the response.
-- **Metrics counter** — increments request and user-message totals.
+Metrics (token counts, request counters) are recorded inside the provider send gateway (`Providers._log_after_call`) — not in `post_turn` and not in the loop. Token totals are accumulated per-send so delegate/sub-processor attribution is correct automatically.
 
-Background paths (DMN, goal pursuit, scheduled) skip all of this. They only update the request counter. (DMN no longer has an idle-timer to reset — it runs as Step 5 of the subconscious worker tick.)
+Background paths (DMN, pattern match, episode encoder, etc.) have `post_turn=None` and emit nothing to the chat UI (`broadcast_to=None`). (DMN no longer has an idle-timer — it runs as Step 5 of the subconscious worker tick.)
 
 Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory ability directly. Contradiction detection happens at storage time.
 
