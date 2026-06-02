@@ -1,11 +1,47 @@
+import copy
 import importlib
+import logging
 import threading
 
 from abilities._base import Ability
 from services.file_mapper_service import FileMapperService
 
+logger = logging.getLogger(__name__)
+
 _lock = threading.RLock()
 _registry: dict[str, Ability] | None = None
+
+# Injected into every tool's input_schema by ``build_tools`` and popped by
+# ``Ability.dispatch()`` before the ability sees it (spec §6, message-
+# processing.md L1166). Carries the user-facing tooltip for the call.
+_ACT_SUMMARY_PROPERTY: dict = {
+    'type': 'string',
+    'description': (
+        'A ~3-10 word summary of what this specific tool call does, shown to'
+        ' the user as a tooltip (e.g. "Searching for laptops in Malta",'
+        ' "Looking up the weather in London").'
+    ),
+}
+
+
+def _with_act_summary(schema: dict) -> dict:
+    """Return a copy of *schema* with ``act_summary`` injected into input_schema.
+
+    Deep-copies input_schema so the originating Ability's ClassVar dict is
+    never mutated. ``act_summary`` is made a required property so the model
+    always supplies a tooltip for each tool call.
+    """
+    input_schema = copy.deepcopy(schema.get('input_schema') or {})
+    properties = input_schema.setdefault('properties', {})
+    properties['act_summary'] = dict(_ACT_SUMMARY_PROPERTY)
+    required = input_schema.setdefault('required', [])
+    if 'act_summary' not in required:
+        required.append('act_summary')
+    return {
+        'name': schema['name'],
+        'description': schema['description'],
+        'input_schema': input_schema,
+    }
 
 
 def _load() -> dict[str, Ability]:
@@ -76,12 +112,51 @@ class AbilityRegistry:
 
     @staticmethod
     def build_tools(mp: "object") -> list[dict]:
-        """Return the tool list for the given MessageProcessor instance.
+        """Return the full native tool list for the current ACT iteration.
 
-        Spec §4 / T3: this stub returns [] at T2; replaced with the real
-        implementation when Ability.dispatch is built in T3.
+        Resolution order (first-seen wins on duplicates):
+        1. ``config.always_available`` — the innate tier pinned in every LLM
+           call for this channel (resolved via the registry).
+        2. ``mp.discovered_tools`` — abilities surfaced this turn via
+           ``find_tools`` (gated by ``DISCOVERABLE`` inside find_tools itself).
+
+        Each schema is ``{name, description, input_schema}`` pulled from the
+        Ability's ``NAME`` / ``SUMMARY`` / ``get_input_schema()``. Every entry
+        gets ``act_summary`` injected (spec §6) before it reaches the model;
+        ``Ability.dispatch()`` pops it back out. Falls back to an empty list
+        when no config is bound (compaction / encoder paths whose
+        ``always_available`` is empty by design).
         """
-        return []
+        config = getattr(mp, "config", None)
+        always = list(getattr(config, "always_available", None) or [])
+
+        registry = _get_registry()
+        native: list[dict] = []
+        for tool_name in always:
+            ability = registry.get(tool_name)
+            if ability is None:
+                logger.warning(
+                    "[AbilityRegistry.build_tools] No ability registered for '%s'",
+                    tool_name,
+                )
+                continue
+            native.append({
+                'name': ability.NAME,
+                'description': ability.SUMMARY,
+                'input_schema': ability.get_input_schema(),
+            })
+
+        dynamic = list(getattr(mp, "discovered_tools", None) or [])
+
+        seen: set[str] = set()
+        result: list[dict] = []
+        for schema in native + dynamic:
+            name = schema.get('name')
+            if name and name not in seen:
+                seen.add(name)
+                result.append(_with_act_summary(schema))
+
+        return result
 
     @staticmethod
     def policy_visible() -> list[Ability]:
