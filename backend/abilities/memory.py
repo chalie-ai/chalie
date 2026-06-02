@@ -345,14 +345,13 @@ def _handle_recall(channel: str, params: dict) -> str:
             proc = current_processor()
             if proc is not None and proc._uid is not None:
                 if query:
-                    proc.handle_tool({
-                        'name': 'document',
-                        'input': {'action': 'search', 'query': query},
-                    })
-                    proc.handle_tool({
-                        'name': 'schedule',
-                        'input': {'action': 'search', 'query': query},
-                    })
+                    from abilities._base import Ability  # noqa: PLC0415
+                    Ability.dispatch(
+                        proc, 'document', {'action': 'search', 'query': query}
+                    )
+                    Ability.dispatch(
+                        proc, 'schedule', {'action': 'search', 'query': query}
+                    )
         except Exception as exc:
             logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
 
@@ -766,7 +765,9 @@ def _gather_query_history(proc, emb_svc) -> tuple[list, str, object]:
             })
         except Exception as _seed_exc:
             logger.debug(f"{LOG_PREFIX} Could not embed seed for drift calc: {_seed_exc}")
-    turn_uid = str(getattr(proc, "_uid", None) or proc.CHANNEL or "unbound")
+    _cfg = getattr(proc, "config", None)
+    _channel = getattr(_cfg, "channel", None)
+    turn_uid = str(getattr(proc, "_uid", None) or _channel or "unbound")
     transcript_id = getattr(proc, "_uid", None)
     return history, turn_uid, transcript_id
 

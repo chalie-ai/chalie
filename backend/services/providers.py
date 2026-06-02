@@ -211,24 +211,26 @@ class Providers:
         config['_job_name'] = job
         proc = current_processor()
         if proc is not None:
-            config['_usage_class'] = proc.USAGE_CLASS
+            proc_config = getattr(proc, 'config', None)
+            usage_class = getattr(proc_config, 'usage_class', None) or 'chat'
+            config['_usage_class'] = usage_class
         return create_llm_service(config)
 
     def _get_tools(self):
-        """Get native tool schemas for the calling processor's ALWAYS_AVAILABLE scope.
+        """Get native tool schemas for the calling processor's tool scope.
 
         Honours the lazy-load contract: DISCOVERABLE abilities are NEVER
         pre-injected here.  Falls back to an empty list when no processor is
-        bound (e.g. compaction / episode-encoder paths whose own
-        ALWAYS_AVAILABLE is empty by design).  The hot path passes ``tools=``
-        explicitly via ``MessageProcessor.send()``; this method is the
-        safety-net default.
+        bound (e.g. compaction / episode-encoder paths whose own scope is empty
+        by design).  The hot path passes ``tools=`` explicitly from the flat ACT
+        loop; this method is only the safety-net default.
         """
         from services.message_processor import current_processor
+        from abilities._registry import AbilityRegistry
         proc = current_processor()
         if proc is None:
             return []
-        return proc.get_tools()
+        return AbilityRegistry.build_tools(proc)
 
     def get_context_limit(self, job='unified'):
         """Delegate to resolved provider, capped to MAX_CONTEXT_WINDOW."""

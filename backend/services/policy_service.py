@@ -581,12 +581,12 @@ class PolicyService:
 
     @staticmethod
     def resolve_context() -> Context:
-        """Read the current processor's USAGE_CLASS and map to policy context."""
+        """Read the running config's usage_class and map to policy context."""
         from services.message_processor import current_processor
         proc = current_processor()
         if proc is None:
             return "chat"
-        usage_class = getattr(proc, "USAGE_CLASS", "chat")
+        usage_class = getattr(getattr(proc, "config", None), "usage_class", "chat") or "chat"
         return USAGE_CLASS_TO_CONTEXT.get(usage_class, "chat")
 
     @staticmethod
@@ -635,10 +635,12 @@ class PolicyService:
         if action_id not in get_defaults() and not tool_name.startswith("_mcp_"):
             return None
 
-        # Derive context from the current processor's usage_class.
+        # Derive context from the running config's usage_class.
         from services.message_processor import current_processor  # noqa: PLC0415
         proc = current_processor()
-        usage_class = getattr(proc, "USAGE_CLASS", "chat") if proc else "chat"
+        usage_class = (
+            getattr(getattr(proc, "config", None), "usage_class", "chat") or "chat"
+        ) if proc else "chat"
         context = USAGE_CLASS_TO_CONTEXT.get(usage_class, "chat")
 
         from services.database_service import get_shared_db_service  # noqa: PLC0415

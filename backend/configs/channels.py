@@ -59,17 +59,20 @@ DEFAULT_DISCOVERABLE: list[str] = [
     "place",
     "programming_docs_search",
     "read",
+    "research",
     "review_tool_calls",
     "review_transcript",
     "schedule",
     "search",
     "search_files",
     "skill_builder",
-    "subagent",
+    "summariser",
     "timer",
     "ubiquiti",
     "weather",
+    "web_browse",
     "web_download",
+    "web_search",
 ]
 
 
@@ -162,7 +165,7 @@ def _dmn_build_user_prompt(mp: object) -> str:
     if episodes_text:
         parts.append(f"## Episodes\n{episodes_text}")
     try:
-        trail = mp.get_act_loop_trail()  # type: ignore[attr-defined]
+        trail = mp._render_act_trail()  # type: ignore[attr-defined]
         if trail and isinstance(trail, str):
             parts.append(trail)
     except Exception:
@@ -185,7 +188,10 @@ DMN_CONFIG = ProcessorConfig(
     build_system_prompt=_dmn_build_system_prompt,
     always_available=DEFAULT_ALWAYS_AVAILABLE,
     discoverable=DEFAULT_DISCOVERABLE,
-    blocked=frozenset({"subagent"}),
+    # DMN is a background reflection loop — it must never spawn delegate work
+    # (the old single ``subagent`` tool was retired in favour of the four
+    # delegate tools; block all of them to preserve that intent).
+    blocked=frozenset({"web_search", "research", "web_browse", "summariser"}),
     max_iterations=100,
     skip_transcript=False,
     skip_input_row=False,
@@ -274,7 +280,7 @@ def _skill_suggestion_build_user_prompt(mp: object) -> str:
     for entry in original_trail:
         parts.append(entry)
     try:
-        trail = mp.get_act_loop_trail()  # type: ignore[attr-defined]
+        trail = mp._render_act_trail()  # type: ignore[attr-defined]
         if trail:
             parts.append(f"\n{trail}")
     except Exception:
@@ -530,20 +536,13 @@ def _ump_post_turn(mp: object, response_text: str) -> None:
     """
     import logging  # noqa: PLC0415
     _log = logging.getLogger(__name__)
-    # loop_exited_cleanly and current_iteration live on the flat mp as
-    # _loop_exited_cleanly / _current_iteration (old attrs) — inspect both.
-    exited_cleanly = (
-        getattr(mp, "_loop_exited_cleanly", False)
-        or getattr(mp, "loop_exited_cleanly", False)
-    )
-    iteration = (
-        getattr(mp, "current_iteration", None)
-        or getattr(mp, "_current_iteration", 0)
-    )
+    exited_cleanly = getattr(mp, "loop_exited_cleanly", False)
+    iteration = getattr(mp, "current_iteration", 0)
     if exited_cleanly and iteration >= 4:
         try:
             from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
-            act_trail = getattr(mp, "_act_trail", [])
+            rendered = mp._render_act_trail()  # type: ignore[attr-defined]
+            act_trail = rendered.split("\n") if rendered else []
             raw_input = getattr(mp, "_raw_input", "")
             maybe_suggest_skill(act_trail, raw_input)
         except Exception as exc:
@@ -831,7 +830,7 @@ def _pattern_build_user_prompt(mp: object, window_start: int, window_end: int) -
     existing = _pattern_existing_patterns_block()
     parts = [f"Existing patterns:\n{existing}", transcript_block]
     try:
-        trail = mp.get_act_loop_trail()  # type: ignore[attr-defined]
+        trail = mp._render_act_trail()  # type: ignore[attr-defined]
         if trail:
             parts.append(trail)
     except Exception:
@@ -1093,7 +1092,7 @@ def make_geo_config(window_start: int, window_end: int) -> ProcessorConfig:
         existing = _pattern_existing_patterns_block()
         parts = [f"Existing patterns:\n{existing}", block]
         try:
-            trail = mp.get_act_loop_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()  # type: ignore[attr-defined]
             if trail:
                 parts.append(trail)
         except Exception:
