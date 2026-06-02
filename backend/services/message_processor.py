@@ -691,7 +691,7 @@ class MessageProcessor:
 
     #: Channels that are themselves compaction loops.  Inside these channels the
     #: compaction thresholds must NOT fire (D14 — recursion guard).
-    _COMPACTION_CHANNELS: frozenset[str] = frozenset({"compaction", "subagent_compaction"})
+    _COMPACTION_CHANNELS: frozenset[str] = frozenset({"compaction"})
 
     def _loop(self) -> str:  # noqa: C901
         """ACT game loop — spec §4 / AC-1.  ≤30 lines."""
@@ -1047,13 +1047,17 @@ def _format_compaction_entry(entry: dict) -> str:
 
     Uses "you:" for assistant turns per the continuity-first envelope spec
     (scoped to compaction only — does not affect downstream consumers).
+
+    No timestamp prefix: the continuity summary is reused as the live
+    ``### Checkpoint`` for days, so a per-turn date would anchor ``## Now`` on a
+    stale moment. Chronological order is preserved positionally; the current
+    date reaches the model only through the live ``local_time`` telemetry block,
+    never through the summary.
     """
     role = entry.get('role', 'unknown')
     display_role = 'you' if role == 'assistant' else role
     content = entry.get('content', '')
-    raw_ts = entry.get('created_at') or ''
-    ts_label = TimeFormatterService.local(raw_ts) or _MISSING_TS_PLACEHOLDER
-    return f"[{ts_label}] {display_role}: {content}"
+    return f"{display_role}: {content}"
 
 
 def _build_compaction_input(prev_text: str, rendered_entries: list) -> str:

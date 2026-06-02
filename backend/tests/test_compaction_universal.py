@@ -575,7 +575,7 @@ class TestD13ExcludeCurrentRow:
 
 
 class TestD14RecursionGuard:
-    """D14: Inside a compaction loop (channel='compaction' or 'subagent_compaction'),
+    """D14: Inside a compaction loop (channel='compaction'),
     >80% logs a warning and proceeds — compaction never compacts itself."""
 
     def test_compaction_channel_skips_compact_trail(self, db, caplog):
@@ -620,34 +620,12 @@ class TestD14RecursionGuard:
             f"warnings={warning_msgs}"
         )
 
-    def test_subagent_compaction_channel_skips_compaction(self, db):
-        """channel='subagent_compaction' also applies the recursion guard."""
-        from configs.channels import SUBAGENT_COMPACTION_CONFIG
-
-        trail_calls = []
-        history_calls = []
-
-        ctx, fake = _patch_providers_calculate([0.95, 0.10])
-        with ctx:
-            from services.message_processor import MessageProcessor
-
-            with patch.object(MessageProcessor, "_compact_trail",
-                               lambda self: trail_calls.append(1) or True), \
-                 patch.object(MessageProcessor, "_compact_history",
-                               lambda self: history_calls.append(1) or True):
-                MessageProcessor.process("compact me", SUBAGENT_COMPACTION_CONFIG)
-
-        assert len(trail_calls) == 0 and len(history_calls) == 0, (
-            "Recursion guard must apply to subagent_compaction channel too (D14)"
-        )
-
 
 # ── D15 — Compaction loops bounded at 30 iterations ──────────────────────────
 
 
 class TestD15CompactionBounded:
-    """D15: Compaction configs (COMPACTION_CONFIG, SUBAGENT_COMPACTION_CONFIG)
-    have max_iterations=30."""
+    """D15: The compaction config (COMPACTION_CONFIG) has max_iterations=30."""
 
     def test_compaction_loop_stops_at_max_iterations(self, db):
         """The compaction loop stops when max_iterations is reached (loop guard)."""

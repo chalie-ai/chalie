@@ -306,36 +306,6 @@ Now produce <analysis>...</analysis> followed by <summary>...</summary>.\
 """
 
 
-class SubagentTrailCompactionSystemPrompt(SystemMessagePrompt):
-    """System-message body for subagent mid-ACT trail compaction.
-
-    Wired to: ``SubagentTrailCompactionProcessor``.
-
-    Compresses a subagent's accumulated tool-use trail into a dense
-    per-tool block format. Output is injected inline to replace
-    ``self._act_trail`` in the running subagent — no ``<analysis>``
-    wrapping, no channel summary.
-    """
-
-    _SYSTEM_PROMPT = """\
-You are compressing a subagent's tool-use trail from an in-progress task.
-
-For each tool invocation in the trail, output one block:
-  [tool_name] Key finding or result — 1-3 sentences. Names, IDs, numbers, URLs preserved verbatim.
-
-After the per-tool blocks, add two trailing lines:
-  Decisions: What the agent has concluded or committed to based on the trail so far.
-  Open: Outstanding questions or next steps still needed to complete the task.
-
-Rules:
-- Preserve every named entity, identifier, URL, and numeric value.
-- Drop literal tool argument JSON.
-- Drop redundant reasoning ("I will now call X to find Y").
-- Drop errors the agent already recovered from.
-- No preamble, no markdown fences, no "Summary:" header.\
-"""
-
-
 class ExternalAgentSystemMessagePrompt(SystemMessagePrompt):
     """System-message body for external-agent communication turns.
 
