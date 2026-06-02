@@ -1312,8 +1312,13 @@ class MessageProcessor:
 
         No-op for non-user channels (classifier is OOD for autonomous flows).
         Never raises. On failure → self._thinking_level = 'low', EMA untouched.
+
+        Works on both the old send() path (CHANNEL class attr) and the new flat
+        process() path (config.channel instance attr).
         """
-        if self.CHANNEL != 'user':
+        config = getattr(self, 'config', None)
+        effective_channel = config.channel if config is not None else self.CHANNEL
+        if effective_channel != 'user':
             return
 
         try:
@@ -1428,9 +1433,17 @@ class MessageProcessor:
         )
 
         try:
-            user_body = self.get_user_prompt()
-            user_body = _wrap_with_checkpoint(self.CHANNEL, user_body)
-            system_prompt = self.get_system_prompt()
+            # Flat process() path supplies config; old send() path uses class methods.
+            config = getattr(self, 'config', None)
+            if config is not None:
+                user_body = config.build_user_prompt(self)
+                effective_channel = config.channel
+                system_prompt = config.build_system_prompt(self)
+            else:
+                user_body = self.get_user_prompt()
+                effective_channel = self.CHANNEL
+                system_prompt = self.get_system_prompt()
+            user_body = _wrap_with_checkpoint(effective_channel, user_body)
             tools = self.get_tools()
 
             response = Providers.instance().send_messages(
@@ -1568,6 +1581,10 @@ class MessageProcessor:
 
         if self.config.channel == "user":
             self._run_thinking_gate()
+            # Sync the exploration result onto the flat-path attribute so that
+            # config.build_user_prompt() (e.g. _ump_build_user_prompt) can read
+            # it via getattr(mp, 'thinking_exploration', None).
+            self.thinking_exploration = self._thinking_exploration
 
         self._seed_turn_zero()
 

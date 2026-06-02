@@ -118,11 +118,10 @@ class TestEampConfig:
             wrapper_id="w1",
         )
 
-    def test_channel_contains_agent_name(self):
-        """channel starts with 'external-agent:' and includes agent_name (§3b)."""
+    def test_channel_is_exact(self):
+        """channel is exactly 'external-agent:{agent_name}' — no wrapper_id (§3b / B2)."""
         cfg = self._make()
-        assert "external-agent:" in cfg.channel
-        assert "testbot" in cfg.channel
+        assert cfg.channel == "external-agent:testbot"
 
     def test_role_is_external_agent(self):
         """role='external_agent' (§3b)."""
@@ -163,17 +162,6 @@ class TestEampConfig:
         """usage_class='external_agent' (§3b)."""
         cfg = self._make()
         assert cfg.usage_class == "external_agent"
-
-    def test_wrapper_id_in_channel(self):
-        """wrapper_id is included in the channel when non-empty (§3b)."""
-        from configs.channels import make_eamp_config
-        cfg = make_eamp_config(
-            agent_name="bot",
-            project="proj",
-            loop_in_human=False,
-            wrapper_id="wrap1",
-        )
-        assert "wrap1" in cfg.channel
 
 
 # ---------------------------------------------------------------------------
@@ -689,3 +677,112 @@ class TestUmpPostTurnSkillSuggestionOnly:
             with patch.dict("sys.modules", {"services.conversation_phase_service": None}):
                 # Should not raise even without that module.
                 cfg.post_turn(mp, "response")
+
+
+# ---------------------------------------------------------------------------
+# M7. Thinking-gate exploration reaches user prompt on flat path    (§4 / §6)
+# ---------------------------------------------------------------------------
+
+
+class TestThinkingGateExplorationReachesPrompt:
+    """M7: flat user path — high deliberation exploration block appears in user prompt.
+
+    Verifies the complete chain:
+      1. _run_thinking_gate fires (config.channel='user', not stale CHANNEL='').
+      2. DeliberationScoreService.classify returns a scalar that buckets 'high'.
+      3. _run_thinking_exploration returns exploration text.
+      4. _setup() syncs _thinking_exploration → thinking_exploration.
+      5. _ump_build_user_prompt injects it as a '## Chain of Thought' block.
+
+    Per GOVERNING TEST PRINCIPLE: if this test fails, the code is wrong — never
+    weaken or delete it.
+    """
+
+    def test_exploration_injected_into_user_prompt_on_high_deliberation(self):
+        """High deliberation scalar → exploration text in built user prompt (M7)."""
+        from services.message_processor import MessageProcessor
+        from services.processor_config import ProcessorConfig
+        from services.deliberation_score_service import DeliberationScoreService
+        from services.deliberation_ema_service import DeliberationEmaService
+
+        EXPLORATION_TEXT = "My chain of thought: I should check the calendar first."
+
+        config = ProcessorConfig(
+            channel="user",
+            role="user",
+            usage_class="chat",
+            build_user_prompt=lambda mp: (
+                # Minimal build: include exploration if present, then input line.
+                (
+                    "## Chain of Thought\n"
+                    "Below is your initial reaction to this prompt, played back. "
+                    "Use it as grounding but pivot as needed based on the conversation."
+                    "\n\n---\n\n"
+                    f"{getattr(mp, 'thinking_exploration', '')}\n\n---"
+                    f"\nuser: {mp._raw_input}"
+                )
+                if getattr(mp, "thinking_exploration", None)
+                else f"user: {mp._raw_input}"
+            ),
+            build_user_definition=lambda _mp: "",
+            build_system_prompt=lambda _mp: "",
+            always_available=[],
+            discoverable=[],
+            blocked=frozenset(),
+            max_iterations=None,
+            skip_transcript=True,
+            skip_input_row=True,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=None,
+        )
+
+        mock_score_svc = MagicMock(spec_set=DeliberationScoreService)
+        mock_score_svc.classify.return_value = 0.92  # high scalar
+
+        mock_ema_svc = MagicMock(spec_set=DeliberationEmaService)
+        mock_ema_svc.update_and_bucket.return_value = (0.90, "high")
+
+        with patch(
+            "services.deliberation_score_service.DeliberationScoreService",
+            return_value=mock_score_svc,
+        ), patch(
+            "services.deliberation_ema_service.DeliberationEmaService",
+            return_value=mock_ema_svc,
+        ), patch.object(
+            MessageProcessor,
+            "_run_thinking_exploration",
+            return_value=EXPLORATION_TEXT,
+        ), patch(
+            "abilities._registry.AbilityRegistry.build_tools",
+            return_value=[],
+        ), patch(
+            "services.providers.Providers",
+        ) as mock_providers_cls:
+            from unittest.mock import MagicMock as _MM
+
+            fake_response = _MM()
+            fake_response.text = "assistant reply"
+            fake_response.tool_calls = []
+
+            mock_provider = _MM()
+            mock_provider.send_messages.return_value = fake_response
+            mock_provider.calculate.return_value = 0.1
+            mock_providers_cls.instance.return_value = mock_provider
+
+            # Run the flat path.
+            result = MessageProcessor.process("schedule a meeting", config)
+
+        # Verify the provider was called and exploration reached the prompt.
+        assert mock_providers_cls.instance.called
+        assert mock_provider.send_messages.called
+        call_args = mock_provider.send_messages.call_args
+        # Second positional arg is the messages list; first message is the user message.
+        messages = call_args.args[1] if call_args.args else call_args[1]
+        user_content = messages[0]["content"]
+        assert EXPLORATION_TEXT in user_content, (
+            f"Exploration text must appear in the user prompt on the flat path. "
+            f"Got: {user_content!r}"
+        )
+        assert result == "assistant reply"

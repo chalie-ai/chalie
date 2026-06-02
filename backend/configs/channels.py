@@ -571,8 +571,7 @@ def make_eamp_config(
     suppress_history=False (conversational), memory_seed=True.
     post_turn dispatches disclosure when loop_in_human (§3b).
     """
-    prefix = f"{wrapper_id}:" if wrapper_id else ""
-    channel = f"external-agent:{prefix}{agent_name}"
+    channel = f"external-agent:{agent_name}"
     return ProcessorConfig(
         channel=channel,
         role="external_agent",
