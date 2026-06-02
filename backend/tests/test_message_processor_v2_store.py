@@ -29,57 +29,52 @@ _GPM_USER_PROMPT = "What time is it?"
 _GPM_CHANNEL = 'test_channel'
 
 
-def _stub_gpm_prompt_cls():
-    from services.system_message_prompt import SystemMessagePrompt
+def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
+    """A flat ProcessorConfig for get_previous_messages() tests.
 
-    class _StubPrompt(SystemMessagePrompt):
-        _SYSTEM_PROMPT = ''
+    Post-§9b there are no MessageProcessor subclasses (P1) — every turn is a
+    single flat MessageProcessor driven by a per-turn ProcessorConfig.
+    """
+    from services.processor_config import ProcessorConfig
 
-    return _StubPrompt
+    return ProcessorConfig(
+        channel=channel,
+        role=role,
+        usage_class='chat',
+        build_user_prompt=lambda _mp: _GPM_USER_PROMPT,
+        build_user_definition=lambda _mp: _GPM_USER_DEF,
+        build_system_prompt=lambda _mp: '',
+        always_available=[],
+        discoverable=[],
+        blocked=frozenset(),
+        max_iterations=5,
+        skip_transcript=False,
+        skip_input_row=False,
+        suppress_history=suppress_history,
+        broadcast_to=None,
+        memory_seed=False,
+        post_turn=None,
+    )
 
 
 class _GPMFakeProcessor:
-    """Concrete MessageProcessor subclass for get_previous_messages() tests."""
+    """Flat config-carrying MessageProcessor builder for get_previous_messages()
+    tests (no subclass — P1 / §7a)."""
 
     _CHANNEL = _GPM_CHANNEL
     _ROLE = 'test_role'
 
     @staticmethod
-    def make(**kwargs):
+    def make(channel=_GPM_CHANNEL, suppress_history=False, **kwargs):
         from services.message_processor import MessageProcessor
 
-        class _Fake(MessageProcessor):
-            CHANNEL = _GPMFakeProcessor._CHANNEL
-            ROLE = _GPMFakeProcessor._ROLE
-            SYSTEM_PROMPT_CLASS = _stub_gpm_prompt_cls()
-
-            def get_user_definition(self) -> str:
-                return _GPM_USER_DEF
-
-            def get_user_prompt(self) -> str:
-                return _GPM_USER_PROMPT
-
+        mp = object.__new__(MessageProcessor)
+        MessageProcessor.__init__(mp, 'test raw input', {'key': 'value'})
+        mp.config = _gpm_config(channel=channel, suppress_history=suppress_history)
+        mp.uid = None
         for k, v in kwargs.items():
-            setattr(_Fake, k, v)
-
-        return _Fake('test raw input', {'key': 'value'})
-
-    @staticmethod
-    def cls():
-        from services.message_processor import MessageProcessor
-
-        class _Fake(MessageProcessor):
-            CHANNEL = _GPMFakeProcessor._CHANNEL
-            ROLE = _GPMFakeProcessor._ROLE
-            SYSTEM_PROMPT_CLASS = _stub_gpm_prompt_cls()
-
-            def get_user_definition(self) -> str:
-                return _GPM_USER_DEF
-
-            def get_user_prompt(self) -> str:
-                return _GPM_USER_PROMPT
-
-        return _Fake
+            setattr(mp, k, v)
+        return mp
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -473,29 +468,37 @@ def _make_compact_llm_response(text='summary text', tool_calls=None):
 
 
 def _make_compact_processor(channel=_COMPACT_CHANNEL, role='user', raw_input='hello', **kwargs):
+    """Flat config-carrying MessageProcessor for compaction tests (no subclass — P1)."""
     from services.message_processor import MessageProcessor
-    from services.system_message_prompt import SystemMessagePrompt
-
-    class _StubPrompt(SystemMessagePrompt):
-        _SYSTEM_PROMPT = ''
+    from services.processor_config import ProcessorConfig
 
     _prompt = raw_input
+    config = ProcessorConfig(
+        channel=channel,
+        role=role,
+        usage_class='subconscious',
+        build_user_prompt=lambda _mp: _prompt,
+        build_user_definition=lambda _mp: _COMPACT_USER_DEF,
+        build_system_prompt=lambda _mp: '',
+        always_available=[],
+        discoverable=[],
+        blocked=frozenset(),
+        max_iterations=5,
+        skip_transcript=False,
+        skip_input_row=False,
+        suppress_history=False,
+        broadcast_to=None,
+        memory_seed=False,
+        post_turn=None,
+    )
 
-    class FakeCompactingProcessor(MessageProcessor):
-        CHANNEL = channel
-        ROLE = role
-        SYSTEM_PROMPT_CLASS = _StubPrompt
-
-        def get_user_definition(self) -> str:
-            return _COMPACT_USER_DEF
-
-        def get_user_prompt(self) -> str:
-            return _prompt
-
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, raw_input)
+    mp.config = config
+    mp.uid = None
     for k, v in kwargs.items():
-        setattr(FakeCompactingProcessor, k, v)
-
-    return FakeCompactingProcessor(raw_input)
+        setattr(mp, k, v)
+    return mp
 
 
 def _compact_seed_transcript_row(db, channel, role='user', content='test content'):

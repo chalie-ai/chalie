@@ -243,9 +243,10 @@ Return ONLY the JSON object. No code fences.\
 
 
 class ContinuityCompactionSystemPrompt(SystemMessagePrompt):
-    """System-message body for UMP continuity-first channel compaction.
+    """System-message body for continuity-first channel compaction.
 
-    Wired to: ``ContinuityCompactionProcessor``.
+    Used by the compaction turn (a flat ``process()`` run on the compaction
+    channel — see ``configs.channels.COMPACTION_CONFIG``).
 
     Replaces the old ``CompactionFullSystemPrompt``. The continuity-first
     prompt instructs the LLM to treat the summary as its own living memory,

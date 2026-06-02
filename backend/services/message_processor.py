@@ -33,14 +33,15 @@ from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
-# ── Compaction rendering helpers (shared with CompactionAbility) ───────────────
+# ── Compaction rendering helpers ───────────────────────────────────────────────
 #
 # These parse/format helpers live alongside the other transcript-rendering
 # infrastructure in this module (TimeFormatterService, _MISSING_TS_PLACEHOLDER).
-# They are imported and called by CompactionAbility.execute()
-# (abilities/compaction.py), which owns the compaction orchestration that
-# _run_full_compaction triggers. _SUMMARY_RE parses the <summary>…</summary>
-# block produced by ContinuityCompactionProcessor.
+# They are called by _run_full_compaction (below), which owns the two-tier
+# compaction orchestration triggered when the live token measurement crosses the
+# 0.80 / 0.90 thresholds. _SUMMARY_RE parses the <summary>…</summary> block
+# produced by the compaction turn (a flat process() run on the compaction
+# channel — see configs.channels.COMPACTION_CONFIG).
 
 _SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>", re.IGNORECASE)
 _COMPACTION_FAILURE_FMT = "[COMPACTION] %s: continuity failure — reason=%s"
@@ -797,34 +798,81 @@ class MessageProcessor:
                 exc,
             )
 
-    def _flat_get_previous_messages(self) -> str:
-        """Flat-path previous messages assembly.
+    def get_previous_messages(self) -> str:
+        """Assemble the ## Previous Messages block for this channel.
 
-        suppress_history → '' (M6).
-        Otherwise: channel-scoped, watermark-bounded (strict id > W, spec §4a).
-        No compaction → watermark 0, all channel rows, no summary (M8).
+        The read counterpart of ``_compact_history()`` (§4b). Channel-scoped,
+        watermark-bounded, and short-circuited for housekeeping loops.
 
-        Spec §4 / AC-26 / AC-27 / M6-M8.
+        suppress_history → '' (M6 — housekeeping loops never replay).
+        Otherwise: find the channel's latest history-compaction row (the
+        watermark = its ``compacted_up_to_id``), read transcript rows with
+        ``id > watermark`` for this channel, prepend the compaction summary,
+        and render each row.
+
+        Literal format (locked by the north star):
+        - input rows  : ``[YYYY-MM-DD HH:MM] <role>: <content>`` — role is
+                        rendered lowercase, except ``assistant`` → ``Assistant``.
+        - durable     : ``[<tool_name>(<k>="<v>";…)] <result>`` — bare, no
+          tool_calls    timestamp, interleaved under their owning transcript row
+                        ordered by created_at. Ephemeral (``ephemeral=1``) rows
+                        are never emitted; the ``compaction`` / ``thinking``
+                        audit pseudo-tools are filtered (Decision 4B).
+
+        Returns '' when the channel has no rows and no compaction summary.
+
+        Spec §4 / §4a / AC-26 / AC-27 / M6-M8.
         """
         if self.config.suppress_history:
             return ""
 
         from services import compaction_persistence, transcript_service
+        from services.tool_call_service import ToolCallService
 
         compaction = compaction_persistence.get_compaction(self.config.channel)
         watermark = compaction["compacted_up_to_id"] if compaction else 0
 
-        rows = transcript_service.get_recent(
+        entries = transcript_service.get_recent(
             self.config.channel, since_id=watermark
         )
 
+        if not entries and not (compaction and compaction.get("compacted_text")):
+            return ""
+
+        # Batch-load durable (ephemeral=0) tool_calls for all transcript rows.
+        all_ids = [e["id"] for e in entries if e.get("id")]
+        durable_by_id: dict[int, list] = {}
+        if all_ids:
+            durable_by_id = ToolCallService().get_by_transcript_ids(
+                all_ids, include_ephemeral=False
+            )
+
         lines: list[str] = []
+
         if compaction and compaction.get("compacted_text"):
             lines.append(compaction["compacted_text"])
-        for row in rows:
-            role = row.get("role", "unknown")
-            content = row.get("content", "")
-            lines.append(f"{role}: {content}")
+
+        for entry in entries:
+            ts = _format_ts(
+                entry.get("created_at"),
+                row_kind="transcript",
+                row_id=entry.get("id"),
+            )
+            raw_role = entry.get("role") or "unknown"
+            role_label = "Assistant" if raw_role == "assistant" else raw_role
+            content = (entry.get("content") or "").replace("\n", " ").strip()
+            lines.append(f"[{ts}] {role_label}: {content}")
+
+            for tc in durable_by_id.get(entry.get("id"), []):
+                tc_name = tc.get("tool_name") or tc.get("name") or "tool"
+                if tc_name in _NEVER_RENDER_IN_PREVIOUS:
+                    continue
+                tc_params = _parse_tc_params(tc.get("params"))
+                tc_result = tc.get("result") or ""
+                lines.append(
+                    _render_tool_call_for_previous(tc_name, tc_params, tc_result)
+                )
+
         return "\n".join(lines)
 
     # ── Trail API (T4: act-trail-as-a-query) ─────────────────────────────────
@@ -1118,14 +1166,19 @@ def _from_last_compaction(rows: "list[dict]") -> "list[dict]":
     return rows if last is None else rows[last:]
 
 
-def _render_tool_call_for_previous(tool_name: str, params: dict, result: str) -> str:
-    """Render a durable tool_call row for the old-path get_previous_messages().
+#: Durable tool_call names that must never surface in the ## Previous Messages
+#: block.  The history ``compaction`` row is stored ``ephemeral=0`` for audit,
+#: but its content is already replayed through the checkpoint prepend at the top
+#: of the block — rendering it again would double-inject the summary on every
+#: subsequent turn (Decision 4B).
+_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction', 'thinking'})
 
-    Preserves the original format used by the deleted ToolRenderAndRecordService
-    so existing prompts and tests that were calibrated against that format are
-    not disturbed.  This function will be removed in T7/T8 when the old-path
-    get_previous_messages() is replaced by the flat-path build_user_prompt which
-    calls Ability.render() directly.
+
+def _render_tool_call_for_previous(tool_name: str, params: dict, result: str) -> str:
+    """Render one durable tool_call row for the ## Previous Messages block.
+
+    Bare format (no timestamp prefix, no ``TOOL()`` wrapper) — the row inherits
+    its owning transcript row's timestamp implicitly by positional placement.
 
     Format: '[tool_name(k="v",…)] result'
     """

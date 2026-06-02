@@ -487,7 +487,7 @@ def _ump_build_user_prompt(mp: object) -> str:
 
     # 3. Previous Messages
     try:
-        prev = mp._flat_get_previous_messages()  # type: ignore[attr-defined]
+        prev = mp.get_previous_messages()  # type: ignore[attr-defined]
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
     except Exception as exc:
@@ -672,7 +672,7 @@ def _eamp_build_user_prompt(mp: object) -> str:
 
     # Previous Messages
     try:
-        prev = mp._flat_get_previous_messages()  # type: ignore[attr-defined]
+        prev = mp.get_previous_messages()  # type: ignore[attr-defined]
         if prev:
             parts.append(f"## Previous Messages\n{prev}")
     except Exception as exc:

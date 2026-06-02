@@ -29,7 +29,7 @@ T7 covers:
   C6  — UMP post_turn does ONLY skill suggestion (no phase update, no metrics).
 """
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 import threading
 
 import pytest
@@ -400,8 +400,6 @@ class TestNarrationPayloadShape:
         mp.thinking_exploration = None
         mp.deadline = None
 
-        captured = []
-
         class _FakeResponse:
             text = "I am thinking about this"
 
@@ -602,13 +600,17 @@ class TestUmpPostTurnSkillSuggestionOnly:
     """C6: UMP post_turn fires skill suggestion only — no phase update, no metrics."""
 
     def _make_mp_flat(self, loop_exited_cleanly=True, iteration=5):
-        """Return a flat-path mp-like object for post_turn testing."""
+        """Return a flat-path mp-like object for post_turn testing.
+
+        The flat _ump_post_turn reads the flat attrs ``loop_exited_cleanly`` /
+        ``current_iteration`` and reconstructs the trail via ``_render_act_trail()``
+        (§4c) — no in-memory ``_act_trail`` list (P3).
+        """
         mp = MagicMock(spec=object)
-        mp._loop_exited_cleanly = loop_exited_cleanly
-        mp._act_trail = ["trail-line-1"]
+        mp.loop_exited_cleanly = loop_exited_cleanly
         mp._raw_input = "test input"
         mp.current_iteration = iteration
-        mp._current_iteration = iteration
+        mp._render_act_trail = lambda: "trail-line-1"
         return mp
 
     def test_skill_suggestion_fired_on_clean_exit_with_many_iterations(self):

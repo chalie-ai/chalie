@@ -33,30 +33,22 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# Stub processor — minimal MessageProcessor subclass that exposes a custom
-# DISCOVERABLE list for the find_tools query gate.
+# Stub processor — a *flat* MessageProcessor instance (no subclass: §7a / P1)
+# carrying a custom DISCOVERABLE list for the find_tools query gate.
 # ---------------------------------------------------------------------------
 
 
-class _StubProcessor(MessageProcessor):
-    """Minimal MessageProcessor for binding DISCOVERABLE during tests."""
+def _make_stub_processor(discoverable: list[str]) -> MessageProcessor:
+    """Build a flat MessageProcessor exposing a custom DISCOVERABLE list.
 
-    CHANNEL = "test"
-    ROLE = "user"
-    DISCOVERABLE: list[str] = []
-    ALWAYS_AVAILABLE: list[str] = []
-
-    def __init__(self, discoverable: list[str]):
-        # Bypass the parent __init__ — it pulls in the orchestrator stack.
-        # Set only the attrs the gate path reads.
-        self.DISCOVERABLE = discoverable
-        self.ALWAYS_AVAILABLE = []
-
-    def get_user_definition(self) -> str:
-        return ""
-
-    def get_user_prompt(self) -> str:
-        return ""
+    ``find_tools`` reads ``getattr(proc, "DISCOVERABLE", [])`` via
+    ``current_processor()``; the gate path needs nothing else, so we bypass the
+    full orchestrator ``__init__`` and set only the attrs that path reads.
+    """
+    proc = object.__new__(MessageProcessor)
+    proc.DISCOVERABLE = discoverable
+    proc.ALWAYS_AVAILABLE = []
+    return proc
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +116,7 @@ def _execute_with_discoverable(ability: FindToolsAbility, query: str, discoverab
 
     The DISCOVERABLE list controls which abilities the gate allows through.
     """
-    proc = _StubProcessor(discoverable=discoverable)
+    proc = _make_stub_processor(discoverable=discoverable)
     params = {"query": query}
     if limit is not None:
         params["limit"] = limit

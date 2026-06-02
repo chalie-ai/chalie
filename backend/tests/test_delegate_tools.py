@@ -119,7 +119,7 @@ class TestK1CleanContext:
         cfg = _captured_config(name)["config"]
         mp = object.__new__(MessageProcessor)
         mp.config = cfg
-        assert mp._flat_get_previous_messages() == ""
+        assert mp.get_previous_messages() == ""
 
 
 # ---------------------------------------------------------------------------

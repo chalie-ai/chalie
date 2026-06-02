@@ -8,7 +8,7 @@ was written.  Do NOT edit these tests to match implementation — fix the code.
 
 import threading
 import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -32,7 +32,6 @@ def _make_config(
     post_turn=None,
 ):
     """Return a minimal ProcessorConfig for use in flat-MP tests."""
-    from configs.channels import DMN_CONFIG
     from services.processor_config import ProcessorConfig
 
     return ProcessorConfig(
@@ -204,7 +203,6 @@ class TestLoopControl:
             mock_cls.instance.return_value.calculate.return_value = 0.0
             mock_cls.instance.return_value.send_messages.side_effect = _send
             from services.message_processor import MessageProcessor
-            mp_result = [None]
             result = MessageProcessor.process("go", config)
 
         # Iteration was 0 during the first tool-bearing turn dispatch
@@ -225,16 +223,6 @@ class TestLoopControl:
                 return 0.85
             # Subsequent: below threshold
             return 0.0
-
-        # Track current_iteration value at compaction time
-        iter_at_compact = []
-
-        def _compact_history_side_effect():
-            # This is called as self._compact_history() — mock replaces at class
-            # level; no 'self' arg to side_effect. We need a different approach:
-            # the real stub already resets iteration=0, so we just verify it
-            # passes through correctly. Return True = compaction succeeded.
-            return True
 
         resp_final = MagicMock()
         resp_final.text = "after compact"
@@ -278,11 +266,7 @@ class TestSetupAndTranscriptRows:
              patch("services.transcript_service.write_assistant_row", return_value=99):
             mock_cls.instance.return_value = _fake_provider(text="ok")
             from services.message_processor import MessageProcessor
-            mp_ref = []
-
-            orig_process = MessageProcessor.process.__func__ if hasattr(MessageProcessor.process, "__func__") else MessageProcessor.process
-
-            result = MessageProcessor.process("hello", config)
+            MessageProcessor.process("hello", config)
             mock_input.assert_called_once_with("user", "user", "hello")
 
     def test_m1_input_row_not_written_when_skip_transcript(self):
@@ -359,7 +343,7 @@ class TestSetupAndTranscriptRows:
              patch("abilities._registry.AbilityRegistry.build_tools", return_value=[]), \
              patch("services.message_processor.MessageProcessor._run_thinking_gate") as mock_gate, \
              patch("services.message_processor.MessageProcessor._run_thinking_exploration",
-                   return_value="my chain of thought") as mock_explore:
+                   return_value="my chain of thought"):
             # _run_thinking_gate is patched: its side_effect cannot access self
             # (class-level patch). We verify it is called, and separately verify
             # _run_thinking_exploration is available on the class for high turns.
@@ -426,10 +410,10 @@ class TestSetupAndTranscriptRows:
         from services.message_processor import MessageProcessor
         config = _make_config(suppress_history=True)
         # Create a flat-path MP instance via process() static machinery
-        # We need to call _flat_get_previous_messages on an instance with config set.
+        # We need to call get_previous_messages on an instance with config set.
         mp = object.__new__(MessageProcessor)
         mp.config = config
-        result = mp._flat_get_previous_messages()
+        result = mp.get_previous_messages()
         assert result == ""
 
     def test_m7_history_read_channel_scoped_watermark_bounded(self):
@@ -452,10 +436,10 @@ class TestSetupAndTranscriptRows:
         ]
 
         with patch("services.compaction_persistence.get_compaction",
-                   return_value=fake_compaction) as mock_compact, \
+                   return_value=fake_compaction), \
              patch("services.transcript_service.get_recent",
                    return_value=fake_rows) as mock_recent:
-            result = mp._flat_get_previous_messages()
+            result = mp.get_previous_messages()
 
         # watermark = 77 → get_recent called with since_id=77
         mock_recent.assert_called_once_with("user", since_id=77)
@@ -481,7 +465,7 @@ class TestSetupAndTranscriptRows:
         with patch("services.compaction_persistence.get_compaction", return_value=None), \
              patch("services.transcript_service.get_recent",
                    return_value=fake_rows) as mock_recent:
-            result = mp._flat_get_previous_messages()
+            result = mp.get_previous_messages()
 
         # No compaction → since_id=0
         mock_recent.assert_called_once_with("user", since_id=0)
