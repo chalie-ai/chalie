@@ -239,7 +239,7 @@ class SubconsciousWorker:
         )
         from services.message_processor import MessageProcessor  # noqa: PLC0415
         from services.salience_service import compute_salience  # noqa: PLC0415
-        from services.super_episode_encoder_processor import (  # noqa: PLC0415
+        from configs.channels import (  # noqa: PLC0415
             _safe_json_load_object,
             _collect_transcript_ids,
             _fetch_transcript_spans,
