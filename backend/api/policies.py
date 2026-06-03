@@ -16,26 +16,15 @@ policies_bp = Blueprint('policies', __name__, url_prefix='/api/policies')
 @policies_bp.route('', methods=['GET'])
 @require_session
 def get_policies():
-    """Return all policy rules grouped by action_id with defaults filled in.
+    """Return all policy rows (flat triples), excluding internal rows.
 
-    Response 200::
-
-        {
-          "policies": {
-            "email.search": {"chat": "allow", "subagent": "allow", "subconscious": "allow"},
-            "email.manage": {"chat": "ask", "subagent": "ask", "subconscious": "deny"},
-            ...
-          }
-        }
+    Response 200:: {"policies": [{"channel","permission","setting"}, ...]}
     """
     try:
         from services.database_service import get_shared_db_service
-        from services.policy_service import PolicyService, get_policy_meta
-
-        svc = PolicyService(get_shared_db_service())
-        policies = svc.get_all()
-        meta = get_policy_meta()
-        return jsonify({"policies": policies, "meta": meta}), 200
+        from services.policy_manager import PolicyManager
+        rows = PolicyManager(get_shared_db_service()).get_all()
+        return jsonify({"policies": rows}), 200
     except Exception as exc:
         logger.error("[POLICIES API] GET failed: %s", exc)
         return jsonify({"error": "Failed to load policies"}), 500
@@ -44,32 +33,15 @@ def get_policies():
 @policies_bp.route('', methods=['PUT'])
 @require_session
 def update_policies():
-    """Upsert a batch of policy rules.
-
-    Request body::
-
-        {"rules": [{"action_id": "email.manage", "context": "chat", "state": "allow"}, ...]}
-
-    Response 200::
-
-        {"updated": 3}
-    """
+    """Single-cell upsert.  Body:: {"channel","permission","setting"}  ->  {"updated": 1}"""
     try:
         data = request.get_json(silent=True) or {}
-        rules = data.get('rules', [])
-
-        if not isinstance(rules, list):
-            return jsonify({"error": "rules must be a list"}), 400
-
-        for rule in rules:
-            if not all(k in rule for k in ('action_id', 'context', 'state')):
-                return jsonify({"error": "Each rule must have action_id, context, state"}), 400
-
+        if not all(k in data for k in ('channel', 'permission', 'setting')):
+            return jsonify({"error": "channel, permission, setting required"}), 400
         from services.database_service import get_shared_db_service
-        from services.policy_service import PolicyService
-
-        svc = PolicyService(get_shared_db_service())
-        affected = svc.upsert(rules)
+        from services.policy_manager import PolicyManager
+        affected = PolicyManager(get_shared_db_service()).upsert(
+            data['channel'], data['permission'], data['setting'])
         return jsonify({"updated": affected}), 200
     except Exception as exc:
         logger.error("[POLICIES API] PUT failed: %s", exc)
@@ -79,25 +51,11 @@ def update_policies():
 @policies_bp.route('/reset', methods=['POST'])
 @require_session
 def reset_policies():
-    """Reset all policies to defaults, optionally filtered by context.
-
-    Request body (optional)::
-
-        {"context": "chat"}
-
-    Response 200::
-
-        {"reset": 147}
-    """
+    """Re-apply the static seed (wipe + reseed).  -> {"reset": N}"""
     try:
-        data = request.get_json(silent=True) or {}
-        context = data.get('context')
-
         from services.database_service import get_shared_db_service
-        from services.policy_service import PolicyService
-
-        svc = PolicyService(get_shared_db_service())
-        affected = svc.reset_to_defaults(context)
+        from services.policy_manager import PolicyManager
+        affected = PolicyManager(get_shared_db_service()).reset_to_defaults()
         return jsonify({"reset": affected}), 200
     except Exception as exc:
         logger.error("[POLICIES API] Reset failed: %s", exc)
@@ -110,7 +68,7 @@ def respond_permission():
     """Wake the blocked ACT dispatch thread with the user's allow/deny decision.
 
     The ACT loop thread is parked on threading.Event.wait() inside
-    PolicyService._request_permission().  This handler resolves the gate so
+    PolicyManager._ask_user().  This handler resolves the gate so
     the thread wakes instantly with zero CPU overhead.
     """
     body = request.get_json(silent=True) or {}
@@ -119,7 +77,7 @@ def respond_permission():
     if not request_id:
         return jsonify(error='request_id required'), 400
     try:
-        from services.policy_service import _permission_gates
+        from services.policy_manager import _permission_gates
         gate = _permission_gates.get(request_id)
         if gate is None:
             # Gate already resolved or request_id unknown — respond gracefully
@@ -138,21 +96,16 @@ def respond_permission():
 def get_blocked_log():
     """Return recent blocked-action entries.
 
-    Query params: limit (default 50), offset (default 0).
+    Query params: limit (default 50).
 
-    Response 200::
-
-        {"entries": [...], "count": 42}
+    Response 200:: {"entries": [...], "count": 42}
     """
     try:
         limit = request.args.get('limit', 50, type=int)
-        offset = request.args.get('offset', 0, type=int)
-
         from services.database_service import get_shared_db_service
-        from services.policy_service import PolicyService
-
-        svc = PolicyService(get_shared_db_service())
-        entries = svc.get_blocked_log(limit=limit, offset=offset)
+        from services.policy_manager import PolicyManager
+        svc = PolicyManager(get_shared_db_service())
+        entries = svc.get_blocked_log(limit=limit)
         return jsonify({"entries": entries, "count": len(entries)}), 200
     except Exception as exc:
         logger.error("[POLICIES API] Blocked log failed: %s", exc)
@@ -170,9 +123,9 @@ def clear_blocked_log():
     """
     try:
         from services.database_service import get_shared_db_service
-        from services.policy_service import PolicyService
+        from services.policy_manager import PolicyManager
 
-        svc = PolicyService(get_shared_db_service())
+        svc = PolicyManager(get_shared_db_service())
         cleared = svc.clear_blocked_log()
         return jsonify({"cleared": cleared}), 200
     except Exception as exc:
