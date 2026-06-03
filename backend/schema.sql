@@ -660,15 +660,6 @@ CREATE TABLE IF NOT EXISTS policy (
     UNIQUE (channel, permission)
 );
 
-CREATE TABLE IF NOT EXISTS policy_rules (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    action_id TEXT NOT NULL,
-    context TEXT NOT NULL,
-    state TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE(action_id, context)
-);
-
 CREATE TABLE IF NOT EXISTS policy_blocked_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action_id TEXT NOT NULL,

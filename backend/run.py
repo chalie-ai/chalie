@@ -237,16 +237,6 @@ def _init_services(database_service) -> None:
     except Exception:
         pass
 
-    # Seed default policy rules
-    try:
-        from services.policy_service import PolicyService
-        _policy_svc = PolicyService(database_service)
-        _seeded = _policy_svc.seed_defaults()
-        if _seeded:
-            logger.info(f"[Startup] Policy rules seeded: {_seeded} new defaults")
-    except Exception as _pol_err:
-        logger.warning(f"[Startup] Policy seed skipped: {_pol_err}")
-
     logger.info("[Startup] Encryption key deferred to post-login (vault mode)")
     logger.info("[Startup] Capability reconnection deferred to post-login (vault mode)")
 

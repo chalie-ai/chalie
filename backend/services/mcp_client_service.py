@@ -5,7 +5,7 @@ Chalie connects OUT to remote MCP servers via the MCP streamable-HTTP
 transport.  This service owns:
   - CRUD for mcp_client_servers rows (chalie.db)
   - per-server ping + tool-list sync (written to data/mcp_tools.sqlite)
-  - dynamic policy-row management in policy_rules (ask by default)
+  - dynamic policy-row management in policy (lazy ask on first use)
   - dispatch of _mcp_<server>_<tool> calls
   - heartbeat loop orchestration
 
@@ -623,12 +623,10 @@ class McpClientService:
             conn.close()
 
     def _delete_policy_rows(self, tool_name_prefix: str) -> None:
-        """Remove all policy_rules rows whose action_id starts with prefix."""
+        """Remove all policy rows whose permission starts with prefix
+        (clears an MCP server's lazily-provisioned rows on delete)."""
         with self._db.connection() as conn:
-            conn.execute(
-                "DELETE FROM policy_rules WHERE action_id LIKE ?",
-                (f"{tool_name_prefix}%",),
-            )
+            conn.execute("DELETE FROM policy WHERE permission LIKE ?", (f"{tool_name_prefix}%",))
             conn.commit()
 
     def _resolve_tool(self, prefixed_name: str) -> tuple[dict, str]:

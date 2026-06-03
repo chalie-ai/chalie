@@ -7,7 +7,7 @@ without any mocks.
 
 Each test drives the REAL McpClientService against a real fully-converged
 SQLite database (via the conftest `db` fixture) and asserts observable
-state — rows in policy_rules, mcp_client_servers, and mcp_tools.sqlite.
+state — rows in policy, mcp_client_servers, and mcp_tools.sqlite.
 """
 
 import pytest
@@ -357,9 +357,9 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db, tmp_path, monk
         conn.close()
     with svc._db.connection() as c:
         c.execute(
-            "INSERT OR IGNORE INTO policy_rules (action_id, context, state, updated_at) "
-            "VALUES (?, ?, ?, ?)",
-            (old_tool, "chat", "ask", "2026-05-31T00:00:00+00:00"),
+            "INSERT OR IGNORE INTO policy (channel, permission, setting) "
+            "VALUES (?, ?, ?)",
+            ("chat", old_tool, "ask"),
         )
         c.commit()
 
@@ -376,7 +376,7 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db, tmp_path, monk
         conn.close()
     with svc._db.connection() as c:
         policy_count = c.execute(
-            "SELECT COUNT(*) FROM policy_rules WHERE action_id = ?", (old_tool,)
+            "SELECT COUNT(*) FROM policy WHERE permission = ?", (old_tool,)
         ).fetchone()[0]
 
     assert tool_count == 0

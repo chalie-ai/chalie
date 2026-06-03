@@ -193,7 +193,6 @@ def test_abilities_directory_has_expected_non_underscore_modules():
 _ALLOWED_REGISTRY_ALL_CALLERS = frozenset({
     "abilities/_registry.py",
     "utils/build_ability_db.py",
-    "services/policy_service.py",
 })
 
 _REGISTRY_ALL_PATTERN = re.compile(r"AbilityRegistry\.all\(\)")
