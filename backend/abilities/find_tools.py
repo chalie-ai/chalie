@@ -128,11 +128,11 @@ class FindToolsAbility(SearchableAbility):
         )
         return schema
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, channel: str, params: dict, telemetry: dict | None) -> str:
         query = params.get("query", "").strip()
         logger.info(f"{self._LOG_PREFIX} query='{query}' limit={params.get('limit', 5)}")
         if not query:
-            return {"text": _skill_tag("find_tools", error="query-required"), "_discovered_tools": []}
+            return _skill_tag("find_tools", error="query-required")
 
         from services.message_processor import current_processor
         proc = current_processor()
@@ -143,10 +143,7 @@ class FindToolsAbility(SearchableAbility):
         effective_allow = list(set(allow) | set(mcp_names))
 
         if not effective_allow:
-            return {
-                "text": _skill_tag("find_tools", self._no_results_text(query), query=query),
-                "_discovered_tools": [],
-            }
+            return _skill_tag("find_tools", self._no_results_text(query), query=query)
 
         limit = min(params.get("limit", 5), 10)
 
@@ -164,21 +161,31 @@ class FindToolsAbility(SearchableAbility):
         rows = self._merge_and_truncate(rows + mcp_rows, limit)
 
         if not rows:
-            return {
-                "text": _skill_tag("find_tools", self._no_results_text(query), query=query),
-                "_discovered_tools": [],
-            }
+            return _skill_tag("find_tools", self._no_results_text(query), query=query)
 
         for row in rows:
             logger.info(f"{self._LOG_PREFIX} RRF: {row['key']} score={row['score']:.4f}")
 
         raw_text = self._format(rows)
         discovered_names = [t["key"] for t in rows]
+        self._append_active(discovered_names)
+        return _skill_tag("find_tools", raw_text, query=query, found=len(discovered_names))
 
-        return {
-            "text": _skill_tag("find_tools", raw_text, query=query, found=len(discovered_names)),
-            "_discovered_tools": discovered_names,
-        }
+    def _append_active(self, names: list[str]) -> None:
+        """Append newly-discovered tool NAMES to the live processor's ACTIVE_TOOLS
+        so build_tools surfaces them on the next ACT iteration. First-seen wins;
+        already-active names are skipped. No-op outside a turn
+        (current_processor() is None — e.g. the action-button path)."""
+        if not names:
+            return
+        from services.message_processor import current_processor  # noqa: PLC0415
+        proc = current_processor()
+        if proc is None:
+            return
+        active = proc.active_tools
+        for name in names:
+            if name not in active:
+                active.append(name)
 
     def _query(self, query: str, blob: bytes, limit: int, allow: list[str]) -> list:
         if not allow:
@@ -271,13 +278,10 @@ class FindToolsAbility(SearchableAbility):
     def _no_results_text(query: str) -> str:
         return f'INFO: The best tools for "{query}" are already available.'
 
-    def _fallback(self, query: str, limit: int, allow: list[str]) -> dict:
+    def _fallback(self, query: str, limit: int, allow: list[str]) -> str:
         """FTS-only fallback for abilities.sqlite when embedding fails."""
         if not allow:
-            return {
-                "text": _skill_tag("find_tools", self._no_results_text(query), query=query),
-                "_discovered_tools": [],
-            }
+            return _skill_tag("find_tools", self._no_results_text(query), query=query)
         # Split allow list into ability names (abilities.sqlite) vs MCP names.
         mcp_names = [n for n in allow if n.startswith("_mcp_")]
         ability_names = [n for n in allow if not n.startswith("_mcp_")]
@@ -310,14 +314,9 @@ class FindToolsAbility(SearchableAbility):
         discovered = discovered[:limit]
 
         if not discovered:
-            return {
-                "text": _skill_tag("find_tools", self._no_results_text(query), query=query),
-                "_discovered_tools": [],
-            }
+            return _skill_tag("find_tools", self._no_results_text(query), query=query)
 
         entries = [{"name": n, "relevance": 0.5} for n in discovered]
         raw_text = json.dumps({"added_tools": entries})
-        return {
-            "text": _skill_tag("find_tools", raw_text, query=query, found=len(discovered)),
-            "_discovered_tools": discovered,
-        }
+        self._append_active(discovered)
+        return _skill_tag("find_tools", raw_text, query=query, found=len(discovered))

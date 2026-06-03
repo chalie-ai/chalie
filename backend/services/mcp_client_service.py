@@ -389,15 +389,10 @@ class McpClientService:
     def get_tool_schema(self, tool_name: str) -> dict | None:
         """Return the LLM tool spec for a single _mcp_* tool, or None if unknown.
 
-        Reads from mcp_tools.sqlite by exact tool_name match.  The returned dict
-        has the same shape as the ability-backed schema dicts built in
-        message_processor.py — {name, description, input_schema} — so it can be
-        appended to self._discovered_tools without any conversion.
-
-        Consumer: message_processor._handle_tool_call() uses this in the
-        find_tools side-effect loop to inject MCP tool schemas into the LLM
-        context.  Without it the model sees a parameter-less tool and must
-        brute-force its arguments.
+        Reads mcp_tools.sqlite by exact tool_name match and returns the
+        {name, description, input_schema} shape AbilityRegistry.build_tools
+        expects, so an _mcp_* name appended to mp.active_tools (by find_tools)
+        resolves to a full schema for the next ACT iteration's provider call.
         """
         conn = _open_tools_db()
         try:

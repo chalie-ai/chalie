@@ -405,7 +405,7 @@ def post_action():
 
             # Build a minimal flat-path context for action-button dispatches.
             # Ability.use() requires an mp-like object with config, uid,
-            # cancel_event, and discovered_tools.  broadcast_to=None keeps these
+            # cancel_event.  broadcast_to=None keeps these
             # dispatches silent (no live WS events for action buttons).
             _action_config = ProcessorConfig(
                 channel="action_button",
@@ -430,7 +430,6 @@ def post_action():
                 config = _action_config
                 uid = None
                 cancel_event = threading.Event()
-                discovered_tools: list = []
 
             ctx = _ActionCtx()
             result_text = Ability.use(ctx, skill, params)

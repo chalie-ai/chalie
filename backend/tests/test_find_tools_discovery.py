@@ -39,15 +39,11 @@ pytestmark = pytest.mark.unit
 
 
 def _make_stub_processor(discoverable: list[str]) -> MessageProcessor:
-    """Build a flat MessageProcessor exposing a custom DISCOVERABLE list.
-
-    ``find_tools`` reads ``getattr(proc, "DISCOVERABLE", [])`` via
-    ``current_processor()``; the gate path needs nothing else, so we bypass the
-    full orchestrator ``__init__`` and set only the attrs that path reads.
-    """
+    """Flat MessageProcessor exposing DISCOVERABLE + an empty ACTIVE_TOOLS that
+    find_tools appends discovered names onto via current_processor()."""
     proc = object.__new__(MessageProcessor)
     proc.DISCOVERABLE = discoverable
-    proc.ALWAYS_AVAILABLE = []
+    proc._active_tools = []
     return proc
 
 
@@ -111,17 +107,16 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     conn.close()
 
 
-def _execute_with_discoverable(ability: FindToolsAbility, query: str, discoverable: list[str], limit: int | None = None):
-    """Run ``ability.run()`` inside a stub processor binding.
-
-    The DISCOVERABLE list controls which abilities the gate allows through.
-    """
+def _execute_with_discoverable(ability, query, discoverable, limit=None):
+    """Run ability.run() inside a stub-processor binding; return
+    (result_text, active_tools) so callers assert on the appended names."""
     proc = _make_stub_processor(discoverable=discoverable)
     params = {"query": query}
     if limit is not None:
         params["limit"] = limit
     with bind_current_processor(proc):
-        return ability.run("text", params, None)
+        result = ability.run("text", params, None)
+    return result, proc.active_tools
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +128,7 @@ class TestFindToolsDiscovery:
     def test_weather_discovered_via_abilities_db(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """Weather in abilities.sqlite → 'weather' appears in _discovered_tools."""
+        """Weather in abilities.sqlite → 'weather' appears in active_tools."""
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [{
             "name": "weather",
@@ -143,11 +138,10 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
 
-        assert isinstance(result, dict)
-        assert "weather" in result["_discovered_tools"], (
-            f"Expected 'weather' in _discovered_tools, got: {result['_discovered_tools']}"
+        assert "weather" in active, (
+            f"Expected 'weather' in active, got: {active}"
         )
 
     def test_fts_keyword_path_surfaces_ability(
@@ -174,13 +168,12 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = _execute_with_discoverable(
+        _, active = _execute_with_discoverable(
             ability, "sandbox python execution", ["weather", "code_eval"]
         )
 
-        assert isinstance(result, dict)
-        assert "code_eval" in result["_discovered_tools"], (
-            f"Expected 'code_eval' via FTS keyword, got: {result['_discovered_tools']}"
+        assert "code_eval" in active, (
+            f"Expected 'code_eval' via FTS keyword, got: {active}"
         )
 
     def test_rrf_merges_vec_and_fts_results(
@@ -207,18 +200,16 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = _execute_with_discoverable(
+        _, active = _execute_with_discoverable(
             ability, "weather forecast sandbox", ["weather", "code_eval"], limit=2
         )
 
-        assert isinstance(result, dict)
-        discovered = result["_discovered_tools"]
-        assert len(discovered) == len(set(discovered)), (
-            f"Duplicates in _discovered_tools: {discovered}"
+        assert len(active) == len(set(active)), (
+            f"Duplicates in active: {active}"
         )
-        assert set(discovered) == {"weather", "code_eval"}, (
+        assert set(active) == {"weather", "code_eval"}, (
             f"RRF should surface both abilities (weather via vec, code_eval via FTS). "
-            f"Got: {discovered}"
+            f"Got: {active}"
         )
 
     def test_no_duplicates_when_ability_in_both_retrievers(
@@ -234,26 +225,23 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = _execute_with_discoverable(
+        _, active = _execute_with_discoverable(
             ability, "weather forecast", ["weather"], limit=5
         )
 
-        assert isinstance(result, dict)
-        discovered = result["_discovered_tools"]
-        assert discovered.count("weather") <= 1, (
-            f"Duplicate 'weather' in _discovered_tools: {discovered}"
+        assert active.count("weather") <= 1, (
+            f"Duplicate 'weather' in active: {active}"
         )
 
     def test_missing_db_returns_empty_gracefully(self, tmp_path, monkeypatch):
-        """abilities.sqlite does not exist → empty _discovered_tools, no exception."""
+        """abilities.sqlite does not exist → empty active_tools, no exception."""
         nonexistent = tmp_path / "does_not_exist" / "abilities.sqlite"
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", nonexistent)
 
         ability = FindToolsAbility()
-        result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
 
-        assert isinstance(result, dict)
-        assert result["_discovered_tools"] == []
+        assert active == []
 
     def test_discoverable_allowlist_filters_results(
         self, tmp_path, monkeypatch, _real_embeddings
@@ -280,14 +268,13 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
 
-        assert isinstance(result, dict)
-        assert "memory" not in result["_discovered_tools"], (
+        assert "memory" not in active, (
             f"'memory' should be filtered by DISCOVERABLE allowlist, got: "
-            f"{result['_discovered_tools']}"
+            f"{active}"
         )
-        assert "weather" in result["_discovered_tools"]
+        assert "weather" in active
 
     def test_empty_discoverable_returns_empty_results(
         self, tmp_path, monkeypatch, _real_embeddings
@@ -307,10 +294,9 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        result = _execute_with_discoverable(ability, "weather forecast", [])
+        _, active = _execute_with_discoverable(ability, "weather forecast", [])
 
-        assert isinstance(result, dict)
-        assert result["_discovered_tools"] == []
+        assert active == []
 
 
 # ---------------------------------------------------------------------------
@@ -405,30 +391,24 @@ class TestFindToolsPhase3Gaps:
         )
 
     def test_fallback_keyword_search_queries_abilities_sqlite(self, tmp_path, monkeypatch):
-        """_fallback hits ability_search_fts in abilities.sqlite.
-
-        This is the path exercised when EmbeddingService fails. It must NOT
-        touch tool_capability_profiles or the shared chalie.db — proved here by
-        having no shared DB wired and a real abilities.sqlite with a known ability.
-        """
+        """_fallback hits ability_search_fts in abilities.sqlite and appends the
+        hit to the bound processor's ACTIVE_TOOLS (never tool_capability_profiles)."""
         db_path = tmp_path / "fallback.sqlite"
         q_vec = np.zeros(768, dtype=np.float32)
         q_vec[0] = 1.0
-
         _build_stub_db(db_path, [
             {"name": "sandboxer",
              "summary": "Execute Python code in a restricted sandbox",
              "embedding": q_vec},
         ])
-
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
-        ability = FindToolsAbility()
-        result = ability._fallback("sandbox", 5, ["sandboxer"])
 
-        assert result["_discovered_tools"] == ["sandboxer"], (
-            f"Expected ['sandboxer'] from abilities.sqlite FTS fallback, "
-            f"got: {result['_discovered_tools']}"
-        )
+        ability = FindToolsAbility()
+        proc = _make_stub_processor(discoverable=["sandboxer"])
+        with bind_current_processor(proc):
+            ability._fallback("sandbox", 5, ["sandboxer"])
+
+        assert proc.active_tools == ["sandboxer"]
 
     def test_query_abilities_filters_by_allowlist(self, tmp_path, monkeypatch):
         """_query ignores rows whose name is outside the allowlist.

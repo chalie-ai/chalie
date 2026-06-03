@@ -239,7 +239,7 @@ class MessageProcessor:
         self._memory_query_history: list[dict] = []
         self._act_trail: list[str] = []
         self._loop_exited_cleanly: bool = False
-        self._discovered_tools: list[dict] = []
+        self._active_tools: list[str] = []
         self._uid: int | None = None
         # Default is 'low' — classifier must explicitly set medium/high.
         # A 'medium' default would silently apply deliberation pressure to every
@@ -279,7 +279,7 @@ class MessageProcessor:
 
     # ── Public per-turn attribute aliases ─────────────────────────────────────
     # The flat process() lifecycle reads/writes mp.uid / mp.cancel_event /
-    # mp.discovered_tools; these properties bridge to the private backing fields
+    # mp.active_tools; these properties bridge to the private backing fields
     # set up in __init__.
 
     @property
@@ -301,13 +301,15 @@ class MessageProcessor:
         self._cancel_event = value
 
     @property
-    def discovered_tools(self) -> list:
-        """Public alias for _discovered_tools (tools found this turn via find_tools)."""
-        return self._discovered_tools
+    def active_tools(self) -> list:
+        """Public alias for _active_tools — the tool NAMES live this turn (seeded
+        with config.always_available by _setup, appended by find_tools).
+        build_tools resolves these names to schemas each ACT iteration."""
+        return self._active_tools
 
-    @discovered_tools.setter
-    def discovered_tools(self, value: list) -> None:
-        self._discovered_tools = value
+    @active_tools.setter
+    def active_tools(self, value: list) -> None:
+        self._active_tools = value
 
     def _run_full_compaction(self, exclude_id: 'int | None' = None) -> 'str | None':
         """Run a full continuity compaction for this channel via the flat path.
@@ -619,7 +621,6 @@ class MessageProcessor:
         )
         mp.thinking_level: str = "low"
         mp.thinking_exploration: "str | None" = None
-        mp.discovered_tools: "list[dict]" = []
         return mp._run()
 
     def _run(self) -> str:
@@ -636,12 +637,18 @@ class MessageProcessor:
     def _setup(self) -> None:
         """Pre-loop.  Executes once per turn.
 
-        1. Write input row to transcript (unless skip_transcript / skip_input_row).
-        2. Run thinking gate (user channel only).
-        3. Seed turn 0 — framework tool calls before the first LLM turn.
+        1. Seed ACTIVE_TOOLS with this channel's always_available tier.
+        2. Write input row to transcript (unless skip_transcript / skip_input_row).
+        3. Run thinking gate (user channel only).
+        4. Seed turn 0 — framework tool calls before the first LLM turn.
 
         Spec §4.
         """
+        # ACTIVE_TOOLS is live from iteration 0; find_tools appends to it and
+        # build_tools resolves it each turn. Empty for compaction / encoder
+        # channels whose always_available is empty by design.
+        self.active_tools = list(self.config.always_available or [])
+
         from services.transcript_service import write_input_row
 
         if not self.config.skip_transcript and not self.config.skip_input_row:
@@ -975,7 +982,7 @@ class MessageProcessor:
             transcript_id=self.uid,
             ephemeral=True,
         )
-        self.discovered_tools.clear()  # D8
+        self.active_tools = list(self.config.always_available or [])  # D8
         self.current_iteration = 0     # D8
         return True
 
@@ -999,7 +1006,7 @@ class MessageProcessor:
             )
             return False  # D12
 
-        self.discovered_tools.clear()       # D11
+        self.active_tools = list(self.config.always_available or [])       # D11
         self.thinking_exploration = None    # D11
         self.current_iteration = 0          # D11
         return True

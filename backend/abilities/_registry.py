@@ -12,7 +12,7 @@ _lock = threading.RLock()
 _registry: dict[str, Ability] | None = None
 
 # Injected into every tool's input_schema by ``build_tools`` and popped by
-# ``Ability.dispatch()`` before the ability sees it (spec §6, message-
+# ``Ability.use()`` before the ability sees it (spec §6, message-
 # processing.md L1166). Carries the user-facing tooltip for the call.
 _ACT_SUMMARY_PROPERTY: dict = {
     'type': 'string',
@@ -114,49 +114,49 @@ class AbilityRegistry:
 
     @staticmethod
     def build_tools(mp: "object") -> list[dict]:
-        """Return the full native tool list for the current ACT iteration.
+        """Resolve ``mp.active_tools`` to native tool schemas for this ACT turn.
 
-        Resolution order (first-seen wins on duplicates):
-        1. ``config.always_available`` — the innate tier pinned in every LLM
-           call for this channel (resolved via the registry).
-        2. ``mp.discovered_tools`` — abilities surfaced this turn via
-           ``find_tools`` (gated by ``DISCOVERABLE`` inside find_tools itself).
-
-        Each schema is ``{name, description, input_schema}`` pulled from the
-        Ability's ``NAME`` / ``SUMMARY`` / ``get_input_schema()``. Every entry
-        gets ``act_summary`` injected (spec §6) before it reaches the model;
-        ``Ability.dispatch()`` pops it back out. Falls back to an empty list
-        when no config is bound (compaction / encoder paths whose
-        ``always_available`` is empty by design).
+        ``active_tools`` is the live list of tool NAMES available this turn:
+        seeded with ``config.always_available`` by ``_setup`` and appended to by
+        ``find_tools``. Native names resolve via the registry; ``_mcp_*`` names
+        via ``McpClientService().get_tool_schema``. First-seen wins on dupes;
+        unknown names are logged and skipped. Every schema gets ``act_summary``
+        injected (spec §6); ``Ability.use`` pops it back out. Returns ``[]`` when
+        no active_tools are bound (compaction / encoder paths, or pre-_setup).
         """
-        config = getattr(mp, "config", None)
-        always = list(getattr(config, "always_available", None) or [])
-
+        active = list(getattr(mp, "active_tools", None) or [])
         registry = _get_registry()
-        native: list[dict] = []
-        for tool_name in always:
-            ability = registry.get(tool_name)
-            if ability is None:
-                logger.warning(
-                    "[AbilityRegistry.build_tools] No ability registered for '%s'",
-                    tool_name,
-                )
-                continue
-            native.append({
-                'name': ability.NAME,
-                'description': ability.SUMMARY,
-                'input_schema': ability.get_input_schema(),
-            })
-
-        dynamic = list(getattr(mp, "discovered_tools", None) or [])
 
         seen: set[str] = set()
         result: list[dict] = []
-        for schema in native + dynamic:
-            name = schema.get('name')
-            if name and name not in seen:
-                seen.add(name)
-                result.append(_with_act_summary(schema))
+        for name in active:
+            if name in seen:
+                continue
+            seen.add(name)
+
+            if name.startswith("_mcp_"):
+                from services.mcp_client_service import McpClientService  # noqa: PLC0415
+                schema = McpClientService().get_tool_schema(name)
+                if schema is None:
+                    logger.warning(
+                        "[AbilityRegistry.build_tools] No MCP schema for '%s'", name
+                    )
+                    continue
+            else:
+                ability = registry.get(name)
+                if ability is None:
+                    logger.warning(
+                        "[AbilityRegistry.build_tools] No ability registered for '%s'",
+                        name,
+                    )
+                    continue
+                schema = {
+                    'name': ability.NAME,
+                    'description': ability.SUMMARY,
+                    'input_schema': ability.get_input_schema(),
+                }
+
+            result.append(_with_act_summary(schema))
 
         return result
 
