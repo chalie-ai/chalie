@@ -95,6 +95,33 @@ def _start_model_preload():
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
 
+def _migrate_policy_table(database_service) -> None:
+    """Create the flat `policy` table, copy legacy policy_rules 1:1, apply the
+    static seed — all idempotent, BEFORE schema convergence drops policy_rules.
+    Mirrors the providers hard-delete ordering (commit 2db7f1a6)."""
+    from services.policy_manager import PolicyManager
+    with database_service.connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS policy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel TEXT NOT NULL, permission TEXT NOT NULL,
+                setting TEXT NOT NULL CHECK (setting IN ('internal','allow','ask','deny')),
+                UNIQUE (channel, permission)
+            )
+        """)
+        has_legacy = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='policy_rules'"
+        ).fetchone() is not None
+        if has_legacy:
+            conn.execute(
+                "INSERT OR IGNORE INTO policy (channel, permission, setting) "
+                "SELECT context, action_id, state FROM policy_rules"
+            )
+        conn.commit()
+    inserted = PolicyManager(database_service).apply_seed()
+    logger.info("[Startup] Policy migration complete (seed inserted %d new rows)", inserted)
+
+
 def _init_database():
     """Initialize SQLite database via declarative convergence and return the service."""
     from services.database_service import get_shared_db_service
@@ -117,6 +144,12 @@ def _init_database():
                     logger.info("[Startup] Purged %d soft-deleted provider row(s)", _purged)
     except Exception as _prov_err:
         logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
+
+    # Policy: migrate the flat `policy` table BEFORE convergence drops policy_rules.
+    try:
+        _migrate_policy_table(database_service)
+    except Exception as _pol_err:
+        logger.warning(f"[Startup] policy migration skipped: {_pol_err}")
 
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
