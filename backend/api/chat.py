@@ -9,7 +9,7 @@ Routes:
                              cancelled turn deletes its own transcript and
                              tool_call rows. Returns 200 always with JSON body.
   POST /action             — receive an action button click; dispatches via
-                             Ability.dispatch(). Returns 202 immediately;
+                             Ability.use(). Returns 202 immediately;
                              response arrives via WebSocketBroker.broadcast().
   POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
                              delegate by its sub_id. Returns 200 always.
@@ -24,7 +24,7 @@ Design:
   User-channel messages flow through MessageProcessor.process() with the
   make_user_config() ProcessorConfig — no MessageProcessor subclass.
   Live output (narration, tool events) is gated by broadcast_to='user' on
-  the config; the flat _loop() and Ability.dispatch() call WS.emit() which
+  the config; the flat _loop() and Ability.use() call WS.emit() which
   broadcasts when broadcast_to is set (AC-28).
 """
 
@@ -376,7 +376,7 @@ def post_subagent_stop(sub_id: str):
 @chat_bp.route("/action", methods=["POST"])
 @require_auth
 def post_action():
-    """Receive an action button click and dispatch via Ability.dispatch().
+    """Receive an action button click and dispatch via Ability.use().
 
     Body (JSON):
         skill (str): The ability name to invoke.
@@ -404,7 +404,7 @@ def post_action():
             broker.broadcast({"type": "status", "stage": "processing"})
 
             # Build a minimal flat-path context for action-button dispatches.
-            # Ability.dispatch() requires an mp-like object with config, uid,
+            # Ability.use() requires an mp-like object with config, uid,
             # cancel_event, and discovered_tools.  broadcast_to=None keeps these
             # dispatches silent (no live WS events for action buttons).
             _action_config = ProcessorConfig(
@@ -433,7 +433,7 @@ def post_action():
                 discovered_tools: list = []
 
             ctx = _ActionCtx()
-            result_text = Ability.dispatch(ctx, skill, params)
+            result_text = Ability.use(ctx, skill, params)
 
             if result_text.startswith("Unknown tool:"):
                 broker.broadcast({

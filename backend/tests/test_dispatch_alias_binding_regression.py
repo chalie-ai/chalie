@@ -10,18 +10,10 @@
 ACT-loop e2e verification (NOT part of the §9a blind-spec set).
 
 1. Lazy module aliases left ``None`` by the _base <-> _registry circular import.
-   When ``abilities._registry`` is imported before ``abilities._base`` (the real
-   application boot order), ``_populate_module_aliases()`` runs mid circular
-   import, the ``from abilities._registry import AbilityRegistry`` raises and is
-   silently swallowed, so the module-level ``AbilityRegistry`` / ``PolicyService``
-   stay ``None``.  The first tool call then crashed every chat at turn zero with
-   ``'NoneType' object has no attribute 'get'`` (the Turn-0 memory seed).
-   ``Ability.dispatch`` must self-heal by re-binding the aliases on first use.
-
-2. ``AbilityRegistry.get`` raises ``KeyError`` on an unknown tool, but
-   ``dispatch`` was written to expect ``None``.  An unknown / hallucinated tool
-   name must yield a graceful ``Unknown tool`` error, never an uncaught
-   ``KeyError`` that kills the turn.
+   ``Ability.use`` must self-heal by re-binding the aliases (incl. PolicyManager)
+   on first use, or the Turn-0 memory seed crashes the chat.
+2. ``AbilityRegistry.get`` raises ``KeyError`` on an unknown tool; ``match`` must
+   turn that into ``None`` so ``use`` returns a graceful ``Unknown tool`` string.
 """
 
 import abilities._base as base
@@ -33,36 +25,37 @@ pytestmark = pytest.mark.unit
 
 class _Cfg:
     channel = "user"
+    policy_channel = None        # match() short-circuits before the gate for an unknown tool
     broadcast_to = None
 
 
 class _MP:
     config = _Cfg()
+    uid = None
     cancel_event = None
 
 
-def test_dispatch_rebinds_none_aliases():
-    """dispatch must re-populate aliases when the circular import left them None."""
-    saved = (base.AbilityRegistry, base.PolicyService, base.WebSocketBroker)
+def test_use_rebinds_none_aliases():
+    """use must re-populate aliases when the circular import left them None."""
+    saved = (base.AbilityRegistry, base.PolicyManager, base.WebSocketBroker)
     try:
         base.AbilityRegistry = None
-        base.PolicyService = None
+        base.PolicyManager = None
         base.WebSocketBroker = None
 
-        # Must not raise AttributeError('NoneType' ...); must resolve gracefully.
-        out = Ability.dispatch(_MP(), "definitely_not_a_real_tool", {"action": "x"})
+        out = Ability.use(_MP(), "definitely_not_a_real_tool", {"action": "x"})
 
         assert "Unknown tool" in out
         assert base.AbilityRegistry is not None
-        assert base.PolicyService is not None
+        assert base.PolicyManager is not None
     finally:
-        base.AbilityRegistry, base.PolicyService, base.WebSocketBroker = saved
+        base.AbilityRegistry, base.PolicyManager, base.WebSocketBroker = saved
 
 
-def test_dispatch_unknown_tool_is_graceful_not_keyerror():
+def test_use_unknown_tool_is_graceful_not_keyerror():
     """An unknown tool name returns an error string, never an uncaught KeyError."""
-    _populate_module_aliases()  # ensure bound regardless of import order
-    out = Ability.dispatch(_MP(), "no_such_ability_xyz", {"action": "noop"})
+    _populate_module_aliases()
+    out = Ability.use(_MP(), "no_such_ability_xyz", {"action": "noop"})
     assert "Unknown tool" in out
 
 

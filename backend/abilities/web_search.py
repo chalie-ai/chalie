@@ -20,7 +20,7 @@ Properties (spec §5b "Properties of every delegate tool"):
   - Finite tool surface — always_available lists exactly what the delegate needs;
     discoverable=[] prevents discovery of anything else.
   - No recursion — delegate tools are not in the surface and are blocked.
-  - ASYNC_CAPABLE=True — the framework (Ability.dispatch) wraps run() in a
+  - ASYNC_CAPABLE=True — the framework (Ability.execute) wraps run() in a
     daemon thread for async-capable origins.  run() is ALWAYS synchronous.
 """
 

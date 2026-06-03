@@ -1,9 +1,11 @@
-"""Ability base class — the single-dispatch chokepoint for all tool calls.
+"""Ability base class — the single entry point for all tool calls.
 
-Every tool call from the ACT loop enters through ``Ability.dispatch()``.
-This is the ONLY path from MessageProcessor._loop() to ability execution.
+Every tool call from the ACT loop enters through ``Ability.use()``, which
+matches the handler, gates it through ``PolicyManager.wrap``, runs it via
+``Ability.execute``, and records the outcome.  This is the ONLY path from
+MessageProcessor._loop() to ability execution.
 
-Spec: ACT Loop Orchestrator Refactor §5, §7b.
+Spec: ACT Loop Orchestrator Refactor §5, §7b; PolicyManager redesign (TKT-797).
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from uuid import uuid4
 # can intercept them from tests.  The imports are deferred to the END of the
 # module to avoid circular-import issues (_registry imports Ability from here).
 AbilityRegistry: object = None  # type: ignore[assignment]
-PolicyService: object = None  # type: ignore[assignment]
+PolicyManager: object = None  # type: ignore[assignment]
 WebSocketBroker: object = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
@@ -29,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 # ── Module-level active-delegate registry ─────────────────────────────────────
 # Maps delegate_id → cancel threading.Event.
-# Populated by dispatch() for ASYNC_CAPABLE tools on async-capable channels.
+# Populated by Ability.execute() for ASYNC_CAPABLE tools on async-capable channels.
 
 _active_delegates: dict[str, threading.Event] = {}
 
@@ -148,66 +150,23 @@ def _normalise_run_result(raw: object) -> dict:
     return {"status": "success", "result": str(raw) if raw is not None else ""}
 
 
-def _dispatch_mcp(mp: object, tool_name: str, params: dict) -> dict:
+def _dispatch_mcp(tool_name: str, params: dict) -> dict:
     """Route an _mcp_<server>_<tool> call through McpClientService.
 
-    Policy enforcement is applied before the MCP call using the dynamically-
-    seeded policy_rules rows from McpClientService._seed_policy_rows.
-
-    Spec §5 / I9.
+    Policy is enforced by PolicyManager.wrap() in Ability.use() (via the
+    _MCPAbility proxy) BEFORE this runs; this only performs the MCP call.
     """
     try:
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         raw = McpClientService().dispatch_mcp_tool(tool_name, params)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[Ability.dispatch] MCP tool %r failed: %s", tool_name, exc)
+        logger.warning("[_dispatch_mcp] MCP tool %r failed: %s", tool_name, exc)
         return {"status": "error", "result": f"MCP tool error: {exc}"}
 
     # McpClientService.dispatch_mcp_tool returns {'text': ...}
     if isinstance(raw, dict) and "text" in raw:
         return {"status": "success", "result": raw["text"]}
     return {"status": "success", "result": str(raw)}
-
-
-def _process_discovered_tools(mp: object, result: dict) -> None:
-    """Add find_tools-discovered tool schemas to mp.discovered_tools.
-
-    Mirrors the side-effect logic previously in MessageProcessor.handle_tool().
-    Spec §5 / I12.
-    """
-    discovered = result.get("_discovered_tools") or []
-    if not discovered:
-        return
-
-    try:
-        from abilities._registry import AbilityRegistry  # noqa: PLC0415
-        from services.mcp_client_service import McpClientService  # noqa: PLC0415
-
-        existing_names = {t.get("name") for t in getattr(mp, "discovered_tools", [])}
-
-        for name in discovered:
-            if name in existing_names:
-                continue
-            if name.startswith("_mcp_"):
-                schema = McpClientService().get_tool_schema(name)
-                if schema is None:
-                    continue
-            else:
-                try:
-                    a = AbilityRegistry.get(name)
-                    schema = {
-                        "name": a.NAME,
-                        "description": a.SUMMARY,
-                        "input_schema": a.INPUT_SCHEMA,
-                    }
-                except (KeyError, AttributeError):
-                    continue
-
-            if hasattr(mp, "discovered_tools"):
-                mp.discovered_tools.append(schema)
-            existing_names.add(name)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[Ability._process_discovered_tools] failed: %s", exc)
 
 
 def _emit(config: object, event: dict) -> None:
@@ -269,8 +228,9 @@ def _run_async_delegate(
 class Ability(ABC):
     """Base class for every dispatchable tool.
 
-    ``dispatch()`` is the single chokepoint for all tool calls from the ACT
-    loop.  It handles: sanitize → policy → timeout thread → execute → record.
+    ``use()`` is the single chokepoint for all tool calls from the ACT loop:
+    match → resolve permission → PolicyManager.wrap(execute) → record. The
+    gated work runs in ``execute()`` (emit → run-in-timeout-thread → return).
 
     Tool *scope* (always-available vs discoverable) lives on ProcessorConfig
     (always_available / discoverable / blocked fields).  Abilities only describe
@@ -292,6 +252,10 @@ class Ability(ABC):
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
+        # Synthetic proxies (e.g. _MCPAbility) carry no EXAMPLES/SEARCH_TOOLTIP
+        # and are constructed with arguments — skip all validation for them.
+        if getattr(cls, "_SYNTHETIC", False):
+            return
         # Abstract subclasses (marked with abstractmethod) are exempt.
         if ABC in cls.__bases__:
             return
@@ -318,104 +282,39 @@ class Ability(ABC):
         ):
             raise TypeError(f"{cls.__name__} must define a non-empty SEARCH_TOOLTIP")
 
-    # ── The single dispatch chokepoint ────────────────────────────────────────
+    # ── The single tool-call entry point ──────────────────────────────────────
 
     @staticmethod
-    def dispatch(
-        mp: object,
-        tool_name: str,
-        params: dict,
-        call_id: "str | None" = None,
-    ) -> str:
-        """Every tool call from the ACT loop goes through here.
+    def use(mp: object, tool_name: str, params: dict) -> str:
+        """The one path every ACT-loop tool call takes.
 
-        Handles: sanitize → policy → timeout thread → execute → record (§4c).
-        For ASYNC_CAPABLE tools on async-capable channels: spawn daemon thread,
-        return ack immediately, deliver result later via dispatch_message.
-        Returns the rendered result string.
-
-        Spec §5 / AC-4 / I1–I14.
+        match → resolve permission (inline) → PolicyManager.wrap(execute) →
+        record → return a STRING. Records EVERY outcome (allow result, block,
+        unknown) so the rendered trail tells the model what happened and it does
+        not retry a blocked tool forever. No cancel check — the loop guards
+        cancel_event one line before calling this. Spec §5 / TKT-797.
         """
-        # ── Early cancel check ────────────────────────────────────────────────
-        # I14: cancel mid-tool-loop stops further dispatches.
-        cancel_ev = getattr(mp, "cancel_event", None)
-        if cancel_ev is not None and cancel_ev.is_set():
-            return ""
-
-        # The module-level aliases (AbilityRegistry / PolicyService / WebSocketBroker)
-        # are populated at import time by _populate_module_aliases(). When _registry
-        # is imported before _base (the real boot order), that populate runs mid
-        # circular-import and the registry class does not exist yet, so the import
-        # silently fails and the aliases stay None. By the time any tool is
-        # dispatched every module is fully loaded, so re-binding here is safe,
-        # idempotent and cheap (imports hit the sys.modules cache).
-        if AbilityRegistry is None or PolicyService is None or WebSocketBroker is None:
+        if AbilityRegistry is None or PolicyManager is None or WebSocketBroker is None:
             _populate_module_aliases()
 
         from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
 
-        # 1. Sanitize params, pop act_summary (I2)
         params = _sanitize_llm_args(dict(params))
         act_summary = params.pop("act_summary", None)
-        call_id = call_id or uuid4().hex[:12]
-
         config = getattr(mp, "config", None)
 
-        # 2. Broadcast start event (no-op unless config.broadcast_to is set) (I4 / N4)
-        _emit(config, {
-            "type": "act_tool_start",
-            "name": tool_name,
-            "id": call_id,
-            "summary": act_summary,
-        })
-
-        # 3. Resolve handler (I9 / I6)
-        if tool_name.startswith("_mcp_"):
-            # MCP path: policy is enforced inside _dispatch_mcp for _mcp_ tools
-            # via seeded policy rows (same as the old ActDispatcherService path).
-            result = _dispatch_mcp(mp, tool_name, params)
+        ability = Ability.match(tool_name)
+        if ability is None:
+            result_text = f"Unknown tool: {tool_name}"
         else:
-            try:
-                ability = AbilityRegistry.get(tool_name)
-            except KeyError:
-                ability = None
-            if ability is None:
-                result = {"status": "error", "result": f"Unknown tool: {tool_name}"}
-            else:
-                # 4. Policy gate (I7 / I8)
-                blocked = PolicyService.enforce(tool_name, params, config.channel if config else "")
-                if blocked is not None:
-                    result = blocked
-                else:
-                    # 5. Async or sync? (J2 / J6)
-                    channel = config.channel if config else ""
-                    if ability.ASYNC_CAPABLE and _supports_async_delivery(channel):
-                        delegate_id = f"{tool_name}_{uuid4().hex[:8]}"
-                        cancel_event = threading.Event()
-                        _active_delegates[delegate_id] = cancel_event
-                        thread = threading.Thread(
-                            target=_run_async_delegate,
-                            args=(ability, channel, params, delegate_id, cancel_event),
-                            daemon=True,
-                        )
-                        thread.start()
-                        result = {
-                            "status": "success",
-                            "result": (
-                                f"{tool_name} dispatched (id: {delegate_id}). "
-                                "You will be notified when it completes."
-                            ),
-                        }
-                    else:
-                        # Sync path: execute in timeout thread (I13)
-                        result = _run_with_timeout(ability, channel, params, ability.TIMEOUT)
+            action = params.get("action")
+            permission = f"{tool_name}.{action}" if action else tool_name
+            result_text = PolicyManager.wrap(
+                channel=getattr(config, "policy_channel", None),
+                permission=permission,
+                callback=lambda: ability.execute(mp, params, act_summary),
+            )
 
-        # 6. find_tools side-effect — discovered tools on success only (I12)
-        if tool_name == "find_tools" and result.get("status") != "error":
-            _process_discovered_tools(mp, result)
-
-        # 7. Record to tool_calls — exactly one row per call (I10)
-        result_text = str(result.get("result", ""))
         Ability.record(
             tool_name=tool_name,
             params=params,
@@ -423,19 +322,21 @@ class Ability(ABC):
             transcript_id=getattr(mp, "uid", None),
             ephemeral=True,
         )
-
-        ok = result.get("status") != "error"
-
-        # 8. Broadcast end event (I4 / I5 / N4)
-        _emit(config, {
-            "type": "act_tool_end",
-            "name": tool_name,
-            "id": call_id,
-            "ok": ok,
-        })
-
-        # 9. Return result text (I11)
         return result_text
+
+    @staticmethod
+    def match(tool_name: str) -> "Ability | None":
+        """Resolve a tool name to its handler. Native → registry; _mcp_* → a
+        synthetic _MCPAbility proxy (so MCP flows through the same gate); unknown
+        native name → None (use() turns this into an 'Unknown tool' string)."""
+        if AbilityRegistry is None:
+            _populate_module_aliases()
+        if tool_name.startswith("_mcp_"):
+            return _MCPAbility(tool_name)
+        try:
+            return AbilityRegistry.get(tool_name)
+        except KeyError:
+            return None
 
     # ── Trail statics — the ONLY write/read/render path for the trail ────────
     # Spec §4c / F2 / F3 / F4 / AC-24.
@@ -549,7 +450,7 @@ class Ability(ABC):
 
     @abstractmethod
     def run(self, channel: str, params: dict, telemetry: "dict | None") -> "dict | str":
-        """Execute the ability.  Called by dispatch() inside a timeout thread.
+        """Execute the ability.  Called by Ability.execute() inside a timeout thread.
 
         Override this method on every Ability subclass — it is the single tool
         entrypoint.
@@ -570,6 +471,50 @@ class Ability(ABC):
         Spec §5.
         """
         ...
+
+    # ── Self-scaffolding executor — the allow-path callback use() hands to wrap ──
+
+    def execute(self, mp: object, params: dict, act_summary: "str | None" = None) -> str:
+        """Emit → run → return. Called ONLY on the allow path (use() passes this
+        as wrap's callback). Owns the async-vs-sync decision, the timeout thread,
+        contextvar copying, VaultLockedError handling, and result normalisation.
+        Returns the result text STRING. Recording is use()'s job, not ours.
+
+        act_summary (popped from params by use()) is the WS tooltip; it is NOT a
+        run() argument. Spec §5 / D5.
+        """
+        config = getattr(mp, "config", None)
+        channel = getattr(config, "channel", "") or ""
+        call_id = uuid4().hex[:12]
+        _emit(config, {
+            "type": "act_tool_start",
+            "name": self.NAME,
+            "id": call_id,
+            "summary": act_summary,
+        })
+
+        if self.ASYNC_CAPABLE and _supports_async_delivery(channel):
+            delegate_id = f"{self.NAME}_{uuid4().hex[:8]}"
+            cancel_event = threading.Event()
+            _active_delegates[delegate_id] = cancel_event
+            threading.Thread(
+                target=_run_async_delegate,
+                args=(self, channel, params, delegate_id, cancel_event),
+                daemon=True,
+            ).start()
+            result = {
+                "status": "success",
+                "result": (
+                    f"{self.NAME} dispatched (id: {delegate_id}). "
+                    "You will be notified when it completes."
+                ),
+            }
+        else:
+            result = _run_with_timeout(self, channel, params, self.TIMEOUT)
+
+        ok = result.get("status") != "error"
+        _emit(config, {"type": "act_tool_end", "name": self.NAME, "id": call_id, "ok": ok})
+        return str(result.get("result", ""))
 
     # ── Schema hooks (unchanged) ──────────────────────────────────────────────
 
@@ -602,6 +547,25 @@ class Ability(ABC):
         return payload
 
 
+class _MCPAbility(Ability):
+    """Synthetic proxy for an _mcp_* tool so MCP calls flow through
+    use → wrap → execute exactly like a native ability — gated AND
+    timeout-bounded (inherits TIMEOUT=10) for the first time.
+
+    _SYNTHETIC=True exempts it from __init_subclass__ validation (no
+    EXAMPLES/SEARCH_TOOLTIP) and from the registry's boot-time instantiation
+    (_all_concrete_subclasses skips it — it cannot be built with no args).
+    """
+
+    _SYNTHETIC: ClassVar[bool] = True
+
+    def __init__(self, tool_name: str) -> None:
+        self.NAME = tool_name
+
+    def run(self, channel: str, params: dict, telemetry: "dict | None" = None) -> dict:
+        return _dispatch_mcp(self.NAME, params)
+
+
 # ── Module-level aliases for patchability ─────────────────────────────────────
 #
 # Populated AFTER the Ability class is fully defined to avoid the circular
@@ -613,15 +577,15 @@ class Ability(ABC):
 # attribute on the object it finds there.
 
 def _populate_module_aliases() -> None:
-    global AbilityRegistry, PolicyService, WebSocketBroker
+    global AbilityRegistry, PolicyManager, WebSocketBroker
     try:
         from abilities._registry import AbilityRegistry as _AR  # noqa: PLC0415
         AbilityRegistry = _AR
     except ImportError:
         pass
     try:
-        from services.policy_service import PolicyService as _PS  # noqa: PLC0415
-        PolicyService = _PS
+        from services.policy_manager import PolicyManager as _PM  # noqa: PLC0415
+        PolicyManager = _PM
     except ImportError:
         pass
     try:

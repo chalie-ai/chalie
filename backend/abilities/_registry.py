@@ -74,6 +74,8 @@ def _all_concrete_subclasses(cls: type) -> list[type]:
             if sub in seen:
                 continue
             seen.add(sub)
+            if getattr(sub, "_SYNTHETIC", False):
+                continue
             if not getattr(sub, "__abstractmethods__", None):
                 out.append(sub)
             _walk(sub)

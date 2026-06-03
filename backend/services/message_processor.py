@@ -16,7 +16,7 @@ point with a per-turn ``ProcessorConfig`` that carries all channel-specific
 behaviour (channel, role, prompt builders, tool scopes, post-turn hook, …).
 
 The class provides the ACT lifecycle (``process`` → ``_run`` → ``_setup`` →
-``_loop`` → ``_record``), tool dispatch through ``Ability.dispatch()``, and
+``_loop`` → ``_record``), tool dispatch through ``Ability.use()``, and
 the trail/compaction primitives.
 """
 
@@ -118,7 +118,7 @@ def _read_attachment(path: str) -> "tuple[str, str, str]":
 # MessageProcessor instance for the turn they are running inside (e.g. to
 # append to ``_memory_query_history`` or read ``_memory_seed``). The
 # MessageProcessor instance is not part of any tool signature — skills are
-# dispatched by name via ``Ability.dispatch()`` and must not receive the
+# dispatched by name via ``Ability.use()`` and must not receive the
 # processor as an argument.
 #
 # We expose an async-safe ``ContextVar`` + a context manager so that
@@ -161,7 +161,7 @@ class MessageProcessor:
     ``ProcessorConfig`` (channel, role, prompt builders, tool scope, the optional
     ``post_turn`` hook, …) supplied to the ``process()`` entry point.  The
     lifecycle is ``process → _run → _setup → _loop → _record``; tool calls route
-    through ``Ability.dispatch`` and the act-trail is reconstructed from
+    through ``Ability.use`` and the act-trail is reconstructed from
     ``tool_calls`` rows (§4c) rather than held in memory.
     """
 
@@ -662,7 +662,7 @@ class MessageProcessor:
         """Framework-issued tool calls fired once before iteration 0.
 
         Two declarative behaviours, zero hooks.  Each call goes through
-        Ability.dispatch() so it BLOCKS, records a tool_calls row, and is
+        Ability.use() so it BLOCKS, records a tool_calls row, and is
         rendered into the trail exactly like an LLM-issued call.  The model's
         first turn already sees memory matches and uploaded documents.
 
@@ -672,7 +672,7 @@ class MessageProcessor:
 
         # a. Memory auto-seed — fire once when the declarative flag is set.
         if self.config.memory_seed:
-            Ability.dispatch(self, "memory", {"action": "recall", "query": self._raw_input})
+            Ability.use(self, "memory", {"action": "recall", "query": self._raw_input})
 
         # b. Attachment uploads — presence-gated, one blocking document.upload
         #    per file.  No second auto document.view: upload IS the ingest.
@@ -682,7 +682,7 @@ class MessageProcessor:
             except OSError as exc:
                 logger.warning("[SEED] could not read attachment %s: %s", path, exc)
                 continue
-            Ability.dispatch(self, "document", {
+            Ability.use(self, "document", {
                 "action": "upload",
                 "name": name,
                 "content": content_b64,
@@ -727,7 +727,7 @@ class MessageProcessor:
             if not response.tool_calls: return response.text or ""  # noqa: E701
             for tc in response.tool_calls:
                 if self.cancel_event.is_set(): return ""  # noqa: E701
-                Ability.dispatch(self, tc["name"], tc["input"], tc.get("id"))
+                Ability.use(self, tc["name"], tc["input"])
             self._record_narration(response)
             self.current_iteration += 1
 

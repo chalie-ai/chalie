@@ -346,12 +346,8 @@ def _handle_recall(channel: str, params: dict) -> str:
             if proc is not None and proc._uid is not None:
                 if query:
                     from abilities._base import Ability  # noqa: PLC0415
-                    Ability.dispatch(
-                        proc, 'document', {'action': 'search', 'query': query}
-                    )
-                    Ability.dispatch(
-                        proc, 'schedule', {'action': 'search', 'query': query}
-                    )
+                    Ability.use(proc, 'document', {'action': 'search', 'query': query})
+                    Ability.use(proc, 'schedule', {'action': 'search', 'query': query})
         except Exception as exc:
             logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
 
