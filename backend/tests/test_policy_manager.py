@@ -69,6 +69,16 @@ def test_allow_and_internal_run_callback(mgr, db, setting):
     assert mgr.authorize(CH.CHAT, "email.search", _ran) == _ran()
 
 
+# 1b. INTERNAL tools ALWAYS bypass — every channel, no row, even over a deny row
+@pytest.mark.parametrize("channel", [CH.CHAT, CH.SUBCONSCIOUS, CH.EXTERNAL_AGENT])
+@pytest.mark.parametrize("permission", ["read", "search", "browser.render", "memory.store", "save_graph"])
+def test_internal_tools_always_bypass(mgr, db, channel, permission):
+    # a deny row for the same key must be ignored — INTERNAL wins, no DB lookup
+    _seed(db, channel.value, permission, "deny")
+    assert mgr.authorize(channel, permission, _ran) == _ran()
+    assert db.execute("SELECT count(*) FROM policy_blocked_log").fetchone()[0] == 0
+
+
 # 2. deny blocks with the shared message and logs reason 'deny'
 def test_deny_blocks_and_logs(mgr, db):
     _seed(db, "chat", "bash.execute", "deny")

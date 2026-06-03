@@ -29,8 +29,14 @@ def test_seed_is_valid_and_carries_known_rows():
     assert by_key[("chat", "email.search")] == "allow"
     assert by_key[("chat", "email.manage")] == "ask"
     assert by_key[("subconscious", "email.manage")] == "deny"
-    # SYSTEM (sub)actions seeded internal in every channel (granular + bare)
+    # Infrastructure actions still seeded internal in every channel
     for ch in _CHANNELS:
-        assert by_key[(ch, "memory.recall")] == "internal"
-        assert by_key[(ch, "memory.forget")] == "internal"
         assert by_key[(ch, "timer")] == "internal"
+
+    # PolicyManager.INTERNAL tools ALWAYS bypass the gate, so they carry NO seed
+    # rows (the frozenset is the source of truth, not the JSON). See policy_manager.
+    from services.policy_manager import INTERNAL
+    tools_in_seed = {r["permission"].split(".", 1)[0] for r in rows}
+    assert tools_in_seed.isdisjoint(INTERNAL), (
+        f"INTERNAL tools must not appear in the seed: {tools_in_seed & INTERNAL}"
+    )

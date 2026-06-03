@@ -25,9 +25,9 @@ Properties (spec §5b "Properties of every delegate tool"):
     daemon thread for async-capable origins.  run() is ALWAYS synchronous.
 
 Permission boundary — ``policy_channel`` stays SUBCONSCIOUS because the
-delegate's internal tools (``search``, ``read``) are scratch internals; the
-user-facing permission check happens at the outer ``web_search`` tool, not on
-each internal call.
+delegate's internal tools (``search``, ``read``, ``web_download``) are scratch
+internals; the user-facing permission check happens at the outer ``web_search``
+tool, not on each internal call.
 """
 
 import time
@@ -53,7 +53,7 @@ _WEB_SEARCH_SYSTEM_PROMPT = (
     "the query you were given."
 )
 
-_WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "read")
+_WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "read", "web_download")
 
 
 def _web_search_user_prompt(mp: object) -> str:
@@ -81,7 +81,7 @@ class WebSearchConfig(ProcessorConfig):
             build_user_prompt=_web_search_user_prompt,
             build_user_definition=lambda _mp: "",
             build_system_prompt=lambda _mp: _WEB_SEARCH_SYSTEM_PROMPT,
-            always_available=tools,
+            always_available=[*tools, "memory"],
             discoverable=[],
             blocked=build_blocked(tools),
             max_iterations=50,

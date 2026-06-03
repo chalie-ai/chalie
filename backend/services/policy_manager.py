@@ -7,9 +7,13 @@ Ability.execute as the callback).
 Settings: internal (always allowed, hidden in Brain) · allow · ask · deny.
 Channels: ProcessorConfig.POLICY_CHANNEL values.
 
-The gate is dead simple: SELECT the setting (lazily creating an 'ask' row on a
-miss), then run | block | prompt. It has ZERO knowledge of threads/timeouts —
-those live in the callback (Ability.execute).
+A small set of read-only / scratch / infrastructure tools (``INTERNAL``) ALWAYS
+bypass the gate regardless of channel or any seeded row — they are never
+user-gated and carry no seed rows. ANY action on these tools runs unconditionally.
+
+The gate is dead simple: short-circuit INTERNAL tools, else SELECT the setting
+(lazily creating an 'ask' row on a miss), then run | block | prompt. It has ZERO
+knowledge of threads/timeouts — those live in the callback (Ability.execute).
 
 Spec: Taskie doc 119 v2.
 """
@@ -27,6 +31,15 @@ logger = logging.getLogger(__name__)
 CHANNEL = ProcessorConfig.POLICY_CHANNEL
 VALID_CHANNELS = {c.value for c in CHANNEL}
 VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
+
+# Read-only / scratch / infrastructure tools that ALWAYS bypass the gate, on
+# every channel, with no seed row. ANY action on these runs unconditionally —
+# they are never user-gated and never appear in the Brain policy surface.
+INTERNAL = frozenset({
+    "browser", "chalie_docs", "find_skills", "find_tools", "memory", "read",
+    "review_tool_calls", "review_transcript", "save_graph", "save_pattern",
+    "search", "skill_manager", "web_download",
+})
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).
 _NO_HUMAN = frozenset({CHANNEL.SUBCONSCIOUS, CHANNEL.EXTERNAL_AGENT})
@@ -57,6 +70,8 @@ class PolicyManager:
     # ── The gate: run | block | ask (dead simple) ─────────────────────────────
 
     def authorize(self, channel, permission, callback, error=_BLOCK):
+        if permission.split(".", 1)[0] in INTERNAL:
+            return callback()                       # INTERNAL tools always bypass (no channel, no row)
         setting = self._setting(channel.value, permission)
         if setting in ("internal", "allow"):
             return callback()

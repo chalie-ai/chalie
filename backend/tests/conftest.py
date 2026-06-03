@@ -59,8 +59,9 @@ def _db_template(tmp_path_factory):
     convergence.converge()
 
     # Mirror boot: seed the flat policy table so gated tool calls on non-chat
-    # channels (e.g. subconscious save_pattern/save_graph, which are 'internal')
-    # resolve to their real defaults instead of an empty-table lazy 'ask'→deny.
+    # channels (e.g. subconscious email.* / timer) resolve to their real defaults
+    # instead of an empty-table lazy 'ask'→deny. (PolicyManager.INTERNAL tools
+    # bypass the gate entirely and carry no seed rows.)
     PolicyManager(db).apply_seed()
 
     # Flush WAL into main file so shutil.copy2 gets a self-contained copy
