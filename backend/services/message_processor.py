@@ -20,8 +20,6 @@ The class provides the ACT lifecycle (``process`` → ``_run`` → ``_setup`` �
 the trail/compaction primitives.
 """
 
-import contextlib
-import contextvars
 import logging
 import re
 import threading
@@ -85,11 +83,11 @@ def _sanitize_llm_args(value):
 # ── Attachment reader — used by _seed_turn_zero() ─────────────────────────────
 
 def _read_attachment(path: str) -> "tuple[str, str, str]":
-    """Read a /tmp attachment and return (name, base64_content, content_type).
+    """Read a temp attachment and return (name, base64_content, content_type).
 
-    Applies a path-traversal guard: only paths under /tmp/chalie_ are
-    accepted (same constraint as UserMessageProcessor._validate_tmp_path).
-    Raises OSError if the path is rejected or the file cannot be read.
+    Applies a path-traversal guard: only paths under the Chalie temp prefix
+    (see ``services.tmp_storage``) are accepted. Raises OSError if the path is
+    rejected or the file cannot be read.
 
     Returns:
         (filename, base64-encoded file bytes, MIME type string)
@@ -98,8 +96,10 @@ def _read_attachment(path: str) -> "tuple[str, str, str]":
     import mimetypes
     import os
 
+    from services.tmp_storage import TMP_PATH_PREFIX
+
     real = os.path.realpath(path)
-    if not real.startswith("/tmp/chalie_") or not os.path.isfile(real):
+    if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
         raise OSError(f"Unsafe or missing attachment path: {path!r}")
 
     with open(real, "rb") as fh:
@@ -112,46 +112,15 @@ def _read_attachment(path: str) -> "tuple[str, str, str]":
     return name, content_b64, content_type
 
 
-# ── Current-processor context ─────────────────────────────────────────────────
+# ── Traceability spine ────────────────────────────────────────────────────────
 #
-# Innate skills and downstream services sometimes need to reach the
-# MessageProcessor instance for the turn they are running inside (e.g. to
-# append to ``_memory_query_history`` or read ``_memory_seed``). The
-# MessageProcessor instance is not part of any tool signature — skills are
-# dispatched by name via ``Ability.use()`` and must not receive the
-# processor as an argument.
-#
-# We expose an async-safe ``ContextVar`` + a context manager so that
-# ``_run()`` can bind the running processor for the duration of a turn and
-# tools called from inside that turn can discover it via
-# ``current_processor()``. Outside a turn this returns ``None`` and callers
-# MUST degrade gracefully.
-_CURRENT_PROCESSOR: contextvars.ContextVar["MessageProcessor | None"] = (
-    contextvars.ContextVar("chalie_current_processor", default=None)
-)
-
-
-def current_processor() -> "MessageProcessor | None":
-    """Return the `MessageProcessor` for the current turn, or None.
-
-    Returns None when called outside a ``MessageProcessor`` turn
-    (worker threads, tests, legacy orchestrator). Callers must handle that.
-    """
-    return _CURRENT_PROCESSOR.get()
-
-
-@contextlib.contextmanager
-def bind_current_processor(processor: "MessageProcessor"):
-    """Context manager that binds ``processor`` as the current-turn processor.
-
-    Wrap the body of ``MessageProcessor._run()`` with this. Resets the
-    ContextVar on exit regardless of success / exception path.
-    """
-    token = _CURRENT_PROCESSOR.set(processor)
-    try:
-        yield processor
-    finally:
-        _CURRENT_PROCESSOR.reset(token)
+# The MessageProcessor instance is the "parent" of everything that runs inside a
+# turn. Rather than hide it behind a global ContextVar, it is threaded
+# explicitly: ``Ability.use(self, …)`` binds it onto each per-call ability as
+# ``self.MessageProcessor``, and the Providers facade receives it as ``mp=``.
+# Wherever we are in a turn we can always reach the parent — and reconstruct the
+# full path that got us there — by holding a real reference, not by reaching
+# into a thread-local.
 
 
 class MessageProcessor:
@@ -167,7 +136,7 @@ class MessageProcessor:
 
     # ── Tool-scope constants ──────────────────────────────────────────────────
     #
-    # find_tools reads ``DISCOVERABLE`` (via ``current_processor()``) to gate
+    # find_tools reads ``DISCOVERABLE`` (via ``self.MessageProcessor``) to gate
     # which abilities may be surfaced at runtime.  ``ALWAYS_AVAILABLE`` is read by
     # ``AbilityRegistry.policy_visible()`` to exclude the innate meta-tools from
     # the policy UI.  Both are class-level defaults shared by every flat-path
@@ -546,6 +515,7 @@ class MessageProcessor:
                 job=config.job,
                 tools=tools,
                 thinking_mode='high',
+                mp=self,
             )
             # Token accumulation happens at the send gateway (§4e), not here.
 
@@ -622,15 +592,14 @@ class MessageProcessor:
         return mp._run()
 
     def _run(self) -> str:
-        """Lifecycle wrapper — bind processor, run setup→loop→record.
+        """Lifecycle wrapper — run setup→loop→record.
 
         Spec §4.
         """
-        with bind_current_processor(self):
-            self._setup()
-            result = self._loop()
-            self._record(result)
-            return result
+        self._setup()
+        result = self._loop()
+        self._record(result)
+        return result
 
     def _setup(self) -> None:
         """Pre-loop.  Executes once per turn.
@@ -710,7 +679,7 @@ class MessageProcessor:
             prompt = self.config.build_user_prompt(self)
             system = self.config.build_system_prompt(self)
             tools = AbilityRegistry.build_tools(self)
-            pct = p.calculate(system, prompt, tools, job=self.config.job)
+            pct = p.calculate(system, prompt, tools, job=self.config.job, mp=self)
             if pct > 0.80:
                 if in_compaction:
                     # D14: recursion guard — never compact-of-compaction.
@@ -728,6 +697,7 @@ class MessageProcessor:
             response = p.send_messages(
                 system, [{"role": "user", "content": prompt}],
                 job=self.config.job, tools=tools, thinking_mode=self.thinking_level,
+                mp=self,
             )
             if not response.tool_calls: return response.text or ""  # noqa: E701
             for tc in response.tool_calls:

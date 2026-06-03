@@ -2,16 +2,17 @@
 Upload API — single multipart upload endpoint for chat attachments.
 
 Routes (all require session auth):
-  POST /upload — save file to /tmp/chalie_<uuid>.<ext>, return metadata
+  POST /upload — save file under the OS temp dir as chalie_<uuid>.<ext>, return metadata
 
 Design:
-  Files are saved to /tmp with a unique chalie_ prefix and are NOT written
-  to the database or analysed at upload time. The frontend collects the
-  returned tmp_path values and passes them as an ``attachments`` array in
-  the POST /chat body. The backend processes attachments (move, DB record,
-  OCR/extraction) as part of the normal message processing flow.
+  Files are saved under the OS temp dir with a unique chalie_ prefix (see
+  services/tmp_storage.py) and are NOT written to the database or analysed at
+  upload time. The frontend collects the returned tmp_path values and passes
+  them as an ``attachments`` array in the POST /chat body. The backend
+  processes attachments (move, DB record, OCR/extraction) as part of the
+  normal message processing flow.
 
-  Cleanup: stale /tmp/chalie_* files older than 24 h are swept by
+  Cleanup: stale chalie_* temp files older than 24 h are swept by
   TmpCleanupWorker (workers/tmp_cleanup_worker.py), registered in run.py.
 
 MIME allowlist (images + documents accepted by text_extractor):
@@ -31,6 +32,7 @@ from flask import Blueprint, jsonify, request
 # safe_filename: shared werkzeug-backed sanitizer (services/filename_utils.py),
 # also used by api/documents.py — single source of truth for upload filenames.
 from services.filename_utils import safe_filename
+from services.tmp_storage import new_tmp_path
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -83,10 +85,10 @@ def _sanitize_filename(original: str, mime: str) -> str:
 @upload_bp.route('/upload', methods=['POST'])
 @require_session
 def upload_file():
-    """Save a multipart file to /tmp and return its metadata.
+    """Save a multipart file to the OS temp dir and return its metadata.
 
     Accepts multipart field ``file``. Validates MIME type and file size.
-    Saves to ``/tmp/chalie_<uuid>.<ext>`` without creating any DB record.
+    Saves to ``<tempdir>/chalie_<uuid>.<ext>`` without creating any DB record.
 
     Returns:
         201: ``{tmp_path, filename, content_type, size}``
@@ -119,7 +121,7 @@ def upload_file():
     filename = _sanitize_filename(file.filename, mime)
     ext = os.path.splitext(filename)[1] or _MIME_TO_EXT.get(mime, '.bin')
     unique_id = secrets.token_hex(8)
-    tmp_path = f'/tmp/chalie_{unique_id}{ext}'
+    tmp_path = new_tmp_path(f'{unique_id}{ext}')
 
     try:
         with open(tmp_path, 'wb') as fh:

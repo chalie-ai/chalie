@@ -138,7 +138,7 @@ class TestProviderCalculateE3ReturnsZeroOnError:
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 
-        assert pct == 0.0, (
+        assert pct == pytest.approx(0.0), (
             f"calculate() must return 0.0 on _resolve failure, got {pct}"
         )
 
@@ -152,7 +152,7 @@ class TestProviderCalculateE3ReturnsZeroOnError:
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 
-        assert pct == 0.0, (
+        assert pct == pytest.approx(0.0), (
             f"calculate() must return 0.0 when build_request_body raises, got {pct}"
         )
 
@@ -169,7 +169,7 @@ class TestProviderCalculateE4ReturnsZeroWhenMaxTokensUnknown:
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 
-        assert pct == 0.0, (
+        assert pct == pytest.approx(0.0), (
             f"calculate() must return 0.0 when context_limit is 0, got {pct}"
         )
 
@@ -181,6 +181,6 @@ class TestProviderCalculateE4ReturnsZeroWhenMaxTokensUnknown:
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 
-        assert pct == 0.0, (
+        assert pct == pytest.approx(0.0), (
             f"calculate() must return 0.0 when context_limit is None, got {pct}"
         )

@@ -47,7 +47,7 @@ const PanelPolicies = (() => {
     }
 
     let html = `<div class="policies-grid">`;
-    for (const cat of Object.keys(byCat).sort()) {
+    for (const cat of Object.keys(byCat).sort((a, b) => a.localeCompare(b))) {
       html += `<div class="policy-category">
         <h4 class="section-head">${BrainApp.escapeHtml(cat)}</h4>
         ${byCat[cat].map(r => `<div class="policy-rule">
