@@ -37,15 +37,6 @@ logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[MCP CLIENT]"
 
-# ── Policy defaults for dynamically-registered _mcp_* tools ─────────────────
-# Matches Dylan's decision #2: ask in chat/subagent, deny in subconscious/external.
-_MCP_POLICY_DEFAULTS: dict[str, str] = {
-    "chat": "ask",
-    "subagent": "ask",
-    "subconscious": "deny",
-    "external_agent": "deny",
-}
-
 # Status strings — these exact values are checked by the nightly scenario.
 _STATUS_UNKNOWN = "unknown"
 _STATUS_ONLINE = "online"
@@ -352,7 +343,6 @@ class McpClientService:
         try:
             tools = asyncio.run(_async_list_tools(host, headers))
             self._write_tools(server_id, server["name"], tools)
-            self._seed_policy_rows(server["name"], tools)
             self._update_status(server_id, _STATUS_ONLINE)
             logger.info(
                 "%s Server %r online — %d tools synced",
@@ -631,34 +621,6 @@ class McpClientService:
             conn.commit()
         finally:
             conn.close()
-
-    def _seed_policy_rows(self, server_name: str, tools: list[dict]) -> None:
-        """Seed per-tool policy rows (ask/ask/deny/deny) for the server's tools.
-
-        Uses INSERT OR IGNORE so existing user customizations are never overwritten.
-        This is what makes _mcp_* tools appear in get_defaults() and therefore
-        get policy-enforced (ask-gate in chat) instead of skipped.
-        """
-        from services.policy_service import VALID_CONTEXTS
-        now = utc_now().isoformat()
-        rows_to_insert = []
-        for t in tools:
-            action_id = _tool_name(server_name, t["name"])
-            for context in VALID_CONTEXTS:
-                state = _MCP_POLICY_DEFAULTS.get(context, "deny")
-                rows_to_insert.append((action_id, context, state, now))
-
-        with self._db.connection() as conn:
-            conn.executemany(
-                "INSERT OR IGNORE INTO policy_rules "
-                "(action_id, context, state, updated_at) VALUES (?, ?, ?, ?)",
-                rows_to_insert,
-            )
-            conn.commit()
-        logger.info(
-            "%s Seeded policy rows for %d tools (server=%r)",
-            _LOG_PREFIX, len(tools), server_name,
-        )
 
     def _delete_policy_rows(self, tool_name_prefix: str) -> None:
         """Remove all policy_rules rows whose action_id starts with prefix."""
