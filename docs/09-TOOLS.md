@@ -47,13 +47,12 @@ class WeatherAbility(Ability):
         # 6 to 8 entries total — enforced by __init_subclass__
     ]
     INPUT_SCHEMA = {"type": "object", "properties": {...}}
-    TIMEOUT = 10  # optional; default is 10
 
-    def execute(self, channel, params, telemetry):
+    def run(self, params):
         ...
 ```
 
-`channel` is the current conversation channel, `params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`, and `telemetry` carries flattened client context (location, time, locale — fields may be null). The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability. SEARCH_TOOLTIP provides a compact label for the `find_tools` index. Both `find_tools` and `find_skills` inherit from `SearchableAbility` (`abilities/_search.py`) which provides the shared vec+FTS5 RRF fusion search infrastructure.
+`params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`. The conversation channel and flattened client telemetry (location, time, locale — fields may be null) are reached via `self.MessageProcessor.config.channel` and `self.telemetry` (set by the dispatch spine immediately before `run()`). Abilities run to completion — there is no framework execution timeout. The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability. SEARCH_TOOLTIP provides a compact label for the `find_tools` index. Both `find_tools` and `find_skills` inherit from `SearchableAbility` (`abilities/_search.py`) which provides the shared vec+FTS5 RRF fusion search infrastructure.
 
 After registering the ability, wire it into the appropriate config(s). For a discoverable ability, add its `NAME` to `DEFAULT_DISCOVERABLE` in `backend/configs/channels.py`. For an always-available ability, add it to `DEFAULT_ALWAYS_AVAILABLE` instead. If a specific channel should not see the ability, add the name to that config's `blocked` frozenset. Then regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
 
