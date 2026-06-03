@@ -20,14 +20,17 @@ Properties (spec §5b "Properties of every delegate tool"):
   - Goal-driven system prompt — short, task-specific.
   - Finite tool surface — always_available lists exactly what the delegate needs;
     discoverable=[] prevents discovery of anything else.
-  - No recursion — delegate tools are not in the surface and are blocked.
+  - No recursion — with no find_tools and discoverable=[], a delegate can only
+    call what is in always_available; delegate tools are not in that surface, so
+    a delegate can never spawn another delegate.
   - ASYNC_CAPABLE=True — the framework (Ability.execute) wraps run() in a
     daemon thread for async-capable origins.  run() is ALWAYS synchronous.
 
-Permission boundary — ``policy_channel`` stays SUBCONSCIOUS because the
-delegate's internal tools (``search``, ``read``, ``web_download``) are scratch
-internals; the user-facing permission check happens at the outer ``web_search``
-tool, not on each internal call.
+Permission boundary — ``policy_channel`` is inherited from the caller that
+invoked the ``web_search`` tool (``policy_channel_for(channel)``): the
+delegate's internal tool calls are gated under the SAME policy channel as the
+caller, not a hardcoded value.  The user-facing permission check still happens
+at the outer ``web_search`` tool.
 """
 
 import time
@@ -36,8 +39,8 @@ from typing import ClassVar
 from abilities._base import Ability
 from abilities._delegate import (
     DELEGATE_DEADLINE_SECONDS,
-    build_blocked,
     delegate_goal,
+    policy_channel_for,
     render_trail,
 )
 from services.processor_config import ProcessorConfig
@@ -68,22 +71,24 @@ def _web_search_user_prompt(mp: object) -> str:
 class WebSearchConfig(ProcessorConfig):
     """ProcessorConfig for the web_search delegate.
 
-    Mirrors the 10 other TKT-803 ProcessorConfig subclasses: typed zero-arg
-    ``__init__`` that calls ``super().__init__(...)`` against the frozen base.
+    Mirrors the TKT-803 ProcessorConfig subclasses: a typed ``__init__`` that
+    calls ``super().__init__(...)`` against the frozen base.  ``policy_channel``
+    is supplied by the caller (inherited from whoever invoked the tool) rather
+    than hardcoded.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
         tools = list(_WEB_SEARCH_TOOLS)
         super().__init__(
             channel="delegate:web_search",
             role="web_search",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=policy_channel,
             build_user_prompt=_web_search_user_prompt,
             build_user_definition=lambda _mp: "",
             build_system_prompt=lambda _mp: _WEB_SEARCH_SYSTEM_PROMPT,
             always_available=[*tools, "memory"],
             discoverable=[],
-            blocked=build_blocked(tools),
+            blocked=frozenset(),
             max_iterations=50,
             skip_transcript=True,
             skip_input_row=True,
@@ -131,7 +136,7 @@ class WebSearchAbility(Ability):
 
         result = MessageProcessor.process(
             delegate_goal(params),
-            WebSearchConfig(),
+            WebSearchConfig(policy_channel_for(channel)),
             deadline=time.time() + DELEGATE_DEADLINE_SECONDS,
         )
         return {"status": "success", "result": result}

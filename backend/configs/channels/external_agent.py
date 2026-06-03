@@ -4,7 +4,12 @@ from typing import Any
 
 from services.processor_config import ProcessorConfig
 
-from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE, DEFAULT_DISCOVERABLE
+from configs.channels._common import (
+    DEFAULT_ALWAYS_AVAILABLE,
+    DEFAULT_DISCOVERABLE,
+    DELEGATE_INTERNAL_TOOLS,
+    PATTERN_WRITE_TOOLS,
+)
 
 # ── EAMP prompt builders ──────────────────────────────────────────────────────
 
@@ -182,7 +187,7 @@ class EAMPConfig(ProcessorConfig):
             build_system_prompt=_eamp_build_system_prompt(agent_name, project, wrapper_id),
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
-            blocked=frozenset(),
+            blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
             max_iterations=200,
             skip_transcript=False,
             skip_input_row=False,

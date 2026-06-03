@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from services.processor_config import ProcessorConfig
 
-from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE, DEFAULT_DISCOVERABLE
+from configs.channels._common import (
+    DEFAULT_ALWAYS_AVAILABLE,
+    DEFAULT_DISCOVERABLE,
+    DELEGATE_INTERNAL_TOOLS,
+    DELEGATE_TOOLS,
+    PATTERN_WRITE_TOOLS,
+)
 
 # ── DMN prompt builders ───────────────────────────────────────────────────────
 
@@ -123,7 +129,7 @@ class DmnConfig(ProcessorConfig):
             build_system_prompt=_dmn_build_system_prompt,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
-            blocked=frozenset({"web_search", "web_browse"}),
+            blocked=DELEGATE_TOOLS | PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
             max_iterations=100,
             skip_transcript=False,
             skip_input_row=False,

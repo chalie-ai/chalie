@@ -4,7 +4,12 @@ from typing import Any
 
 from services.processor_config import ProcessorConfig
 
-from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE, DEFAULT_DISCOVERABLE
+from configs.channels._common import (
+    DEFAULT_ALWAYS_AVAILABLE,
+    DEFAULT_DISCOVERABLE,
+    DELEGATE_INTERNAL_TOOLS,
+    PATTERN_WRITE_TOOLS,
+)
 
 # ── UMP prompt builders ───────────────────────────────────────────────────────
 
@@ -205,7 +210,7 @@ class UserConfig(ProcessorConfig):
             build_system_prompt=_ump_build_system_prompt,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
-            blocked=frozenset(),
+            blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
             max_iterations=None,
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),

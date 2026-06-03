@@ -16,25 +16,29 @@ factory — only these small shared primitives.
 
 from __future__ import annotations
 
-# Every delegate tool name — used to build each delegate's recursion-guard
-# blocklist (spec §5b property #4 / K5): a delegate never invokes another
-# delegate.
-DELEGATE_TOOL_NAMES: frozenset[str] = frozenset(
-    {"web_search", "web_browse"}
-)
+from services.processor_config import ProcessorConfig
 
 # Wall-clock horizon for a delegate ACT loop (K9).
 DELEGATE_DEADLINE_SECONDS: int = 600
 
 
-def build_blocked(surface: list[str]) -> frozenset[str]:
-    """Block every delegate tool NOT in this delegate's own surface.
+def policy_channel_for(channel: str) -> "ProcessorConfig.POLICY_CHANNEL":
+    """Map a caller's transcript channel → the policy channel a delegate inherits.
 
-    Recursion guard (spec §5b property #4 / K5).  A delegate cannot invoke
-    another delegate unless it explicitly lists that delegate in its own
-    always_available surface; every other delegate is blocked.
+    A delegate's internal tool calls are gated under the SAME policy channel as
+    the caller that invoked the delegate tool, rather than a hardcoded value.
+    The map is total: the user channel → CHAT, an external-agent channel →
+    EXTERNAL_AGENT, every background channel → SUBCONSCIOUS.  ``channel`` is the
+    caller's ``config.channel`` (set by ``Ability.execute``) and is always
+    present in a real dispatch; an empty/unknown string is only reachable by a
+    direct non-dispatch call and falls into the SUBCONSCIOUS branch.
     """
-    return frozenset(name for name in DELEGATE_TOOL_NAMES if name not in surface)
+    pc = ProcessorConfig.POLICY_CHANNEL
+    if channel == "user":
+        return pc.CHAT
+    if channel.startswith("external-agent:"):
+        return pc.EXTERNAL_AGENT
+    return pc.SUBCONSCIOUS
 
 
 def delegate_goal(params: dict) -> str:

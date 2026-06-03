@@ -18,10 +18,11 @@ Named ``web_browse`` (not ``browser``) to avoid a flat-registry collision with
 the raw ``browser`` ability — its tool *surface* still uses the raw ``browser``
 tool (spec amendment 2026-06-02, Dylan, AC-3).
 
-Permission boundary — ``policy_channel`` stays SUBCONSCIOUS because the
-delegate's internal tools (``browser``, ``read``) are scratch internals; the
-user-facing permission check happens at the outer ``web_browse`` tool, not on
-each internal call.
+Permission boundary — ``policy_channel`` is inherited from the caller that
+invoked the ``web_browse`` tool (``policy_channel_for(channel)``): the
+delegate's internal tool calls are gated under the SAME policy channel as the
+caller, not a hardcoded value.  The user-facing permission check still happens
+at the outer ``web_browse`` tool.
 """
 
 import time
@@ -30,8 +31,8 @@ from typing import ClassVar
 from abilities._base import Ability
 from abilities._delegate import (
     DELEGATE_DEADLINE_SECONDS,
-    build_blocked,
     delegate_goal,
+    policy_channel_for,
     render_trail,
 )
 from services.processor_config import ProcessorConfig
@@ -65,22 +66,24 @@ def _web_browse_user_prompt(mp: object) -> str:
 class WebBrowseConfig(ProcessorConfig):
     """ProcessorConfig for the web_browse delegate.
 
-    Mirrors the 10 other TKT-803 ProcessorConfig subclasses: typed zero-arg
-    ``__init__`` that calls ``super().__init__(...)`` against the frozen base.
+    Mirrors the TKT-803 ProcessorConfig subclasses: a typed ``__init__`` that
+    calls ``super().__init__(...)`` against the frozen base.  ``policy_channel``
+    is supplied by the caller (inherited from whoever invoked the tool) rather
+    than hardcoded.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
         tools = list(_WEB_BROWSE_TOOLS)
         super().__init__(
             channel="delegate:web_browse",
             role="web_browse",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=policy_channel,
             build_user_prompt=_web_browse_user_prompt,
             build_user_definition=lambda _mp: "",
             build_system_prompt=lambda _mp: _WEB_BROWSE_SYSTEM_PROMPT,
-            always_available=tools,
+            always_available=[*tools, "memory"],
             discoverable=[],
-            blocked=build_blocked(tools),
+            blocked=frozenset(),
             max_iterations=50,
             skip_transcript=True,
             skip_input_row=True,
@@ -129,7 +132,7 @@ class WebBrowseAbility(Ability):
 
         result = MessageProcessor.process(
             delegate_goal(params),
-            WebBrowseConfig(),
+            WebBrowseConfig(policy_channel_for(channel)),
             deadline=time.time() + DELEGATE_DEADLINE_SECONDS,
         )
         return {"status": "success", "result": result}
