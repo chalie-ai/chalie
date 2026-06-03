@@ -1,7 +1,11 @@
 """policy_defaults.json is a valid static seed (flat triples + internal rows)."""
 import json
 
+import pytest
+
 from services.file_mapper_service import FileMapperService
+
+pytestmark = pytest.mark.unit
 
 _CHANNELS = {"chat", "subagent", "subconscious", "external_agent"}
 _SETTINGS = {"internal", "allow", "ask", "deny"}
