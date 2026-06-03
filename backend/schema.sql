@@ -652,6 +652,14 @@ END;
 -- ============================================================================
 -- POLICY — per-action permission control (allow / ask / deny).
 -- ============================================================================
+CREATE TABLE IF NOT EXISTS policy (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel    TEXT NOT NULL,
+    permission TEXT NOT NULL,
+    setting    TEXT NOT NULL CHECK (setting IN ('internal', 'allow', 'ask', 'deny')),
+    UNIQUE (channel, permission)
+);
+
 CREATE TABLE IF NOT EXISTS policy_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     action_id TEXT NOT NULL,
