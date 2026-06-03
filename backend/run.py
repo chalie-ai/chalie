@@ -95,12 +95,24 @@ def _start_model_preload():
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
 
-def _migrate_policy_table(database_service) -> None:
-    """Create the flat `policy` table, copy legacy policy_rules 1:1, apply the
-    static seed — all idempotent, BEFORE schema convergence drops policy_rules.
-    Mirrors the providers hard-delete ordering (commit 2db7f1a6)."""
-    from services.policy_manager import PolicyManager
+def _migrate_legacy_policy_rules(database_service) -> None:
+    """Copy a legacy ``policy_rules`` table 1:1 into the flat ``policy`` table,
+    BEFORE schema convergence drops policy_rules.
+
+    Upgrade-path only.  On a fresh install there is no policy_rules, so this is a
+    no-op and — critically — does NOT create the ``policy`` table early.  Creating
+    any table here would make the DB look non-empty to convergence's freshness
+    check, which would then skip schema.sql's INSERT OR IGNORE seed pass entirely
+    — including the row that marks ``api_key`` sensitive, persisting the REST API
+    key in cleartext on fresh installs.  Convergence creates ``policy`` (schema.sql)
+    and runs the seeds; the declarative policy seed is applied separately, after
+    convergence (see _init_database)."""
     with database_service.connection() as conn:
+        has_legacy = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='policy_rules'"
+        ).fetchone() is not None
+        if not has_legacy:
+            return
         conn.execute("""
             CREATE TABLE IF NOT EXISTS policy (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,17 +121,12 @@ def _migrate_policy_table(database_service) -> None:
                 UNIQUE (channel, permission)
             )
         """)
-        has_legacy = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='policy_rules'"
-        ).fetchone() is not None
-        if has_legacy:
-            conn.execute(
-                "INSERT OR IGNORE INTO policy (channel, permission, setting) "
-                "SELECT context, action_id, state FROM policy_rules"
-            )
+        conn.execute(
+            "INSERT OR IGNORE INTO policy (channel, permission, setting) "
+            "SELECT context, action_id, state FROM policy_rules"
+        )
         conn.commit()
-    inserted = PolicyManager(database_service).apply_seed()
-    logger.info("[Startup] Policy migration complete (seed inserted %d new rows)", inserted)
+    logger.info("[Startup] Legacy policy_rules copied into flat policy table")
 
 
 def _init_database():
@@ -145,14 +152,26 @@ def _init_database():
     except Exception as _prov_err:
         logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
 
-    # Policy: migrate the flat `policy` table BEFORE convergence drops policy_rules.
+    # Policy (upgrade path): copy legacy policy_rules → policy BEFORE convergence
+    # drops policy_rules.  No-op on a fresh DB so it stays "fresh" and convergence
+    # runs schema.sql's seed pass (incl. the api_key is_sensitive row).
     try:
-        _migrate_policy_table(database_service)
+        _migrate_legacy_policy_rules(database_service)
     except Exception as _pol_err:
-        logger.warning(f"[Startup] policy migration skipped: {_pol_err}")
+        logger.warning(f"[Startup] legacy policy_rules copy skipped: {_pol_err}")
 
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
+
+    # Policy: apply the declarative seed (idempotent) AFTER convergence has created
+    # the policy table.  INSERT OR IGNORE preserves any copied/user rows.
+    try:
+        from services.policy_manager import PolicyManager
+        inserted = PolicyManager(database_service).apply_seed()
+        logger.info("[Startup] Policy seed applied (%d new rows)", inserted)
+    except Exception as _seed_err:
+        logger.warning(f"[Startup] policy seed skipped: {_seed_err}")
+
     return database_service
 
 
