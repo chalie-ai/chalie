@@ -339,7 +339,7 @@ def _ensure_worker_started() -> None:
         _embedding_worker_running = True
 
 
-def _submit_for_inference(texts: List[str]) -> np.ndarray:
+def _submit_for_inference(texts: List[str], mp=None) -> np.ndarray:
     """Submit texts to the inference queue and block until the result is ready.
 
     Cache checks must be done BEFORE calling this function — submitting a
@@ -347,20 +347,16 @@ def _submit_for_inference(texts: List[str]) -> np.ndarray:
     could cause reentrance if the worker itself ever needed to embed (it does
     not, but the guard keeps the contract explicit).
 
-    Records the queue+inference wait into the bound processor's
-    ``embedding_wait_ms`` stage so callers can see how much pre-LLM time
-    the single-threaded ONNX worker is costing them.
+    When the caller threads its MessageProcessor (``mp``) through, the
+    queue+inference wait is recorded into that processor's ``embedding_wait_ms``
+    stage so callers can see how much pre-LLM time the single-threaded ONNX
+    worker is costing them. Background callers pass no ``mp`` — the timing is
+    simply not attributed (the worker is queue-decoupled and has no parent).
     """
     _ensure_worker_started()
     future: concurrent.futures.Future = concurrent.futures.Future()
     _embedding_queue.put((texts, future))
-    proc = None
-    try:
-        from services.message_processor import current_processor
-        proc = current_processor()
-    except Exception:
-        proc = None
-    metrics = getattr(proc, '_metrics', None) if proc is not None else None
+    metrics = getattr(mp, '_metrics', None) if mp is not None else None
     if metrics is None:
         return future.result()
     with metrics.stage('embedding_wait'):
@@ -410,12 +406,16 @@ class EmbeddingService:
         except Exception:
             pass
 
-    def generate_embedding(self, text: str) -> list:
+    def generate_embedding(self, text: str, mp=None) -> list:
         """Generate a single L2-normalized embedding vector as a list. Cached.
 
         Cache hit returns immediately without touching the queue — this also
         prevents reentrance deadlock if an embedding is requested from within
         the worker thread (impossible today, but guarded explicitly).
+
+        ``mp`` (the invoking MessageProcessor) is threaded through to attribute
+        the embedding-wait timing when called from within a turn; None from
+        background callers.
 
         Returns:
             Embedding as a plain Python list of floats suitable for SQLite storage.
@@ -426,19 +426,22 @@ class EmbeddingService:
             return cached
 
         try:
-            embedding = _submit_for_inference([text])[0].tolist()
+            embedding = _submit_for_inference([text], mp)[0].tolist()
             self._cache_put(text, embedding)
             return embedding
         except Exception as e:
             logger.error(f"[EMBEDDING] Generation failed: {e}")
             raise
 
-    def generate_embedding_np(self, text: str) -> np.ndarray:
+    def generate_embedding_np(self, text: str, mp=None) -> np.ndarray:
         """Generate a single L2-normalized embedding vector as a numpy array. Cached.
 
         Cache hit returns immediately without touching the queue — this also
         prevents reentrance deadlock if an embedding is requested from within
         the worker thread (impossible today, but guarded explicitly).
+
+        ``mp`` is threaded through for embedding-wait attribution; None from
+        background callers.
 
         Returns:
             Embedding as a float32 numpy array for cosine similarity math.
@@ -449,14 +452,14 @@ class EmbeddingService:
             return np.array(cached, dtype=np.float32)
 
         try:
-            embedding = _submit_for_inference([text])[0]
+            embedding = _submit_for_inference([text], mp)[0]
             self._cache_put(text, embedding.tolist())
             return embedding
         except Exception as e:
             logger.error(f"[EMBEDDING] Generation failed: {e}")
             raise
 
-    def generate_embeddings_batch(self, texts: List[str]) -> List[np.ndarray]:
+    def generate_embeddings_batch(self, texts: List[str], mp=None) -> List[np.ndarray]:
         """Generate L2-normalized embeddings for a batch of texts.
 
         Each chunk is submitted as a single queue job so the worker processes
@@ -477,7 +480,7 @@ class EmbeddingService:
             chunk_size = 32
             for i in range(0, len(texts), chunk_size):
                 chunk = texts[i:i + chunk_size]
-                embeddings = _submit_for_inference(chunk)
+                embeddings = _submit_for_inference(chunk, mp)
                 results.extend(embeddings)
             return results
         except Exception as e:

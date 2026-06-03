@@ -46,7 +46,7 @@ class TestProviderCalculateE1ReturnsFraction:
             body=json.dumps({"messages": [{"role": "user", "content": "hello world test"}]}),
             context_limit=10_000,
         )
-        monkeypatch.setattr(Providers, '_resolve', lambda self, job: fake_provider)
+        monkeypatch.setattr(Providers, '_resolve', lambda self, job, mp=None: fake_provider)
 
         pct = Providers.instance().calculate('sys', 'hello world test', [], job='unified')
 
@@ -60,7 +60,7 @@ class TestProviderCalculateE1ReturnsFraction:
         body_str = json.dumps({"messages": [{"role": "user", "content": "a b c d e"}]})
         context_limit = 100_000
         fake_provider = _make_fake_provider(body=body_str, context_limit=context_limit)
-        monkeypatch.setattr(Providers, '_resolve', lambda self, job: fake_provider)
+        monkeypatch.setattr(Providers, '_resolve', lambda self, job, mp=None: fake_provider)
 
         pct = Providers.instance().calculate('sys', 'a b c d e', [], job='unified')
 
@@ -82,7 +82,7 @@ class TestProviderCalculateE2MeasuresRealBody:
         from services.providers import Providers
 
         fake_provider = _make_fake_provider(body='{}', context_limit=50_000)
-        monkeypatch.setattr(Providers, '_resolve', lambda self, job: fake_provider)
+        monkeypatch.setattr(Providers, '_resolve', lambda self, job, mp=None: fake_provider)
 
         system = 'You are a helpful assistant.'
         user_body = 'What is 2+2?'
@@ -112,7 +112,7 @@ class TestProviderCalculateE2MeasuresRealBody:
         # A 'fat' body that has far more tokens than the raw user_body alone
         fat_body = json.dumps({'messages': ['word ' * 1000]})
         fake_provider = _make_fake_provider(body=fat_body, context_limit=200_000)
-        monkeypatch.setattr(Providers, '_resolve', lambda self, job: fake_provider)
+        monkeypatch.setattr(Providers, '_resolve', lambda self, job, mp=None: fake_provider)
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 
@@ -134,7 +134,7 @@ class TestProviderCalculateE3ReturnsZeroOnError:
         def _raise(job):
             raise RuntimeError("no provider configured")
 
-        monkeypatch.setattr(Providers, '_resolve', lambda self, job: _raise(job))
+        monkeypatch.setattr(Providers, '_resolve', lambda self, job, mp=None: _raise(job))
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 
@@ -148,7 +148,7 @@ class TestProviderCalculateE3ReturnsZeroOnError:
         fake_provider = MagicMock()
         fake_provider.build_request_body.side_effect = RuntimeError("serialisation failed")
         fake_provider.get_context_limit.return_value = 100_000
-        monkeypatch.setattr(Providers, '_resolve', lambda self, job: fake_provider)
+        monkeypatch.setattr(Providers, '_resolve', lambda self, job, mp=None: fake_provider)
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 
@@ -165,7 +165,7 @@ class TestProviderCalculateE4ReturnsZeroWhenMaxTokensUnknown:
         from services.providers import Providers
 
         fake_provider = _make_fake_provider(body='{"messages":[]}', context_limit=0)
-        monkeypatch.setattr(Providers, '_resolve', lambda self, job: fake_provider)
+        monkeypatch.setattr(Providers, '_resolve', lambda self, job, mp=None: fake_provider)
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 
@@ -177,7 +177,7 @@ class TestProviderCalculateE4ReturnsZeroWhenMaxTokensUnknown:
         from services.providers import Providers
 
         fake_provider = _make_fake_provider(body='{"messages":[]}', context_limit=None)
-        monkeypatch.setattr(Providers, '_resolve', lambda self, job: fake_provider)
+        monkeypatch.setattr(Providers, '_resolve', lambda self, job, mp=None: fake_provider)
 
         pct = Providers.instance().calculate('sys', 'hello', [], job='unified')
 

@@ -4,7 +4,7 @@ Reachable when a processor lists ``"save_graph"`` in its ``ALWAYS_AVAILABLE``
 or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
 
 Budget state lives on the calling processor (read via
-``current_processor()``).  PMP initialises ``_save_graph_calls = 0`` in
+``self.MessageProcessor``).  PMP initialises ``_save_graph_calls = 0`` in
 ``__init__``; this Ability uses ``getattr`` defaults so it remains usable
 from any processor that opts it in.
 """
@@ -12,7 +12,6 @@ import logging
 
 from abilities._base import Ability
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
-from services.message_processor import current_processor
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +49,9 @@ class SaveGraph(Ability):
         },
         "required": ["kind", "key", "value"],
     }
-    TIMEOUT = 10
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        proc = current_processor()
+    def run(self, params: dict) -> dict:
+        proc = self.MessageProcessor
         count = getattr(proc, "_save_graph_calls", 0) if proc is not None else 0
         if count >= _BUDGET_CAP:
             return {"budget_exceeded": True, "tool": "save_graph"}

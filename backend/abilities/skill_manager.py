@@ -17,9 +17,9 @@ class SkillManagerAbility(SkillBuilderAbility):
     NAME = "skill_manager"
     SYSTEM = True
 
-    def run(self, channel: str, params: dict, telemetry: "dict | None") -> dict:
+    def run(self, params: dict) -> dict:
         """Run inherited handler, then fix tag name in result text."""
-        result = super().run(channel, params, telemetry)
+        result = super().run(params)
         if 'text' in result:
             result['text'] = result['text'].replace(
                 'skill_builder', self.NAME,

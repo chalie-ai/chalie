@@ -171,7 +171,7 @@ class TestSkillBuilderCreateValidation:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        result = ability.run("test", {"action": "create"}, None)
+        result = ability.run({"action": "create"})
 
         assert "error=title-required" in result["text"]
 
@@ -179,7 +179,7 @@ class TestSkillBuilderCreateValidation:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        result = ability.run("test", {"action": "create", "title": "My Skill"}, None)
+        result = ability.run({"action": "create", "title": "My Skill"})
 
         assert "error=use_for-required" in result["text"]
 
@@ -187,11 +187,7 @@ class TestSkillBuilderCreateValidation:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        result = ability.run(
-            "test",
-            {"action": "create", "title": "My Skill", "use_for": "tracking things"},
-            None,
-        )
+        result = ability.run({"action": "create", "title": "My Skill", "use_for": "tracking things"})
 
         assert "error=content-required" in result["text"]
 
@@ -213,17 +209,13 @@ class TestSkillBuilderLifecycle:
         before = _skill_count(db_path)
 
         ability = SkillBuilderAbility()
-        result = ability.run(
-            "test",
-            {
+        result = ability.run({
                 "action": "create",
                 "title": self._TITLE,
                 "use_for": self._USE_FOR,
                 "content": self._CONTENT,
                 "tags": "productivity, planning",
-            },
-            None,
-        )
+            })
 
         assert "status=ok" in result["text"]
         assert "action=create" in result["text"]
@@ -252,8 +244,8 @@ class TestSkillBuilderLifecycle:
             "use_for": self._USE_FOR,
             "content": self._CONTENT,
         }
-        ability.run("test", params, None)
-        result = ability.run("test", params, None)
+        ability.run(params)
+        result = ability.run(params)
 
         assert "skill-already-exists" in result["text"]
 
@@ -262,23 +254,15 @@ class TestSkillBuilderLifecycle:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        ability.run(
-            "test",
-            {
+        ability.run({
                 "action": "create",
                 "title": self._TITLE,
                 "use_for": self._USE_FOR,
                 "content": self._CONTENT,
-            },
-            None,
-        )
+            })
 
         new_content = "1. Summarise tasks.\n2. Review blockers.\n3. Plan next week."
-        result = ability.run(
-            "test",
-            {"action": "edit", "title": self._TITLE, "content": new_content},
-            None,
-        )
+        result = ability.run({"action": "edit", "title": self._TITLE, "content": new_content})
 
         assert "status=ok" in result["text"]
         assert "action=edit" in result["text"]
@@ -293,23 +277,15 @@ class TestSkillBuilderLifecycle:
 
         db_path = skill_env["db_path"]
         ability = SkillBuilderAbility()
-        ability.run(
-            "test",
-            {
+        ability.run({
                 "action": "create",
                 "title": self._TITLE,
                 "use_for": self._USE_FOR,
                 "content": self._CONTENT,
-            },
-            None,
-        )
+            })
 
         before = _skill_count(db_path)
-        result = ability.run(
-            "test",
-            {"action": "delete", "title": self._TITLE},
-            None,
-        )
+        result = ability.run({"action": "delete", "title": self._TITLE})
 
         assert "status=ok" in result["text"]
         assert "action=delete" in result["text"]
@@ -324,18 +300,14 @@ class TestSkillBuilderLifecycle:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        ability.run(
-            "test",
-            {
+        ability.run({
                 "action": "create",
                 "title": self._TITLE,
                 "use_for": self._USE_FOR,
                 "content": self._CONTENT,
-            },
-            None,
-        )
+            })
 
-        result = ability.run("test", {"action": "list"}, None)
+        result = ability.run({"action": "list"})
 
         assert "action=list" in result["text"]
         assert self._TITLE in result["text"]

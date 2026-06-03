@@ -149,11 +149,6 @@ def test_registry_get_returns_weather_ability():
     assert isinstance(instance, WeatherAbility)
 
 
-def test_weather_timeout_default():
-    """TIMEOUT defaults to 10."""
-    assert WeatherAbility.TIMEOUT == 10
-
-
 # ---------------------------------------------------------------------------
 # execute() — happy path via Open-Meteo
 # ---------------------------------------------------------------------------
@@ -162,8 +157,10 @@ def test_execute_open_meteo_happy_path_returns_documented_keys():
     """With coords in telemetry and a successful Open-Meteo response, all documented keys are present."""
     telemetry = {"lat": 35.8989, "lon": 14.5146, "city": "Valletta", "country": "Malta"}
 
+    ab = WeatherAbility()
+    ab.telemetry = telemetry
     with patch("requests.get", return_value=_make_http_response(_OPEN_METEO_RESPONSE)):
-        result = WeatherAbility().run("text", {}, telemetry)
+        result = ab.run({})
 
     expected_keys = {
         "location", "condition", "temperature_c", "temperature_f", "feels_like_c",
@@ -194,9 +191,13 @@ def test_execute_cache_hit_calls_requests_once():
     telemetry = {"lat": 35.8989, "lon": 14.5146, "city": "Valletta", "country": "Malta"}
     mock_resp = _make_http_response(_OPEN_METEO_RESPONSE)
 
+    ab1 = WeatherAbility()
+    ab1.telemetry = telemetry
+    ab2 = WeatherAbility()
+    ab2.telemetry = telemetry
     with patch("requests.get", return_value=mock_resp) as mock_get:
-        WeatherAbility().run("text", {}, telemetry)
-        WeatherAbility().run("text", {}, telemetry)
+        ab1.run({})
+        ab2.run({})
         assert mock_get.call_count == 1, f"Expected 1 HTTP call, got {mock_get.call_count}"
 
 
@@ -218,7 +219,7 @@ def test_execute_retries_wttr_on_first_failure():
     ]
 
     with patch("requests.get", side_effect=side_effects):
-        result = WeatherAbility().run("text", {"location": "London"}, None)
+        result = WeatherAbility().run({"location": "London"})
 
     assert "error" not in result, f"Unexpected error: {result}"
     assert result["location"] == "London, United Kingdom"
@@ -236,7 +237,7 @@ def test_execute_total_failure_returns_error_dict():
     # and a location param (triggers wttr.in attempt) by using location_param only
     # so we exercise the wttr.in failure path cleanly.
     with patch("requests.get", side_effect=Exception("connection refused")):
-        result = WeatherAbility().run("text", {"location": "NoSuchCity"}, None)
+        result = WeatherAbility().run({"location": "NoSuchCity"})
 
     assert "error" in result, f"Expected error key, got: {result}"
     assert "details" in result, f"Expected details key, got: {result}"

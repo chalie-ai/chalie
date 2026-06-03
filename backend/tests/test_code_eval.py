@@ -6,6 +6,8 @@ no-code. A silent empty success previously caused the LLM to retry the same
 call until the ACT-loop iteration wall (nightly 052-tool-code-eval).
 """
 
+import time
+
 import pytest
 
 from abilities.code_eval import CodeEvalAbility
@@ -16,7 +18,7 @@ pytestmark = pytest.mark.unit
 def _run(code) -> dict:
     """Execute CodeEvalAbility with the given code param and return the dict."""
     params = {} if code is None else {"code": code}
-    return CodeEvalAbility().run("user", params, None)
+    return CodeEvalAbility().run(params)
 
 
 # ── 1. printed output is returned ─────────────────────────────────────
@@ -100,3 +102,33 @@ def test_no_path_returns_empty_string_loop_signal_is_gone():
     """Regression: a bare expression (no print) must NOT yield empty success."""
     result = _run("42")
     assert result["error"] == CodeEvalAbility._ERR_NO_OUTPUT
+
+
+# ── hard wall-clock cap: runaway code is force-killed ─────────────────
+
+
+def test_runaway_loop_is_terminated_with_timeout_error(monkeypatch):
+    """A non-terminating loop is force-killed at the cap and returns the
+    actionable timeout error — the ACT loop never hangs.
+
+    The real subprocess is spawned and terminated; only the cap length is
+    shortened (to keep the suite fast) so this exercises the genuine kill path.
+    """
+    monkeypatch.setattr(CodeEvalAbility, "_EXEC_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(CodeEvalAbility, "_POLL_INTERVAL_S", 0.1)
+
+    start = time.monotonic()
+    result = _run("while True:\n    pass")
+    elapsed = time.monotonic() - start
+
+    assert result["error"] == CodeEvalAbility._ERR_TIMEOUT
+    assert result["text"] == ""
+    assert elapsed < 30, "the runaway loop must be killed promptly, not run on"
+
+
+def test_long_output_round_trips_through_subprocess():
+    """A large (untruncated) result returns intact across the process boundary —
+    proof the read-before-join path does not deadlock or truncate."""
+    result = _run("print('x' * 200000)")
+    assert result["error"] == ""
+    assert result["text"].strip() == "x" * 200000

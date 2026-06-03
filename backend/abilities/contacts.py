@@ -70,9 +70,8 @@ class ContactsAbility(Ability):
         },
         "required": ["action"],
     }
-    TIMEOUT = 15
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, params: dict) -> dict | str:
         action = params.get("action", "list").lower()
         ordinal = params.get("_rich_media_ordinal")
 
@@ -111,7 +110,7 @@ class ContactsAbility(Ability):
             return {"text": _skill_tag("contacts", json.dumps(result), action=action)}
 
         from services.innate_skills._capability import dispatch_capability_handler
-        result = dispatch_capability_handler(handler, params, telemetry)
+        result = dispatch_capability_handler(handler, params, self.telemetry)
 
         if ordinal is not None and "error" not in result:
             return _serialise_rich(result, action, ordinal)

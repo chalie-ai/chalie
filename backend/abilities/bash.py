@@ -106,7 +106,6 @@ class BashAbility(Ability):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
 
     NAME = "bash"
-    TIMEOUT = _MAX_TIMEOUT_S
     POLICY_CATEGORY = "System"
     POLICY_LABELS: ClassVar[dict[str, str]] = {
         "read": "Read-only commands",
@@ -188,7 +187,7 @@ class BashAbility(Ability):
         cwd = Path.home()
         return self.SUMMARY + f"Working directory: {cwd}. Use absolute paths or cd to operate elsewhere."
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         command = (params.get("command") or "").strip()
         if not command:
             return {"text": "Error: command is required."}

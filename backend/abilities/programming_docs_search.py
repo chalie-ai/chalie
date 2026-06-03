@@ -902,9 +902,8 @@ class ProgrammingDocsSearchAbility(Ability):
         },
         "required": ["language", "query"],
     }
-    TIMEOUT = 15
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         language = (params.get("language") or "").strip()
         query = (params.get("query") or "").strip()
         if not language:

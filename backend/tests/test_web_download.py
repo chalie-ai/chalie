@@ -51,20 +51,20 @@ def httpbin():
 
 @pytest.mark.unit
 def test_blocked_schemes():
-    assert "blocked" in _ability.run("text", {"url": "file:///etc/passwd"}, None).lower()
-    assert "blocked" in _ability.run("text", {"url": "data:text/plain;base64,SGVsbG8="}, None).lower()
+    assert "blocked" in _ability.run({"url": "file:///etc/passwd"}).lower()
+    assert "blocked" in _ability.run({"url": "data:text/plain;base64,SGVsbG8="}).lower()
 
 
 @pytest.mark.unit
 def test_private_ip_blocked():
-    result = _ability.run("text", {"url": "http://127.0.0.1/secret"}, None)
+    result = _ability.run({"url": "http://127.0.0.1/secret"})
     assert "blocked" in result.lower() or "private" in result.lower()
 
 
 @pytest.mark.unit
 def test_missing_url_is_rejected():
-    assert "required" in _ability.run("text", {}, None).lower()
-    assert "required" in _ability.run("text", {"url": ""}, None).lower()
+    assert "required" in _ability.run({}).lower()
+    assert "required" in _ability.run({"url": ""}).lower()
 
 
 # ── Integration tier: real downloads against httpbin.org ─────────────────────
@@ -72,14 +72,14 @@ def test_missing_url_is_rejected():
 
 @pytest.mark.integration
 def test_successful_download(httpbin):
-    result = _ability.run("text", {"url": "https://httpbin.org/robots.txt"}, None)
+    result = _ability.run({"url": "https://httpbin.org/robots.txt"})
     assert os.path.isabs(result)
     assert result.startswith(_TMP)
     assert os.path.exists(result)
     assert os.path.getsize(result) > 0
     assert result.endswith("robots.txt")
 
-    second = _ability.run("text", {"url": "https://httpbin.org/robots.txt"}, None)
+    second = _ability.run({"url": "https://httpbin.org/robots.txt"})
     assert second != result
     assert second.endswith("robots.txt")
     assert os.path.exists(second)
@@ -90,21 +90,21 @@ def test_successful_download(httpbin):
 
 @pytest.mark.integration
 def test_timeout_and_edge_values(httpbin):
-    result = _ability.run("text", {"url": "https://httpbin.org/bytes/32", "timeout": 5}, None)
+    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": 5})
     assert os.path.exists(result)
     os.remove(result)
 
-    result = _ability.run("text", {"url": "https://httpbin.org/bytes/32", "timeout": 999}, None)
+    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": 999})
     assert os.path.exists(result)
     os.remove(result)
 
-    result = _ability.run("text", {"url": "https://httpbin.org/bytes/32", "timeout": "banana"}, None)
+    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": "banana"})
     assert os.path.exists(result)
     os.remove(result)
 
 
 @pytest.mark.integration
 def test_http_error_status_is_reported(httpbin):
-    result = _ability.run("text", {"url": "https://httpbin.org/status/404"}, None)
+    result = _ability.run({"url": "https://httpbin.org/status/404"})
     assert "404" in result or "not found" in result.lower() or "error" in result.lower()
     assert not os.path.exists(result)

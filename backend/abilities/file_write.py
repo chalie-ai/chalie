@@ -43,7 +43,7 @@ class FileWriteAbility(Ability):
         "required": ["path", "contents"],
     }
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         path_str = params.get("path", "")
         contents = params.get("contents", "")
 
@@ -72,12 +72,9 @@ class FileWriteAbility(Ability):
         except OSError as exc:
             return {"text": f"Error writing to {target}: {exc}"}
 
-    @staticmethod
-    def _check_read_guard(db, target: Path) -> str | None:
+    def _check_read_guard(self, db, target: Path) -> str | None:
         """Return an error message if ``read`` was not called on this path first."""
-        from services.message_processor import current_processor
-
-        proc = current_processor()
+        proc = self.MessageProcessor
         if proc is None:
             return None
 

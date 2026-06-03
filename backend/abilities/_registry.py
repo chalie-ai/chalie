@@ -153,7 +153,7 @@ class AbilityRegistry:
                 schema = {
                     'name': ability.NAME,
                     'description': ability.SUMMARY,
-                    'input_schema': ability.get_input_schema(),
+                    'input_schema': ability.get_input_schema(mp),
                 }
 
             result.append(_with_act_summary(schema))

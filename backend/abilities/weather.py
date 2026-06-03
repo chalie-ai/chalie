@@ -81,12 +81,11 @@ class WeatherAbility(Ability):
         },
         "required": [],
     }
-    TIMEOUT = 10
 
     _cache: ClassVar[dict] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, params: dict) -> dict | str:
         """
         Get current weather for a location.
 
@@ -103,7 +102,7 @@ class WeatherAbility(Ability):
         """
         ordinal = params.get("_rich_media_ordinal")
         location_param = params.get("location", "").strip()
-        lat, lon, location_name = _extract_location(telemetry)
+        lat, lon, location_name = _extract_location(self.telemetry)
         cache_key = _build_cache_key(location_param, lat, lon, location_name)
 
         cached = _get_fresh_cache(cache_key)

@@ -219,20 +219,20 @@ class ScheduleAbility(Ability):
         },
         "required": ["action"],
     }
-    TIMEOUT = 10
 
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, params: dict) -> dict | str:
         action = params.get("action", "list").lower()
         ordinal = params.get("_rich_media_ordinal")
 
         if action == "create":
+            channel = getattr(getattr(self.MessageProcessor, "config", None), "channel", "") or ""
             result = _create(channel, params, self._PAST_DUE_GRACE_SECONDS)
         elif action == "list":
             result = _list(params)
         elif action == "search":
-            result = _search(params)
+            result = _search(params, self.MessageProcessor)
         elif action == "cancel":
             result = _cancel(params)
         else:
@@ -494,7 +494,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
         return {"status": "error", "error": f"Create failed: {e}"}
 
 
-def _search(params: dict) -> dict:
+def _search(params: dict, mp=None) -> dict:
     query = (params.get("query") or "").strip()
     if not query:
         return {"status": "error", "error": "query is required for search"}
@@ -507,7 +507,7 @@ def _search(params: dict) -> dict:
         from services.embedding_utils import pack_embedding
         from services.time_formatter_service import TimeFormatterService
 
-        emb = get_embedding_service().generate_embedding(query)
+        emb = get_embedding_service().generate_embedding(query, mp=mp)
         if not emb:
             return {"status": "success", "action_performed": "search", "records": []}
 

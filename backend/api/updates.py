@@ -170,8 +170,12 @@ def update_memory():
         salience = 5
 
     try:
-        from abilities._registry import AbilityRegistry
-        result = AbilityRegistry.get("memory").run(
+        # External REST caller — there is no ACT-loop MessageProcessor here, so
+        # the memory ability's run() (which reads its channel from the bound
+        # processor) does not apply. Call the store primitive directly, passing
+        # ``topic`` as the provenance channel for the source tag.
+        from abilities.memory import _handle_store
+        text = _handle_store(
             topic,
             {
                 "action": "store",
@@ -179,9 +183,7 @@ def update_memory():
                 "value": content,
                 "kind": "misc",
             },
-            None,
         )
-        text = result.get("text", "") if isinstance(result, dict) else str(result)
         if "error=" in text.split('\n', 1)[0]:
             logger.warning("[Updates API] memory update result: %s", text)
             return jsonify({"error": "Memory encoding failed"}), 422

@@ -16,30 +16,6 @@ factory — only these small shared primitives.
 
 from __future__ import annotations
 
-from services.processor_config import ProcessorConfig
-
-# Wall-clock horizon for a delegate ACT loop (K9).
-DELEGATE_DEADLINE_SECONDS: int = 600
-
-
-def policy_channel_for(channel: str) -> "ProcessorConfig.POLICY_CHANNEL":
-    """Map a caller's transcript channel → the policy channel a delegate inherits.
-
-    A delegate's internal tool calls are gated under the SAME policy channel as
-    the caller that invoked the delegate tool, rather than a hardcoded value.
-    The map is total: the user channel → CHAT, an external-agent channel →
-    EXTERNAL_AGENT, every background channel → SUBCONSCIOUS.  ``channel`` is the
-    caller's ``config.channel`` (set by ``Ability.execute``) and is always
-    present in a real dispatch; an empty/unknown string is only reachable by a
-    direct non-dispatch call and falls into the SUBCONSCIOUS branch.
-    """
-    pc = ProcessorConfig.POLICY_CHANNEL
-    if channel == "user":
-        return pc.CHAT
-    if channel.startswith("external-agent:"):
-        return pc.EXTERNAL_AGENT
-    return pc.SUBCONSCIOUS
-
 
 def delegate_goal(params: dict) -> str:
     """Extract the delegate's goal/query from the tool params.

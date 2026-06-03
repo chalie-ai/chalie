@@ -363,14 +363,12 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
     def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(self, db, store):
         from abilities.save_graph import SaveGraph
 
-        # SaveGraph reads its budget counter via current_processor() + getattr.
+        # SaveGraph reads its budget counter via self.MessageProcessor + getattr.
         # No processor is bound here — getattr falls back to 0, validation
         # short-circuits before any DB write.
         instance = SaveGraph()
         result = instance.run(
-            "test",
             {"kind": "behavioral_pattern", "key": "x", "value": "y"},
-            None,
         )
 
         assert isinstance(result, dict), f"SaveGraph.run returned non-dict: {result!r}"
@@ -438,26 +436,23 @@ class TestSaveGraphBudgetCapAt50:
 
     def test_save_graph_budget_cap_at_50(self, db, store):
         from abilities.save_graph import SaveGraph
-        from services.message_processor import bind_current_processor
 
-        # SaveGraph reads/writes its budget counter via current_processor()
-        # + getattr/setattr. Bind a stub as the current processor for the
-        # duration of the test so the counter persists across 51 calls.
+        # SaveGraph reads/writes its budget counter via self.MessageProcessor
+        # + getattr/setattr. Bind a stub as the processor so the counter
+        # persists across 51 calls.
         class _StubProcessor:
             _save_graph_calls = 0
 
         stub_processor = _StubProcessor()
         instance = SaveGraph()
+        instance.MessageProcessor = stub_processor
 
-        with bind_current_processor(stub_processor):
-            results = [
-                instance.run(
-                    "test",
-                    {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
-                    None,
-                )
-                for i in range(51)
-            ]
+        results = [
+            instance.run(
+                {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
+            )
+            for i in range(51)
+        ]
 
         # First 50 must succeed.
         for i, r in enumerate(results[:50]):

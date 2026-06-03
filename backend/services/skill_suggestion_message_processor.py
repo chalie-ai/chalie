@@ -71,7 +71,6 @@ def _run_suggestion_processor(
         mp.config = SkillSuggestionConfig()
         mp.uid = None
         mp.current_iteration = 0
-        mp.deadline = None
         mp.cancel_event = threading.Event()
         mp.thinking_level = "low"
         mp.thinking_exploration = None

@@ -115,7 +115,6 @@ class MemoryAbility(Ability):
         },
         "required": ["action"],
     }
-    TIMEOUT = 10
 
     RECALL_RADIUS_BASELINE: ClassVar[float] = 0.5
     SEED_RADIUS_BASELINE: ClassVar[float] = 0.4
@@ -128,16 +127,18 @@ class MemoryAbility(Ability):
     EXPAND_MAX_DIST: ClassVar[float] = 0.55
     EXPAND_FACTOR_CEILING: ClassVar[float] = 2.2
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         action = params.get("action", "recall")
+        mp = self.MessageProcessor
+        channel = getattr(getattr(mp, "config", None), "channel", "") or ""
 
         try:
             if action == "store":
                 text = _handle_store(channel, params)
             elif action == "recall":
-                text = _handle_recall(channel, params)
+                text = _handle_recall(mp, channel, params)
             elif action == "reflect":
-                text = _handle_reflect(channel, params)
+                text = _handle_reflect(mp, channel, params)
             elif action == "forget":
                 text = _handle_forget(params)
             else:
@@ -297,7 +298,7 @@ def _format_forget_response(result: dict) -> str:
 # ── Recall ───────────────────────────────────────────────────────────
 
 
-def _handle_recall(channel: str, params: dict) -> str:
+def _handle_recall(mp, channel: str, params: dict) -> str:
     query = params.get("query", "")
     location = params.get("location", "")
     if not query and not location:
@@ -312,7 +313,7 @@ def _handle_recall(channel: str, params: dict) -> str:
         loc_ids = {h["id"] for h in loc_hits}
         loc_by_id = {h["id"]: h for h in loc_hits}
 
-        sem_hits, _ = _search_episodes(channel, query, limit * 3)
+        sem_hits, _ = _search_episodes(mp, channel, query, limit * 3)
         sem_ids = {h["id"] for h in sem_hits}
         sem_by_id = {h["id"]: h for h in sem_hits}
 
@@ -335,14 +336,12 @@ def _handle_recall(channel: str, params: dict) -> str:
         hits, _ = _search_data_graph(query, limit)
         results.extend(hits)
 
-        hits, _ = _search_episodes(channel, query, limit)
+        hits, _ = _search_episodes(mp, channel, query, limit)
         results.extend(hits)
 
     if not params.get('_auto'):
         try:
-            from services.message_processor import current_processor
-
-            proc = current_processor()
+            proc = mp
             if proc is not None and proc._uid is not None:
                 if query:
                     from abilities._base import Ability  # noqa: PLC0415
@@ -364,12 +363,13 @@ def _handle_recall(channel: str, params: dict) -> str:
 # ── Reflect ──────────────────────────────────────────────────────────
 
 
-def _handle_reflect(channel: str, params: dict) -> str:
+def _handle_reflect(mp, channel: str, params: dict) -> str:
     query = params.get("query", "")
     if not query:
         return _tag("memory", action="reflect", error="no-query")
 
     raw_episodes, _ = recall_episodes(
+        mp,
         channel=channel,
         query=query,
         caller="llm_recall",
@@ -738,7 +738,7 @@ def _write_recall_telemetry(
         logger.warning(f"{LOG_PREFIX} Failed to write memory_recall_log row: {e}")
 
 
-def _gather_query_history(proc, emb_svc) -> tuple[list, str, object]:
+def _gather_query_history(proc, emb_svc, mp=None) -> tuple[list, str, object]:
     """Build (history, turn_uid, transcript_id) from the bound processor, if any.
 
     Inserts the seed-query record at the head of history when the processor has a
@@ -752,7 +752,7 @@ def _gather_query_history(proc, emb_svc) -> tuple[list, str, object]:
     seed_query = getattr(proc, "_memory_seed_query", None) or None
     if seed_query and not any(h.get("caller") == "seed" for h in history):
         try:
-            seed_emb = emb_svc.generate_embedding(seed_query)
+            seed_emb = emb_svc.generate_embedding(seed_query, mp=mp)
             history.insert(0, {
                 "query": seed_query,
                 "embedding": seed_emb,
@@ -769,6 +769,7 @@ def _gather_query_history(proc, emb_svc) -> tuple[list, str, object]:
 
 
 def recall_episodes(
+    mp,
     channel: str,
     query: str,
     *,
@@ -786,7 +787,6 @@ def recall_episodes(
         from services import episodic_retrieval_service
         from services.database_service import get_shared_db_service
         from services.embedding_service import get_embedding_service
-        from services.message_processor import current_processor
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
         return [], f"error: {exc}"
@@ -800,9 +800,9 @@ def recall_episodes(
         db = get_shared_db_service()
         emb_svc = get_embedding_service()
 
-        q_embedding = emb_svc.generate_embedding(query)
-        proc = current_processor()
-        history, turn_uid, transcript_id = _gather_query_history(proc, emb_svc)
+        q_embedding = emb_svc.generate_embedding(query, mp=mp)
+        proc = mp
+        history, turn_uid, transcript_id = _gather_query_history(proc, emb_svc, mp)
 
         narrow_factor, expand_factor, _min_dist, _max_drift = _compute_radius_factors(q_embedding, history)
         input_radius = baseline_radius * narrow_factor * expand_factor
@@ -868,9 +868,10 @@ def recall_episodes(
 
 
 def _search_episodes(
-    channel: str, query: str, limit: int
+    mp, channel: str, query: str, limit: int
 ) -> Tuple[List[Dict], str]:
     return recall_episodes(
+        mp,
         channel=channel,
         query=query,
         caller="llm_recall",

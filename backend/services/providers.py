@@ -39,19 +39,24 @@ class Providers:
                     cls._instance = cls()
         return cls._instance
 
-    def send(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True, thinking_mode=None):
-        """Sync send. Returns LLMResponse."""
+    def send(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True, thinking_mode=None, mp=None):
+        """Sync send. Returns LLMResponse.
+
+        ``mp`` is the invoking MessageProcessor (the parent), threaded explicitly
+        so metrics/token attribution binds to the right accumulator. None from
+        background callers — metrics simply no-op, as before.
+        """
         if tools is None:
-            tools = self._get_tools()
-        provider = self._resolve(job)
+            tools = self._get_tools(mp)
+        provider = self._resolve(job, mp)
         messages = [{"role": "user", "content": user_prompt}]
         t0 = time.monotonic()
         response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms)
+        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms, mp)
         return response
 
-    def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True, thinking_mode=None):
+    def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True, thinking_mode=None, mp=None):
         """Multi-turn send with a pre-built messages array. Returns LLMResponse.
 
         Used by the tool loop in MessageProcessor to send growing message arrays
@@ -67,15 +72,15 @@ class Providers:
                 'medium' or 'high' = provider-native thinking enabled.
         """
         if tools is None:
-            tools = self._get_tools()
-        provider = self._resolve(job)
+            tools = self._get_tools(mp)
+        provider = self._resolve(job, mp)
         t0 = time.monotonic()
         response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
         wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms)
+        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms, mp)
         return response
 
-    def _log_after_call(self, system_prompt, messages, tools, job, response, wall_ms=None):
+    def _log_after_call(self, system_prompt, messages, tools, job, response, wall_ms=None, mp=None):
         """Write the LLM request log file. Best-effort, never raises.
 
         Called by both :meth:`send` and :meth:`send_messages` so every LLM
@@ -91,13 +96,12 @@ class Providers:
             channel, ``subagent_turns_total`` for delegate channels).
 
         Recording once at the send means delegate / sub-processor token
-        attribution is correct for free (``current_processor()`` binds the
+        attribution is correct for free (the threaded ``mp`` binds the
         right accumulator), and the per-turn timing snapshot reflects every
         LLM round-trip (ACT iterations, exploration, compaction).
         """
         try:
-            from services.message_processor import current_processor
-            proc = current_processor()
+            proc = mp
             if proc is not None:
                 # Prefer the gateway-level wall_ms so providers that forget to
                 # populate response.latency_ms (e.g. OllamaService prior to the
@@ -124,8 +128,7 @@ class Providers:
             logger.debug(f"[LLM LOG] processor lookup failed: {exc}")
         try:
             from services.llm_request_logger import log_llm_request
-            from services.message_processor import current_processor
-            proc = current_processor()
+            proc = mp
             caller_name = type(proc).__name__ if proc is not None else 'unknown'
             user_msg_str = self._render_messages_for_log(messages)
             log_llm_request(
@@ -190,7 +193,7 @@ class Providers:
             for m in msgs
         )
 
-    def _resolve(self, job):
+    def _resolve(self, job, mp=None):
         """Resolve the active DB provider and wrap it as an LLM service.
 
         Injects _job_name (for LoggingLLMService) and _usage_class (for
@@ -199,7 +202,6 @@ class Providers:
         """
         from services.provider_cache_service import ProviderCacheService
         from services.llm_service import create_llm_service
-        from services.message_processor import current_processor
         config = ProviderCacheService.get_selected_provider()
         if not config:
             providers = ProviderCacheService.get_providers()
@@ -209,28 +211,26 @@ class Providers:
                 config = {}
         config = dict(config)  # don't mutate the cached dict
         config['_job_name'] = job
-        proc = current_processor()
+        proc = mp
         if proc is not None:
             proc_config = getattr(proc, 'config', None)
             usage_class = getattr(proc_config, 'usage_class', None) or 'chat'
             config['_usage_class'] = usage_class
         return create_llm_service(config)
 
-    def _get_tools(self):
+    def _get_tools(self, mp=None):
         """Get native tool schemas for the calling processor's tool scope.
 
         Honours the lazy-load contract: DISCOVERABLE abilities are NEVER
         pre-injected here.  Falls back to an empty list when no processor is
-        bound (e.g. compaction / episode-encoder paths whose own scope is empty
+        passed (e.g. compaction / episode-encoder paths whose own scope is empty
         by design).  The hot path passes ``tools=`` explicitly from the flat ACT
         loop; this method is only the safety-net default.
         """
-        from services.message_processor import current_processor
         from abilities._registry import AbilityRegistry
-        proc = current_processor()
-        if proc is None:
+        if mp is None:
             return []
-        return AbilityRegistry.build_tools(proc)
+        return AbilityRegistry.build_tools(mp)
 
     def get_context_limit(self, job='unified'):
         """Delegate to resolved provider, capped to MAX_CONTEXT_WINDOW."""
@@ -242,6 +242,7 @@ class Providers:
         user_body: str,
         tools: list,
         job: str = 'unified',
+        mp=None,
     ) -> float:
         """Return what fraction of the context window this request would use.
 
@@ -259,7 +260,7 @@ class Providers:
         """
         from services.llm_service import estimate_tokens  # noqa: PLC0415
         try:
-            provider = self._resolve(job)
+            provider = self._resolve(job, mp)
             body = provider.build_request_body(
                 system_prompt,
                 [{'role': 'user', 'content': user_body}],

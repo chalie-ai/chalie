@@ -72,9 +72,8 @@ class TimerAbility(Ability):
         },
         "required": ["title", "duration_seconds"],
     }
-    TIMEOUT = 5
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, params: dict) -> dict | str:
         ordinal = params.get("_rich_media_ordinal")
         title = (params.get("title") or "").strip()
         duration_seconds = params.get("duration_seconds")

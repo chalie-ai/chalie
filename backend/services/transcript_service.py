@@ -390,7 +390,6 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             emp.config = EpisodeEncoderConfig()
             emp.uid = None
             emp.current_iteration = 0
-            emp.deadline = None
             emp.cancel_event = threading.Event()
             emp.thinking_level = "low"
             emp.thinking_exploration = None

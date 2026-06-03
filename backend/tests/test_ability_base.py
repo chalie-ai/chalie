@@ -157,26 +157,5 @@ def test_valid_concrete_subclass_constructs_cleanly():
     gc.collect()
 
 
-# ---------------------------------------------------------------------------
-# Default class attribute values
-# ---------------------------------------------------------------------------
-
-
-def test_timeout_defaults_to_ten():
-    """TIMEOUT defaults to 10 unless overridden."""
-
-    class _DefaultTimeout(Ability):
-        NAME = "default_timeout"
-        SUMMARY = "Timeout default check"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
-
-        def run(self, channel, params, telemetry):
-            return {}
-
-    assert _DefaultTimeout.TIMEOUT == 10
-
-    del _DefaultTimeout
-    gc.collect()
 
 

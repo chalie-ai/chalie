@@ -13,7 +13,7 @@ Verifies:
 Strategy: monkeypatch _DB_PATH on FindToolsAbility to a tmp_path
 database populated with real embeddings. Real EmbeddingService is used.
 ``FindToolsAbility.execute()`` reads the calling MessageProcessor's
-``DISCOVERABLE`` list via ``current_processor()``; tests bind a stub
+``DISCOVERABLE`` list via ``self.MessageProcessor``; tests bind a stub
 processor for that lookup. Direct ``_query`` and ``_fallback`` calls
 accept the allowlist as a positional arg so RRF ordering can be verified
 by formula, not by semantic luck.
@@ -27,7 +27,7 @@ import pytest
 
 from abilities._search import RRF_K
 from abilities.find_tools import FindToolsAbility
-from services.message_processor import MessageProcessor, bind_current_processor
+from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -40,7 +40,7 @@ pytestmark = pytest.mark.unit
 
 def _make_stub_processor(discoverable: list[str]) -> MessageProcessor:
     """Flat MessageProcessor exposing DISCOVERABLE + an empty ACTIVE_TOOLS that
-    find_tools appends discovered names onto via current_processor()."""
+    find_tools appends discovered names onto via self.MessageProcessor."""
     proc = object.__new__(MessageProcessor)
     proc.DISCOVERABLE = discoverable
     proc._active_tools = []
@@ -114,8 +114,8 @@ def _execute_with_discoverable(ability, query, discoverable, limit=None):
     params = {"query": query}
     if limit is not None:
         params["limit"] = limit
-    with bind_current_processor(proc):
-        result = ability.run("text", params, None)
+    ability.MessageProcessor = proc
+    result = ability.run(params)
     return result, proc.active_tools
 
 
@@ -281,8 +281,8 @@ class TestFindToolsDiscovery:
     ):
         """A processor with no DISCOVERABLE entries gets an empty result.
 
-        find_tools is a no-op outside a turn (current_processor() == None) and
-        also when the calling processor has no discoverable scope at all. The
+        find_tools is a no-op when the calling processor has no discoverable
+        scope at all. The
         SQL never executes when the allowlist is empty.
         """
         new_db_path = tmp_path / "abilities.sqlite"
@@ -405,8 +405,8 @@ class TestFindToolsPhase3Gaps:
 
         ability = FindToolsAbility()
         proc = _make_stub_processor(discoverable=["sandboxer"])
-        with bind_current_processor(proc):
-            ability._fallback("sandbox", 5, ["sandboxer"])
+        ability.MessageProcessor = proc
+        ability._fallback("sandbox", 5, ["sandboxer"])
 
         assert proc.active_tools == ["sandboxer"]
 

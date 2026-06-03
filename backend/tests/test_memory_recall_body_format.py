@@ -16,10 +16,15 @@ pytestmark = pytest.mark.unit
 
 
 def _handle_memory(topic: str, params: dict) -> str:
-    """Thin shim: call MemoryAbility.execute and return the text string."""
+    """Thin shim: call MemoryAbility.run and return the text string.
+
+    No processor is bound — recall reads its channel from the (absent)
+    MessageProcessor and falls back to "", which the data-graph recall path
+    does not depend on.
+    """
     from abilities.memory import MemoryAbility
-    result = MemoryAbility().run(topic, params, None)
-    assert result is not None, "MemoryAbility.execute() returned None"
+    result = MemoryAbility().run(params)
+    assert result is not None, "MemoryAbility.run() returned None"
     return result["text"]
 
 

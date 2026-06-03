@@ -43,7 +43,6 @@ class FindToolsAbility(SearchableAbility):
         },
         "required": ["query"],
     }
-    TIMEOUT = 10
 
     _DB_PATH: ClassVar[Path] = FileMapperService.get_abilities_db_path()
     # Separate runtime DB for dynamically-synced MCP client tools.
@@ -52,16 +51,15 @@ class FindToolsAbility(SearchableAbility):
     _MCP_DB_PATH: ClassVar[Path] = FileMapperService.get_mcp_tools_db_path()
     _LOG_PREFIX = "[FIND_TOOLS]"
 
-    def _build_tools_index(self) -> str:
+    def _build_tools_index(self, mp=None) -> str:
         """Return a formatted tools index string for discoverable tools.
 
         Includes both registered abilities (from AbilityRegistry) and
         enabled+online MCP client tools (from McpClientService).
         """
         from abilities._registry import AbilityRegistry
-        from services.message_processor import current_processor
 
-        proc = current_processor()
+        proc = mp
         discoverable = list(getattr(proc, "DISCOVERABLE", []) or []) if proc else []
         blocked = set(getattr(proc, "_BLOCKED", set()) or set()) if proc else set()
 
@@ -118,8 +116,8 @@ class FindToolsAbility(SearchableAbility):
             logger.debug("[FIND_TOOLS] Could not fetch MCP tool index: %s", exc)
             return []
 
-    def get_input_schema(self) -> dict:
-        tools_index = self._build_tools_index()
+    def get_input_schema(self, mp=None) -> dict:
+        tools_index = self._build_tools_index(mp)
         if not tools_index:
             return self.INPUT_SCHEMA
         schema = copy.deepcopy(self.INPUT_SCHEMA)
@@ -128,14 +126,13 @@ class FindToolsAbility(SearchableAbility):
         )
         return schema
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> str:
+    def run(self, params: dict) -> str:
         query = params.get("query", "").strip()
         logger.info(f"{self._LOG_PREFIX} query='{query}' limit={params.get('limit', 5)}")
         if not query:
             return _skill_tag("find_tools", error="query-required")
 
-        from services.message_processor import current_processor
-        proc = current_processor()
+        proc = self.MessageProcessor
         allow = list(getattr(proc, "DISCOVERABLE", []) or []) if proc is not None else []
         # Augment the allow-list with enabled+online MCP tool names so the
         # find_tools query gate accepts them.
@@ -149,7 +146,7 @@ class FindToolsAbility(SearchableAbility):
 
         try:
             from services.embedding_service import EmbeddingService
-            query_embedding = EmbeddingService().generate_embedding(query)
+            query_embedding = EmbeddingService().generate_embedding(query, mp=self.MessageProcessor)
         except Exception as e:
             logger.warning(f"{self._LOG_PREFIX} Embedding generation failed: {e}")
             return self._fallback(query, limit, effective_allow)
@@ -175,11 +172,10 @@ class FindToolsAbility(SearchableAbility):
         """Append newly-discovered tool NAMES to the live processor's ACTIVE_TOOLS
         so build_tools surfaces them on the next ACT iteration. First-seen wins;
         already-active names are skipped. No-op outside a turn
-        (current_processor() is None — e.g. the action-button path)."""
+        (``self.MessageProcessor`` is None — e.g. the action-button path)."""
         if not names:
             return
-        from services.message_processor import current_processor  # noqa: PLC0415
-        proc = current_processor()
+        proc = self.MessageProcessor
         if proc is None:
             return
         active = proc.active_tools

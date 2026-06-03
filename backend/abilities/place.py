@@ -80,14 +80,13 @@ class PlaceAbility(Ability):
         },
         "required": ["action"],
     }
-    TIMEOUT = 10
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         action = params.get("action", "").lower()
         name = (params.get("name") or "").strip().lower()
 
         if action == _ACTION_SAVE:
-            return self._handle_save(name, telemetry)
+            return self._handle_save(name, self.telemetry)
         if action == _ACTION_LIST:
             return self._handle_list()
         if action == _ACTION_GET:

@@ -20,7 +20,6 @@ The 2 delegate tools and their EXACT tool surfaces (§9a K3):
 Spec references: §5b, §10f, §4.
 """
 
-import time
 from unittest.mock import patch
 
 import pytest
@@ -36,9 +35,25 @@ _DELEGATE_NAMES = ("web_search", "web_browse")
 
 
 def _get_ability(name):
-    """Return the concrete Ability instance for *name* from the registry."""
+    """Return the concrete Ability instance for *name* from the registry,
+    bound to a stub user-channel processor.
+
+    Each delegate reads ``self.MessageProcessor.config.policy_channel`` to
+    inherit the caller's permission channel, so a bound processor is required.
+    """
     from abilities._registry import AbilityRegistry
-    return AbilityRegistry.get(name)
+    from services.processor_config import ProcessorConfig
+
+    ability = AbilityRegistry.get(name)
+
+    class _StubConfig:
+        policy_channel = ProcessorConfig.POLICY_CHANNEL.CHAT
+
+    class _StubProcessor:
+        config = _StubConfig()
+
+    ability.MessageProcessor = _StubProcessor()
+    return ability
 
 
 def _captured_config(name, params=None):
@@ -63,7 +78,7 @@ def _captured_config(name, params=None):
 
     with patch("services.message_processor.MessageProcessor.process",
                side_effect=_fake_process):
-        ability.run("user", params, None)
+        ability.run(params)
 
     return captured
 
@@ -131,7 +146,7 @@ class TestK8RunAlwaysSynchronous:
         with patch("services.message_processor.MessageProcessor.process",
                    return_value="synchronous answer"), \
              patch("threading.Thread", side_effect=_track):
-            result = ability.run("user", {"goal": "g", "query": "g"}, None)
+            result = ability.run({"goal": "g", "query": "g"})
 
         # run() itself spawns no threads — async is the framework's job.
         assert spawned == []
@@ -139,27 +154,21 @@ class TestK8RunAlwaysSynchronous:
 
 
 # ---------------------------------------------------------------------------
-# K9. Delegate honors its wall-clock deadline                              (§5b/§4)
+# K9. Delegate passes NO wall-clock deadline — it runs to completion       (§5b)
 # ---------------------------------------------------------------------------
 
-class TestK9WallClockDeadline:
-    """K9: Each delegate passes a finite wall-clock deadline to process()."""
+class TestK9NoWallClockDeadline:
+    """K9: Delegates impose no timeout/deadline. The framework never abandons a
+    delegate ACT loop; it runs to completion (cooperative cancel / iteration cap
+    only). process() is therefore called with no deadline argument."""
 
     @pytest.mark.parametrize("name", _DELEGATE_NAMES)
-    def test_deadline_is_passed_to_process(self, name):
-        before = time.time()
+    def test_no_deadline_is_passed_to_process(self, name):
         captured = _captured_config(name)
-        after = time.time()
-        deadline = captured["kwargs"].get("deadline")
-        if deadline is None and captured["args"]:
-            # deadline may be passed positionally (3rd positional after
-            # raw_input, config → metadata, deadline). Walk positional args.
-            for a in captured["args"]:
-                if isinstance(a, (int, float)):
-                    deadline = a
-                    break
-        assert deadline is not None, "delegate must pass a wall-clock deadline"
-        # The deadline must be in the future relative to dispatch time.
-        assert deadline > before
-        # And it must be a finite, bounded horizon (<= 1 day past now).
-        assert deadline <= after + 86400
+        assert "deadline" not in captured["kwargs"], (
+            "delegate must NOT pass a deadline — delegates have no timeout"
+        )
+        # No positional numeric deadline either.
+        assert not any(isinstance(a, (int, float)) for a in captured["args"]), (
+            "delegate must NOT pass a positional deadline"
+        )

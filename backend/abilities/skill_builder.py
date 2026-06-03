@@ -123,11 +123,10 @@ class SkillBuilderAbility(Ability):
         },
         "required": ["action"],
     }
-    TIMEOUT = 15
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         action = params.get("action", "list")
-        logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
+        logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, self.MessageProcessor.config.channel)
 
         try:
             if action == "create":

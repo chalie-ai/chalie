@@ -47,9 +47,8 @@ class WebDownloadAbility(Ability):
         },
         "required": ["url"],
     }
-    TIMEOUT = _MAX_TIMEOUT_MIN * 60
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> str:
+    def run(self, params: dict) -> str:
         url = params.get("url", "").strip()
         if not url:
             return "url parameter is required"

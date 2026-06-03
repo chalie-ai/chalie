@@ -23,7 +23,6 @@ the trail/compaction primitives.
 import logging
 import re
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from services.metrics_accumulator import MetricsAccumulator
@@ -227,10 +226,6 @@ class MessageProcessor:
         self._overflow_recovered_this_turn: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
-        # Per-instance deadline (seconds from epoch) for processors that want a
-        # hard wall-clock cap (e.g. SubagentProcessor). None means no deadline.
-        # Set by subclasses in __init__ after calling super().__init__().
-        self._deadline: float | None = None
         # Cooperative cancellation flag. Set by stop endpoints to signal the
         # ACT loop to exit at the next iteration boundary. Never raises —
         # the loop checks is_set() at the top of each iteration.
@@ -569,7 +564,6 @@ class MessageProcessor:
         raw_input: str,
         config: "ProcessorConfig",  # noqa: F821 — deferred import avoids circular dep
         metadata: "dict | None" = None,
-        deadline: "float | None" = None,
         cancel_event: "threading.Event | None" = None,
     ) -> str:
         """Single entry point.  Creates an MP, runs the turn, returns text.
@@ -583,7 +577,6 @@ class MessageProcessor:
         mp.config = config
         mp.uid: "int | None" = None
         mp.current_iteration: int = 0
-        mp.deadline: "float | None" = deadline
         mp.cancel_event: "threading.Event" = (
             cancel_event if cancel_event is not None else threading.Event()
         )
@@ -707,13 +700,11 @@ class MessageProcessor:
             self.current_iteration += 1
 
     def _should_stop(self) -> bool:
-        """Single stop check: cancel OR deadline OR iteration cap.
+        """Single stop check: cancel OR iteration cap.
 
         Spec §4 / L3-L6.
         """
         if self.cancel_event.is_set():
-            return True
-        if self.deadline is not None and time.time() > self.deadline:
             return True
         if self.config.max_iterations is not None:
             if self.current_iteration >= self.config.max_iterations:

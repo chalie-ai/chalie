@@ -57,7 +57,6 @@ class ReadAbility(Ability):
         },
         "required": ["source"],
     }
-    TIMEOUT = 10
 
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15
 
@@ -87,7 +86,7 @@ class ReadAbility(Ability):
 
     _BLOCKED_PATH_PREFIXES: ClassVar[tuple] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         source = params.get("source", "").strip()
         if not source:
             return {"text": _skill_tag("read", error="source-required")}

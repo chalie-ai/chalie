@@ -6,13 +6,15 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Unit tests for the dispatch replacement: Ability.use / match / execute.
+"""Unit tests for the dispatch replacement: Ability.use / _bind / execute.
 
-use() is the single ACT-loop chokepoint: match → resolve permission →
-PolicyManager.wrap(execute) → record → return STRING.  These tests pin the
-contract that every boundary returns a string, that deny/unknown still get
-recorded (so the model sees the outcome and stops retrying the blocked tool),
-and that MCP tools now flow through the gate via the synthetic _MCPAbility.
+use() is the single ACT-loop chokepoint: _bind (a FRESH per-call instance bound
+to the invoking processor) → resolve permission → PolicyManager.wrap(execute) →
+record → return STRING.  These tests pin the contract that every boundary
+returns a string, that deny/unknown still get recorded (so the model sees the
+outcome and stops retrying the blocked tool), and that MCP tools now flow
+through the gate via the synthetic _MCPAbility.  execute() reads its parent off
+``self.MessageProcessor`` (set by _bind) — it takes no processor argument.
 """
 from unittest.mock import MagicMock
 
@@ -64,16 +66,17 @@ def test_match_routes_native_mcp_and_unknown():
 def test_use_allow_runs_records_and_returns_string(monkeypatch, captured):
     ability = MagicMock()
     ability.execute.return_value = "OK"                     # execute returns a STRING
-    monkeypatch.setattr(Ability, "match", staticmethod(lambda name: ability))
+    monkeypatch.setattr(Ability, "_bind", staticmethod(lambda mp, name: ability))
     monkeypatch.setattr(_base.PolicyManager, "wrap",
                         staticmethod(lambda channel, permission, callback, error=None: callback()))
 
     out = Ability.use(_MP(), "email", {"action": "search", "act_summary": "Searching email"})
 
     assert out == "OK"
-    # act_summary is popped before execute/record and threaded to execute as a kwarg
+    # act_summary is popped before execute/record and threaded to execute as its
+    # second positional arg; the bound processor is read off self.MessageProcessor.
     ability.execute.assert_called_once()
-    _mp_arg, exec_params, exec_summary = ability.execute.call_args.args
+    exec_params, exec_summary = ability.execute.call_args.args
     assert "act_summary" not in exec_params and exec_summary == "Searching email"
     assert captured[-1]["tool_name"] == "email"
     assert captured[-1]["result"] == "OK" and "act_summary" not in captured[-1]["params"]
@@ -88,7 +91,7 @@ def test_use_resolves_permission_key(monkeypatch, captured, params, expected):
     seen = {}
     ability = MagicMock()
     ability.execute.return_value = "x"
-    monkeypatch.setattr(Ability, "match", staticmethod(lambda name: ability))
+    monkeypatch.setattr(Ability, "_bind", staticmethod(lambda mp, name: ability))
 
     def fake_wrap(channel, permission, callback, error=None):
         seen["permission"] = permission
@@ -103,7 +106,7 @@ def test_use_resolves_permission_key(monkeypatch, captured, params, expected):
 # 4. deny path: wrap returns the block STRING; use returns it AND records it; callback never ran
 def test_use_deny_returns_block_string_and_records(monkeypatch, captured):
     ability = MagicMock()
-    monkeypatch.setattr(Ability, "match", staticmethod(lambda name: ability))
+    monkeypatch.setattr(Ability, "_bind", staticmethod(lambda mp, name: ability))
     monkeypatch.setattr(_base.PolicyManager, "wrap",
                         staticmethod(lambda channel, permission, callback, error=None:
                                      "The bash.execute action is not allowed. Do NOT retry."))
@@ -117,7 +120,7 @@ def test_use_deny_returns_block_string_and_records(monkeypatch, captured):
 
 # 5. unknown tool: returns a string, records it, NEVER calls wrap (nothing to gate)
 def test_use_unknown_returns_string_records_without_gating(monkeypatch, captured):
-    monkeypatch.setattr(Ability, "match", staticmethod(lambda name: None))
+    monkeypatch.setattr(Ability, "_bind", staticmethod(lambda mp, name: None))
     called = {"wrap": False}
     monkeypatch.setattr(_base.PolicyManager, "wrap",
                         staticmethod(lambda *a, **k: called.__setitem__("wrap", True)))
@@ -145,8 +148,11 @@ def test_execute_runs_and_returns_string():
     class _Echo(Ability):
         _SYNTHETIC = True                       # skip __init_subclass__ + registry walk
         NAME = "echo"
-        def run(self, channel, params, telemetry=None):
+        def run(self, params):
             return {"status": "success", "result": "ECHO"}
 
-    out = _Echo().execute(_MP(), {"x": 1}, act_summary="echoing")
+    # execute() reads its parent off self.MessageProcessor (set by _bind in prod).
+    echo = _Echo()
+    echo.MessageProcessor = _MP()
+    out = echo.execute({"x": 1}, act_summary="echoing")
     assert out == "ECHO"

@@ -85,12 +85,11 @@ class SearchAbility(Ability):
         },
         "required": ["query"],
     }
-    TIMEOUT = 180
 
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
     _providers: ClassVar[dict | None] = None
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, params: dict) -> dict | str:
         query = (params.get("query") or "").strip()
         if not query:
             return {"text": "EMPTY: no query supplied. Tell the user no search was performed."}

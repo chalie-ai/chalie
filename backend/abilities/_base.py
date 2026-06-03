@@ -83,38 +83,29 @@ def _load_tool_telemetry() -> "dict | None":
         return None
 
 
-def _run_with_timeout(ability: "Ability", channel: str, params: dict, timeout: float) -> dict:
-    """Execute ability.run() in a daemon thread bounded by *timeout* seconds.
+def _run_ability(ability: "Ability", params: dict) -> dict:
+    """Execute ability.run() synchronously and normalise the result.
 
-    Copies the calling thread's contextvars so abilities can reach
-    current_processor() inside the thread.
+    Loads the flattened client telemetry onto ``ability.telemetry`` just before
+    run(); the ability reads its parent off ``self.MessageProcessor``.
+
+    There is no wall-clock bound — an ability runs to completion. The framework
+    never abandons a tool call: the only things that stop a running tool are
+    cooperative cancellation (cancel_event) and the network-level I/O timeouts
+    inside individual abilities.
 
     Returns a result dict with 'status' and 'result' keys.
 
     Spec §5 / I13.
     """
-    result_box: dict = {"result": None, "exc": None}
-    ctx = contextvars.copy_context()
+    try:
+        ability.telemetry = _load_tool_telemetry()
+    except Exception:  # noqa: BLE001
+        ability.telemetry = None
 
-    def _target() -> None:
-        try:
-            telemetry = _load_tool_telemetry()
-        except Exception:  # noqa: BLE001
-            telemetry = None
-        try:
-            result_box["result"] = ability.run(channel, params, telemetry)
-        except Exception as exc:  # noqa: BLE001
-            result_box["exc"] = exc
-
-    thread = threading.Thread(target=ctx.run, args=(_target,), daemon=True)
-    thread.start()
-    thread.join(timeout=timeout)
-
-    if thread.is_alive():
-        return {"status": "timeout", "result": f"Action exceeded {timeout}s timeout"}
-
-    if result_box["exc"] is not None:
-        exc = result_box["exc"]
+    try:
+        raw = ability.run(params)
+    except Exception as exc:  # noqa: BLE001
         # VaultLockedError gets a friendlier message.
         try:
             from services.vault_service import VaultLockedError  # noqa: PLC0415
@@ -132,7 +123,6 @@ def _run_with_timeout(ability: "Ability", channel: str, params: dict, timeout: f
             pass
         return {"status": "error", "result": f"Error: {exc}"}
 
-    raw = result_box["result"]
     return _normalise_run_result(raw)
 
 
@@ -186,7 +176,6 @@ def _emit(config: object, event: dict) -> None:
 
 def _run_async_delegate(
     ability: "Ability",
-    channel: str,
     params: dict,
     delegate_id: str,
     cancel_event: threading.Event,
@@ -195,13 +184,16 @@ def _run_async_delegate(
 
     Runs the tool synchronously, then delivers the result via
     dispatch_message(hidden_input=True) so the parent ACT loop gets a fresh
-    turn with the result.
+    turn with the result. The delivery channel is read off the bound parent
+    (``ability.MessageProcessor.config.channel``).
 
     Spec §5 / §5b / J5.
     """
+    config = getattr(ability.MessageProcessor, "config", None)
+    channel = getattr(config, "channel", "") or ""
     try:
         try:
-            result = _run_with_timeout(ability, channel, params, ability.TIMEOUT)
+            result = _run_ability(ability, params)
             result_text = str(result.get("result", ""))
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -230,12 +222,11 @@ class Ability(ABC):
 
     ``use()`` is the single chokepoint for all tool calls from the ACT loop:
     match → resolve permission → PolicyManager.wrap(execute) → record. The
-    gated work runs in ``execute()`` (emit → run-in-timeout-thread → return).
+    gated work runs in ``execute()`` (emit → run → return).
 
     Tool *scope* (always-available vs discoverable) lives on ProcessorConfig
     (always_available / discoverable / blocked fields).  Abilities only describe
-    what the tool is (NAME / SUMMARY / EXAMPLES / INPUT_SCHEMA / TIMEOUT /
-    ASYNC_CAPABLE).
+    what the tool is (NAME / SUMMARY / EXAMPLES / INPUT_SCHEMA / ASYNC_CAPABLE).
 
     Spec: §5 / AC-4.
     """
@@ -244,11 +235,22 @@ class Ability(ABC):
     SUMMARY: ClassVar[str]
     EXAMPLES: ClassVar[list[str]]
     INPUT_SCHEMA: ClassVar[dict]
-    TIMEOUT: ClassVar[int] = 10
     ASYNC_CAPABLE: ClassVar[bool] = False
     SEARCH_TOOLTIP: ClassVar[str] = ""
     POLICY_CATEGORY: ClassVar[str] = ""
     POLICY_LABELS: ClassVar[dict[str, str]] = {}
+
+    # Bound per-call by Ability._bind(): the invoking MessageProcessor (the
+    # "parent" of this tool call). A tool reads ALL its context off this —
+    # self.MessageProcessor.config.channel, .config.policy_channel, ._uid, etc.
+    # This is the traceability spine: every hop holds a real reference to its
+    # parent instead of reaching into a hidden global. None only on a synthetic
+    # / never-bound instance.
+    MessageProcessor: "object | None" = None
+    # Set by _run_ability() immediately before run(): the flattened client
+    # telemetry dict (location / locale / time / currency …) or None when no
+    # client context is stored yet (fresh boot, no heartbeat).
+    telemetry: "dict | None" = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -303,7 +305,7 @@ class Ability(ABC):
         act_summary = params.pop("act_summary", None)
         config = getattr(mp, "config", None)
 
-        ability = Ability.match(tool_name)
+        ability = Ability._bind(mp, tool_name)
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
         else:
@@ -312,7 +314,7 @@ class Ability(ABC):
             result_text = PolicyManager.wrap(
                 channel=getattr(config, "policy_channel", None),
                 permission=permission,
-                callback=lambda: ability.execute(mp, params, act_summary),
+                callback=lambda: ability.execute(params, act_summary),
             )
 
         Ability.record(
@@ -337,6 +339,30 @@ class Ability(ABC):
             return AbilityRegistry.get(tool_name)
         except KeyError:
             return None
+
+    @staticmethod
+    def _bind(mp: object, tool_name: str) -> "Ability | None":
+        """Resolve *tool_name* to a FRESH per-call Ability instance bound to *mp*.
+
+        Native abilities live in the registry as singletons; binding *mp* onto a
+        shared instance would race across concurrent turns. So every call gets
+        its own instance (abilities are stateless, no custom ``__init__``) with
+        the invoking MessageProcessor attached as ``self.MessageProcessor`` — the
+        parent the tool reads its context from. ``_mcp_*`` names get a fresh
+        ``_MCPAbility`` proxy (already per-call). Unknown native name → None.
+        """
+        if AbilityRegistry is None:
+            _populate_module_aliases()
+        if tool_name.startswith("_mcp_"):
+            ability: "Ability" = _MCPAbility(tool_name)
+        else:
+            try:
+                template = AbilityRegistry.get(tool_name)
+            except KeyError:
+                return None
+            ability = type(template)()
+        ability.MessageProcessor = mp
+        return ability
 
     # ── Trail statics — the ONLY write/read/render path for the trail ────────
     # Spec §4c / F2 / F3 / F4 / AC-24.
@@ -449,11 +475,14 @@ class Ability(ABC):
     # ── Instance method — the actual tool logic ───────────────────────────────
 
     @abstractmethod
-    def run(self, channel: str, params: dict, telemetry: "dict | None") -> "dict | str":
-        """Execute the ability.  Called by Ability.execute() inside a timeout thread.
+    def run(self, params: dict) -> "dict | str":
+        """Execute the ability.  Called by Ability.execute() via _run_ability().
 
         Override this method on every Ability subclass — it is the single tool
-        entrypoint.
+        entrypoint. The invoking MessageProcessor is available as
+        ``self.MessageProcessor`` (read ``self.MessageProcessor.config.channel``
+        where the old signature passed ``channel``), and the flattened client
+        telemetry as ``self.telemetry`` (or None).
 
         Must return either:
         - A dict with 'status' and 'result' keys (canonical form).
@@ -461,9 +490,7 @@ class Ability(ABC):
         - A plain string (treated as success result text).
 
         Args:
-            channel: The conversation channel for this invocation.
             params: Input parameters from the LLM, framework keys stripped.
-            telemetry: Optional client telemetry (location, locale, etc.) or None.
 
         Returns:
             dict when the result is structured data, or str for plain text.
@@ -474,15 +501,17 @@ class Ability(ABC):
 
     # ── Self-scaffolding executor — the allow-path callback use() hands to wrap ──
 
-    def execute(self, mp: object, params: dict, act_summary: "str | None" = None) -> str:
+    def execute(self, params: dict, act_summary: "str | None" = None) -> str:
         """Emit → run → return. Called ONLY on the allow path (use() passes this
-        as wrap's callback). Owns the async-vs-sync decision, the timeout thread,
-        contextvar copying, VaultLockedError handling, and result normalisation.
+        as wrap's callback). Owns the async-vs-sync decision, contextvar copying
+        for async delivery, VaultLockedError handling, and result normalisation.
         Returns the result text STRING. Recording is use()'s job, not ours.
 
+        Reads the bound parent off ``self.MessageProcessor`` (set by _bind()).
         act_summary (popped from params by use()) is the WS tooltip; it is NOT a
         run() argument. Spec §5 / D5.
         """
+        mp = self.MessageProcessor
         config = getattr(mp, "config", None)
         channel = getattr(config, "channel", "") or ""
         call_id = uuid4().hex[:12]
@@ -497,9 +526,13 @@ class Ability(ABC):
             delegate_id = f"{self.NAME}_{uuid4().hex[:8]}"
             cancel_event = threading.Event()
             _active_delegates[delegate_id] = cancel_event
+            # Copy the calling thread's contextvars into the daemon thread so
+            # locale/timezone context (set per-request) propagates to the async
+            # delegate exactly as it does on the synchronous path.
+            ctx = contextvars.copy_context()
             threading.Thread(
-                target=_run_async_delegate,
-                args=(self, channel, params, delegate_id, cancel_event),
+                target=ctx.run,
+                args=(_run_async_delegate, self, params, delegate_id, cancel_event),
                 daemon=True,
             ).start()
             result = {
@@ -510,7 +543,7 @@ class Ability(ABC):
                 ),
             }
         else:
-            result = _run_with_timeout(self, channel, params, self.TIMEOUT)
+            result = _run_ability(self, params)
 
         ok = result.get("status") != "error"
         _emit(config, {"type": "act_tool_end", "name": self.NAME, "id": call_id, "ok": ok})
@@ -526,11 +559,13 @@ class Ability(ABC):
         """
         return self.SUMMARY
 
-    def get_input_schema(self) -> dict:
+    def get_input_schema(self, mp=None) -> dict:
         """Return the INPUT_SCHEMA for LLM tool presentation.
 
-        Override to enrich the schema at runtime.  The default returns
-        the class-level INPUT_SCHEMA unchanged.
+        Override to enrich the schema at runtime.  ``mp`` is the invoking
+        MessageProcessor (threaded by ``build_tools`` because that path operates
+        on the unbound registry singleton).  The default returns the class-level
+        INPUT_SCHEMA unchanged.
         """
         return self.INPUT_SCHEMA
 
@@ -549,8 +584,8 @@ class Ability(ABC):
 
 class _MCPAbility(Ability):
     """Synthetic proxy for an _mcp_* tool so MCP calls flow through
-    use → wrap → execute exactly like a native ability — gated AND
-    timeout-bounded (inherits TIMEOUT=10) for the first time.
+    use → wrap → execute exactly like a native ability — gated for the
+    first time.
 
     _SYNTHETIC=True exempts it from __init_subclass__ validation (no
     EXAMPLES/SEARCH_TOOLTIP) and from the registry's boot-time instantiation
@@ -562,7 +597,7 @@ class _MCPAbility(Ability):
     def __init__(self, tool_name: str) -> None:
         self.NAME = tool_name
 
-    def run(self, channel: str, params: dict, telemetry: "dict | None" = None) -> dict:
+    def run(self, params: dict) -> dict:
         return _dispatch_mcp(self.NAME, params)
 
 

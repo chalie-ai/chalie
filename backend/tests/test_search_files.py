@@ -15,7 +15,7 @@ def _run(action: str, query: str, directory: str | None = None, **extra) -> str:
     params: dict = {"action": action, "query": query, **extra}
     if directory is not None:
         params["directory"] = directory
-    return SearchFilesAbility().run("user", params, None)["text"]
+    return SearchFilesAbility().run(params)["text"]
 
 
 # ── validation ────────────────────────────────────────────────────

@@ -24,11 +24,7 @@ def test_no_ordinal_returns_dict_without_trailer():
     from this dict too — only the rich-media render path needs a wall-clock
     anchor and that is injected by the parser."""
     ability = TimerAbility()
-    result = ability.run(
-        channel="subagent",
-        params={"title": "Focus block", "duration_seconds": 1500},
-        telemetry=None,
-    )
+    result = ability.run({"title": "Focus block", "duration_seconds": 1500})
     assert isinstance(result, dict)
     assert result["title"] == "Focus block"
     assert result["duration_seconds"] == 1500
@@ -42,11 +38,7 @@ def test_ordinal_returns_string_with_trailer():
     ``started_at`` — keeping the LLM ignorant of the wall-clock is a hard
     invariant of the timer contract."""
     ability = TimerAbility()
-    result = ability.run(
-        channel="user",
-        params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 2},
-        telemetry=None,
-    )
+    result = ability.run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 2})
     assert isinstance(result, str)
     body, _, instruction = result.partition("\n\n")
     payload = json.loads(body)
@@ -60,11 +52,7 @@ def test_ordinal_returns_string_with_trailer():
 
 def test_missing_title_returns_error_dict():
     ability = TimerAbility()
-    result = ability.run(
-        channel="user",
-        params={"duration_seconds": 60, "_rich_media_ordinal": 1},
-        telemetry=None,
-    )
+    result = ability.run({"duration_seconds": 60, "_rich_media_ordinal": 1})
     assert isinstance(result, dict)
     assert "error" in result
 
@@ -72,11 +60,7 @@ def test_missing_title_returns_error_dict():
 def test_invalid_duration_returns_error_dict():
     ability = TimerAbility()
     for bad in (0, -5, 86401, "30", None):
-        result = ability.run(
-            channel="user",
-            params={"title": "Bad", "duration_seconds": bad, "_rich_media_ordinal": 1},
-            telemetry=None,
-        )
+        result = ability.run({"title": "Bad", "duration_seconds": bad, "_rich_media_ordinal": 1})
         assert isinstance(result, dict), f"expected error dict for {bad!r}"
         assert "error" in result, f"expected error key for {bad!r}"
 
@@ -84,11 +68,7 @@ def test_invalid_duration_returns_error_dict():
 def test_long_title_truncated_to_80_chars():
     ability = TimerAbility()
     long_title = "x" * 200
-    result = ability.run(
-        channel="subagent",
-        params={"title": long_title, "duration_seconds": 60},
-        telemetry=None,
-    )
+    result = ability.run({"title": long_title, "duration_seconds": 60})
     assert len(result["title"]) == 80
 
 
@@ -99,11 +79,7 @@ def test_parser_skips_injection_when_created_at_missing():
     """
     from services.rich_media_parser import parse
 
-    raw = TimerAbility().run(
-        channel="user",
-        params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1},
-        telemetry=None,
-    )
+    raw = TimerAbility().run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1})
     tool_calls = [{
         "tool_name": "timer",
         "params": "{}",
@@ -124,11 +100,7 @@ def test_parser_rejects_unparseable_created_at_sentinel():
     """
     from services.rich_media_parser import parse
 
-    raw = TimerAbility().run(
-        channel="user",
-        params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1},
-        telemetry=None,
-    )
+    raw = TimerAbility().run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1})
     tool_calls = [{
         "tool_name": "timer",
         "params": "{}",
@@ -169,11 +141,7 @@ def test_parser_injects_started_at_from_tool_calls_created_at():
     from services.rich_media_parser import parse
 
     ability = TimerAbility()
-    raw = ability.run(
-        channel="user",
-        params={"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1},
-        telemetry=None,
-    )
+    raw = ability.run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1})
     assert "started_at" not in raw
 
     tool_calls = [{
@@ -199,11 +167,7 @@ def test_parser_injects_started_at_from_tool_calls_created_at():
 def test_max_duration_accepted():
     """24-hour upper bound is the documented edge — exercise it explicitly."""
     ability = TimerAbility()
-    result = ability.run(
-        channel="subagent",
-        params={"title": "Long", "duration_seconds": 86400},
-        telemetry=None,
-    )
+    result = ability.run({"title": "Long", "duration_seconds": 86400})
     assert result["duration_seconds"] == 86400
 
 

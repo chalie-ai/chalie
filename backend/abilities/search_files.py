@@ -23,6 +23,11 @@ _MAX_MAX_FILES = 200
 _DEFAULT_CONTEXT_LINES = 5
 _MAX_CONTEXT_LINES = 20
 _BUDGET_RATIO = 0.8
+# Cooperative wall-clock budget (seconds) for a single glob/grep walk. This is
+# NOT a framework execution timeout — it bounds the filesystem traversal itself
+# so a walk of an enormous tree returns a partial result with exhausted=True
+# instead of crawling indefinitely.
+_WALK_BUDGET_S = 30
 
 
 class SearchFilesAbility(Ability):
@@ -95,9 +100,8 @@ class SearchFilesAbility(Ability):
         },
         "required": ["action", "query"],
     }
-    TIMEOUT = 30
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         action = params.get("action", "")
         query = (params.get("query") or "").strip()
         directory = (params.get("directory") or "").strip()
@@ -141,7 +145,7 @@ class SearchFilesAbility(Ability):
         if not root.is_dir():
             return {"text": f"Not a directory: {root}"}
 
-        budget = self.TIMEOUT * _BUDGET_RATIO
+        budget = _WALK_BUDGET_S * _BUDGET_RATIO
         deadline = time.monotonic() + budget
 
         try:

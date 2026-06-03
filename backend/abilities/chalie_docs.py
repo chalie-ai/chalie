@@ -57,9 +57,8 @@ class ChalieDocsAbility(Ability):
         },
         "required": ["query"],
     }
-    TIMEOUT = 5
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         query = params.get("query", "").strip().lower()
         urls = _QUERY_URLS.get(query)
         if not urls:

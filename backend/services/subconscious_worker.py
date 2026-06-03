@@ -410,7 +410,6 @@ class SubconsciousWorker:
         pmp.config = config
         pmp.uid = None
         pmp.current_iteration = 0
-        pmp.deadline = None
         pmp.cancel_event = threading.Event()
         pmp.thinking_level = "low"
         pmp.thinking_exploration = None
@@ -575,7 +574,6 @@ class SubconsciousWorker:
         gmp.config = config
         gmp.uid = None
         gmp.current_iteration = 0
-        gmp.deadline = None
         gmp.cancel_event = threading.Event()
         gmp.thinking_level = "low"
         gmp.thinking_exploration = None

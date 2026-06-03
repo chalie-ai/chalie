@@ -44,9 +44,8 @@ class ReviewToolCallsAbility(Ability):
         },
         "required": ["date_time"],
     }
-    TIMEOUT = 10
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         date_time = (params.get("date_time") or "").strip()
         if not date_time:
             return {"text": _skill_tag("review_tool_calls", error="date-time-required")}

@@ -52,12 +52,11 @@ class FindSkillsAbility(SearchableAbility):
         },
         "required": ["query"],
     }
-    TIMEOUT = 10
 
     _DB_PATH: ClassVar[Path] = FileMapperService.get_skills_db_path()
     _LOG_PREFIX = "[FIND_SKILLS]"
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
+    def run(self, params: dict) -> dict:
         query = params.get("query", "").strip()
         logger.info(f"{self._LOG_PREFIX} query='{query}' limit={params.get('limit', 3)}")
         if not query:
@@ -71,7 +70,7 @@ class FindSkillsAbility(SearchableAbility):
 
         try:
             from services.embedding_service import EmbeddingService
-            query_embedding = EmbeddingService().generate_embedding(query)
+            query_embedding = EmbeddingService().generate_embedding(query, mp=self.MessageProcessor)
         except Exception as exc:
             logger.warning(f"{self._LOG_PREFIX} embedding failed: {exc}")
             return self._fallback(query, limit)

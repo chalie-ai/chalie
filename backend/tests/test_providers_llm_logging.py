@@ -30,8 +30,8 @@ def _stub_providers(monkeypatch, response):
         def send_messages(self, system_prompt, messages, cache_prefix=True, tools=None, thinking_mode=None):
             return response
 
-    monkeypatch.setattr(prov_mod.Providers, '_resolve', lambda self, job: _FakeProvider())
-    monkeypatch.setattr(prov_mod.Providers, '_get_tools', lambda self, job: [])
+    monkeypatch.setattr(prov_mod.Providers, '_resolve', lambda self, job, mp=None: _FakeProvider())
+    monkeypatch.setattr(prov_mod.Providers, '_get_tools', lambda self, mp=None: [])
 
 
 @pytest.fixture
@@ -69,29 +69,22 @@ def test_send_messages_produces_log_with_provider_and_model(logs_dir, monkeypatc
 
 
 def test_log_caller_from_bound_processor(logs_dir, monkeypatch):
-    """Filename starts with the bound processor's class name."""
-    from services.message_processor import bind_current_processor
+    """Filename starts with the threaded processor's class name."""
     _stub_providers(monkeypatch, _make_response())
 
     class FakeUserProc:
         pass
 
-    with bind_current_processor(FakeUserProc()):
-        _send()
+    _send(mp=FakeUserProc())
 
     files = list(logs_dir.glob('*.log'))
     assert files[0].name.startswith('FakeUserProc-')
 
 
 def test_log_caller_unknown_when_unbound(logs_dir, monkeypatch):
-    """With no processor bound the filename falls back to 'unknown-'."""
+    """With no processor threaded the filename falls back to 'unknown-'."""
     _stub_providers(monkeypatch, _make_response())
 
-    from services import message_processor as mp_mod
-    token = mp_mod._CURRENT_PROCESSOR.set(None)
-    try:
-        _send()
-    finally:
-        mp_mod._CURRENT_PROCESSOR.reset(token)
+    _send()
 
     assert list(logs_dir.glob('*.log'))[0].name.startswith('unknown-')

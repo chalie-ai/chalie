@@ -4,7 +4,7 @@ Reachable when a processor lists ``"save_pattern"`` in its ``ALWAYS_AVAILABLE``
 or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
 
 Budget + decay-tracking state lives on the calling processor (read via
-``current_processor()``).  PMP initialises ``_save_pattern_calls = 0`` and
+``self.MessageProcessor``).  PMP initialises ``_save_pattern_calls = 0`` and
 ``_touched_pattern_ids = set()`` in ``__init__``; this Ability uses ``getattr``
 defaults so it remains usable from any processor that opts it in.
 """
@@ -15,7 +15,6 @@ import re
 
 from abilities._base import Ability
 from services.database_service import get_shared_db_service
-from services.message_processor import current_processor
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
 
@@ -71,10 +70,9 @@ class SavePattern(Ability):
         },
         "required": ["name", "frequency", "summary", "evidence_transcript_ids"],
     }
-    TIMEOUT = 10
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        proc = current_processor()
+    def run(self, params: dict) -> dict:
+        proc = self.MessageProcessor
         count = getattr(proc, "_save_pattern_calls", 0) if proc is not None else 0
         if count >= _BUDGET_CAP:
             return {"budget_exceeded": True, "tool": "save_pattern"}

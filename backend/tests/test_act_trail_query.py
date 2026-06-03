@@ -79,7 +79,6 @@ def _make_flat_mp(db_conn, channel="test", broadcast=False, current_iteration=0)
     mp.config = config
     mp.uid = uid
     mp.current_iteration = current_iteration
-    mp.deadline = None
     mp.cancel_event = threading.Event()
     mp.thinking_level = "low"
     mp.thinking_exploration = None

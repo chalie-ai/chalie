@@ -4,6 +4,12 @@ CodeEvalAbility — Restricted Python scratchpad.
 Runs user-supplied Python in a RestrictedPython sandbox. No file I/O,
 no subprocess, no imports. Pre-loaded safe modules: math, statistics,
 json, decimal, fractions, itertools, functools, collections.
+
+Execution happens in a separate (``spawn``) process with a hard 10-minute
+wall-clock cap. The subprocess is the only way to force-kill arbitrary
+CPU-bound code (e.g. ``while True``) — a thread cannot be interrupted, and
+SIGALRM only fires on the main thread. ``spawn`` (not ``fork``) avoids
+inheriting locks from the multithreaded server.
 """
 
 import collections
@@ -14,8 +20,11 @@ import itertools
 import json
 import logging
 import math
+import multiprocessing
 import statistics
+import time
 import traceback
+from queue import Empty
 from typing import ClassVar
 
 from RestrictedPython import compile_restricted, safe_builtins, safe_globals
@@ -59,7 +68,6 @@ class CodeEvalAbility(Ability):
         },
         "required": ["code"],
     }
-    TIMEOUT = 15
 
     # Sandbox identity + result-contract messages. The error strings are the
     # actionable signals the LLM receives in place of a silent empty success,
@@ -74,6 +82,21 @@ class CodeEvalAbility(Ability):
         "Your code did not produce any output. "
         "Ensure you use `print` on whatever you want outputted / returned"
     )
+    _ERR_TIMEOUT = (
+        "Your code was stopped because it ran longer than 10 minutes. "
+        "This usually means an infinite loop or an operation that is too "
+        "large — check your loop conditions or reduce the amount of work."
+    )
+    _ERR_CRASHED = (
+        "The code could not be run: the sandbox process exited unexpectedly "
+        "without returning a result."
+    )
+
+    # Hard wall-clock cap on a single execution, and how often the parent polls
+    # the result queue while waiting (so an early crash is detected promptly
+    # instead of waiting out the full cap).
+    _EXEC_TIMEOUT_S = 600
+    _POLL_INTERVAL_S = 2.0
 
     # Pre-built restricted globals — assembled once at import time.
     _RESTRICTED_GLOBALS: ClassVar[dict] = {
@@ -93,19 +116,61 @@ class CodeEvalAbility(Ability):
         "collections": collections,
     }
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        """Compile and run the supplied Python, returning its printed output or
-        an actionable error — never a silent empty success that the LLM would
-        misread as 'done' and retry."""
+    def run(self, params: dict) -> dict:
+        """Run the supplied Python under a hard 10-minute cap, returning its
+        printed output or an actionable error — never a silent empty success
+        that the LLM would misread as 'done' and retry."""
         code = (params.get("code") or "").strip()
         if not code:
             return self._error(self._ERR_NO_CODE)
+        return self._execute_with_cap(code)
 
+    def _execute_with_cap(self, code: str) -> dict:
+        """Run the sandboxed code in a separate process with a hard wall-clock
+        cap. A subprocess is the only way to force-kill arbitrary CPU-bound code
+        (e.g. ``while True``) — a thread cannot be interrupted. On timeout the
+        process is terminated and an actionable error is returned so the LLM can
+        correct course instead of the ACT loop hanging forever."""
+        ctx = multiprocessing.get_context("spawn")
+        result_queue = ctx.Queue()
+        proc = ctx.Process(
+            target=_sandbox_worker, args=(code, result_queue), daemon=True,
+        )
+        proc.start()
+
+        deadline = time.monotonic() + self._EXEC_TIMEOUT_S
+        result = None
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            try:
+                # Read BEFORE join so a large (untruncated) result never
+                # deadlocks the queue feeder thread against proc.join().
+                result = result_queue.get(timeout=min(self._POLL_INTERVAL_S, remaining))
+                break
+            except Empty:
+                if not proc.is_alive():
+                    break  # finished or crashed without producing a result
+
+        if result is not None:
+            proc.join()
+            return result
+        if proc.is_alive():
+            proc.terminate()
+            proc.join()
+            return self._error(self._ERR_TIMEOUT)
+        proc.join()
+        return self._error(self._ERR_CRASHED)
+
+    def _compile_and_run(self, code: str) -> dict:
+        """Compile and execute *code* in fresh restricted globals. Runs inside
+        the sandbox subprocess; returns printed output, a full stack trace on
+        failure, or a no-output error — never a silent empty success."""
         try:
             byte_code = compile_restricted(code, filename=self._FILENAME, mode="exec")
         except SyntaxError:
             return self._error(traceback.format_exc())
-
         return self._run(byte_code)
 
     def _run(self, byte_code) -> dict:
@@ -137,3 +202,11 @@ class CodeEvalAbility(Ability):
         """Build an error result, preserving any partial print output as text so
         the LLM keeps context alongside the failure."""
         return {"text": captured, "error": message}
+
+
+def _sandbox_worker(code: str, result_queue) -> None:
+    """Entry point for the sandbox subprocess: compile and execute *code*, then
+    put the result dict on *result_queue*. Module-level so it is picklable under
+    the ``spawn`` start method. Runs in its own process so a runaway loop can be
+    force-terminated by the parent — a thread cannot be killed."""
+    result_queue.put(CodeEvalAbility()._compile_and_run(code))

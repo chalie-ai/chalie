@@ -68,7 +68,6 @@ class NewsAbility(Ability):
         },
         "required": ["query"],
     }
-    TIMEOUT = 10
 
     _service: ClassVar[Optional[NewsService]] = None
 
@@ -85,14 +84,14 @@ class NewsAbility(Ability):
         "united arab emirates": "AE", "saudi arabia": "SA",
     }
 
-    def run(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
+    def run(self, params: dict) -> dict | str:
         query = (params.get("query") or "").strip()
         if not query:
             return {"text": "", "error": "A 'query' parameter is required."}
 
         ordinal = params.get("_rich_media_ordinal")
         category = params.get("category")
-        telemetry = telemetry or {}
+        telemetry = self.telemetry or {}
 
         try:
             svc = self._get_service()

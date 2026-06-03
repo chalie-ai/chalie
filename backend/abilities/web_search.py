@@ -27,20 +27,17 @@ Properties (spec §5b "Properties of every delegate tool"):
     daemon thread for async-capable origins.  run() is ALWAYS synchronous.
 
 Permission boundary — ``policy_channel`` is inherited from the caller that
-invoked the ``web_search`` tool (``policy_channel_for(channel)``): the
-delegate's internal tool calls are gated under the SAME policy channel as the
-caller, not a hardcoded value.  The user-facing permission check still happens
-at the outer ``web_search`` tool.
+invoked the ``web_search`` tool (``self.MessageProcessor.config.policy_channel``):
+the delegate's internal tool calls are gated under the SAME policy channel as
+the caller, not a hardcoded value.  The user-facing permission check still
+happens at the outer ``web_search`` tool.
 """
 
-import time
 from typing import ClassVar
 
 from abilities._base import Ability
 from abilities._delegate import (
-    DELEGATE_DEADLINE_SECONDS,
     delegate_goal,
-    policy_channel_for,
     render_trail,
 )
 from services.processor_config import ProcessorConfig
@@ -129,14 +126,12 @@ class WebSearchAbility(Ability):
         },
         "required": ["query"],
     }
-    TIMEOUT = DELEGATE_DEADLINE_SECONDS
 
-    def run(self, channel: str, params: dict, telemetry: "dict | None") -> dict:
+    def run(self, params: dict) -> dict:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         result = MessageProcessor.process(
             delegate_goal(params),
-            WebSearchConfig(policy_channel_for(channel)),
-            deadline=time.time() + DELEGATE_DEADLINE_SECONDS,
+            WebSearchConfig(self.MessageProcessor.config.policy_channel),
         )
         return {"status": "success", "result": result}
