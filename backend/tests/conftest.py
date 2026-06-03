@@ -43,10 +43,12 @@ def _db_template(tmp_path_factory):
     """Build a fully-converged SQLite database file (once per session).
 
     Runs the real production boot sequence — SchemaConvergenceService.converge()
-    — against a temp file.  The result is a "golden" database that
+    plus the policy seed (PolicyManager.apply_seed, as run.py does at boot) —
+    against a temp file.  The result is a "golden" database that
     function-scoped fixtures copy cheaply.
     """
     from services.database_service import DatabaseService
+    from services.policy_manager import PolicyManager
     from services.schema_convergence_service import SchemaConvergenceService
 
     template_dir = tmp_path_factory.mktemp('db_template')
@@ -55,6 +57,11 @@ def _db_template(tmp_path_factory):
     db = DatabaseService(template_path)
     convergence = SchemaConvergenceService(db, embedding_dimensions=256)
     convergence.converge()
+
+    # Mirror boot: seed the flat policy table so gated tool calls on non-chat
+    # channels (e.g. subconscious save_pattern/save_graph, which are 'internal')
+    # resolve to their real defaults instead of an empty-table lazy 'ask'→deny.
+    PolicyManager(db).apply_seed()
 
     # Flush WAL into main file so shutil.copy2 gets a self-contained copy
     with db.connection() as conn:
