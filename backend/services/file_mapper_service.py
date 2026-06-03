@@ -96,6 +96,11 @@ class FileMapperService:
         return cls._ABILITIES_DIR / "assets" / "skills.sqlite"
 
     @classmethod
+    def get_policy_defaults_path(cls) -> Path:
+        """Return path to the static hand-authored policy seed (flat triples)."""
+        return cls._ABILITIES_DIR / "assets" / "policy_defaults.json"
+
+    @classmethod
     def get_mcp_tools_db_path(cls) -> Path:
         """Return path to the runtime MCP-tools index (gitignored, data/).
 
