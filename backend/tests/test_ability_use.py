@@ -86,7 +86,8 @@ def test_use_allow_runs_records_and_returns_string(monkeypatch, captured):
 ])
 def test_use_resolves_permission_key(monkeypatch, captured, params, expected):
     seen = {}
-    ability = MagicMock(); ability.execute.return_value = "x"
+    ability = MagicMock()
+    ability.execute.return_value = "x"
     monkeypatch.setattr(Ability, "match", staticmethod(lambda name: ability))
 
     def fake_wrap(channel, permission, callback, error=None):
