@@ -316,6 +316,11 @@ export class Renderer {
     const startedAt = Number.parseInt(row.dataset.startedAt || '0', 10);
     const elapsed = startedAt ? Date.now() - startedAt : 200;
     const wait = Math.max(0, 150 - elapsed);
+    // The backend act_tool_end event carries no `ms`; fall back to the
+    // client-measured elapsed so the pill still shows a real duration.
+    const effectiveMs = Number(ms) > 0
+      ? Number(ms)
+      : (startedAt ? Date.now() - startedAt : 0);
 
     setTimeout(() => {
       row.classList.remove('act-tool--running');
@@ -324,7 +329,7 @@ export class Renderer {
       if (!statusEl) return;
       statusEl.innerHTML = '';
       if (ok) {
-        const seconds = (Math.max(0, Number(ms) || 0) / 1000).toFixed(1);
+        const seconds = (Math.max(0, effectiveMs) / 1000).toFixed(1);
         statusEl.textContent = `${seconds}s`;
       } else {
         statusEl.textContent = 'error';

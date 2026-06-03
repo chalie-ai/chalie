@@ -266,10 +266,16 @@ export class Chat {
         this._renderer.setActNarrative(actEl, data.text, data.step);
       },
       onToolStart: (msg) => {
-        this._renderer.appendToolPill(actEl, msg.call_id, msg.name, msg.act_summary);
+        // Backend (abilities/_base.py) emits the act_tool_start event with
+        // keys `id` and `summary`; align to that contract (was call_id /
+        // act_summary, which silently dropped every pill via the !callId guard
+        // in renderer.appendToolPill).
+        this._renderer.appendToolPill(actEl, msg.id, msg.name, msg.summary);
       },
       onToolEnd: (msg) => {
-        this._renderer.resolveToolPill(msg.call_id, msg.ms || 0, !!msg.ok);
+        // Backend sends `id` and `ok` but no `ms`; pass 0 and let the renderer
+        // fall back to the client-measured elapsed for the duration display.
+        this._renderer.resolveToolPill(msg.id, msg.ms || 0, !!msg.ok);
       },
       onMessage: (data) => {
         responseContent = data.content || '';
