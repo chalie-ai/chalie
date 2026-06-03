@@ -35,23 +35,26 @@ def _skill_suggestion_build_system_prompt(_mp: object) -> str:
     return SkillSuggestionSystemPrompt().get_prompt()
 
 
-SKILL_SUGGESTION_CONFIG = ProcessorConfig(
-    channel="skills_building",
-    role="skills_building",
-    policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-    build_user_prompt=_skill_suggestion_build_user_prompt,
-    build_user_definition=lambda _mp: "",
-    build_system_prompt=_skill_suggestion_build_system_prompt,
-    always_available=["skill_manager"],
-    discoverable=[],
-    blocked=frozenset(),
-    max_iterations=5,
-    skip_transcript=False,
-    skip_input_row=False,
-    suppress_history=True,
-    broadcast_to=None,
-    memory_seed=False,
-    post_turn=None,
-)
-"""Skill suggestion — housekeeping, suppress_history=True replaces old
-get_previous_messages() override.  §3a / AC-26."""
+class SkillSuggestionConfig(ProcessorConfig):
+    """Skill suggestion — housekeeping, suppress_history=True replaces old
+    get_previous_messages() override.  §3a / AC-26."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            channel="skills_building",
+            role="skills_building",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            build_user_prompt=_skill_suggestion_build_user_prompt,
+            build_user_definition=lambda _mp: "",
+            build_system_prompt=_skill_suggestion_build_system_prompt,
+            always_available=["skill_manager"],
+            discoverable=[],
+            blocked=frozenset(),
+            max_iterations=5,
+            skip_transcript=False,
+            skip_input_row=False,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=None,
+        )

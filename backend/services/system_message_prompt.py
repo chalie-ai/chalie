@@ -246,7 +246,7 @@ class ContinuityCompactionSystemPrompt(SystemMessagePrompt):
     """System-message body for continuity-first channel compaction.
 
     Used by the compaction turn (a flat ``process()`` run on the compaction
-    channel — see ``configs.channels.COMPACTION_CONFIG``).
+    channel — see ``configs.channels.CompactionConfig``).
 
     Replaces the old ``CompactionFullSystemPrompt``. The continuity-first
     prompt instructs the LLM to treat the summary as its own living memory,

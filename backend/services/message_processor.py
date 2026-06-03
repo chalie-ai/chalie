@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # compaction orchestration triggered when the live token measurement crosses the
 # 0.80 / 0.90 thresholds. _SUMMARY_RE parses the <summary>…</summary> block
 # produced by the compaction turn (a flat process() run on the compaction
-# channel — see configs.channels.COMPACTION_CONFIG).
+# channel — see configs.channels.CompactionConfig).
 
 _SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>", re.IGNORECASE)
 _COMPACTION_FAILURE_FMT = "[COMPACTION] %s: continuity failure — reason=%s"
@@ -316,7 +316,7 @@ class MessageProcessor:
 
         Reads entries since the watermark, builds the continuity-first envelope,
         runs the compaction LLM through ``MessageProcessor.process()`` with
-        ``COMPACTION_CONFIG`` (the single flat loop — no compaction subclass),
+        ``CompactionConfig`` (the single flat loop — no compaction subclass),
         parses ``<summary>``, and writes the append-only ``tool_calls`` audit
         row that the canonical ``compaction_persistence.get_compaction()``
         lookup reads.
@@ -331,7 +331,7 @@ class MessageProcessor:
             The extracted ``<summary>`` body on success, None on failure
             (unchanged contract — callers and tests rely on it).
         """
-        from configs.channels import COMPACTION_CONFIG
+        from configs.channels import CompactionConfig
         from services import compaction_persistence
 
         channel = self._effective_channel()
@@ -362,7 +362,7 @@ class MessageProcessor:
 
         try:
             raw_output = (
-                MessageProcessor.process(compaction_input, COMPACTION_CONFIG) or ''
+                MessageProcessor.process(compaction_input, CompactionConfig()) or ''
             ).strip()
         except Exception as exc:
             reason = f"LLM error: {exc}"
@@ -945,7 +945,7 @@ class MessageProcessor:
 
         Compaction is itself a tool call. We assemble the current trail
         (everything since the last 'trail_compaction' row — §4c), summarise
-        it via MessageProcessor.process() with COMPACTION_CONFIG, and record
+        it via MessageProcessor.process() with CompactionConfig, and record
         the summary as a new 'trail_compaction' row. Because trail assembly
         always starts at the LATEST 'trail_compaction' row, that one row
         instantly becomes the new head of the trail and every prior row drops
@@ -957,14 +957,14 @@ class MessageProcessor:
         Spec §4a / D2 / D8 / D9 / D10 / AC-23.
         """
         from abilities._base import Ability  # noqa: PLC0415
-        from configs.channels import COMPACTION_CONFIG  # noqa: PLC0415
+        from configs.channels import CompactionConfig  # noqa: PLC0415
 
         trail_text = self._render_act_trail()
         if not trail_text.strip():
             return True  # D9: nothing to compact — no-op success
 
         compacted = MessageProcessor.process(
-            f"## Tool Results\n{trail_text}", COMPACTION_CONFIG
+            f"## Tool Results\n{trail_text}", CompactionConfig()
         )
         if not compacted.strip():
             logger.warning(
@@ -991,7 +991,7 @@ class MessageProcessor:
 
         Summarises this channel's history using _run_full_compaction, which
         runs the compaction LLM through the flat MessageProcessor.process()
-        path with COMPACTION_CONFIG. Independent of the trail — operates on
+        path with CompactionConfig. Independent of the trail — operates on
         the transcript, not the tool_calls trail.
 
         Returns True on success, False on failure (caller should abort the turn).

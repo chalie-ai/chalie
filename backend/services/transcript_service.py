@@ -329,7 +329,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
         try:
             import threading
 
-            from configs.channels import EPISODE_ENCODER_CONFIG
+            from configs.channels import EpisodeEncoderConfig
             from services.database_service import get_shared_db_service
             from services.message_processor import MessageProcessor
             from services.episodic_service import (
@@ -383,11 +383,11 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             referenced_str = _format_episodes_for_prompt(referenced_episodes)
 
             # ── 4. Encode the window via the flat episode-encoder channel ────
-            # _window / _referenced are read by EPISODE_ENCODER_CONFIG's
+            # _window / _referenced are read by EpisodeEncoderConfig's
             # build_user_prompt; set them on the instance before _run().
             emp = object.__new__(MessageProcessor)
             MessageProcessor.__init__(emp, "", None)
-            emp.config = EPISODE_ENCODER_CONFIG
+            emp.config = EpisodeEncoderConfig()
             emp.uid = None
             emp.current_iteration = 0
             emp.deadline = None

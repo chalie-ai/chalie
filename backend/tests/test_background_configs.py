@@ -32,12 +32,12 @@ pytestmark = pytest.mark.unit
 
 
 class TestUserSummaryConfig:
-    """make_user_summary_config's post_turn parses {short, long} → data_graph."""
+    """UserSummaryConfig's post_turn parses {short, long} → data_graph."""
 
     def test_post_turn_writes_data_graph_on_valid_json(self, db):
         """post_turn parses {short, long} JSON and writes both rows to data_graph."""
-        from configs.channels import make_user_summary_config
-        cfg = make_user_summary_config()
+        from configs.channels import UserSummaryConfig
+        cfg = UserSummaryConfig()
 
         mp = MagicMock()
         response_text = '{"short": "Alice is an engineer.", "long": "Alice works in software engineering in Malta."}'
@@ -120,15 +120,15 @@ class TestPostTurnRunsAfterAssistantRow:
 
 
 class TestSuperEpisodeConfig:
-    """make_super_episode_config captures sources/spans at factory time and the
+    """SuperEpisodeConfig captures sources/spans at construction time and the
     build_user_prompt closure renders them — one config per cluster (O2)."""
 
     def test_super_episode_config_build_user_prompt_uses_sources_spans(self):
         """build_user_prompt produces a non-empty prompt containing the cluster's data."""
-        from configs.channels import make_super_episode_config
+        from configs.channels import SuperEpisodeConfig
         sources = [{"id": "ep1", "gist": "User discussed AI plans"}]
         spans = "raw transcript text here"
-        cfg = make_super_episode_config("user", sources, spans)
+        cfg = SuperEpisodeConfig("user", sources, spans)
         mp = MagicMock()
         result = cfg.build_user_prompt(mp)
         assert isinstance(result, str)

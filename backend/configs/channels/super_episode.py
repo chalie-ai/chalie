@@ -135,55 +135,52 @@ def _super_episode_build_system_prompt(_mp: object) -> str:
     return SuperEpisodeEncoderSystemPrompt().get_prompt()
 
 
-def make_super_episode_config(
-    channel: str,
-    sources: list[Any],
-    spans: Any,
-) -> ProcessorConfig:
+class SuperEpisodeConfig(ProcessorConfig):
     """Super-episode encoder config — per-cluster episode synthesis.
 
     channel/role='super_episode_encoder', suppress_history=True, max_iterations=1.
     post_turn = None (caller owns episode write — §3b / O2).
 
-    sources and spans are captured at factory time so the build_user_prompt
+    sources and spans are captured at construction time so the build_user_prompt
     closure is self-contained per cluster (§3c: cluster loop moves to caller).
 
     Args:
-        channel: The user channel being consolidated (e.g. 'user').
-        sources: List of episode dicts for this cluster (each with 'id', 'gist').
-        spans:   Raw transcript spans string covering these episodes.
+        channel:  The user channel being consolidated (e.g. 'user'). Recorded for
+                  caller traceability only; the processor's transcript channel is
+                  always 'super_episode_encoder'.
+        sources:  List of episode dicts for this cluster (each with 'id', 'gist').
+        spans:    Raw transcript spans string covering these episodes.
     """
-    _sources = sources
-    _spans = spans
 
-    def _build_user_prompt(_mp: object) -> str:
-        src = "\n\n".join(f"[{e['id']}] {e['gist']}" for e in _sources)
-        return (
-            f"Source episodes:\n\n{src}\n\n"
-            f"Raw transcript spans covering these episodes:\n\n{_spans}"
+    def __init__(self, channel: str, sources: list[Any], spans: Any) -> None:
+        def _build_user_prompt(_mp: object) -> str:
+            src = "\n\n".join(f"[{e['id']}] {e['gist']}" for e in sources)
+            return (
+                f"Source episodes:\n\n{src}\n\n"
+                f"Raw transcript spans covering these episodes:\n\n{spans}"
+            )
+
+        def _build_user_definition(_mp: object) -> str:
+            return (
+                "The user is 'super_episode_encoder' — a background process that "
+                "consolidates clusters of related episodes into a single super-episode."
+            )
+
+        super().__init__(
+            channel="super_episode_encoder",
+            role="super_episode_encoder",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            build_user_prompt=_build_user_prompt,
+            build_user_definition=_build_user_definition,
+            build_system_prompt=_super_episode_build_system_prompt,
+            always_available=[],
+            discoverable=[],
+            blocked=frozenset(),
+            max_iterations=1,
+            skip_transcript=True,
+            skip_input_row=False,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=None,
         )
-
-    def _build_user_definition(_mp: object) -> str:
-        return (
-            "The user is 'super_episode_encoder' — a background process that "
-            "consolidates clusters of related episodes into a single super-episode."
-        )
-
-    return ProcessorConfig(
-        channel="super_episode_encoder",
-        role="super_episode_encoder",
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-        build_user_prompt=_build_user_prompt,
-        build_user_definition=_build_user_definition,
-        build_system_prompt=_super_episode_build_system_prompt,
-        always_available=[],
-        discoverable=[],
-        blocked=frozenset(),
-        max_iterations=1,
-        skip_transcript=True,
-        skip_input_row=False,
-        suppress_history=True,
-        broadcast_to=None,
-        memory_seed=False,
-        post_turn=None,
-    )

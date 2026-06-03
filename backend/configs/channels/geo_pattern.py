@@ -95,7 +95,7 @@ def _geo_pattern_post_turn(mp: object, _response_text: str) -> None:
         _log.warning("[GEO_CONFIG] post_turn logging failed: %s", exc)
 
 
-def make_geo_config(window_start: int, window_end: int) -> ProcessorConfig:
+class GeoConfig(ProcessorConfig):
     """Geo-pattern config — per-window background geo recognition.
 
     channel/role='geo_pattern', suppress_history=True, max_iterations=30.
@@ -104,48 +104,50 @@ def make_geo_config(window_start: int, window_end: int) -> ProcessorConfig:
     Counter/state attrs are lazily initialised by build_user_prompt on the first
     call so the caller does not need to pre-set them.
     """
-    def _build_user_prompt(mp: object) -> str:
-        # Lazy-init per-instance state so SavePattern/SaveGraph find it.
-        if not hasattr(mp, "_save_pattern_calls"):
-            mp._save_pattern_calls = 0  # type: ignore[attr-defined]
-        if not hasattr(mp, "_save_graph_calls"):
-            mp._save_graph_calls = 0  # type: ignore[attr-defined]
-        if not hasattr(mp, "_save_graph_seen"):
-            mp._save_graph_seen = set()  # type: ignore[attr-defined]
-        if not hasattr(mp, "_touched_pattern_ids"):
-            mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
-        # Cache the transcript block across multiple iterations (same as GPP).
-        cached = getattr(mp, "_cached_transcript_block", None)
-        if cached is None:
-            block = _geo_pattern_load_transcript_block(window_start, window_end)
-            mp._cached_transcript_block = block  # type: ignore[attr-defined]
-        else:
-            block = cached
-        existing = _pattern_existing_patterns_block()
-        parts = [f"Existing patterns:\n{existing}", block]
-        try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
-            if trail:
-                parts.append(trail)
-        except Exception:
-            pass
-        return "\n\n".join(parts)
 
-    return ProcessorConfig(
-        channel="geo_pattern",
-        role="geo_pattern",
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-        build_user_prompt=_build_user_prompt,
-        build_user_definition=lambda _mp: "",
-        build_system_prompt=_geo_pattern_build_system_prompt,
-        always_available=["save_pattern", "save_graph"],
-        discoverable=[],
-        blocked=frozenset(),
-        max_iterations=30,
-        skip_transcript=True,
-        skip_input_row=False,
-        suppress_history=True,
-        broadcast_to=None,
-        memory_seed=False,
-        post_turn=_geo_pattern_post_turn,
-    )
+    def __init__(self, window_start: int, window_end: int) -> None:
+        def _build_user_prompt(mp: object) -> str:
+            # Lazy-init per-instance state so SavePattern/SaveGraph find it.
+            if not hasattr(mp, "_save_pattern_calls"):
+                mp._save_pattern_calls = 0  # type: ignore[attr-defined]
+            if not hasattr(mp, "_save_graph_calls"):
+                mp._save_graph_calls = 0  # type: ignore[attr-defined]
+            if not hasattr(mp, "_save_graph_seen"):
+                mp._save_graph_seen = set()  # type: ignore[attr-defined]
+            if not hasattr(mp, "_touched_pattern_ids"):
+                mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
+            # Cache the transcript block across multiple iterations (same as GPP).
+            cached = getattr(mp, "_cached_transcript_block", None)
+            if cached is None:
+                block = _geo_pattern_load_transcript_block(window_start, window_end)
+                mp._cached_transcript_block = block  # type: ignore[attr-defined]
+            else:
+                block = cached
+            existing = _pattern_existing_patterns_block()
+            parts = [f"Existing patterns:\n{existing}", block]
+            try:
+                trail = mp._render_act_trail()  # type: ignore[attr-defined]
+                if trail:
+                    parts.append(trail)
+            except Exception:
+                pass
+            return "\n\n".join(parts)
+
+        super().__init__(
+            channel="geo_pattern",
+            role="geo_pattern",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            build_user_prompt=_build_user_prompt,
+            build_user_definition=lambda _mp: "",
+            build_system_prompt=_geo_pattern_build_system_prompt,
+            always_available=["save_pattern", "save_graph"],
+            discoverable=[],
+            blocked=frozenset(),
+            max_iterations=30,
+            skip_transcript=True,
+            skip_input_row=False,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=_geo_pattern_post_turn,
+        )

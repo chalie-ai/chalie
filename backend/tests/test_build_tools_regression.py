@@ -25,7 +25,7 @@ and the resolve (``build_tools``); both are pinned below.
 import pytest
 
 from abilities._registry import AbilityRegistry
-from configs.channels import DEFAULT_ALWAYS_AVAILABLE, make_user_config
+from configs.channels import DEFAULT_ALWAYS_AVAILABLE, UserConfig
 from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
@@ -45,7 +45,7 @@ def test_setup_seeds_active_tools_from_always_available(monkeypatch):
     or the always_available tier never reaches the model (mem 07c8c134, relocated)."""
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "", None)
-    mp.config = make_user_config({"channel": "user"})
+    mp.config = UserConfig({"channel": "user"})
     mp.uid = None
     # Stub the heavy bits _setup runs AFTER the seed (DB write, thinking gate, seed-0).
     monkeypatch.setattr("services.transcript_service.write_input_row", lambda *a, **k: 1)
@@ -59,7 +59,7 @@ def test_setup_seeds_active_tools_from_always_available(monkeypatch):
 
 def test_active_tools_resolve_to_always_available_surface():
     """The resolve half: active_tools = always_available → those tools reach the model."""
-    mp = _make_mp(list(DEFAULT_ALWAYS_AVAILABLE), config=make_user_config({"channel": "user"}))
+    mp = _make_mp(list(DEFAULT_ALWAYS_AVAILABLE), config=UserConfig({"channel": "user"}))
     names = {t["name"] for t in AbilityRegistry.build_tools(mp)}
     assert names == set(DEFAULT_ALWAYS_AVAILABLE)
     assert names == {"find_skills", "find_tools", "memory"}

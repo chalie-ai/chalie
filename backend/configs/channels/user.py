@@ -185,7 +185,7 @@ def _ump_post_turn(mp: object, response_text: str) -> None:
             _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
 
 
-def make_user_config(metadata: dict[str, Any] | None = None) -> ProcessorConfig:
+class UserConfig(ProcessorConfig):
     """UMP config — conversational user channel.
 
     broadcast_to='user' (live output), memory_seed=True, suppress_history=False.
@@ -193,22 +193,24 @@ def make_user_config(metadata: dict[str, Any] | None = None) -> ProcessorConfig:
     of metadata['attachments'] drives this).  post_turn = skill suggestion only
     (no metrics, no phase — §3b / §4e / §6).
     """
-    _metadata = metadata or {}
-    return ProcessorConfig(
-        channel="user",
-        role="user",
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
-        build_user_prompt=_ump_build_user_prompt,
-        build_user_definition=_ump_build_user_definition,
-        build_system_prompt=_ump_build_system_prompt,
-        always_available=DEFAULT_ALWAYS_AVAILABLE,
-        discoverable=DEFAULT_DISCOVERABLE,
-        blocked=frozenset(),
-        max_iterations=None,
-        skip_transcript=False,
-        skip_input_row=bool(_metadata.get("hidden_input")),
-        suppress_history=False,
-        broadcast_to="user",
-        memory_seed=True,
-        post_turn=_ump_post_turn,
-    )
+
+    def __init__(self, metadata: dict[str, Any] | None = None) -> None:
+        _metadata = metadata or {}
+        super().__init__(
+            channel="user",
+            role="user",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
+            build_user_prompt=_ump_build_user_prompt,
+            build_user_definition=_ump_build_user_definition,
+            build_system_prompt=_ump_build_system_prompt,
+            always_available=DEFAULT_ALWAYS_AVAILABLE,
+            discoverable=DEFAULT_DISCOVERABLE,
+            blocked=frozenset(),
+            max_iterations=None,
+            skip_transcript=False,
+            skip_input_row=bool(_metadata.get("hidden_input")),
+            suppress_history=False,
+            broadcast_to="user",
+            memory_seed=True,
+            post_turn=_ump_post_turn,
+        )

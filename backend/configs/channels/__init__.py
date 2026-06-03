@@ -7,63 +7,64 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-Per-channel ProcessorConfig constants and factory functions.
+Per-channel ProcessorConfig subclasses.
 
 Spec: ACT Loop Orchestrator Refactor §3.
 
-Static channels (§3a) — constant ProcessorConfig instances:
-  DMN_CONFIG, EPISODE_ENCODER_CONFIG, SKILL_SUGGESTION_CONFIG,
-  COMPACTION_CONFIG
+Each channel is a named ProcessorConfig subclass with a typed __init__.
+The caller instantiates the subclass directly — no factory layer, no
+extras dict.
 
-Per-instance channels (§3b) — factory functions:
-  make_user_config(metadata) -> ProcessorConfig
-  make_eamp_config(agent_name, project, loop_in_human, wrapper_id) -> ProcessorConfig
-  make_pattern_config(window_start, window_end) -> ProcessorConfig
-  make_geo_config(window_start, window_end) -> ProcessorConfig
-  make_user_summary_config() -> ProcessorConfig
-  make_super_episode_config(channel, sources, spans) -> ProcessorConfig
+Static channels (§3a) — zero-arg constructors:
+  DmnConfig(), EpisodeEncoderConfig(), SkillSuggestionConfig(),
+  CompactionConfig()
 
-T7 wired UMP and EAMP with real implementations.
-T8 wired all background/housekeeping channels with real implementations.
+Per-instance channels (§3b) — typed constructors:
+  UserConfig(metadata: dict | None = None)
+  EAMPConfig(agent_name, project, loop_in_human, wrapper_id)
+  PatternConfig(window_start, window_end)
+  GeoConfig(window_start, window_end)
+  UserSummaryConfig()
+  SuperEpisodeConfig(channel, sources, spans)
 """
 
 from __future__ import annotations
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE, DEFAULT_DISCOVERABLE
-from configs.channels.compaction import COMPACTION_CONFIG
-from configs.channels.dmn import DMN_CONFIG
-from configs.channels.episode_encoder import EPISODE_ENCODER_CONFIG
-from configs.channels.external_agent import make_eamp_config
-from configs.channels.geo_pattern import make_geo_config
-from configs.channels.pattern import _pattern_existing_patterns_block, make_pattern_config
-from configs.channels.skill_suggestion import SKILL_SUGGESTION_CONFIG
+from configs.channels.compaction import CompactionConfig
+from configs.channels.dmn import DmnConfig
+from configs.channels.episode_encoder import EpisodeEncoderConfig
+from configs.channels.external_agent import EAMPConfig
+from configs.channels.geo_pattern import GeoConfig
+from configs.channels.pattern import PatternConfig, _pattern_existing_patterns_block
+from configs.channels.skill_suggestion import SkillSuggestionConfig
 from configs.channels.super_episode import (
+    SuperEpisodeConfig,
     _collect_transcript_ids,
     _fetch_transcript_spans,
     _safe_json_load_object,
-    make_super_episode_config,
 )
-from configs.channels.user import make_user_config
-from configs.channels.user_summary import _should_synthesise, make_user_summary_config
+from configs.channels.user import UserConfig
+from configs.channels.user_summary import UserSummaryConfig, _should_synthesise
 from services.processor_config import ProcessorConfig
 
 __all__ = [
-    "COMPACTION_CONFIG",
+    "CompactionConfig",
     "DEFAULT_ALWAYS_AVAILABLE",
     "DEFAULT_DISCOVERABLE",
-    "DMN_CONFIG",
-    "EPISODE_ENCODER_CONFIG",
+    "DmnConfig",
+    "EAMPConfig",
+    "EpisodeEncoderConfig",
+    "GeoConfig",
+    "PatternConfig",
     "ProcessorConfig",
-    "SKILL_SUGGESTION_CONFIG",
+    "SkillSuggestionConfig",
+    "SuperEpisodeConfig",
+    "UserConfig",
+    "UserSummaryConfig",
     "_collect_transcript_ids",
     "_fetch_transcript_spans",
     "_pattern_existing_patterns_block",
     "_safe_json_load_object",
     "_should_synthesise",
-    "make_eamp_config",
-    "make_geo_config",
-    "make_pattern_config",
-    "make_super_episode_config",
-    "make_user_config",
-    "make_user_summary_config",
 ]

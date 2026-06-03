@@ -158,34 +158,36 @@ def _make_eamp_post_turn(
     return _post_turn
 
 
-def make_eamp_config(
-    agent_name: str,
-    project: str,
-    loop_in_human: bool,
-    wrapper_id: str,
-) -> ProcessorConfig:
+class EAMPConfig(ProcessorConfig):
     """External-Agent Message Processor config.
 
     channel='external-agent:{agent_name}', role='external_agent'.
     suppress_history=False (conversational), memory_seed=True.
     post_turn dispatches disclosure when loop_in_human (§3b).
     """
-    channel = f"external-agent:{agent_name}"
-    return ProcessorConfig(
-        channel=channel,
-        role="external_agent",
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.EXTERNAL_AGENT,
-        build_user_prompt=_eamp_build_user_prompt,
-        build_user_definition=_eamp_build_user_definition(agent_name, project),
-        build_system_prompt=_eamp_build_system_prompt(agent_name, project, wrapper_id),
-        always_available=DEFAULT_ALWAYS_AVAILABLE,
-        discoverable=DEFAULT_DISCOVERABLE,
-        blocked=frozenset(),
-        max_iterations=200,
-        skip_transcript=False,
-        skip_input_row=False,
-        suppress_history=False,
-        broadcast_to=None,
-        memory_seed=True,
-        post_turn=_make_eamp_post_turn(agent_name, project, loop_in_human),
-    )
+
+    def __init__(
+        self,
+        agent_name: str,
+        project: str,
+        loop_in_human: bool,
+        wrapper_id: str,
+    ) -> None:
+        super().__init__(
+            channel=f"external-agent:{agent_name}",
+            role="external_agent",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.EXTERNAL_AGENT,
+            build_user_prompt=_eamp_build_user_prompt,
+            build_user_definition=_eamp_build_user_definition(agent_name, project),
+            build_system_prompt=_eamp_build_system_prompt(agent_name, project, wrapper_id),
+            always_available=DEFAULT_ALWAYS_AVAILABLE,
+            discoverable=DEFAULT_DISCOVERABLE,
+            blocked=frozenset(),
+            max_iterations=200,
+            skip_transcript=False,
+            skip_input_row=False,
+            suppress_history=False,
+            broadcast_to=None,
+            memory_seed=True,
+            post_turn=_make_eamp_post_turn(agent_name, project, loop_in_human),
+        )

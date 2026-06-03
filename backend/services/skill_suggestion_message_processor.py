@@ -59,16 +59,16 @@ def _run_suggestion_processor(
     """Thread target: run the flat skill-suggestion channel. Never raises.
 
     _original_trail / _original_input / _iteration_count are read by
-    SKILL_SUGGESTION_CONFIG's build_user_prompt; set them on the instance
+    SkillSuggestionConfig's build_user_prompt; set them on the instance
     before _run().
     """
     try:
-        from configs.channels import SKILL_SUGGESTION_CONFIG
+        from configs.channels import SkillSuggestionConfig
         from services.message_processor import MessageProcessor
 
         mp = object.__new__(MessageProcessor)
         MessageProcessor.__init__(mp, "", None)
-        mp.config = SKILL_SUGGESTION_CONFIG
+        mp.config = SkillSuggestionConfig()
         mp.uid = None
         mp.current_iteration = 0
         mp.deadline = None

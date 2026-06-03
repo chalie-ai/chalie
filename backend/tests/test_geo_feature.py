@@ -126,18 +126,18 @@ class TestEstimateSpeedFromHistory:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: geo-pattern channel config (make_geo_config — flat path)
+# Test 4: geo-pattern channel config (GeoConfig — flat path)
 # ---------------------------------------------------------------------------
 
 class TestGeoPatternConfig:
-    """make_geo_config produces the expected channel config and prompt content."""
+    """GeoConfig produces the expected channel config and prompt content."""
 
     def test_config_sets_expected_attributes(self, db):
-        """make_geo_config sets channel, role, skip_transcript, max_iterations,
+        """GeoConfig sets channel, role, skip_transcript, max_iterations,
         always_available, and discoverable."""
-        from configs.channels import make_geo_config
+        from configs.channels import GeoConfig
 
-        config = make_geo_config(window_start=0, window_end=100)
+        config = GeoConfig(window_start=0, window_end=100)
 
         assert config.channel == "geo_pattern"
         assert config.role == "geo_pattern"
@@ -150,9 +150,9 @@ class TestGeoPatternConfig:
     def test_system_prompt_contains_geo_keywords(self, db):
         """build_system_prompt() references location-tagging, save_pattern, save_graph,
         and geo-spatial — the four pillars of the geo-pattern task description."""
-        from configs.channels import make_geo_config
+        from configs.channels import GeoConfig
 
-        config = make_geo_config(window_start=0, window_end=100)
+        config = GeoConfig(window_start=0, window_end=100)
         prompt = config.build_system_prompt(None)
 
         assert "location-tagged" in prompt, "System prompt must mention 'location-tagged'"

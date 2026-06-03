@@ -230,7 +230,7 @@ def _should_synthesise() -> bool:
         return False
 
 
-def make_user_summary_config() -> ProcessorConfig:
+class UserSummaryConfig(ProcessorConfig):
     """User-summary config — one-shot user synthesis.
 
     channel/role='user_summary', suppress_history=True, max_iterations=1.
@@ -239,21 +239,23 @@ def make_user_summary_config() -> ProcessorConfig:
     The caller gates on _should_synthesise() BEFORE calling
     MessageProcessor.process() — §3c / O1.
     """
-    return ProcessorConfig(
-        channel="user_summary",
-        role="user_summary",
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-        build_user_prompt=_user_summary_build_user_prompt,
-        build_user_definition=lambda _mp: "You are a synthesiser. The user is a real human whose traits you are distilling.",
-        build_system_prompt=_user_summary_build_system_prompt,
-        always_available=[],
-        discoverable=[],
-        blocked=frozenset(),
-        max_iterations=1,
-        skip_transcript=True,
-        skip_input_row=False,
-        suppress_history=True,
-        broadcast_to=None,
-        memory_seed=False,
-        post_turn=_user_summary_post_turn,
-    )
+
+    def __init__(self) -> None:
+        super().__init__(
+            channel="user_summary",
+            role="user_summary",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            build_user_prompt=_user_summary_build_user_prompt,
+            build_user_definition=lambda _mp: "You are a synthesiser. The user is a real human whose traits you are distilling.",
+            build_system_prompt=_user_summary_build_system_prompt,
+            always_available=[],
+            discoverable=[],
+            blocked=frozenset(),
+            max_iterations=1,
+            skip_transcript=True,
+            skip_input_row=False,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=_user_summary_post_turn,
+        )

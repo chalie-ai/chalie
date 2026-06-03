@@ -17,16 +17,14 @@ for one turn can never be mutated mid-loop (AC-5 / §2).
 
 Usage
 -----
-Constant channels (DMN, EpisodeEncoder, …) expose a module-level instance::
+Every channel is a named ``ProcessorConfig`` subclass with a typed ``__init__``.
+The caller instantiates the subclass directly::
 
-    from configs.channels import DMN_CONFIG
-    mp = MessageProcessor.process(raw_input, DMN_CONFIG)
+    from configs.channels import DmnConfig
+    mp = MessageProcessor.process(raw_input, DmnConfig())
 
-Per-instance channels (UMP, ExternalAgent, …) expose factory functions::
-
-    from configs.channels import make_user_config
-    config = make_user_config(metadata=request_metadata)
-    mp = MessageProcessor.process(raw_input, config)
+    from configs.channels import UserConfig
+    mp = MessageProcessor.process(raw_input, UserConfig(metadata=request_metadata))
 
 The ``job`` property — ``f"{channel}:{role}"`` — is the telemetry label passed
 to ``Providers.calculate`` / ``Providers.send_messages``.  There is no separate
@@ -111,7 +109,7 @@ class ProcessorConfig:
 
     broadcast_to: str | None
     """None = silent.  Non-None = stream narration + tool events to this channel.
-    Only make_user_config sets this ('user'); all others leave it None (AC-28)."""
+    Only UserConfig sets this ('user'); all others leave it None (AC-28)."""
 
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 

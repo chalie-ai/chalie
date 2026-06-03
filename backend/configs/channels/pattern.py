@@ -177,7 +177,7 @@ def _pattern_init_instance_state(mp: object) -> None:
         mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
 
 
-def make_pattern_config(window_start: int, window_end: int) -> ProcessorConfig:
+class PatternConfig(ProcessorConfig):
     """Pattern-match config — per-window background pattern recognition.
 
     channel/role='pattern_match', suppress_history=True, max_iterations=100.
@@ -186,26 +186,28 @@ def make_pattern_config(window_start: int, window_end: int) -> ProcessorConfig:
     Counter/state attrs are lazily initialised by build_user_prompt on the first
     call so the caller does not need to pre-set them.
     """
-    def _build_user_prompt(mp: object) -> str:
-        # Lazy-init per-instance state so SavePattern/SaveGraph find it.
-        _pattern_init_instance_state(mp)
-        return _pattern_build_user_prompt(mp, window_start, window_end)
 
-    return ProcessorConfig(
-        channel="pattern_match",
-        role="pattern_match",
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-        build_user_prompt=_build_user_prompt,
-        build_user_definition=lambda _mp: "",
-        build_system_prompt=_pattern_build_system_prompt,
-        always_available=["save_pattern", "save_graph"],
-        discoverable=[],
-        blocked=frozenset(),
-        max_iterations=100,
-        skip_transcript=True,
-        skip_input_row=False,
-        suppress_history=True,
-        broadcast_to=None,
-        memory_seed=False,
-        post_turn=_pattern_post_turn,
-    )
+    def __init__(self, window_start: int, window_end: int) -> None:
+        def _build_user_prompt(mp: object) -> str:
+            # Lazy-init per-instance state so SavePattern/SaveGraph find it.
+            _pattern_init_instance_state(mp)
+            return _pattern_build_user_prompt(mp, window_start, window_end)
+
+        super().__init__(
+            channel="pattern_match",
+            role="pattern_match",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            build_user_prompt=_build_user_prompt,
+            build_user_definition=lambda _mp: "",
+            build_system_prompt=_pattern_build_system_prompt,
+            always_available=["save_pattern", "save_graph"],
+            discoverable=[],
+            blocked=frozenset(),
+            max_iterations=100,
+            skip_transcript=True,
+            skip_input_row=False,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=_pattern_post_turn,
+        )

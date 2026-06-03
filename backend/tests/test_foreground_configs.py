@@ -84,8 +84,8 @@ class TestEampDisclosure:
 
     def test_disclosure_dispatched_when_true(self):
         """loop_in_human=True → post_turn dispatches a hidden external-agent turn."""
-        from configs.channels import make_eamp_config
-        cfg = make_eamp_config(
+        from configs.channels import EAMPConfig
+        cfg = EAMPConfig(
             agent_name="bot", project="proj", loop_in_human=True, wrapper_id="",
         )
         mp = _post_turn_mp(_raw_input="hello from agent")
@@ -99,8 +99,8 @@ class TestEampDisclosure:
 
     def test_disclosure_text_includes_agent_name_and_project(self):
         """The dispatched disclosure body names the calling agent and project (§3b)."""
-        from configs.channels import make_eamp_config
-        cfg = make_eamp_config(
+        from configs.channels import EAMPConfig
+        cfg = EAMPConfig(
             agent_name="mybot", project="my-project", loop_in_human=True, wrapper_id="",
         )
         mp = _post_turn_mp(_raw_input="hello from agent")
@@ -153,8 +153,8 @@ class TestUmpPostTurnSkillSuggestion:
 
     def test_fired_on_clean_exit_with_enough_iterations(self):
         """clean exit + iteration>=4 → skill suggestion fires."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
+        from configs.channels import UserConfig
+        cfg = UserConfig()
         mp = _post_turn_mp(loop_exited_cleanly=True, current_iteration=4,
                            _raw_input="test input")
         with patch(
@@ -166,8 +166,8 @@ class TestUmpPostTurnSkillSuggestion:
 
     def test_not_fired_when_loop_did_not_exit_cleanly(self):
         """loop_exited_cleanly=False → no skill suggestion, even with many iterations."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
+        from configs.channels import UserConfig
+        cfg = UserConfig()
         mp = _post_turn_mp(loop_exited_cleanly=False, current_iteration=10,
                            _raw_input="test input")
         with patch(
@@ -179,8 +179,8 @@ class TestUmpPostTurnSkillSuggestion:
 
     def test_not_fired_when_too_few_iterations(self):
         """iteration < 4 → no skill suggestion, even on a clean exit."""
-        from configs.channels import make_user_config
-        cfg = make_user_config()
+        from configs.channels import UserConfig
+        cfg = UserConfig()
         mp = _post_turn_mp(loop_exited_cleanly=True, current_iteration=2,
                            _raw_input="test input")
         with patch(

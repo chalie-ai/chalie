@@ -227,7 +227,7 @@ class SubconsciousWorker:
         and a correctness guarantee: legacy pre-migration channels with residual
         episodes are intentionally excluded.
         """
-        from configs.channels import make_super_episode_config  # noqa: PLC0415
+        from configs.channels import SuperEpisodeConfig  # noqa: PLC0415
         from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.embedding_service import get_embedding_service  # noqa: PLC0415
         from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER  # noqa: PLC0415
@@ -280,7 +280,7 @@ class SubconsciousWorker:
                 all_t_ids = _collect_transcript_ids(sources)
                 transcript_spans = _fetch_transcript_spans(all_t_ids, db)
 
-                config = make_super_episode_config("user", sources, transcript_spans)
+                config = SuperEpisodeConfig("user", sources, transcript_spans)
                 response = MessageProcessor.process("", config)
 
                 if not response:
@@ -400,10 +400,10 @@ class SubconsciousWorker:
 
         # 3. Fire processor via flat path (§3b / T8 migration).
         # build_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
-        from configs.channels import make_pattern_config  # noqa: PLC0415
+        from configs.channels import PatternConfig  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        config = make_pattern_config(cursor, latest)
+        config = PatternConfig(cursor, latest)
         # Build the mp manually so we can inspect _touched_pattern_ids after _run().
         pmp = object.__new__(MessageProcessor)
         MessageProcessor.__init__(pmp, "", None)
@@ -462,14 +462,14 @@ class SubconsciousWorker:
         data_graph are the prerequisite for step 5 (DMN). Sequential execution
         guarantees step 5 sees the freshest synthesis output.
         """
-        from configs.channels import _should_synthesise, make_user_summary_config  # noqa: PLC0415
+        from configs.channels import UserSummaryConfig, _should_synthesise  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         if not _should_synthesise():
             logger.info(f"{LOG_PREFIX} No new traits since last synthesis; skipping")
             return "no new traits/patterns; skipped"
 
-        config = make_user_summary_config()
+        config = UserSummaryConfig()
         MessageProcessor.process("", config)
         return "ok"
 
@@ -493,9 +493,9 @@ class SubconsciousWorker:
             logger.info(f"{LOG_PREFIX} Skipping DMN — no user synthesis available")
             return "skipped: no user synthesis"
 
-        from configs.channels import DMN_CONFIG  # noqa: PLC0415
+        from configs.channels import DmnConfig  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
-        MessageProcessor.process("", DMN_CONFIG)
+        MessageProcessor.process("", DmnConfig())
         return "ok"
 
     def _step_capability_sync(self) -> str:
@@ -520,7 +520,7 @@ class SubconsciousWorker:
         Reads a cursor from data_graph (kind='system' key='geo_pattern_cursor').
         If the count of location-tagged transcripts beyond the cursor is below
         the minimum delta (30), skip. Else fire via flat MessageProcessor.process()
-        with make_geo_config and advance the cursor on success.
+        with GeoConfig and advance the cursor on success.
         """
         from services.data_graph_service import get_data_graph_service
         from services.database_service import get_shared_db_service
@@ -566,10 +566,10 @@ class SubconsciousWorker:
 
         # Fire via flat path (§3b / T8 migration).
         # build_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
-        from configs.channels import make_geo_config  # noqa: PLC0415
+        from configs.channels import GeoConfig  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        config = make_geo_config(cursor, latest)
+        config = GeoConfig(cursor, latest)
         gmp = object.__new__(MessageProcessor)
         MessageProcessor.__init__(gmp, "", None)
         gmp.config = config

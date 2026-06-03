@@ -105,25 +105,30 @@ def _dmn_build_system_prompt(_mp: object) -> str:
     return DMNSystemMessagePrompt().get_prompt()
 
 
-DMN_CONFIG = ProcessorConfig(
-    channel="dmn",
-    role="proactive_thought",
-    policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-    build_user_prompt=_dmn_build_user_prompt,
-    build_user_definition=_dmn_build_user_definition,
-    build_system_prompt=_dmn_build_system_prompt,
-    always_available=DEFAULT_ALWAYS_AVAILABLE,
-    discoverable=DEFAULT_DISCOVERABLE,
-    # DMN is a background reflection loop — it must never spawn delegate work
-    # (the old single ``subagent`` tool was retired in favour of the four
-    # delegate tools; block all of them to preserve that intent).
-    blocked=frozenset({"web_search", "research", "web_browse", "summariser"}),
-    max_iterations=100,
-    skip_transcript=False,
-    skip_input_row=False,
-    suppress_history=True,
-    broadcast_to=None,
-    memory_seed=False,
-    post_turn=None,
-)
-"""DMN background channel.  §3a / §8b.  post_turn=None (metrics moved to gateway §4e)."""
+class DmnConfig(ProcessorConfig):
+    """DMN background channel.  §3a / §8b.  post_turn=None (metrics moved to gateway §4e).
+
+    DMN is a background reflection loop — it must never spawn delegate work
+    (the old single ``subagent`` tool was retired in favour of the four
+    delegate tools; block all of them to preserve that intent).
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            channel="dmn",
+            role="proactive_thought",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            build_user_prompt=_dmn_build_user_prompt,
+            build_user_definition=_dmn_build_user_definition,
+            build_system_prompt=_dmn_build_system_prompt,
+            always_available=DEFAULT_ALWAYS_AVAILABLE,
+            discoverable=DEFAULT_DISCOVERABLE,
+            blocked=frozenset({"web_search", "research", "web_browse", "summariser"}),
+            max_iterations=100,
+            skip_transcript=False,
+            skip_input_row=False,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=None,
+        )

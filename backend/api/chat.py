@@ -22,7 +22,7 @@ Design:
   fresh turn with the combined original+new message text.
 
   User-channel messages flow through MessageProcessor.process() with the
-  make_user_config() ProcessorConfig — no MessageProcessor subclass.
+  UserConfig ProcessorConfig subclass — no MessageProcessor subclass.
   Live output (narration, tool events) is gated by broadcast_to='user' on
   the config; the flat _loop() and Ability.use() call WS.emit() which
   broadcasts when broadcast_to is set (AC-28).
@@ -106,7 +106,7 @@ def _run_chat_background(
 ) -> None:
     """Background thread: process user message via flat MessageProcessor and broadcast.
 
-    Uses MessageProcessor.process() with the make_user_config() ProcessorConfig.
+    Uses MessageProcessor.process() with the UserConfig ProcessorConfig subclass.
     Live narration and tool events are emitted by the flat loop via WS.emit()
     (gated on config.broadcast_to='user') — no callbacks required (AC-28).
 
@@ -217,13 +217,13 @@ def dispatch_message(
 def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = False) -> str:
     """Start a new UMP turn via MessageProcessor.process() in a background thread.
 
-    Uses make_user_config() to build the ProcessorConfig and passes it to
+    Uses UserConfig to build the ProcessorConfig and passes it to
     MessageProcessor.process().  Live WS events (narration, tool start/end) are
     emitted by the flat loop via WS.emit() — no per-turn callbacks (AC-28).
 
     Returns the new request_id.
     """
-    from configs.channels import make_user_config  # noqa: PLC0415
+    from configs.channels import UserConfig  # noqa: PLC0415
 
     request_id = str(uuid.uuid4())
     turn_start = time.time()
@@ -246,7 +246,7 @@ def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = 
         "hidden_input": hidden_input,
     }
 
-    config = make_user_config(metadata)
+    config = UserConfig(metadata)
     cancel_event = threading.Event()
     turn = _ActiveTurn(cancel_event=cancel_event, raw_input=text)
     _set_active_ump(turn)
