@@ -261,9 +261,9 @@ Singleton with an `RLock`. Exposes `get(name)`, `all()`, the static `build_tools
 
 ## Chat File Attachments
 
-Chat attachments use HTTP only — the WebSocket is server→client push (see the WebSocket section). The frontend uploads each file via `POST /upload`, which stores it under `/tmp/chalie_*` and returns that `tmp_path`. The send then `POST`s `/chat` with the message text plus an `attachments` array of those paths (capped at 10); `dispatch_message()` forwards them to the processor as `metadata['attachments']`.
+Chat attachments use HTTP only — the WebSocket is server→client push (see the WebSocket section). The frontend uploads each file via `POST /upload`, which stores it under the OS temp dir with a `chalie_` prefix (the location + guard live in `services/tmp_storage.py`, so the write, read and cleanup-sweep sites stay in lockstep) and returns that `tmp_path`. The send then `POST`s `/chat` with the message text plus an `attachments` array of those paths (capped at 10); `dispatch_message()` forwards them to the processor as `metadata['attachments']`.
 
-On turn 0 — before the first LLM iteration — `_seed_turn_zero()` iterates each `tmp_path` in `metadata['attachments']`. `_read_attachment()` realpath-resolves each path, rejects anything that does not resolve under `/tmp/chalie_` (traversal guard), and base64-encodes it. For each file it then issues **one** blocking tool call through `Ability.use()`:
+On turn 0 — before the first LLM iteration — `_seed_turn_zero()` iterates each `tmp_path` in `metadata['attachments']`. `_read_attachment()` realpath-resolves each path, rejects anything that does not resolve under the Chalie temp prefix (`services/tmp_storage.TMP_PATH_PREFIX`, traversal guard), and base64-encodes it. For each file it then issues **one** blocking tool call through `Ability.use()`:
 
 1. `document(action='upload', name=..., content=..., content_type=...)` — persists to permanent storage, runs extraction synchronously, returns a document ID; the `/tmp` file is deleted afterwards.
 
