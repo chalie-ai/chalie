@@ -109,8 +109,8 @@ class DmnConfig(ProcessorConfig):
     """DMN background channel.  §3a / §8b.  post_turn=None (metrics moved to gateway §4e).
 
     DMN is a background reflection loop — it must never spawn delegate work
-    (the old single ``subagent`` tool was retired in favour of the four
-    delegate tools; block all of them to preserve that intent).
+    (the old single ``subagent`` tool was retired in favour of the delegate
+    tools; block all of them to preserve that intent).
     """
 
     def __init__(self) -> None:
@@ -123,7 +123,7 @@ class DmnConfig(ProcessorConfig):
             build_system_prompt=_dmn_build_system_prompt,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
-            blocked=frozenset({"web_search", "research", "web_browse", "summariser"}),
+            blocked=frozenset({"web_search", "web_browse"}),
             max_iterations=100,
             skip_transcript=False,
             skip_input_row=False,

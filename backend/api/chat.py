@@ -342,7 +342,7 @@ def get_active_subagents():
     Note: the new delegate registry (Ability._active_delegates) tracks only
     delegate_ids and cancel events — no per-type metadata.  Richer metadata
     (agent_type, description, started_at) will be restored when the T11
-    delegate tools (web_search, research, browser, summariser) land.
+    delegate tools (web_search, web_browse) land.
     """
     from abilities._base import Ability
 

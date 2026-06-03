@@ -9,8 +9,9 @@
 """WebSearchAbility — delegate a web-research task to a focused search agent.
 
 The foundational delegate-tool template (spec §5b / §10f, TKT-732).  A delegate
-tool is a standalone Ability that builds its OWN ProcessorConfig inside run()
-and calls the normal MessageProcessor.process().  There is no subclass, no
+tool is a standalone Ability that pairs with a typed ``ProcessorConfig``
+subclass (``WebSearchConfig``).  ``run()`` instantiates the subclass and calls
+``MessageProcessor.process()`` — there is no MessageProcessor subclass, no
 SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
 Properties (spec §5b "Properties of every delegate tool"):
@@ -22,6 +23,11 @@ Properties (spec §5b "Properties of every delegate tool"):
   - No recursion — delegate tools are not in the surface and are blocked.
   - ASYNC_CAPABLE=True — the framework (Ability.execute) wraps run() in a
     daemon thread for async-capable origins.  run() is ALWAYS synchronous.
+
+Permission boundary — ``policy_channel`` stays SUBCONSCIOUS because the
+delegate's internal tools (``search``, ``read``) are scratch internals; the
+user-facing permission check happens at the outer ``web_search`` tool, not on
+each internal call.
 """
 
 import time
@@ -47,6 +53,8 @@ _WEB_SEARCH_SYSTEM_PROMPT = (
     "the query you were given."
 )
 
+_WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "read")
+
 
 def _web_search_user_prompt(mp: object) -> str:
     """Goal-driven user prompt: the raw query plus the act-trail so far."""
@@ -55,6 +63,35 @@ def _web_search_user_prompt(mp: object) -> str:
     if trail:
         parts.append(trail)
     return "\n\n".join(parts)
+
+
+class WebSearchConfig(ProcessorConfig):
+    """ProcessorConfig for the web_search delegate.
+
+    Mirrors the 10 other TKT-803 ProcessorConfig subclasses: typed zero-arg
+    ``__init__`` that calls ``super().__init__(...)`` against the frozen base.
+    """
+
+    def __init__(self) -> None:
+        tools = list(_WEB_SEARCH_TOOLS)
+        super().__init__(
+            channel="delegate:web_search",
+            role="web_search",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            build_user_prompt=_web_search_user_prompt,
+            build_user_definition=lambda _mp: "",
+            build_system_prompt=lambda _mp: _WEB_SEARCH_SYSTEM_PROMPT,
+            always_available=tools,
+            discoverable=[],
+            blocked=build_blocked(tools),
+            max_iterations=50,
+            skip_transcript=True,
+            skip_input_row=True,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=None,
+        )
 
 
 class WebSearchAbility(Ability):
@@ -89,32 +126,12 @@ class WebSearchAbility(Ability):
     }
     TIMEOUT = DELEGATE_DEADLINE_SECONDS
 
-    _TOOLS: ClassVar[list[str]] = ["search", "read"]
-
     def run(self, channel: str, params: dict, telemetry: "dict | None") -> dict:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        config = ProcessorConfig(
-            channel=f"delegate:{self.NAME}",
-            role=self.NAME,
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            build_user_prompt=_web_search_user_prompt,
-            build_user_definition=lambda _mp: "",
-            build_system_prompt=lambda _mp: _WEB_SEARCH_SYSTEM_PROMPT,
-            always_available=self._TOOLS,
-            discoverable=[],
-            blocked=build_blocked(self._TOOLS),
-            max_iterations=50,
-            skip_transcript=True,
-            skip_input_row=True,
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
-            post_turn=None,
-        )
         result = MessageProcessor.process(
             delegate_goal(params),
-            config,
+            WebSearchConfig(),
             deadline=time.time() + DELEGATE_DEADLINE_SECONDS,
         )
         return {"status": "success", "result": result}

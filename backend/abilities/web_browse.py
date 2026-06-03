@@ -8,17 +8,20 @@
 
 """WebBrowseAbility — delegate an interactive web-browsing task to a focused agent.
 
-The fourth delegate tool (spec §5b / §10f).  Replaces the browsing role the
-former ``web_surfer`` subagent performed, scoped down to a clean-context agent
-that drives the raw ``browser`` tool (render / screenshot / interact / monitor)
-and reads what it finds.
+Pairs with a typed ``ProcessorConfig`` subclass (``WebBrowseConfig``) defined
+alongside it.  Spec §5b / §10f.  Replaces the browsing role the former
+``web_surfer`` subagent performed, scoped down to a clean-context agent that
+drives the raw ``browser`` tool (render / screenshot / interact / monitor) and
+reads what it finds.
 
 Named ``web_browse`` (not ``browser``) to avoid a flat-registry collision with
 the raw ``browser`` ability — its tool *surface* still uses the raw ``browser``
 tool (spec amendment 2026-06-02, Dylan, AC-3).
 
-Standalone delegate tool: builds its own ProcessorConfig and calls the normal
-MessageProcessor.process().  No subclass, no SUBAGENT_TYPES, no factory.
+Permission boundary — ``policy_channel`` stays SUBCONSCIOUS because the
+delegate's internal tools (``browser``, ``read``) are scratch internals; the
+user-facing permission check happens at the outer ``web_browse`` tool, not on
+each internal call.
 """
 
 import time
@@ -47,6 +50,8 @@ _WEB_BROWSE_SYSTEM_PROMPT = (
     "personality — work only from the goal you were given."
 )
 
+_WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read")
+
 
 def _web_browse_user_prompt(mp: object) -> str:
     """Goal-driven user prompt: the goal plus the act-trail so far."""
@@ -55,6 +60,35 @@ def _web_browse_user_prompt(mp: object) -> str:
     if trail:
         parts.append(trail)
     return "\n\n".join(parts)
+
+
+class WebBrowseConfig(ProcessorConfig):
+    """ProcessorConfig for the web_browse delegate.
+
+    Mirrors the 10 other TKT-803 ProcessorConfig subclasses: typed zero-arg
+    ``__init__`` that calls ``super().__init__(...)`` against the frozen base.
+    """
+
+    def __init__(self) -> None:
+        tools = list(_WEB_BROWSE_TOOLS)
+        super().__init__(
+            channel="delegate:web_browse",
+            role="web_browse",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            build_user_prompt=_web_browse_user_prompt,
+            build_user_definition=lambda _mp: "",
+            build_system_prompt=lambda _mp: _WEB_BROWSE_SYSTEM_PROMPT,
+            always_available=tools,
+            discoverable=[],
+            blocked=build_blocked(tools),
+            max_iterations=50,
+            skip_transcript=True,
+            skip_input_row=True,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+            post_turn=None,
+        )
 
 
 class WebBrowseAbility(Ability):
@@ -90,32 +124,12 @@ class WebBrowseAbility(Ability):
     }
     TIMEOUT = DELEGATE_DEADLINE_SECONDS
 
-    _TOOLS: ClassVar[list[str]] = ["browser", "read"]
-
     def run(self, channel: str, params: dict, telemetry: "dict | None") -> dict:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        config = ProcessorConfig(
-            channel=f"delegate:{self.NAME}",
-            role=self.NAME,
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            build_user_prompt=_web_browse_user_prompt,
-            build_user_definition=lambda _mp: "",
-            build_system_prompt=lambda _mp: _WEB_BROWSE_SYSTEM_PROMPT,
-            always_available=self._TOOLS,
-            discoverable=[],
-            blocked=build_blocked(self._TOOLS),
-            max_iterations=50,
-            skip_transcript=True,
-            skip_input_row=True,
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
-            post_turn=None,
-        )
         result = MessageProcessor.process(
             delegate_goal(params),
-            config,
+            WebBrowseConfig(),
             deadline=time.time() + DELEGATE_DEADLINE_SECONDS,
         )
         return {"status": "success", "result": result}

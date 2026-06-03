@@ -13,10 +13,8 @@ Tests authored per the GOVERNING TEST PRINCIPLE:
   - A failing test means the CODE is wrong, not the test.
   - Never weaken, delete, xfail, or "correct" a §9a test.
 
-The 4 delegate tools and their EXACT tool surfaces (§9a K3):
+The 2 delegate tools and their EXACT tool surfaces (§9a K3):
   - web_search  → always_available = ['search', 'read']
-  - summariser  → always_available = ['read', 'document', 'web_search']
-  - research    → always_available = ['memory', 'search', 'read', 'find_tools']
   - web_browse  → always_available = ['browser', 'read']
 
 Spec references: §5b, §10f, §4.
@@ -34,7 +32,7 @@ pytestmark = pytest.mark.unit
 # Helpers
 # ---------------------------------------------------------------------------
 
-_DELEGATE_NAMES = ("web_search", "summariser", "research", "web_browse")
+_DELEGATE_NAMES = ("web_search", "web_browse")
 
 
 def _get_ability(name):

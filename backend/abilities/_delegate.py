@@ -18,10 +18,9 @@ from __future__ import annotations
 
 # Every delegate tool name — used to build each delegate's recursion-guard
 # blocklist (spec §5b property #4 / K5): a delegate never invokes another
-# delegate, except a sanctioned single step it explicitly lists in its own
-# always_available surface (summariser→web_search).
+# delegate.
 DELEGATE_TOOL_NAMES: frozenset[str] = frozenset(
-    {"web_search", "summariser", "research", "web_browse"}
+    {"web_search", "web_browse"}
 )
 
 # Wall-clock horizon for a delegate ACT loop (K9).
@@ -31,9 +30,9 @@ DELEGATE_DEADLINE_SECONDS: int = 600
 def build_blocked(surface: list[str]) -> frozenset[str]:
     """Block every delegate tool NOT in this delegate's own surface.
 
-    Recursion guard (spec §5b property #4 / K5).  The only delegate a delegate
-    may call is one it explicitly lists in always_available (summariser→
-    web_search); every other delegate is blocked.
+    Recursion guard (spec §5b property #4 / K5).  A delegate cannot invoke
+    another delegate unless it explicitly lists that delegate in its own
+    always_available surface; every other delegate is blocked.
     """
     return frozenset(name for name in DELEGATE_TOOL_NAMES if name not in surface)
 
@@ -41,8 +40,8 @@ def build_blocked(surface: list[str]) -> frozenset[str]:
 def delegate_goal(params: dict) -> str:
     """Extract the delegate's goal/query from the tool params.
 
-    Delegates accept either ``goal`` (research / summariser / web_browse) or
-    ``query`` (web_search) — normalise to a single string.
+    Delegates accept either ``goal`` (web_browse) or ``query`` (web_search) —
+    normalise to a single string.
     """
     return params.get("goal") or params.get("query") or ""
 
