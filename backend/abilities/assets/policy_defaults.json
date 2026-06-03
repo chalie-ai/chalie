@@ -1,2022 +1,406 @@
 [
-  {
-    "channel": "chat",
-    "permission": "bash.compound",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "bash.execute",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "bash.installation",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "bash.modify_file",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "bash.read",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "bash.remote_execution",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "bash.web_fetch",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "browser.interact",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "browser.monitor",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "browser.render",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "browser.screenshot",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "calendar.get_event",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "calendar.list_events",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "calendar.update_event",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "chalie_docs",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "code_eval",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "contacts.get",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "contacts.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "document.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "document.delete",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "document.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "document.restore",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "document.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "document.upload",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "document.view",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "email.draft",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "email.forward",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "email.manage",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "email.read",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "email.reply",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "email.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "email.send",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "file_permissions",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "file_write",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "find_skills",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "find_tools",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "home.control",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "home.get_state",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "home.list_automations",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "home.list_devices",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "home.subscribe_events",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "home.trigger_automation",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.add",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.check",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.clear",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.delete",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.list_all",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.remove",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.rename",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "list.view",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "mcp_manager.add",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "mcp_manager.disable",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "mcp_manager.enable",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "mcp_manager.list",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "memory.forget",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "memory.recall",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "memory.reflect",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "memory.store",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "news",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "place.delete",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "place.get",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "place.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "place.save",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "programming_docs_search",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "read",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "research",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "review_tool_calls",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "review_transcript",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "save_graph",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "save_pattern",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "schedule.cancel",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "schedule.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "schedule.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "schedule.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "search",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "search_files.glob",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "search_files.grep",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "skill_builder.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "skill_builder.delete",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "skill_builder.edit",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "skill_builder.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "skill_manager.create",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "skill_manager.delete",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "skill_manager.edit",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "skill_manager.list",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "summariser",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "timer",
-    "setting": "internal"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.authorize_guest",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.control_client",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.control_device",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.get_info",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.list_clients",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.list_devices",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.manage_port_forward",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.manage_traffic_rule",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "ubiquiti.manage_wlan",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "weather",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "web_browse",
-    "setting": "allow"
-  },
-  {
-    "channel": "chat",
-    "permission": "web_download",
-    "setting": "ask"
-  },
-  {
-    "channel": "chat",
-    "permission": "web_search",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "bash.compound",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "bash.execute",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "bash.installation",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "bash.modify_file",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "bash.read",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "bash.remote_execution",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "bash.web_fetch",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "browser.interact",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "browser.monitor",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "browser.render",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "browser.screenshot",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "calendar.get_event",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "calendar.list_events",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "calendar.update_event",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "chalie_docs",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "code_eval",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "contacts.get",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "contacts.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "document.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "document.delete",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "document.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "document.restore",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "document.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "document.upload",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "document.view",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "email.draft",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "email.forward",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "email.manage",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "email.read",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "email.reply",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "email.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "email.send",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "file_permissions",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "file_write",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "find_skills",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "find_tools",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "home.control",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "home.get_state",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "home.list_automations",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "home.list_devices",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "home.subscribe_events",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "home.trigger_automation",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.add",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.check",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.clear",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.delete",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.list_all",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.remove",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.rename",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "list.view",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "mcp_manager.add",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "mcp_manager.disable",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "mcp_manager.enable",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "mcp_manager.list",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "memory.forget",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "memory.recall",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "memory.reflect",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "memory.store",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "news",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "place.delete",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "place.get",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "place.list",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "place.save",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "programming_docs_search",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "read",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "research",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "review_tool_calls",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "review_transcript",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "save_graph",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "save_pattern",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "schedule.cancel",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "schedule.create",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "schedule.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "schedule.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "search",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "search_files.glob",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "search_files.grep",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "skill_builder.create",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "skill_builder.delete",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "skill_builder.edit",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "skill_builder.list",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "skill_manager.create",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "skill_manager.delete",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "skill_manager.edit",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "skill_manager.list",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "summariser",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "timer",
-    "setting": "internal"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.authorize_guest",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.control_client",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.control_device",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.get_info",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.list_clients",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.list_devices",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.manage_port_forward",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.manage_traffic_rule",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "ubiquiti.manage_wlan",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "weather",
-    "setting": "allow"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "web_browse",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "web_download",
-    "setting": "deny"
-  },
-  {
-    "channel": "external_agent",
-    "permission": "web_search",
-    "setting": "deny"
-  },
-  {
-    "channel": "subagent",
-    "permission": "bash.compound",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "bash.execute",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "bash.installation",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "bash.modify_file",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "bash.read",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "bash.remote_execution",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "bash.web_fetch",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "browser.interact",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "browser.monitor",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "browser.render",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "browser.screenshot",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "calendar.get_event",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "calendar.list_events",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "calendar.update_event",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "chalie_docs",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "code_eval",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "contacts.get",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "contacts.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "document.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "document.delete",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "document.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "document.restore",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "document.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "document.upload",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "document.view",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "email.draft",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "email.forward",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "email.manage",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "email.read",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "email.reply",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "email.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "email.send",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "file_permissions",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "file_write",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "find_skills",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "find_tools",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "home.control",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "home.get_state",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "home.list_automations",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "home.list_devices",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "home.subscribe_events",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "home.trigger_automation",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.add",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.check",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.clear",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.delete",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.list_all",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.remove",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.rename",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "list.view",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "mcp_manager.add",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "mcp_manager.disable",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "mcp_manager.enable",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "mcp_manager.list",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "memory.forget",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "memory.recall",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "memory.reflect",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "memory.store",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "news",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "place.delete",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "place.get",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "place.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "place.save",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "programming_docs_search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "read",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "research",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "review_tool_calls",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "review_transcript",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "save_graph",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "save_pattern",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "schedule.cancel",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "schedule.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "schedule.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "schedule.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "search_files.glob",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "search_files.grep",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "skill_builder.create",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "skill_builder.delete",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "skill_builder.edit",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "skill_builder.list",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "skill_manager.create",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "skill_manager.delete",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "skill_manager.edit",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "skill_manager.list",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "summariser",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "timer",
-    "setting": "internal"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.authorize_guest",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.control_client",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.control_device",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.get_info",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.list_clients",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.list_devices",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.manage_port_forward",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.manage_traffic_rule",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "ubiquiti.manage_wlan",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "weather",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "web_browse",
-    "setting": "allow"
-  },
-  {
-    "channel": "subagent",
-    "permission": "web_download",
-    "setting": "ask"
-  },
-  {
-    "channel": "subagent",
-    "permission": "web_search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "bash.compound",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "bash.execute",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "bash.installation",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "bash.modify_file",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "bash.read",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "bash.remote_execution",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "bash.web_fetch",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "browser.interact",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "browser.monitor",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "browser.render",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "browser.screenshot",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "calendar.get_event",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "calendar.list_events",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "calendar.update_event",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "chalie_docs",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "code_eval",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "contacts.get",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "contacts.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "document.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "document.delete",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "document.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "document.restore",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "document.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "document.upload",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "document.view",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "email.draft",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "email.forward",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "email.manage",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "email.read",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "email.reply",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "email.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "email.send",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "file_permissions",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "file_write",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "find_skills",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "find_tools",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "home.control",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "home.get_state",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "home.list_automations",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "home.list_devices",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "home.subscribe_events",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "home.trigger_automation",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.add",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.check",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.clear",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.create",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.delete",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.list_all",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.remove",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.rename",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "list.view",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "mcp_manager.add",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "mcp_manager.disable",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "mcp_manager.enable",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "mcp_manager.list",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "memory.forget",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "memory.recall",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "memory.reflect",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "memory.store",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "news",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "place.delete",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "place.get",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "place.list",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "place.save",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "programming_docs_search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "read",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "research",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "review_tool_calls",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "review_transcript",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "save_graph",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "save_pattern",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "schedule.cancel",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "schedule.create",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "schedule.list",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "schedule.search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "search",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "search_files.glob",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "search_files.grep",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "skill_builder.create",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "skill_builder.delete",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "skill_builder.edit",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "skill_builder.list",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "skill_manager.create",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "skill_manager.delete",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "skill_manager.edit",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "skill_manager.list",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "summariser",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "timer",
-    "setting": "internal"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.authorize_guest",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.control_client",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.control_device",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.get_info",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.list_clients",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.list_devices",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.manage_port_forward",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.manage_traffic_rule",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "ubiquiti.manage_wlan",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "weather",
-    "setting": "allow"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "web_browse",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "web_download",
-    "setting": "deny"
-  },
-  {
-    "channel": "subconscious",
-    "permission": "web_search",
-    "setting": "deny"
-  }
+  {"channel": "chat", "permission": "bash.compound", "setting": "ask"},
+  {"channel": "chat", "permission": "bash.execute", "setting": "ask"},
+  {"channel": "chat", "permission": "bash.installation", "setting": "ask"},
+  {"channel": "chat", "permission": "bash.modify_file", "setting": "ask"},
+  {"channel": "chat", "permission": "bash.read", "setting": "allow"},
+  {"channel": "chat", "permission": "bash.remote_execution", "setting": "ask"},
+  {"channel": "chat", "permission": "bash.web_fetch", "setting": "ask"},
+  {"channel": "chat", "permission": "browser.interact", "setting": "allow"},
+  {"channel": "chat", "permission": "browser.monitor", "setting": "allow"},
+  {"channel": "chat", "permission": "browser.render", "setting": "allow"},
+  {"channel": "chat", "permission": "browser.screenshot", "setting": "allow"},
+  {"channel": "chat", "permission": "calendar.get_event", "setting": "allow"},
+  {"channel": "chat", "permission": "calendar.list_events", "setting": "allow"},
+  {"channel": "chat", "permission": "calendar.update_event", "setting": "ask"},
+  {"channel": "chat", "permission": "chalie_docs", "setting": "allow"},
+  {"channel": "chat", "permission": "code_eval", "setting": "allow"},
+  {"channel": "chat", "permission": "contacts.get", "setting": "allow"},
+  {"channel": "chat", "permission": "contacts.list", "setting": "allow"},
+  {"channel": "chat", "permission": "document.create", "setting": "allow"},
+  {"channel": "chat", "permission": "document.delete", "setting": "ask"},
+  {"channel": "chat", "permission": "document.list", "setting": "allow"},
+  {"channel": "chat", "permission": "document.restore", "setting": "allow"},
+  {"channel": "chat", "permission": "document.search", "setting": "allow"},
+  {"channel": "chat", "permission": "document.upload", "setting": "allow"},
+  {"channel": "chat", "permission": "document.view", "setting": "allow"},
+  {"channel": "chat", "permission": "email.draft", "setting": "allow"},
+  {"channel": "chat", "permission": "email.forward", "setting": "ask"},
+  {"channel": "chat", "permission": "email.manage", "setting": "ask"},
+  {"channel": "chat", "permission": "email.read", "setting": "allow"},
+  {"channel": "chat", "permission": "email.reply", "setting": "ask"},
+  {"channel": "chat", "permission": "email.search", "setting": "allow"},
+  {"channel": "chat", "permission": "email.send", "setting": "ask"},
+  {"channel": "chat", "permission": "file_permissions", "setting": "ask"},
+  {"channel": "chat", "permission": "file_write", "setting": "ask"},
+  {"channel": "chat", "permission": "find_skills", "setting": "internal"},
+  {"channel": "chat", "permission": "find_tools", "setting": "internal"},
+  {"channel": "chat", "permission": "home.control", "setting": "ask"},
+  {"channel": "chat", "permission": "home.get_state", "setting": "allow"},
+  {"channel": "chat", "permission": "home.list_automations", "setting": "allow"},
+  {"channel": "chat", "permission": "home.list_devices", "setting": "allow"},
+  {"channel": "chat", "permission": "home.subscribe_events", "setting": "allow"},
+  {"channel": "chat", "permission": "home.trigger_automation", "setting": "ask"},
+  {"channel": "chat", "permission": "list.add", "setting": "allow"},
+  {"channel": "chat", "permission": "list.check", "setting": "allow"},
+  {"channel": "chat", "permission": "list.clear", "setting": "allow"},
+  {"channel": "chat", "permission": "list.create", "setting": "allow"},
+  {"channel": "chat", "permission": "list.delete", "setting": "ask"},
+  {"channel": "chat", "permission": "list.list_all", "setting": "allow"},
+  {"channel": "chat", "permission": "list.remove", "setting": "allow"},
+  {"channel": "chat", "permission": "list.rename", "setting": "allow"},
+  {"channel": "chat", "permission": "list.view", "setting": "allow"},
+  {"channel": "chat", "permission": "mcp_manager.add", "setting": "internal"},
+  {"channel": "chat", "permission": "mcp_manager.disable", "setting": "internal"},
+  {"channel": "chat", "permission": "mcp_manager.enable", "setting": "internal"},
+  {"channel": "chat", "permission": "mcp_manager.list", "setting": "internal"},
+  {"channel": "chat", "permission": "memory.forget", "setting": "internal"},
+  {"channel": "chat", "permission": "memory.recall", "setting": "internal"},
+  {"channel": "chat", "permission": "memory.reflect", "setting": "internal"},
+  {"channel": "chat", "permission": "memory.store", "setting": "internal"},
+  {"channel": "chat", "permission": "news", "setting": "allow"},
+  {"channel": "chat", "permission": "place.delete", "setting": "allow"},
+  {"channel": "chat", "permission": "place.get", "setting": "allow"},
+  {"channel": "chat", "permission": "place.list", "setting": "allow"},
+  {"channel": "chat", "permission": "place.save", "setting": "allow"},
+  {"channel": "chat", "permission": "programming_docs_search", "setting": "allow"},
+  {"channel": "chat", "permission": "read", "setting": "allow"},
+  {"channel": "chat", "permission": "research", "setting": "allow"},
+  {"channel": "chat", "permission": "review_tool_calls", "setting": "internal"},
+  {"channel": "chat", "permission": "review_transcript", "setting": "internal"},
+  {"channel": "chat", "permission": "save_graph", "setting": "internal"},
+  {"channel": "chat", "permission": "save_pattern", "setting": "internal"},
+  {"channel": "chat", "permission": "schedule.cancel", "setting": "allow"},
+  {"channel": "chat", "permission": "schedule.create", "setting": "allow"},
+  {"channel": "chat", "permission": "schedule.list", "setting": "allow"},
+  {"channel": "chat", "permission": "schedule.search", "setting": "allow"},
+  {"channel": "chat", "permission": "search", "setting": "allow"},
+  {"channel": "chat", "permission": "search_files.glob", "setting": "allow"},
+  {"channel": "chat", "permission": "search_files.grep", "setting": "allow"},
+  {"channel": "chat", "permission": "skill_builder.create", "setting": "allow"},
+  {"channel": "chat", "permission": "skill_builder.delete", "setting": "allow"},
+  {"channel": "chat", "permission": "skill_builder.edit", "setting": "allow"},
+  {"channel": "chat", "permission": "skill_builder.list", "setting": "allow"},
+  {"channel": "chat", "permission": "skill_manager.create", "setting": "internal"},
+  {"channel": "chat", "permission": "skill_manager.delete", "setting": "internal"},
+  {"channel": "chat", "permission": "skill_manager.edit", "setting": "internal"},
+  {"channel": "chat", "permission": "skill_manager.list", "setting": "internal"},
+  {"channel": "chat", "permission": "summariser", "setting": "allow"},
+  {"channel": "chat", "permission": "timer", "setting": "internal"},
+  {"channel": "chat", "permission": "ubiquiti.authorize_guest", "setting": "ask"},
+  {"channel": "chat", "permission": "ubiquiti.control_client", "setting": "ask"},
+  {"channel": "chat", "permission": "ubiquiti.control_device", "setting": "ask"},
+  {"channel": "chat", "permission": "ubiquiti.get_info", "setting": "allow"},
+  {"channel": "chat", "permission": "ubiquiti.list_clients", "setting": "allow"},
+  {"channel": "chat", "permission": "ubiquiti.list_devices", "setting": "allow"},
+  {"channel": "chat", "permission": "ubiquiti.manage_port_forward", "setting": "ask"},
+  {"channel": "chat", "permission": "ubiquiti.manage_traffic_rule", "setting": "ask"},
+  {"channel": "chat", "permission": "ubiquiti.manage_wlan", "setting": "ask"},
+  {"channel": "chat", "permission": "weather", "setting": "allow"},
+  {"channel": "chat", "permission": "web_browse", "setting": "allow"},
+  {"channel": "chat", "permission": "web_download", "setting": "ask"},
+  {"channel": "chat", "permission": "web_search", "setting": "allow"},
+  {"channel": "external_agent", "permission": "bash.compound", "setting": "deny"},
+  {"channel": "external_agent", "permission": "bash.execute", "setting": "deny"},
+  {"channel": "external_agent", "permission": "bash.installation", "setting": "deny"},
+  {"channel": "external_agent", "permission": "bash.modify_file", "setting": "deny"},
+  {"channel": "external_agent", "permission": "bash.read", "setting": "deny"},
+  {"channel": "external_agent", "permission": "bash.remote_execution", "setting": "deny"},
+  {"channel": "external_agent", "permission": "bash.web_fetch", "setting": "deny"},
+  {"channel": "external_agent", "permission": "browser.interact", "setting": "deny"},
+  {"channel": "external_agent", "permission": "browser.monitor", "setting": "allow"},
+  {"channel": "external_agent", "permission": "browser.render", "setting": "allow"},
+  {"channel": "external_agent", "permission": "browser.screenshot", "setting": "allow"},
+  {"channel": "external_agent", "permission": "calendar.get_event", "setting": "allow"},
+  {"channel": "external_agent", "permission": "calendar.list_events", "setting": "allow"},
+  {"channel": "external_agent", "permission": "calendar.update_event", "setting": "deny"},
+  {"channel": "external_agent", "permission": "chalie_docs", "setting": "allow"},
+  {"channel": "external_agent", "permission": "code_eval", "setting": "allow"},
+  {"channel": "external_agent", "permission": "contacts.get", "setting": "allow"},
+  {"channel": "external_agent", "permission": "contacts.list", "setting": "allow"},
+  {"channel": "external_agent", "permission": "document.create", "setting": "allow"},
+  {"channel": "external_agent", "permission": "document.delete", "setting": "deny"},
+  {"channel": "external_agent", "permission": "document.list", "setting": "allow"},
+  {"channel": "external_agent", "permission": "document.restore", "setting": "allow"},
+  {"channel": "external_agent", "permission": "document.search", "setting": "allow"},
+  {"channel": "external_agent", "permission": "document.upload", "setting": "deny"},
+  {"channel": "external_agent", "permission": "document.view", "setting": "allow"},
+  {"channel": "external_agent", "permission": "email.draft", "setting": "deny"},
+  {"channel": "external_agent", "permission": "email.forward", "setting": "deny"},
+  {"channel": "external_agent", "permission": "email.manage", "setting": "deny"},
+  {"channel": "external_agent", "permission": "email.read", "setting": "allow"},
+  {"channel": "external_agent", "permission": "email.reply", "setting": "deny"},
+  {"channel": "external_agent", "permission": "email.search", "setting": "allow"},
+  {"channel": "external_agent", "permission": "email.send", "setting": "deny"},
+  {"channel": "external_agent", "permission": "file_permissions", "setting": "deny"},
+  {"channel": "external_agent", "permission": "file_write", "setting": "deny"},
+  {"channel": "external_agent", "permission": "find_skills", "setting": "internal"},
+  {"channel": "external_agent", "permission": "find_tools", "setting": "internal"},
+  {"channel": "external_agent", "permission": "home.control", "setting": "deny"},
+  {"channel": "external_agent", "permission": "home.get_state", "setting": "allow"},
+  {"channel": "external_agent", "permission": "home.list_automations", "setting": "allow"},
+  {"channel": "external_agent", "permission": "home.list_devices", "setting": "allow"},
+  {"channel": "external_agent", "permission": "home.subscribe_events", "setting": "allow"},
+  {"channel": "external_agent", "permission": "home.trigger_automation", "setting": "deny"},
+  {"channel": "external_agent", "permission": "list.add", "setting": "allow"},
+  {"channel": "external_agent", "permission": "list.check", "setting": "allow"},
+  {"channel": "external_agent", "permission": "list.clear", "setting": "allow"},
+  {"channel": "external_agent", "permission": "list.create", "setting": "allow"},
+  {"channel": "external_agent", "permission": "list.delete", "setting": "deny"},
+  {"channel": "external_agent", "permission": "list.list_all", "setting": "allow"},
+  {"channel": "external_agent", "permission": "list.remove", "setting": "allow"},
+  {"channel": "external_agent", "permission": "list.rename", "setting": "allow"},
+  {"channel": "external_agent", "permission": "list.view", "setting": "allow"},
+  {"channel": "external_agent", "permission": "mcp_manager.add", "setting": "internal"},
+  {"channel": "external_agent", "permission": "mcp_manager.disable", "setting": "internal"},
+  {"channel": "external_agent", "permission": "mcp_manager.enable", "setting": "internal"},
+  {"channel": "external_agent", "permission": "mcp_manager.list", "setting": "internal"},
+  {"channel": "external_agent", "permission": "memory.forget", "setting": "internal"},
+  {"channel": "external_agent", "permission": "memory.recall", "setting": "internal"},
+  {"channel": "external_agent", "permission": "memory.reflect", "setting": "internal"},
+  {"channel": "external_agent", "permission": "memory.store", "setting": "internal"},
+  {"channel": "external_agent", "permission": "news", "setting": "allow"},
+  {"channel": "external_agent", "permission": "place.delete", "setting": "deny"},
+  {"channel": "external_agent", "permission": "place.get", "setting": "deny"},
+  {"channel": "external_agent", "permission": "place.list", "setting": "deny"},
+  {"channel": "external_agent", "permission": "place.save", "setting": "deny"},
+  {"channel": "external_agent", "permission": "programming_docs_search", "setting": "allow"},
+  {"channel": "external_agent", "permission": "read", "setting": "allow"},
+  {"channel": "external_agent", "permission": "research", "setting": "deny"},
+  {"channel": "external_agent", "permission": "review_tool_calls", "setting": "internal"},
+  {"channel": "external_agent", "permission": "review_transcript", "setting": "internal"},
+  {"channel": "external_agent", "permission": "save_graph", "setting": "internal"},
+  {"channel": "external_agent", "permission": "save_pattern", "setting": "internal"},
+  {"channel": "external_agent", "permission": "schedule.cancel", "setting": "deny"},
+  {"channel": "external_agent", "permission": "schedule.create", "setting": "deny"},
+  {"channel": "external_agent", "permission": "schedule.list", "setting": "allow"},
+  {"channel": "external_agent", "permission": "schedule.search", "setting": "allow"},
+  {"channel": "external_agent", "permission": "search", "setting": "allow"},
+  {"channel": "external_agent", "permission": "search_files.glob", "setting": "allow"},
+  {"channel": "external_agent", "permission": "search_files.grep", "setting": "allow"},
+  {"channel": "external_agent", "permission": "skill_builder.create", "setting": "deny"},
+  {"channel": "external_agent", "permission": "skill_builder.delete", "setting": "deny"},
+  {"channel": "external_agent", "permission": "skill_builder.edit", "setting": "deny"},
+  {"channel": "external_agent", "permission": "skill_builder.list", "setting": "deny"},
+  {"channel": "external_agent", "permission": "skill_manager.create", "setting": "internal"},
+  {"channel": "external_agent", "permission": "skill_manager.delete", "setting": "internal"},
+  {"channel": "external_agent", "permission": "skill_manager.edit", "setting": "internal"},
+  {"channel": "external_agent", "permission": "skill_manager.list", "setting": "internal"},
+  {"channel": "external_agent", "permission": "summariser", "setting": "deny"},
+  {"channel": "external_agent", "permission": "timer", "setting": "internal"},
+  {"channel": "external_agent", "permission": "ubiquiti.authorize_guest", "setting": "deny"},
+  {"channel": "external_agent", "permission": "ubiquiti.control_client", "setting": "deny"},
+  {"channel": "external_agent", "permission": "ubiquiti.control_device", "setting": "deny"},
+  {"channel": "external_agent", "permission": "ubiquiti.get_info", "setting": "allow"},
+  {"channel": "external_agent", "permission": "ubiquiti.list_clients", "setting": "allow"},
+  {"channel": "external_agent", "permission": "ubiquiti.list_devices", "setting": "allow"},
+  {"channel": "external_agent", "permission": "ubiquiti.manage_port_forward", "setting": "deny"},
+  {"channel": "external_agent", "permission": "ubiquiti.manage_traffic_rule", "setting": "deny"},
+  {"channel": "external_agent", "permission": "ubiquiti.manage_wlan", "setting": "deny"},
+  {"channel": "external_agent", "permission": "weather", "setting": "allow"},
+  {"channel": "external_agent", "permission": "web_browse", "setting": "deny"},
+  {"channel": "external_agent", "permission": "web_download", "setting": "deny"},
+  {"channel": "external_agent", "permission": "web_search", "setting": "deny"},
+  {"channel": "subagent", "permission": "bash.compound", "setting": "ask"},
+  {"channel": "subagent", "permission": "bash.execute", "setting": "ask"},
+  {"channel": "subagent", "permission": "bash.installation", "setting": "ask"},
+  {"channel": "subagent", "permission": "bash.modify_file", "setting": "ask"},
+  {"channel": "subagent", "permission": "bash.read", "setting": "allow"},
+  {"channel": "subagent", "permission": "bash.remote_execution", "setting": "ask"},
+  {"channel": "subagent", "permission": "bash.web_fetch", "setting": "ask"},
+  {"channel": "subagent", "permission": "browser.interact", "setting": "allow"},
+  {"channel": "subagent", "permission": "browser.monitor", "setting": "allow"},
+  {"channel": "subagent", "permission": "browser.render", "setting": "allow"},
+  {"channel": "subagent", "permission": "browser.screenshot", "setting": "allow"},
+  {"channel": "subagent", "permission": "calendar.get_event", "setting": "allow"},
+  {"channel": "subagent", "permission": "calendar.list_events", "setting": "allow"},
+  {"channel": "subagent", "permission": "calendar.update_event", "setting": "ask"},
+  {"channel": "subagent", "permission": "chalie_docs", "setting": "allow"},
+  {"channel": "subagent", "permission": "code_eval", "setting": "allow"},
+  {"channel": "subagent", "permission": "contacts.get", "setting": "allow"},
+  {"channel": "subagent", "permission": "contacts.list", "setting": "allow"},
+  {"channel": "subagent", "permission": "document.create", "setting": "allow"},
+  {"channel": "subagent", "permission": "document.delete", "setting": "ask"},
+  {"channel": "subagent", "permission": "document.list", "setting": "allow"},
+  {"channel": "subagent", "permission": "document.restore", "setting": "allow"},
+  {"channel": "subagent", "permission": "document.search", "setting": "allow"},
+  {"channel": "subagent", "permission": "document.upload", "setting": "allow"},
+  {"channel": "subagent", "permission": "document.view", "setting": "allow"},
+  {"channel": "subagent", "permission": "email.draft", "setting": "allow"},
+  {"channel": "subagent", "permission": "email.forward", "setting": "ask"},
+  {"channel": "subagent", "permission": "email.manage", "setting": "ask"},
+  {"channel": "subagent", "permission": "email.read", "setting": "allow"},
+  {"channel": "subagent", "permission": "email.reply", "setting": "ask"},
+  {"channel": "subagent", "permission": "email.search", "setting": "allow"},
+  {"channel": "subagent", "permission": "email.send", "setting": "ask"},
+  {"channel": "subagent", "permission": "file_permissions", "setting": "ask"},
+  {"channel": "subagent", "permission": "file_write", "setting": "ask"},
+  {"channel": "subagent", "permission": "find_skills", "setting": "internal"},
+  {"channel": "subagent", "permission": "find_tools", "setting": "internal"},
+  {"channel": "subagent", "permission": "home.control", "setting": "ask"},
+  {"channel": "subagent", "permission": "home.get_state", "setting": "allow"},
+  {"channel": "subagent", "permission": "home.list_automations", "setting": "allow"},
+  {"channel": "subagent", "permission": "home.list_devices", "setting": "allow"},
+  {"channel": "subagent", "permission": "home.subscribe_events", "setting": "allow"},
+  {"channel": "subagent", "permission": "home.trigger_automation", "setting": "ask"},
+  {"channel": "subagent", "permission": "list.add", "setting": "allow"},
+  {"channel": "subagent", "permission": "list.check", "setting": "allow"},
+  {"channel": "subagent", "permission": "list.clear", "setting": "allow"},
+  {"channel": "subagent", "permission": "list.create", "setting": "allow"},
+  {"channel": "subagent", "permission": "list.delete", "setting": "ask"},
+  {"channel": "subagent", "permission": "list.list_all", "setting": "allow"},
+  {"channel": "subagent", "permission": "list.remove", "setting": "allow"},
+  {"channel": "subagent", "permission": "list.rename", "setting": "allow"},
+  {"channel": "subagent", "permission": "list.view", "setting": "allow"},
+  {"channel": "subagent", "permission": "mcp_manager.add", "setting": "internal"},
+  {"channel": "subagent", "permission": "mcp_manager.disable", "setting": "internal"},
+  {"channel": "subagent", "permission": "mcp_manager.enable", "setting": "internal"},
+  {"channel": "subagent", "permission": "mcp_manager.list", "setting": "internal"},
+  {"channel": "subagent", "permission": "memory.forget", "setting": "internal"},
+  {"channel": "subagent", "permission": "memory.recall", "setting": "internal"},
+  {"channel": "subagent", "permission": "memory.reflect", "setting": "internal"},
+  {"channel": "subagent", "permission": "memory.store", "setting": "internal"},
+  {"channel": "subagent", "permission": "news", "setting": "allow"},
+  {"channel": "subagent", "permission": "place.delete", "setting": "allow"},
+  {"channel": "subagent", "permission": "place.get", "setting": "allow"},
+  {"channel": "subagent", "permission": "place.list", "setting": "allow"},
+  {"channel": "subagent", "permission": "place.save", "setting": "allow"},
+  {"channel": "subagent", "permission": "programming_docs_search", "setting": "allow"},
+  {"channel": "subagent", "permission": "read", "setting": "allow"},
+  {"channel": "subagent", "permission": "research", "setting": "allow"},
+  {"channel": "subagent", "permission": "review_tool_calls", "setting": "internal"},
+  {"channel": "subagent", "permission": "review_transcript", "setting": "internal"},
+  {"channel": "subagent", "permission": "save_graph", "setting": "internal"},
+  {"channel": "subagent", "permission": "save_pattern", "setting": "internal"},
+  {"channel": "subagent", "permission": "schedule.cancel", "setting": "allow"},
+  {"channel": "subagent", "permission": "schedule.create", "setting": "allow"},
+  {"channel": "subagent", "permission": "schedule.list", "setting": "allow"},
+  {"channel": "subagent", "permission": "schedule.search", "setting": "allow"},
+  {"channel": "subagent", "permission": "search", "setting": "allow"},
+  {"channel": "subagent", "permission": "search_files.glob", "setting": "allow"},
+  {"channel": "subagent", "permission": "search_files.grep", "setting": "allow"},
+  {"channel": "subagent", "permission": "skill_builder.create", "setting": "ask"},
+  {"channel": "subagent", "permission": "skill_builder.delete", "setting": "ask"},
+  {"channel": "subagent", "permission": "skill_builder.edit", "setting": "ask"},
+  {"channel": "subagent", "permission": "skill_builder.list", "setting": "ask"},
+  {"channel": "subagent", "permission": "skill_manager.create", "setting": "internal"},
+  {"channel": "subagent", "permission": "skill_manager.delete", "setting": "internal"},
+  {"channel": "subagent", "permission": "skill_manager.edit", "setting": "internal"},
+  {"channel": "subagent", "permission": "skill_manager.list", "setting": "internal"},
+  {"channel": "subagent", "permission": "summariser", "setting": "allow"},
+  {"channel": "subagent", "permission": "timer", "setting": "internal"},
+  {"channel": "subagent", "permission": "ubiquiti.authorize_guest", "setting": "ask"},
+  {"channel": "subagent", "permission": "ubiquiti.control_client", "setting": "ask"},
+  {"channel": "subagent", "permission": "ubiquiti.control_device", "setting": "ask"},
+  {"channel": "subagent", "permission": "ubiquiti.get_info", "setting": "allow"},
+  {"channel": "subagent", "permission": "ubiquiti.list_clients", "setting": "allow"},
+  {"channel": "subagent", "permission": "ubiquiti.list_devices", "setting": "allow"},
+  {"channel": "subagent", "permission": "ubiquiti.manage_port_forward", "setting": "ask"},
+  {"channel": "subagent", "permission": "ubiquiti.manage_traffic_rule", "setting": "ask"},
+  {"channel": "subagent", "permission": "ubiquiti.manage_wlan", "setting": "ask"},
+  {"channel": "subagent", "permission": "weather", "setting": "allow"},
+  {"channel": "subagent", "permission": "web_browse", "setting": "allow"},
+  {"channel": "subagent", "permission": "web_download", "setting": "ask"},
+  {"channel": "subagent", "permission": "web_search", "setting": "allow"},
+  {"channel": "subconscious", "permission": "bash.compound", "setting": "deny"},
+  {"channel": "subconscious", "permission": "bash.execute", "setting": "deny"},
+  {"channel": "subconscious", "permission": "bash.installation", "setting": "deny"},
+  {"channel": "subconscious", "permission": "bash.modify_file", "setting": "deny"},
+  {"channel": "subconscious", "permission": "bash.read", "setting": "deny"},
+  {"channel": "subconscious", "permission": "bash.remote_execution", "setting": "deny"},
+  {"channel": "subconscious", "permission": "bash.web_fetch", "setting": "deny"},
+  {"channel": "subconscious", "permission": "browser.interact", "setting": "deny"},
+  {"channel": "subconscious", "permission": "browser.monitor", "setting": "deny"},
+  {"channel": "subconscious", "permission": "browser.render", "setting": "deny"},
+  {"channel": "subconscious", "permission": "browser.screenshot", "setting": "deny"},
+  {"channel": "subconscious", "permission": "calendar.get_event", "setting": "allow"},
+  {"channel": "subconscious", "permission": "calendar.list_events", "setting": "allow"},
+  {"channel": "subconscious", "permission": "calendar.update_event", "setting": "deny"},
+  {"channel": "subconscious", "permission": "chalie_docs", "setting": "allow"},
+  {"channel": "subconscious", "permission": "code_eval", "setting": "allow"},
+  {"channel": "subconscious", "permission": "contacts.get", "setting": "allow"},
+  {"channel": "subconscious", "permission": "contacts.list", "setting": "allow"},
+  {"channel": "subconscious", "permission": "document.create", "setting": "allow"},
+  {"channel": "subconscious", "permission": "document.delete", "setting": "deny"},
+  {"channel": "subconscious", "permission": "document.list", "setting": "allow"},
+  {"channel": "subconscious", "permission": "document.restore", "setting": "allow"},
+  {"channel": "subconscious", "permission": "document.search", "setting": "allow"},
+  {"channel": "subconscious", "permission": "document.upload", "setting": "deny"},
+  {"channel": "subconscious", "permission": "document.view", "setting": "allow"},
+  {"channel": "subconscious", "permission": "email.draft", "setting": "deny"},
+  {"channel": "subconscious", "permission": "email.forward", "setting": "deny"},
+  {"channel": "subconscious", "permission": "email.manage", "setting": "deny"},
+  {"channel": "subconscious", "permission": "email.read", "setting": "allow"},
+  {"channel": "subconscious", "permission": "email.reply", "setting": "deny"},
+  {"channel": "subconscious", "permission": "email.search", "setting": "allow"},
+  {"channel": "subconscious", "permission": "email.send", "setting": "deny"},
+  {"channel": "subconscious", "permission": "file_permissions", "setting": "deny"},
+  {"channel": "subconscious", "permission": "file_write", "setting": "deny"},
+  {"channel": "subconscious", "permission": "find_skills", "setting": "internal"},
+  {"channel": "subconscious", "permission": "find_tools", "setting": "internal"},
+  {"channel": "subconscious", "permission": "home.control", "setting": "deny"},
+  {"channel": "subconscious", "permission": "home.get_state", "setting": "allow"},
+  {"channel": "subconscious", "permission": "home.list_automations", "setting": "allow"},
+  {"channel": "subconscious", "permission": "home.list_devices", "setting": "allow"},
+  {"channel": "subconscious", "permission": "home.subscribe_events", "setting": "deny"},
+  {"channel": "subconscious", "permission": "home.trigger_automation", "setting": "deny"},
+  {"channel": "subconscious", "permission": "list.add", "setting": "allow"},
+  {"channel": "subconscious", "permission": "list.check", "setting": "allow"},
+  {"channel": "subconscious", "permission": "list.clear", "setting": "allow"},
+  {"channel": "subconscious", "permission": "list.create", "setting": "allow"},
+  {"channel": "subconscious", "permission": "list.delete", "setting": "deny"},
+  {"channel": "subconscious", "permission": "list.list_all", "setting": "allow"},
+  {"channel": "subconscious", "permission": "list.remove", "setting": "allow"},
+  {"channel": "subconscious", "permission": "list.rename", "setting": "allow"},
+  {"channel": "subconscious", "permission": "list.view", "setting": "allow"},
+  {"channel": "subconscious", "permission": "mcp_manager.add", "setting": "internal"},
+  {"channel": "subconscious", "permission": "mcp_manager.disable", "setting": "internal"},
+  {"channel": "subconscious", "permission": "mcp_manager.enable", "setting": "internal"},
+  {"channel": "subconscious", "permission": "mcp_manager.list", "setting": "internal"},
+  {"channel": "subconscious", "permission": "memory.forget", "setting": "internal"},
+  {"channel": "subconscious", "permission": "memory.recall", "setting": "internal"},
+  {"channel": "subconscious", "permission": "memory.reflect", "setting": "internal"},
+  {"channel": "subconscious", "permission": "memory.store", "setting": "internal"},
+  {"channel": "subconscious", "permission": "news", "setting": "allow"},
+  {"channel": "subconscious", "permission": "place.delete", "setting": "deny"},
+  {"channel": "subconscious", "permission": "place.get", "setting": "deny"},
+  {"channel": "subconscious", "permission": "place.list", "setting": "deny"},
+  {"channel": "subconscious", "permission": "place.save", "setting": "deny"},
+  {"channel": "subconscious", "permission": "programming_docs_search", "setting": "allow"},
+  {"channel": "subconscious", "permission": "read", "setting": "allow"},
+  {"channel": "subconscious", "permission": "research", "setting": "deny"},
+  {"channel": "subconscious", "permission": "review_tool_calls", "setting": "internal"},
+  {"channel": "subconscious", "permission": "review_transcript", "setting": "internal"},
+  {"channel": "subconscious", "permission": "save_graph", "setting": "internal"},
+  {"channel": "subconscious", "permission": "save_pattern", "setting": "internal"},
+  {"channel": "subconscious", "permission": "schedule.cancel", "setting": "deny"},
+  {"channel": "subconscious", "permission": "schedule.create", "setting": "deny"},
+  {"channel": "subconscious", "permission": "schedule.list", "setting": "allow"},
+  {"channel": "subconscious", "permission": "schedule.search", "setting": "allow"},
+  {"channel": "subconscious", "permission": "search", "setting": "allow"},
+  {"channel": "subconscious", "permission": "search_files.glob", "setting": "allow"},
+  {"channel": "subconscious", "permission": "search_files.grep", "setting": "allow"},
+  {"channel": "subconscious", "permission": "skill_builder.create", "setting": "deny"},
+  {"channel": "subconscious", "permission": "skill_builder.delete", "setting": "deny"},
+  {"channel": "subconscious", "permission": "skill_builder.edit", "setting": "deny"},
+  {"channel": "subconscious", "permission": "skill_builder.list", "setting": "deny"},
+  {"channel": "subconscious", "permission": "skill_manager.create", "setting": "internal"},
+  {"channel": "subconscious", "permission": "skill_manager.delete", "setting": "internal"},
+  {"channel": "subconscious", "permission": "skill_manager.edit", "setting": "internal"},
+  {"channel": "subconscious", "permission": "skill_manager.list", "setting": "internal"},
+  {"channel": "subconscious", "permission": "summariser", "setting": "deny"},
+  {"channel": "subconscious", "permission": "timer", "setting": "internal"},
+  {"channel": "subconscious", "permission": "ubiquiti.authorize_guest", "setting": "deny"},
+  {"channel": "subconscious", "permission": "ubiquiti.control_client", "setting": "deny"},
+  {"channel": "subconscious", "permission": "ubiquiti.control_device", "setting": "deny"},
+  {"channel": "subconscious", "permission": "ubiquiti.get_info", "setting": "allow"},
+  {"channel": "subconscious", "permission": "ubiquiti.list_clients", "setting": "allow"},
+  {"channel": "subconscious", "permission": "ubiquiti.list_devices", "setting": "allow"},
+  {"channel": "subconscious", "permission": "ubiquiti.manage_port_forward", "setting": "deny"},
+  {"channel": "subconscious", "permission": "ubiquiti.manage_traffic_rule", "setting": "deny"},
+  {"channel": "subconscious", "permission": "ubiquiti.manage_wlan", "setting": "deny"},
+  {"channel": "subconscious", "permission": "weather", "setting": "allow"},
+  {"channel": "subconscious", "permission": "web_browse", "setting": "deny"},
+  {"channel": "subconscious", "permission": "web_download", "setting": "deny"},
+  {"channel": "subconscious", "permission": "web_search", "setting": "deny"}
 ]
