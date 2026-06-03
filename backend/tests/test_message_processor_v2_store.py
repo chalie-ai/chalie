@@ -40,7 +40,7 @@ def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
     return ProcessorConfig(
         channel=channel,
         role=role,
-        usage_class='chat',
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
         build_user_prompt=lambda _mp: _GPM_USER_PROMPT,
         build_user_definition=lambda _mp: _GPM_USER_DEF,
         build_system_prompt=lambda _mp: '',
@@ -476,7 +476,7 @@ def _make_compact_processor(channel=_COMPACT_CHANNEL, role='user', raw_input='he
     config = ProcessorConfig(
         channel=channel,
         role=role,
-        usage_class='subconscious',
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
         build_user_prompt=lambda _mp: _prompt,
         build_user_definition=lambda _mp: _COMPACT_USER_DEF,
         build_system_prompt=lambda _mp: '',

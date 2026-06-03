@@ -43,7 +43,7 @@ def _make_config(
     return ProcessorConfig(
         channel=channel,
         role=role,
-        usage_class="subconscious",
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
         build_user_prompt=lambda _mp: "user body",
         build_user_definition=lambda _mp: "user definition",
         build_system_prompt=lambda _mp: "system",

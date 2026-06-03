@@ -172,7 +172,7 @@ def make_super_episode_config(
     return ProcessorConfig(
         channel="super_episode_encoder",
         role="super_episode_encoder",
-        usage_class="subconscious",
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
         build_user_prompt=_build_user_prompt,
         build_user_definition=_build_user_definition,
         build_system_prompt=_super_episode_build_system_prompt,

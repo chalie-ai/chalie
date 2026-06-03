@@ -58,7 +58,7 @@ def _make_config(**overrides):
     defaults = dict(
         channel="user",
         role="user",
-        usage_class="chat",
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
         build_user_prompt=lambda _mp: "",
         build_user_definition=lambda _mp: "",
         build_system_prompt=lambda _mp: "",

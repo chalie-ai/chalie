@@ -197,7 +197,7 @@ def make_user_config(metadata: dict[str, Any] | None = None) -> ProcessorConfig:
     return ProcessorConfig(
         channel="user",
         role="user",
-        usage_class="chat",
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
         build_user_prompt=_ump_build_user_prompt,
         build_user_definition=_ump_build_user_definition,
         build_system_prompt=_ump_build_system_prompt,

@@ -108,7 +108,7 @@ def _dmn_build_system_prompt(_mp: object) -> str:
 DMN_CONFIG = ProcessorConfig(
     channel="dmn",
     role="proactive_thought",
-    usage_class="subconscious",
+    policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
     build_user_prompt=_dmn_build_user_prompt,
     build_user_definition=_dmn_build_user_definition,
     build_system_prompt=_dmn_build_system_prompt,

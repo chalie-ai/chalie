@@ -11,7 +11,7 @@ def _compaction_system_prompt(_mp: object) -> str:
 COMPACTION_CONFIG = ProcessorConfig(
     channel="compaction",
     role="compaction",
-    usage_class="subconscious",
+    policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
     build_user_prompt=lambda mp: mp._raw_input,
     build_user_definition=lambda _mp: "",
     build_system_prompt=_compaction_system_prompt,

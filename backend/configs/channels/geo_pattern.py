@@ -134,7 +134,7 @@ def make_geo_config(window_start: int, window_end: int) -> ProcessorConfig:
     return ProcessorConfig(
         channel="geo_pattern",
         role="geo_pattern",
-        usage_class="subconscious",
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
         build_user_prompt=_build_user_prompt,
         build_user_definition=lambda _mp: "",
         build_system_prompt=_geo_pattern_build_system_prompt,

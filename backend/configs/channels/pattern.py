@@ -194,7 +194,7 @@ def make_pattern_config(window_start: int, window_end: int) -> ProcessorConfig:
     return ProcessorConfig(
         channel="pattern_match",
         role="pattern_match",
-        usage_class="subconscious",
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
         build_user_prompt=_build_user_prompt,
         build_user_definition=lambda _mp: "",
         build_system_prompt=_pattern_build_system_prompt,

@@ -38,7 +38,7 @@ def _skill_suggestion_build_system_prompt(_mp: object) -> str:
 SKILL_SUGGESTION_CONFIG = ProcessorConfig(
     channel="skills_building",
     role="skills_building",
-    usage_class="subconscious",
+    policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
     build_user_prompt=_skill_suggestion_build_user_prompt,
     build_user_definition=lambda _mp: "",
     build_system_prompt=_skill_suggestion_build_system_prompt,

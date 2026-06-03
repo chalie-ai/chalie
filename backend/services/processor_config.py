@@ -36,6 +36,7 @@ to ``Providers.calculate`` / ``Providers.send_messages``.  There is no separate
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import Callable
 
 
@@ -45,6 +46,13 @@ class ProcessorConfig:
 
     See spec §2 for field-by-field rationale.
     """
+
+    # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
+    class POLICY_CHANNEL(str, Enum):
+        CHAT           = "chat"
+        SUBAGENT       = "subagent"        # reserved — no live config routes here today
+        SUBCONSCIOUS   = "subconscious"
+        EXTERNAL_AGENT = "external_agent"
 
     # ── Identity ──────────────────────────────────────────────────────────────
 
@@ -56,9 +64,9 @@ class ProcessorConfig:
     """Transcript role for the input row.  E.g. 'user', 'proactive_thought',
     'external_agent', 'pattern_match'."""
 
-    usage_class: str
-    """LLM usage class written to llm_call_log.  One of 'chat', 'subagent',
-    'subconscious', 'external_agent'."""
+    policy_channel: "ProcessorConfig.POLICY_CHANNEL"
+    """Which policy channel this processor's tool calls are gated under.
+    usage_class (the llm_call_log string) is derived from it."""
 
     # ── Prompt builders ───────────────────────────────────────────────────────
     # Each callable receives the MessageProcessor instance and returns a str.
@@ -120,7 +128,7 @@ class ProcessorConfig:
     (mp: MessageProcessor, response_text: str) -> None.
     None = no-op.  This is the ONLY optional hook on ProcessorConfig (AC-32)."""
 
-    # ── Derived property ──────────────────────────────────────────────────────
+    # ── Derived properties ────────────────────────────────────────────────────
 
     @property
     def job(self) -> str:
@@ -131,3 +139,9 @@ class ProcessorConfig:
         ``LOG_LABEL`` class attribute (§2 / AC-13).
         """
         return f"{self.channel}:{self.role}"
+
+    @property
+    def usage_class(self) -> str:
+        """LLM usage class string for llm_call_log / telemetry — the value of
+        policy_channel ('chat' | 'subagent' | 'subconscious' | 'external_agent')."""
+        return self.policy_channel.value

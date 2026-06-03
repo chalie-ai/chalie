@@ -97,7 +97,7 @@ class WebSearchAbility(Ability):
         config = ProcessorConfig(
             channel=f"delegate:{self.NAME}",
             role=self.NAME,
-            usage_class="subconscious",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
             build_user_prompt=_web_search_user_prompt,
             build_user_definition=lambda _mp: "",
             build_system_prompt=lambda _mp: _WEB_SEARCH_SYSTEM_PROMPT,

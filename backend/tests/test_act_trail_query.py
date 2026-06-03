@@ -59,7 +59,7 @@ def _make_flat_mp(db_conn, channel="test", broadcast=False, current_iteration=0)
     config = ProcessorConfig(
         channel=channel,
         role="test",
-        usage_class="chat",
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
         build_user_prompt=lambda mp: "",
         build_user_definition=lambda mp: "",
         build_system_prompt=lambda mp: "",

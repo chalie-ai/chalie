@@ -79,7 +79,7 @@ class TestPostTurnRunsAfterAssistantRow:
         cfg = ProcessorConfig(
             channel="c4_test",
             role="c4",
-            usage_class="chat",
+            policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
             build_user_prompt=lambda _: "",
             build_user_definition=lambda _: "",
             build_system_prompt=lambda _: "",

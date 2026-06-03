@@ -174,7 +174,7 @@ def make_eamp_config(
     return ProcessorConfig(
         channel=channel,
         role="external_agent",
-        usage_class="external_agent",
+        policy_channel=ProcessorConfig.POLICY_CHANNEL.EXTERNAL_AGENT,
         build_user_prompt=_eamp_build_user_prompt,
         build_user_definition=_eamp_build_user_definition(agent_name, project),
         build_system_prompt=_eamp_build_system_prompt(agent_name, project, wrapper_id),

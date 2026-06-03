@@ -410,7 +410,7 @@ def post_action():
             _action_config = ProcessorConfig(
                 channel="action_button",
                 role="action_button",
-                usage_class="chat",
+                policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
                 build_user_prompt=lambda _: "",
                 build_user_definition=lambda _: "",
                 build_system_prompt=lambda _: "",

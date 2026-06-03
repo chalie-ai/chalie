@@ -44,7 +44,7 @@ def _episode_encoder_build_system_prompt(_mp: object) -> str:
 EPISODE_ENCODER_CONFIG = ProcessorConfig(
     channel="episode_encoder",
     role="episode_encoder",
-    usage_class="subconscious",
+    policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
     build_user_prompt=_episode_encoder_build_user_prompt,
     build_user_definition=_episode_encoder_build_user_definition,
     build_system_prompt=_episode_encoder_build_system_prompt,
