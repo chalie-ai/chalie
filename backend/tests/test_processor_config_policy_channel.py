@@ -17,9 +17,9 @@ def _make(policy_channel):
     )
 
 
-def test_enum_has_four_values():
+def test_enum_has_three_values():
     vals = {c.value for c in ProcessorConfig.POLICY_CHANNEL}
-    assert vals == {"chat", "subagent", "subconscious", "external_agent"}
+    assert vals == {"chat", "subconscious", "external_agent"}
 
 
 def test_usage_class_derives_from_policy_channel():

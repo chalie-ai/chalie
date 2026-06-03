@@ -50,7 +50,6 @@ class ProcessorConfig:
     # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
     class POLICY_CHANNEL(str, Enum):
         CHAT           = "chat"
-        SUBAGENT       = "subagent"        # reserved — no live config routes here today
         SUBCONSCIOUS   = "subconscious"
         EXTERNAL_AGENT = "external_agent"
 
@@ -91,7 +90,7 @@ class ProcessorConfig:
     """Tool names discoverable via find_tools for this channel."""
 
     blocked: frozenset[str]
-    """Tool names never offered to the model (e.g. subagent blocks 'subagent')."""
+    """Tool names never offered to the model (e.g. DMN blocks the delegate tools)."""
 
     # ── Loop control ──────────────────────────────────────────────────────────
 
@@ -143,5 +142,5 @@ class ProcessorConfig:
     @property
     def usage_class(self) -> str:
         """LLM usage class string for llm_call_log / telemetry — the value of
-        policy_channel ('chat' | 'subagent' | 'subconscious' | 'external_agent')."""
+        policy_channel ('chat' | 'subconscious' | 'external_agent')."""
         return self.policy_channel.value
