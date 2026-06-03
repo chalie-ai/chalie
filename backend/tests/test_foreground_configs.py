@@ -191,6 +191,44 @@ class TestUmpPostTurnSkillSuggestion:
         mock_suggest.assert_not_called()
 
 
+# ── Per-provider content-field placeholder is resolved, not emitted literally ──
+
+class TestContentFieldPlaceholderSubstitution:
+    """The user system prompt must reference the active provider's real response
+    field, never the literal ``{{provider_content_field_name}}`` template token
+    (regression: the ACT-loop refactor dropped the substitution from the user
+    channel, so the model was told to write into a non-existent field)."""
+
+    def test_user_system_prompt_resolves_provider_content_field(self):
+        """UserConfig.build_system_prompt swaps the placeholder for the provider's
+        CONTENT_FIELD_LABEL."""
+        from configs.channels import UserConfig
+
+        provider = MagicMock()
+        provider.CONTENT_FIELD_LABEL = "content[].text"
+        providers_singleton = MagicMock()
+        providers_singleton._resolve.return_value = provider
+
+        with patch("services.providers.Providers") as mock_providers_cls:
+            mock_providers_cls.instance.return_value = providers_singleton
+            body = UserConfig().build_system_prompt(MagicMock(spec=object))
+
+        assert "{{provider_content_field_name}}" not in body
+        assert "content[].text" in body
+
+    def test_passthrough_when_provider_lookup_fails(self):
+        """A provider-resolution failure leaves the body intact (best-effort)."""
+        from configs.channels._common import substitute_provider_content_field
+
+        with patch("services.providers.Providers") as mock_providers_cls:
+            mock_providers_cls.instance.side_effect = RuntimeError("no provider")
+            out = substitute_provider_content_field(
+                "In the {{provider_content_field_name}} field ...", "user"
+            )
+
+        assert out == "In the {{provider_content_field_name}} field ..."
+
+
 # ── M7: thinking-exploration reaches the user prompt on the flat path ──────────
 
 class TestThinkingGateExplorationReachesPrompt:

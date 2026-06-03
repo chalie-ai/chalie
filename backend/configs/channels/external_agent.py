@@ -9,6 +9,7 @@ from configs.channels._common import (
     DEFAULT_DISCOVERABLE,
     DELEGATE_INTERNAL_TOOLS,
     PATTERN_WRITE_TOOLS,
+    substitute_provider_content_field,
 )
 
 # ── EAMP prompt builders ──────────────────────────────────────────────────────
@@ -45,17 +46,7 @@ def _eamp_build_system_prompt(agent_name: str, project: str, wrapper_id: str) ->
         try:
             from services.system_message_prompt import ExternalAgentSystemMessagePrompt  # noqa: PLC0415
             body = ExternalAgentSystemMessagePrompt().get_prompt()
-
-            # Substitute {{provider_content_field_name}} if present.
-            if "{{provider_content_field_name}}" in body:
-                try:
-                    from services.providers import Providers  # noqa: PLC0415
-                    provider = Providers.instance()._resolve("external_agent")
-                    label = getattr(provider, "CONTENT_FIELD_LABEL", None)
-                    if label:
-                        body = body.replace("{{provider_content_field_name}}", label)
-                except Exception:
-                    pass
+            body = substitute_provider_content_field(body, "external_agent")
 
             # Resolve the user's first name from data_graph.
             user_name = "the user"

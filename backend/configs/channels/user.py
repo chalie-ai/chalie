@@ -9,6 +9,7 @@ from configs.channels._common import (
     DEFAULT_DISCOVERABLE,
     DELEGATE_INTERNAL_TOOLS,
     PATTERN_WRITE_TOOLS,
+    substitute_provider_content_field,
 )
 
 # ── UMP prompt builders ───────────────────────────────────────────────────────
@@ -73,6 +74,7 @@ def _ump_build_system_prompt(mp: object) -> str:
         template = UnifiedSystemMessagePrompt().get_prompt()
         voice_line = f"When responding; {personality_service.get_voice()}"
         prompt = f"{voice_line}\n\n{template}"
+        prompt = substitute_provider_content_field(prompt, "user")
     except Exception as exc:
         _log.warning("[UMP] system prompt build failed: %s", exc)
         return ""

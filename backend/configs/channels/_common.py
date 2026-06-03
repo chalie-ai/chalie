@@ -1,5 +1,33 @@
 from __future__ import annotations
 
+# ── Per-provider system-prompt placeholders ───────────────────────────────────
+
+_CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
+
+
+def substitute_provider_content_field(body: str, job: str = "unified") -> str:
+    """Replace ``{{provider_content_field_name}}`` with the active provider's
+    ``CONTENT_FIELD_LABEL`` (e.g. ``content[].text`` for Anthropic,
+    ``message.content`` for Ollama) so the model is told the exact JSON field
+    where its user-visible prose lands.
+
+    ``job`` is a logging label only — the provider is resolved from the active
+    selection, not from this key.  Best-effort: if the placeholder is absent or
+    the provider lookup fails, the body passes through unchanged.
+    """
+    if _CONTENT_FIELD_PLACEHOLDER not in body:
+        return body
+    try:
+        from services.providers import Providers  # noqa: PLC0415
+        provider = Providers.instance()._resolve(job)
+        label = getattr(provider, "CONTENT_FIELD_LABEL", None)
+    except Exception:
+        label = None
+    if not label:
+        return body
+    return body.replace(_CONTENT_FIELD_PLACEHOLDER, label)
+
+
 # ── Default tool visibility (mirrors MessageProcessor class defaults) ──────────
 
 DEFAULT_ALWAYS_AVAILABLE: list[str] = [
