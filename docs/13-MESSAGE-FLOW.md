@@ -98,7 +98,7 @@ Every turn runs the same ACT loop through the one flat `MessageProcessor`; behav
 
 Tool errors are returned to the model as structured result strings. They are never raised to the caller or surfaced to the user directly.
 
-Each tool call is written to `tool_calls` immediately via `Ability.record()` — the trail is the table, not an in-memory list. Ephemeral rows are purged at turn end (`_purge_ephemeral_tool_calls`); durable rows (compaction, thinking) persist.
+Each tool call is written to `tool_calls` by `ToolDispatcher.dispatch()` via `ActTrail().record()` — the trail is the table, not an in-memory list. Ephemeral rows are purged at turn end (`_purge_ephemeral_tool_calls`); durable rows (compaction, thinking) persist.
 
 ---
 
@@ -123,11 +123,11 @@ The 90% check runs first. The compaction loop (`COMPACTION_CONFIG`) hits a recur
 
 ## Post-Turn Fan-Out (User Path Only)
 
-After the turn is stored, `config.post_turn(mp, response_text)` is called if non-None. This is the only post-turn hook. For the user channel it fires proactive skill suggestion (when iteration ≥ 4 and the loop exited cleanly). For all background channels it is `None`.
+After the turn is stored, `_record()` iterates `config.post_turn_hooks` — a `tuple[PostTurnHook, ...]` (default `()` for background channels). Each hook's `run(mp, response_text)` is called in a failure-isolated loop; one hook raising does not affect the others. For the user channel the tuple contains `ProactiveSuggestionHook` (fires proactive skill suggestion when iteration ≥ 4 and the loop exited cleanly). Background channels have an empty tuple.
 
-Metrics (token counts, request counters) are recorded inside the provider send gateway (`Providers._log_after_call`) — not in `post_turn` and not in the loop. Token totals are accumulated per-send so delegate/sub-processor attribution is correct automatically.
+Metrics (token counts, request counters) are recorded inside the provider send gateway (`Providers._log_after_call`) — not in post-turn hooks and not in the loop. Token totals are accumulated per-send so delegate/sub-processor attribution is correct automatically.
 
-Background paths (DMN, pattern match, episode encoder, etc.) have `post_turn=None` and emit nothing to the chat UI (`broadcast_to=None`). (DMN no longer has an idle-timer — it runs as Step 5 of the subconscious worker tick.)
+Background paths (DMN, pattern match, episode encoder, etc.) have `post_turn_hooks=()` and emit nothing to the chat UI (`broadcast_to=None`). (DMN no longer has an idle-timer — it runs as Step 5 of the subconscious worker tick.)
 
 Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory ability directly. Contradiction detection happens at storage time.
 
