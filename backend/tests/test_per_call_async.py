@@ -25,7 +25,7 @@ The async LLM follow-up turn delivery (the captured-mp synthesis on the user
 channel) is exercised end-to-end in the QA-env / nightly run, not here — it
 requires a real model.  This test proves the *decision* and the *non-blocking*
 contract without firing the LLM by cancelling the delegate before releasing it,
-which makes ``_run_async_delegate`` skip delivery (§4.4).
+which makes ``AsyncDelegateRunner._run`` skip delivery (§4.4).
 """
 
 import threading
@@ -33,9 +33,10 @@ import time
 
 import pytest
 
-from abilities._base import Ability, _active_delegates
+from abilities._base import Ability
 from abilities._registry import AbilityRegistry
 from configs.channels import DmnConfig, UserConfig
+from services.async_delegate_runner import async_delegate_runner
 
 pytestmark = pytest.mark.unit
 
@@ -167,7 +168,7 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
     ability = _BlockingAbility()
     ability.MessageProcessor = _Ctx(DmnConfig())
 
-    before = set(_active_delegates)
+    before = set(async_delegate_runner.active_ids())
     result = ability.execute({"async": True})
 
     # Non-blocking: the placeholder came back while run() is still blocked.
@@ -175,20 +176,20 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
     assert started.wait(timeout=2), "background run() never started"
     assert not finished, "run() returned before release — was not backgrounded"
 
-    new = set(_active_delegates) - before
+    new = set(async_delegate_runner.active_ids()) - before
     assert len(new) == 1
     delegate_id = new.pop()
     assert delegate_id.startswith("test_per_call_blocking_")
 
-    # Cancel BEFORE releasing → _run_async_delegate skips deliver_async_result
+    # Cancel BEFORE releasing → AsyncDelegateRunner._run skips delivery
     # (cancel_event.is_set()), so no real-LLM synthesis turn is spawned.
-    Ability.cancel_delegate(delegate_id)
+    async_delegate_runner.cancel(delegate_id)
     release.set()
 
     # The daemon finishes run(), skips delivery, and deregisters in `finally`.
     for _ in range(100):
-        if delegate_id not in _active_delegates:
+        if delegate_id not in async_delegate_runner.active_ids():
             break
         time.sleep(0.05)
-    assert delegate_id not in _active_delegates
+    assert delegate_id not in async_delegate_runner.active_ids()
     assert finished == [True]

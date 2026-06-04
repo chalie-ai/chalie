@@ -386,14 +386,14 @@ def get_active_subagents():
     Response JSON:
         {subagents: [{sub_id}]}
 
-    Note: the new delegate registry (Ability._active_delegates) tracks only
+    Note: the delegate registry (async_delegate_runner) tracks only
     delegate_ids and cancel events — no per-type metadata.  Richer metadata
     (agent_type, description, started_at) will be restored when the T11
     delegate tools (web_search, web_browse) land.
     """
-    from abilities._base import Ability
+    from services.async_delegate_runner import async_delegate_runner
 
-    items = [{"sub_id": did} for did in Ability.get_active_delegates()]
+    items = [{"sub_id": did} for did in async_delegate_runner.active_ids()]
     return jsonify({"subagents": items}), 200
 
 
@@ -402,9 +402,8 @@ def get_active_subagents():
 def post_subagent_stop(sub_id: str):
     """Cooperatively cancel a running async delegate.
 
-    Delegates to Ability.cancel_delegate() from the dispatch infrastructure.
-    The delegate's cancel_event is set; the ACT loop exits at the next
-    iteration boundary.
+    Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
+    is set; the ACT loop exits at the next iteration boundary.
 
     Always returns HTTP 200.
 
@@ -412,9 +411,9 @@ def post_subagent_stop(sub_id: str):
         {ok: true, cancelled: true}         — stop signal delivered
         {ok: true, reason: "not_found"}     — sub_id not in active registry
     """
-    from abilities._base import Ability
+    from services.async_delegate_runner import async_delegate_runner
 
-    if Ability.cancel_delegate(sub_id):
+    if async_delegate_runner.cancel(sub_id):
         logger.info("[Chat API] Stop signal delivered to delegate %s", safe(sub_id[:8]))
         return jsonify({"ok": True, "cancelled": True}), 200
     return jsonify({"ok": True, "reason": "not_found"}), 200

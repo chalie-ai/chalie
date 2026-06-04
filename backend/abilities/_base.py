@@ -10,9 +10,7 @@ Spec: ACT Loop Orchestrator Refactor §5, §7b; PolicyManager redesign (TKT-797)
 
 from __future__ import annotations
 
-import contextvars
 import logging
-import threading
 from abc import ABC, abstractmethod
 from typing import ClassVar
 from uuid import uuid4
@@ -32,15 +30,6 @@ AbilityRegistry: object = None  # type: ignore[assignment]
 PolicyManager: object = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
-
-
-# ── Module-level active-delegate registry ─────────────────────────────────────
-# Maps delegate_id → cancel threading.Event.
-# Populated by Ability.execute() when the model opts a call into the background
-# (per-call async: params['async'] is True, exposed only on SUPPORTS_ASYNC
-# channels).
-
-_active_delegates: dict[str, threading.Event] = {}
 
 
 def _load_tool_telemetry() -> "dict | None":
@@ -109,53 +98,6 @@ def _normalise_run_result(raw: object) -> dict:
     if isinstance(raw, str):
         return {"status": "success", "result": raw}
     return {"status": "success", "result": str(raw) if raw is not None else ""}
-
-
-def _run_async_delegate(
-    ability: "Ability",
-    params: dict,
-    delegate_id: str,
-    cancel_event: threading.Event,
-) -> None:
-    """Daemon-thread body for a backgrounded (per-call ``async``) tool call.
-
-    Runs the tool synchronously, then delivers the result by synthesising a fresh
-    assistant turn through the ORIGINATING MessageProcessor — captured here as
-    ``ability.MessageProcessor``. The captured ``mp`` lives on in this thread's
-    memory, so delivery surfaces on the channel the call spawned from even after
-    that ACT loop has closed.  This replaces the old ``UserConfig``-hardwired
-    ``dispatch_message(channel=…)`` route — delivery now rides ``mp``'s own
-    channel (spec §4.0 / §4.4).
-
-    Spec §4.4 / §5b / J5.
-    """
-    mp = ability.MessageProcessor
-    try:
-        try:
-            result = _run_ability(ability, params)
-            result_text = str(result.get("result", ""))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[Ability._run_async_delegate] execution failed for %s: %s",
-                delegate_id,
-                exc,
-            )
-            result_text = None
-
-        if result_text is not None and not cancel_event.is_set():
-            try:
-                # api.chat owns the user-channel turn machinery + hot-path emit;
-                # deliver_async_result spawns the synthesis MP from the captured mp.
-                from api.chat import deliver_async_result  # noqa: PLC0415
-                deliver_async_result(mp, result_text)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "[Ability._run_async_delegate] delivery failed for %s: %s",
-                    delegate_id,
-                    exc,
-                )
-    finally:
-        _active_delegates.pop(delegate_id, None)
 
 
 class Ability(ABC):
@@ -305,28 +247,6 @@ class Ability(ABC):
         ability.MessageProcessor = mp
         return ability
 
-    # ── Active-delegate registry ──────────────────────────────────────────────
-
-    @staticmethod
-    def cancel_delegate(delegate_id: str) -> bool:
-        """Cancel a running async delegate.  Returns True if found.
-
-        Spec §5 / J8.
-        """
-        ev = _active_delegates.get(delegate_id)
-        if ev:
-            ev.set()
-            return True
-        return False
-
-    @staticmethod
-    def get_active_delegates() -> list[str]:
-        """Return IDs of currently running async delegates.
-
-        Spec §5 / J7.
-        """
-        return list(_active_delegates.keys())
-
     # ── Instance method — the actual tool logic ───────────────────────────────
 
     @abstractmethod
@@ -381,25 +301,12 @@ class Ability(ABC):
         })
 
         if run_async:
-            delegate_id = f"{self.NAME}_{uuid4().hex[:8]}"
-            cancel_event = threading.Event()
-            _active_delegates[delegate_id] = cancel_event
-            # Copy the calling thread's contextvars into the daemon thread so
-            # locale/timezone context (set per-request) propagates to the async
-            # delegate exactly as it does on the synchronous path.
-            ctx = contextvars.copy_context()
-            threading.Thread(
-                target=ctx.run,
-                args=(_run_async_delegate, self, params, delegate_id, cancel_event),
-                daemon=True,
-            ).start()
-            result = {
-                "status": "success",
-                "result": (
-                    f"{self.NAME} dispatched (id: {delegate_id}). "
-                    "You will be notified when it completes."
-                ),
-            }
+            # AsyncDelegateRunner owns the daemon-thread lifecycle + the captured
+            # mp it delivers through; it returns the placeholder immediately so
+            # this ACT iteration is never blocked (spec §4.0 / §4.4).
+            from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
+            placeholder = async_delegate_runner.spawn(self, params, self.MessageProcessor)
+            result = {"status": "success", "result": placeholder}
         else:
             result = _run_ability(self, params)
 
