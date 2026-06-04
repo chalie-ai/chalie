@@ -14,7 +14,7 @@ class ProviderDbService:
     # Column list used by all SELECT queries — order matters for positional access
     _PROVIDER_COLS = (
         "id, name, platform, model, host, api_key, "
-        "dimensions, timeout, supports_vision"
+        "dimensions, timeout, supports_vision, max_tokens"
     )
 
     def __init__(self, database_service):
@@ -65,7 +65,7 @@ class ProviderDbService:
         """Convert a database row to a provider dict, decrypting api_key.
 
         Column order: id, name, platform, model, host, api_key,
-                      dimensions, timeout, supports_vision
+                      dimensions, timeout, supports_vision, max_tokens
 
         The ``api_key`` field is decrypted via :meth:`_unseal_api_key`.  If the
         vault is currently locked the field is returned as ``None`` so that
@@ -90,6 +90,7 @@ class ProviderDbService:
                 "dimensions": row['dimensions'],
                 "timeout": row['timeout'],
                 "supports_vision": bool(row.get('supports_vision', 0)),
+                "max_tokens": row.get('max_tokens'),
             }
             if row.get('api_key'):
                 try:
@@ -111,6 +112,7 @@ class ProviderDbService:
             "dimensions": row[6],
             "timeout": row[7],
             "supports_vision": bool(row[8]) if len(row) > 8 else False,
+            "max_tokens": row[9] if len(row) > 9 else None,
         }
         if row[5]:
             try:
