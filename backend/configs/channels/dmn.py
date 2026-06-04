@@ -106,9 +106,12 @@ def _dmn_build_user_prompt(mp: object) -> str:
 
 
 def _dmn_build_system_prompt(_mp: object) -> str:
-    """DMN system prompt from DMNSystemMessagePrompt."""
+    """DMN system prompt: user_definition prefix + DMNSystemMessagePrompt body.
+
+    Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
+    """
     from services.system_message_prompt import DMNSystemMessagePrompt  # noqa: PLC0415
-    return DMNSystemMessagePrompt().get_prompt()
+    return f"{_dmn_build_user_definition(_mp)}\n\n{DMNSystemMessagePrompt().get_prompt()}"
 
 
 class DmnConfig(ProcessorConfig):

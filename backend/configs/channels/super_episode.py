@@ -130,9 +130,16 @@ def _fetch_transcript_spans(t_ids: set, db) -> str:
 
 
 def _super_episode_build_system_prompt(_mp: object) -> str:
-    """Super-episode system prompt from SuperEpisodeEncoderSystemPrompt."""
+    """Super-episode system prompt: user_definition prefix + body.
+
+    Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
+    """
     from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
-    return SuperEpisodeEncoderSystemPrompt().get_prompt()
+    _user_def = (
+        "The user is 'super_episode_encoder' — a background process that "
+        "consolidates clusters of related episodes into a single super-episode."
+    )
+    return f"{_user_def}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"
 
 
 class SuperEpisodeConfig(ProcessorConfig):

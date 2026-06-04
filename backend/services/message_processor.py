@@ -638,8 +638,11 @@ class MessageProcessor:
         from abilities._base import Ability  # noqa: PLC0415
 
         # a. Memory auto-seed — fire once when the declarative flag is set.
+        #    _auto=True marks this as the background seed recall so memory's
+        #    _handle_recall does NOT fan out to document.search + schedule.search
+        #    (that delegation is reserved for explicit, model-invoked recalls).
         if self.config.memory_seed:
-            Ability.use(self, "memory", {"action": "recall", "query": self._raw_input})
+            Ability.use(self, "memory", {"action": "recall", "query": self._raw_input, "_auto": True})
 
         # b. Attachment uploads — presence-gated, one blocking document.upload
         #    per file.  No second auto document.view: upload IS the ingest.
@@ -670,6 +673,7 @@ class MessageProcessor:
         while True:
             if self._should_stop(): return ""  # noqa: E701
             prompt = self.config.build_user_prompt(self)
+            prompt = _wrap_with_checkpoint(self.config.channel, prompt)
             system = self.config.build_system_prompt(self)
             tools = AbilityRegistry.build_tools(self)
             pct = p.calculate(system, prompt, tools, job=self.config.job, mp=self)

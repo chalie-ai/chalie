@@ -91,9 +91,13 @@ def _user_summary_build_user_prompt(_mp: object) -> str:
 
 
 def _user_summary_build_system_prompt(_mp: object) -> str:
-    """User-summary system prompt from UserSummarySystemPrompt."""
+    """User-summary system prompt: user_definition prefix + body.
+
+    Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
+    """
     from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
-    return UserSummarySystemPrompt().get_prompt()
+    _user_def = "You are a synthesiser. The user is a real human whose traits you are distilling."
+    return f"{_user_def}\n\n{UserSummarySystemPrompt().get_prompt()}"
 
 
 def _user_summary_post_turn(_mp: object, response_text: str) -> None:

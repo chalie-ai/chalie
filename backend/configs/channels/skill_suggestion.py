@@ -30,9 +30,14 @@ def _skill_suggestion_build_user_prompt(mp: object) -> str:
 
 
 def _skill_suggestion_build_system_prompt(_mp: object) -> str:
-    """Skill suggestion system prompt from SkillSuggestionSystemPrompt."""
+    """Skill suggestion system prompt: user_definition prefix + body.
+
+    Restores OLD base get_system_prompt assembly.  This channel's
+    get_user_definition() was empty, so OLD emitted ``f"\\n\\n{body}"`` — the
+    leading blank lines are reproduced verbatim for parity with main.
+    """
     from services.system_message_prompt import SkillSuggestionSystemPrompt  # noqa: PLC0415
-    return SkillSuggestionSystemPrompt().get_prompt()
+    return f"\n\n{SkillSuggestionSystemPrompt().get_prompt()}"
 
 
 class SkillSuggestionConfig(ProcessorConfig):

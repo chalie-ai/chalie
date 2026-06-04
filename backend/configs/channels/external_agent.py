@@ -104,16 +104,16 @@ def _eamp_build_user_prompt(mp: object) -> str:
 
     parts.append("")
 
-    # ACT loop trail
+    # Input line — BEFORE the trail (OLD get_user_prompt ordering).
+    parts.append(f"user: {mp._raw_input}")  # type: ignore[attr-defined]
+
+    # ACT loop trail (carries the turn-0 memory seed once it has fired).
     try:
         trail = mp._render_act_trail()  # type: ignore[attr-defined]
         if trail:
             parts.append(trail)
     except Exception as exc:
         _log.debug("[EAMP] _render_act_trail failed: %s", exc)
-
-    # Input line
-    parts.append(f"user: {mp._raw_input}")  # type: ignore[attr-defined]
 
     return "\n".join(parts)
 

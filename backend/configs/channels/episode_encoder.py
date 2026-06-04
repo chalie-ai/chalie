@@ -36,9 +36,15 @@ def _episode_encoder_build_user_prompt(mp: object) -> str:
 
 
 def _episode_encoder_build_system_prompt(_mp: object) -> str:
-    """Episode encoder system prompt from EpisodeEncoderSystemPrompt."""
+    """Episode encoder system prompt: user_definition prefix + body.
+
+    Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
+    """
     from services.system_message_prompt import EpisodeEncoderSystemPrompt  # noqa: PLC0415
-    return EpisodeEncoderSystemPrompt().get_prompt()
+    return (
+        f"{_episode_encoder_build_user_definition(_mp)}\n\n"
+        f"{EpisodeEncoderSystemPrompt().get_prompt()}"
+    )
 
 
 class EpisodeEncoderConfig(ProcessorConfig):

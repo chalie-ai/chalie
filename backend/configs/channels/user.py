@@ -95,14 +95,20 @@ def _ump_build_system_prompt(mp: object) -> str:
 def _ump_build_user_prompt(mp: object) -> str:
     """UMP user-message body for one ACT iteration.
 
-    Section order (spec § Body structure of build_user_prompt):
+    Section order (mirrors OLD get_user_prompt + _wrap_with_exploration):
+      Outer wrapper (only when high-thinking exploration is active):
+        ## Chain of Thought … prepended to the whole body.
       1. User definition (identity anchor — in user prompt, not system prompt).
       2. World State block.
       3. ## Previous Messages.
       (blank separator)
-      4. Thinking exploration block (high-thinking mode only).
-      5. ACT loop trail (empty before any tools have run).
-      6. Input line: user: <raw_input>.
+      4. Input line: user: <raw_input>  (BEFORE the trail).
+      5. ACT loop trail (empty before any tools have run; carries the
+         turn-0 memory seed once it has fired).
+
+    The framework _loop then wraps the returned body with the ### Checkpoint /
+    ### Current State envelope when a compaction row exists — so exploration
+    sits at the top of ### Current State, exactly as OLD send() produced it.
 
     §3b / §6 / spec §4.
     """
@@ -139,19 +145,15 @@ def _ump_build_user_prompt(mp: object) -> str:
     # Blank separator
     parts.append("")
 
-    # 4. Thinking exploration (high-thinking mode; None when not active)
-    exploration = getattr(mp, "thinking_exploration", None)
-    if exploration:
-        parts.append(
-            "## Chain of Thought\n"
-            "Below is your initial reaction to this prompt, played back. "
-            "Use it as grounding but pivot as needed based on the conversation.\n\n"
-            "---\n\n"
-            f"{exploration}\n\n"
-            "---"
-        )
+    # 4. Input line with optional nudge — BEFORE the trail (OLD ordering).
+    nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""
+    turn_line = f"user: {mp._raw_input}"  # type: ignore[attr-defined]
+    if nudge_tag:
+        turn_line += " " + nudge_tag
+    parts.append(turn_line)
 
-    # 5. ACT loop trail
+    # 5. ACT loop trail (empty before any tools have run; carries the turn-0
+    #    memory seed once it has fired).
     try:
         trail = mp._render_act_trail()  # type: ignore[attr-defined]
         if trail:
@@ -159,14 +161,25 @@ def _ump_build_user_prompt(mp: object) -> str:
     except Exception as exc:
         _log.debug("[UMP] _render_act_trail failed: %s", exc)
 
-    # 6. Input line with optional nudge
-    nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""
-    turn_line = f"user: {mp._raw_input}"  # type: ignore[attr-defined]
-    if nudge_tag:
-        turn_line += " " + nudge_tag
-    parts.append(turn_line)
+    body = "\n".join(parts)
 
-    return "\n".join(parts)
+    # 6. Thinking exploration — Chain-of-Thought wrapper prepended to the whole
+    #    body (high-thinking mode only; None when not active).  Mirrors OLD
+    #    _wrap_with_exploration; the framework _loop adds the checkpoint
+    #    envelope around this, so CoT lands at the top of ### Current State.
+    exploration = getattr(mp, "thinking_exploration", None)
+    if exploration:
+        body = (
+            "## Chain of Thought\n"
+            "Below is your initial reaction to this prompt, played back. "
+            "Use it as grounding but pivot as needed based on the conversation.\n\n"
+            "---\n\n"
+            f"{exploration}\n\n"
+            "---\n\n"
+            + body
+        )
+
+    return body
 
 
 def _ump_post_turn(mp: object, response_text: str) -> None:
