@@ -36,18 +36,11 @@ logger = logging.getLogger(__name__)
 
 # ── Module-level active-delegate registry ─────────────────────────────────────
 # Maps delegate_id → cancel threading.Event.
-# Populated by Ability.execute() for ASYNC_CAPABLE tools on async-capable channels.
+# Populated by Ability.execute() when the model opts a call into the background
+# (per-call async: params['async'] is True, exposed only on SUPPORTS_ASYNC
+# channels).
 
 _active_delegates: dict[str, threading.Event] = {}
-
-
-def _supports_async_delivery(channel: str) -> bool:
-    """Return True when the channel supports async result delivery.
-
-    Currently only the 'user' channel supports async delivery via
-    dispatch_message(hidden_input=True).  Spec §5 / §5b.
-    """
-    return channel == "user"
 
 
 def _load_tool_telemetry() -> "dict | None":
@@ -124,17 +117,19 @@ def _run_async_delegate(
     delegate_id: str,
     cancel_event: threading.Event,
 ) -> None:
-    """Daemon-thread body for ASYNC_CAPABLE tool execution.
+    """Daemon-thread body for a backgrounded (per-call ``async``) tool call.
 
-    Runs the tool synchronously, then delivers the result via
-    dispatch_message(hidden_input=True) so the parent ACT loop gets a fresh
-    turn with the result. The delivery channel is read off the bound parent
-    (``ability.MessageProcessor.config.channel``).
+    Runs the tool synchronously, then delivers the result by synthesising a fresh
+    assistant turn through the ORIGINATING MessageProcessor — captured here as
+    ``ability.MessageProcessor``. The captured ``mp`` lives on in this thread's
+    memory, so delivery surfaces on the channel the call spawned from even after
+    that ACT loop has closed.  This replaces the old ``UserConfig``-hardwired
+    ``dispatch_message(channel=…)`` route — delivery now rides ``mp``'s own
+    channel (spec §4.0 / §4.4).
 
-    Spec §5 / §5b / J5.
+    Spec §4.4 / §5b / J5.
     """
-    config = getattr(ability.MessageProcessor, "config", None)
-    channel = getattr(config, "channel", "") or ""
+    mp = ability.MessageProcessor
     try:
         try:
             result = _run_ability(ability, params)
@@ -149,8 +144,10 @@ def _run_async_delegate(
 
         if result_text is not None and not cancel_event.is_set():
             try:
-                from api.chat import dispatch_message  # noqa: PLC0415
-                dispatch_message(result_text, channel=channel, hidden_input=True)
+                # api.chat owns the user-channel turn machinery + hot-path emit;
+                # deliver_async_result spawns the synthesis MP from the captured mp.
+                from api.chat import deliver_async_result  # noqa: PLC0415
+                deliver_async_result(mp, result_text)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "[Ability._run_async_delegate] delivery failed for %s: %s",
@@ -170,7 +167,9 @@ class Ability(ABC):
 
     Tool *scope* (always-available vs discoverable) lives on ProcessorConfig
     (always_available / discoverable / blocked fields).  Abilities only describe
-    what the tool is (NAME / SUMMARY / EXAMPLES / INPUT_SCHEMA / ASYNC_CAPABLE).
+    what the tool is (NAME / SUMMARY / EXAMPLES / INPUT_SCHEMA).  Whether a call
+    blocks or runs in the background is a per-call decision (the framework
+    ``async`` flag), not an ability-level trait.
 
     Spec: §5 / AC-4.
     """
@@ -179,7 +178,6 @@ class Ability(ABC):
     SUMMARY: ClassVar[str]
     EXAMPLES: ClassVar[list[str]]
     INPUT_SCHEMA: ClassVar[dict]
-    ASYNC_CAPABLE: ClassVar[bool] = False
     SEARCH_TOOLTIP: ClassVar[str] = ""
 
     # Bound per-call by Ability._bind(): the invoking MessageProcessor (the
@@ -444,18 +442,20 @@ class Ability(ABC):
     # ── Self-scaffolding executor — the allow-path callback use() hands to wrap ──
 
     def execute(self, params: dict, act_summary: "str | None" = None) -> str:
-        """Emit → run → return. Called ONLY on the allow path (use() passes this
-        as wrap's callback). Owns the async-vs-sync decision, contextvar copying
-        for async delivery, VaultLockedError handling, and result normalisation.
-        Returns the result text STRING. Recording is use()'s job, not ours.
+        """Emit → (async-decision) → run → emit. Called ONLY on the allow path
+        (use() passes this as wrap's callback). The per-call ``async`` flag —
+        popped here, a framework key never passed to run() — decides whether the
+        real work blocks this ACT iteration or runs on a background thread; run()
+        is identical either way. Owns contextvar copying for async delivery,
+        VaultLockedError handling, and result normalisation. Returns the result
+        text STRING. Recording is use()'s job, not ours.
 
         Reads the bound parent off ``self.MessageProcessor`` (set by _bind()).
         act_summary (popped from params by use()) is the WS tooltip; it is NOT a
-        run() argument. Spec §5 / D5.
+        run() argument. Spec §4.0 / §5 / D5.
         """
-        mp = self.MessageProcessor
-        config = getattr(mp, "config", None)
-        channel = getattr(config, "channel", "") or ""
+        run_async = bool(params.pop("async", False))
+        config = getattr(self.MessageProcessor, "config", None)
         emitter = ActEventEmitter(config)
         call_id = uuid4().hex[:12]
         emitter.emit({
@@ -465,7 +465,7 @@ class Ability(ABC):
             "summary": act_summary,
         })
 
-        if self.ASYNC_CAPABLE and _supports_async_delivery(channel):
+        if run_async:
             delegate_id = f"{self.NAME}_{uuid4().hex[:8]}"
             cancel_event = threading.Event()
             _active_delegates[delegate_id] = cancel_event
@@ -503,14 +503,36 @@ class Ability(ABC):
         return self.SUMMARY
 
     def get_input_schema(self, mp=None) -> dict:
-        """Return the INPUT_SCHEMA for LLM tool presentation.
+        """Return the INPUT_SCHEMA for LLM tool presentation, with the framework
+        ``async`` property injected on channels that support backgrounding.
 
-        Override to enrich the schema at runtime.  ``mp`` is the invoking
-        MessageProcessor (threaded by ``build_tools`` because that path operates
-        on the unbound registry singleton).  The default returns the class-level
-        INPUT_SCHEMA unchanged.
+        ``mp`` is the invoking MessageProcessor (threaded by ``build_tools``
+        because that path operates on the unbound registry singleton).  The
+        ``async`` boolean is injected **iff** ``mp`` is known and its config sets
+        ``SUPPORTS_ASYNC`` (only the user channel today, §4.8d); elsewhere — and
+        when ``mp`` is None (synchronous is the safe default) — the property is
+        omitted, so the model cannot pick async and every tool is synchronous.
+
+        This is the ONLY place ``async`` is declared.  Overrides that enrich the
+        schema MUST start from ``super().get_input_schema(mp)`` so this gate
+        applies uniformly (§4.1).
+
+        Spec §4.0 / §4.1.
         """
-        return self.INPUT_SCHEMA
+        if mp is None or not getattr(getattr(mp, "config", None), "SUPPORTS_ASYNC", False):
+            return self.INPUT_SCHEMA
+        import copy as _copy  # noqa: PLC0415
+        schema = _copy.deepcopy(self.INPUT_SCHEMA)
+        schema.setdefault("properties", {})["async"] = {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "Run in the background instead of blocking this step. You get an "
+                "immediate acknowledgement and the result is delivered on this "
+                "channel when it completes. Use for long-running calls."
+            ),
+        }
+        return schema
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:

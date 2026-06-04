@@ -43,7 +43,14 @@ class UserConfig(ProcessorConfig):
     Attachments auto-fire document.upload on turn 0 (no flag needed — presence
     of metadata['attachments'] drives this).  post_turn = skill suggestion only
     (no metrics, no phase — §3b / §4e / §6).
+
+    SUPPORTS_ASYNC=True — the user channel is a push channel with a durable
+    session, so it can honour a deferred result: the per-call ``async`` boolean
+    is exposed on every tool here, and a backgrounded call's result is delivered
+    as a later assistant turn on this channel (§4.0 / §4.8d).
     """
+
+    SUPPORTS_ASYNC = True
 
     def __init__(self, metadata: dict[str, Any] | None = None) -> None:
         _metadata = metadata or {}

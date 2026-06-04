@@ -128,39 +128,10 @@ def _run_chat_background(
             _clear_active_ump(turn)
             return
 
-        # Resolve the transcript id written during this turn for segment
-        # enrichment. Since UMP turns are serialized (one at a time) the most
-        # recent user-channel input row is this turn's row.
-        transcript_ids: list[int] = []
-        try:
-            from services.transcript_service import get_recent  # noqa: PLC0415
-            rows = get_recent("user", limit=1)
-            if rows:
-                uid = rows[-1].get("id")
-                if uid is not None:
-                    transcript_ids = [uid]
-        except Exception as exc:
-            logger.debug("[Chat API] transcript_id lookup failed: %s", exc)
-
-        content = sanitize(response or "")
-        message_evt = {
-            "type": "message",
-            "content": content,
-            "topic": "user",
-            "mode": "UNIFIED",
-            "confidence": 1.0,
-            "exchange_id": request_id,
-            "metrics": {},
-            "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
-        }
-        message_evt["segments"] = SegmentService.build(content, transcript_ids)
-
-        elapsed_ms = int((time.time() - turn_start) * 1000)
-        done_evt = {"type": "done", "duration_ms": elapsed_ms}
-
+        # Clear the active UMP BEFORE broadcasting done so the frontend can
+        # immediately POST /chat without racing a still-set active_ump.
         _clear_active_ump(turn)
-        broker.broadcast(message_evt)
-        broker.broadcast(done_evt)
+        _broadcast_turn_result(response, request_id, turn_start)
 
     except Exception as exc:
         logger.exception("[Chat API] UMP error for %s: %s", request_id, exc)
@@ -179,12 +150,89 @@ def _run_chat_background(
         _clear_active_ump(turn)
 
 
+def _broadcast_turn_result(response: str, request_id: str, turn_start: float) -> None:
+    """Emit the assistant ``message`` + ``done`` events for a completed turn.
+
+    The hot-path delivery tail (spec §4.0 lever 2): shared by the foreground user
+    turn (``_run_chat_background``) and the background async-result synthesis
+    (``deliver_async_result``) so both surface a turn through the exact same WS
+    event shape — one flow, no duplication.
+    """
+    broker = WebSocketBroker()
+
+    # Resolve the transcript id written during this turn for segment enrichment.
+    # User-channel turns are serialized, so the most recent user input row is
+    # this turn's row.
+    transcript_ids: list[int] = []
+    try:
+        from services.transcript_service import get_recent  # noqa: PLC0415
+        rows = get_recent("user", limit=1)
+        if rows:
+            uid = rows[-1].get("id")
+            if uid is not None:
+                transcript_ids = [uid]
+    except Exception as exc:
+        logger.debug("[Chat API] transcript_id lookup failed: %s", exc)
+
+    content = sanitize(response or "")
+    message_evt = {
+        "type": "message",
+        "content": content,
+        "topic": "user",
+        "mode": "UNIFIED",
+        "confidence": 1.0,
+        "exchange_id": request_id,
+        "metrics": {},
+        "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
+    }
+    message_evt["segments"] = SegmentService.build(content, transcript_ids)
+
+    elapsed_ms = int((time.time() - turn_start) * 1000)
+    broker.broadcast(message_evt)
+    broker.broadcast({"type": "done", "duration_ms": elapsed_ms})
+
+
+def deliver_async_result(mp: object, result_text: str) -> None:
+    """Deliver a backgrounded tool result by synthesising a fresh assistant turn.
+
+    Called by the async-delegate daemon when a backgrounded tool finishes. Spawns
+    a fresh synthesis MessageProcessor — a clone of the CAPTURED ``mp``'s config
+    with the input row suppressed (the 'input' is the tool result, not a user
+    message) — so the LLM synthesises a reply, then emits it on the hot path
+    (``_broadcast_turn_result``).  Delivery rides the captured ``mp``'s own
+    channel, never the old ``UserConfig``-hardwired ``dispatch_message`` route.
+
+    Deliberately self-contained: it does NOT register ``_active_ump`` and does NOT
+    go through ``dispatch_message`` / ``_start_turn``, so it never cancels or
+    combines the user's in-flight foreground turn — it is a background task that
+    simply appends another assistant turn (spec §4.0 / §4.4).
+    """
+    from services.message_processor import MessageProcessor  # noqa: PLC0415
+
+    config = getattr(mp, "config", None)
+    if config is None:
+        logger.warning("[Chat API] async delivery skipped: captured mp has no config")
+        return
+
+    synth_config = config.with_hidden_input()
+    # Clone the originating metadata but suppress the input row and drop
+    # attachments — they were already ingested on the originating turn and must
+    # not re-upload on the synthesis turn.
+    metadata = dict(getattr(mp, "_metadata", None) or {})
+    metadata["hidden_input"] = True
+    metadata["attachments"] = []
+    request_id = str(uuid.uuid4())
+    turn_start = time.time()
+
+    response = MessageProcessor.process(result_text, synth_config, metadata)
+    _broadcast_turn_result(response, request_id, turn_start)
+
+
 def dispatch_message(
     text: str,
     source: str = "text",
     attachments: list | None = None,
     hidden_input: bool = False,
-    channel: str = "user",
 ) -> None:
     """Single chokepoint for all message sources entering the user channel.
 
@@ -200,7 +248,6 @@ def dispatch_message(
         attachments: Optional file paths from POST /upload.
         hidden_input: When True the input row is NOT written to the transcript
                       (the synthesized assistant response still is).
-        channel: Channel name; currently always ``"user"``.
     """
     attachments = attachments or []
 

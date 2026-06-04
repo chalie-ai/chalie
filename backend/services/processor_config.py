@@ -36,7 +36,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, ClassVar
 
 if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
@@ -56,6 +56,14 @@ class ProcessorConfig(ABC):
     argument; the config holds no reference to the processor and stays a pure,
     fully-immutable frozen dataclass.
     """
+
+    # ── Async capability (ClassVar — not a dataclass field) ────────────────────
+    SUPPORTS_ASYNC: ClassVar[bool] = False
+    """True → the framework ``async`` boolean is exposed on every tool's schema
+    for this channel, letting the model run a call in the background and receive
+    the result as a later turn.  Only a push channel with a durable session can
+    honour a deferred result, so this is False everywhere except UserConfig
+    (§4.0 / §4.8d).  It gates schema *exposure* only — never routing."""
 
     # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
     class POLICY_CHANNEL(str, Enum):
@@ -164,3 +172,22 @@ class ProcessorConfig(ABC):
         """LLM usage class string for llm_call_log / telemetry — the value of
         policy_channel ('chat' | 'subconscious' | 'external_agent')."""
         return self.policy_channel.value
+
+    # ── Cloning ───────────────────────────────────────────────────────────────
+
+    def with_hidden_input(self) -> "ProcessorConfig":
+        """Return a copy of this frozen config with the input row suppressed.
+
+        Used to synthesise a background turn whose 'input' is a tool result, not
+        a user message — the assistant row is still written, the input row is not
+        (skip_input_row=True).  ``copy.copy`` preserves the concrete subclass and
+        every field without re-running the typed ``__init__``; frozen dataclasses
+        forbid field mutation, so the one override goes through
+        ``object.__setattr__``.
+
+        Spec §4.4 — captured-``mp`` async delivery.
+        """
+        import copy  # noqa: PLC0415
+        clone = copy.copy(self)
+        object.__setattr__(clone, "skip_input_row", True)
+        return clone

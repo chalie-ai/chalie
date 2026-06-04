@@ -115,10 +115,13 @@ class FindToolsAbility(SearchableAbility):
             return []
 
     def get_input_schema(self, mp=None) -> dict:
+        # Start from the base schema so the framework `async` property injection
+        # (gated on mp.config.SUPPORTS_ASYNC) applies uniformly here too.
+        schema = super().get_input_schema(mp)
         tools_index = self._build_tools_index(mp)
         if not tools_index:
-            return self.INPUT_SCHEMA
-        schema = copy.deepcopy(self.INPUT_SCHEMA)
+            return schema
+        schema = copy.deepcopy(schema)
         schema["properties"]["query"]["description"] = (
             f"Specify the name of the tool you need. Tools available: {tools_index}"
         )

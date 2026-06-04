@@ -96,7 +96,6 @@ class WebBrowseConfig(ProcessorConfig):
 class WebBrowseAbility(Ability):
     NAME = "web_browse"
     SEARCH_TOOLTIP = "delegate an interactive web-browsing task"
-    ASYNC_CAPABLE = True
     SUMMARY = (
         "Delegate an interactive web-browsing task to a focused agent that "
         "drives a real browser — rendering pages, taking screenshots, filling "

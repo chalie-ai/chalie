@@ -23,8 +23,10 @@ Properties (spec §5b "Properties of every delegate tool"):
   - No recursion — with no find_tools and discoverable=[], a delegate can only
     call what is in always_available; delegate tools are not in that surface, so
     a delegate can never spawn another delegate.
-  - ASYNC_CAPABLE=True — the framework (Ability.execute) wraps run() in a
-    daemon thread for async-capable origins.  run() is ALWAYS synchronous.
+  - Per-call async — the model may pass ``async: true`` (exposed only on
+    SUPPORTS_ASYNC channels) to run the search in the background and receive the
+    result as a later turn; the framework (Ability.execute) wraps run() in a
+    daemon thread when it does.  run() is ALWAYS synchronous in itself.
 
 Permission boundary — ``policy_channel`` is inherited from the caller that
 invoked the ``web_search`` tool (``self.MessageProcessor.config.policy_channel``):
@@ -101,7 +103,6 @@ class WebSearchConfig(ProcessorConfig):
 class WebSearchAbility(Ability):
     NAME = "web_search"
     SEARCH_TOOLTIP = "delegate a focused web search"
-    ASYNC_CAPABLE = True
     SUMMARY = (
         "Delegate a web-research task to a focused agent that searches the web, "
         "reads the best sources, and returns a grounded synthesis with citations."
