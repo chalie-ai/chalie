@@ -51,15 +51,6 @@ _WEB_BROWSE_SYSTEM_PROMPT = (
 _WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read")
 
 
-def _web_browse_user_prompt(mp: object) -> str:
-    """Goal-driven user prompt: the goal plus the act-trail so far."""
-    parts = [f"Browsing goal:\n{mp._raw_input}"]  # type: ignore[attr-defined]
-    trail = render_trail(mp)
-    if trail:
-        parts.append(trail)
-    return "\n\n".join(parts)
-
-
 class WebBrowseConfig(ProcessorConfig):
     """ProcessorConfig for the web_browse delegate.
 
@@ -75,9 +66,6 @@ class WebBrowseConfig(ProcessorConfig):
             channel="delegate:web_browse",
             role="web_browse",
             policy_channel=policy_channel,
-            build_user_prompt=_web_browse_user_prompt,
-            build_user_definition=lambda _mp: "",
-            build_system_prompt=lambda _mp: _WEB_BROWSE_SYSTEM_PROMPT,
             always_available=[*tools, "memory"],
             discoverable=[],
             blocked=frozenset(),
@@ -89,6 +77,21 @@ class WebBrowseConfig(ProcessorConfig):
             memory_seed=False,
             post_turn=None,
         )
+
+    def get_user_definition(self) -> str:
+        return ""
+
+    def get_user_prompt(self) -> str:
+        """Goal-driven user prompt: the goal plus the act-trail so far."""
+        mp = self.mp
+        parts = [f"Browsing goal:\n{mp._raw_input}"]  # type: ignore[attr-defined]
+        trail = render_trail(mp)
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    def get_system_prompt(self) -> str:
+        return _WEB_BROWSE_SYSTEM_PROMPT
 
 
 class WebBrowseAbility(Ability):

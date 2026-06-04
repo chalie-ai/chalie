@@ -148,12 +148,12 @@ class TestGeoPatternConfig:
         assert config.discoverable == []
 
     def test_system_prompt_contains_geo_keywords(self, db):
-        """build_system_prompt() references location-tagging, save_pattern, save_graph,
+        """get_system_prompt() references location-tagging, save_pattern, save_graph,
         and geo-spatial — the four pillars of the geo-pattern task description."""
         from configs.channels import GeoConfig
 
         config = GeoConfig(window_start=0, window_end=100)
-        prompt = config.build_system_prompt(None)
+        prompt = config.get_system_prompt()
 
         assert "location-tagged" in prompt, "System prompt must mention 'location-tagged'"
         assert "save_pattern" in prompt, "System prompt must reference the save_pattern tool"

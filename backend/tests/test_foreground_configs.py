@@ -54,6 +54,7 @@ def _make_config(**overrides):
     builds.
     """
     from services.processor_config import ProcessorConfig
+    from tests.helpers import StubProcessorConfig
 
     defaults = dict(
         channel="user",
@@ -74,7 +75,7 @@ def _make_config(**overrides):
         post_turn=None,
     )
     defaults.update(overrides)
-    return ProcessorConfig(**defaults)
+    return StubProcessorConfig(**defaults)
 
 
 # ── B3: EAMP disclosure fires only when loop_in_human (§3b) ────────────────────
@@ -200,7 +201,7 @@ class TestContentFieldPlaceholderSubstitution:
     channel, so the model was told to write into a non-existent field)."""
 
     def test_user_system_prompt_resolves_provider_content_field(self):
-        """UserConfig.build_system_prompt swaps the placeholder for the provider's
+        """UserConfig.get_system_prompt swaps the placeholder for the provider's
         CONTENT_FIELD_LABEL."""
         from configs.channels import UserConfig
 
@@ -211,7 +212,9 @@ class TestContentFieldPlaceholderSubstitution:
 
         with patch("services.providers.Providers") as mock_providers_cls:
             mock_providers_cls.instance.return_value = providers_singleton
-            body = UserConfig().build_system_prompt(MagicMock(spec=object))
+            cfg = UserConfig()
+            object.__setattr__(cfg, "mp", MagicMock(spec=object))
+            body = cfg.get_system_prompt()
 
         assert "{{provider_content_field_name}}" not in body
         assert "content[].text" in body

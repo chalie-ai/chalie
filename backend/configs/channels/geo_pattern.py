@@ -42,34 +42,6 @@ def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> st
         return "(transcript fetch failed)"
 
 
-def _geo_pattern_build_system_prompt(_mp: object) -> str:
-    """Geo-pattern system prompt (inlined from GeoPatternProcessor.get_system_prompt)."""
-    return (
-        "You are analysing the user's recent location-tagged transcripts "
-        "to detect geo-spatial behavioural patterns — routines, habits, "
-        "and durable facts tied to specific physical places.\n\n"
-        "You have ONE forward pass. Emit ALL tool calls in parallel. Do "
-        "NOT loop — results are intentionally minimal.\n\n"
-        "save_pattern summaries must be 1 sentence and concise. "
-        "Examples:\n"
-        "- User walks to work every morning at 09:00\n"
-        "- User goes to the gym daily, except Sundays\n"
-        "- User's gym schedule is: Monday weights, Tuesday boxing\n"
-        "Do NOT write narratives, episode summaries, or date-stamped "
-        "event logs. The summary is a distilled habit, not a story.\n\n"
-        "Rules:\n"
-        "- save_pattern requires >=2 evidence rows in this batch.\n"
-        "- Mirror existing pattern names exactly when reinforcing — "
-        "case-sensitive.\n"
-        "- Only emit patterns where physical place is central. Another "
-        "processor handles location-independent patterns.\n"
-        "- Do NOT use save_graph for repeating behaviours — use "
-        "save_pattern.\n"
-        "- Skip noise. Skip one-offs. Skip ambiguous interpretations.\n"
-        "- Emit everything in this single pass."
-    )
-
-
 def _geo_pattern_post_turn(mp: object, _response_text: str) -> None:
     """Log completion counters. Decay is handled by pattern_match, not geo_pattern.
 
@@ -101,45 +73,15 @@ class GeoConfig(ProcessorConfig):
     channel/role='geo_pattern', suppress_history=True, max_iterations=30.
     post_turn = log counters only (§3b).
 
-    Counter/state attrs are lazily initialised by build_user_prompt on the first
+    Counter/state attrs are lazily initialised by get_user_prompt on the first
     call so the caller does not need to pre-set them.
     """
 
     def __init__(self, window_start: int, window_end: int) -> None:
-        def _build_user_prompt(mp: object) -> str:
-            # Lazy-init per-instance state so SavePattern/SaveGraph find it.
-            if not hasattr(mp, "_save_pattern_calls"):
-                mp._save_pattern_calls = 0  # type: ignore[attr-defined]
-            if not hasattr(mp, "_save_graph_calls"):
-                mp._save_graph_calls = 0  # type: ignore[attr-defined]
-            if not hasattr(mp, "_save_graph_seen"):
-                mp._save_graph_seen = set()  # type: ignore[attr-defined]
-            if not hasattr(mp, "_touched_pattern_ids"):
-                mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
-            # Cache the transcript block across multiple iterations (same as GPP).
-            cached = getattr(mp, "_cached_transcript_block", None)
-            if cached is None:
-                block = _geo_pattern_load_transcript_block(window_start, window_end)
-                mp._cached_transcript_block = block  # type: ignore[attr-defined]
-            else:
-                block = cached
-            existing = _pattern_existing_patterns_block()
-            parts = [f"Existing patterns:\n{existing}", block]
-            try:
-                trail = mp._render_act_trail()  # type: ignore[attr-defined]
-                if trail:
-                    parts.append(trail)
-            except Exception:
-                pass
-            return "\n\n".join(parts)
-
         super().__init__(
             channel="geo_pattern",
             role="geo_pattern",
             policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            build_user_prompt=_build_user_prompt,
-            build_user_definition=lambda _mp: "",
-            build_system_prompt=_geo_pattern_build_system_prompt,
             always_available=["save_pattern", "save_graph"],
             discoverable=[],
             blocked=frozenset(),
@@ -150,4 +92,65 @@ class GeoConfig(ProcessorConfig):
             broadcast_to=None,
             memory_seed=False,
             post_turn=_geo_pattern_post_turn,
+        )
+        object.__setattr__(self, "_window_start", window_start)
+        object.__setattr__(self, "_window_end", window_end)
+
+    def get_user_definition(self) -> str:
+        return ""
+
+    def get_user_prompt(self) -> str:
+        """Geo-pattern user-prompt: cached location transcripts + existing patterns + trail."""
+        mp = self.mp
+        # Lazy-init per-instance state so SavePattern/SaveGraph find it.
+        if not hasattr(mp, "_save_pattern_calls"):
+            mp._save_pattern_calls = 0  # type: ignore[attr-defined]
+        if not hasattr(mp, "_save_graph_calls"):
+            mp._save_graph_calls = 0  # type: ignore[attr-defined]
+        if not hasattr(mp, "_save_graph_seen"):
+            mp._save_graph_seen = set()  # type: ignore[attr-defined]
+        if not hasattr(mp, "_touched_pattern_ids"):
+            mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
+        # Cache the transcript block across multiple iterations (same as GPP).
+        cached = getattr(mp, "_cached_transcript_block", None)
+        if cached is None:
+            block = _geo_pattern_load_transcript_block(self._window_start, self._window_end)
+            mp._cached_transcript_block = block  # type: ignore[attr-defined]
+        else:
+            block = cached
+        existing = _pattern_existing_patterns_block()
+        parts = [f"Existing patterns:\n{existing}", block]
+        try:
+            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            if trail:
+                parts.append(trail)
+        except Exception:
+            pass
+        return "\n\n".join(parts)
+
+    def get_system_prompt(self) -> str:
+        """Geo-pattern system prompt (inlined from GeoPatternProcessor.get_system_prompt)."""
+        return (
+            "You are analysing the user's recent location-tagged transcripts "
+            "to detect geo-spatial behavioural patterns — routines, habits, "
+            "and durable facts tied to specific physical places.\n\n"
+            "You have ONE forward pass. Emit ALL tool calls in parallel. Do "
+            "NOT loop — results are intentionally minimal.\n\n"
+            "save_pattern summaries must be 1 sentence and concise. "
+            "Examples:\n"
+            "- User walks to work every morning at 09:00\n"
+            "- User goes to the gym daily, except Sundays\n"
+            "- User's gym schedule is: Monday weights, Tuesday boxing\n"
+            "Do NOT write narratives, episode summaries, or date-stamped "
+            "event logs. The summary is a distilled habit, not a story.\n\n"
+            "Rules:\n"
+            "- save_pattern requires >=2 evidence rows in this batch.\n"
+            "- Mirror existing pattern names exactly when reinforcing — "
+            "case-sensitive.\n"
+            "- Only emit patterns where physical place is central. Another "
+            "processor handles location-independent patterns.\n"
+            "- Do NOT use save_graph for repeating behaviours — use "
+            "save_pattern.\n"
+            "- Skip noise. Skip one-offs. Skip ambiguous interpretations.\n"
+            "- Emit everything in this single pass."
         )

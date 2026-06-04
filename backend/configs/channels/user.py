@@ -12,175 +12,6 @@ from configs.channels._common import (
     substitute_provider_content_field,
 )
 
-# ── UMP prompt builders ───────────────────────────────────────────────────────
-
-def _ump_build_user_definition(mp: object) -> str:
-    """One-sentence synthesis of the real human user.
-
-    Reads user_summary / user_summary_long from data_graph, preferring the
-    long form when the converse mode is strongly active.  Falls back to a
-    static peer-to-peer framing on any failure or missing row.
-
-    Per-turn cached on mp._user_definition_cached so each ACT iteration is
-    cheap.  §3b / spec body-structure §1.
-    """
-    _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
-    cached = getattr(mp, "_user_definition_cached", None)
-    if cached is not None:
-        return cached
-
-    try:
-        from services.mode_gate_service import STEER_THRESHOLD  # noqa: PLC0415
-        mode_state = getattr(mp, "_mode_state_cached", None)
-        if mode_state is None:
-            mode_state = {}
-        prefer_long = mode_state.get("converse", 0.0) >= STEER_THRESHOLD
-    except Exception:
-        prefer_long = False
-
-    try:
-        from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-        dgs = get_data_graph_service()
-        rows = dgs.fetch(kinds=["system"], order_by="retrieval_weight DESC")
-        by_key = {r.get("key"): r for r in rows if r.get("key")}
-
-        preferred_key = "user_summary_long" if prefer_long else "user_summary"
-        entry = by_key.get(preferred_key)
-        if (not entry or not entry.get("value")) and prefer_long:
-            entry = by_key.get("user_summary")
-        if entry and entry.get("value"):
-            result = entry["value"]
-            mp._user_definition_cached = result  # type: ignore[attr-defined]
-            return result
-    except Exception:
-        pass
-
-    mp._user_definition_cached = _FALLBACK  # type: ignore[attr-defined]
-    return _FALLBACK
-
-
-def _ump_build_system_prompt(mp: object) -> str:
-    """UMP system prompt — personality voice + template + mode-gate directives.
-
-    Voice line sits at the very top for cache warmth.  The user_definition is
-    NOT emitted here — it lives in the user prompt (spec § Prompt Message
-    Definitions).  §3b / §6.
-    """
-    import logging  # noqa: PLC0415
-    _log = logging.getLogger(__name__)
-    try:
-        from services.personality.personality_service import personality_service  # noqa: PLC0415
-        from services.system_message_prompt import UnifiedSystemMessagePrompt  # noqa: PLC0415
-        template = UnifiedSystemMessagePrompt().get_prompt()
-        voice_line = f"When responding; {personality_service.get_voice()}"
-        prompt = f"{voice_line}\n\n{template}"
-        prompt = substitute_provider_content_field(prompt, "user")
-    except Exception as exc:
-        _log.warning("[UMP] system prompt build failed: %s", exc)
-        return ""
-
-    # Mode-gate steering directives.
-    try:
-        mode_gate = getattr(mp, "_mode_gate_cached", None)
-        if mode_gate is not None:
-            additions = mode_gate.get_system_prompt_additions()
-            if additions:
-                prompt = f"{prompt}\n\n{additions}"
-    except Exception as exc:
-        _log.debug("[UMP] mode-gate additions failed: %s", exc)
-
-    return prompt
-
-
-def _ump_build_user_prompt(mp: object) -> str:
-    """UMP user-message body for one ACT iteration.
-
-    Section order (mirrors OLD get_user_prompt + _wrap_with_exploration):
-      Outer wrapper (only when high-thinking exploration is active):
-        ## Chain of Thought … prepended to the whole body.
-      1. User definition (identity anchor — in user prompt, not system prompt).
-      2. World State block.
-      3. ## Previous Messages.
-      (blank separator)
-      4. Input line: user: <raw_input>  (BEFORE the trail).
-      5. ACT loop trail (empty before any tools have run; carries the
-         turn-0 memory seed once it has fired).
-
-    The framework _loop then wraps the returned body with the ### Checkpoint /
-    ### Current State envelope when a compaction row exists — so exploration
-    sits at the top of ### Current State, exactly as OLD send() produced it.
-
-    §3b / §6 / spec §4.
-    """
-    import logging  # noqa: PLC0415
-    _log = logging.getLogger(__name__)
-    parts: list[str] = []
-
-    # 1. User definition
-    user_def = _ump_build_user_definition(mp)
-    if user_def:
-        parts.append(user_def)
-
-    # 2. World State
-    try:
-        from services.world_state import world_state  # noqa: PLC0415
-        rendered_ws = world_state.render()
-        if rendered_ws:
-            _log.info(
-                "[WorldState] injected rendered block into user prompt (%d chars)",
-                len(rendered_ws),
-            )
-            parts.append(rendered_ws)
-    except Exception as exc:
-        _log.debug("[UMP] world_state.render failed: %s", exc)
-
-    # 3. Previous Messages
-    try:
-        prev = mp.get_previous_messages()  # type: ignore[attr-defined]
-        if prev:
-            parts.append(f"## Previous Messages\n{prev}")
-    except Exception as exc:
-        _log.debug("[UMP] get_previous_messages failed: %s", exc)
-
-    # Blank separator
-    parts.append("")
-
-    # 4. Input line with optional nudge — BEFORE the trail (OLD ordering).
-    nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""
-    turn_line = f"user: {mp._raw_input}"  # type: ignore[attr-defined]
-    if nudge_tag:
-        turn_line += " " + nudge_tag
-    parts.append(turn_line)
-
-    # 5. ACT loop trail (empty before any tools have run; carries the turn-0
-    #    memory seed once it has fired).
-    try:
-        trail = mp._render_act_trail()  # type: ignore[attr-defined]
-        if trail:
-            parts.append(trail)
-    except Exception as exc:
-        _log.debug("[UMP] _render_act_trail failed: %s", exc)
-
-    body = "\n".join(parts)
-
-    # 6. Thinking exploration — Chain-of-Thought wrapper prepended to the whole
-    #    body (high-thinking mode only; None when not active).  Mirrors OLD
-    #    _wrap_with_exploration; the framework _loop adds the checkpoint
-    #    envelope around this, so CoT lands at the top of ### Current State.
-    exploration = getattr(mp, "thinking_exploration", None)
-    if exploration:
-        body = (
-            "## Chain of Thought\n"
-            "Below is your initial reaction to this prompt, played back. "
-            "Use it as grounding but pivot as needed based on the conversation.\n\n"
-            "---\n\n"
-            f"{exploration}\n\n"
-            "---\n\n"
-            + body
-        )
-
-    return body
-
 
 def _ump_post_turn(mp: object, response_text: str) -> None:
     """UMP post-turn: proactive skill suggestion only.  No metrics, no phase.
@@ -220,9 +51,6 @@ class UserConfig(ProcessorConfig):
             channel="user",
             role="user",
             policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
-            build_user_prompt=_ump_build_user_prompt,
-            build_user_definition=_ump_build_user_definition,
-            build_system_prompt=_ump_build_system_prompt,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
             blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
@@ -234,3 +62,171 @@ class UserConfig(ProcessorConfig):
             memory_seed=True,
             post_turn=_ump_post_turn,
         )
+
+    def get_user_definition(self) -> str:
+        """One-sentence synthesis of the real human user.
+
+        Reads user_summary / user_summary_long from data_graph, preferring the
+        long form when the converse mode is strongly active.  Falls back to a
+        static peer-to-peer framing on any failure or missing row.
+
+        Per-turn cached on mp._user_definition_cached so each ACT iteration is
+        cheap.  §3b / spec body-structure §1.
+        """
+        mp = self.mp
+        _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
+        cached = getattr(mp, "_user_definition_cached", None)
+        if cached is not None:
+            return cached
+
+        try:
+            from services.mode_gate_service import STEER_THRESHOLD  # noqa: PLC0415
+            mode_state = getattr(mp, "_mode_state_cached", None)
+            if mode_state is None:
+                mode_state = {}
+            prefer_long = mode_state.get("converse", 0.0) >= STEER_THRESHOLD
+        except Exception:
+            prefer_long = False
+
+        try:
+            from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
+            dgs = get_data_graph_service()
+            rows = dgs.fetch(kinds=["system"], order_by="retrieval_weight DESC")
+            by_key = {r.get("key"): r for r in rows if r.get("key")}
+
+            preferred_key = "user_summary_long" if prefer_long else "user_summary"
+            entry = by_key.get(preferred_key)
+            if (not entry or not entry.get("value")) and prefer_long:
+                entry = by_key.get("user_summary")
+            if entry and entry.get("value"):
+                result = entry["value"]
+                mp._user_definition_cached = result  # type: ignore[attr-defined]
+                return result
+        except Exception:
+            pass
+
+        mp._user_definition_cached = _FALLBACK  # type: ignore[attr-defined]
+        return _FALLBACK
+
+    def get_system_prompt(self) -> str:
+        """UMP system prompt — personality voice + template + mode-gate directives.
+
+        Voice line sits at the very top for cache warmth.  The user_definition is
+        NOT emitted here — it lives in the user prompt (spec § Prompt Message
+        Definitions).  §3b / §6.
+        """
+        mp = self.mp
+        import logging  # noqa: PLC0415
+        _log = logging.getLogger(__name__)
+        try:
+            from services.personality.personality_service import personality_service  # noqa: PLC0415
+            from services.system_message_prompt import UnifiedSystemMessagePrompt  # noqa: PLC0415
+            template = UnifiedSystemMessagePrompt().get_prompt()
+            voice_line = f"When responding; {personality_service.get_voice()}"
+            prompt = f"{voice_line}\n\n{template}"
+            prompt = substitute_provider_content_field(prompt, "user")
+        except Exception as exc:
+            _log.warning("[UMP] system prompt build failed: %s", exc)
+            return ""
+
+        # Mode-gate steering directives.
+        try:
+            mode_gate = getattr(mp, "_mode_gate_cached", None)
+            if mode_gate is not None:
+                additions = mode_gate.get_system_prompt_additions()
+                if additions:
+                    prompt = f"{prompt}\n\n{additions}"
+        except Exception as exc:
+            _log.debug("[UMP] mode-gate additions failed: %s", exc)
+
+        return prompt
+
+    def get_user_prompt(self) -> str:
+        """UMP user-message body for one ACT iteration.
+
+        Section order (mirrors OLD get_user_prompt + _wrap_with_exploration):
+          Outer wrapper (only when high-thinking exploration is active):
+            ## Chain of Thought … prepended to the whole body.
+          1. User definition (identity anchor — in user prompt, not system prompt).
+          2. World State block.
+          3. ## Previous Messages.
+          (blank separator)
+          4. Input line: user: <raw_input>  (BEFORE the trail).
+          5. ACT loop trail (empty before any tools have run; carries the
+             turn-0 memory seed once it has fired).
+
+        The framework _loop then wraps the returned body with the ### Checkpoint /
+        ### Current State envelope when a compaction row exists — so exploration
+        sits at the top of ### Current State, exactly as OLD send() produced it.
+
+        §3b / §6 / spec §4.
+        """
+        mp = self.mp
+        import logging  # noqa: PLC0415
+        _log = logging.getLogger(__name__)
+        parts: list[str] = []
+
+        # 1. User definition
+        user_def = self.get_user_definition()
+        if user_def:
+            parts.append(user_def)
+
+        # 2. World State
+        try:
+            from services.world_state import world_state  # noqa: PLC0415
+            rendered_ws = world_state.render()
+            if rendered_ws:
+                _log.info(
+                    "[WorldState] injected rendered block into user prompt (%d chars)",
+                    len(rendered_ws),
+                )
+                parts.append(rendered_ws)
+        except Exception as exc:
+            _log.debug("[UMP] world_state.render failed: %s", exc)
+
+        # 3. Previous Messages
+        try:
+            prev = mp.get_previous_messages()  # type: ignore[attr-defined]
+            if prev:
+                parts.append(f"## Previous Messages\n{prev}")
+        except Exception as exc:
+            _log.debug("[UMP] get_previous_messages failed: %s", exc)
+
+        # Blank separator
+        parts.append("")
+
+        # 4. Input line with optional nudge — BEFORE the trail (OLD ordering).
+        nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""
+        turn_line = f"user: {mp._raw_input}"  # type: ignore[attr-defined]
+        if nudge_tag:
+            turn_line += " " + nudge_tag
+        parts.append(turn_line)
+
+        # 5. ACT loop trail (empty before any tools have run; carries the turn-0
+        #    memory seed once it has fired).
+        try:
+            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            if trail:
+                parts.append(trail)
+        except Exception as exc:
+            _log.debug("[UMP] _render_act_trail failed: %s", exc)
+
+        body = "\n".join(parts)
+
+        # 6. Thinking exploration — Chain-of-Thought wrapper prepended to the whole
+        #    body (high-thinking mode only; None when not active).  Mirrors OLD
+        #    _wrap_with_exploration; the framework _loop adds the checkpoint
+        #    envelope around this, so CoT lands at the top of ### Current State.
+        exploration = getattr(mp, "thinking_exploration", None)
+        if exploration:
+            body = (
+                "## Chain of Thought\n"
+                "Below is your initial reaction to this prompt, played back. "
+                "Use it as grounding but pivot as needed based on the conversation.\n\n"
+                "---\n\n"
+                f"{exploration}\n\n"
+                "---\n\n"
+                + body
+            )
+
+        return body

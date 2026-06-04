@@ -17,14 +17,6 @@ _DMN_EPISODE_LOOKBACK_DAYS = 30
 _DMN_EPISODE_LIMIT = 50
 
 
-def _dmn_build_user_definition(_mp: object) -> str:
-    """DMN runs as a background process — no human user definition needed."""
-    return (
-        "The user is 'proactive_thought' — a special background process "
-        "that represents your own reflections on recent activity."
-    )
-
-
 def _dmn_fetch_user_synthesis() -> str:
     """Read user synthesis from data_graph.
 
@@ -87,33 +79,6 @@ def _dmn_fetch_recent_episodes() -> str:
         return ""
 
 
-def _dmn_build_user_prompt(mp: object) -> str:
-    """DMN user-message: user synthesis + filtered recent episodes + ACT trail."""
-    parts: list[str] = []
-    synthesis = _dmn_fetch_user_synthesis()
-    if synthesis:
-        parts.append(f"## About the User\n{synthesis}")
-    episodes_text = _dmn_fetch_recent_episodes()
-    if episodes_text:
-        parts.append(f"## Episodes\n{episodes_text}")
-    try:
-        trail = mp._render_act_trail()  # type: ignore[attr-defined]
-        if trail and isinstance(trail, str):
-            parts.append(trail)
-    except Exception:
-        pass
-    return "\n\n".join(parts)
-
-
-def _dmn_build_system_prompt(_mp: object) -> str:
-    """DMN system prompt: user_definition prefix + DMNSystemMessagePrompt body.
-
-    Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
-    """
-    from services.system_message_prompt import DMNSystemMessagePrompt  # noqa: PLC0415
-    return f"{_dmn_build_user_definition(_mp)}\n\n{DMNSystemMessagePrompt().get_prompt()}"
-
-
 class DmnConfig(ProcessorConfig):
     """DMN background channel.  §3a / §8b.  post_turn=None (metrics moved to gateway §4e).
 
@@ -127,9 +92,6 @@ class DmnConfig(ProcessorConfig):
             channel="dmn",
             role="proactive_thought",
             policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            build_user_prompt=_dmn_build_user_prompt,
-            build_user_definition=_dmn_build_user_definition,
-            build_system_prompt=_dmn_build_system_prompt,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
             blocked=DELEGATE_TOOLS | PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
@@ -141,3 +103,36 @@ class DmnConfig(ProcessorConfig):
             memory_seed=False,
             post_turn=None,
         )
+
+    def get_user_definition(self) -> str:
+        """DMN runs as a background process — no human user definition needed."""
+        return (
+            "The user is 'proactive_thought' — a special background process "
+            "that represents your own reflections on recent activity."
+        )
+
+    def get_user_prompt(self) -> str:
+        """DMN user-message: user synthesis + filtered recent episodes + ACT trail."""
+        mp = self.mp
+        parts: list[str] = []
+        synthesis = _dmn_fetch_user_synthesis()
+        if synthesis:
+            parts.append(f"## About the User\n{synthesis}")
+        episodes_text = _dmn_fetch_recent_episodes()
+        if episodes_text:
+            parts.append(f"## Episodes\n{episodes_text}")
+        try:
+            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            if trail and isinstance(trail, str):
+                parts.append(trail)
+        except Exception:
+            pass
+        return "\n\n".join(parts)
+
+    def get_system_prompt(self) -> str:
+        """DMN system prompt: user_definition prefix + DMNSystemMessagePrompt body.
+
+        Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
+        """
+        from services.system_message_prompt import DMNSystemMessagePrompt  # noqa: PLC0415
+        return f"{self.get_user_definition()}\n\n{DMNSystemMessagePrompt().get_prompt()}"

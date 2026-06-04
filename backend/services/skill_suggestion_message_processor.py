@@ -59,7 +59,7 @@ def _run_suggestion_processor(
     """Thread target: run the flat skill-suggestion channel. Never raises.
 
     _original_trail / _original_input / _iteration_count are read by
-    SkillSuggestionConfig's build_user_prompt; set them on the instance
+    SkillSuggestionConfig's get_user_prompt; set them on the instance
     before _run().
     """
     try:

@@ -2,12 +2,13 @@
 import pytest
 
 from services.processor_config import ProcessorConfig
+from tests.helpers import StubProcessorConfig
 
 pytestmark = pytest.mark.unit
 
 
 def _make(policy_channel):
-    return ProcessorConfig(
+    return StubProcessorConfig(
         channel="user", role="user", policy_channel=policy_channel,
         build_user_prompt=lambda mp: "", build_user_definition=lambda mp: "",
         build_system_prompt=lambda mp: "", always_available=[], discoverable=[],

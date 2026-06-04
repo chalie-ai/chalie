@@ -12,111 +12,6 @@ from configs.channels._common import (
     substitute_provider_content_field,
 )
 
-# ── EAMP prompt builders ──────────────────────────────────────────────────────
-
-def _eamp_build_user_definition(agent_name: str, project: str) -> Any:
-    """Return a builder callable for the EAMP user definition.
-
-    Returns a zero-arg-relative callable that, when called with mp, returns
-    the static agent identity string.  §3b.
-    """
-    _text = (
-        f"The user is {agent_name}, an external agent. "
-        f"This conversation is about: {project}."
-    )
-
-    def _build(_mp: object) -> str:
-        return _text
-
-    return _build
-
-
-def _eamp_build_system_prompt(agent_name: str, project: str, wrapper_id: str) -> Any:
-    """Return a builder callable for the EAMP system prompt.
-
-    Fills in {user_name}, {agent_name}, {project_or_task_name} template
-    variables from data_graph and the EAMP constructor args.  §3b.
-    """
-    _agent_name = agent_name
-    _project = project
-
-    def _build(_mp: object) -> str:
-        import logging  # noqa: PLC0415
-        _log = logging.getLogger(__name__)
-        try:
-            from services.system_message_prompt import ExternalAgentSystemMessagePrompt  # noqa: PLC0415
-            body = ExternalAgentSystemMessagePrompt().get_prompt()
-            body = substitute_provider_content_field(body, "external_agent")
-
-            # Resolve the user's first name from data_graph.
-            user_name = "the user"
-            try:
-                from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-                dgs = get_data_graph_service()
-                rows = dgs.fetch(kinds=["system"])
-                for row in rows:
-                    key = row.get("key") if isinstance(row, dict) else getattr(row, "key", None)
-                    val = row.get("value") if isinstance(row, dict) else getattr(row, "value", None)
-                    if key == "user_summary" and val:
-                        first_word = val.split()[0] if val else ""
-                        if first_word:
-                            user_name = first_word
-                        break
-            except Exception:
-                pass
-
-            user_def = (
-                f"The user is {_agent_name}, an external agent. "
-                f"This conversation is about: {_project}."
-            )
-            body = (
-                body
-                .replace("{user_name}", user_name)
-                .replace("{agent_name}", _agent_name)
-                .replace("{project_or_task_name}", _project)
-            )
-            return f"{user_def}\n\n{body}"
-        except Exception as exc:
-            _log.warning("[EAMP] system prompt build failed: %s", exc)
-            return ""
-
-    return _build
-
-
-def _eamp_build_user_prompt(mp: object) -> str:
-    """EAMP user-message body for one ACT iteration.
-
-    Stripped compared to UMP: no world state, no user definition (it lives
-    in the system prompt for EAMP).  Keeps: previous messages, ACT trail,
-    input line.  §3b.
-    """
-    import logging  # noqa: PLC0415
-    _log = logging.getLogger(__name__)
-    parts: list[str] = []
-
-    # Previous Messages
-    try:
-        prev = mp.get_previous_messages()  # type: ignore[attr-defined]
-        if prev:
-            parts.append(f"## Previous Messages\n{prev}")
-    except Exception as exc:
-        _log.debug("[EAMP] get_previous_messages failed: %s", exc)
-
-    parts.append("")
-
-    # Input line — BEFORE the trail (OLD get_user_prompt ordering).
-    parts.append(f"user: {mp._raw_input}")  # type: ignore[attr-defined]
-
-    # ACT loop trail (carries the turn-0 memory seed once it has fired).
-    try:
-        trail = mp._render_act_trail()  # type: ignore[attr-defined]
-        if trail:
-            parts.append(trail)
-    except Exception as exc:
-        _log.debug("[EAMP] _render_act_trail failed: %s", exc)
-
-    return "\n".join(parts)
-
 
 def _make_eamp_post_turn(
     agent_name: str,
@@ -160,6 +55,10 @@ class EAMPConfig(ProcessorConfig):
     channel='external-agent:{agent_name}', role='external_agent'.
     suppress_history=False (conversational), memory_seed=True.
     post_turn dispatches disclosure when loop_in_human (§3b).
+
+    agent_name / project are captured on the instance (the prompt-builder
+    methods read them via self).  wrapper_id is accepted for call-site
+    compatibility but is not used by any prompt builder.
     """
 
     def __init__(
@@ -173,9 +72,6 @@ class EAMPConfig(ProcessorConfig):
             channel=f"external-agent:{agent_name}",
             role="external_agent",
             policy_channel=ProcessorConfig.POLICY_CHANNEL.EXTERNAL_AGENT,
-            build_user_prompt=_eamp_build_user_prompt,
-            build_user_definition=_eamp_build_user_definition(agent_name, project),
-            build_system_prompt=_eamp_build_system_prompt(agent_name, project, wrapper_id),
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
             blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
@@ -187,3 +83,91 @@ class EAMPConfig(ProcessorConfig):
             memory_seed=True,
             post_turn=_make_eamp_post_turn(agent_name, project, loop_in_human),
         )
+        object.__setattr__(self, "_agent_name", agent_name)
+        object.__setattr__(self, "_project", project)
+
+    def get_user_definition(self) -> str:
+        """Static agent identity string.  §3b."""
+        return (
+            f"The user is {self._agent_name}, an external agent. "
+            f"This conversation is about: {self._project}."
+        )
+
+    def get_system_prompt(self) -> str:
+        """EAMP system prompt.
+
+        Fills in {user_name}, {agent_name}, {project_or_task_name} template
+        variables from data_graph and the EAMP constructor args.  §3b.
+        """
+        import logging  # noqa: PLC0415
+        _log = logging.getLogger(__name__)
+        _agent_name = self._agent_name
+        _project = self._project
+        try:
+            from services.system_message_prompt import ExternalAgentSystemMessagePrompt  # noqa: PLC0415
+            body = ExternalAgentSystemMessagePrompt().get_prompt()
+            body = substitute_provider_content_field(body, "external_agent")
+
+            # Resolve the user's first name from data_graph.
+            user_name = "the user"
+            try:
+                from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
+                dgs = get_data_graph_service()
+                rows = dgs.fetch(kinds=["system"])
+                for row in rows:
+                    key = row.get("key") if isinstance(row, dict) else getattr(row, "key", None)
+                    val = row.get("value") if isinstance(row, dict) else getattr(row, "value", None)
+                    if key == "user_summary" and val:
+                        first_word = val.split()[0] if val else ""
+                        if first_word:
+                            user_name = first_word
+                        break
+            except Exception:
+                pass
+
+            user_def = self.get_user_definition()
+            body = (
+                body
+                .replace("{user_name}", user_name)
+                .replace("{agent_name}", _agent_name)
+                .replace("{project_or_task_name}", _project)
+            )
+            return f"{user_def}\n\n{body}"
+        except Exception as exc:
+            _log.warning("[EAMP] system prompt build failed: %s", exc)
+            return ""
+
+    def get_user_prompt(self) -> str:
+        """EAMP user-message body for one ACT iteration.
+
+        Stripped compared to UMP: no world state, no user definition (it lives
+        in the system prompt for EAMP).  Keeps: previous messages, ACT trail,
+        input line.  §3b.
+        """
+        mp = self.mp
+        import logging  # noqa: PLC0415
+        _log = logging.getLogger(__name__)
+        parts: list[str] = []
+
+        # Previous Messages
+        try:
+            prev = mp.get_previous_messages()  # type: ignore[attr-defined]
+            if prev:
+                parts.append(f"## Previous Messages\n{prev}")
+        except Exception as exc:
+            _log.debug("[EAMP] get_previous_messages failed: %s", exc)
+
+        parts.append("")
+
+        # Input line — BEFORE the trail (OLD get_user_prompt ordering).
+        parts.append(f"user: {mp._raw_input}")  # type: ignore[attr-defined]
+
+        # ACT loop trail (carries the turn-0 memory seed once it has fired).
+        try:
+            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            if trail:
+                parts.append(trail)
+        except Exception as exc:
+            _log.debug("[EAMP] _render_act_trail failed: %s", exc)
+
+        return "\n".join(parts)

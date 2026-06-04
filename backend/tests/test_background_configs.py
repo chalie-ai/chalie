@@ -76,7 +76,8 @@ class TestPostTurnRunsAfterAssistantRow:
             call_order.append("post_turn")
 
         from services.processor_config import ProcessorConfig
-        cfg = ProcessorConfig(
+        from tests.helpers import StubProcessorConfig
+        cfg = StubProcessorConfig(
             channel="c4_test",
             role="c4",
             policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
@@ -130,6 +131,7 @@ class TestSuperEpisodeConfig:
         spans = "raw transcript text here"
         cfg = SuperEpisodeConfig("user", sources, spans)
         mp = MagicMock()
-        result = cfg.build_user_prompt(mp)
+        object.__setattr__(cfg, "mp", mp)
+        result = cfg.get_user_prompt()
         assert isinstance(result, str)
         assert "ep1" in result or "AI plans" in result or "transcript" in result

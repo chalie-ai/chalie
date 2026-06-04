@@ -407,24 +407,37 @@ def post_action():
             # Ability.use() requires an mp-like object with config, uid,
             # cancel_event.  broadcast_to=None keeps these
             # dispatches silent (no live WS events for action buttons).
-            _action_config = ProcessorConfig(
-                channel="action_button",
-                role="action_button",
-                policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
-                build_user_prompt=lambda _: "",
-                build_user_definition=lambda _: "",
-                build_system_prompt=lambda _: "",
-                always_available=[],
-                discoverable=[],
-                blocked=frozenset(),
-                max_iterations=1,
-                skip_transcript=True,
-                skip_input_row=True,
-                suppress_history=True,
-                broadcast_to=None,
-                memory_seed=False,
-                post_turn=None,
-            )
+            # ProcessorConfig is abstract, so action-button dispatch needs a
+            # concrete subclass; no ACT loop runs here, so the three prompt
+            # builders are never invoked — they return "" to satisfy the base.
+            class _ActionButtonConfig(ProcessorConfig):
+                def __init__(self) -> None:
+                    super().__init__(
+                        channel="action_button",
+                        role="action_button",
+                        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
+                        always_available=[],
+                        discoverable=[],
+                        blocked=frozenset(),
+                        max_iterations=1,
+                        skip_transcript=True,
+                        skip_input_row=True,
+                        suppress_history=True,
+                        broadcast_to=None,
+                        memory_seed=False,
+                        post_turn=None,
+                    )
+
+                def get_user_definition(self) -> str:
+                    return ""
+
+                def get_user_prompt(self) -> str:
+                    return ""
+
+                def get_system_prompt(self) -> str:
+                    return ""
+
+            _action_config = _ActionButtonConfig()
 
             class _ActionCtx:
                 config = _action_config

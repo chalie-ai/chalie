@@ -36,8 +36,9 @@ def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
     single flat MessageProcessor driven by a per-turn ProcessorConfig.
     """
     from services.processor_config import ProcessorConfig
+    from tests.helpers import StubProcessorConfig
 
-    return ProcessorConfig(
+    return StubProcessorConfig(
         channel=channel,
         role=role,
         policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
@@ -471,9 +472,10 @@ def _make_compact_processor(channel=_COMPACT_CHANNEL, role='user', raw_input='he
     """Flat config-carrying MessageProcessor for compaction tests (no subclass — P1)."""
     from services.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
+    from tests.helpers import StubProcessorConfig
 
     _prompt = raw_input
-    config = ProcessorConfig(
+    config = StubProcessorConfig(
         channel=channel,
         role=role,
         policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,

@@ -399,7 +399,7 @@ class SubconsciousWorker:
             return f"skip cursor={cursor} latest={latest} delta={delta}"
 
         # 3. Fire processor via flat path (§3b / T8 migration).
-        # build_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
+        # get_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
         from configs.channels import PatternConfig  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
@@ -564,7 +564,7 @@ class SubconsciousWorker:
             return f"skip cursor={cursor} latest={latest} delta={delta}"
 
         # Fire via flat path (§3b / T8 migration).
-        # build_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
+        # get_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
         from configs.channels import GeoConfig  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 

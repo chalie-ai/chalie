@@ -24,9 +24,13 @@ import logging
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from typing import TYPE_CHECKING
 
 from services.metrics_accumulator import MetricsAccumulator
 from services.time_formatter_service import TimeFormatterService
+
+if TYPE_CHECKING:
+    from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +192,10 @@ class MessageProcessor:
     def __init__(self, raw_input: str, metadata: dict | None = None):
         self._raw_input = raw_input
         self._metadata = metadata or {}
+        # Per-turn config (set via the `config` property, which also binds the
+        # config back to this processor so its prompt-builder methods can read
+        # self.mp).  None until attached.
+        self._config: "ProcessorConfig | None" = None
         self._memory_seed: str | None = None
         # Raw recall query used by pre_act(); kept separate from _memory_seed
         # (which is the formatted tag block) so recall_episodes() can embed
@@ -243,6 +251,27 @@ class MessageProcessor:
     # The flat process() lifecycle reads/writes mp.uid / mp.cancel_event /
     # mp.active_tools; these properties bridge to the private backing fields
     # set up in __init__.
+
+    @property
+    def config(self) -> "ProcessorConfig":
+        """The per-turn ProcessorConfig driving this processor."""
+        return self._config
+
+    @config.setter
+    def config(self, value: "ProcessorConfig") -> None:
+        """Attach a config and bind it back to this processor.
+
+        Binding ``config.mp = self`` is what lets the config's prompt-builder
+        methods (``get_system_prompt`` / ``get_user_prompt`` /
+        ``get_user_definition``) read ``self.mp`` instead of taking the
+        processor as an argument.  The config is a frozen dataclass, so the bind
+        goes through ``object.__setattr__``.  Centralising it here means every
+        ``mp.config = X`` site — process(), the subconscious workers, the
+        skill-suggestion / episode-encoder paths, and tests — binds uniformly.
+        """
+        self._config = value
+        if value is not None:
+            object.__setattr__(value, "mp", self)
 
     @property
     def uid(self) -> 'int | None':
@@ -462,7 +491,7 @@ class MessageProcessor:
         Asks the model to think out loud about the user's request: assess
         gaps in its knowledge, evaluate which tools would help, and flag
         non-obvious aspects. Output is Chain-of-Thought that gets
-        re-injected into the ACT loop via the config's build_user_prompt
+        re-injected into the ACT loop via the config's get_user_prompt
         (which reads ``thinking_exploration``) so the model can act on its
         own reasoning.
 
@@ -499,9 +528,9 @@ class MessageProcessor:
 
             # Flat process() path — config carries all per-turn surfaces (§4).
             config = self.config
-            user_body = config.build_user_prompt(self)
+            user_body = config.get_user_prompt()
             user_body = _wrap_with_checkpoint(config.channel, user_body)
-            system_prompt = config.build_system_prompt(self)
+            system_prompt = config.get_system_prompt()
             tools = AbilityRegistry.build_tools(self)
 
             response = Providers.instance().send_messages(
@@ -619,7 +648,7 @@ class MessageProcessor:
         if self.config.channel == "user":
             self._run_thinking_gate()
             # Sync the exploration result onto the flat-path attribute so that
-            # config.build_user_prompt() (e.g. _ump_build_user_prompt) can read
+            # config.get_user_prompt() (e.g. UserConfig.get_user_prompt) can read
             # it via getattr(mp, 'thinking_exploration', None).
             self.thinking_exploration = self._thinking_exploration
 
@@ -672,9 +701,9 @@ class MessageProcessor:
         in_compaction = self.config.channel in self._COMPACTION_CHANNELS
         while True:
             if self._should_stop(): return ""  # noqa: E701
-            prompt = self.config.build_user_prompt(self)
+            prompt = self.config.get_user_prompt()
             prompt = _wrap_with_checkpoint(self.config.channel, prompt)
-            system = self.config.build_system_prompt(self)
+            system = self.config.get_system_prompt()
             tools = AbilityRegistry.build_tools(self)
             pct = p.calculate(system, prompt, tools, job=self.config.job, mp=self)
             if pct > 0.80:

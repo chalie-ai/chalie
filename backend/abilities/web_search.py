@@ -56,15 +56,6 @@ _WEB_SEARCH_SYSTEM_PROMPT = (
 _WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "read", "web_download")
 
 
-def _web_search_user_prompt(mp: object) -> str:
-    """Goal-driven user prompt: the raw query plus the act-trail so far."""
-    parts = [f"Research query:\n{mp._raw_input}"]  # type: ignore[attr-defined]
-    trail = render_trail(mp)
-    if trail:
-        parts.append(trail)
-    return "\n\n".join(parts)
-
-
 class WebSearchConfig(ProcessorConfig):
     """ProcessorConfig for the web_search delegate.
 
@@ -80,9 +71,6 @@ class WebSearchConfig(ProcessorConfig):
             channel="delegate:web_search",
             role="web_search",
             policy_channel=policy_channel,
-            build_user_prompt=_web_search_user_prompt,
-            build_user_definition=lambda _mp: "",
-            build_system_prompt=lambda _mp: _WEB_SEARCH_SYSTEM_PROMPT,
             always_available=[*tools, "memory"],
             discoverable=[],
             blocked=frozenset(),
@@ -94,6 +82,21 @@ class WebSearchConfig(ProcessorConfig):
             memory_seed=False,
             post_turn=None,
         )
+
+    def get_user_definition(self) -> str:
+        return ""
+
+    def get_user_prompt(self) -> str:
+        """Goal-driven user prompt: the raw query plus the act-trail so far."""
+        mp = self.mp
+        parts = [f"Research query:\n{mp._raw_input}"]  # type: ignore[attr-defined]
+        trail = render_trail(mp)
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    def get_system_prompt(self) -> str:
+        return _WEB_SEARCH_SYSTEM_PROMPT
 
 
 class WebSearchAbility(Ability):

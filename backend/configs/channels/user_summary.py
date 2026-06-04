@@ -23,83 +23,6 @@ def _format_pattern_line(content: dict) -> str:
     )
 
 
-def _user_summary_build_user_prompt(_mp: object) -> str:
-    """User-summary user-prompt: user_specific traits + behavioral_patterns."""
-    import json as _json  # noqa: PLC0415
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
-
-    # Section 1: user_specific traits
-    try:
-        from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-        rows = get_data_graph_service().fetch(
-            kinds=["user_specific"],
-            limit=_MAX_TRAIT_ROWS,
-            order_by="retrieval_weight DESC",
-        )
-    except Exception as exc:
-        _log.warning("[USER_SUMMARY_CONFIG] trait fetch failed: %s", exc)
-        rows = []
-
-    if not rows:
-        facts_section = "Facts:\n(no facts available)"
-    else:
-        lines = [
-            f"{r['key']}: {r['value']}"
-            for r in rows
-            if r.get("key") and r.get("value")
-        ]
-        facts_section = "Facts:\n" + "\n".join(lines) if lines else "Facts:\n(no facts available)"
-
-    # Section 2: active behavioral_patterns
-    active_patterns = []
-    try:
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            pattern_rows = conn.execute(
-                """
-                SELECT value
-                FROM data_graph
-                WHERE kind = 'behavioral_pattern'
-                  AND active = 1
-                  AND deleted_at IS NULL
-                ORDER BY last_confirmed_at DESC
-                LIMIT ?
-                """,
-                (_MAX_PATTERN_ROWS,),
-            ).fetchall()
-        for (value_json,) in pattern_rows:
-            try:
-                content = _json.loads(value_json)
-                if content:
-                    active_patterns.append(content)
-            except Exception:
-                continue
-    except Exception as exc:
-        _log.warning("[USER_SUMMARY_CONFIG] active pattern fetch failed: %s", exc)
-
-    if not active_patterns:
-        return facts_section
-
-    pattern_lines = [_format_pattern_line(p) for p in active_patterns]
-    patterns_section = (
-        "## Behavioural patterns (frequency, last seen)\n"
-        + "\n".join(f"- {line}" for line in pattern_lines)
-    )
-    return facts_section + "\n\n" + patterns_section
-
-
-def _user_summary_build_system_prompt(_mp: object) -> str:
-    """User-summary system prompt: user_definition prefix + body.
-
-    Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
-    """
-    from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
-    _user_def = "You are a synthesiser. The user is a real human whose traits you are distilling."
-    return f"{_user_def}\n\n{UserSummarySystemPrompt().get_prompt()}"
-
-
 def _user_summary_post_turn(_mp: object, response_text: str) -> None:
     """Parse JSON {short, long} from response_text and write to data_graph.
 
@@ -249,9 +172,6 @@ class UserSummaryConfig(ProcessorConfig):
             channel="user_summary",
             role="user_summary",
             policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            build_user_prompt=_user_summary_build_user_prompt,
-            build_user_definition=lambda _mp: "You are a synthesiser. The user is a real human whose traits you are distilling.",
-            build_system_prompt=_user_summary_build_system_prompt,
             always_available=[],
             discoverable=[],
             blocked=frozenset(),
@@ -263,3 +183,80 @@ class UserSummaryConfig(ProcessorConfig):
             memory_seed=False,
             post_turn=_user_summary_post_turn,
         )
+
+    def get_user_definition(self) -> str:
+        return "You are a synthesiser. The user is a real human whose traits you are distilling."
+
+    def get_user_prompt(self) -> str:
+        """User-summary user-prompt: user_specific traits + behavioral_patterns."""
+        import json as _json  # noqa: PLC0415
+        import logging as _logging  # noqa: PLC0415
+        _log = _logging.getLogger(__name__)
+
+        # Section 1: user_specific traits
+        try:
+            from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
+            rows = get_data_graph_service().fetch(
+                kinds=["user_specific"],
+                limit=_MAX_TRAIT_ROWS,
+                order_by="retrieval_weight DESC",
+            )
+        except Exception as exc:
+            _log.warning("[USER_SUMMARY_CONFIG] trait fetch failed: %s", exc)
+            rows = []
+
+        if not rows:
+            facts_section = "Facts:\n(no facts available)"
+        else:
+            lines = [
+                f"{r['key']}: {r['value']}"
+                for r in rows
+                if r.get("key") and r.get("value")
+            ]
+            facts_section = "Facts:\n" + "\n".join(lines) if lines else "Facts:\n(no facts available)"
+
+        # Section 2: active behavioral_patterns
+        active_patterns = []
+        try:
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                pattern_rows = conn.execute(
+                    """
+                    SELECT value
+                    FROM data_graph
+                    WHERE kind = 'behavioral_pattern'
+                      AND active = 1
+                      AND deleted_at IS NULL
+                    ORDER BY last_confirmed_at DESC
+                    LIMIT ?
+                    """,
+                    (_MAX_PATTERN_ROWS,),
+                ).fetchall()
+            for (value_json,) in pattern_rows:
+                try:
+                    content = _json.loads(value_json)
+                    if content:
+                        active_patterns.append(content)
+                except Exception:
+                    continue
+        except Exception as exc:
+            _log.warning("[USER_SUMMARY_CONFIG] active pattern fetch failed: %s", exc)
+
+        if not active_patterns:
+            return facts_section
+
+        pattern_lines = [_format_pattern_line(p) for p in active_patterns]
+        patterns_section = (
+            "## Behavioural patterns (frequency, last seen)\n"
+            + "\n".join(f"- {line}" for line in pattern_lines)
+        )
+        return facts_section + "\n\n" + patterns_section
+
+    def get_system_prompt(self) -> str:
+        """User-summary system prompt: user_definition prefix + body.
+
+        Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
+        """
+        from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
+        return f"{self.get_user_definition()}\n\n{UserSummarySystemPrompt().get_prompt()}"

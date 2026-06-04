@@ -33,16 +33,29 @@ to ``Providers.calculate`` / ``Providers.send_messages``.  There is no separate
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 
 @dataclass(frozen=True)
-class ProcessorConfig:
+class ProcessorConfig(ABC):
     """Everything that varies between channels.  Immutable per-turn.
 
     See spec §2 for field-by-field rationale.
+
+    The three prompt builders are **abstract methods** — every channel is a
+    concrete subclass that implements ``get_system_prompt`` /
+    ``get_user_prompt`` / ``get_user_definition``.  The base class is abstract
+    (ABC) so a subclass that forgets any of the three cannot be instantiated.
+    Each method reads ``self.mp`` — the bound MessageProcessor for the turn —
+    so no argument is threaded through.  ``mp`` is set when the config is
+    attached to a processor (``MessageProcessor.config`` setter); it is the only
+    mutable-after-construction attribute and is bound exactly once per turn.
     """
 
     # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
@@ -64,20 +77,6 @@ class ProcessorConfig:
     policy_channel: "ProcessorConfig.POLICY_CHANNEL"
     """Which policy channel this processor's tool calls are gated under.
     usage_class (the llm_call_log string) is derived from it."""
-
-    # ── Prompt builders ───────────────────────────────────────────────────────
-    # Each callable receives the MessageProcessor instance and returns a str.
-    # Using Any at runtime to avoid the circular-import problem; the TYPE_CHECKING
-    # guard above provides static-analysis fidelity.
-
-    build_user_prompt: Callable[..., str]
-    """Given (mp: MessageProcessor) → str.  The raw user-turn text."""
-
-    build_user_definition: Callable[..., str]
-    """Given (mp: MessageProcessor) → str.  The user/persona preamble."""
-
-    build_system_prompt: Callable[..., str]
-    """Given (mp: MessageProcessor) → str.  The system instruction block."""
 
     # ── Tool visibility ───────────────────────────────────────────────────────
 
@@ -124,6 +123,40 @@ class ProcessorConfig:
     """Called once after the assistant row is persisted, signature:
     (mp: MessageProcessor, response_text: str) -> None.
     None = no-op.  This is the ONLY optional hook on ProcessorConfig (AC-32)."""
+
+    # ── Bound processor (set post-construction, not a constructor arg) ─────────
+
+    mp: "MessageProcessor | None" = field(
+        default=None, init=False, compare=False, repr=False
+    )
+    """The MessageProcessor running this turn.  Bound by the
+    ``MessageProcessor.config`` setter the moment the config is attached, so the
+    prompt-builder methods can read ``self.mp`` instead of taking an argument.
+    None until attached; rebound (via ``object.__setattr__``) exactly once per
+    turn, which is why it is excluded from the frozen dataclass's __init__,
+    equality, and repr."""
+
+    # ── Prompt builders (abstract — one implementation per channel) ───────────
+
+    @abstractmethod
+    def get_system_prompt(self) -> str:
+        """The system instruction block for this channel's turn.
+
+        Reads ``self.mp``.  Every concrete config MUST implement this; the
+        returned string is byte-identical to the pre-refactor builder output."""
+
+    @abstractmethod
+    def get_user_prompt(self) -> str:
+        """The user-turn body (world state, history, input, ACT trail).
+
+        Reads ``self.mp``.  Every concrete config MUST implement this."""
+
+    @abstractmethod
+    def get_user_definition(self) -> str:
+        """The user/persona preamble.  Reads ``self.mp``.
+
+        Every concrete config MUST implement this (return ``""`` when the
+        channel has no user definition)."""
 
     # ── Derived properties ────────────────────────────────────────────────────
 

@@ -42,68 +42,6 @@ def _pattern_existing_patterns_block() -> str:
         return "(none yet)"
 
 
-def _pattern_build_user_prompt(mp: object, window_start: int, window_end: int) -> str:
-    """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
-    try:
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, role, content, created_at FROM transcript "
-                "WHERE id > ? AND id <= ? "
-                "AND content IS NOT NULL AND content != '' "
-                "ORDER BY id ASC",
-                (window_start, window_end),
-            ).fetchall()
-        if not rows:
-            return "(no transcripts in window)"
-        transcript_block = "\n".join(
-            f"[id={r[0]} | {r[1]} | {r[3]}] {r[2]}" for r in rows
-        )
-    except Exception as exc:
-        _log.warning("[PATTERN_CONFIG] transcript fetch failed: %s", exc)
-        transcript_block = "(transcript fetch failed)"
-
-    existing = _pattern_existing_patterns_block()
-    parts = [f"Existing patterns:\n{existing}", transcript_block]
-    try:
-        trail = mp._render_act_trail()  # type: ignore[attr-defined]
-        if trail:
-            parts.append(trail)
-    except Exception:
-        pass
-    return "\n\n".join(parts)
-
-
-def _pattern_build_system_prompt(_mp: object) -> str:
-    """Pattern-match system prompt (inlined from PatternMatchProcessor.get_system_prompt)."""
-    return (
-        "You are analysing the user's recent transcripts to detect "
-        "repeating behavioural patterns and surface durable life-graph "
-        "facts.\n\n"
-        "You have ONE forward pass. Emit ALL tool calls in parallel. Do "
-        "NOT loop — results are intentionally minimal.\n\n"
-        "save_pattern summaries must be 1 sentence and concise. "
-        "Examples:\n"
-        "- User walks to work every morning at 09:00\n"
-        "- User prefers cold-beverages\n"
-        "- User goes to the gym daily, except Sundays\n"
-        "- User's gym schedule is: Monday weights, Tuesday boxing\n"
-        "Do NOT write narratives, episode summaries, or date-stamped "
-        "event logs. The summary is a distilled habit, not a story.\n\n"
-        "Rules:\n"
-        "- save_pattern requires >=2 evidence rows in this batch.\n"
-        "- Mirror existing pattern names exactly when reinforcing — "
-        "case-sensitive.\n"
-        "- Do NOT use save_graph for repeating behaviours — use "
-        "save_pattern.\n"
-        "- Skip noise. Skip one-offs. Skip ambiguous interpretations.\n"
-        "- Emit everything in this single pass."
-    )
-
-
 def _pattern_post_turn(mp: object, _response_text: str) -> None:
     """Confidence decay sweep: -0.005 on untouched active rows; soft-delete at <=0.
 
@@ -183,23 +121,15 @@ class PatternConfig(ProcessorConfig):
     channel/role='pattern_match', suppress_history=True, max_iterations=100.
     post_turn = confidence decay sweep (§3b).
 
-    Counter/state attrs are lazily initialised by build_user_prompt on the first
+    Counter/state attrs are lazily initialised by get_user_prompt on the first
     call so the caller does not need to pre-set them.
     """
 
     def __init__(self, window_start: int, window_end: int) -> None:
-        def _build_user_prompt(mp: object) -> str:
-            # Lazy-init per-instance state so SavePattern/SaveGraph find it.
-            _pattern_init_instance_state(mp)
-            return _pattern_build_user_prompt(mp, window_start, window_end)
-
         super().__init__(
             channel="pattern_match",
             role="pattern_match",
             policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            build_user_prompt=_build_user_prompt,
-            build_user_definition=lambda _mp: "",
-            build_system_prompt=_pattern_build_system_prompt,
             always_available=["save_pattern", "save_graph"],
             discoverable=[],
             blocked=frozenset(),
@@ -210,4 +140,72 @@ class PatternConfig(ProcessorConfig):
             broadcast_to=None,
             memory_seed=False,
             post_turn=_pattern_post_turn,
+        )
+        object.__setattr__(self, "_window_start", window_start)
+        object.__setattr__(self, "_window_end", window_end)
+
+    def get_user_definition(self) -> str:
+        return ""
+
+    def get_user_prompt(self) -> str:
+        """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
+        mp = self.mp
+        # Lazy-init per-instance state so SavePattern/SaveGraph find it.
+        _pattern_init_instance_state(mp)
+        import logging as _logging  # noqa: PLC0415
+        _log = _logging.getLogger(__name__)
+        try:
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT id, role, content, created_at FROM transcript "
+                    "WHERE id > ? AND id <= ? "
+                    "AND content IS NOT NULL AND content != '' "
+                    "ORDER BY id ASC",
+                    (self._window_start, self._window_end),
+                ).fetchall()
+            if not rows:
+                return "(no transcripts in window)"
+            transcript_block = "\n".join(
+                f"[id={r[0]} | {r[1]} | {r[3]}] {r[2]}" for r in rows
+            )
+        except Exception as exc:
+            _log.warning("[PATTERN_CONFIG] transcript fetch failed: %s", exc)
+            transcript_block = "(transcript fetch failed)"
+
+        existing = _pattern_existing_patterns_block()
+        parts = [f"Existing patterns:\n{existing}", transcript_block]
+        try:
+            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            if trail:
+                parts.append(trail)
+        except Exception:
+            pass
+        return "\n\n".join(parts)
+
+    def get_system_prompt(self) -> str:
+        """Pattern-match system prompt (inlined from PatternMatchProcessor.get_system_prompt)."""
+        return (
+            "You are analysing the user's recent transcripts to detect "
+            "repeating behavioural patterns and surface durable life-graph "
+            "facts.\n\n"
+            "You have ONE forward pass. Emit ALL tool calls in parallel. Do "
+            "NOT loop — results are intentionally minimal.\n\n"
+            "save_pattern summaries must be 1 sentence and concise. "
+            "Examples:\n"
+            "- User walks to work every morning at 09:00\n"
+            "- User prefers cold-beverages\n"
+            "- User goes to the gym daily, except Sundays\n"
+            "- User's gym schedule is: Monday weights, Tuesday boxing\n"
+            "Do NOT write narratives, episode summaries, or date-stamped "
+            "event logs. The summary is a distilled habit, not a story.\n\n"
+            "Rules:\n"
+            "- save_pattern requires >=2 evidence rows in this batch.\n"
+            "- Mirror existing pattern names exactly when reinforcing — "
+            "case-sensitive.\n"
+            "- Do NOT use save_graph for repeating behaviours — use "
+            "save_pattern.\n"
+            "- Skip noise. Skip one-offs. Skip ambiguous interpretations.\n"
+            "- Emit everything in this single pass."
         )

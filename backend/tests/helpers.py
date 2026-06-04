@@ -10,6 +10,40 @@ noted otherwise.  Override any field via keyword argument.
 
 from datetime import datetime, timezone, timedelta
 
+from services.processor_config import ProcessorConfig
+
+
+# ─── ProcessorConfig test stub ───────────────────────────────────────
+# ProcessorConfig's three prompt builders are abstractmethods, so the base
+# cannot be instantiated directly.  This concrete stub takes the builders as
+# callables (signature (mp) -> str — the pre-refactor field API) and delegates
+# to them, letting test helpers inject custom prompt bodies exactly as before.
+
+class StubProcessorConfig(ProcessorConfig):
+    """Concrete ProcessorConfig for tests, with injectable prompt builders."""
+
+    def __init__(
+        self,
+        *,
+        build_user_prompt=None,
+        build_user_definition=None,
+        build_system_prompt=None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        object.__setattr__(self, "_b_up", build_user_prompt or (lambda _mp: ""))
+        object.__setattr__(self, "_b_ud", build_user_definition or (lambda _mp: ""))
+        object.__setattr__(self, "_b_sp", build_system_prompt or (lambda _mp: ""))
+
+    def get_user_prompt(self) -> str:
+        return self._b_up(self.mp)
+
+    def get_user_definition(self) -> str:
+        return self._b_ud(self.mp)
+
+    def get_system_prompt(self) -> str:
+        return self._b_sp(self.mp)
+
 
 # ─── scheduled_items ─────────────────────────────────────────────────
 # Column order matches: SELECT id, item_type, message, due_at, recurrence,

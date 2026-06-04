@@ -54,9 +54,10 @@ def _make_flat_mp(db_conn, channel="test", broadcast=False, current_iteration=0)
     """
     from services.processor_config import ProcessorConfig
     from services.message_processor import MessageProcessor
+    from tests.helpers import StubProcessorConfig
 
     uid = _insert_transcript(db_conn, channel=channel)
-    config = ProcessorConfig(
+    config = StubProcessorConfig(
         channel=channel,
         role="test",
         policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,

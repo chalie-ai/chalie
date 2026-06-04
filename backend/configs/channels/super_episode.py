@@ -126,20 +126,7 @@ def _fetch_transcript_spans(t_ids: set, db) -> str:
         return ""
 
 
-# ── Super-episode prompt builders ────────────────────────────────────────────
-
-
-def _super_episode_build_system_prompt(_mp: object) -> str:
-    """Super-episode system prompt: user_definition prefix + body.
-
-    Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
-    """
-    from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
-    _user_def = (
-        "The user is 'super_episode_encoder' — a background process that "
-        "consolidates clusters of related episodes into a single super-episode."
-    )
-    return f"{_user_def}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"
+# ── Super-episode config ─────────────────────────────────────────────────────
 
 
 class SuperEpisodeConfig(ProcessorConfig):
@@ -148,8 +135,8 @@ class SuperEpisodeConfig(ProcessorConfig):
     channel/role='super_episode_encoder', suppress_history=True, max_iterations=1.
     post_turn = None (caller owns episode write — §3b / O2).
 
-    sources and spans are captured at construction time so the build_user_prompt
-    closure is self-contained per cluster (§3c: cluster loop moves to caller).
+    sources and spans are captured at construction time so get_user_prompt is
+    self-contained per cluster (§3c: cluster loop moves to caller).
 
     Args:
         channel:  The user channel being consolidated (e.g. 'user'). Recorded for
@@ -160,26 +147,10 @@ class SuperEpisodeConfig(ProcessorConfig):
     """
 
     def __init__(self, channel: str, sources: list[Any], spans: Any) -> None:
-        def _build_user_prompt(_mp: object) -> str:
-            src = "\n\n".join(f"[{e['id']}] {e['gist']}" for e in sources)
-            return (
-                f"Source episodes:\n\n{src}\n\n"
-                f"Raw transcript spans covering these episodes:\n\n{spans}"
-            )
-
-        def _build_user_definition(_mp: object) -> str:
-            return (
-                "The user is 'super_episode_encoder' — a background process that "
-                "consolidates clusters of related episodes into a single super-episode."
-            )
-
         super().__init__(
             channel="super_episode_encoder",
             role="super_episode_encoder",
             policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            build_user_prompt=_build_user_prompt,
-            build_user_definition=_build_user_definition,
-            build_system_prompt=_super_episode_build_system_prompt,
             always_available=[],
             discoverable=[],
             blocked=frozenset(),
@@ -191,3 +162,26 @@ class SuperEpisodeConfig(ProcessorConfig):
             memory_seed=False,
             post_turn=None,
         )
+        object.__setattr__(self, "_sources", sources)
+        object.__setattr__(self, "_spans", spans)
+
+    def get_user_definition(self) -> str:
+        return (
+            "The user is 'super_episode_encoder' — a background process that "
+            "consolidates clusters of related episodes into a single super-episode."
+        )
+
+    def get_user_prompt(self) -> str:
+        src = "\n\n".join(f"[{e['id']}] {e['gist']}" for e in self._sources)
+        return (
+            f"Source episodes:\n\n{src}\n\n"
+            f"Raw transcript spans covering these episodes:\n\n{self._spans}"
+        )
+
+    def get_system_prompt(self) -> str:
+        """Super-episode system prompt: user_definition prefix + body.
+
+        Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
+        """
+        from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
+        return f"{self.get_user_definition()}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"

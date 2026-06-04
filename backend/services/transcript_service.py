@@ -384,7 +384,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
 
             # ── 4. Encode the window via the flat episode-encoder channel ────
             # _window / _referenced are read by EpisodeEncoderConfig's
-            # build_user_prompt; set them on the instance before _run().
+            # get_user_prompt; set them on the instance before _run().
             emp = object.__new__(MessageProcessor)
             MessageProcessor.__init__(emp, "", None)
             emp.config = EpisodeEncoderConfig()

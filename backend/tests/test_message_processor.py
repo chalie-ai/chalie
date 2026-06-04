@@ -39,8 +39,9 @@ def _make_config(
 ):
     """Return a minimal ProcessorConfig for use in flat-MP tests."""
     from services.processor_config import ProcessorConfig
+    from tests.helpers import StubProcessorConfig
 
-    return ProcessorConfig(
+    return StubProcessorConfig(
         channel=channel,
         role=role,
         policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
