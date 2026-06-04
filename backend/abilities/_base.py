@@ -17,6 +17,10 @@ from abc import ABC, abstractmethod
 from typing import ClassVar
 from uuid import uuid4
 
+# ClientContext owns the per-request client-telemetry snapshot that
+# _load_tool_telemetry() flattens onto ability.telemetry before run().
+from services.client_context import ClientContext
+
 
 # These module-level names are populated at the bottom of this file (after the
 # Ability class is defined) so that unittest.mock.patch("abilities._base.X")
@@ -49,38 +53,11 @@ def _load_tool_telemetry() -> "dict | None":
     """Pull a flattened telemetry dict for tool dispatch.
 
     Returns None when no client context is stored yet (fresh boot, no
-    heartbeat) so abilities can fall back gracefully.
-
-    Formerly in act_dispatcher_service; moved here in T3.
+    heartbeat) so abilities can fall back gracefully. Delegates the snapshot to
+    the ``ClientContext`` value object — this is just the dict adapter.
     """
-    try:
-        from services.locale_service import (  # noqa: PLC0415
-            get_timezone_name, get_locale, get_language,
-            get_currency, get_location, format_date,
-        )
-        from services.time_utils import utc_now  # noqa: PLC0415
-
-        location = get_location()
-        loc_name = location.get("name") or ""
-        city, country = "", ""
-        if "," in loc_name:
-            city, country = [p.strip() for p in loc_name.split(",", 1)]
-
-        return {
-            "lat": location.get("lat"),
-            "lon": location.get("lon"),
-            "location_name": loc_name,
-            "city": city,
-            "country": country,
-            "time": format_date(utc_now(), "%H:%M:%S", for_ui=True) or "",
-            "timezone": get_timezone_name(),
-            "locale": get_locale(),
-            "language": get_language(),
-            "currency": get_currency(),
-        }
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[Ability] telemetry load failed: %s", exc)
-        return None
+    ctx = ClientContext.current()
+    return ctx.as_dict() if ctx else None
 
 
 def _run_ability(ability: "Ability", params: dict) -> dict:
