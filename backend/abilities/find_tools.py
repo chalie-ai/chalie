@@ -16,8 +16,6 @@ logger = logging.getLogger(__name__)
 class FindToolsAbility(SearchableAbility):
     NAME = "find_tools"
     SEARCH_TOOLTIP = "discover available tools"
-    POLICY_CATEGORY = "Search & Tools"
-    POLICY_LABELS = {"": "Find tools"}
     SUMMARY = "Use this tool to discover more tools and capabilities. Search for the tools you need."
     EXAMPLES = [
         "I want to check if Apple's Q2 earnings report is out yet",

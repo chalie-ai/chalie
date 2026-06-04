@@ -16,15 +16,6 @@ logger = logging.getLogger(__name__)
 class HomeAbility(Ability):
     NAME = "home"
     SEARCH_TOOLTIP = "smart home control"
-    POLICY_CATEGORY = "Home"
-    POLICY_LABELS = {
-        "control": "Control devices",
-        "get_state": "Get device state",
-        "list_automations": "List automations",
-        "list_devices": "List devices",
-        "subscribe_events": "Subscribe events",
-        "trigger_automation": "Trigger automation",
-    }
     SUMMARY = (
         "Control smart home devices and automations via the connected "
         "Home Assistant instance. Available when the user asks about "

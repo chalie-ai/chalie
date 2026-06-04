@@ -103,13 +103,6 @@ def query_items(
 class ScheduleAbility(Ability):
     NAME = "schedule"
     SEARCH_TOOLTIP = "reminders and scheduled tasks"
-    POLICY_CATEGORY = "Scheduling"
-    POLICY_LABELS = {
-        "cancel": "Cancel schedule",
-        "create": "Create schedule",
-        "list": "List schedules",
-        "search": "Search schedules",
-    }
     SUMMARY = (
         "Create, list, or cancel persistent reminders and recurring prompts at a "
         "specific calendar date/time, with optional destination for departure reminders. "

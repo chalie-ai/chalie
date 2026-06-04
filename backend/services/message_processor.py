@@ -140,16 +140,10 @@ class MessageProcessor:
     # ── Tool-scope constants ──────────────────────────────────────────────────
     #
     # find_tools reads ``DISCOVERABLE`` (via ``self.MessageProcessor``) to gate
-    # which abilities may be surfaced at runtime.  ``ALWAYS_AVAILABLE`` is read by
-    # ``AbilityRegistry.policy_visible()`` to exclude the innate meta-tools from
-    # the policy UI.  Both are class-level defaults shared by every flat-path
-    # turn.  THINKING_TIMEOUT bounds the optional high-mode exploration pass.
+    # which abilities may be surfaced at runtime.  It is a class-level default
+    # shared by every flat-path turn.  THINKING_TIMEOUT bounds the optional
+    # high-mode exploration pass.
 
-    ALWAYS_AVAILABLE: list[str] = [
-        "find_skills",
-        "find_tools",
-        "memory",
-    ]
     # ``find_tools`` is gated to ``WHERE name IN DISCOVERABLE`` so a
     # processor can never discover anything outside this list.
     DISCOVERABLE: list[str] = [

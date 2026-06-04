@@ -48,13 +48,6 @@ def _discover_tool_names() -> str:
 class SkillBuilderAbility(Ability):
     NAME = "skill_builder"
     SEARCH_TOOLTIP = "create, edit, delete, or list user-defined skill playbooks"
-    POLICY_CATEGORY = "Skills"
-    POLICY_LABELS = {
-        "create": "Create custom skill",
-        "delete": "Delete custom skill",
-        "edit": "Edit custom skill",
-        "list": "List custom skills",
-    }
     SUMMARY = (
         "Create, edit, delete, or list custom skill playbooks. "
         "Use this to save step-by-step procedures that Chalie should follow for recurring tasks."

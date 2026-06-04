@@ -96,8 +96,6 @@ class WebBrowseConfig(ProcessorConfig):
 class WebBrowseAbility(Ability):
     NAME = "web_browse"
     SEARCH_TOOLTIP = "delegate an interactive web-browsing task"
-    POLICY_CATEGORY = "Delegate Agents"
-    POLICY_LABELS: ClassVar[dict[str, str]] = {"": "Web browse agent"}
     ASYNC_CAPABLE = True
     SUMMARY = (
         "Delegate an interactive web-browsing task to a focused agent that "

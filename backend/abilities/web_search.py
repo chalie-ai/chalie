@@ -101,8 +101,6 @@ class WebSearchConfig(ProcessorConfig):
 class WebSearchAbility(Ability):
     NAME = "web_search"
     SEARCH_TOOLTIP = "delegate a focused web search"
-    POLICY_CATEGORY = "Delegate Agents"
-    POLICY_LABELS: ClassVar[dict[str, str]] = {"": "Web search agent"}
     ASYNC_CAPABLE = True
     SUMMARY = (
         "Delegate a web-research task to a focused agent that searches the web, "

@@ -24,8 +24,6 @@ class FindSkillsAbility(SearchableAbility):
 
     NAME = "find_skills"
     SEARCH_TOOLTIP = "discover procedural skill playbooks for complex tasks"
-    POLICY_CATEGORY = "Search & Tools"
-    POLICY_LABELS = {"": "Find skills"}
     SUMMARY = (
         "Find a step-by-step skill playbook for a complex task like research, "
         "planning, or analysis."

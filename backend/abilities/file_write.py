@@ -18,8 +18,6 @@ class FileWriteAbility(Ability):
     NAME = "file_write"
     SUMMARY = "Write content to a file. You MUST call the 'read' tool on the target path before writing."
     SEARCH_TOOLTIP = "File writing and creation"
-    POLICY_CATEGORY = "Files"
-    POLICY_LABELS = {"": "Write to files"}
     EXAMPLES = [
         "save this text to a file",
         "write this configuration to /etc/myapp/config.yaml",

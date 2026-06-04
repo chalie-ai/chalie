@@ -21,16 +21,6 @@ logger = logging.getLogger(__name__)
 class DocumentAbility(Ability):
     NAME = "document"
     SEARCH_TOOLTIP = "document and notes manager"
-    POLICY_CATEGORY = "Documents"
-    POLICY_LABELS = {
-        "create": "Create document",
-        "delete": "Delete document",
-        "list": "List documents",
-        "restore": "Restore document",
-        "search": "Search documents",
-        "upload": "Upload document",
-        "view": "View document",
-    }
     SUMMARY = "Search, view, create, and manage persistent documents and notes in the document library."
     EXAMPLES = [
         "search my documents for information about coral bleaching",

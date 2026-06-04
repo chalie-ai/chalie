@@ -160,24 +160,6 @@ class AbilityRegistry:
 
         return result
 
-    @staticmethod
-    def policy_visible() -> list[Ability]:
-        """Return abilities that should appear in the policy UI.
-
-        Excludes SYSTEM and actionless ALWAYS_AVAILABLE meta-tools
-        (find_tools, find_skills) whose denial would break routing.
-        """
-        from services.message_processor import MessageProcessor
-        always_available = set(MessageProcessor.ALWAYS_AVAILABLE)
-        return [
-            a for a in _get_registry().values()
-            if not getattr(a, "SYSTEM", False)
-            and not (
-                a.NAME in always_available
-                and not a.INPUT_SCHEMA.get("properties", {}).get("action")
-            )
-        ]
-
 
 def _reset_for_tests() -> None:
     """Reset the module-level registry cache.  Test-only — never call in production."""

@@ -40,8 +40,6 @@ _RICH_MEDIA_INSTRUCTION = (
 class NewsAbility(Ability):
     NAME = "news"
     SEARCH_TOOLTIP = "news article search"
-    POLICY_CATEGORY = "News & Weather"
-    POLICY_LABELS = {"": "Search news"}
     SUMMARY = "Search news articles across global sources by query, with optional category filtering for broad topic browsing."
     EXAMPLES = [
         "what's in the news about artificial intelligence today",

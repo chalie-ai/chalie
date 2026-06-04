@@ -36,7 +36,7 @@ class MemoryAbility(Ability):
     SEARCH_TOOLTIP = "personal memory store"
     # SYSTEM tool: always allowed in every context and never shown in the Policy
     # Manager. Memory is core to Chalie's operation, so it bypasses policy like
-    # skill_manager. (Excluded from policy_visible() → absent from defaults/meta.)
+    # skill_manager.
     SYSTEM = True
     SUMMARY = "Store, recall, or forget first-party facts about the user — traits, preferences, relationships, goals, and habits."
     EXAMPLES = [

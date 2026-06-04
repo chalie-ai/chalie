@@ -45,8 +45,6 @@ def _guarded_getattr(obj, name):
 class CodeEvalAbility(Ability):
     NAME = "code_eval"
     SEARCH_TOOLTIP = "Python code execution"
-    POLICY_CATEGORY = "Code"
-    POLICY_LABELS = {"": "Run sandboxed code"}
     SUMMARY = "Run Python code in a restricted sandbox to compute formulas, verify logic, and perform precise calculations."
     EXAMPLES = [
         "calculate the exact monthly payment on a mortgage at 6.5% over 30 years",

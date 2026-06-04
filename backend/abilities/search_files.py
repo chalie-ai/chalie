@@ -38,11 +38,6 @@ class SearchFilesAbility(Ability):
         "don't already know the path of."
     )
     SEARCH_TOOLTIP = "Find files by name or content"
-    POLICY_CATEGORY = "Files"
-    POLICY_LABELS: ClassVar[dict[str, str]] = {
-        "glob": "Find files by name/pattern",
-        "grep": "Search file contents",
-    }
     EXAMPLES: ClassVar[list[str]] = [
         "find all yaml files under chalie-nightly-test",
         "where is the message_processor file",

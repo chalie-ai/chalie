@@ -32,18 +32,6 @@ _RICH_MEDIA_INSTRUCTION = (
 class ListAbility(Ability):
     NAME = "list"
     SEARCH_TOOLTIP = "list and checklist manager"
-    POLICY_CATEGORY = "Lists"
-    POLICY_LABELS = {
-        "add": "Add list items",
-        "check": "Check list items",
-        "clear": "Clear list",
-        "create": "Create list",
-        "delete": "Delete list",
-        "list_all": "List all lists",
-        "remove": "Remove list items",
-        "rename": "Rename list",
-        "view": "View list",
-    }
     SUMMARY = "Create and manage named lists — shopping, to-do, chores — addressed by id."
     EXAMPLES = [
         "create a grocery list and add milk, eggs, and bread",

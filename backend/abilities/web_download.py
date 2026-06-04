@@ -23,8 +23,6 @@ class WebDownloadAbility(Ability):
     NAME = "web_download"
     SUMMARY = "Download a file from the internet to a temporary location for later reading or processing."
     SEARCH_TOOLTIP = "File download from URL"
-    POLICY_CATEGORY = "Web"
-    POLICY_LABELS = {"": "Download file from URL"}
     EXAMPLES: ClassVar[list[str]] = [
         "download this PDF so I can read it",
         "fetch the CSV file from this URL",

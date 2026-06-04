@@ -106,16 +106,6 @@ class BashAbility(Ability):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
 
     NAME = "bash"
-    POLICY_CATEGORY = "System"
-    POLICY_LABELS: ClassVar[dict[str, str]] = {
-        "read": "Read-only commands",
-        "execute": "Run scripts/binaries",
-        "modify_file": "File modifications",
-        "web_fetch": "Network commands",
-        "installation": "Package management",
-        "remote_execution": "Remote access",
-        "compound": "Multi-command chains",
-    }
     SEARCH_TOOLTIP = "Shell command execution"
     SUMMARY = (
         "Run a shell command via bash. "

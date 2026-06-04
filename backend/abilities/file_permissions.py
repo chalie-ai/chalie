@@ -22,8 +22,6 @@ class FilePermissionsAbility(Ability):
     NAME = "file_permissions"
     SUMMARY = "Change Unix-style filesystem permissions (chmod) on a file or directory."
     SEARCH_TOOLTIP = "Change file permissions (chmod)"
-    POLICY_CATEGORY = "Files"
-    POLICY_LABELS = {"": "Change file permissions"}
     EXAMPLES: ClassVar[list[str]] = [
         "make this script executable",
         "chmod 755 /home/user/scripts/deploy.sh",

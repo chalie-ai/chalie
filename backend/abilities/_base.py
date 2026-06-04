@@ -237,8 +237,6 @@ class Ability(ABC):
     INPUT_SCHEMA: ClassVar[dict]
     ASYNC_CAPABLE: ClassVar[bool] = False
     SEARCH_TOOLTIP: ClassVar[str] = ""
-    POLICY_CATEGORY: ClassVar[str] = ""
-    POLICY_LABELS: ClassVar[dict[str, str]] = {}
 
     # Bound per-call by Ability._bind(): the invoking MessageProcessor (the
     # "parent" of this tool call). A tool reads ALL its context off this —
