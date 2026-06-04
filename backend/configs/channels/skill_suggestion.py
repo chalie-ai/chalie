@@ -24,16 +24,15 @@ class SkillSuggestionConfig(ProcessorConfig):
             post_turn=None,
         )
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         return ""
 
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp) -> str:
         """Skill suggestion user-prompt: original request + ACT trail.
 
         Reads _original_trail, _original_input, _iteration_count from mp (set by
         the caller before calling MessageProcessor.process()).
         """
-        mp = self.mp
         original_trail = getattr(mp, "_original_trail", []) or []
         original_input = getattr(mp, "_original_input", "") or ""
         iteration_count = getattr(mp, "_iteration_count", len(original_trail))
@@ -51,7 +50,7 @@ class SkillSuggestionConfig(ProcessorConfig):
             pass
         return "\n".join(parts)
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         """Skill suggestion system prompt: user_definition prefix + body.
 
         Restores OLD base get_system_prompt assembly.  This channel's

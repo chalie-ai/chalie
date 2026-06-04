@@ -96,12 +96,11 @@ class GeoConfig(ProcessorConfig):
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         return ""
 
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp) -> str:
         """Geo-pattern user-prompt: cached location transcripts + existing patterns + trail."""
-        mp = self.mp
         # Lazy-init per-instance state so SavePattern/SaveGraph find it.
         if not hasattr(mp, "_save_pattern_calls"):
             mp._save_pattern_calls = 0  # type: ignore[attr-defined]
@@ -128,7 +127,7 @@ class GeoConfig(ProcessorConfig):
             pass
         return "\n\n".join(parts)
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         """Geo-pattern system prompt (inlined from GeoPatternProcessor.get_system_prompt)."""
         return (
             "You are analysing the user's recent location-tagged transcripts "

@@ -165,23 +165,23 @@ class SuperEpisodeConfig(ProcessorConfig):
         object.__setattr__(self, "_sources", sources)
         object.__setattr__(self, "_spans", spans)
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         return (
             "The user is 'super_episode_encoder' — a background process that "
             "consolidates clusters of related episodes into a single super-episode."
         )
 
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp) -> str:
         src = "\n\n".join(f"[{e['id']}] {e['gist']}" for e in self._sources)
         return (
             f"Source episodes:\n\n{src}\n\n"
             f"Raw transcript spans covering these episodes:\n\n{self._spans}"
         )
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         """Super-episode system prompt: user_definition prefix + body.
 
         Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
         """
         from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
-        return f"{self.get_user_definition()}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"
+        return f"{self.get_user_definition(mp)}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"

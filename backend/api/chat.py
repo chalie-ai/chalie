@@ -428,13 +428,13 @@ def post_action():
                         post_turn=None,
                     )
 
-                def get_user_definition(self) -> str:
+                def get_user_definition(self, mp) -> str:
                     return ""
 
-                def get_user_prompt(self) -> str:
+                def get_user_prompt(self, mp) -> str:
                     return ""
 
-                def get_system_prompt(self) -> str:
+                def get_system_prompt(self, mp) -> str:
                     return ""
 
             _action_config = _ActionButtonConfig()

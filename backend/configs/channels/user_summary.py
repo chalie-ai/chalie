@@ -184,10 +184,10 @@ class UserSummaryConfig(ProcessorConfig):
             post_turn=_user_summary_post_turn,
         )
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         return "You are a synthesiser. The user is a real human whose traits you are distilling."
 
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp) -> str:
         """User-summary user-prompt: user_specific traits + behavioral_patterns."""
         import json as _json  # noqa: PLC0415
         import logging as _logging  # noqa: PLC0415
@@ -253,10 +253,10 @@ class UserSummaryConfig(ProcessorConfig):
         )
         return facts_section + "\n\n" + patterns_section
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         """User-summary system prompt: user_definition prefix + body.
 
         Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
         """
         from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
-        return f"{self.get_user_definition()}\n\n{UserSummarySystemPrompt().get_prompt()}"
+        return f"{self.get_user_definition(mp)}\n\n{UserSummarySystemPrompt().get_prompt()}"

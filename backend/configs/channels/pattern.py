@@ -144,12 +144,11 @@ class PatternConfig(ProcessorConfig):
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         return ""
 
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp) -> str:
         """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
-        mp = self.mp
         # Lazy-init per-instance state so SavePattern/SaveGraph find it.
         _pattern_init_instance_state(mp)
         import logging as _logging  # noqa: PLC0415
@@ -184,7 +183,7 @@ class PatternConfig(ProcessorConfig):
             pass
         return "\n\n".join(parts)
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         """Pattern-match system prompt (inlined from PatternMatchProcessor.get_system_prompt)."""
         return (
             "You are analysing the user's recent transcripts to detect "

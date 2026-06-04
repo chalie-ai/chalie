@@ -35,14 +35,14 @@ class StubProcessorConfig(ProcessorConfig):
         object.__setattr__(self, "_b_ud", build_user_definition or (lambda _mp: ""))
         object.__setattr__(self, "_b_sp", build_system_prompt or (lambda _mp: ""))
 
-    def get_user_prompt(self) -> str:
-        return self._b_up(self.mp)
+    def get_user_prompt(self, mp) -> str:
+        return self._b_up(mp)
 
-    def get_user_definition(self) -> str:
-        return self._b_ud(self.mp)
+    def get_user_definition(self, mp) -> str:
+        return self._b_ud(mp)
 
-    def get_system_prompt(self) -> str:
-        return self._b_sp(self.mp)
+    def get_system_prompt(self, mp) -> str:
+        return self._b_sp(mp)
 
 
 # ─── scheduled_items ─────────────────────────────────────────────────

@@ -153,7 +153,7 @@ class TestGeoPatternConfig:
         from configs.channels import GeoConfig
 
         config = GeoConfig(window_start=0, window_end=100)
-        prompt = config.get_system_prompt()
+        prompt = config.get_system_prompt(None)
 
         assert "location-tagged" in prompt, "System prompt must mention 'location-tagged'"
         assert "save_pattern" in prompt, "System prompt must reference the save_pattern tool"

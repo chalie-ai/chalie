@@ -63,7 +63,7 @@ class UserConfig(ProcessorConfig):
             post_turn=_ump_post_turn,
         )
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         """One-sentence synthesis of the real human user.
 
         Reads user_summary / user_summary_long from data_graph, preferring the
@@ -73,7 +73,6 @@ class UserConfig(ProcessorConfig):
         Per-turn cached on mp._user_definition_cached so each ACT iteration is
         cheap.  §3b / spec body-structure §1.
         """
-        mp = self.mp
         _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
         cached = getattr(mp, "_user_definition_cached", None)
         if cached is not None:
@@ -108,14 +107,13 @@ class UserConfig(ProcessorConfig):
         mp._user_definition_cached = _FALLBACK  # type: ignore[attr-defined]
         return _FALLBACK
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         """UMP system prompt — personality voice + template + mode-gate directives.
 
         Voice line sits at the very top for cache warmth.  The user_definition is
         NOT emitted here — it lives in the user prompt (spec § Prompt Message
         Definitions).  §3b / §6.
         """
-        mp = self.mp
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         try:
@@ -141,7 +139,7 @@ class UserConfig(ProcessorConfig):
 
         return prompt
 
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp) -> str:
         """UMP user-message body for one ACT iteration.
 
         Section order (mirrors OLD get_user_prompt + _wrap_with_exploration):
@@ -161,13 +159,12 @@ class UserConfig(ProcessorConfig):
 
         §3b / §6 / spec §4.
         """
-        mp = self.mp
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []
 
         # 1. User definition
-        user_def = self.get_user_definition()
+        user_def = self.get_user_definition(mp)
         if user_def:
             parts.append(user_def)
 

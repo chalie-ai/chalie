@@ -131,7 +131,6 @@ class TestSuperEpisodeConfig:
         spans = "raw transcript text here"
         cfg = SuperEpisodeConfig("user", sources, spans)
         mp = MagicMock()
-        object.__setattr__(cfg, "mp", mp)
-        result = cfg.get_user_prompt()
+        result = cfg.get_user_prompt(mp)
         assert isinstance(result, str)
         assert "ep1" in result or "AI plans" in result or "transcript" in result

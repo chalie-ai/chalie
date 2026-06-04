@@ -78,19 +78,18 @@ class WebBrowseConfig(ProcessorConfig):
             post_turn=None,
         )
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         return ""
 
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp) -> str:
         """Goal-driven user prompt: the goal plus the act-trail so far."""
-        mp = self.mp
         parts = [f"Browsing goal:\n{mp._raw_input}"]  # type: ignore[attr-defined]
         trail = render_trail(mp)
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         return _WEB_BROWSE_SYSTEM_PROMPT
 
 

@@ -86,14 +86,14 @@ class EAMPConfig(ProcessorConfig):
         object.__setattr__(self, "_agent_name", agent_name)
         object.__setattr__(self, "_project", project)
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         """Static agent identity string.  §3b."""
         return (
             f"The user is {self._agent_name}, an external agent. "
             f"This conversation is about: {self._project}."
         )
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         """EAMP system prompt.
 
         Fills in {user_name}, {agent_name}, {project_or_task_name} template
@@ -125,7 +125,7 @@ class EAMPConfig(ProcessorConfig):
             except Exception:
                 pass
 
-            user_def = self.get_user_definition()
+            user_def = self.get_user_definition(mp)
             body = (
                 body
                 .replace("{user_name}", user_name)
@@ -137,14 +137,13 @@ class EAMPConfig(ProcessorConfig):
             _log.warning("[EAMP] system prompt build failed: %s", exc)
             return ""
 
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp) -> str:
         """EAMP user-message body for one ACT iteration.
 
         Stripped compared to UMP: no world state, no user definition (it lives
         in the system prompt for EAMP).  Keeps: previous messages, ACT trail,
         input line.  §3b.
         """
-        mp = self.mp
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []

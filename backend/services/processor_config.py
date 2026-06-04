@@ -34,7 +34,7 @@ to ``Providers.calculate`` / ``Providers.send_messages``.  There is no separate
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Callable
 
@@ -52,10 +52,9 @@ class ProcessorConfig(ABC):
     concrete subclass that implements ``get_system_prompt`` /
     ``get_user_prompt`` / ``get_user_definition``.  The base class is abstract
     (ABC) so a subclass that forgets any of the three cannot be instantiated.
-    Each method reads ``self.mp`` — the bound MessageProcessor for the turn —
-    so no argument is threaded through.  ``mp`` is set when the config is
-    attached to a processor (``MessageProcessor.config`` setter); it is the only
-    mutable-after-construction attribute and is bound exactly once per turn.
+    Each method receives the turn's ``MessageProcessor`` as an explicit ``mp``
+    argument; the config holds no reference to the processor and stays a pure,
+    fully-immutable frozen dataclass.
     """
 
     # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
@@ -124,36 +123,26 @@ class ProcessorConfig(ABC):
     (mp: MessageProcessor, response_text: str) -> None.
     None = no-op.  This is the ONLY optional hook on ProcessorConfig (AC-32)."""
 
-    # ── Bound processor (set post-construction, not a constructor arg) ─────────
-
-    mp: "MessageProcessor | None" = field(
-        default=None, init=False, compare=False, repr=False
-    )
-    """The MessageProcessor running this turn.  Bound by the
-    ``MessageProcessor.config`` setter the moment the config is attached, so the
-    prompt-builder methods can read ``self.mp`` instead of taking an argument.
-    None until attached; rebound (via ``object.__setattr__``) exactly once per
-    turn, which is why it is excluded from the frozen dataclass's __init__,
-    equality, and repr."""
-
     # ── Prompt builders (abstract — one implementation per channel) ───────────
 
     @abstractmethod
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """The system instruction block for this channel's turn.
 
-        Reads ``self.mp``.  Every concrete config MUST implement this; the
-        returned string is byte-identical to the pre-refactor builder output."""
+        Receives the turn's MessageProcessor.  Every concrete config MUST
+        implement this; the returned string is byte-identical to the
+        pre-refactor builder output."""
 
     @abstractmethod
-    def get_user_prompt(self) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """The user-turn body (world state, history, input, ACT trail).
 
-        Reads ``self.mp``.  Every concrete config MUST implement this."""
+        Receives the turn's MessageProcessor.  Every concrete config MUST
+        implement this."""
 
     @abstractmethod
-    def get_user_definition(self) -> str:
-        """The user/persona preamble.  Reads ``self.mp``.
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
+        """The user/persona preamble.  Receives the turn's MessageProcessor.
 
         Every concrete config MUST implement this (return ``""`` when the
         channel has no user definition)."""

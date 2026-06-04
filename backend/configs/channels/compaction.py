@@ -23,13 +23,13 @@ class CompactionConfig(ProcessorConfig):
             post_turn=None,
         )
 
-    def get_user_definition(self) -> str:
+    def get_user_definition(self, mp) -> str:
         return ""
 
-    def get_user_prompt(self) -> str:
-        return self.mp._raw_input
+    def get_user_prompt(self, mp) -> str:
+        return mp._raw_input
 
-    def get_system_prompt(self) -> str:
+    def get_system_prompt(self, mp) -> str:
         """System prompt for continuity (history) compaction.  §3a / §4a."""
         from services.system_message_prompt import ContinuityCompactionSystemPrompt  # noqa: PLC0415
         return ContinuityCompactionSystemPrompt().get_prompt()

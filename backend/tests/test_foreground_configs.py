@@ -212,9 +212,7 @@ class TestContentFieldPlaceholderSubstitution:
 
         with patch("services.providers.Providers") as mock_providers_cls:
             mock_providers_cls.instance.return_value = providers_singleton
-            cfg = UserConfig()
-            object.__setattr__(cfg, "mp", MagicMock(spec=object))
-            body = cfg.get_system_prompt()
+            body = UserConfig().get_system_prompt(MagicMock(spec=object))
 
         assert "{{provider_content_field_name}}" not in body
         assert "content[].text" in body

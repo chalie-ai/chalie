@@ -192,10 +192,9 @@ class MessageProcessor:
     def __init__(self, raw_input: str, metadata: dict | None = None):
         self._raw_input = raw_input
         self._metadata = metadata or {}
-        # Per-turn config (set via the `config` property, which also binds the
-        # config back to this processor so its prompt-builder methods can read
-        # self.mp).  None until attached.
-        self._config: "ProcessorConfig | None" = None
+        # Per-turn config — a plain attribute set by `mp.config = X` in
+        # process() / the background workers.  None until attached.
+        self.config: "ProcessorConfig | None" = None
         self._memory_seed: str | None = None
         # Raw recall query used by pre_act(); kept separate from _memory_seed
         # (which is the formatted tag block) so recall_episodes() can embed
@@ -251,27 +250,6 @@ class MessageProcessor:
     # The flat process() lifecycle reads/writes mp.uid / mp.cancel_event /
     # mp.active_tools; these properties bridge to the private backing fields
     # set up in __init__.
-
-    @property
-    def config(self) -> "ProcessorConfig":
-        """The per-turn ProcessorConfig driving this processor."""
-        return self._config
-
-    @config.setter
-    def config(self, value: "ProcessorConfig") -> None:
-        """Attach a config and bind it back to this processor.
-
-        Binding ``config.mp = self`` is what lets the config's prompt-builder
-        methods (``get_system_prompt`` / ``get_user_prompt`` /
-        ``get_user_definition``) read ``self.mp`` instead of taking the
-        processor as an argument.  The config is a frozen dataclass, so the bind
-        goes through ``object.__setattr__``.  Centralising it here means every
-        ``mp.config = X`` site — process(), the subconscious workers, the
-        skill-suggestion / episode-encoder paths, and tests — binds uniformly.
-        """
-        self._config = value
-        if value is not None:
-            object.__setattr__(value, "mp", self)
 
     @property
     def uid(self) -> 'int | None':
@@ -528,9 +506,9 @@ class MessageProcessor:
 
             # Flat process() path — config carries all per-turn surfaces (§4).
             config = self.config
-            user_body = config.get_user_prompt()
+            user_body = config.get_user_prompt(self)
             user_body = _wrap_with_checkpoint(config.channel, user_body)
-            system_prompt = config.get_system_prompt()
+            system_prompt = config.get_system_prompt(self)
             tools = AbilityRegistry.build_tools(self)
 
             response = Providers.instance().send_messages(
@@ -701,9 +679,9 @@ class MessageProcessor:
         in_compaction = self.config.channel in self._COMPACTION_CHANNELS
         while True:
             if self._should_stop(): return ""  # noqa: E701
-            prompt = self.config.get_user_prompt()
+            prompt = self.config.get_user_prompt(self)
             prompt = _wrap_with_checkpoint(self.config.channel, prompt)
-            system = self.config.get_system_prompt()
+            system = self.config.get_system_prompt(self)
             tools = AbilityRegistry.build_tools(self)
             pct = p.calculate(system, prompt, tools, job=self.config.job, mp=self)
             if pct > 0.80:
