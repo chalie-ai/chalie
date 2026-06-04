@@ -74,7 +74,7 @@ class GeoConfig(ProcessorConfig):
     """Geo-pattern config — per-window background geo recognition.
 
     channel/role='geo_pattern', suppress_history=True, max_iterations=30.
-    post_turn = log counters only (§3b).
+    post_turn_hooks = (GeoCounterHook(),) — log counters only (§3b).
 
     Counter/state attrs are lazily initialised by get_user_prompt on the first
     call so the caller does not need to pre-set them.

@@ -44,8 +44,8 @@ class UserConfig(ProcessorConfig):
 
     broadcast_to='user' (live output), memory_seed=True, suppress_history=False.
     Attachments auto-fire document.upload on turn 0 (no flag needed — presence
-    of metadata['attachments'] drives this).  post_turn = skill suggestion only
-    (no metrics, no phase — §3b / §4e / §6).
+    of metadata['attachments'] drives this).  post_turn_hooks = (ProactiveSuggestionHook(),)
+    — skill suggestion only (no metrics, no phase — §3b / §4e / §6).
 
     SUPPORTS_ASYNC=True — the user channel is a push channel with a durable
     session, so it can honour a deferred result: the per-call ``async`` boolean

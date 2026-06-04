@@ -133,7 +133,7 @@ class SuperEpisodeConfig(ProcessorConfig):
     """Super-episode encoder config — per-cluster episode synthesis.
 
     channel/role='super_episode_encoder', suppress_history=True, max_iterations=1.
-    post_turn = None (caller owns episode write — §3b / O2).
+    post_turn_hooks = () (caller owns episode write — §3b / O2).
 
     sources and spans are captured at construction time so get_user_prompt is
     self-contained per cluster (§3c: cluster loop moves to caller).

@@ -130,8 +130,8 @@ class MessageProcessor:
     """The single flat message processor for every channel (spec §1 / §4 / §7a).
 
     There are no subclasses.  A turn is driven entirely by a per-turn
-    ``ProcessorConfig`` (channel, role, prompt builders, tool scope, the optional
-    ``post_turn`` hook, …) supplied to the ``process()`` entry point.  The
+    ``ProcessorConfig`` (channel, role, prompt builders, tool scope, the
+    ``post_turn_hooks`` tuple, …) supplied to the ``process()`` entry point.  The
     lifecycle is ``process → _run → _setup → _loop → _record``; tool calls route
     through ``ToolDispatcher.dispatch`` and the act-trail is reconstructed from
     ``tool_calls`` rows (§4c) rather than held in memory.

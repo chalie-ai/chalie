@@ -122,7 +122,7 @@ class PatternConfig(ProcessorConfig):
     """Pattern-match config — per-window background pattern recognition.
 
     channel/role='pattern_match', suppress_history=True, max_iterations=100.
-    post_turn = confidence decay sweep (§3b).
+    post_turn_hooks = (PatternDecayHook(),) — confidence decay sweep (§3b).
 
     Counter/state attrs are lazily initialised by get_user_prompt on the first
     call so the caller does not need to pre-set them.

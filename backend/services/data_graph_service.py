@@ -57,8 +57,8 @@ _KIND_POLICY = {
     KIND_DOCUMENT:           {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
     # behavioral_pattern: written exclusively by abilities.pattern_match.save_pattern.SavePattern
     # via raw SQL UPSERT (one-active-row-per-(kind, key)). Decay (-0.005/pass with
-    # soft-delete at 0) is handled by PatternMatchProcessor.post_turn() — DecayEngine
-    # does NOT touch this kind.
+    # soft-delete at 0) is handled by PatternDecayHook (configs/channels/pattern.py)
+    # via PatternConfig.post_turn_hooks — DecayEngine does NOT touch this kind.
     KIND_BEHAVIORAL_PATTERN: {'ttl_days': None,  'reinforce': True,  'contradiction': None,               'deletion': 'soft',     'd_base': 0.1,  'salience_floor': 0.3},
     # place: named locations saved by the user (home, work, gym, etc.). Persistent,
     # reinforced on re-save of same coords, superseded when the user renames/moves a
