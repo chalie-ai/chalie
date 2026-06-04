@@ -739,8 +739,18 @@ class MessageProcessor:
         if not self.config.skip_transcript:
             write_assistant_row(self.config.channel, response_text)
 
-        if self.config.post_turn is not None:
-            self.config.post_turn(self, response_text)
+        # After-turn hooks: mutually independent, failure-isolated (§4.8).  One
+        # hook raising is a non-event for the others — the order is undefined and
+        # may become concurrent, so each call is isolated (log + continue).
+        for hook in self.config.post_turn_hooks:
+            try:
+                hook.run(self, response_text)
+            except Exception as exc:  # noqa: BLE001 — failure isolation contract
+                logger.warning(
+                    "[post_turn] hook %s failed (isolated): %s",
+                    type(hook).__name__,
+                    exc,
+                )
 
     def _cleanup_cancelled(self) -> None:
         """Delete DB rows created during a cancelled turn.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
 # ── User-summary prompt builders and post_turn ────────────────────────────────
@@ -23,75 +24,76 @@ def _format_pattern_line(content: dict) -> str:
     )
 
 
-def _user_summary_post_turn(_mp: object, response_text: str) -> None:
-    """Parse JSON {short, long} from response_text and write to data_graph.
+class PersistUserSummaryHook(PostTurnHook):
+    """Parse JSON {short, long} from the assistant text and write to data_graph.
 
-    AC-29: receives response_text directly — no on_store hook, no _last_response cache.
-    §3b: post_turn(mp, response_text) is the only callback.
+    AC-29: receives response_text directly — no on_store hook, no _last_response
+    cache.  §3b / §4.8: this hook is the only after-turn callback for this channel.
     """
-    import json as _json  # noqa: PLC0415
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
 
-    text = (response_text or "").strip()
-    if not text:
-        _log.warning("[USER_SUMMARY_CONFIG] post_turn: empty LLM response — skipping write")
-        return
+    def run(self, mp, response_text: str) -> None:
+        import json as _json  # noqa: PLC0415
+        import logging as _logging  # noqa: PLC0415
+        _log = _logging.getLogger(__name__)
 
-    # Strip markdown code fences if the model wrapped the JSON.
-    stripped = text.removeprefix("```json").removeprefix("```").lstrip()
-    stripped = stripped.removesuffix("```").rstrip()
+        text = (response_text or "").strip()
+        if not text:
+            _log.warning("[USER_SUMMARY_CONFIG] post_turn: empty LLM response — skipping write")
+            return
 
-    try:
-        parsed = _json.loads(stripped)
-    except _json.JSONDecodeError as exc:
-        _log.warning(
-            "[USER_SUMMARY_CONFIG] post_turn: JSON parse failed (%s) — skipping write. raw=%r",
-            exc,
-            text[:200],
-        )
-        return
+        # Strip markdown code fences if the model wrapped the JSON.
+        stripped = text.removeprefix("```json").removeprefix("```").lstrip()
+        stripped = stripped.removesuffix("```").rstrip()
 
-    if not isinstance(parsed, dict):
-        _log.warning(
-            "[USER_SUMMARY_CONFIG] post_turn: parsed value is not a dict — skipping write"
-        )
-        return
+        try:
+            parsed = _json.loads(stripped)
+        except _json.JSONDecodeError as exc:
+            _log.warning(
+                "[USER_SUMMARY_CONFIG] post_turn: JSON parse failed (%s) — skipping write. raw=%r",
+                exc,
+                text[:200],
+            )
+            return
 
-    short = (parsed.get("short") or "").strip()
-    long_ = (parsed.get("long") or "").strip()
+        if not isinstance(parsed, dict):
+            _log.warning(
+                "[USER_SUMMARY_CONFIG] post_turn: parsed value is not a dict — skipping write"
+            )
+            return
 
-    if not short or not long_:
-        _log.warning(
-            "[USER_SUMMARY_CONFIG] post_turn: 'short' or 'long' missing/empty — skipping write"
-        )
-        return
+        short = (parsed.get("short") or "").strip()
+        long_ = (parsed.get("long") or "").strip()
 
-    try:
-        from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-        dgs = get_data_graph_service()
-        # Write user_summary_long FIRST so crash recovery works correctly.
-        # See UserSummaryProcessor.post_turn() docstring for the ordering rationale.
-        dgs.store(
-            kind="system",
-            key="user_summary_long",
-            value=long_,
-            source="user_summary_config",
-        )
-        dgs.store(
-            kind="system",
-            key="user_summary",
-            value=short,
-            source="user_summary_config",
-        )
-        _log.info(
-            "[USER_SUMMARY_CONFIG] post_turn: wrote user_summary (%d chars) and "
-            "user_summary_long (%d chars)",
-            len(short),
-            len(long_),
-        )
-    except Exception as exc:
-        _log.warning("[USER_SUMMARY_CONFIG] post_turn: data_graph write failed: %s", exc)
+        if not short or not long_:
+            _log.warning(
+                "[USER_SUMMARY_CONFIG] post_turn: 'short' or 'long' missing/empty — skipping write"
+            )
+            return
+
+        try:
+            from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
+            dgs = get_data_graph_service()
+            # Write user_summary_long FIRST so crash recovery works correctly.
+            dgs.store(
+                kind="system",
+                key="user_summary_long",
+                value=long_,
+                source="user_summary_config",
+            )
+            dgs.store(
+                kind="system",
+                key="user_summary",
+                value=short,
+                source="user_summary_config",
+            )
+            _log.info(
+                "[USER_SUMMARY_CONFIG] post_turn: wrote user_summary (%d chars) and "
+                "user_summary_long (%d chars)",
+                len(short),
+                len(long_),
+            )
+        except Exception as exc:
+            _log.warning("[USER_SUMMARY_CONFIG] post_turn: data_graph write failed: %s", exc)
 
 
 def _should_synthesise() -> bool:
@@ -181,7 +183,7 @@ class UserSummaryConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn=_user_summary_post_turn,
+            post_turn_hooks=(PersistUserSummaryHook(),),
         )
 
     def get_user_definition(self, mp) -> str:

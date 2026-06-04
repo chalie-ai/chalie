@@ -160,7 +160,6 @@ class SuperEpisodeConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn=None,
         )
         object.__setattr__(self, "_sources", sources)
         object.__setattr__(self, "_spans", spans)

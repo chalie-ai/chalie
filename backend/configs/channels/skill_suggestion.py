@@ -21,7 +21,6 @@ class SkillSuggestionConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn=None,
         )
 
     def get_user_definition(self, mp) -> str:

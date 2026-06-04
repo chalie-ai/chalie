@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
 from configs.channels._common import (
@@ -13,27 +14,29 @@ from configs.channels._common import (
 )
 
 
-def _ump_post_turn(mp: object, response_text: str) -> None:
-    """UMP post-turn: proactive skill suggestion only.  No metrics, no phase.
+class ProactiveSuggestionHook(PostTurnHook):
+    """UMP after-turn: proactive skill suggestion only.  No metrics, no phase.
 
     Fires only on clean ACT exits with 4+ tool-calling iterations.
     Non-blocking (daemon thread inside the service).
 
-    §3b / §4e / §6.
+    §3b / §4e / §6 / §4.8.
     """
-    import logging  # noqa: PLC0415
-    _log = logging.getLogger(__name__)
-    exited_cleanly = getattr(mp, "loop_exited_cleanly", False)
-    iteration = getattr(mp, "current_iteration", 0)
-    if exited_cleanly and iteration >= 4:
-        try:
-            from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
-            rendered = mp._render_act_trail()  # type: ignore[attr-defined]
-            act_trail = rendered.split("\n") if rendered else []
-            raw_input = getattr(mp, "_raw_input", "")
-            maybe_suggest_skill(act_trail, raw_input)
-        except Exception as exc:
-            _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
+
+    def run(self, mp, response_text: str) -> None:
+        import logging  # noqa: PLC0415
+        _log = logging.getLogger(__name__)
+        exited_cleanly = getattr(mp, "loop_exited_cleanly", False)
+        iteration = getattr(mp, "current_iteration", 0)
+        if exited_cleanly and iteration >= 4:
+            try:
+                from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
+                rendered = mp._render_act_trail()  # type: ignore[attr-defined]
+                act_trail = rendered.split("\n") if rendered else []
+                raw_input = getattr(mp, "_raw_input", "")
+                maybe_suggest_skill(act_trail, raw_input)
+            except Exception as exc:
+                _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
 
 
 class UserConfig(ProcessorConfig):
@@ -67,7 +70,7 @@ class UserConfig(ProcessorConfig):
             suppress_history=False,
             broadcast_to="user",
             memory_seed=True,
-            post_turn=_ump_post_turn,
+            post_turn_hooks=(ProactiveSuggestionHook(),),
         )
 
     def get_user_definition(self, mp) -> str:

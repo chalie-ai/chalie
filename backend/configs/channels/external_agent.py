@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
-
+from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
 from configs.channels._common import (
@@ -13,29 +12,27 @@ from configs.channels._common import (
 )
 
 
-def _make_eamp_post_turn(
-    agent_name: str,
-    project: str,
-    loop_in_human: bool,
-) -> Any:
-    """Return a post_turn callable for EAMP.
+class DiscloseToHumanHook(PostTurnHook):
+    """EAMP after-turn: dispatch a disclosure turn to the user channel so the
+    human learns about the external-agent exchange.  §3b / §4d / §4.8.
 
-    When loop_in_human=True, dispatches a disclosure message to the user
-    channel after the ACT loop completes.  §3b / §4d.
+    The closure-over-constructor-args of the old factory becomes honest object
+    fields.  Composed onto EAMPConfig only when ``loop_in_human`` is set.  The
+    hidden-input UserConfig turn it spawns is the §4.0 cross-channel surface —
+    a background, emit-only processor invisible to the foreground turn machinery.
     """
-    if not loop_in_human:
-        return None
 
-    _agent_name = agent_name
-    _project = project
+    def __init__(self, agent_name: str, project: str) -> None:
+        self._agent_name = agent_name
+        self._project = project
 
-    def _post_turn(mp: object, response_text: str) -> None:
+    def run(self, mp, response_text: str) -> None:
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         raw_input = getattr(mp, "_raw_input", "")
         disclosure_input = (
-            f"An external agent called '{_agent_name}' just contacted you "
-            f"about '{_project}'. "
+            f"An external agent called '{self._agent_name}' just contacted you "
+            f"about '{self._project}'. "
             f"Here's what they said:\n\n\"{raw_input}\"\n\n"
             f"You replied:\n\n\"{response_text}\"\n\n"
             "Let the user know about this exchange in your own words."
@@ -45,8 +42,6 @@ def _make_eamp_post_turn(
             dispatch_message(disclosure_input, source="external_agent", hidden_input=True)
         except Exception as exc:
             _log.warning("[EAMP] disclosure dispatch failed: %s", exc)
-
-    return _post_turn
 
 
 class EAMPConfig(ProcessorConfig):
@@ -81,7 +76,9 @@ class EAMPConfig(ProcessorConfig):
             suppress_history=False,
             broadcast_to=None,
             memory_seed=True,
-            post_turn=_make_eamp_post_turn(agent_name, project, loop_in_human),
+            post_turn_hooks=(
+                (DiscloseToHumanHook(agent_name, project),) if loop_in_human else ()
+            ),
         )
         object.__setattr__(self, "_agent_name", agent_name)
         object.__setattr__(self, "_project", project)

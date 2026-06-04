@@ -14,7 +14,7 @@ def _make(policy_channel):
         build_system_prompt=lambda mp: "", always_available=[], discoverable=[],
         blocked=frozenset(), max_iterations=None, skip_transcript=False,
         skip_input_row=False, suppress_history=False, broadcast_to=None,
-        memory_seed=False, post_turn=None,
+        memory_seed=False,
     )
 
 

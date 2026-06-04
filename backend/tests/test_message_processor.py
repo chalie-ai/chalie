@@ -35,7 +35,6 @@ def _make_config(
     suppress_history=True,
     broadcast_to=None,
     memory_seed=False,
-    post_turn=None,
 ):
     """Return a minimal ProcessorConfig for use in flat-MP tests."""
     from services.processor_config import ProcessorConfig
@@ -57,7 +56,6 @@ def _make_config(
         suppress_history=suppress_history,
         broadcast_to=broadcast_to,
         memory_seed=memory_seed,
-        post_turn=post_turn,
     )
 
 
@@ -88,14 +86,14 @@ class TestSuppressHistory:
 class TestProcessorConfigHookSurface:
 
     def test_post_turn_is_only_optional_hook(self):
-        """post_turn is the ONLY optional Callable hook (no on_narration/
-        on_tool_event/pre_act/process_attachments/overflow_strategy). §2."""
+        """post_turn_hooks is the ONLY hook surface (no on_narration/
+        on_tool_event/pre_act/process_attachments/overflow_strategy). §2 / §4.8."""
         from services.processor_config import ProcessorConfig
         import dataclasses
 
         fields = {f.name for f in dataclasses.fields(ProcessorConfig)}
-        # post_turn must exist
-        assert "post_turn" in fields
+        # post_turn_hooks must exist (the post_turn callable became a hook set, §4.8)
+        assert "post_turn_hooks" in fields
         # None of the removed hooks should exist
         for removed in ("on_narration", "on_tool_event", "pre_act",
                         "process_attachments", "overflow_strategy"):

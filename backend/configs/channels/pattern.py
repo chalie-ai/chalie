@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
 # ── Pattern-match prompt builders and post_turn ───────────────────────────────
@@ -42,65 +43,67 @@ def _pattern_existing_patterns_block() -> str:
         return "(none yet)"
 
 
-def _pattern_post_turn(mp: object, _response_text: str) -> None:
+class PatternDecayHook(PostTurnHook):
     """Confidence decay sweep: -0.005 on untouched active rows; soft-delete at <=0.
 
-    §3b / §4e — no metrics recorded here (metrics moved to send gateway).
+    §3b / §4e / §4.8 — no metrics recorded here (metrics moved to send gateway).
     """
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
-    try:
-        touched_ids: set = getattr(mp, "_touched_pattern_ids", set()) or set()
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        from services.time_utils import utc_now  # noqa: PLC0415
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            # Decrement confidence on untouched rows.
-            params: list = []
-            touched_filter = ""
-            if touched_ids:
-                placeholders = ",".join("?" * len(touched_ids))
-                touched_filter = f"AND id NOT IN ({placeholders})"
-                params = list(touched_ids)
-            conn.execute(
-                f"""
-                UPDATE data_graph
-                SET value = json_set(
-                      value,
-                      '$.confidence',
-                      MAX(0.0, CAST(json_extract(value, '$.confidence') AS REAL) - 0.005)
-                    )
-                WHERE kind = 'behavioral_pattern'
-                  AND active = 1
-                  AND deleted_at IS NULL
-                  AND json_extract(value, '$.confidence') IS NOT NULL
-                  {touched_filter}
-                """,
-                params,
+
+    def run(self, mp, response_text: str) -> None:
+        import logging as _logging  # noqa: PLC0415
+        _log = _logging.getLogger(__name__)
+        try:
+            touched_ids: set = getattr(mp, "_touched_pattern_ids", set()) or set()
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            from services.time_utils import utc_now  # noqa: PLC0415
+            db = get_shared_db_service()
+            with db.connection() as conn:
+                # Decrement confidence on untouched rows.
+                params: list = []
+                touched_filter = ""
+                if touched_ids:
+                    placeholders = ",".join("?" * len(touched_ids))
+                    touched_filter = f"AND id NOT IN ({placeholders})"
+                    params = list(touched_ids)
+                conn.execute(
+                    f"""
+                    UPDATE data_graph
+                    SET value = json_set(
+                          value,
+                          '$.confidence',
+                          MAX(0.0, CAST(json_extract(value, '$.confidence') AS REAL) - 0.005)
+                        )
+                    WHERE kind = 'behavioral_pattern'
+                      AND active = 1
+                      AND deleted_at IS NULL
+                      AND json_extract(value, '$.confidence') IS NOT NULL
+                      {touched_filter}
+                    """,
+                    params,
+                )
+                # Soft-delete rows whose confidence dropped to <=0.
+                conn.execute(
+                    """
+                    UPDATE data_graph
+                    SET active = 0
+                    WHERE kind = 'behavioral_pattern'
+                      AND active = 1
+                      AND CAST(json_extract(value, '$.confidence') AS REAL) <= 0.0
+                    """,
+                )
+            save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
+            save_graph_calls = getattr(mp, "_save_graph_calls", 0)
+            now_iso = utc_now().isoformat()
+            _log.info(
+                "[PATTERN_CONFIG] done save_pattern=%d save_graph=%d "
+                "touched=%d at=%s",
+                save_pattern_calls,
+                save_graph_calls,
+                len(touched_ids),
+                now_iso,
             )
-            # Soft-delete rows whose confidence dropped to <=0.
-            conn.execute(
-                """
-                UPDATE data_graph
-                SET active = 0
-                WHERE kind = 'behavioral_pattern'
-                  AND active = 1
-                  AND CAST(json_extract(value, '$.confidence') AS REAL) <= 0.0
-                """,
-            )
-        save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
-        save_graph_calls = getattr(mp, "_save_graph_calls", 0)
-        now_iso = utc_now().isoformat()
-        _log.info(
-            "[PATTERN_CONFIG] done save_pattern=%d save_graph=%d "
-            "touched=%d at=%s",
-            save_pattern_calls,
-            save_graph_calls,
-            len(touched_ids),
-            now_iso,
-        )
-    except Exception as exc:
-        _log.warning("[PATTERN_CONFIG] decay sweep failed: %s", exc)
+        except Exception as exc:
+            _log.warning("[PATTERN_CONFIG] decay sweep failed: %s", exc)
 
 
 def _pattern_init_instance_state(mp: object) -> None:
@@ -139,7 +142,7 @@ class PatternConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn=_pattern_post_turn,
+            post_turn_hooks=(PatternDecayHook(),),
         )
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)

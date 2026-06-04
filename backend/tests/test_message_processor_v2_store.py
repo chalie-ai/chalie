@@ -54,7 +54,6 @@ def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
         suppress_history=suppress_history,
         broadcast_to=None,
         memory_seed=False,
-        post_turn=None,
     )
 
 
@@ -491,7 +490,6 @@ def _make_compact_processor(channel=_COMPACT_CHANNEL, role='user', raw_input='he
         suppress_history=False,
         broadcast_to=None,
         memory_seed=False,
-        post_turn=None,
     )
 
     mp = object.__new__(MessageProcessor)

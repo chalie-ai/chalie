@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
 from configs.channels.pattern import _pattern_existing_patterns_block
@@ -42,29 +43,31 @@ def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> st
         return "(transcript fetch failed)"
 
 
-def _geo_pattern_post_turn(mp: object, _response_text: str) -> None:
+class GeoCounterHook(PostTurnHook):
     """Log completion counters. Decay is handled by pattern_match, not geo_pattern.
 
-    §3b — no metrics, no decay sweep.
+    §3b / §4.8 — no metrics, no decay sweep.
     """
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
-    try:
-        from services.time_utils import utc_now  # noqa: PLC0415
-        save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
-        save_graph_calls = getattr(mp, "_save_graph_calls", 0)
-        touched_ids = getattr(mp, "_touched_pattern_ids", set()) or set()
-        now_iso = utc_now().isoformat()
-        _log.info(
-            "[GEO_CONFIG] done save_pattern=%d save_graph=%d "
-            "touched=%d at=%s",
-            save_pattern_calls,
-            save_graph_calls,
-            len(touched_ids),
-            now_iso,
-        )
-    except Exception as exc:
-        _log.warning("[GEO_CONFIG] post_turn logging failed: %s", exc)
+
+    def run(self, mp, response_text: str) -> None:
+        import logging as _logging  # noqa: PLC0415
+        _log = _logging.getLogger(__name__)
+        try:
+            from services.time_utils import utc_now  # noqa: PLC0415
+            save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
+            save_graph_calls = getattr(mp, "_save_graph_calls", 0)
+            touched_ids = getattr(mp, "_touched_pattern_ids", set()) or set()
+            now_iso = utc_now().isoformat()
+            _log.info(
+                "[GEO_CONFIG] done save_pattern=%d save_graph=%d "
+                "touched=%d at=%s",
+                save_pattern_calls,
+                save_graph_calls,
+                len(touched_ids),
+                now_iso,
+            )
+        except Exception as exc:
+            _log.warning("[GEO_CONFIG] post_turn logging failed: %s", exc)
 
 
 class GeoConfig(ProcessorConfig):
@@ -91,7 +94,7 @@ class GeoConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn=_geo_pattern_post_turn,
+            post_turn_hooks=(GeoCounterHook(),),
         )
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)

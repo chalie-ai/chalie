@@ -36,10 +36,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Callable, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
+    from services.post_turn_hook import PostTurnHook
 
 
 @dataclass(frozen=True)
@@ -124,12 +125,14 @@ class ProcessorConfig(ABC):
     Attachments are NOT a flag: presence of metadata['attachments'] auto-fires
     document.upload per file on turn 0 (AC-30 / AC-31)."""
 
-    # ── The only optional hook — None = no-op ────────────────────────────────
+    # ── After-turn hooks — empty tuple = no-op ───────────────────────────────
 
-    post_turn: Callable[..., None] | None
-    """Called once after the assistant row is persisted, signature:
-    (mp: MessageProcessor, response_text: str) -> None.
-    None = no-op.  This is the ONLY optional hook on ProcessorConfig (AC-32)."""
+    post_turn_hooks: tuple[PostTurnHook, ...] = ()
+    """Independent units of after-turn work, each ``hook.run(mp, response_text)``,
+    run once after the assistant row is persisted.  Empty tuple = no-op.  Hooks
+    are mutually independent and failure-isolated — see services/post_turn_hook.py
+    and MessageProcessor._record.  This is the ONLY hook surface on
+    ProcessorConfig (AC-32 / §4.8)."""
 
     # ── Prompt builders (abstract — one implementation per channel) ───────────
 

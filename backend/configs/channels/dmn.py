@@ -80,7 +80,7 @@ def _dmn_fetch_recent_episodes() -> str:
 
 
 class DmnConfig(ProcessorConfig):
-    """DMN background channel.  §3a / §8b.  post_turn=None (metrics moved to gateway §4e).
+    """DMN background channel.  §3a / §8b.  No after-turn hooks (metrics moved to gateway §4e).
 
     DMN is a background reflection loop — it must never spawn delegate work
     (the old single ``subagent`` tool was retired in favour of the delegate
@@ -101,7 +101,6 @@ class DmnConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn=None,
         )
 
     def get_user_definition(self, mp) -> str:
