@@ -25,11 +25,20 @@ logger = logging.getLogger(__name__)
 MAX_CONTEXT_WINDOW = 200_000
 
 
+class ContextOverflowError(Exception):
+    """Raised by pre_flight_check when the scaffolded request would not fit the
+    provider's context window (clamped 90% / 8k-headroom rule)."""
+
+
 class Providers:
-    """Singleton provider gateway. Resolves provider by job, sends messages."""
+    """Per-mp provider gateway. Owns the bound MessageProcessor and scaffolds
+    every send / size-check / resolution from it. One instance per mp."""
 
     _instance = None
     _lock = threading.Lock()
+
+    def __init__(self, mp=None):
+        self.mp = mp
 
     @classmethod
     def instance(cls):
@@ -39,7 +48,53 @@ class Providers:
                     cls._instance = cls()
         return cls._instance
 
-    def send(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True, thinking_mode=None, mp=None):
+    def send(self):
+        """Scaffold the request from self.mp, pre-flight it, send, log. Returns LLMResponse."""
+        mp = self.mp
+        system = mp.config.get_system_prompt(mp)
+        from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
+        user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
+        from abilities._registry import AbilityRegistry  # noqa: PLC0415
+        tools = AbilityRegistry.build_tools(mp)
+        job = mp.config.job
+        thinking_mode = getattr(mp.config, "thinking_mode", None) or mp.thinking_level
+
+        self.pre_flight_check(system, user, tools, job)
+
+        provider = self._resolve(job, mp)
+        messages = [{"role": "user", "content": user}]
+        t0 = time.monotonic()
+        response = provider.send_messages(system, messages, True, tools=tools, thinking_mode=thinking_mode)
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        self._log_after_call(system, messages, tools, job, response, wall_ms, mp)
+        return response
+
+    def pre_flight_check(self, system, user, tools, job):
+        """Raise ContextOverflowError when the scaffolded request would overflow.
+
+        Clamped rule (design §3.3): fire on req >= 0.90*window OR
+        (window - req) <= min(8000, 0.10*window). The clamp keeps the literal 8k
+        headroom on large windows and degrades to 10% on small ones, so small
+        (e.g. 8k Ollama) windows never trip on every request."""
+        from services.llm_service import estimate_tokens  # noqa: PLC0415
+        provider = self._resolve(job, self.mp)
+        window = self.get_context_limit()   # declared max_tokens, capped 200k (Step 3b)
+        if not window:
+            return
+        body = provider.build_request_body(system, [{"role": "user", "content": user}], tools)
+        req = estimate_tokens(body)
+        headroom = min(8000, int(0.10 * window))
+        if req >= 0.90 * window or (window - req) <= headroom:
+            raise ContextOverflowError(
+                f"request {req} tok would overflow window {window} "
+                f"(headroom {headroom}); channel={self.mp.config.channel}"
+            )
+
+    def selected_provider(self):
+        """The resolved provider instance for this mp's job (design §3.1, §6.3)."""
+        return self._resolve(self.mp.config.job, self.mp)
+
+    def send_legacy(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True, thinking_mode=None, mp=None):
         """Sync send. Returns LLMResponse.
 
         ``mp`` is the invoking MessageProcessor (the parent), threaded explicitly
@@ -232,9 +287,20 @@ class Providers:
             return []
         return AbilityRegistry.build_tools(mp)
 
-    def get_context_limit(self, job='unified'):
-        """Delegate to resolved provider, capped to MAX_CONTEXT_WINDOW."""
-        return min(self._resolve(job).get_context_limit(), MAX_CONTEXT_WINDOW)
+    def get_context_limit(self):
+        """Declared context window for the active provider/model, hard-capped at
+        MAX_CONTEXT_WINDOW (200k). Reads the backfilled providers.max_tokens
+        (set by provider_token_limits.backfill_one = min(model window, 200k)).
+        Falls back to the live provider method before backfill has run. §3.3."""
+        from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
+        config = ProviderCacheService.get_selected_provider() or {}
+        declared = config.get("max_tokens")
+        if declared and int(declared) > 0:
+            return min(int(declared), MAX_CONTEXT_WINDOW)
+        mp = self.mp
+        if mp is not None:
+            return min(self._resolve(mp.config.job, mp).get_context_limit(), MAX_CONTEXT_WINDOW)
+        return min(self._resolve('unified').get_context_limit(), MAX_CONTEXT_WINDOW)
 
     def calculate(
         self,

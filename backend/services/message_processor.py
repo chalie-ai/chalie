@@ -227,6 +227,11 @@ class MessageProcessor:
         self._overflow_recovered_this_turn: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
+        # The mp owns its provider gateway — param-free, scaffolds from self.
+        from services.providers import Providers  # noqa: PLC0415
+        self.providers = Providers(self)
+        # Reactive-compaction retry budget; reset to 0 after any successful send.
+        self._compaction_retries: int = 0
         # Cooperative cancellation flag. Set by stop endpoints to signal the
         # ACT loop to exit at the next iteration boundary. Never raises —
         # the loop checks is_set() at the top of each iteration.

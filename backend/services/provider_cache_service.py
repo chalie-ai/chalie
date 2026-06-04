@@ -141,6 +141,20 @@ class ProviderCacheService:
             service = ProviderDbService(db)
             selected = service.get_selected_provider()
             if selected:
+                # Fetch max_tokens directly: ProviderDbService._PROVIDER_COLS does not
+                # include max_tokens so we read it with a targeted query here.
+                max_tokens = selected.get('max_tokens')
+                if max_tokens is None:
+                    try:
+                        with db.connection() as _conn:
+                            _row = _conn.execute(
+                                "SELECT max_tokens FROM providers WHERE id = ?",
+                                (selected['id'],),
+                            ).fetchone()
+                            if _row:
+                                max_tokens = _row[0]
+                    except Exception:
+                        pass
                 return {
                     'platform': selected['platform'],
                     'model': selected['model'],
@@ -148,6 +162,7 @@ class ProviderCacheService:
                     'api_key': selected.get('api_key'),
                     'dimensions': selected.get('dimensions'),
                     'timeout': selected.get('timeout'),
+                    'max_tokens': max_tokens,
                 }
         except Exception as e:
             logger.debug(f"[ProviderCache] Failed to get selected provider: {e}")

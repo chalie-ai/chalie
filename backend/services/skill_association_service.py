@@ -118,7 +118,7 @@ class SkillAssociationService:
 
         from services.providers import Providers
         try:
-            response = Providers.instance().send(
+            response = Providers.instance().send_legacy(
                 user_prompt=user_prompt,
                 system_prompt=_SYSTEM_PROMPT,
                 job='subconscious',
