@@ -539,9 +539,9 @@ class MessageProcessor:
         """
         if transcript_id is None or self._thinking_exploration is None:
             return
-        from abilities._base import Ability  # noqa: PLC0415
+        from services.act_trail import ActTrail  # noqa: PLC0415
         try:
-            Ability.record(
+            ActTrail().record(
                 tool_name='thinking',
                 params={},
                 result=self._thinking_exploration,
@@ -876,7 +876,7 @@ class MessageProcessor:
     def _has_trail(self) -> bool:
         """True when a non-compaction trail row exists since last compaction.
 
-        Queries tool_calls via Ability.fetch_by_transcript_id and slices from
+        Queries tool_calls via ActTrail.fetch_by_transcript_id and slices from
         the last trail_compaction row.  Returns True only when at least one
         non-trail_compaction row exists in that slice.
 
@@ -884,24 +884,25 @@ class MessageProcessor:
         """
         if self.uid is None:
             return False
-        from abilities._base import Ability  # noqa: PLC0415
-        rows = _from_last_compaction(Ability.fetch_by_transcript_id(self.uid))
+        from services.act_trail import ActTrail  # noqa: PLC0415
+        rows = _from_last_compaction(ActTrail().fetch_by_transcript_id(self.uid))
         return any(r["tool_name"] != "trail_compaction" for r in rows)
 
     def _render_act_trail(self) -> str:
         """Assemble the ACT trail string for the current turn.
 
         Fetches all tool_calls rows for self.uid ordered by id, slices from the
-        last trail_compaction row (inclusive), and renders each via Ability.render().
+        last trail_compaction row (inclusive), and renders each via ActTrail.render().
         Returns '' when uid is None or no rows exist.
 
         Spec §4c / _render_act_trail.
         """
         if self.uid is None:
             return ""
-        from abilities._base import Ability  # noqa: PLC0415
-        rows = _from_last_compaction(Ability.fetch_by_transcript_id(self.uid))
-        return "\n".join(Ability.render(r) for r in rows)
+        from services.act_trail import ActTrail  # noqa: PLC0415
+        trail = ActTrail()
+        rows = _from_last_compaction(trail.fetch_by_transcript_id(self.uid))
+        return "\n".join(trail.render(r) for r in rows)
 
     def _compact_trail(self) -> bool:
         """Trail compaction (>90%): summarise the trail-so-far into ONE
@@ -920,8 +921,8 @@ class MessageProcessor:
 
         Spec §4a / D2 / D8 / D9 / D10 / AC-23.
         """
-        from abilities._base import Ability  # noqa: PLC0415
         from configs.channels import CompactionConfig  # noqa: PLC0415
+        from services.act_trail import ActTrail  # noqa: PLC0415
 
         trail_text = self._render_act_trail()
         if not trail_text.strip():
@@ -939,7 +940,7 @@ class MessageProcessor:
 
         # Record the summary AS a trail tool call — it becomes the head of the
         # trail on the next assembly (distinct tool_name from history 'compaction').
-        Ability.record(
+        ActTrail().record(
             tool_name="trail_compaction",
             params={},
             result=compacted,
@@ -987,9 +988,9 @@ class MessageProcessor:
         text = getattr(response, "text", None)
         if not text:
             return
-        from abilities._base import Ability  # noqa: PLC0415
         from abilities._event_emitter import ActEventEmitter  # noqa: PLC0415
-        Ability.record(
+        from services.act_trail import ActTrail  # noqa: PLC0415
+        ActTrail().record(
             tool_name="narration",
             params={},
             result=text,

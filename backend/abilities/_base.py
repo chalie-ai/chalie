@@ -257,7 +257,8 @@ class Ability(ABC):
                 callback=lambda: ability.execute(params, act_summary),
             )
 
-        Ability.record(
+        from services.act_trail import ActTrail  # noqa: PLC0415
+        ActTrail().record(
             tool_name=tool_name,
             params=params,
             result=result_text,
@@ -303,92 +304,6 @@ class Ability(ABC):
             ability = type(template)()
         ability.MessageProcessor = mp
         return ability
-
-    # ── Trail statics — the ONLY write/read/render path for the trail ────────
-    # Spec §4c / F2 / F3 / F4 / AC-24.
-
-    @staticmethod
-    def record(
-        tool_name: str,
-        params: dict,
-        result: str,
-        transcript_id: "int | None",
-        ephemeral: bool = True,
-    ) -> None:
-        """Rule 1 — the ONLY write path.  One INSERT, raw params/result, no render.
-
-        Skips silently when transcript_id is None (delegates with skip_transcript
-        have no anchor row; the FK column is NOT NULL so we never attempt the
-        insert).
-
-        Spec §4c / F2 / AC-24.
-        """
-        if transcript_id is None:
-            logger.debug(
-                "[Ability.record] skipping record (no transcript_id): tool=%s",
-                tool_name,
-            )
-            return
-        import json as _json  # noqa: PLC0415
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        from services.time_utils import utc_now  # noqa: PLC0415
-
-        try:
-            db = get_shared_db_service()
-            params_json = _json.dumps(params)
-            now = utc_now().isoformat()
-            with db.connection() as conn:
-                conn.execute(
-                    "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, ephemeral, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (transcript_id, tool_name, params_json, result,
-                     1 if ephemeral else 0, now),
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[Ability.record] trail write failed (non-fatal): tool=%s transcript=%s: %s",
-                tool_name, transcript_id, exc,
-            )
-
-    @staticmethod
-    def fetch_by_transcript_id(transcript_id: int) -> "list[dict]":
-        """Rule 3 (fetch) — every tool_calls row for an ACT loop, oldest→newest.
-
-        Ordered by autoincrement id (not created_at — one-second granularity
-        makes created_at ambiguous when several rows land in the same second).
-
-        Spec §4c / F3.
-        """
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-
-        try:
-            db = get_shared_db_service()
-            return db.fetch_all(
-                "SELECT id, tool_name, params, result, created_at, ephemeral "
-                "FROM tool_calls WHERE transcript_id = ? ORDER BY id",
-                (transcript_id,),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[Ability.fetch_by_transcript_id] query failed for transcript_id=%s: %s",
-                transcript_id, exc,
-            )
-            return []
-
-    @staticmethod
-    def render(row: dict) -> str:
-        """Rule 2 — the ONLY render path.  One row → its representation.
-
-        Invariant shape: '[tool_name] params → result'
-        Same function for the LLM prompt, the UI card, and the audit view.
-
-        Spec §4c / F4.
-        """
-        tool_name = row.get("tool_name", "unknown")
-        params_raw = row.get("params") or "{}"
-        result = row.get("result") or ""
-        return f"[{tool_name}] {params_raw} → {result}"
 
     # ── Active-delegate registry ──────────────────────────────────────────────
 
