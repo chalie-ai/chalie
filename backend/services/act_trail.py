@@ -16,7 +16,7 @@ This is a repository, not an Ability concern — it was lifted out of the
 
 Consumers: ``services.message_processor`` (trail assembly, compaction,
 narration, thinking persistence) and the tool-dispatch chokepoint
-(``Ability.use`` → later ``ToolDispatcher.dispatch``), which records every tool
+(``ToolDispatcher.dispatch``), which records every tool
 outcome so the rendered trail tells the model what happened.
 
 It holds a real dependency — the shared DB service — so it is a constructed

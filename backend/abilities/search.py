@@ -19,7 +19,7 @@ import sqlite3
 import time
 from typing import ClassVar
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.file_mapper_service import FileMapperService
 from tools.search.fetcher import fetch_providers, fetch_ddg_fallback
 

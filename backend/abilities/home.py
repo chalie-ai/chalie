@@ -7,7 +7,7 @@ email.py (no rich-media rendering).
 import json
 import logging
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)

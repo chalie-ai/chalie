@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from abilities._ssrf import is_private_url
 from services.innate_skills._tag import tag as _skill_tag
 

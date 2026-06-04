@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
 
-from abilities._base import Ability
+from abilities._ability import Ability
 
 # ---------------------------------------------------------------------------
 # Content extraction constants

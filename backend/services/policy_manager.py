@@ -1,8 +1,8 @@
 """PolicyManager — flat (channel, permission, setting) permission gate.
 
 Single entry point: PolicyManager.wrap(channel, permission, callback, error).
-Every native AND MCP tool call flows through it (Ability.use passes
-Ability.execute as the callback).
+Every native AND MCP tool call flows through it (ToolDispatcher.dispatch passes
+ToolDispatcher._execute as the callback).
 
 Settings: internal (always allowed, hidden in Brain) · allow · ask · deny.
 Channels: ProcessorConfig.POLICY_CHANNEL values.
@@ -62,7 +62,7 @@ class PolicyManager:
         """Gate `callback` for (channel, permission). channel is a POLICY_CHANNEL.
         Returns the callback's result STRING (allow/internal/approved) or the
         shared block STRING (deny / escalated-ask / user-denied). The result is
-        always a string so Ability.use can record it and the loop can render it
+        always a string so ToolDispatcher.dispatch can record it and the loop can render it
         uniformly — dicts never cross this boundary."""
         from services.database_service import get_shared_db_service  # noqa: PLC0415
         return PolicyManager(get_shared_db_service()).authorize(channel, permission, callback, error)

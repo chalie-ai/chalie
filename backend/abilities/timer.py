@@ -25,7 +25,7 @@ import logging
 from datetime import datetime, timezone
 from typing import ClassVar
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)

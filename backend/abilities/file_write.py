@@ -9,7 +9,7 @@ import json
 import logging
 from pathlib import Path
 
-from abilities._base import Ability
+from abilities._ability import Ability
 
 logger = logging.getLogger(__name__)
 

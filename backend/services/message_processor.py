@@ -16,7 +16,7 @@ point with a per-turn ``ProcessorConfig`` that carries all channel-specific
 behaviour (channel, role, prompt builders, tool scopes, post-turn hook, …).
 
 The class provides the ACT lifecycle (``process`` → ``_run`` → ``_setup`` →
-``_loop`` → ``_record``), tool dispatch through ``Ability.use()``, and
+``_loop`` → ``_record``), tool dispatch through ``ToolDispatcher.dispatch()``, and
 the trail/compaction primitives.
 """
 
@@ -119,8 +119,8 @@ def _read_attachment(path: str) -> "tuple[str, str, str]":
 #
 # The MessageProcessor instance is the "parent" of everything that runs inside a
 # turn. Rather than hide it behind a global ContextVar, it is threaded
-# explicitly: ``Ability.use(self, …)`` binds it onto each per-call ability as
-# ``self.MessageProcessor``, and the Providers facade receives it as ``mp=``.
+# explicitly: ``ToolDispatcher(self).dispatch(…)`` binds it onto each per-call
+# ability as ``self.MessageProcessor``, and the Providers facade receives it as ``mp=``.
 # Wherever we are in a turn we can always reach the parent — and reconstruct the
 # full path that got us there — by holding a real reference, not by reaching
 # into a thread-local.
@@ -133,7 +133,7 @@ class MessageProcessor:
     ``ProcessorConfig`` (channel, role, prompt builders, tool scope, the optional
     ``post_turn`` hook, …) supplied to the ``process()`` entry point.  The
     lifecycle is ``process → _run → _setup → _loop → _record``; tool calls route
-    through ``Ability.use`` and the act-trail is reconstructed from
+    through ``ToolDispatcher.dispatch`` and the act-trail is reconstructed from
     ``tool_calls`` rows (§4c) rather than held in memory.
     """
 
@@ -630,20 +630,22 @@ class MessageProcessor:
         """Framework-issued tool calls fired once before iteration 0.
 
         Two declarative behaviours, zero hooks.  Each call goes through
-        Ability.use() so it BLOCKS, records a tool_calls row, and is
+        ToolDispatcher.dispatch() so it BLOCKS, records a tool_calls row, and is
         rendered into the trail exactly like an LLM-issued call.  The model's
         first turn already sees memory matches and uploaded documents.
 
         Spec §4 / §4d / AC-30 / AC-31.
         """
-        from abilities._base import Ability  # noqa: PLC0415
+        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+
+        dispatcher = ToolDispatcher(self)
 
         # a. Memory auto-seed — fire once when the declarative flag is set.
         #    _auto=True marks this as the background seed recall so memory's
         #    _handle_recall does NOT fan out to document.search + schedule.search
         #    (that delegation is reserved for explicit, model-invoked recalls).
         if self.config.memory_seed:
-            Ability.use(self, "memory", {"action": "recall", "query": self._raw_input, "_auto": True})
+            dispatcher.dispatch("memory", {"action": "recall", "query": self._raw_input, "_auto": True})
 
         # b. Attachment uploads — presence-gated, one blocking document.upload
         #    per file.  No second auto document.view: upload IS the ingest.
@@ -653,7 +655,7 @@ class MessageProcessor:
             except OSError as exc:
                 logger.warning("[SEED] could not read attachment %s: %s", path, exc)
                 continue
-            Ability.use(self, "document", {
+            dispatcher.dispatch("document", {
                 "action": "upload",
                 "name": name,
                 "content": content_b64,
@@ -666,7 +668,7 @@ class MessageProcessor:
 
     def _loop(self) -> str:  # noqa: C901
         """ACT game loop — spec §4 / AC-1.  ≤30 lines."""
-        from abilities._base import Ability  # noqa: PLC0415
+        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         from services.providers import Providers  # noqa: PLC0415
         p = Providers.instance()
@@ -698,9 +700,10 @@ class MessageProcessor:
                 mp=self,
             )
             if not response.tool_calls: return response.text or ""  # noqa: E701
+            dispatcher = ToolDispatcher(self)
             for tc in response.tool_calls:
                 if self.cancel_event.is_set(): return ""  # noqa: E701
-                Ability.use(self, tc["name"], tc["input"])
+                dispatcher.dispatch(tc["name"], tc["input"])
             self._record_narration(response)
             self.current_iteration += 1
 

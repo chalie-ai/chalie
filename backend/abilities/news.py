@@ -11,7 +11,7 @@ import json
 import logging
 from typing import ClassVar, Optional
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services import news_sources
 from services.news_service import NewsService
 from services.time_formatter_service import TimeFormatterService

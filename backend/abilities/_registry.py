@@ -3,7 +3,7 @@ import importlib
 import logging
 import threading
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
@@ -12,7 +12,7 @@ _lock = threading.RLock()
 _registry: dict[str, Ability] | None = None
 
 # Injected into every tool's input_schema by ``build_tools`` and popped by
-# ``Ability.use()`` before the ability sees it (spec §6, message-
+# ``ToolDispatcher.dispatch()`` before the ability sees it (spec §6, message-
 # processing.md L1166). Carries the user-facing tooltip for the call.
 _ACT_SUMMARY_PROPERTY: dict = {
     'type': 'string',
@@ -121,7 +121,7 @@ class AbilityRegistry:
         ``find_tools``. Native names resolve via the registry; ``_mcp_*`` names
         via ``McpClientService().get_tool_schema``. First-seen wins on dupes;
         unknown names are logged and skipped. Every schema gets ``act_summary``
-        injected (spec §6); ``Ability.use`` pops it back out. Returns ``[]`` when
+        injected (spec §6); ``ToolDispatcher.dispatch`` pops it back out. Returns ``[]`` when
         no active_tools are bound (compaction / encoder paths, or pre-_setup).
         """
         active = list(getattr(mp, "active_tools", None) or [])

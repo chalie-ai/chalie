@@ -30,7 +30,7 @@ from typing import ClassVar
 from RestrictedPython import compile_restricted, safe_builtins, safe_globals
 from RestrictedPython.PrintCollector import PrintCollector
 
-from abilities._base import Ability
+from abilities._ability import Ability
 
 logger = logging.getLogger(__name__)
 

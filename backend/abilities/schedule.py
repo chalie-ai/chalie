@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import ClassVar
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
 from services.time_utils import utc_now
 

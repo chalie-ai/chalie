@@ -24,8 +24,8 @@ codebase's ``heartbeat_service = HeartbeatService()`` convention and preserves
 the old module-dict semantics: a ``cancel`` from ``api/chat`` sees delegates
 spawned by any processor (spec §4.4).
 
-Consumers: ``abilities._base.Ability.execute`` (spawn) and ``api/chat`` (the
-task-drawer ``active_ids`` / ``cancel`` endpoints).
+Consumers: ``abilities._dispatcher.ToolDispatcher._execute`` (spawn) and
+``api/chat`` (the task-drawer ``active_ids`` / ``cancel`` endpoints).
 """
 
 from __future__ import annotations
@@ -88,16 +88,17 @@ class AsyncDelegateRunner:
     ) -> None:
         """Daemon-thread body: run the tool, then deliver via the captured mp.
 
-        The sync-run primitive lives in ``abilities._base`` until P7, where it
-        moves to ``ToolDispatcher._run``; this import is repointed there then.
+        The sync-run primitive is ``ToolDispatcher._run`` (the same path the
+        inline dispatch uses), imported lazily to break the mutual deferral with
+        the dispatcher (which imports this runner for its async branch).
         ``deliver_async_result`` is imported from ``api.chat`` lazily — api.chat
         imports this module, so a top-level import would be circular.
         """
-        from abilities._base import _run_ability  # noqa: PLC0415
+        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
 
         try:
             try:
-                result = _run_ability(ability, params)
+                result = ToolDispatcher._run(ability, params)
                 result_text = str(result.get("result", ""))
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

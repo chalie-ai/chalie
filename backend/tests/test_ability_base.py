@@ -1,4 +1,4 @@
-"""Feature tests for Ability ABC contract (abilities/_base.py).
+"""Feature tests for Ability ABC contract (abilities/_ability.py).
 
 Asserts that the metaclass enforcement, attribute validation, and lifecycle
 hooks behave exactly as the plan specifies — with no mocks, no stubs, no IO.
@@ -12,7 +12,7 @@ import gc
 
 import pytest
 
-from abilities._base import Ability
+from abilities._ability import Ability
 
 pytestmark = pytest.mark.unit
 

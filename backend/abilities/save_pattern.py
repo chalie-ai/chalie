@@ -13,7 +13,7 @@ import logging
 import math
 import re
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.database_service import get_shared_db_service
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column

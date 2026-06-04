@@ -48,7 +48,7 @@ def _extract_json(result: dict) -> dict:
 def test_email_calendar_contacts_are_registered():
     """All three new abilities are discoverable via AbilityRegistry."""
     from abilities._registry import AbilityRegistry
-    from abilities._base import Ability
+    from abilities._ability import Ability
 
     for name in ("email", "calendar", "contacts"):
         ability = AbilityRegistry.get(name)

@@ -11,7 +11,7 @@ import logging
 import math
 from typing import ClassVar, Dict, List, Optional, Tuple
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.innate_skills._tag import tag as _tag
 
 logger = logging.getLogger(__name__)
@@ -344,9 +344,10 @@ def _handle_recall(mp, channel: str, params: dict) -> str:
             proc = mp
             if proc is not None and proc._uid is not None:
                 if query:
-                    from abilities._base import Ability  # noqa: PLC0415
-                    Ability.use(proc, 'document', {'action': 'search', 'query': query})
-                    Ability.use(proc, 'schedule', {'action': 'search', 'query': query})
+                    from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+                    dispatcher = ToolDispatcher(proc)
+                    dispatcher.dispatch('document', {'action': 'search', 'query': query})
+                    dispatcher.dispatch('schedule', {'action': 'search', 'query': query})
         except Exception as exc:
             logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
 

@@ -10,7 +10,7 @@ from any processor that opts it in.
 """
 import logging
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
 
 logger = logging.getLogger(__name__)

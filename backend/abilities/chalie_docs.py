@@ -1,4 +1,4 @@
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.file_mapper_service import FileMapperService
 
 _VERSION_FILE = FileMapperService.get_version_path()

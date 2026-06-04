@@ -11,7 +11,7 @@ MailCapability's CalDAV handler which pushes changes to the server.
 
 import json as _json
 import logging
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
 from utils.data_utils import parse_json_column
 

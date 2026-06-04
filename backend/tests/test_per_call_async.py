@@ -15,7 +15,7 @@ Real hot path, zero mocks:
     channel (DmnConfig) and never when there is no live processor.  This is the
     schema-exposure gate, not a routing gate (§4.8d).
   * A real ability dispatched WITHOUT ``async`` runs inline through the real
-    ``execute`` → ``_run_ability`` → ``run`` → ``_normalise_run_result`` chain
+    ``ToolDispatcher._execute`` → ``_run`` → ``run`` → ``_normalise`` chain
     and returns its actual result.
   * The same ability dispatched WITH ``async: true`` returns the
     ``dispatched (id: …)`` placeholder immediately (non-blocking — the real
@@ -33,7 +33,8 @@ import time
 
 import pytest
 
-from abilities._base import Ability
+from abilities._ability import Ability
+from abilities._dispatcher import ToolDispatcher
 from abilities._registry import AbilityRegistry
 from configs.channels import DmnConfig, UserConfig
 from services.async_delegate_runner import async_delegate_runner
@@ -128,7 +129,7 @@ def test_dispatch_without_async_runs_inline():
     ability = _EchoAbility()
     ability.MessageProcessor = _Ctx(DmnConfig())
 
-    result = ability.execute({"text": "hi"})
+    result = ToolDispatcher(ability.MessageProcessor)._execute(ability, {"text": "hi"}, None)
 
     assert result == "echoed: hi"
     # The framework popped the async flag before handing params to run().
@@ -169,7 +170,7 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
     ability.MessageProcessor = _Ctx(DmnConfig())
 
     before = set(async_delegate_runner.active_ids())
-    result = ability.execute({"async": True})
+    result = ToolDispatcher(ability.MessageProcessor)._execute(ability, {"async": True}, None)
 
     # Non-blocking: the placeholder came back while run() is still blocked.
     assert "dispatched (id:" in result

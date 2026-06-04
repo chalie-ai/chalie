@@ -20,7 +20,7 @@ user having to open the Brain UI.  This ability handles that path.
 
 import logging
 
-from abilities._base import Ability
+from abilities._ability import Ability
 
 logger = logging.getLogger(__name__)
 

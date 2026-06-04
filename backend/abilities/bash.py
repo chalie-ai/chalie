@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import ClassVar
 
-from abilities._base import Ability
+from abilities._ability import Ability
 
 logger = logging.getLogger(__name__)
 

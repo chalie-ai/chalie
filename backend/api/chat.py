@@ -9,7 +9,7 @@ Routes:
                              cancelled turn deletes its own transcript and
                              tool_call rows. Returns 200 always with JSON body.
   POST /action             — receive an action button click; dispatches via
-                             Ability.use(). Returns 202 immediately;
+                             ToolDispatcher.dispatch(). Returns 202 immediately;
                              response arrives via WebSocketBroker.broadcast().
   POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
                              delegate by its sub_id. Returns 200 always.
@@ -24,7 +24,7 @@ Design:
   User-channel messages flow through MessageProcessor.process() with the
   UserConfig ProcessorConfig subclass — no MessageProcessor subclass.
   Live output (narration, tool events) is gated by broadcast_to='user' on
-  the config; the flat _loop() and Ability.use() call WS.emit() which
+  the config; the flat _loop() and ToolDispatcher.dispatch() call WS.emit() which
   broadcasts when broadcast_to is set (AC-28).
 """
 
@@ -422,7 +422,7 @@ def post_subagent_stop(sub_id: str):
 @chat_bp.route("/action", methods=["POST"])
 @require_auth
 def post_action():
-    """Receive an action button click and dispatch via Ability.use().
+    """Receive an action button click and dispatch via ToolDispatcher.dispatch().
 
     Body (JSON):
         skill (str): The ability name to invoke.
@@ -442,7 +442,7 @@ def post_action():
     def _run_action():
         broker = WebSocketBroker()
         try:
-            from abilities._base import Ability  # noqa: PLC0415
+            from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
             from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
             params = {k: v for k, v in body.items() if k != "skill"}
@@ -450,7 +450,7 @@ def post_action():
             broker.broadcast({"type": "status", "stage": "processing"})
 
             # Build a minimal flat-path context for action-button dispatches.
-            # Ability.use() requires an mp-like object with config, uid,
+            # ToolDispatcher requires an mp-like object with config, uid,
             # cancel_event.  broadcast_to=None keeps these
             # dispatches silent (no live WS events for action buttons).
             # ProcessorConfig is abstract, so action-button dispatch needs a
@@ -491,7 +491,7 @@ def post_action():
                 cancel_event = threading.Event()
 
             ctx = _ActionCtx()
-            result_text = Ability.use(ctx, skill, params)
+            result_text = ToolDispatcher(ctx).dispatch(skill, params)
 
             if result_text.startswith("Unknown tool:"):
                 broker.broadcast({

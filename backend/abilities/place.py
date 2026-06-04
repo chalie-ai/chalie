@@ -14,7 +14,7 @@ returns an informative error rather than storing a null record.
 import json
 import logging
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.data_graph_service import KIND_PLACE, get_data_graph_service
 
 logger = logging.getLogger(__name__)

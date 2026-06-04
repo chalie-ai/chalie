@@ -27,7 +27,7 @@ happens at the outer ``web_browse`` tool.
 
 from typing import ClassVar
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from abilities._delegate import (
     delegate_goal,
     render_trail,

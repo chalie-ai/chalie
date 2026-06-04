@@ -30,7 +30,7 @@ from typing import ClassVar
 
 import requests
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)

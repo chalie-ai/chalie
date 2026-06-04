@@ -17,7 +17,7 @@ from typing import ClassVar
 
 # Ability is the shared base every dispatchable tool subclasses; _MCPAbility is
 # a synthetic member of that hierarchy so MCP calls reuse the one gate.
-from abilities._base import Ability
+from abilities._ability import Ability
 
 logger = logging.getLogger(__name__)
 

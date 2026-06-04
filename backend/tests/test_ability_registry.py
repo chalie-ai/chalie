@@ -17,7 +17,7 @@ import threading
 
 import pytest
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from abilities._registry import AbilityRegistry, _reset_for_tests
 
 pytestmark = pytest.mark.unit

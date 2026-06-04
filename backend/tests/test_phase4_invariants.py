@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 import abilities._registry as _reg_module
-from abilities._base import Ability
+from abilities._ability import Ability
 
 pytestmark = pytest.mark.unit
 

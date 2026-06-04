@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from abilities._base import Ability
+from abilities._ability import Ability
 from services.async_delegate_runner import AsyncDelegateRunner
 
 pytestmark = pytest.mark.unit

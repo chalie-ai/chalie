@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright  # noqa: F401
 
-from abilities._base import Ability
+from abilities._ability import Ability
 
 logger = logging.getLogger(__name__)
 
