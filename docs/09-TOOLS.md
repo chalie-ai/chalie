@@ -36,7 +36,7 @@ Three status values appear in the tools list:
 A first-party ability is a Python module under `backend/abilities/` that subclasses `Ability` and implements a single dispatch method:
 
 ```python
-from abilities._base import Ability
+from abilities._ability import Ability
 
 class WeatherAbility(Ability):
     NAME = "weather"

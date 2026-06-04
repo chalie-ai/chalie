@@ -201,7 +201,7 @@ This is the single source of truth — no ability constructs its own format stri
 
 ### `Ability` ABC and `SearchableAbility`
 
-Every concrete ability subclasses `Ability` (`backend/abilities/_base.py`) and declares:
+Every concrete ability subclasses `Ability` (`backend/abilities/_ability.py`) and declares:
 
 | Class attribute | Type | Notes |
 |-----------------|------|-------|
