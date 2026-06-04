@@ -117,25 +117,6 @@ def _normalise_run_result(raw: object) -> dict:
     return {"status": "success", "result": str(raw) if raw is not None else ""}
 
 
-def _dispatch_mcp(tool_name: str, params: dict) -> dict:
-    """Route an _mcp_<server>_<tool> call through McpClientService.
-
-    Policy is enforced by PolicyManager.wrap() in Ability.use() (via the
-    _MCPAbility proxy) BEFORE this runs; this only performs the MCP call.
-    """
-    try:
-        from services.mcp_client_service import McpClientService  # noqa: PLC0415
-        raw = McpClientService().dispatch_mcp_tool(tool_name, params)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[_dispatch_mcp] MCP tool %r failed: %s", tool_name, exc)
-        return {"status": "error", "result": f"MCP tool error: {exc}"}
-
-    # McpClientService.dispatch_mcp_tool returns {'text': ...}
-    if isinstance(raw, dict) and "text" in raw:
-        return {"status": "success", "result": raw["text"]}
-    return {"status": "success", "result": str(raw)}
-
-
 def _emit(config: object, event: dict) -> None:
     """Broadcast *event* when config.broadcast_to is non-None; no-op otherwise.
 
@@ -557,25 +538,6 @@ class Ability(ABC):
         return payload
 
 
-class _MCPAbility(Ability):
-    """Synthetic proxy for an _mcp_* tool so MCP calls flow through
-    use → wrap → execute exactly like a native ability — gated for the
-    first time.
-
-    _SYNTHETIC=True exempts it from __init_subclass__ validation (no
-    EXAMPLES/SEARCH_TOOLTIP) and from the registry's boot-time instantiation
-    (_all_concrete_subclasses skips it — it cannot be built with no args).
-    """
-
-    _SYNTHETIC: ClassVar[bool] = True
-
-    def __init__(self, tool_name: str) -> None:
-        self.NAME = tool_name
-
-    def run(self, params: dict) -> dict:
-        return _dispatch_mcp(self.NAME, params)
-
-
 # ── Module-level aliases for patchability ─────────────────────────────────────
 #
 # Populated AFTER the Ability class is fully defined to avoid the circular
@@ -606,3 +568,9 @@ def _populate_module_aliases() -> None:
 
 
 _populate_module_aliases()
+
+
+# Imported at the bottom (after Ability is defined) so _mcp_ability's
+# ``from abilities._base import Ability`` resolves without a circular import.
+# match()/_bind() reference _MCPAbility as a module global at call time.
+from abilities._mcp_ability import _MCPAbility  # noqa: E402
