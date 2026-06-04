@@ -987,7 +987,8 @@ class MessageProcessor:
         text = getattr(response, "text", None)
         if not text:
             return
-        from abilities._base import Ability, _emit  # noqa: PLC0415
+        from abilities._base import Ability  # noqa: PLC0415
+        from abilities._event_emitter import ActEventEmitter  # noqa: PLC0415
         Ability.record(
             tool_name="narration",
             params={},
@@ -995,13 +996,13 @@ class MessageProcessor:
             transcript_id=self.uid,
             ephemeral=True,
         )
-        # Gate on broadcast_to — background loops (broadcast_to=None) never emit (N1/N5).
-        if getattr(self.config, "broadcast_to", None) is not None:
-            _emit(self.config, {
-                "type": "act_narration",
-                "text": _sanitize_llm_args(text),
-                "step": self.current_iteration,
-            })
+        # The emitter owns the broadcast_to gate — background loops
+        # (broadcast_to=None) never emit (N1/N5).
+        ActEventEmitter(self.config).emit({
+            "type": "act_narration",
+            "text": _sanitize_llm_args(text),
+            "step": self.current_iteration,
+        })
 
 
 # ── Module-private helpers ────────────────────────────────────────────────────

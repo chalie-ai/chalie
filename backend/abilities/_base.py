@@ -20,6 +20,8 @@ from uuid import uuid4
 # ClientContext owns the per-request client-telemetry snapshot that
 # _load_tool_telemetry() flattens onto ability.telemetry before run().
 from services.client_context import ClientContext
+# ActEventEmitter owns the broadcast_to gate for ACT tool-start/end events.
+from abilities._event_emitter import ActEventEmitter
 
 
 # These module-level names are populated at the bottom of this file (after the
@@ -28,7 +30,6 @@ from services.client_context import ClientContext
 # module to avoid circular-import issues (_registry imports Ability from here).
 AbilityRegistry: object = None  # type: ignore[assignment]
 PolicyManager: object = None  # type: ignore[assignment]
-WebSocketBroker: object = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -115,21 +116,6 @@ def _normalise_run_result(raw: object) -> dict:
     if isinstance(raw, str):
         return {"status": "success", "result": raw}
     return {"status": "success", "result": str(raw) if raw is not None else ""}
-
-
-def _emit(config: object, event: dict) -> None:
-    """Broadcast *event* when config.broadcast_to is non-None; no-op otherwise.
-
-    Spec §5 / N1 / N2 / AC-28.
-    """
-    if config is None or getattr(config, "broadcast_to", None) is None:
-        return
-    if WebSocketBroker is None:
-        _populate_module_aliases()
-    try:
-        WebSocketBroker().broadcast(event)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("[Ability._emit] broadcast failed: %s", exc)
 
 
 def _run_async_delegate(
@@ -252,7 +238,7 @@ class Ability(ABC):
         not retry a blocked tool forever. No cancel check — the loop guards
         cancel_event one line before calling this. Spec §5 / TKT-797.
         """
-        if AbilityRegistry is None or PolicyManager is None or WebSocketBroker is None:
+        if AbilityRegistry is None or PolicyManager is None:
             _populate_module_aliases()
 
         from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
@@ -470,8 +456,9 @@ class Ability(ABC):
         mp = self.MessageProcessor
         config = getattr(mp, "config", None)
         channel = getattr(config, "channel", "") or ""
+        emitter = ActEventEmitter(config)
         call_id = uuid4().hex[:12]
-        _emit(config, {
+        emitter.emit({
             "type": "act_tool_start",
             "name": self.NAME,
             "id": call_id,
@@ -502,7 +489,7 @@ class Ability(ABC):
             result = _run_ability(self, params)
 
         ok = result.get("status") != "error"
-        _emit(config, {"type": "act_tool_end", "name": self.NAME, "id": call_id, "ok": ok})
+        emitter.emit({"type": "act_tool_end", "name": self.NAME, "id": call_id, "ok": ok})
         return str(result.get("result", ""))
 
     # ── Schema hooks (unchanged) ──────────────────────────────────────────────
@@ -549,7 +536,7 @@ class Ability(ABC):
 # attribute on the object it finds there.
 
 def _populate_module_aliases() -> None:
-    global AbilityRegistry, PolicyManager, WebSocketBroker
+    global AbilityRegistry, PolicyManager
     try:
         from abilities._registry import AbilityRegistry as _AR  # noqa: PLC0415
         AbilityRegistry = _AR
@@ -558,11 +545,6 @@ def _populate_module_aliases() -> None:
     try:
         from services.policy_manager import PolicyManager as _PM  # noqa: PLC0415
         PolicyManager = _PM
-    except ImportError:
-        pass
-    try:
-        from services.websocket_broker import WebSocketBroker as _WS  # noqa: PLC0415
-        WebSocketBroker = _WS
     except ImportError:
         pass
 

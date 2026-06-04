@@ -37,11 +37,10 @@ class _MP:
 
 def test_use_rebinds_none_aliases():
     """use must re-populate aliases when the circular import left them None."""
-    saved = (base.AbilityRegistry, base.PolicyManager, base.WebSocketBroker)
+    saved = (base.AbilityRegistry, base.PolicyManager)
     try:
         base.AbilityRegistry = None
         base.PolicyManager = None
-        base.WebSocketBroker = None
 
         out = Ability.use(_MP(), "definitely_not_a_real_tool", {"action": "x"})
 
@@ -49,7 +48,7 @@ def test_use_rebinds_none_aliases():
         assert base.AbilityRegistry is not None
         assert base.PolicyManager is not None
     finally:
-        base.AbilityRegistry, base.PolicyManager, base.WebSocketBroker = saved
+        base.AbilityRegistry, base.PolicyManager = saved
 
 
 def test_use_unknown_tool_is_graceful_not_keyerror():
