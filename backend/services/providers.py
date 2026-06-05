@@ -13,7 +13,6 @@ Resolves the active DB provider, sends messages, returns a raw LLMResponse.
 """
 
 import json
-import threading
 import logging
 import time
 
@@ -34,19 +33,8 @@ class Providers:
     """Per-mp provider gateway. Owns the bound MessageProcessor and scaffolds
     every send / size-check / resolution from it. One instance per mp."""
 
-    _instance = None
-    _lock = threading.Lock()
-
-    def __init__(self, mp=None):
+    def __init__(self, mp):
         self.mp = mp
-
-    @classmethod
-    def instance(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls()
-        return cls._instance
 
     def send(self):
         """Scaffold the request from self.mp, pre-flight it, send, log. Returns LLMResponse."""
@@ -93,30 +81,6 @@ class Providers:
     def selected_provider(self):
         """The resolved provider instance for this mp's job (design §3.1, §6.3)."""
         return self._resolve(self.mp.config.job, self.mp)
-
-    def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True, thinking_mode=None, mp=None):
-        """Multi-turn send with a pre-built messages array. Returns LLMResponse.
-
-        Used by the tool loop in MessageProcessor to send growing message arrays
-        across iterations without rebuilding them from scratch.
-
-        Args:
-            system_prompt: Assembled system prompt string.
-            messages: Full messages array (role/content dicts).
-            job: Provider job name used to resolve the LLM config.
-            tools: Tool schemas. If None, Providers resolves defaults.
-            cache_prefix: Whether to apply prompt prefix caching.
-            thinking_mode: Native deliberation flag. None = disabled (default),
-                'medium' or 'high' = provider-native thinking enabled.
-        """
-        if tools is None:
-            tools = self._get_tools(mp)
-        provider = self._resolve(job, mp)
-        t0 = time.monotonic()
-        response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
-        wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms, mp)
-        return response
 
     def _log_after_call(self, system_prompt, messages, tools, job, response, wall_ms=None, mp=None):
         """Write the LLM request log file. Best-effort, never raises.
@@ -256,20 +220,6 @@ class Providers:
             config['_usage_class'] = usage_class
         return create_llm_service(config)
 
-    def _get_tools(self, mp=None):
-        """Get native tool schemas for the calling processor's tool scope.
-
-        Honours the lazy-load contract: DISCOVERABLE abilities are NEVER
-        pre-injected here.  Falls back to an empty list when no processor is
-        passed (e.g. compaction / episode-encoder paths whose own scope is empty
-        by design).  The hot path passes ``tools=`` explicitly from the flat ACT
-        loop; this method is only the safety-net default.
-        """
-        from abilities._registry import AbilityRegistry
-        if mp is None:
-            return []
-        return AbilityRegistry.build_tools(mp)
-
     def get_context_limit(self):
         """Declared context window for the active provider/model, hard-capped at
         MAX_CONTEXT_WINDOW (200k). Reads the backfilled providers.max_tokens
@@ -284,45 +234,6 @@ class Providers:
         if mp is not None:
             return min(self._resolve(mp.config.job, mp).get_context_limit(), MAX_CONTEXT_WINDOW)
         return min(self._resolve('unified').get_context_limit(), MAX_CONTEXT_WINDOW)
-
-    def calculate(
-        self,
-        system_prompt: str,
-        user_body: str,
-        tools: list,
-        job: str = 'unified',
-        mp=None,
-    ) -> float:
-        """Return what fraction of the context window this request would use.
-
-        Builds the real request body (same serialisation path as send_messages),
-        counts tokens, divides by the provider's context window.
-
-        Returns 0.0 on any error so the ACT loop safely skips compaction and
-        proceeds to send_messages() — the same safe behaviour as the old
-        estimate_payload_tokens() failure path.
-
-        Returns 0.0 when the provider reports a zero or missing context limit
-        to avoid zero-division.
-
-        Spec §4b / E1–E4.
-        """
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        try:
-            provider = self._resolve(job, mp)
-            body = provider.build_request_body(
-                system_prompt,
-                [{'role': 'user', 'content': user_body}],
-                tools,
-            )
-            tokens = estimate_tokens(body)
-            max_tokens = provider.get_context_limit()
-            if not max_tokens:
-                return 0.0
-            return tokens / max_tokens
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[Provider.calculate] failed: %s", exc)
-            return 0.0
 
     def count_tokens(self, messages, system_prompt='', tools=None, job='unified'):
         """Delegate to resolved provider."""

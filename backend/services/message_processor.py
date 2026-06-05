@@ -33,15 +33,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── Compaction rendering helpers ───────────────────────────────────────────────
+# ── Compaction summary parser ──────────────────────────────────────────────────
 #
-# These parse/format helpers live alongside the other transcript-rendering
-# infrastructure in this module (TimeFormatterService, _MISSING_TS_PLACEHOLDER).
-# They are called by _run_full_compaction (below), which owns the two-tier
-# compaction orchestration triggered when the live token measurement crosses the
-# 0.80 / 0.90 thresholds. _SUMMARY_RE parses the <summary>…</summary> block
-# produced by the compaction turn (a flat process() run on the compaction
-# channel — see configs.channels.CompactionConfig).
+# _SUMMARY_RE parses the <summary>…</summary> block produced by the compaction
+# turn (a flat process() run on the compaction channel — see
+# configs.channels.CompactionConfig).
 
 _SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>", re.IGNORECASE)
 _COMPACTION_FAILURE_FMT = "[COMPACTION] %s: continuity failure — reason=%s"
@@ -206,15 +202,6 @@ class MessageProcessor:
         self._uid: int | None = None
         self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
         self._deliberation_ema: float | None = None      # EMA after this turn's update
-        # One-shot guard: any overflow recovery (proactive threshold trip
-        # OR 413 from the provider) triggers a Stage 2 ACT restart, but only
-        # once per turn. The proactive threshold path can mis-fire when the
-        # static system_prompt + tools schema alone exceed compact_at — in
-        # that case compaction shrinks user_body but the threshold still
-        # trips on restart, and without this guard the loop spins forever.
-        # After one recovery: send anyway and let the transport 413 path
-        # decide whether the compacted body is genuinely too large.
-        self._overflow_recovered_this_turn: bool = False
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
         # The mp owns its provider gateway — param-free, scaffolds from self.
@@ -268,98 +255,6 @@ class MessageProcessor:
     @active_tools.setter
     def active_tools(self, value: list) -> None:
         self._active_tools = value
-
-    def _run_full_compaction(self, exclude_id: 'int | None' = None) -> 'str | None':
-        """Run a full continuity compaction for this channel via the flat path.
-
-        Reads entries since the watermark, builds the continuity-first envelope,
-        runs the compaction LLM through ``MessageProcessor.process()`` with
-        ``CompactionConfig`` (the single flat loop — no compaction subclass),
-        parses ``<summary>``, and writes the append-only ``tool_calls`` audit
-        row that the canonical ``compaction_persistence.get_compaction()``
-        lookup reads.
-
-        Args:
-            exclude_id: When set, filters this transcript ID from the rendered
-                entries list — used by the history-compaction path to exclude
-                the current turn's input row so the LLM does not see a partial /
-                unanswered user message.
-
-        Returns:
-            The extracted ``<summary>`` body on success, None on failure
-            (unchanged contract — callers and tests rely on it).
-        """
-        from configs.channels import CompactionConfig
-        from services import compaction_persistence
-
-        channel = self._effective_channel()
-        transcript_id = self._uid
-
-        prior = compaction_persistence.get_compaction(channel)
-        watermark = prior['compacted_up_to_id'] if prior else 0
-        prev_text = (prior.get('compacted_text') or '').strip() if prior else ''
-
-        all_entries = list(compaction_persistence.get_entries_since(channel, watermark))
-        if exclude_id is not None:
-            entries = [e for e in all_entries if e.get('id') != exclude_id]
-        else:
-            entries = all_entries
-
-        # Nothing to compact — bail before hitting the LLM.
-        if not entries and not prev_text:
-            logger.warning(
-                "[COMPACTION] %s: compaction invoked with no entries and no prior "
-                "checkpoint — skipping LLM call",
-                channel,
-            )
-            return None
-
-        rendered = [_format_compaction_entry(e) for e in entries]
-        compaction_input = _build_compaction_input(prev_text, rendered)
-        in_chars = len(compaction_input)
-
-        try:
-            raw_output = (
-                MessageProcessor.process(compaction_input, CompactionConfig()) or ''
-            ).strip()
-        except Exception as exc:
-            reason = f"LLM error: {exc}"
-            logger.error(_COMPACTION_FAILURE_FMT, channel, reason)
-            _write_compaction_audit_row(
-                transcript_id, watermark=watermark, status='failure',
-                summary='', reason=reason,
-            )
-            return None
-
-        if not raw_output:
-            reason = "LLM returned empty output"
-            logger.warning(_COMPACTION_FAILURE_FMT, channel, reason)
-            _write_compaction_audit_row(
-                transcript_id, watermark=watermark, status='failure',
-                summary='', reason=reason,
-            )
-            return None
-
-        summary = _extract_compaction_summary(raw_output)
-        if not summary:
-            reason = "no <summary> tags in LLM output"
-            logger.warning(_COMPACTION_FAILURE_FMT, channel, reason)
-            _write_compaction_audit_row(
-                transcript_id, watermark=watermark, status='failure',
-                summary='', reason=reason,
-            )
-            return None
-
-        new_watermark = max((e.get('id', 0) for e in entries), default=watermark)
-        _write_compaction_audit_row(
-            transcript_id, watermark=new_watermark, status='success', summary=summary,
-        )
-        logger.info(
-            "[COMPACTION] %s: continuity success — in=%d chars, out=%d chars, "
-            "watermark %d→%d",
-            channel, in_chars, len(summary), watermark, new_watermark,
-        )
-        return summary
 
     def _effective_channel(self) -> str:
         """Channel for this turn — read from the flat config (§4)."""
@@ -536,47 +431,31 @@ class MessageProcessor:
                 "content_type": content_type,
             })
 
-    #: Channels that are themselves compaction loops.  Inside these channels the
-    #: compaction thresholds must NOT fire (D14 — recursion guard).
-    _COMPACTION_CHANNELS: frozenset[str] = frozenset({"compaction"})
-
     def _loop(self) -> str:  # noqa: C901
-        """ACT game loop — spec §4 / AC-1.  ≤30 lines."""
+        """ACT game loop — send, dispatch tools, compact-and-retry on overflow."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from abilities._registry import AbilityRegistry  # noqa: PLC0415
-        from services.providers import Providers  # noqa: PLC0415
-        p = Providers.instance()
-        in_compaction = self.config.channel in self._COMPACTION_CHANNELS
+        from services.providers import ContextOverflowError  # noqa: PLC0415
+        from services.llm_service import PayloadTooLargeError  # noqa: PLC0415
         while True:
-            if self._should_stop(): return ""  # noqa: E701
-            prompt = self.config.get_user_prompt(self)
-            prompt = _wrap_with_checkpoint(self.config.channel, prompt)
-            system = self.config.get_system_prompt(self)
-            tools = AbilityRegistry.build_tools(self)
-            pct = p.calculate(system, prompt, tools, job=self.config.job, mp=self)
-            if pct > 0.80:
-                if in_compaction:
-                    # D14: recursion guard — never compact-of-compaction.
-                    logger.warning(
-                        "[COMPACTION] recursion guard: %s payload at %.0f%% — "
-                        "proceeding without compaction",
-                        self.config.channel, pct * 100,
-                    )
-                elif pct > 0.90 and self._has_trail():
-                    if not self._compact_trail(): return ""  # noqa: E701
-                    continue
-                else:
-                    if not self._compact_history(): return ""  # noqa: E701
-                    continue
-            response = p.send_messages(
-                system, [{"role": "user", "content": prompt}],
-                job=self.config.job, tools=tools, thinking_mode=self.thinking_level,
-                mp=self,
-            )
-            if not response.tool_calls: return response.text or ""  # noqa: E701
+            if self._should_stop():
+                return ""
+            if len(self._previous_rows()) > 50:   # proactive turn-count compaction
+                self._compact()
+            try:
+                response = self.providers.send()
+            except (ContextOverflowError, PayloadTooLargeError):
+                if self._compaction_retries >= 2:
+                    raise
+                self._compaction_retries += 1
+                self._compact()
+                continue                          # retry re-reads the now-compacted DB
+            self._compaction_retries = 0          # reset on every successful send
+            if not response.tool_calls:
+                return response.text or ""
             dispatcher = ToolDispatcher(self)
             for tc in response.tool_calls:
-                if self.cancel_event.is_set(): return ""  # noqa: E701
+                if self.cancel_event.is_set():
+                    return ""
                 dispatcher.dispatch(tc["name"], tc["input"])
             self._record_narration(response)
             self.current_iteration += 1
@@ -656,81 +535,43 @@ class MessageProcessor:
                 exc,
             )
 
-    def get_previous_messages(self) -> str:
-        """Assemble the ## Previous Messages block for this channel.
+    def _previous_rows(self) -> list:
+        """Watermark-bounded transcript rows for this channel (design §3.7).
 
-        The read counterpart of ``_compact_history()`` (§4b). Channel-scoped,
-        watermark-bounded, and short-circuited for housekeeping loops.
-
-        suppress_history → '' (M6 — housekeeping loops never replay).
-        Otherwise: find the channel's latest history-compaction row (the
-        watermark = its ``compacted_up_to_id``), read transcript rows with
-        ``id > watermark`` for this channel, prepend the compaction summary,
-        and render each row.
-
-        Literal format (locked by the north star):
-        - input rows  : ``[YYYY-MM-DD HH:MM] <role>: <content>`` — role is
-                        rendered lowercase, except ``assistant`` → ``Assistant``.
-        - durable     : ``[<tool_name>(<k>="<v>";…)] <result>`` — bare, no
-          tool_calls    timestamp, interleaved under their owning transcript row
-                        ordered by created_at. Ephemeral (``ephemeral=1``) rows
-                        are never emitted; the ``compaction`` / ``thinking``
-                        audit pseudo-tools are filtered (Decision 4B).
-
-        Returns '' when the channel has no rows and no compaction summary.
-
-        Spec §4 / §4a / AC-26 / AC-27 / M6-M8.
-        """
+        SELECT * FROM transcript WHERE channel=? AND id > <watermark> ORDER BY id ASC
+        No LIMIT (fixes the 20-row bug). Empty for suppress_history channels and
+        post-compaction turns (the compaction row's own id IS the watermark)."""
         if self.config.suppress_history:
-            return ""
-
-        from services import compaction_persistence, transcript_service
-        from services.tool_call_service import ToolCallService
-
+            return []
+        from services import compaction_persistence, transcript_service  # noqa: PLC0415
         compaction = compaction_persistence.get_compaction(self.config.channel)
         watermark = compaction["compacted_up_to_id"] if compaction else 0
+        return transcript_service.get_recent(self.config.channel, since_id=watermark)
 
-        entries = transcript_service.get_recent(
-            self.config.channel, since_id=watermark
-        )
-
-        if not entries and not (compaction and compaction.get("compacted_text")):
+    def get_previous_messages(self) -> str:
+        """Render the ## Previous Messages block from _previous_rows()."""
+        if self.config.suppress_history:
             return ""
-
-        # Batch-load durable (ephemeral=0) tool_calls for all transcript rows.
+        from services.tool_call_service import ToolCallService  # noqa: PLC0415
+        entries = self._previous_rows()
+        if not entries:
+            return ""
         all_ids = [e["id"] for e in entries if e.get("id")]
-        durable_by_id: dict[int, list] = {}
-        if all_ids:
-            durable_by_id = ToolCallService().get_by_transcript_ids(
-                all_ids, include_ephemeral=False
-            )
-
+        durable_by_id = ToolCallService().get_by_transcript_ids(all_ids, include_ephemeral=False) if all_ids else {}
         lines: list[str] = []
-
-        if compaction and compaction.get("compacted_text"):
-            lines.append(compaction["compacted_text"])
-
         for entry in entries:
-            ts = _format_ts(
-                entry.get("created_at"),
-                row_kind="transcript",
-                row_id=entry.get("id"),
-            )
+            ts = _format_ts(entry.get("created_at"), row_kind="transcript", row_id=entry.get("id"))
             raw_role = entry.get("role") or "unknown"
             role_label = "Assistant" if raw_role == "assistant" else raw_role
             content = (entry.get("content") or "").replace("\n", " ").strip()
             lines.append(f"[{ts}] {role_label}: {content}")
-
             for tc in durable_by_id.get(entry.get("id"), []):
                 tc_name = tc.get("tool_name") or tc.get("name") or "tool"
                 if tc_name in _NEVER_RENDER_IN_PREVIOUS:
                     continue
                 tc_params = _parse_tc_params(tc.get("params"))
                 tc_result = tc.get("result") or ""
-                lines.append(
-                    _render_tool_call_for_previous(tc_name, tc_params, tc_result)
-                )
-
+                lines.append(_render_tool_call_for_previous(tc_name, tc_params, tc_result))
         return "\n".join(lines)
 
     # ── Trail API (T4: act-trail-as-a-query) ─────────────────────────────────
@@ -791,76 +632,42 @@ class MessageProcessor:
         rows = _from_last_compaction(trail.fetch_by_transcript_id(self.uid))
         return "\n".join(trail.render(r) for r in rows)
 
-    def _compact_trail(self) -> bool:
-        """Trail compaction (>90%): summarise the trail-so-far into ONE
-        'trail_compaction' tool_calls row.
+    def _compact(self) -> None:
+        """Compact history (→transcript role='compaction') and, when a trail
+        exists, the act-trail (→tool_calls trail_compaction). Design §3.5.
 
-        Compaction is itself a tool call. We assemble the current trail
-        (everything since the last 'trail_compaction' row — §4c), summarise
-        it via MessageProcessor.process() with CompactionConfig, and record
-        the summary as a new 'trail_compaction' row. Because trail assembly
-        always starts at the LATEST 'trail_compaction' row, that one row
-        instantly becomes the new head of the trail and every prior row drops
-        out of view. No watermark field, no list surgery, no mid-turn deletes.
+        The history summary's transcript row id IS the new watermark, so the
+        next read of _previous_rows() returns nothing through it. Each sub-summary
+        is produced by a fresh MessageProcessor.process() compaction loop. A
+        no-op (nothing to summarise) leaves the watermark untouched — the retry
+        cap in _loop bounds the universal case."""
+        from configs.channels import CompactionConfig, TrailHandoverConfig  # noqa: PLC0415
+        from services import transcript_service  # noqa: PLC0415
 
-        Returns True on success (incl. empty-trail no-op), False on failure
-        (caller should abort the turn by returning '').
+        # 1. History → transcript (the writer's row id is the watermark).
+        prev = self.get_previous_messages()
+        if prev.strip():
+            summary = MessageProcessor.process(prev, CompactionConfig())
+            if summary and summary.strip():
+                transcript_service.write_input_row(self.config.channel, "compaction", summary)
 
-        Spec §4a / D2 / D8 / D9 / D10 / AC-23.
-        """
-        from configs.channels import CompactionConfig  # noqa: PLC0415
-        from services.act_trail import ActTrail  # noqa: PLC0415
+        # 2. Trail → tool_calls (only when a non-compaction trail row exists).
+        if self._has_trail():
+            from services.act_trail import ActTrail  # noqa: PLC0415
+            from abilities._event_emitter import ActEventEmitter  # noqa: PLC0415
+            trail_text = self._render_act_trail()
+            handover = MessageProcessor.process(trail_text, TrailHandoverConfig())
+            if handover and handover.strip():
+                emitter = ActEventEmitter(self.config)
+                emitter.emit({"type": "act_tool_start", "name": "trail_compaction", "id": "compact", "summary": "compacting context"})
+                ActTrail().record(
+                    tool_name="trail_compaction", params={}, result=handover,
+                    transcript_id=self.uid, ephemeral=True,
+                )
+                emitter.emit({"type": "act_tool_end", "name": "trail_compaction", "id": "compact", "ok": True})
 
-        trail_text = self._render_act_trail()
-        if not trail_text.strip():
-            return True  # D9: nothing to compact — no-op success
-
-        compacted = MessageProcessor.process(
-            f"## Tool Results\n{trail_text}", CompactionConfig()
-        )
-        if not compacted.strip():
-            logger.warning(
-                "[COMPACTION] %s: trail compaction returned empty summary — aborting turn",
-                self.config.channel,
-            )
-            return False  # D10: empty summary → abort turn
-
-        # Record the summary AS a trail tool call — it becomes the head of the
-        # trail on the next assembly (distinct tool_name from history 'compaction').
-        ActTrail().record(
-            tool_name="trail_compaction",
-            params={},
-            result=compacted,
-            transcript_id=self.uid,
-            ephemeral=True,
-        )
-        self.active_tools = list(self.config.always_available or [])  # D8
-        self.current_iteration = 0     # D8
-        return True
-
-    def _compact_history(self) -> bool:
-        """History compaction (>80%): summarise prior conversation turns.
-
-        Summarises this channel's history using _run_full_compaction, which
-        runs the compaction LLM through the flat MessageProcessor.process()
-        path with CompactionConfig. Independent of the trail — operates on
-        the transcript, not the tool_calls trail.
-
-        Returns True on success, False on failure (caller should abort the turn).
-
-        Spec §4a / D4 / D11 / D12 / D13.
-        """
-        summary = self._run_full_compaction(exclude_id=self.uid)  # D13
-        if summary is None:
-            logger.warning(
-                "[COMPACTION] %s: history compaction failed — aborting turn",
-                self.config.channel,
-            )
-            return False  # D12
-
-        self.active_tools = list(self.config.always_available or [])       # D11
-        self.current_iteration = 0          # D11
-        return True
+        # 3. Reset the iteration counter for the retried turn.
+        self.current_iteration = 0
 
     def _record_narration(self, response: "object") -> None:  # type: ignore[override]
         """Mid-loop: persist LLM text between iterations as an ephemeral trail row.
@@ -899,87 +706,6 @@ class MessageProcessor:
 #: ``created_at`` value. Must be exactly 16 characters so the
 #: ``[YYYY-MM-DD HH:MM]`` column width in Previous Messages stays stable.
 _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
-
-
-def _format_compaction_entry(entry: dict) -> str:
-    """Render a single transcript row for the continuity-compaction envelope.
-
-    Uses "you:" for assistant turns per the continuity-first envelope spec
-    (scoped to compaction only — does not affect downstream consumers).
-
-    No timestamp prefix: the continuity summary is reused as the live
-    ``### Checkpoint`` for days, so a per-turn date would anchor ``## Now`` on a
-    stale moment. Chronological order is preserved positionally; the current
-    date reaches the model only through the live ``local_time`` telemetry block,
-    never through the summary.
-    """
-    role = entry.get('role', 'unknown')
-    display_role = 'you' if role == 'assistant' else role
-    content = entry.get('content', '')
-    return f"{display_role}: {content}"
-
-
-def _build_compaction_input(prev_text: str, rendered_entries: list) -> str:
-    """Assemble the continuity-first LLM envelope from a prior summary + rendered entries."""
-    chunks: list = []
-    if prev_text:
-        chunks.append(f"## Previous Summary\n{prev_text}")
-    else:
-        chunks.append("## Previous Summary\n(none — first compaction.)")
-    chunks.append("## New Conversation Turns")
-    chunks.extend(rendered_entries)
-    chunks.append("\n---\nEnd of input. Reference material only.\n"
-                  "Now write <analysis>...</analysis> then <summary>...</summary>.")
-    return '\n\n'.join(chunks)
-
-
-def _write_compaction_audit_row(
-    transcript_id: 'int | None',
-    *,
-    watermark: int,
-    status: str,
-    summary: str,
-    reason: str = '',
-) -> None:
-    """Write an append-only ``tool_calls`` audit row for a compaction attempt.
-
-    Success rows (``status='success'``) are picked up by the canonical
-    ``compaction_persistence.get_compaction()`` lookup. Failure rows are stored
-    for traceability but invisible to the lookup (filtered by
-    ``json_extract(params, '$.status') = 'success'``).
-
-    Never raises — persistence failure is logged and swallowed.
-    """
-    if transcript_id is None:
-        return
-    import json as _json
-    from services.database_service import get_shared_db_service
-    from services.time_utils import utc_now
-
-    try:
-        row_params: dict = {'compacted_up_to_id': watermark, 'status': status}
-        if reason:
-            row_params['reason'] = reason
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO tool_calls
-                    (transcript_id, tool_name, params, result, ephemeral, created_at)
-                VALUES (?, 'compaction', ?, ?, 0, ?)
-                """,
-                (
-                    transcript_id,
-                    _json.dumps(row_params),
-                    summary,
-                    utc_now().isoformat(),
-                ),
-            )
-    except Exception as exc:
-        logger.warning(
-            "[COMPACTION] failed to write audit row (status=%s): %s",
-            status, exc,
-        )
 
 
 def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
