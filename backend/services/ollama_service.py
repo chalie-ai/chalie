@@ -27,14 +27,6 @@ from services.llm_service import LLMResponse, PayloadTooLargeError, RateLimitErr
 _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._:\-/]+$")
 _ALLOWED_HOST_SCHEMES = frozenset({"http", "https"})
 
-# Ollama Cloud (model name suffix ``:cloud``) is fronted by an HTTP edge proxy
-# whose request-body size limit is far below the model's nominal context
-# window (e.g. kimi-k2.6:cloud reports 262 144 tokens but the edge rejects
-# payloads at a much smaller byte threshold with HTTP 413). Clamping the
-# reported context length here makes ``MessageProcessor._check_threshold``
-# fire Stage 1/2 compaction before the request leaves the box.
-OLLAMA_CLOUD_CONTEXT_CAP = 65_536
-
 
 class OllamaService:
     """LLM service backed by a locally-running Ollama instance.
@@ -289,14 +281,15 @@ class OllamaService:
     def get_context_limit(self) -> int:
         """Query Ollama for model's context window size, cached.
 
-        For ``:cloud`` models the result is clamped to
-        ``OLLAMA_CLOUD_CONTEXT_CAP`` because the cloud edge proxy enforces a
-        much smaller body-size limit than the model's nominal context window.
+        Returns the model's nominal context window verbatim (e.g.
+        deepseek-v4-pro:cloud reports 1 048 576). The system-wide hard ceiling
+        in ``Providers.get_context_limit`` (``MAX_CONTEXT_WINDOW``) is the only
+        cap applied downstream.
 
         Cache lifetime: instance-scoped. ``Providers._resolve()`` builds a
         fresh ``OllamaService`` on each call, so the cache effectively lives
         for one provider call only. Do not store an ``OllamaService`` long-
-        term and assume the cap stays current.
+        term and assume the value stays current.
         """
         if hasattr(self, '_cached_context_limit'):
             return self._cached_context_limit
@@ -319,22 +312,8 @@ class OllamaService:
             logging.debug(f"[OllamaService] Failed to get context limit: {e}")
         if raw_limit is None:
             raw_limit = 8192  # Conservative default
-        self._cached_context_limit = self._apply_cloud_cap(raw_limit)
+        self._cached_context_limit = raw_limit
         return self._cached_context_limit
-
-    def _apply_cloud_cap(self, raw_limit: int) -> int:
-        # Lower-cased compare so future tag variants (':Cloud', ':CLOUD') are
-        # caught. Suffix-only — cloud-routed models always end with ':cloud'
-        # in Ollama's current naming convention.
-        model_lower = (self.model or '').lower()
-        if model_lower.endswith(':cloud') and raw_limit > OLLAMA_CLOUD_CONTEXT_CAP:
-            logging.info(
-                "[OllamaService] Clamping :cloud model context window: "
-                "model=%s reported=%d capped=%d (edge proxy body-size limit)",
-                self.model, raw_limit, OLLAMA_CLOUD_CONTEXT_CAP,
-            )
-            return OLLAMA_CLOUD_CONTEXT_CAP
-        return raw_limit
 
     def count_tokens(self, messages: list, system_prompt: str = '', tools: list = None) -> int:
         """Estimate tokens using heuristic (Ollama models vary too much for fixed tokenizer)."""
