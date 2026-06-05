@@ -14,6 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 class FindToolsAbility(SearchableAbility):
+    """Discover and activate tools for the current ACT turn.
+
+    Supports two mutually exclusive selection modes:
+    - select: exact case-insensitive match against the effective allow-list.
+    - query: hybrid vec+FTS RRF semantic search with a relevance floor.
+    When both are supplied, select takes precedence and query is ignored.
+    """
+
     NAME = "find_tools"
     SEARCH_TOOLTIP = "discover available tools"
     SUMMARY = "Use this tool to discover more tools and capabilities. Search for the tools you need."
@@ -30,16 +38,17 @@ class FindToolsAbility(SearchableAbility):
     INPUT_SCHEMA = {
         "type": "object",
         "properties": {
+            "select": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Exact tool names to activate directly.",
+            },
             "query": {
                 "type": "string",
                 "description": "Describe what you need.",
             },
-            "limit": {
-                "type": "integer",
-                "description": "Max results (default 5, max 10).",
-            },
         },
-        "required": ["query"],
+        "required": [],
     }
 
     _DB_PATH: ClassVar[Path] = FileMapperService.get_abilities_db_path()
@@ -47,7 +56,16 @@ class FindToolsAbility(SearchableAbility):
     # Queried in addition to _DB_PATH so build_ability_db rebuilds never
     # destroy _mcp_* rows.  See McpClientService and FileMapperService.
     _MCP_DB_PATH: ClassVar[Path] = FileMapperService.get_mcp_tools_db_path()
-    _LOG_PREFIX = "[FIND_TOOLS]"
+    _LOG_PREFIX: ClassVar[str] = "[FIND_TOOLS]"
+
+    # Relevance floor: RRF scores below this are single-signal junk.
+    # Dual-signal rank-1 in both vec+FTS = 2×(1/(15+1)) = 0.125.
+    # Single-signal rank-1 = 1/(15+1) = 0.0625.
+    # 0.075 cleanly separates the two populations (empirically verified).
+    MIN_RRF_SCORE: ClassVar[float] = 0.075
+
+    # Maximum number of results returned by the query path after floor filtering.
+    MAX_QUERY_RESULTS: ClassVar[int] = 5
 
     def _build_tools_index(self, mp=None) -> str:
         """Return a formatted tools index string for discoverable tools.
@@ -122,58 +140,93 @@ class FindToolsAbility(SearchableAbility):
         if not tools_index:
             return schema
         schema = copy.deepcopy(schema)
-        schema["properties"]["query"]["description"] = (
-            f"Specify the name of the tool you need. Tools available: {tools_index}"
+        schema["properties"]["select"]["description"] = (
+            f"Exact tool names to activate directly. Available tools: {tools_index}"
         )
         return schema
 
     def run(self, params: dict) -> str:
+        """Dispatch to the select or query path and return a tagged result string."""
+        select_names = params.get("select")
         query = params.get("query", "").strip()
-        logger.info(f"{self._LOG_PREFIX} query='{query}' limit={params.get('limit', 5)}")
-        if not query:
-            return _skill_tag("find_tools", error="query-required")
+
+        # Require at least one param.
+        if not select_names and not query:
+            return _skill_tag("find_tools", error="params-required")
 
         proc = self.MessageProcessor
         allow = list(getattr(proc, "DISCOVERABLE", []) or []) if proc is not None else []
-        # Augment the allow-list with enabled+online MCP tool names so the
-        # find_tools query gate accepts them.
         mcp_names = self._get_online_mcp_names()
-        effective_allow = list(set(allow) | set(mcp_names))
+        effective_allow = set(allow) | set(mcp_names)
 
         if not effective_allow:
-            return _skill_tag("find_tools", self._no_results_text(query), query=query)
+            return _skill_tag("find_tools", self._no_results_text(query or ""), query=query or None)
 
-        limit = min(params.get("limit", 5), 10)
+        # select wins over query when both are provided.
+        if select_names:
+            return self._run_select(select_names, effective_allow)
+
+        logger.info("%s query='%s'", self._LOG_PREFIX, query)
+        return self._run_query(query, list(allow), list(mcp_names))
+
+    def _run_select(self, requested: list[str], effective_allow: set[str]) -> str:
+        """Exact case-insensitive match against effective_allow; append matched names."""
+        allow_lower = {name.lower(): name for name in effective_allow}
+        matched: list[str] = []
+        not_found: list[str] = []
+
+        for name in requested:
+            canonical = allow_lower.get(name.lower())
+            if canonical is not None:
+                matched.append(canonical)
+            else:
+                not_found.append(name)
+
+        self._append_active(matched)
+        parts: list[str] = []
+        if matched:
+            parts.append(self._format_universal(matched, "Selected and added the following tools"))
+        if not_found:
+            parts.append(f"Tools not found or unavailable: {', '.join(not_found)}")
+
+        return _skill_tag("find_tools", "\n".join(parts), found=len(matched))
+
+    def _run_query(self, query: str, allow: list[str], mcp_names: list[str]) -> str:
+        """Hybrid vec+FTS RRF search with relevance floor and top-N cap."""
+        effective_allow = list(set(allow) | set(mcp_names))
 
         try:
             from services.embedding_service import EmbeddingService
             query_embedding = EmbeddingService().generate_embedding(query, mp=self.MessageProcessor)
-        except Exception as e:
-            logger.warning(f"{self._LOG_PREFIX} Embedding generation failed: {e}")
-            return self._fallback(query, limit, effective_allow)
+        except Exception as exc:
+            logger.warning("%s Embedding generation failed: %s", self._LOG_PREFIX, exc)
+            return self._fallback(query, effective_allow)
 
         blob = pack_embedding(query_embedding)
-        # Query both abilities.sqlite (registered abilities) and mcp_tools.sqlite.
-        rows = self._query(query, blob, limit, allow)
-        mcp_rows = self._query_mcp(query, blob, limit, mcp_names)
-        rows = self._merge_and_truncate(rows + mcp_rows, limit)
+        rows = self._query(query, blob, allow)
+        mcp_rows = self._query_mcp(query, blob, self.MAX_QUERY_RESULTS, mcp_names)
+        rows = self._merge_and_truncate(rows + mcp_rows)
 
-        if not rows:
-            return _skill_tag("find_tools", self._no_results_text(query), query=query)
+        # Apply relevance floor then cap to MAX_QUERY_RESULTS.
+        rows = [r for r in rows if r["score"] >= self.MIN_RRF_SCORE][:self.MAX_QUERY_RESULTS]
 
         for row in rows:
-            logger.info(f"{self._LOG_PREFIX} RRF: {row['key']} score={row['score']:.4f}")
+            logger.info("%s RRF: %s score=%.4f", self._LOG_PREFIX, row["key"], row["score"])
 
-        raw_text = self._format(rows)
-        discovered_names = [t["key"] for t in rows]
-        self._append_active(discovered_names)
-        return _skill_tag("find_tools", raw_text, query=query, found=len(discovered_names))
+        if not rows:
+            return _skill_tag("find_tools", "No tools match the query specified", query=query)
+
+        names = [r["key"] for r in rows]
+        self._append_active(names)
+        raw_text = self._format_universal(names, f'Query "{query}" matched and added the following tools')
+        return _skill_tag("find_tools", raw_text, query=query, found=len(names))
 
     def _append_active(self, names: list[str]) -> None:
-        """Append newly-discovered tool NAMES to the live processor's ACTIVE_TOOLS
-        so build_tools surfaces them on the next ACT iteration. First-seen wins;
-        already-active names are skipped. No-op outside a turn
-        (``self.MessageProcessor`` is None — e.g. the action-button path)."""
+        """Append newly-discovered tool names to the live processor's active_tools.
+
+        Build_tools resolves active_tools to schemas on the next ACT iteration.
+        No-op when MessageProcessor is None (action-button path) or names is empty.
+        """
         if not names:
             return
         proc = self.MessageProcessor
@@ -184,12 +237,46 @@ class FindToolsAbility(SearchableAbility):
             if name not in active:
                 active.append(name)
 
-    def _query(self, query: str, blob: bytes, limit: int, allow: list[str]) -> list:
+    def _format_universal(self, names: list[str], lead: str) -> str:
+        """Build the universal v2 result string carrying per-tool input_schema.
+
+        Each entry is {"name": <name>, "input_schema": <schema dict>} so the
+        literal token "input_schema" always appears in the serialised output.
+        Schema lookup failures are logged and skipped — find_tools must always
+        complete.
+        """
+        entries = []
+        for name in names:
+            schema = self._resolve_schema(name)
+            entries.append({"name": name, "input_schema": schema})
+        return f"{lead}:\n{json.dumps(entries)}"
+
+    def _resolve_schema(self, name: str) -> dict:
+        """Return the input_schema dict for a tool name (ability or MCP).
+
+        Never raises — returns an empty dict on any failure so the caller can
+        always produce a result string.
+        """
+        try:
+            if name.startswith("_mcp_"):
+                from services.mcp_client_service import McpClientService
+                result = McpClientService().get_tool_schema(name)
+                if result and "input_schema" in result:
+                    return result["input_schema"]
+                return {}
+            from abilities._registry import AbilityRegistry
+            ability = AbilityRegistry.get(name)
+            return ability.get_input_schema(self.MessageProcessor)
+        except Exception as exc:
+            logger.warning("%s Schema lookup failed for %r: %s", self._LOG_PREFIX, name, exc)
+            return {}
+
+    def _query(self, query: str, blob: bytes, allow: list[str]) -> list:
         if not allow:
             return []
         placeholders = ",".join("?" * len(allow))
         return self._hybrid_search(
-            query, blob, limit,
+            query, blob, self.MAX_QUERY_RESULTS,
             vec_sql=f"""
                 SELECT a.name, a.summary, v.distance
                 FROM ability_search_vec v
@@ -253,8 +340,8 @@ class FindToolsAbility(SearchableAbility):
             return []
 
     @staticmethod
-    def _merge_and_truncate(rows: list[dict], limit: int) -> list[dict]:
-        """Deduplicate by key and keep the top `limit` results by score."""
+    def _merge_and_truncate(rows: list[dict]) -> list[dict]:
+        """Deduplicate by key and sort by score descending (no cap — caller applies floor+cap)."""
         seen: set[str] = set()
         merged = []
         for row in rows:
@@ -262,24 +349,21 @@ class FindToolsAbility(SearchableAbility):
                 seen.add(row["key"])
                 merged.append(row)
         merged.sort(key=lambda r: r["score"], reverse=True)
-        return merged[:limit]
-
-    def _format(self, rows: list) -> str:
-        entries = [
-            {"name": t["key"], "relevance": round(min(1.0, t["score"] * 8.0), 2)}
-            for t in rows
-        ]
-        return json.dumps({"added_tools": entries})
+        return merged
 
     @staticmethod
     def _no_results_text(query: str) -> str:
         return f'INFO: The best tools for "{query}" are already available.'
 
-    def _fallback(self, query: str, limit: int, allow: list[str]) -> str:
-        """FTS-only fallback for abilities.sqlite when embedding fails."""
+    def _fallback(self, query: str, allow: list[str]) -> str:
+        """FTS-only fallback for abilities.sqlite when embedding fails.
+
+        No relevance floor applied (single-signal by nature); adapts to the
+        v2 universal result format.
+        """
         if not allow:
             return _skill_tag("find_tools", self._no_results_text(query), query=query)
-        # Split allow list into ability names (abilities.sqlite) vs MCP names.
+
         mcp_names = [n for n in allow if n.startswith("_mcp_")]
         ability_names = [n for n in allow if not n.startswith("_mcp_")]
 
@@ -299,21 +383,19 @@ class FindToolsAbility(SearchableAbility):
                     ORDER BY a.name
                     LIMIT ?
                 """,
-                fts_params=(query, *ability_names, limit),
+                fts_params=(query, *ability_names, self.MAX_QUERY_RESULTS),
             )
             discovered.extend(row[0] for row in rows)
 
-        # Also fallback-search the MCP tools DB.
-        for row in self._query_mcp(query, b"", limit, mcp_names):
+        for row in self._query_mcp(query, b"", self.MAX_QUERY_RESULTS, mcp_names):
             if row["key"] not in discovered:
                 discovered.append(row["key"])
 
-        discovered = discovered[:limit]
+        discovered = discovered[:self.MAX_QUERY_RESULTS]
 
         if not discovered:
             return _skill_tag("find_tools", self._no_results_text(query), query=query)
 
-        entries = [{"name": n, "relevance": 0.5} for n in discovered]
-        raw_text = json.dumps({"added_tools": entries})
         self._append_active(discovered)
+        raw_text = self._format_universal(discovered, f'Query "{query}" matched and added the following tools')
         return _skill_tag("find_tools", raw_text, query=query, found=len(discovered))

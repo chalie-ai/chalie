@@ -1,10 +1,7 @@
 """Tests for ToolCallService — unified API for tool_calls audit entries.
 
-Covers store, store_batch, get_by_transcript, get_by_timerange,
-and get_find_tools_results.
+Covers store, store_batch, get_by_transcript, and get_by_timerange.
 """
-
-import json
 
 import pytest
 
@@ -68,19 +65,6 @@ class TestStoreBatch:
         assert rows[0]['tool_name'] == 'memory'
         assert rows[1]['tool_name'] == 'schedule'
 
-    def test_store_batch_find_tools_special_case(self, svc, db, transcript_id):
-        tool_calls = [
-            {'id': 'tc1', 'name': 'find_tools', 'input': {'query': 'email'}},
-        ]
-        results = [
-            {'result': 'Found 2 tools', '_discovered_tools': ['send_email', 'read_email'], 'status': 'ok'},
-        ]
-        svc.store_batch(transcript_id, tool_calls, results)
-        rows = _all_rows(db)
-        assert len(rows) == 1
-        params = json.loads(rows[0]['params'])
-        assert params == {'discovered': ['send_email', 'read_email']}
-
 
 class TestGetByTranscript:
     def test_get_by_transcript_include_ephemeral(self, svc, db, transcript_id):
@@ -127,26 +111,5 @@ class TestGetByTimerange:
         assert len(rows) == 1
         assert rows[0]['tool_name'] == 'memory'
 
-
-class TestGetFindToolsResults:
-    def test_get_find_tools_results_returns_deduped_flat_list(self, svc, db, transcript_id):
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral) "
-            "VALUES (?, 'find_tools', ?, '', 1)",
-            (transcript_id, json.dumps({'discovered': ['send_email', 'read_email']})),
-        )
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral) "
-            "VALUES (?, 'find_tools', ?, '', 1)",
-            (transcript_id, json.dumps({'discovered': ['read_email', 'delete_email']})),
-        )
-
-        results = svc.get_find_tools_results(transcript_id)
-        assert results == ['send_email', 'read_email', 'delete_email']
-
-    def test_get_find_tools_results_empty_when_no_find_tools_records(self, svc, db, transcript_id):
-        svc.store(transcript_id, 'memory', {}, 'result')
-        results = svc.get_find_tools_results(transcript_id)
-        assert results == []
 
 
