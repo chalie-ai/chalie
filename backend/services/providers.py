@@ -71,7 +71,7 @@ class Providers:
         system = mp.config.get_system_prompt(mp)
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         tools = AbilityRegistry.build_tools(mp)
-        provider = self._resolve(mp.config.job, mp)
+        provider = self._resolve()
 
         from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
         user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
@@ -85,11 +85,10 @@ class Providers:
             getattr(mp, "thinking_override", None),
             mp.thinking_level,
         )
-        job = mp.config.job
         t0 = time.monotonic()
         response = provider.send_messages(system, messages, True, tools=tools, thinking_mode=thinking_mode)
         wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(system, messages, tools, job, response, wall_ms, mp)
+        self._log_after_call(system, messages, tools, response, wall_ms)
         return response
 
     def _over_cap(self, system, messages, tools, provider) -> bool:
@@ -110,16 +109,15 @@ class Providers:
 
     def selected_provider(self):
         """The resolved provider instance for this mp's job (design §3.1, §6.3)."""
-        return self._resolve(self.mp.config.job, self.mp)
+        return self._resolve()
 
-    def _log_after_call(self, system_prompt, messages, tools, job, response, wall_ms=None, mp=None):
+    def _log_after_call(self, system_prompt, messages, tools, response, wall_ms=None):
         """Write the LLM request log file. Best-effort, never raises.
 
-        Called by both :meth:`send` and :meth:`send_messages` so every LLM
-        request goes through a single logging chokepoint. This is also THE
-        metrics recording site (spec §4e): every send records, next to the
-        existing latency capture and bucketed by the bound processor's
-        ``config.channel``:
+        Called from :meth:`send` — the single logging chokepoint every LLM
+        request flows through. This is also THE metrics recording site (spec
+        §4e): every send records, next to the latency capture and bucketed by
+        the bound processor's ``config.channel``:
 
           * the send's token totals (folded into the processor's
             MetricsAccumulator — the loop never calls ``.accumulate()``);
@@ -128,48 +126,41 @@ class Providers:
             channel, ``subagent_turns_total`` for delegate channels).
 
         Recording once at the send means delegate / sub-processor token
-        attribution is correct for free (the threaded ``mp`` binds the
-        right accumulator), and the per-turn timing snapshot reflects every
-        LLM round-trip (ACT iterations, exploration, compaction).
+        attribution is correct for free (``self.mp`` binds the right
+        accumulator), and the per-turn timing snapshot reflects every LLM
+        round-trip (ACT iterations, exploration, compaction).
         """
+        proc = self.mp
         try:
-            proc = mp
-            if proc is not None:
-                # Prefer the gateway-level wall_ms so providers that forget to
-                # populate response.latency_ms (e.g. OllamaService prior to the
-                # parallel patch) still report accurately. Fall back to the
-                # provider-reported value if wall_ms wasn't passed (older
-                # in-tree callers).
-                latency_ms = wall_ms
-                if latency_ms is None:
-                    latency_ms = getattr(response, 'latency_ms', None)
-                if latency_ms is not None:
-                    try:
-                        proc._metrics.record_llm_call(latency_ms)
-                    except Exception as exc:
-                        logger.debug(f"[LLM LOG] record_llm_call failed: {exc}")
-                # Token totals fold into the processor's accumulator at the send
-                # (§4e) — the loop no longer calls .accumulate().
+            # Prefer the gateway-level wall_ms so providers that forget to
+            # populate response.latency_ms (e.g. OllamaService prior to the
+            # parallel patch) still report accurately. Fall back to the
+            # provider-reported value if wall_ms wasn't passed.
+            latency_ms = wall_ms if wall_ms is not None else getattr(response, 'latency_ms', None)
+            if latency_ms is not None:
                 try:
-                    proc._metrics.accumulate(response)
+                    proc._metrics.record_llm_call(latency_ms)
                 except Exception as exc:
-                    logger.debug(f"[LLM LOG] accumulate failed: {exc}")
-                # Per-send / per-channel counters (§4e).
-                self._record_send_counters(proc)
+                    logger.debug(f"[LLM LOG] record_llm_call failed: {exc}")
+            # Token totals fold into the processor's accumulator at the send
+            # (§4e) — the loop no longer calls .accumulate().
+            try:
+                proc._metrics.accumulate(response)
+            except Exception as exc:
+                logger.debug(f"[LLM LOG] accumulate failed: {exc}")
+            # Per-send / per-channel counters (§4e).
+            self._record_send_counters(proc)
         except Exception as exc:
             logger.debug(f"[LLM LOG] processor lookup failed: {exc}")
         try:
             from services.llm_request_logger import log_llm_request
-            proc = mp
-            caller_name = type(proc).__name__ if proc is not None else 'unknown'
-            user_msg_str = self._render_messages_for_log(messages)
             log_llm_request(
-                caller=caller_name,
-                job=job,
+                caller=type(proc).__name__,
+                job=self.mp.config.job,
                 provider=getattr(response, 'provider', 'unknown'),
                 model=getattr(response, 'model', 'unknown'),
                 system_message=system_prompt or '',
-                user_message=user_msg_str,
+                user_message=self._render_messages_for_log(messages),
                 tools=tools,
             )
         except Exception as e:
@@ -225,29 +216,24 @@ class Providers:
             for m in msgs
         )
 
-    def _resolve(self, job, mp=None):
+    def _resolve(self):
         """Resolve the active DB provider and wrap it as an LLM service.
 
-        Injects _job_name (for LoggingLLMService) and _usage_class (for
-        llm_call_log tagging) into the config dict before calling
-        create_llm_service.
+        Reads everything it needs from the bound ``self.mp`` (the per-mp gateway
+        already owns it — no raw params are threaded in): ``_job_name`` (for
+        LoggingLLMService) from ``mp.config.job`` and ``_usage_class`` (for
+        llm_call_log tagging) from ``mp.config.usage_class``. Both are injected
+        into the config dict before calling create_llm_service.
         """
         from services.provider_cache_service import ProviderCacheService
         from services.llm_service import create_llm_service
         config = ProviderCacheService.get_selected_provider()
         if not config:
             providers = ProviderCacheService.get_providers()
-            if providers:
-                config = dict(next(iter(providers.values())))
-            else:
-                config = {}
+            config = dict(next(iter(providers.values()))) if providers else {}
         config = dict(config)  # don't mutate the cached dict
-        config['_job_name'] = job
-        proc = mp
-        if proc is not None:
-            proc_config = getattr(proc, 'config', None)
-            usage_class = getattr(proc_config, 'usage_class', None) or 'chat'
-            config['_usage_class'] = usage_class
+        config['_job_name'] = self.mp.config.job
+        config['_usage_class'] = getattr(self.mp.config, 'usage_class', None) or 'chat'
         return create_llm_service(config)
 
     def get_context_limit(self):
@@ -260,11 +246,4 @@ class Providers:
         declared = config.get("max_tokens")
         if declared and int(declared) > 0:
             return min(int(declared), MAX_CONTEXT_WINDOW)
-        mp = self.mp
-        if mp is not None:
-            return min(self._resolve(mp.config.job, mp).get_context_limit(), MAX_CONTEXT_WINDOW)
-        return min(self._resolve('unified').get_context_limit(), MAX_CONTEXT_WINDOW)
-
-    def count_tokens(self, messages, system_prompt='', tools=None, job='unified'):
-        """Delegate to resolved provider."""
-        return self._resolve(job).count_tokens(messages, system_prompt, tools)
+        return min(self._resolve().get_context_limit(), MAX_CONTEXT_WINDOW)
