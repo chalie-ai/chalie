@@ -103,7 +103,7 @@ class EAMPConfig(ProcessorConfig):
         try:
             from services.system_message_prompt import ExternalAgentSystemMessagePrompt  # noqa: PLC0415
             body = ExternalAgentSystemMessagePrompt().get_prompt()
-            body = substitute_provider_content_field(body, "external_agent")
+            body = substitute_provider_content_field(body, mp)
 
             # Resolve the user's first name from data_graph.
             user_name = "the user"

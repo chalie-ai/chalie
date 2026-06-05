@@ -132,7 +132,7 @@ class UserConfig(ProcessorConfig):
             template = UnifiedSystemMessagePrompt().get_prompt()
             voice_line = f"When responding; {personality_service.get_voice()}"
             prompt = f"{voice_line}\n\n{template}"
-            prompt = substitute_provider_content_field(prompt, "user")
+            prompt = substitute_provider_content_field(prompt, mp)
         except Exception as exc:
             _log.warning("[UMP] system prompt build failed: %s", exc)
             return ""

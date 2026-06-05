@@ -69,3 +69,22 @@ def test_get_context_limit_reads_declared_max_tokens_capped():
         with db.connection() as conn:
             conn.execute("UPDATE providers SET max_tokens = ? WHERE id = ?", (original, pid))
         ProviderCacheService.invalidate()
+
+
+def test_substitute_provider_content_field_uses_mp_providers():
+    from configs.channels._common import substitute_provider_content_field, _CONTENT_FIELD_PLACEHOLDER
+    from services.message_processor import MessageProcessor
+    from configs.channels import UserConfig
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, "hi", None)
+    mp.config = UserConfig()
+    # real stack: needs a configured provider whose class declares CONTENT_FIELD_LABEL
+    try:
+        label = mp.providers.selected_provider().CONTENT_FIELD_LABEL
+    except Exception:
+        label = None
+    if not label:
+        pytest.skip("no active provider with a CONTENT_FIELD_LABEL in this env")
+    out = substitute_provider_content_field(f"write into {_CONTENT_FIELD_PLACEHOLDER}", mp)
+    assert _CONTENT_FIELD_PLACEHOLDER not in out          # placeholder replaced
+    assert label in out                                    # replaced with the active provider's real label

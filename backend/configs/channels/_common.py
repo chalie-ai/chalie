@@ -5,22 +5,14 @@ from __future__ import annotations
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
 
 
-def substitute_provider_content_field(body: str, job: str = "unified") -> str:
-    """Replace ``{{provider_content_field_name}}`` with the active provider's
-    ``CONTENT_FIELD_LABEL`` (e.g. ``content[].text`` for Anthropic,
-    ``message.content`` for Ollama) so the model is told the exact JSON field
-    where its user-visible prose lands.
-
-    ``job`` is a logging label only — the provider is resolved from the active
-    selection, not from this key.  Best-effort: if the placeholder is absent or
-    the provider lookup fails, the body passes through unchanged.
-    """
+def substitute_provider_content_field(body: str, mp) -> str:
+    """Replace {{provider_content_field_name}} with the active provider's
+    CONTENT_FIELD_LABEL, read through the mp-owned providers gateway. Best-effort:
+    placeholder absent or resolution fails → body unchanged (design §6.3)."""
     if _CONTENT_FIELD_PLACEHOLDER not in body:
         return body
     try:
-        from services.providers import Providers  # noqa: PLC0415
-        provider = Providers.instance()._resolve(job)
-        label = getattr(provider, "CONTENT_FIELD_LABEL", None)
+        label = mp.providers.selected_provider().CONTENT_FIELD_LABEL
     except Exception:
         label = None
     if not label:
