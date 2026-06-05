@@ -108,20 +108,24 @@ Each tool call is written to `tool_calls` by `ToolDispatcher.dispatch()` via `Ac
 
 ## Mid-ACT Compaction
 
-Two independent thresholds checked once per iteration via `Providers.calculate()`:
+Compaction is triggered by two conditions, both handled by the single `_compact()` method:
 
-| Threshold | Data source | Action |
-|-----------|-------------|--------|
-| **>90% + trail exists** | `tool_calls` rows for this turn | `_compact_trail()` — summarises trail into one `trail_compaction` row, iteration resets to 0 |
-| **>80%** | Prior conversation transcript | `_compact_history()` — summarises prior turns into history watermark, iteration resets to 0 |
+| Trigger | Condition | How |
+|---------|-----------|-----|
+| **Proactive** | `len(_previous_rows()) > 50` at top of each `_loop` iteration | `_compact()` called before `providers.send()` |
+| **Reactive** | `providers.send()` raises `ContextOverflowError` or `PayloadTooLargeError` | `_compact()` called in the `except` branch; up to 2 retries per turn |
 
-The 90% check runs first. The compaction loop (`COMPACTION_CONFIG`) hits a recursion guard — if it approaches 80% it logs a warning and proceeds rather than compacting-of-compaction. There is one universal compaction config for every channel (delegates included); the old per-subagent config was removed.
+`_compact()` runs two sub-passes in order, then resets `current_iteration = 0`:
 
-**Trail compaction** (`_compact_trail()`): assembles the current trail from `tool_calls` (everything since the last `trail_compaction` row), summarises it with `COMPACTION_CONFIG`, and records the result as a new `trail_compaction` row (`tool_name='trail_compaction'`, `ephemeral=1`). The next `_from_last_compaction()` slice begins at that row — every prior row silently drops out of the assembled trail without a DELETE.
+1. **History** — calls `get_previous_messages()` (watermark-bounded, no LIMIT on the `since_id` path), feeds the result to `MessageProcessor.process(prev, CompactionConfig())`, and writes the summary to the `transcript` table as `role='compaction'`. The new row's own `id` becomes the watermark — `_previous_rows()` reads `id > watermark`, so the next read returns nothing through it.
 
-**History compaction** (`_compact_history()`): calls `_run_full_compaction()` which writes a durable `tool_calls` row with `tool_name='compaction'`, `ephemeral=0`, `params={"compacted_up_to_id": <max id>, "status": "success"|"failure"}`, `result=<summary body>`. `compaction_persistence.get_compaction(channel)` returns the most recent success row. The model sees this summary through the prompt envelope: when a compaction row exists for the channel, the ACT loop wraps the user-prompt body via `_wrap_with_checkpoint()` into a `### Checkpoint - What you were previously discussing / doing` block followed by `### Current State - What's happening in the current turn` (no-op when no compaction row exists). The same summary is also surfaced read-only in the Brain dashboard under **Cognition → Compacted Summary** via `GET /system/observability/compaction`.
+2. **Trail** — if `_has_trail()` is true (at least one non-`trail_compaction` row since the last trail boundary), summarises the assembled trail via `MessageProcessor.process(trail_text, TrailHandoverConfig())` and records it as a new `trail_compaction` tool_calls row (`ephemeral=1`). The next `_from_last_compaction()` slice begins at that row — prior rows silently drop out of the trail without a DELETE.
 
-**Two compaction kinds must not collide.** History rows use `tool_name='compaction'`; trail rows use `tool_name='trail_compaction'`. The history lookup filters `params.status='success'`, which trail rows never carry — so the two selectors are disjoint.
+There is one universal compaction config per kind for every channel (delegates included). There is no recursion guard — compaction channels (`CompactionConfig`) are single-iteration by design (`max_iterations=1`) and `suppress_history=True`, so `_previous_rows()` returns `[]` immediately and `_compact()` is a no-op inside them.
+
+**Checkpoint envelope.** When a compaction row exists for the channel, `_wrap_with_checkpoint()` (called inside `Providers.send()`) wraps the user-prompt body into a `### Checkpoint - What you were previously discussing / doing` block followed by `### Current State - What's happening in the current turn`. No-op when no compaction row exists.
+
+**Two compaction kinds must not collide.** History rows live in `transcript` with `role='compaction'`; trail rows live in `tool_calls` with `tool_name='trail_compaction'`. The watermark lookup (`compaction_persistence.get_compaction`) reads `transcript WHERE role='compaction'` — disjoint from the trail selector. The same summary is surfaced read-only in the Brain dashboard under **Cognition → Compacted Summary** via `GET /system/observability/compaction`.
 
 ---
 
