@@ -116,7 +116,7 @@ Compaction relies **solely on context-window size** — there is no turn-count t
 | Trigger | Condition | How |
 |---------|-----------|-----|
 | **Window-fit (compact-first)** | `Providers.send()` scaffolds the full request, and `_over_cap()` finds it reaches the fit cap, so `send()` returns the `OVER_CAP` sentinel **without calling the provider** | `_loop` sees `OVER_CAP`, calls `_dispatch_compaction()` FIRST, then rebuilds the collapsed request from the DB and re-sends. If `_dispatch_compaction()` made no progress (irreducible), it calls `send(force=True)` to let the provider be the source of truth |
-| **Reactive (413)** | `provider.send_messages()` raises `PayloadTooLargeError` (provider rejects the payload outright despite the estimate fitting) | `_dispatch_compaction()` in the `except` branch, then re-send |
+| **Irreducible (force send)** | `_dispatch_compaction()` made no progress — the act-trail is already collapsed (an empty handover lands no boundary) **and** the chat-history watermark cannot advance (nothing left to fold) | `_loop` calls `send(force=True)`, which bypasses the `_over_cap()` check so the provider receives the request and becomes the source of truth — it succeeds, or fails loud. There is **no** reactive 413 re-compaction path |
 
 **The cap check (`Providers._over_cap`).** `send()` builds the full request body (system + checkpoint-wrapped user + tools) and estimates its token size via `estimate_tokens()`, comparing against `cap = window - max(int(0.10 * window), 8000)` — i.e. always reserve `max(10% of the window, 8k tokens)` of response headroom. If the request fits, `send()` calls the provider normally. If `estimate_tokens(body) >= cap`, `send()` returns the module-level `OVER_CAP` sentinel and makes **no API call**. `_loop` reacts by compacting first. Because every ACT iteration rebuilds the request from the DB (never from in-memory state), advancing the watermark auto-clears both the `## Previous Messages` block and the `tool_calls`-built act-trail, so the rebuilt request fits. `_dispatch_compaction()` returns a **progress** boolean; when it returns `False` (nothing left to collapse — irreducible request) `_loop` calls `send(force=True)`, which skips the cap check and lets the provider fail loud rather than looping forever. Convergence is at most ~2 iterations.
 
@@ -187,7 +187,7 @@ Runs internally when a channel's transcript tail grows beyond a threshold. Encod
 
 ## Per-Turn Metrics
 
-Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the `ThinkingAbility` exploration pass (when `thinking_level='high'`), and any compaction call fired by `_dispatch_compaction()` (on the compact-first `OVER_CAP` path or the reactive 413 path). Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
+Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the `ThinkingAbility` exploration pass (when `thinking_level='high'`), and any compaction call fired by `_dispatch_compaction()` on the compact-first `OVER_CAP` path. Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
 
 ```json
 {

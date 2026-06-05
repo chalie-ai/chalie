@@ -727,7 +727,7 @@ class MessageProcessor:
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
         from services import compaction_persistence  # noqa: PLC0415
 
-        had_trail = self._has_trail()
+        trail_before = self._has_trail()
         before = compaction_persistence.get_compaction(self.config.channel)
         before_id = before["compacted_up_to_id"] if before else 0
 
@@ -737,7 +737,17 @@ class MessageProcessor:
 
         after = compaction_persistence.get_compaction(self.config.channel)
         after_id = after["compacted_up_to_id"] if after else 0
-        return had_trail or after_id > before_id
+        # Progress = the act-trail was actually COLLAPSED (a non-empty handover
+        # landed a new boundary, so _has_trail flips True→False) OR the chat-history
+        # watermark advanced. The trail term is measured AFTER dispatch on purpose:
+        # ToolChainCompactor records a no-op row (no boundary) when the handover
+        # summariser returns an empty string, leaving _has_trail True. Counting that
+        # as progress would spin the OVER_CAP loop forever (that branch has no
+        # iteration cap). Returning False instead falls through to send(force=True),
+        # letting the provider be the source of truth and fail loud on an
+        # irreducible request rather than hang.
+        trail_collapsed = trail_before and not self._has_trail()
+        return trail_collapsed or after_id > before_id
 
     def _record_narration(self, response: "object") -> None:  # type: ignore[override]
         """Mid-loop: persist LLM text between iterations as an ephemeral trail row.
