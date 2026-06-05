@@ -34,31 +34,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── Compaction summary parser ──────────────────────────────────────────────────
+# ── Trail-compaction boundary markers ───────────────────────────────────────────
 #
-# _SUMMARY_RE parses the <summary>…</summary> block produced by the compaction
-# turn (a flat process() run on the compaction channel — see
-# configs.channels.CompactionConfig).
+# The two compaction abilities are dispatched programmatically (never
+# model-selected) by _dispatch_compaction(). ChatHistoryCompactor writes the
+# durable transcript watermark; ToolChainCompactor's recorded tool_calls row is
+# the act-trail boundary. Both names are framework markers, not real tool
+# activity, so the trail helpers below treat them specially.
 
-_SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>", re.IGNORECASE)
-_COMPACTION_FAILURE_FMT = "[COMPACTION] %s: continuity failure — reason=%s"
+#: The act-trail boundary tool. The LAST non-empty row with this name marks the
+#: start of the live (un-compacted) trail slice — see _from_last_compaction.
+_TRAIL_BOUNDARY_TOOL = "tool_chain_compactor"
 
-# Maximum bytes fed to _SUMMARY_RE; bounds backtracking on malformed LLM output.
-_SUMMARY_RE_CAP = 65_536
-
-
-def _extract_compaction_summary(raw: 'str | None') -> 'str | None':
-    """Extract the body of a <summary>…</summary> block from raw LLM output.
-
-    Returns the stripped inner text on success.
-    Returns None when:
-    - raw is empty or None.
-    - no <summary> tags are present in the output.
-    """
-    if not raw:
-        return None
-    m = _SUMMARY_RE.search(raw[:_SUMMARY_RE_CAP])
-    return m.group(1).strip() if m else None
+#: Both compactors are framework markers: they never count as real trail content
+#: (_has_trail) and the chat-history marker is never rendered to the model (its
+#: compacted output reaches the model through the checkpoint prepend instead).
+_COMPACTOR_TOOLS: "frozenset[str]" = frozenset({"chat_history_compactor", "tool_chain_compactor"})
 
 
 _LLM_SENTINEL_PATTERNS = (
@@ -433,7 +424,20 @@ class MessageProcessor:
             })
 
     def _loop(self) -> str:  # noqa: C901
-        """ACT game loop — send, dispatch tools, compact-and-retry on overflow."""
+        """ACT game loop — send, dispatch tools, compact-and-retry on overflow.
+
+        Compaction is never inlined: both triggers route to the SAME
+        _dispatch_compaction() chokepoint and the provider hot-path send is
+        SKIPPED that iteration (``continue``), so the next turn re-reads the
+        now-compacted database from scratch (design: DB is the state machine).
+
+        - Proactive: the un-compacted backlog exceeds COMPACTION_ROW_WINDOW.
+          Self-limiting — ChatHistoryCompactor advances the watermark, so the
+          backlog reads empty on the next pass.
+        - Reactive: the scaffolded request overflows the context window
+          (ContextOverflowError) or the provider rejects it (PayloadTooLargeError).
+          Capped at 2 retries per turn so an un-shrinkable request fails loudly.
+        """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
         from services.providers import ContextOverflowError  # noqa: PLC0415
         from services.llm_service import PayloadTooLargeError  # noqa: PLC0415
@@ -441,15 +445,16 @@ class MessageProcessor:
             if self._should_stop():
                 return ""
             if len(self._previous_rows()) > COMPACTION_ROW_WINDOW:   # proactive turn-count compaction
-                self._compact()
+                self._dispatch_compaction()
+                continue                          # skip send; re-read the compacted DB
             try:
                 response = self.providers.send()
             except (ContextOverflowError, PayloadTooLargeError):
                 if self._compaction_retries >= 2:
                     raise
                 self._compaction_retries += 1
-                self._compact()
-                continue                          # retry re-reads the now-compacted DB
+                self._dispatch_compaction()
+                continue                          # skip send; re-read the compacted DB
             self._compaction_retries = 0          # reset on every successful send
             if not response.tool_calls:
                 return response.text or ""
@@ -606,76 +611,69 @@ class MessageProcessor:
             )
 
     def _has_trail(self) -> bool:
-        """True when a non-compaction trail row exists since last compaction.
+        """True when real (non-compactor) tool activity exists since the last
+        trail boundary.
 
-        Queries tool_calls via ActTrail.fetch_by_transcript_id and slices from
-        the last trail_compaction row.  Returns True only when at least one
-        non-trail_compaction row exists in that slice.
-
-        Spec §4c / F9.
+        Slices from the last tool_chain_compactor boundary and returns True only
+        when at least one row in that slice is NOT a framework compactor marker.
+        Used by ToolChainCompactor to silently no-op when there is nothing to
+        compact.
         """
         if self.uid is None:
             return False
         from services.act_trail import ActTrail  # noqa: PLC0415
         rows = _from_last_compaction(ActTrail().fetch_by_transcript_id(self.uid))
-        return any(r["tool_name"] != "trail_compaction" for r in rows)
+        return any(r["tool_name"] not in _COMPACTOR_TOOLS for r in rows)
 
     def _render_act_trail(self) -> str:
         """Assemble the ACT trail string for the current turn.
 
-        Fetches all tool_calls rows for self.uid ordered by id, slices from the
-        last trail_compaction row (inclusive), and renders each via ActTrail.render().
-        Returns '' when uid is None or no rows exist.
-
-        Spec §4c / _render_act_trail.
+        Fetches all tool_calls rows for self.uid ordered by id and slices from
+        the last tool_chain_compactor boundary (inclusive); the boundary row's
+        handover renders in place of the pre-compacted calls. Framework markers
+        are filtered: chat_history_compactor rows never reach the model (their
+        compacted history arrives via the checkpoint prepend), and an empty
+        tool_chain_compactor no-op row is dropped. Returns '' when uid is None.
         """
         if self.uid is None:
             return ""
         from services.act_trail import ActTrail  # noqa: PLC0415
         trail = ActTrail()
         rows = _from_last_compaction(trail.fetch_by_transcript_id(self.uid))
-        return "\n".join(trail.render(r) for r in rows)
+        out: list[str] = []
+        for r in rows:
+            name = r.get("tool_name")
+            if name == "chat_history_compactor":
+                continue
+            if name == _TRAIL_BOUNDARY_TOOL and not (r.get("result") or "").strip():
+                continue
+            out.append(trail.render(r))
+        return "\n".join(out)
 
-    def _compact(self) -> None:
-        """Compact history (→transcript role='compaction') and, when a trail
-        exists, the act-trail (→tool_calls trail_compaction). Design §3.5.
+    def _dispatch_compaction(self) -> None:
+        """Fire both compactors through the normal tool-dispatch chokepoint.
 
-        The history summary's transcript row id IS the new watermark, so the
-        next read of _previous_rows() returns nothing through it. Each sub-summary
-        is produced by a fresh MessageProcessor.process() compaction loop. A
-        no-op (nothing to summarise) leaves the watermark untouched — the retry
-        cap in _loop bounds the universal case."""
-        from configs.channels import CompactionConfig, TrailHandoverConfig  # noqa: PLC0415
-        from services import transcript_service  # noqa: PLC0415
+        No alternative path: this is the SAME machinery as the turn-0
+        memory/thinking seeds. Each compactor goes through ToolDispatcher.dispatch
+        so it auto-records its tool_calls row AND auto-emits the act-trail WS
+        events (act_tool_start/act_tool_end) — that is how compaction shows up in
+        the frontend act-trail without any hand-rolled emit.
 
-        # 1. History → transcript (the writer's row id is the watermark).
-        # CompactionConfig emits <analysis>…</analysis><summary>…</summary>; the
-        # <analysis> is a discard-after-use reconciliation scaffold. Only the
-        # dense <summary> body is the durable artifact — persist that, never the
-        # raw blob (would leak the scratchpad + literal XML tags into the prompt).
-        prev = self.get_previous_messages()
-        if prev.strip():
-            raw = MessageProcessor.process(prev, CompactionConfig())
-            summary = _extract_compaction_summary(raw)
-            if summary:
-                transcript_service.write_input_row(self.config.channel, "compaction", summary)
+        - ToolChainCompactor reads the act-trail off this mp and compacts it
+          (silent no-op when empty); its recorded row is the new trail boundary.
+        - ChatHistoryCompactor reads get_previous_messages() off this mp and
+          advances the durable transcript watermark.
 
-        # 2. Trail → tool_calls (only when a non-compaction trail row exists).
-        if self._has_trail():
-            from services.act_trail import ActTrail  # noqa: PLC0415
-            from abilities._event_emitter import ActEventEmitter  # noqa: PLC0415
-            trail_text = self._render_act_trail()
-            handover = MessageProcessor.process(trail_text, TrailHandoverConfig())
-            if handover and handover.strip():
-                emitter = ActEventEmitter(self.config)
-                emitter.emit({"type": "act_tool_start", "name": "trail_compaction", "id": "compact", "summary": "compacting context"})
-                ActTrail().record(
-                    tool_name="trail_compaction", params={}, result=handover,
-                    transcript_id=self.uid, ephemeral=True,
-                )
-                emitter.emit({"type": "act_tool_end", "name": "trail_compaction", "id": "compact", "ok": True})
+        Fired tool_chain first so its handover summarises the real trail before
+        the chat-history marker lands. Both are INTERNAL (policy gate bypassed)
+        and never-discoverable. The iteration counter resets for the retried turn.
+        """
+        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
 
-        # 3. Reset the iteration counter for the retried turn.
+        dispatcher = ToolDispatcher(self)
+        # compaction tool dispatch
+        dispatcher.dispatch("tool_chain_compactor", {"act_summary": "Compacting tool history"})
+        dispatcher.dispatch("chat_history_compactor", {"act_summary": "Compacting conversation"})
         self.current_iteration = 0
 
     def _record_narration(self, response: "object") -> None:  # type: ignore[override]
@@ -747,19 +745,18 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
 
 
 def _from_last_compaction(rows: "list[dict]") -> "list[dict]":
-    """Return the tail of *rows* starting at the LAST 'trail_compaction' row (inclusive).
+    """Return the tail of *rows* starting at the LAST non-empty trail boundary
+    (a tool_chain_compactor row whose result holds a handover), inclusive.
 
-    When no trail_compaction row exists, return all rows.
-
-    The history-compaction tool_name is 'compaction' (durable, channel-scoped).
-    Only 'trail_compaction' is a trail boundary.  'compaction' rows are
-    NOT boundaries and are included as-is in whatever slice they fall in.
-
-    Spec §4c / _from_last_compaction / F5 / F6 / F7.
+    When no such boundary exists, return all rows. An empty-result
+    tool_chain_compactor row (the no-trail no-op) is NOT a boundary — it carries
+    no handover, so slicing at it would drop real calls behind a blank marker.
+    The chat_history_compactor marker is never a boundary either; only the
+    act-trail compactor bounds the trail.
     """
     last: "int | None" = None
     for i, r in enumerate(rows):
-        if r.get("tool_name") == "trail_compaction":
+        if r.get("tool_name") == _TRAIL_BOUNDARY_TOOL and (r.get("result") or "").strip():
             last = i
     return rows if last is None else rows[last:]
 

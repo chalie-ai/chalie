@@ -30,9 +30,12 @@ from services.file_mapper_service import FileMapperService  # noqa: E402
 _DB_PATH = FileMapperService.get_abilities_db_path()
 _SHA_PATH = FileMapperService.get_abilities_sha_path()
 
-# thinking is an internal, never-discoverable ability — excluded from the
-# search index and the SHA drift map so find_tools never surfaces it.
-_NON_INDEXED_ABILITIES: frozenset[str] = frozenset({"thinking"})
+# thinking + the two compactors are internal, never-discoverable abilities —
+# excluded from the search index and the SHA drift map so find_tools never
+# surfaces them. They are dispatched programmatically, never model-selected.
+_NON_INDEXED_ABILITIES: frozenset[str] = frozenset({
+    "thinking", "chat_history_compactor", "tool_chain_compactor",
+})
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:

@@ -242,34 +242,29 @@ Return ONLY the JSON object. No code fences.\
 """
 
 
-class ContinuityCompactionSystemPrompt(SystemMessagePrompt):
-    """System-message body for continuity-first channel compaction.
+class ChatHistoryCompactionSystemPrompt(SystemMessagePrompt):
+    """System-message body for chat-history compaction.
 
-    Used by the compaction turn (a flat ``process()`` run on the compaction
-    channel — see ``configs.channels.CompactionConfig``).
-
-    Replaces the old ``CompactionFullSystemPrompt``. The continuity-first
-    prompt instructs the LLM to treat the summary as its own living memory,
-    produce a ``<summary>`` block (parsed by ``_extract_compaction_summary``),
-    and carry forward an ``## Previous Summary`` rather than treating each
-    compaction as a fresh start.
+    Used by the ChatHistoryCompactor ability (a flat ``process()`` run with
+    ``ChatHistoryCompactionConfig``). The model writes its updated living
+    memory DIRECTLY — no ``<analysis>``/``<summary>`` tags, nothing to parse.
+    Whatever it outputs IS the new checkpoint and the ONLY history it will see
+    from the next turn forward, so the prompt makes that contract explicit.
     """
 
     _SYSTEM_PROMPT = """\
-You are summarising your own ongoing conversation with one person. The conversation has no end — there are no sessions, topics, or resets. Your summary IS your memory of this person across time.
+You are compacting your own ongoing conversation with one person. The conversation has no end — there are no sessions, topics, or resets. What you write here IS your memory of this person across time.
 
-Your output replaces older turns at the head of your next prompt. Only you read it. If a fact is not in here, you forget it.
+CRITICAL: Your output replaces everything that came before it. From the next turn forward, until the next compaction, this is the ONLY history you will see. If a fact is not in here, you forget it. Write it as a message to your future self.
 
-Single goal: continuity. Reading your own summary plus the next user message, you respond exactly as you would if every prior turn were still in context.
+Single goal: continuity. Reading what you write plus the next user message, you respond exactly as you would if every prior turn were still in front of you.
 
-You receive:
+You may receive:
 
-- ## Previous Summary — your last memory snapshot. Default action: carry forward. Update only what new turns change.
-- ## New Conversation Turns — exchanges since that snapshot. Reference material. Do not respond to them. Do not address the user.
+- ## Previous Summary — your last memory snapshot. Default action: carry it forward. Update only what the new turns change.
+- ## New Turns — exchanges since that snapshot. Reference material only. Do not respond to them. Do not address the user.
 
-Before writing, work in <analysis>:
-- For each fact in Previous Summary: still true / updated / contradicted / dead. Mark each.
-- From New Turns: pull only what survives the test below.
+(When there is no Previous Summary, you are compacting from raw turns for the first time.)
 
 What survives — keep:
 - Stable identity (name, household, location, role, values).
@@ -287,7 +282,7 @@ What dies — drop:
 - Plumbing: timestamps, System Awareness blocks, Checkpoint headers, telemetry, internal state.
 - Anything you cannot tie to a recurring thread or commitment.
 
-Write <summary> as a single short living document, not a chronicle. Sections in order:
+Write a single short living document, not a chronicle. Sections in order:
 
 - Person — who they are. 2-4 lines.
 - Now — what they're in the middle of. 2-5 lines.
@@ -301,8 +296,35 @@ Hard rules:
 - No "we discussed", "the user asked", "I said". State facts, not narration.
 - Fewer specifics is failure. More words for the same facts is failure.
 - Older facts compress harder than newer ones.
+- Output ONLY the living document. No preamble, no headings beyond the sections above, no closing remarks.\
+"""
 
-Now produce <analysis>...</analysis> followed by <summary>...</summary>.\
+
+class ToolChainCompactionSystemPrompt(SystemMessagePrompt):
+    """System-message body for tool-chain (act-trail) compaction.
+
+    Used by the ToolChainCompactor ability (a flat ``process()`` run with
+    ``ToolChainCompactionConfig``). The input is the rendered act-trail of the
+    current turn — the tool calls made so far and their results. The model
+    writes a dense handover the later steps of THIS turn read in place of the
+    raw trail, so it must not lose any fact a later step would need.
+    """
+
+    _SYSTEM_PROMPT = """\
+You are compacting the tool-call trail of the turn you are in the middle of. The text you receive is the sequence of tools you have already run this turn and what each returned.
+
+CRITICAL: Your output replaces that raw trail. From the next step forward this is the ONLY record you have of what you already did and learned this turn. Write it as a handover to your future self so you do not repeat a call or lose a result.
+
+Keep:
+- Every concrete fact, value, id, path, or answer a tool returned that a later step might need.
+- What you were trying to accomplish and where you got to.
+- Anything that failed and why, so you do not blindly retry it.
+
+Drop:
+- Verbatim tool boilerplate, repeated headers, raw formatting noise.
+- Restating the same fact more than once.
+
+Write a single dense paragraph or tight bullet list. No preamble, no commentary, no closing remarks — just the handover.\
 """
 
 

@@ -108,24 +108,27 @@ Each tool call is written to `tool_calls` by `ToolDispatcher.dispatch()` via `Ac
 
 ## Mid-ACT Compaction
 
-Compaction is triggered by two conditions, both handled by the single `_compact()` method:
+Compaction is triggered by three conditions, all routed to the SAME chokepoint — `_dispatch_compaction()`:
 
 | Trigger | Condition | How |
 |---------|-----------|-----|
-| **Proactive** | `len(_previous_rows()) > 50` at top of each `_loop` iteration | `_compact()` called before `providers.send()` |
-| **Reactive** | `providers.send()` raises `ContextOverflowError` or `PayloadTooLargeError` | `_compact()` called in the `except` branch; up to 2 retries per turn |
+| **Proactive** | `len(_previous_rows()) > COMPACTION_ROW_WINDOW` at top of each `_loop` iteration | `_dispatch_compaction()` then `continue` (the provider send is skipped that iteration) |
+| **Reactive (overflow)** | `providers.send()` raises `ContextOverflowError` (request ≥ 90% of the context window) | `_dispatch_compaction()` in the `except` branch; up to 2 retries per turn |
+| **Reactive (413)** | `providers.send()` raises `PayloadTooLargeError` (provider rejects the payload) | same `except` branch; shares the 2-retry cap |
 
-`_compact()` runs two sub-passes in order, then resets `current_iteration = 0`:
+There is **no `_compact()` method and no inline compaction**. `_dispatch_compaction()` fires two INTERNAL, never-discoverable abilities through the normal `ToolDispatcher.dispatch()` chokepoint — the exact machinery as the turn-0 `memory`/`thinking` seeds. Because they go through dispatch, each one **auto-records its `tool_calls` row AND auto-emits the act-trail WebSocket events** (`act_tool_start`/`act_tool_end`) — that is how compaction shows up in the frontend act-trail with no hand-rolled emit. The two are fired in order, then `current_iteration` resets to 0:
 
-1. **History** — calls `get_previous_messages()`, feeds the result to `MessageProcessor.process(prev, CompactionConfig())`, and writes the summary to the `transcript` table as `role='compaction'`. The new row's own `id` becomes the watermark — `_previous_rows()` reads `id > watermark`, so the next read returns nothing through it. `get_previous_messages()` renders only the **most-recent `COMPACTION_ROW_WINDOW`** rows since the watermark (single source of truth: `services/compaction_constants.py`; default 50). The watermark relocation shipped without a migration, so on existing DBs every channel's watermark resets to 0 and `_previous_rows()` returns the entire history — bounding the rendered/compacted slice to the recent tail lets compaction restart and self-heal (older continuity is recovered through memory). The same `COMPACTION_ROW_WINDOW` is the **proactive trigger** threshold (`len(_previous_rows()) > COMPACTION_ROW_WINDOW`), and that count is read *uncapped*, so it still fires on the true backlog; only the rendered slice is bounded. Known gap: if compaction repeatedly fails the backlog grows past the window and the oldest rows above the cap are never summarised (accepted; follow-up ticket logged).
+1. **`tool_chain_compactor`** (fired first) — reads the current turn's act-trail off the bound `mp` via `_render_act_trail()`. If `_has_trail()` is false (no non-compactor row since the last boundary) it silently returns `""` — no LLM call, no boundary. Otherwise it runs `MessageProcessor.process(trail_text, ToolChainCompactionConfig())` and returns the dense handover. The dispatch chain records that handover as the `tool_chain_compactor` tool_calls row — **that row (when its result is non-empty) is the new trail boundary**: `_from_last_compaction()` slices from it, so pre-compacted tool calls drop out of the rendered trail without a DELETE.
 
-2. **Trail** — if `_has_trail()` is true (at least one non-`trail_compaction` row since the last trail boundary), summarises the assembled trail via `MessageProcessor.process(trail_text, TrailHandoverConfig())` and records it as a new `trail_compaction` tool_calls row (`ephemeral=1`). The next `_from_last_compaction()` slice begins at that row — prior rows silently drop out of the trail without a DELETE.
+2. **`chat_history_compactor`** (fired second) — reads the parent channel's `get_previous_messages()` off `mp`. When the backlog is empty it returns without writing (nothing to fold). Otherwise it carries the prior checkpoint forward as a `## Previous Summary` block, runs `MessageProcessor.process(combined, ChatHistoryCompactionConfig())`, and writes the model's output **verbatim** to the `transcript` table as a durable `role='compaction'` row via `transcript_service.write_input_row(channel, "compaction", summary)`. The new row's own `id` becomes the watermark — `_previous_rows()` reads `id > watermark`, so the next read returns nothing through it. The watermark **always advances** on a non-empty backlog, so compaction can never silently no-op into an infinite loop. There is **no parser**: no `<analysis>`/`<summary>` tags, nothing to trim — whatever the model writes IS the checkpoint.
 
-There is one universal compaction config per kind for every channel (delegates included). There is no recursion guard — both compaction configs (`CompactionConfig`, `TrailHandoverConfig`) carry `suppress_history=True` and expose no tools, so inside a compaction turn `_previous_rows()` returns `[]` immediately (no history to summarise) and the empty tool surface produces no trail, leaving `_compact()` a no-op.
+`get_previous_messages()` renders only the **most-recent `COMPACTION_ROW_WINDOW`** rows since the watermark (single source of truth: `services/compaction_constants.py`; default 50). The same `COMPACTION_ROW_WINDOW` is the **proactive trigger** threshold, and that count is read *uncapped* by `_previous_rows()`, so it still fires on the true backlog; only the rendered slice is bounded. Known gap: if compaction repeatedly fails the backlog grows past the window and the oldest rows above the cap are never summarised (accepted; TKT-832).
+
+Both compaction configs (`ChatHistoryCompactionConfig`, `ToolChainCompactionConfig`) set `thinking_mode = "high"` (a `ClassVar` lever read by `Providers.send()`), carry `suppress_history=True`, expose no tools, and use `channel="compaction"` — a dedicated channel name so the inner compaction send's own `_wrap_with_checkpoint("compaction", …)` lookup is empty (continuity is instead carried explicitly via `## Previous Summary`). Watermark rows are written to the **parent** channel, never to `"compaction"`.
 
 **Checkpoint envelope.** When a compaction row exists for the channel, `_wrap_with_checkpoint()` (called inside `Providers.send()`) wraps the user-prompt body into a `### Checkpoint - What you were previously discussing / doing` block followed by `### Current State - What's happening in the current turn`. No-op when no compaction row exists.
 
-**Two compaction kinds must not collide.** History rows live in `transcript` with `role='compaction'`; trail rows live in `tool_calls` with `tool_name='trail_compaction'`. The watermark lookup (`compaction_persistence.get_compaction`) reads `transcript WHERE role='compaction'` — disjoint from the trail selector. The same summary is surfaced read-only in the Brain dashboard under **Cognition → Compacted Summary** via `GET /system/observability/compaction`.
+**Two compaction kinds must not collide.** History rows live in `transcript` with `role='compaction'`; trail rows live in `tool_calls` with `tool_name='tool_chain_compactor'`. The watermark lookup (`compaction_persistence.get_compaction`) reads `transcript WHERE role='compaction'` — disjoint from the trail selector. The same summary is surfaced read-only in the Brain dashboard under **Cognition → Compacted Summary** via `GET /system/observability/compaction`.
 
 ---
 
@@ -178,7 +181,7 @@ Runs internally when a channel's transcript tail grows beyond a threshold. Encod
 
 ## Per-Turn Metrics
 
-Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the `ThinkingAbility` exploration pass (when `thinking_level='high'`), and any compaction call fired by `_compact()` (on the `_loop` overflow-retry path). Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
+Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the `ThinkingAbility` exploration pass (when `thinking_level='high'`), and any compaction call fired by `_dispatch_compaction()` (on the proactive or `_loop` overflow-retry path). Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
 
 ```json
 {

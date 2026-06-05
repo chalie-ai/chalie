@@ -137,6 +137,14 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     # at the top level so AbilityRegistry._load() registers it, but it is
     # excluded from find_tools indexing (build_ability_db _NON_INDEXED_ABILITIES).
     "thinking",
+    # chat_history_compactor / tool_chain_compactor: internal never-discoverable
+    # abilities dispatched programmatically by MessageProcessor._dispatch_compaction()
+    # (compaction redesign — compaction now fires via the normal tool-dispatch
+    # chokepoint instead of an inline _compact() method). Both register at the top
+    # level but are excluded from find_tools indexing AND the policy gate
+    # (build_ability_db _NON_INDEXED_ABILITIES + policy_manager INTERNAL).
+    "chat_history_compactor",
+    "tool_chain_compactor",
     "timer",
     "ubiquiti",
     "weather",

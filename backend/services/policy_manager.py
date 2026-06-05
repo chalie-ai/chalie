@@ -36,9 +36,10 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # every channel, with no seed row. ANY action on these runs unconditionally —
 # they are never user-gated and never appear in the Brain policy surface.
 INTERNAL = frozenset({
-    "browser", "chalie_docs", "find_skills", "find_tools", "memory", "read",
-    "review_tool_calls", "review_transcript", "save_graph", "save_pattern",
-    "search", "skill_manager", "thinking", "web_download",
+    "browser", "chalie_docs", "chat_history_compactor", "find_skills",
+    "find_tools", "memory", "read", "review_tool_calls", "review_transcript",
+    "save_graph", "save_pattern", "search", "skill_manager", "thinking",
+    "tool_chain_compactor", "web_download",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).

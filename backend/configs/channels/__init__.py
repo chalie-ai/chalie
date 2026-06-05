@@ -16,8 +16,7 @@ The caller instantiates the subclass directly — no factory layer, no
 extras dict.
 
 Static channels (§3a) — zero-arg constructors:
-  DmnConfig(), EpisodeEncoderConfig(), SkillSuggestionConfig(),
-  CompactionConfig()
+  DmnConfig(), EpisodeEncoderConfig(), SkillSuggestionConfig()
 
 Per-instance channels (§3b) — typed constructors:
   UserConfig(metadata: dict | None = None)
@@ -31,9 +30,7 @@ Per-instance channels (§3b) — typed constructors:
 from __future__ import annotations
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE, DEFAULT_DISCOVERABLE
-from configs.channels.compaction import CompactionConfig
 from configs.channels.skill_association import SkillAssociationConfig
-from configs.channels.trail_handover import TrailHandoverConfig
 from configs.channels.dmn import DmnConfig
 from configs.channels.episode_encoder import EpisodeEncoderConfig
 from configs.channels.external_agent import EAMPConfig
@@ -51,9 +48,7 @@ from configs.channels.user_summary import UserSummaryConfig, _should_synthesise
 from services.processor_config import ProcessorConfig
 
 __all__ = [
-    "CompactionConfig",
     "SkillAssociationConfig",
-    "TrailHandoverConfig",
     "DEFAULT_ALWAYS_AVAILABLE",
     "DEFAULT_DISCOVERABLE",
     "DmnConfig",
