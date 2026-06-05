@@ -34,9 +34,13 @@ User (WebSocket)
   │  · write input transcript   │
   │    row (captures uid)       │
   │  · deliberation-score gate  │
-  │    (exploration pass, user  │
-  │    channel only)            │
+  │    (user channel only;      │
+  │     sets thinking_level)    │
   │  · _seed_turn_zero():       │
+  │    - thinking dispatch      │
+  │      (if thinking_level=    │
+  │       'high'; ThinkingAbil- │
+  │       ity via ToolDispatch) │
   │    - memory recall dispatch │
   │      (if memory_seed=True)  │
   │    - document.upload per    │
@@ -98,7 +102,7 @@ Every turn runs the same ACT loop through the one flat `MessageProcessor`; behav
 
 Tool errors are returned to the model as structured result strings. They are never raised to the caller or surfaced to the user directly.
 
-Each tool call is written to `tool_calls` by `ToolDispatcher.dispatch()` via `ActTrail().record()` — the trail is the table, not an in-memory list. Ephemeral rows are purged at turn end (`_purge_ephemeral_tool_calls`); durable rows (compaction, thinking) persist.
+Each tool call is written to `tool_calls` by `ToolDispatcher.dispatch()` via `ActTrail().record()` — the trail is the table, not an in-memory list. Ephemeral rows are purged at turn end (`_purge_ephemeral_tool_calls`); durable rows (compaction, thinking, memory seed, document uploads) persist across turns.
 
 ---
 
@@ -170,7 +174,7 @@ Runs internally when a channel's transcript tail grows beyond a threshold. Encod
 
 ## Per-Turn Metrics
 
-Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the thinking exploration pass, and any compaction call fired by `_handle_overflow()`. Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
+Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the `ThinkingAbility` exploration pass (when `thinking_level='high'`), and any compaction call fired by `_handle_overflow()`. Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
 
 ```json
 {
