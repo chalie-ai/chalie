@@ -123,9 +123,8 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
                     FROM transcript
                     WHERE channel = ? AND id > ?
                     ORDER BY id ASC
-                    LIMIT ?
                     """,
-                    (channel, since_id, limit),
+                    (channel, since_id),
                 )
             else:
                 cursor.execute(
