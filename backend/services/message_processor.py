@@ -373,10 +373,10 @@ class MessageProcessor:
     # ── Thinking-gate (CHANNEL='user' only) ──────────────────────────────────
 
     def _run_thinking_gate(self) -> None:
-        """Regression-head deliberation scoring. Writes self._thinking_level.
+        """Regression-head deliberation scoring. Writes self.thinking_level.
 
         No-op for non-user channels (classifier is OOD for autonomous flows).
-        Never raises. On failure → self._thinking_level = 'low', EMA untouched.
+        Never raises. On failure → self.thinking_level = 'low', EMA untouched.
 
         Flat process() path — channel comes from config (§4).
         """
@@ -391,7 +391,7 @@ class MessageProcessor:
             ema_svc = DeliberationEmaService()
 
             if scalar is None:
-                self._thinking_level = 'low'
+                self.thinking_level = 'low'
                 self._deliberation_scalar = None
                 self._deliberation_ema = ema_svc.peek()
                 logger.info(
@@ -401,7 +401,7 @@ class MessageProcessor:
                 return
 
             ema, bucket = ema_svc.update_and_bucket(scalar)
-            self._thinking_level = bucket
+            self.thinking_level = bucket
             self._deliberation_scalar = scalar
             self._deliberation_ema = ema
             logger.info(
@@ -426,7 +426,7 @@ class MessageProcessor:
 
         except Exception:
             logger.exception("[DELIBERATION] gate failed; defaulting to 'low'")
-            self._thinking_level = 'low'
+            self.thinking_level = 'low'
             self._deliberation_scalar = None
 
     # ── Flat-MessageProcessor entry point (spec §4 / T2) ─────────────────────

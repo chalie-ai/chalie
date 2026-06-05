@@ -132,8 +132,8 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
 
 
 def _build_sha_map() -> dict[str, str]:
-    """SHA map covers every ability indexed in the search DB."""
-    return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all()}
+    """SHA map covers every ability indexed in the search DB (thinking excluded)."""
+    return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all() if a.NAME != "thinking"}
 
 
 def _build(db_path: Path, sha_path: Path) -> None:
