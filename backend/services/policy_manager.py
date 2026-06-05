@@ -38,7 +38,7 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 INTERNAL = frozenset({
     "browser", "chalie_docs", "find_skills", "find_tools", "memory", "read",
     "review_tool_calls", "review_transcript", "save_graph", "save_pattern",
-    "search", "skill_manager", "web_download",
+    "search", "skill_manager", "thinking", "web_download",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).

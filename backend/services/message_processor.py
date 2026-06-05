@@ -23,7 +23,6 @@ the trail/compaction primitives.
 import logging
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from typing import TYPE_CHECKING
 
 from services.metrics_accumulator import MetricsAccumulator
@@ -141,8 +140,7 @@ class MessageProcessor:
     #
     # find_tools reads ``DISCOVERABLE`` (via ``self.MessageProcessor``) to gate
     # which abilities may be surfaced at runtime.  It is a class-level default
-    # shared by every flat-path turn.  THINKING_TIMEOUT bounds the optional
-    # high-mode exploration pass.
+    # shared by every flat-path turn.
 
     # ``find_tools`` is gated to ``WHERE name IN DISCOVERABLE`` so a
     # processor can never discover anything outside this list.
@@ -179,8 +177,6 @@ class MessageProcessor:
         "web_download",
         "web_search",
     ]
-    THINKING_TIMEOUT: int = 600  # seconds — exploration pass budget (independent of ACT)
-
     # ─────────────────────────────────────────────────────────────────────────
 
     def __init__(self, raw_input: str, metadata: dict | None = None):
@@ -215,7 +211,6 @@ class MessageProcessor:
         self._thinking_level: str = 'low'
         self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
         self._deliberation_ema: float | None = None      # EMA after this turn's update
-        self._thinking_exploration: str | None = None
         # One-shot guard: any overflow recovery (proactive threshold trip
         # OR 413 from the provider) triggers a Stage 2 ACT restart, but only
         # once per turn. The proactive threshold path can mis-fire when the
@@ -403,7 +398,6 @@ class MessageProcessor:
                     "[DELIBERATION] turn=%s scalar=None ema=%s bucket=low fallback=true",
                     self._uid, self._deliberation_ema,
                 )
-                self._thinking_exploration = None
                 return
 
             ema, bucket = ema_svc.update_and_bucket(scalar)
@@ -414,32 +408,6 @@ class MessageProcessor:
                 "[DELIBERATION] turn=%s scalar=%.4f ema=%.4f bucket=%s fallback=false",
                 self._uid, scalar, ema, bucket,
             )
-
-            if self._thinking_level == 'high':
-                try:
-                    with ThreadPoolExecutor(max_workers=1) as _pool:
-                        _future = _pool.submit(self._run_thinking_exploration)
-                        try:
-                            self._thinking_exploration = _future.result(
-                                timeout=self.THINKING_TIMEOUT
-                            )
-                        except FuturesTimeoutError:
-                            logger.warning(
-                                "[THINKING] exploration exceeded THINKING_TIMEOUT=%ds"
-                                " — proceeding without exploration",
-                                self.THINKING_TIMEOUT,
-                            )
-                            self._thinking_exploration = None
-                except Exception as exc:
-                    logger.info(
-                        "[THINKING] exploration failed (%s) — high turn proceeds "
-                        "without exploration", exc,
-                    )
-                    self._thinking_exploration = None
-                if self._thinking_exploration is not None:
-                    self._persist_exploration_to_tool_calls(self._uid)
-            else:
-                self._thinking_exploration = None
 
             if self._uid is not None:
                 from services.database_service import get_shared_db_service
@@ -460,103 +428,6 @@ class MessageProcessor:
             logger.exception("[DELIBERATION] gate failed; defaulting to 'low'")
             self._thinking_level = 'low'
             self._deliberation_scalar = None
-            self._thinking_exploration = None
-
-    def _run_thinking_exploration(self) -> 'str | None':
-        """One same-job exploration pass for high-mode turns.
-
-        Asks the model to think out loud about the user's request: assess
-        gaps in its knowledge, evaluate which tools would help, and flag
-        non-obvious aspects. Output is Chain-of-Thought that gets
-        re-injected into the ACT loop via the config's get_user_prompt
-        (which reads ``thinking_exploration``) so the model can act on its
-        own reasoning.
-
-        Tools schema is sent so the model can reason about available
-        capabilities, but the prompt instructs it not to invoke them.
-        Any tool_calls in the response are discarded (single-pass only).
-
-        The model may output 'NOTHING' if the request is straightforward,
-        in which case None is returned and no exploration is injected.
-
-        Returns None on any failure (network, provider rejection, etc).
-        Logged at INFO. NEVER raises.
-        """
-        from services.providers import Providers
-
-        _EXPLORATION_PREFIX = (
-            "Think out loud about the user's request before responding.\n\n"
-            "Consider:\n"
-            "- What does the ideal response look like? What would make it genuinely useful?\n"
-            "- Do you already know enough to answer well, or are there gaps?\n"
-            "- Would any of your available tools fill those gaps? Which ones, in what order?\n"
-            "- Is there anything non-obvious about this request you might miss on a first read?\n\n"
-            "Whatever you output here will be shown to you as Chain of Thought on the next "
-            "pass — write to your future self. Be specific: name the tools you plan to use, "
-            "flag uncertainties, note key facts you want to remember to include.\n\n"
-            "If the request is straightforward and you have nothing useful to say to yourself, "
-            "output exactly: NOTHING\n\n"
-            "DO NOT INVOKE TOOLS — they are disabled in this phase. Think only."
-            "\n\n---\n\n"
-        )
-
-        try:
-            from abilities._registry import AbilityRegistry  # noqa: PLC0415
-
-            # Flat process() path — config carries all per-turn surfaces (§4).
-            config = self.config
-            user_body = config.get_user_prompt(self)
-            user_body = _wrap_with_checkpoint(config.channel, user_body)
-            system_prompt = config.get_system_prompt(self)
-            tools = AbilityRegistry.build_tools(self)
-
-            response = Providers.instance().send_messages(
-                system_prompt,
-                [{'role': 'user', 'content': _EXPLORATION_PREFIX + user_body}],
-                job=config.job,
-                tools=tools,
-                thinking_mode='high',
-                mp=self,
-            )
-            # Token accumulation happens at the send gateway (§4e), not here.
-
-            if response.tool_calls:
-                logger.debug(
-                    "[THINKING] exploration model attempted %d tool call(s) — discarded",
-                    len(response.tool_calls),
-                )
-
-            text = (response.text or '').strip()
-            if text.upper() == 'NOTHING':
-                return None
-            return text if text else None
-
-        except Exception as exc:
-            logger.info("[THINKING] exploration failed (%s)", exc)
-            return None
-
-    def _persist_exploration_to_tool_calls(self, transcript_id: 'int | None') -> None:
-        """Insert the exploration text as a durable tool_calls row.
-
-        Stored with tool_name='thinking', ephemeral=0 so it survives
-        compaction and surfaces as part of the durable audit trail.
-        Persistence failure logs INFO and does NOT abort the turn.
-        """
-        if transcript_id is None or self._thinking_exploration is None:
-            return
-        from services.act_trail import ActTrail  # noqa: PLC0415
-        try:
-            ActTrail().record(
-                tool_name='thinking',
-                params={},
-                result=self._thinking_exploration,
-                transcript_id=transcript_id,
-                ephemeral=False,
-            )
-        except Exception as exc:
-            logger.info(
-                "[THINKING] failed to persist exploration to tool_calls (%s)", exc
-            )
 
     # ── Flat-MessageProcessor entry point (spec §4 / T2) ─────────────────────
     #
@@ -587,7 +458,6 @@ class MessageProcessor:
             cancel_event if cancel_event is not None else threading.Event()
         )
         mp.thinking_level: str = "low"
-        mp.thinking_exploration: "str | None" = None
         return mp._run()
 
     def _run(self) -> str:
@@ -624,10 +494,6 @@ class MessageProcessor:
 
         if self.config.channel == "user":
             self._run_thinking_gate()
-            # Sync the exploration result onto the flat-path attribute so that
-            # config.get_user_prompt() (e.g. UserConfig.get_user_prompt) can read
-            # it via getattr(mp, 'thinking_exploration', None).
-            self.thinking_exploration = self._thinking_exploration
 
         self._seed_turn_zero()
 
@@ -651,6 +517,10 @@ class MessageProcessor:
         #    (that delegation is reserved for explicit, model-invoked recalls).
         if self.config.memory_seed:
             dispatcher.dispatch("memory", {"action": "recall", "query": self._raw_input, "_auto": True})
+
+        # c. High-deliberation thinking pass — programmatic, never model-visible.
+        if getattr(self, "thinking_level", "low") == "high":
+            dispatcher.dispatch("thinking", {})
 
         # b. Attachment uploads — presence-gated, one blocking document.upload
         #    per file.  No second auto document.view: upload IS the ingest.
@@ -990,7 +860,6 @@ class MessageProcessor:
             return False  # D12
 
         self.active_tools = list(self.config.always_available or [])       # D11
-        self.thinking_exploration = None    # D11
         self.current_iteration = 0          # D11
         return True
 
@@ -1166,7 +1035,7 @@ def _from_last_compaction(rows: "list[dict]") -> "list[dict]":
 #: but its content is already replayed through the checkpoint prepend at the top
 #: of the block — rendering it again would double-inject the summary on every
 #: subsequent turn (Decision 4B).
-_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction', 'thinking'})
+_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction'})
 
 
 def _render_tool_call_for_previous(tool_name: str, params: dict, result: str) -> str:

@@ -392,7 +392,6 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             emp.current_iteration = 0
             emp.cancel_event = threading.Event()
             emp.thinking_level = "low"
-            emp.thinking_exploration = None
             emp._window = window_str
             emp._referenced = referenced_str
             response = emp._run()

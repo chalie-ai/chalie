@@ -141,7 +141,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
     # find_tools. Per-processor scoping (which abilities a given processor
     # may discover) is gated at find_tools query time via the calling
     # processor's DISCOVERABLE list.
-    abilities = list(AbilityRegistry.all())
+    abilities = [a for a in AbilityRegistry.all() if a.NAME != "thinking"]
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 
     emb_service = EmbeddingService() if abilities else None

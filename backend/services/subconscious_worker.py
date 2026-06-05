@@ -412,7 +412,6 @@ class SubconsciousWorker:
         pmp.current_iteration = 0
         pmp.cancel_event = threading.Event()
         pmp.thinking_level = "low"
-        pmp.thinking_exploration = None
         pmp._run()
 
         # Layer 2: update skill-personalisation associations for touched patterns
@@ -576,7 +575,6 @@ class SubconsciousWorker:
         gmp.current_iteration = 0
         gmp.cancel_event = threading.Event()
         gmp.thinking_level = "low"
-        gmp.thinking_exploration = None
         gmp._run()
 
         try:

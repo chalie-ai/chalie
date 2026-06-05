@@ -73,7 +73,6 @@ def _run_suggestion_processor(
         mp.current_iteration = 0
         mp.cancel_event = threading.Event()
         mp.thinking_level = "low"
-        mp.thinking_exploration = None
         mp._original_trail = act_trail
         mp._original_input = raw_input
         mp._iteration_count = iteration_count
