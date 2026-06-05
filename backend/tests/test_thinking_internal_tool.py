@@ -24,19 +24,28 @@ def test_thinking_config_retains_parent_tool_surface(db):
     assert tc.max_iterations == 1
 
 
-def test_high_thinking_gate_result_is_visible_to_turn_zero_dispatch():
-    """_run_thinking_gate writes self.thinking_level (public); _seed_turn_zero
-    reads getattr(self, 'thinking_level', 'low').  This test asserts the writer
-    and reader use the same attribute so a 'high' gate result actually triggers
-    the thinking dispatch in turn-0.  Fails on the old code where the gate
-    wrote self._thinking_level and the seed read self.thinking_level.
+def test_thinking_gate_writes_the_public_thinking_level_attr(db):
+    """The deliberation gate MUST write the PUBLIC self.thinking_level that
+    _seed_turn_zero / send() / Providers.send() read. Regression guard: when the
+    gate wrote the private self._thinking_level instead, high-deliberation thinking
+    never fired. We seed an out-of-band sentinel, run the REAL gate (real
+    DeliberationScoreService + EMA, zero mocks), and require the gate to overwrite
+    the sentinel on the public attr. On the pre-fix code (gate writes _thinking_level)
+    the sentinel survives and this fails — exactly the regression.
     """
     from services.message_processor import MessageProcessor
 
     mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "raw input", None)
-    mp.config = UserConfig()
-    # Simulate what _run_thinking_gate now writes after the fix.
-    mp.thinking_level = "high"
-    # The seed's read must see the same value the gate wrote.
-    assert getattr(mp, "thinking_level", "low") == "high"
+    MessageProcessor.__init__(mp, "Walk me through the trade-offs of three caching strategies.", None)
+    mp.config = UserConfig()      # channel='user' → gate does NOT early-return
+    mp.uid = None
+    mp._uid = None                # gate's DB-persist block is skipped when _uid is None
+    mp.thinking_level = "__SENTINEL__"   # not a valid bucket — proves the gate wrote it
+
+    mp._run_thinking_gate()       # the REAL gate, real services, no mocks
+
+    # The gate must have written the PUBLIC attribute (every reader uses this one).
+    assert mp.thinking_level != "__SENTINEL__", (
+        "gate did not write the public thinking_level — readers would see the stale value"
+    )
+    assert mp.thinking_level in {"low", "medium", "high"}
