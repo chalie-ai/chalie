@@ -121,4 +121,19 @@ export class ApiClient {
     return this._post(`/tools/${encodeURIComponent(name)}/test`, {});
   }
 
+  /** @returns {Promise<{last_request_tokens: number|null, context_window: number|null}>} */
+  getContextUsage() {
+    return this._get('/system/context-usage');
+  }
+
+  /** @returns {Promise<{key: string, value: string|null}>} */
+  getSetting(key) {
+    return this._get(`/system/settings/${encodeURIComponent(key)}`);
+  }
+
+  /** Empty value deletes the row server-side (→ default). @returns {Promise<object>} */
+  setSetting(key, value) {
+    return this._put(`/system/settings/${encodeURIComponent(key)}`, { value });
+  }
+
 }

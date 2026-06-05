@@ -25,6 +25,20 @@ logger = logging.getLogger(__name__)
 MAX_CONTEXT_WINDOW = 200_000
 
 
+def resolve_thinking_mode(config_thinking_mode, override, level):
+    """Single precedence rule for a send's thinking level.
+
+    1. ``config_thinking_mode`` — a config that hard-pins a level (the thinking
+       ability and the two compactors pin ``"high"``). These are deliberate,
+       quality-critical internals and win over everything, so a user ``medium``
+       override never downgrades compaction.
+    2. ``override`` — the persisted user override (``'medium'`` | ``'high'`` |
+       None). When set it replaces the deliberation gate on every channel.
+    3. ``level`` — the gate-computed ``mp.thinking_level`` (auto behaviour).
+    """
+    return config_thinking_mode or override or level
+
+
 class Providers:
     """Per-mp provider gateway. Owns the bound MessageProcessor and scaffolds
     every send / size-check / resolution from it. One instance per mp."""
@@ -46,7 +60,11 @@ class Providers:
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         tools = AbilityRegistry.build_tools(mp)
         job = mp.config.job
-        thinking_mode = getattr(mp.config, "thinking_mode", None) or mp.thinking_level
+        thinking_mode = resolve_thinking_mode(
+            getattr(mp.config, "thinking_mode", None),
+            getattr(mp, "thinking_override", None),
+            mp.thinking_level,
+        )
         provider = self._resolve(job, mp)
 
         user = self._fit_request(system, tools, provider)

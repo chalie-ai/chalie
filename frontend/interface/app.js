@@ -23,6 +23,7 @@ import { DocumentUpload } from './document_upload.js';
 import { UpdateSystem } from './update_system.js';
 import { PermissionNotifications } from './permission_notifications.js';
 import { QuickTipCard } from './quick_tip_card.js';
+import { ChatControls } from './chat_controls.js';
 import { showToast, lsGet, lsSet } from './utils.js';
 
 // Disable the browser's scroll-restoration so a refresh never lands the
@@ -159,6 +160,10 @@ class ChalieApp {
 
     // Attach menu (+ button)
     this._initAttachMenu();
+
+    // Composer controls: thinking-level override + context-size indicator
+    this._chatControls = new ChatControls({ api: this.api, ws: this.ws });
+    this._chatControls.init();
 
     // Ambient canvas (background animation)
     const canvas = new AmbientCanvas();

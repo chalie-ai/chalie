@@ -52,6 +52,23 @@ def log_call(
         logger.debug(f"[LLM_CALL_LOG] Failed to log call: {e}")
 
 
+def get_last_chat_request_tokens(usage_class: str = 'chat') -> 'int | None':
+    """Return ``tokens_input`` of the most recent call for ``usage_class``.
+
+    Powers the composer's context-size indicator (the last user-facing chat
+    request). ``id DESC`` (autoincrement) is the insertion order, so this is the
+    truly-latest row even when two calls share a ``created_at`` second. Returns
+    None when no such call has been logged yet.
+    """
+    db = get_shared_db_service()
+    rows = db.fetch_all(
+        "SELECT tokens_input FROM llm_call_log WHERE usage_class = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (usage_class,),
+    )
+    return rows[0]['tokens_input'] if rows else None
+
+
 def get_token_usage(window: str, usage_class: str | None = None) -> dict:
     """Return time-bucketed token usage statistics.
 

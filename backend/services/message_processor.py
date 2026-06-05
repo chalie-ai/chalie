@@ -193,6 +193,11 @@ class MessageProcessor:
         self._uid: int | None = None
         self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
         self._deliberation_ema: float | None = None      # EMA after this turn's update
+        # User thinking-level override (None = auto, gate decides). When set to
+        # 'medium'/'high' it bypasses the deliberation gate and is forced on every
+        # send via Providers.send's precedence. process() reads it once per turn;
+        # default None keeps the gate in control for old-path / background MPs.
+        self.thinking_override: str | None = None
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
         # The mp owns its provider gateway — param-free, scaffolds from self.
@@ -269,6 +274,16 @@ class MessageProcessor:
         Flat process() path — channel comes from config (§4).
         """
         if self.config.channel != 'user':
+            return
+
+        # User override bypasses the gate entirely (no classifier inference).
+        # NOTE: this sets thinking_level only on the user channel, which is also
+        # the only channel that fires the turn-0 seed thinking pass. The override
+        # still reaches the provider on EVERY channel via resolve_thinking_mode()
+        # in Providers.send() — background loops get high-mode reasoning at the
+        # request level without injecting an extra seed deliberation pass.
+        if self.thinking_override:
+            self.thinking_level = self.thinking_override
             return
 
         try:
@@ -350,6 +365,11 @@ class MessageProcessor:
         # where the gate wasn't run (non-user channels) or crashed — regressing
         # benchmark behaviour on simple recall/chit-chat.
         mp.thinking_level: str = "low"
+        # Resolve the persisted user override once per turn. None = auto (gate
+        # decides); 'medium'/'high' bypass the gate on EVERY channel via the
+        # Providers.send precedence.
+        from services.thinking_override_service import get_thinking_override
+        mp.thinking_override = get_thinking_override()
         return mp._run()
 
     def _run(self) -> str:

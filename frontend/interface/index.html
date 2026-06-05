@@ -238,6 +238,22 @@
       </div>
     </div>
 
+    <!-- Composer controls: thinking-level override (left) + context-size indicator (right) -->
+    <div class="dock-controls">
+      <div class="thinking-select">
+        <button id="thinkingTrigger" class="thinking-select__trigger" type="button" aria-haspopup="true" aria-expanded="false">
+          <span class="thinking-select__caption">Thinking</span>
+          <span id="thinkingLabel" class="thinking-select__value">Auto</span>
+        </button>
+        <div id="thinkingMenu" class="thinking-select__menu hidden" role="menu">
+          <button class="thinking-select__item" data-level="auto" type="button" role="menuitem">Auto</button>
+          <button class="thinking-select__item" data-level="medium" type="button" role="menuitem">Medium</button>
+          <button class="thinking-select__item" data-level="high" type="button" role="menuitem">High</button>
+        </div>
+      </div>
+      <span id="contextIndicator" class="context-indicator hidden" title="Last request size / context window"></span>
+    </div>
+
     <!-- Mic error label — shown below the input dock when mic access fails -->
     <p id="voiceRecError" class="voice-rec-error hidden"></p>
     <!-- Hidden file input for image capture (capture="environment" triggers native camera on mobile) -->

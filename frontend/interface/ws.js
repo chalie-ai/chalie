@@ -27,6 +27,7 @@ export class WSClient {
     this._reconnectTimer = null;
     this._chatCallbacks = null;
     this._driftHandler = null;
+    this._anyHandler = null;
     this._disconnectHandler = null;
     this._connected = false;
     this._intentionallyClosed = false;
@@ -61,6 +62,16 @@ export class WSClient {
    */
   onDrift(handler) {
     this._driftHandler = handler;
+  }
+
+  /**
+   * Set a handler invoked for EVERY inbound WS message, before any type-specific
+   * routing. Used by the composer to re-fetch the context-size indicator on each
+   * message. Must never throw — failures are swallowed so the WS pipe is safe.
+   * @param {(data: object) => void} handler
+   */
+  onAny(handler) {
+    this._anyHandler = handler;
   }
 
   /**
@@ -232,6 +243,12 @@ export class WSClient {
   }
 
   _dispatch(data) {
+    // Fire the "any message" hook first so it observes every inbound message
+    // (including pings and chat events), regardless of type-specific routing.
+    if (this._anyHandler) {
+      try { this._anyHandler(data); } catch { /* never break the WS pipe */ }
+    }
+
     const type = data.type;
 
     if (type === 'ping') {
