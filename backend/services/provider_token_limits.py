@@ -4,7 +4,8 @@ Provider token-limit backfill.
 Reads each provider's get_context_limit() and persists max_tokens into
 the providers table.  Used at boot (every row) and on provider creation
 (single row).  The compaction threshold is no longer a stored column —
-Providers.pre_flight_check() applies the 90%-of-max_tokens guard at call time.
+Providers._fit_request() trims the request to the max_tokens window
+(reserving max(10% window, 8k) response headroom) at call time.
 """
 import logging
 

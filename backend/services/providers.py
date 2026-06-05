@@ -7,9 +7,10 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-Providers — thin singleton wrapping provider resolution and LLM send.
+Providers — per-mp gateway wrapping provider resolution, window-fit, and send.
 
-Resolves the active DB provider, sends messages, returns a raw LLMResponse.
+Resolves the active DB provider, fits the scaffolded request to the context
+window (trim-then-compact, design §3.3), sends, and returns a raw LLMResponse.
 """
 
 import json
@@ -24,11 +25,6 @@ logger = logging.getLogger(__name__)
 MAX_CONTEXT_WINDOW = 200_000
 
 
-class ContextOverflowError(Exception):
-    """Raised by pre_flight_check when the scaffolded request would not fit the
-    provider's context window (clamped 90% / 8k-headroom rule)."""
-
-
 class Providers:
     """Per-mp provider gateway. Owns the bound MessageProcessor and scaffolds
     every send / size-check / resolution from it. One instance per mp."""
@@ -37,19 +33,24 @@ class Providers:
         self.mp = mp
 
     def send(self):
-        """Scaffold the request from self.mp, pre-flight it, send, log. Returns LLMResponse."""
+        """Scaffold the request from self.mp, fit it to the context window, send, log.
+
+        Fitting is window-only (design §3.3 — trim-then-compact): the request is
+        built with the full watermark-bounded history, and when it would not
+        leave ``max(10% window, 8k)`` tokens free for the response the oldest
+        history rows are dropped one at a time until it fits. When any row had to
+        be dropped, ``mp._compaction_pending`` is set so the ACT loop compacts the
+        (full) history into the next turn's checkpoint. Returns LLMResponse."""
         mp = self.mp
         system = mp.config.get_system_prompt(mp)
-        from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
-        user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         tools = AbilityRegistry.build_tools(mp)
         job = mp.config.job
         thinking_mode = getattr(mp.config, "thinking_mode", None) or mp.thinking_level
-
-        self.pre_flight_check(system, user, tools, job)
-
         provider = self._resolve(job, mp)
+
+        user = self._fit_request(system, tools, provider)
+
         messages = [{"role": "user", "content": user}]
         t0 = time.monotonic()
         response = provider.send_messages(system, messages, True, tools=tools, thinking_mode=thinking_mode)
@@ -57,26 +58,43 @@ class Providers:
         self._log_after_call(system, messages, tools, job, response, wall_ms, mp)
         return response
 
-    def pre_flight_check(self, system, user, tools, job):
-        """Raise ContextOverflowError when the scaffolded request would overflow.
+    def _fit_request(self, system, tools, provider):
+        """Build the user payload, trimming oldest history until the request
+        reserves response headroom (design §3.3 — trim-then-compact).
 
-        Clamped rule (design §3.3): fire on req >= 0.90*window OR
-        (window - req) <= min(8000, 0.10*window). The clamp keeps the literal 8k
-        headroom on large windows and degrades to 10% on small ones, so small
-        (e.g. 8k Ollama) windows never trip on every request."""
+        The request must leave ``max(10% window, 8k)`` tokens free for the
+        response (Dylan: "10% or 8k, whichever is highest"). While it does not,
+        the oldest rendered history row is dropped (``drop_oldest_previous_message``)
+        and the payload rebuilt. The drop loop is monotonic and bounded by the row
+        count, so it ALWAYS terminates — an irreducible request (system + input +
+        checkpoint already over budget, e.g. a deliberately tiny test window) is
+        sent as-is and fails loudly at the provider rather than looping forever.
+
+        Sets ``mp._compaction_pending`` True whenever any history row had to be
+        dropped, so the ACT loop compacts the full history into the next turn's
+        checkpoint and the dropped rows are not lost."""
+        from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
         from services.llm_service import estimate_tokens  # noqa: PLC0415
-        provider = self._resolve(job, self.mp)
+        mp = self.mp
+
+        def build():
+            u = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
+            body = provider.build_request_body(system, [{"role": "user", "content": u}], tools)
+            return u, estimate_tokens(body)
+
+        mp._history_drop = 0
+        mp._compaction_pending = False
+        user, req = build()
         window = self.get_context_limit()   # declared max_tokens, capped 200k (Step 3b)
         if not window:
-            return
-        body = provider.build_request_body(system, [{"role": "user", "content": user}], tools)
-        req = estimate_tokens(body)
-        headroom = min(8000, int(0.10 * window))
-        if req >= 0.90 * window or (window - req) <= headroom:
-            raise ContextOverflowError(
-                f"request {req} tok would overflow window {window} "
-                f"(headroom {headroom}); channel={self.mp.config.channel}"
-            )
+            return user
+        cap = window - max(int(0.10 * window), 8000)   # reserve response headroom
+        if req <= cap:
+            return user
+        mp._compaction_pending = True
+        while req > cap and mp.drop_oldest_previous_message():
+            user, req = build()
+        return user
 
     def selected_provider(self):
         """The resolved provider instance for this mp's job (design §3.1, §6.3)."""

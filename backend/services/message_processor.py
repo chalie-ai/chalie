@@ -25,7 +25,6 @@ import re
 import threading
 from typing import TYPE_CHECKING
 
-from services.compaction_constants import COMPACTION_ROW_WINDOW
 from services.metrics_accumulator import MetricsAccumulator
 from services.time_formatter_service import TimeFormatterService
 
@@ -199,8 +198,15 @@ class MessageProcessor:
         # The mp owns its provider gateway — param-free, scaffolds from self.
         from services.providers import Providers  # noqa: PLC0415
         self.providers = Providers(self)
-        # Reactive-compaction retry budget; reset to 0 after any successful send.
-        self._compaction_retries: int = 0
+        # Window-fit state (design §3.3, trim-then-compact). _history_drop is the
+        # number of oldest history rows the fit loop has dropped for the current
+        # send; _compaction_pending flags that a send had to trim, so _loop
+        # compacts the full history into the next turn's checkpoint.
+        self._history_drop: int = 0
+        self._compaction_pending: bool = False
+        # One-shot guard: a real provider 413 (PayloadTooLargeError) despite the
+        # estimate-based fit triggers a single collapse-and-retry, then fails loud.
+        self._payload_compacted: bool = False
         # Cooperative cancellation flag. Set by stop endpoints to signal the
         # ACT loop to exit at the next iteration boundary. Never raises —
         # the loop checks is_set() at the top of each iteration.
@@ -424,38 +430,36 @@ class MessageProcessor:
             })
 
     def _loop(self) -> str:  # noqa: C901
-        """ACT game loop — send, dispatch tools, compact-and-retry on overflow.
+        """ACT game loop — fit-and-send, compact when history had to be trimmed.
 
-        Compaction is never inlined: both triggers route to the SAME
-        _dispatch_compaction() chokepoint and the provider hot-path send is
-        SKIPPED that iteration (``continue``), so the next turn re-reads the
-        now-compacted database from scratch (design: DB is the state machine).
+        Fitting is window-only (design §3.3 — trim-then-compact). Providers.send()
+        builds the request with the full watermark-bounded history and drops the
+        oldest rows until it reserves response headroom (``max(10% window, 8k)``),
+        setting ``_compaction_pending`` when any row was dropped. On that flag the
+        loop fires _dispatch_compaction() once, summarising the full history into
+        the next turn's checkpoint so the dropped messages are not lost — the
+        compaction row's own id becomes the new watermark (design: DB is the state
+        machine), so the next send re-reads a collapsed history.
 
-        - Proactive: the un-compacted backlog exceeds COMPACTION_ROW_WINDOW.
-          Self-limiting — ChatHistoryCompactor advances the watermark, so the
-          backlog reads empty on the next pass.
-        - Reactive: the scaffolded request overflows the context window
-          (ContextOverflowError) or the provider rejects it (PayloadTooLargeError).
-          Capped at 2 retries per turn so an un-shrinkable request fails loudly.
+        A real provider rejection (PayloadTooLargeError — the token estimate
+        under-counted) triggers a single collapse-and-retry; a second rejection
+        re-raises so an irreducible request fails loudly instead of looping.
         """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services.providers import ContextOverflowError  # noqa: PLC0415
         from services.llm_service import PayloadTooLargeError  # noqa: PLC0415
         while True:
             if self._should_stop():
                 return ""
-            if len(self._previous_rows()) > COMPACTION_ROW_WINDOW:   # proactive turn-count compaction
-                self._dispatch_compaction()
-                continue                          # skip send; re-read the compacted DB
             try:
                 response = self.providers.send()
-            except (ContextOverflowError, PayloadTooLargeError):
-                if self._compaction_retries >= 2:
-                    raise
-                self._compaction_retries += 1
+            except PayloadTooLargeError:
+                if self._payload_compacted:
+                    raise                         # already collapsed once — fail loud
+                self._payload_compacted = True
                 self._dispatch_compaction()
-                continue                          # skip send; re-read the compacted DB
-            self._compaction_retries = 0          # reset on every successful send
+                continue                          # re-read the compacted DB and retry
+            if self._compaction_pending:          # a send had to trim history
+                self._dispatch_compaction()       # fold the dropped rows into the checkpoint
             if not response.tool_calls:
                 return response.text or ""
             dispatcher = ToolDispatcher(self)
@@ -555,14 +559,19 @@ class MessageProcessor:
         return transcript_service.get_recent(self.config.channel, since_id=watermark)
 
     def get_previous_messages(self) -> str:
-        """Render the ## Previous Messages block from _previous_rows()."""
+        """Render the ## Previous Messages block from _previous_rows().
+
+        Renders every watermark-bounded row, minus the oldest ``_history_drop``
+        rows the fit loop dropped to reserve response headroom (design §3.3).
+        There is NO fixed row cap: history is bounded by context-window size,
+        not a turn count. _previous_rows() returns id-ASC, so dropping the first
+        ``_history_drop`` entries removes the OLDEST messages."""
         if self.config.suppress_history:
             return ""
         from services.tool_call_service import ToolCallService  # noqa: PLC0415
-        # Render only the most-recent COMPACTION_ROW_WINDOW rows (oldest fall
-        # off). _previous_rows() returns id-ASC, so [-N:] is the newest N in
-        # chronological order.
-        entries = self._previous_rows()[-COMPACTION_ROW_WINDOW:]
+        entries = self._previous_rows()
+        if self._history_drop:
+            entries = entries[self._history_drop:]   # drop oldest (fit-to-window)
         if not entries:
             return ""
         all_ids = [e["id"] for e in entries if e.get("id")]
@@ -582,6 +591,18 @@ class MessageProcessor:
                 tc_result = tc.get("result") or ""
                 lines.append(_render_tool_call_for_previous(tc_name, tc_params, tc_result))
         return "\n".join(lines)
+
+    def drop_oldest_previous_message(self) -> bool:
+        """Drop the oldest rendered history row; return False when none remain.
+
+        The window-fit loop (Providers._fit_request) calls this to shrink the
+        request until it reserves response headroom. Monotonic and bounded by the
+        watermark-bounded row count, so the fit loop always terminates (design
+        §3.3)."""
+        if self._history_drop < len(self._previous_rows()):
+            self._history_drop += 1
+            return True
+        return False
 
     # ── Trail API (T4: act-trail-as-a-query) ─────────────────────────────────
 
@@ -666,15 +687,19 @@ class MessageProcessor:
 
         Fired tool_chain first so its handover summarises the real trail before
         the chat-history marker lands. Both are INTERNAL (policy gate bypassed)
-        and never-discoverable. The iteration counter resets for the retried turn.
+        and never-discoverable.
+
+        ``_history_drop`` is reset to 0 first so ChatHistoryCompactor reads the
+        FULL watermark-bounded history — the rows the fit loop dropped from the
+        live request must still be summarised into the checkpoint (design §3.3).
         """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
 
+        self._history_drop = 0   # summarise the full (untrimmed) history
         dispatcher = ToolDispatcher(self)
         # compaction tool dispatch
         dispatcher.dispatch("tool_chain_compactor", {"act_summary": "Compacting tool history"})
         dispatcher.dispatch("chat_history_compactor", {"act_summary": "Compacting conversation"})
-        self.current_iteration = 0
 
     def _record_narration(self, response: "object") -> None:  # type: ignore[override]
         """Mid-loop: persist LLM text between iterations as an ephemeral trail row.

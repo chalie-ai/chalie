@@ -42,10 +42,10 @@ class _FakeLLMService:
     Patched in for ``Providers._resolve`` so the real ``Providers.send`` still
     runs every production step (system/user prompt assembly — which lazily
     inits ``_touched_pattern_ids`` via PatternConfig.get_user_prompt — tool
-    building, and pre-flight sizing) while only the network round-trip is
+    building, and window-fit sizing) while only the network round-trip is
     controlled by ``send_fn``. Mirrors the provider methods that
-    ``Providers.send`` / ``pre_flight_check`` invoke. ``build_request_body``
-    returns a tiny payload so pre-flight never trips the overflow guard.
+    ``Providers.send`` / ``_fit_request`` invoke. ``build_request_body``
+    returns a tiny payload so the fit loop never has to trim history.
     """
 
     def __init__(self, send_fn):

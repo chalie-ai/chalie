@@ -302,23 +302,23 @@ class TestGetPreviousMessagesEmptyChannelWithOtherData:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — render bound (most-recent 50 rows)
+# get_previous_messages() — window-only fit (NO fixed row cap)
 #
-# SPEC CHANGE (2026-06-05, Dylan): the watermark relocation (transcript
-# role='compaction') shipped without a migration, so on existing DBs every
-# channel's watermark resets to 0 and _previous_rows() returns the ENTIRE
-# channel history — which on the live instance rendered ~1.76M tokens into one
-# user message and overflowed the compaction window (Ollama 65536). Decision:
-# bound get_previous_messages() to the most-recent 50 transcript rows. On
-# cut-over this restarts compaction from the last 50 messages; memory self-heals
-# the older continuity gap as the user keeps talking. The proactive trigger in
-# _loop still reads the UNCAPPED _previous_rows() count, so it fires on the true
-# backlog (51, 52, …) — only the RENDERED / compacted slice is bounded.
+# SPEC CHANGE (2026-06-05, Dylan — supersedes the 50-row render cap): compaction
+# no longer caps the rendered history at a fixed row count, and the proactive
+# turn-count trigger and COMPACTION_ROW_WINDOW were removed. get_previous_messages()
+# renders EVERY watermark-bounded row; the live request is bounded by context-
+# window size in Providers._fit_request, which drops the oldest rows (via
+# drop_oldest_previous_message) until the request reserves max(10% window, 8k)
+# response headroom. The dropped rows are summarised into the next turn's
+# checkpoint (_dispatch_compaction resets _history_drop first), so nothing is
+# lost. Dylan: "Drop the 50 turn cap. Let's go back to solely relying on context
+# window size … loop and drop the oldest message until it fits."
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestGetPreviousMessagesRenderBound:
-    """get_previous_messages() renders at most COMPACTION_ROW_WINDOW rows."""
+class TestGetPreviousMessagesWindowFit:
+    """get_previous_messages() renders every row; drop_oldest trims the oldest."""
 
     def _seed_rows(self, db, n, channel=_GPM_CHANNEL):
         for i in range(n):
@@ -329,34 +329,42 @@ class TestGetPreviousMessagesRenderBound:
             )
         db.commit()
 
-    def test_renders_only_most_recent_window_rows(self, db):
-        from services.compaction_constants import COMPACTION_ROW_WINDOW
-
-        window = COMPACTION_ROW_WINDOW
-        overflow = 10
-        self._seed_rows(db, window + overflow)
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-
-        # Exactly `window` rendered lines (no durable tool_calls → one per row).
-        assert len(result.splitlines()) == window
-        # The oldest `overflow` rows are dropped …
-        for i in range(overflow):
-            assert f"line-{i:04d}-end" not in result
-        # … and the most-recent `window` rows (boundary + newest) remain.
-        assert f"line-{overflow:04d}-end" in result
-        assert f"line-{window + overflow - 1:04d}-end" in result
-
-    def test_under_window_all_render(self, db):
-        from services.compaction_constants import COMPACTION_ROW_WINDOW
-
-        n = max(1, COMPACTION_ROW_WINDOW - 1)
+    def test_renders_all_rows_uncapped(self, db):
+        # Well past the retired 50-row cap — every row must still render.
+        n = 60
         self._seed_rows(db, n)
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
+        # One line per row (no durable tool_calls), no fixed cap.
         assert len(result.splitlines()) == n
-        assert f"line-{0:04d}-end" in result
+        assert "line-0000-end" in result
         assert f"line-{n - 1:04d}-end" in result
+
+    def test_drop_oldest_trims_from_the_front(self, db):
+        n = 10
+        self._seed_rows(db, n)
+        p = _GPMFakeProcessor.make()
+        # The fit loop drops the three oldest rows.
+        assert p.drop_oldest_previous_message() is True
+        assert p.drop_oldest_previous_message() is True
+        assert p.drop_oldest_previous_message() is True
+        result = p.get_previous_messages()
+        assert len(result.splitlines()) == n - 3
+        for i in range(3):
+            assert f"line-{i:04d}-end" not in result   # oldest dropped
+        assert "line-0003-end" in result               # first surviving row
+        assert f"line-{n - 1:04d}-end" in result        # newest always kept
+
+    def test_drop_oldest_terminates_when_history_exhausted(self, db):
+        # The fit loop's termination guarantee: drop_oldest returns False once
+        # every row is gone, so _fit_request can never loop forever.
+        n = 2
+        self._seed_rows(db, n)
+        p = _GPMFakeProcessor.make()
+        assert p.drop_oldest_previous_message() is True
+        assert p.drop_oldest_previous_message() is True
+        assert p.drop_oldest_previous_message() is False
+        assert p.get_previous_messages() == ""
 
 
 # =============================================================================
