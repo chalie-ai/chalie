@@ -19,22 +19,6 @@ LOG_PREFIX = "[SKILL_ASSOC]"
 
 _SKILLS_DB = FileMapperService.get_skills_db_path()
 
-_SYSTEM_PROMPT = """You map behavioral patterns to skill playbooks.
-
-Given a list of the user's behavioral patterns and a list of available skills,
-identify which patterns are relevant to which skills and produce a personalisation
-rule for each match.
-
-A personalisation rule is a single sentence describing how the skill should be
-adapted based on the pattern. Only produce rules where the pattern genuinely
-informs how the skill should be executed differently.
-
-Respond with a JSON array of objects:
-[{"skill_id": <int>, "pattern_name": "<str>", "rule": "<str>"}]
-
-If no patterns match any skills, respond with an empty array: []"""
-
-
 class SkillAssociationService:
     """Run LLM-driven association passes between behavioural patterns and skills.
 
@@ -116,14 +100,10 @@ class SkillAssociationService:
             f"## Available Skills\n{json.dumps(skill_list)}"
         )
 
-        from services.providers import Providers
+        from services.message_processor import MessageProcessor
+        from configs.channels import SkillAssociationConfig
         try:
-            response = Providers.instance().send_legacy(
-                user_prompt=user_prompt,
-                system_prompt=_SYSTEM_PROMPT,
-                job='subconscious',
-                tools=[],
-            )
+            text = MessageProcessor.process(user_prompt, SkillAssociationConfig())
         except Exception as exc:
             exc_str = str(exc).lower()
             if "context" in exc_str or "token" in exc_str or "length" in exc_str:
@@ -135,7 +115,7 @@ class SkillAssociationService:
                 logger.error(f"{LOG_PREFIX} LLM call failed: {exc}")
             return None
 
-        return _parse_associations(response.text)
+        return _parse_associations(text)
 
     def _write_associations(
         self,

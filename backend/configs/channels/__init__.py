@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE, DEFAULT_DISCOVERABLE
 from configs.channels.compaction import CompactionConfig
+from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.trail_handover import TrailHandoverConfig
 from configs.channels.dmn import DmnConfig
 from configs.channels.episode_encoder import EpisodeEncoderConfig
@@ -51,6 +52,7 @@ from services.processor_config import ProcessorConfig
 
 __all__ = [
     "CompactionConfig",
+    "SkillAssociationConfig",
     "TrailHandoverConfig",
     "DEFAULT_ALWAYS_AVAILABLE",
     "DEFAULT_DISCOVERABLE",

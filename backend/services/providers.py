@@ -94,23 +94,6 @@ class Providers:
         """The resolved provider instance for this mp's job (design §3.1, §6.3)."""
         return self._resolve(self.mp.config.job, self.mp)
 
-    def send_legacy(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True, thinking_mode=None, mp=None):
-        """Sync send. Returns LLMResponse.
-
-        ``mp`` is the invoking MessageProcessor (the parent), threaded explicitly
-        so metrics/token attribution binds to the right accumulator. None from
-        background callers — metrics simply no-op, as before.
-        """
-        if tools is None:
-            tools = self._get_tools(mp)
-        provider = self._resolve(job, mp)
-        messages = [{"role": "user", "content": user_prompt}]
-        t0 = time.monotonic()
-        response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
-        wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms, mp)
-        return response
-
     def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True, thinking_mode=None, mp=None):
         """Multi-turn send with a pre-built messages array. Returns LLMResponse.
 
