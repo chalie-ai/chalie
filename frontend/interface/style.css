@@ -1744,10 +1744,20 @@ body.voice-loading .speech-form__speak-btn { display: none; }
 .thinking-select__item:hover  { background: color-mix(in oklab, var(--accent-primary) 8%, transparent); }
 .thinking-select__item.active { color: var(--accent-primary); font-weight: 600; }
 
+.context-display {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  font-size: var(--font-size-sm);
+}
+
+.context-display__caption { color: var(--text-tertiary); }
+
 .context-indicator {
   background: transparent;
   color: var(--text-primary);
-  font-size: var(--font-size-sm);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 

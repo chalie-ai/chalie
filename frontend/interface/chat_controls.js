@@ -24,7 +24,8 @@ export class ChatControls {
     this._menu = document.getElementById('thinkingMenu');
     this._label = document.getElementById('thinkingLabel');
     this._indicator = document.getElementById('contextIndicator');
-    if (!this._trigger || !this._menu || !this._label || !this._indicator) return;
+    this._contextWrap = document.getElementById('contextDisplay');
+    if (!this._trigger || !this._menu || !this._label || !this._indicator || !this._contextWrap) return;
 
     this._wireDropdown();
     this._loadThinking();
@@ -114,7 +115,7 @@ export class ChatControls {
       if (tokens == null || contextWindow == null) return;
       this._indicator.textContent =
         `${(tokens / 1000).toFixed(1)}/${(contextWindow / 1000).toFixed(1)}k`;
-      this._indicator.classList.remove('hidden');
+      this._contextWrap.classList.remove('hidden'); // reveal the Context label + value together
     } finally {
       this._refreshing = false;
       if (this._refreshQueued) {

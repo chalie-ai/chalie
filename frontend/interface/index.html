@@ -251,7 +251,10 @@
           <button class="thinking-select__item" data-level="high" type="button" role="menuitem">High</button>
         </div>
       </div>
-      <span id="contextIndicator" class="context-indicator hidden" title="Last request size / context window"></span>
+      <div id="contextDisplay" class="context-display hidden">
+        <span class="context-display__caption">Context</span>
+        <span id="contextIndicator" class="context-indicator" title="Last request size / context window"></span>
+      </div>
     </div>
 
     <!-- Mic error label — shown below the input dock when mic access fails -->
