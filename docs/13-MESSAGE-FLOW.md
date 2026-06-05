@@ -35,7 +35,10 @@ User (WebSocket)
   │    row (captures uid)       │
   │  · deliberation-score gate  │
   │    (user channel only;      │
-  │     sets thinking_level)    │
+  │     sets thinking_level —    │
+  │     a persisted user over-   │
+  │     ride 'medium'/'high'     │
+  │     short-circuits it)       │
   │  · _seed_turn_zero():       │
   │    - thinking dispatch      │
   │      (if thinking_level=    │
@@ -126,6 +129,8 @@ There is **no proactive turn-count trigger, no `ContextOverflowError`, no retry 
 `get_previous_messages()` renders **every** row since the watermark, minus the leading `mp._history_drop` rows the fit loop has trimmed (`entries = self._previous_rows()[self._history_drop:]`). There is no fixed row cap — the only bound on the rendered slice is whatever the window-fit loop had to drop to make the request fit. `_history_drop` is reset to `0` at the start of each `_fit_request` and again inside `_dispatch_compaction()` (once the dropped rows are folded into the checkpoint, the watermark advances past them and the drop count is no longer meaningful).
 
 Both compaction configs (`ChatHistoryCompactionConfig`, `ToolChainCompactionConfig`) set `thinking_mode = "high"` (a `ClassVar` lever read by `Providers.send()`), carry `suppress_history=True`, expose no tools, and use `channel="compaction"` — a dedicated channel name so the inner compaction send's own `_wrap_with_checkpoint("compaction", …)` lookup is empty (continuity is instead carried explicitly via `## Previous Summary`). Watermark rows are written to the **parent** channel, never to `"compaction"`.
+
+**Thinking-mode precedence.** `Providers.send()` resolves the level it sends via `resolve_thinking_mode(config_thinking_mode, override, level)` = `config_thinking_mode or override or level`: a config hard-pin (the two compactors + `ThinkingAbility`, all `"high"`) wins over the persisted user override, which in turn wins over the gate-computed `mp.thinking_level`. The override is a single global setting (`settings` key `thinking_level_override`, values `medium`/`high`; absent ⇒ `auto`) read by `thinking_override_service.get_thinking_override()` and assigned to `mp.thinking_override` in `process()`. When set it reaches the provider on **every** channel (a user `medium` therefore never downgrades the compactors' pinned `high`); on the user channel it also short-circuits the deliberation gate. The composer exposes it bottom-left, alongside a bottom-right context-size indicator fed by `GET /system/context-usage` (last `usage_class='chat'` `tokens_input` ÷ selected-provider `max_tokens`), re-fetched on page load and on every inbound WS message.
 
 **Checkpoint envelope.** When a compaction row exists for the channel, `_wrap_with_checkpoint()` (called inside `Providers.send()`) wraps the user-prompt body into a `### Checkpoint - What you were previously discussing / doing` block followed by `### Current State - What's happening in the current turn`. No-op when no compaction row exists.
 
