@@ -539,10 +539,15 @@ Replace `get_previous_messages` (785–860). Add `_previous_rows` and keep the r
         from services import transcript_service  # noqa: PLC0415
 
         # 1. History → transcript (the writer's row id is the watermark).
+        # CompactionConfig emits <analysis>…</analysis><summary>…</summary>; persist
+        # only the extracted <summary> (the <analysis> is a discard-after-use
+        # reconciliation scaffold). Writing the raw blob leaks the scratchpad +
+        # literal XML tags into every later prompt. Resolves R2. (commit 1fccaf07)
         prev = self.get_previous_messages()
         if prev.strip():
-            summary = MessageProcessor.process(prev, CompactionConfig())
-            if summary and summary.strip():
+            raw = MessageProcessor.process(prev, CompactionConfig())
+            summary = _extract_compaction_summary(raw)
+            if summary:
                 transcript_service.write_input_row(self.config.channel, "compaction", summary)
 
         # 2. Trail → tool_calls (only when a non-compaction trail row exists).
@@ -567,7 +572,7 @@ Replace `get_previous_messages` (785–860). Add `_previous_rows` and keep the r
 Delete `_compact_trail` (920–965), `_compact_history` (967–990), and `_run_full_compaction` (277–367). Also delete the module helpers only those used: `_format_compaction_entry` (1031), `_build_compaction_input` (1049), `_write_compaction_audit_row` (1063) — grep first to confirm no other callers:
 
 Run: `cd backend && grep -rn "_run_full_compaction\|_format_compaction_entry\|_build_compaction_input\|_write_compaction_audit_row\|_compact_trail\|_compact_history" --include="*.py" . | grep -v __pycache__`
-Expected after deletion: only test references (handled in their own tasks). `_extract_compaction_summary` MAY still be used by CompactionConfig output parsing — confirm before deleting; keep if referenced.
+Expected after deletion: only test references (handled in their own tasks). `_extract_compaction_summary` **IS still used** — `_compact()` Step 2 above extracts the `<summary>` from `CompactionConfig` output before persisting (R2 resolution, commit `1fccaf07`). KEEP it and its unit tests (`test_compaction_summary_parser.py`).
 
 - [ ] **Step 3: Remove the dead `_overflow_recovered_this_turn` attribute**
 
@@ -576,7 +581,17 @@ Delete `self._overflow_recovered_this_turn` (line 227) and its comment block (21
 - [ ] **Step 4: Run import + watermark tests**
 
 Run: `cd backend && pytest tests/test_compaction_watermark.py::test_previous_rows_excludes_through_watermark_and_has_no_limit -v`
-Expected: PASS (the SQL is unchanged for this read; `since_id` was already correct).
+Expected: PASS.
+
+**Correction (2026-06-05):** the original step text claimed *"the SQL is unchanged
+for this read; `since_id` was already correct"* — that was **wrong**. The
+`since_id` branch of `transcript_service.get_recent` still applied the `limit=20`
+default, capping `_previous_rows()` at 20 rows and making the `>50` proactive
+trigger unreachable (the very 20-row bug §3.7 set out to kill). Fixed by removing
+`LIMIT` from the `since_id` (ASC, watermark) branch only — the DESC/else branch
+keeps its `LIMIT`. This added `backend/services/transcript_service.py` to Task
+2.2's file scope (commit `8963833a`; Dylan: "LIMIT = BUG, it's literally in the
+spec" — design §3.7).
 
 - [ ] **Step 5: Commit**
 
@@ -1176,7 +1191,7 @@ git commit -m "docs: reconcile compaction redesign (pre-flight loop, transcript 
 ## Risks / verify-continuously (chalie-feature: surface every breakage)
 
 - **R1 — `write_input_row` side effects on a `role='compaction'` row.** `write_input_row` calls `_maybe_trigger_extraction(channel, row_id)` and `_resolve_location`. A compaction row will now fire the rolling episode-extraction trigger. VERIFY `_maybe_trigger_extraction` ignores `role='compaction'` (or is harmless on it); if it ingests the summary as conversational content, add a role guard. Evidence required before closing.
-- **R2 — `CompactionConfig` output parsing.** `_compact()` writes `MessageProcessor.process(prev, CompactionConfig())` verbatim as the summary. The old `_run_full_compaction` extracted `<summary>` tags via `_extract_compaction_summary`. CONFIRM whether `CompactionConfig`'s system prompt still wraps output in `<summary>`; if so, either strip tags in `_compact()` or update the prompt. Do not write raw `<summary>…</summary>` into the transcript.
+- **R2 — `CompactionConfig` output parsing. [RESOLVED 2026-06-05, commit `1fccaf07`.]** `_compact()` extracts the `<summary>` via `_extract_compaction_summary` before persisting — it does NOT write the raw `process(...)` output. Confirmed: `CompactionConfig`'s system prompt (`ContinuityCompactionSystemPrompt`) wraps output in `<analysis>…</analysis><summary>…</summary>`; only the `<summary>` body is persisted (the `<analysis>` is a discard-after-use reconciliation scaffold). Chosen resolution = extract (not prompt change), restoring pre-redesign `_run_full_compaction` behaviour (Dylan: "retain old behaviour in terms of compaction"). `TrailHandoverConfig` output stays raw — its prompt emits no tags.
 - **R3 — proactive `len(_previous_rows()) > 50` cost.** Runs every iteration. `_previous_rows()` is one indexed `id > watermark` query; acceptable, but confirm it is not called twice per iteration (it is also inside `get_previous_messages`). Acceptable duplication; note if profiling shows otherwise.
 - **R4 — `build_request_body` / `estimate_tokens` availability on every provider.** `pre_flight_check` calls `provider.build_request_body` + `estimate_tokens`. The old `calculate()` used the same pair, so parity holds — but re-confirm both exist on the Fallback wrapper and each concrete provider.
 - **R5 — thinking dispatch ordering.** `_run_thinking_gate` (sets `thinking_level`) runs in `_setup` BEFORE `_seed_turn_zero` (verified: 620–627). The turn-0 dispatch reads `self.thinking_level`; ensure the gate has run for the user channel before seeding.

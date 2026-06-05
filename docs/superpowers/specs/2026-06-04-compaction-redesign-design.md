@@ -117,10 +117,25 @@ The existing `PayloadTooLargeError` (raised by `OllamaService` on HTTP 413, re-r
 ### 3.5 `_compact()` — reuse write + emit paths
 
 1. **History → `transcript`** (reuses the existing writer):
-   `summary = MessageProcessor.process(self.get_previous_messages(), CompactionConfig())`
+   `raw = MessageProcessor.process(self.get_previous_messages(), CompactionConfig())`
+   `summary = _extract_compaction_summary(raw)`
    `transcript_service.write_input_row(channel, 'compaction', summary)`.
    The written row's **own id is the watermark**.
-   Skip when there is nothing to summarise.
+   Skip when there is nothing to summarise (or when extraction yields no `<summary>`).
+
+   **Decision (2026-06-05, Dylan — "retain old behaviour in terms of compaction"):**
+   `CompactionConfig`'s system prompt (`ContinuityCompactionSystemPrompt`) emits
+   `<analysis>…</analysis><summary>…</summary>`. The `<analysis>` is a
+   discard-after-use reconciliation scaffold (audit each prior fact
+   still-true/updated/contradicted/dead before compressing — the guard against
+   lossy or fresh-start summaries); only the dense `<summary>` body is the
+   durable artifact injected into later turns via `_wrap_with_checkpoint`.
+   Persist the **extracted** `<summary>`, never the raw blob — writing the raw
+   output leaks the scratchpad and literal XML tags into every subsequent
+   prompt. This restores the pre-redesign `_run_full_compaction` behaviour and
+   re-wires `_extract_compaction_summary` into the live path. **Resolves the
+   plan's Risk R2.** `TrailHandoverConfig` output (item 2) stays raw — its
+   prompt emits no tags. (Implemented in commit `1fccaf07`.)
 
 2. **Trail → `tool_calls`** (only when a trail exists, i.e. not turn-0):
    `handover = MessageProcessor.process(self._render_act_trail(), TrailHandoverConfig())`
