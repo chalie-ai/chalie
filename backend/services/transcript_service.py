@@ -295,6 +295,7 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
                 SELECT COUNT(*)
                 FROM transcript
                 WHERE channel = ?
+                  AND role != 'compaction'
                   AND id > COALESCE(
                       (SELECT MAX(transcript_id_end)
                        FROM episodes
@@ -347,7 +348,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     SELECT id, role, content, tool_name, created_at,
                            location_lat, location_lon, location_name
                     FROM transcript
-                    WHERE channel = ? AND id <= ?
+                    WHERE channel = ? AND id <= ? AND role != 'compaction'
                     ORDER BY id DESC
                     LIMIT ?
                     """,
