@@ -38,20 +38,27 @@ const PanelPolicies = (() => {
     if (!el) return;
     const channel = CONTEXT_MAP[_sub] || 'chat';
 
-    // Group this channel's rows by category (permission prefix).
+    // Group this channel's rows by category. MCP rows carry a server-title
+    // `group` (which also flags the group as MCP); native rows group by the
+    // permission prefix. Both carry a humanized `label` tagged backend-side.
     const byCat = {};
     for (const r of _rows) {
       if (r.channel !== channel) continue;
-      const cat = r.permission.split('.')[0];
-      (byCat[cat] = byCat[cat] || []).push(r);
+      const isMcp = !!r.group;
+      const cat = r.group || r.permission.split('.')[0];
+      const label = r.label || r.permission;
+      const bucket = byCat[cat] || (byCat[cat] = { isMcp, rows: [] });
+      bucket.rows.push({ r, label });
     }
 
     let html = `<div class="policies-grid">`;
     for (const cat of Object.keys(byCat).sort((a, b) => a.localeCompare(b))) {
+      const { isMcp, rows } = byCat[cat];
+      const pill = isMcp ? `<span class="badge badge-cyan">MCP</span> ` : '';
       html += `<div class="policy-category">
-        <h4 class="section-head">${BrainApp.escapeHtml(cat)}</h4>
-        ${byCat[cat].map(r => `<div class="policy-rule">
-          <span class="policy-label">${BrainApp.escapeHtml(r.permission)}</span>
+        <h4 class="section-head">${pill}${BrainApp.escapeHtml(cat)}</h4>
+        ${rows.map(({ r, label }) => `<div class="policy-rule">
+          <span class="policy-label">${BrainApp.escapeHtml(label)}</span>
           <div class="segmented" data-permission="${BrainApp.escapeHtml(r.permission)}">
             ${['allow', 'ask', 'deny'].map(v => `<button class="seg-btn${v === r.setting ? ' active' : ''}" data-val="${v}">${v.charAt(0).toUpperCase() + v.slice(1)}</button>`).join('')}
           </div>

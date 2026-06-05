@@ -13,17 +13,49 @@ logger = logging.getLogger(__name__)
 policies_bp = Blueprint('policies', __name__, url_prefix='/api/policies')
 
 
+def _tag_display_rows(rows: list[dict]) -> None:
+    """Annotate every row in place with a display ``label`` (and ``group`` for
+    MCP rows) so the Brain UI renders friendly names instead of raw permissions.
+
+    - ``_mcp_<server>_<tool>`` -> group=server title, label=humanized tool name.
+    - native ``tool.action``    -> label=humanized action only (``search_files.glob``
+      -> ``Glob``); a bare ``tool`` with no action -> humanized tool name.
+
+    MCP resolution is guarded: a misconfigured/absent MCP store must never break
+    the page — MCP rows then fall through to the native branch.
+    """
+    from services.mcp_client_service import McpClientService, humanize_segment
+    mcp_labels: dict = {}
+    try:
+        mcp_labels = McpClientService().label_mcp_permissions([r['permission'] for r in rows])
+    except Exception as exc:  # noqa: BLE001 — display enrichment must not 500 the page
+        logger.warning("[POLICIES API] MCP row tagging skipped: %s", exc)
+    for r in rows:
+        info = mcp_labels.get(r['permission'])
+        if info:
+            r['group'] = info['group']
+            r['label'] = info['label']
+        else:
+            _base, _, action = r['permission'].partition('.')
+            r['label'] = humanize_segment(action or _base)
+
+
 @policies_bp.route('', methods=['GET'])
 @require_session
 def get_policies():
     """Return all policy rows (flat triples), excluding internal rows.
 
     Response 200:: {"policies": [{"channel","permission","setting"}, ...]}
+
+    Every row carries a display ``label`` (humanized); ``_mcp_*`` rows also carry
+    a ``group`` (server title) so the Brain UI groups them by MCP server instead
+    of showing one raw ``_mcp_<server>_<tool>`` group per tool.
     """
     try:
         from services.database_service import get_shared_db_service
         from services.policy_manager import PolicyManager
         rows = PolicyManager(get_shared_db_service()).get_all()
+        _tag_display_rows(rows)
         return jsonify({"policies": rows}), 200
     except Exception as exc:
         logger.error("[POLICIES API] GET failed: %s", exc)

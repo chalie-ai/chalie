@@ -64,6 +64,26 @@ def _tool_name(server_name: str, remote_tool: str) -> str:
     return f"_mcp_{_sanitize_name(server_name)}_{remote_tool}"
 
 
+# Short words that stay lowercase mid-label when humanizing a tool name.
+_MINOR_LABEL_WORDS = frozenset({
+    "a", "an", "and", "as", "at", "by", "for", "from", "in",
+    "of", "on", "or", "the", "to", "with",
+})
+
+
+def humanize_segment(segment: str) -> str:
+    """Turn an underscore identifier into a Title-Cased label.
+
+    ``add_comment_to_pending_review`` -> ``Add Comment to Pending Review``.
+    The first word is always capitalized; minor words elsewhere stay lowercase.
+    """
+    words = [w for w in segment.split("_") if w]
+    out = []
+    for i, w in enumerate(words):
+        out.append(w if (i and w.lower() in _MINOR_LABEL_WORDS) else w[:1].upper() + w[1:])
+    return " ".join(out)
+
+
 def _normalize_host(host: str) -> str:
     """Canonical dedup key for a remote MCP endpoint.
 
@@ -463,6 +483,38 @@ class McpClientService:
             display = call_name[len(prefix):] if call_name.startswith(prefix) else call_name
             index.append((call_name, display))
         return index
+
+    def label_mcp_permissions(self, permissions: list[str]) -> dict[str, dict]:
+        """Map ``_mcp_*`` policy permissions to display ``{group, label}``.
+
+        ``group`` is the configured server title (e.g. ``GitHub``); ``label`` is
+        the remote tool name humanized (``_mcp_github_add_comment_to_pending_review``
+        -> ``Add Comment to Pending Review``).  Non-MCP permissions and orphan rows
+        (no matching server) are omitted, so callers fall back to the raw string.
+
+        Disabled/offline servers ARE included — the Brain policies UI must group
+        their rows too — unlike ``_resolve_tool`` which gates on enabled status.
+        One ``list_servers`` read serves the whole batch.
+        """
+        servers = sorted(
+            ({"slug": _sanitize_name(s["name"]), "title": s["name"]}
+             for s in self.list_servers()),
+            key=lambda s: len(s["slug"]), reverse=True,  # longest slug wins the prefix race
+        )
+        out: dict[str, dict] = {}
+        for perm in permissions:
+            if not perm.startswith("_mcp_"):
+                continue
+            base, _, action = perm.partition(".")
+            for s in servers:
+                prefix = f"_mcp_{s['slug']}_"
+                if base.startswith(prefix):
+                    label = humanize_segment(base[len(prefix):])
+                    if action:
+                        label += f" — {humanize_segment(action)}"
+                    out[perm] = {"group": s["title"], "label": label}
+                    break
+        return out
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
 
