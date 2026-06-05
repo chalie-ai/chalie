@@ -1,6 +1,6 @@
 """Tests for ToolCallService — unified API for tool_calls audit entries.
 
-Covers store, store_batch, get_by_transcript, and get_by_timerange.
+Covers store, get_by_transcript, and get_by_timerange.
 """
 
 import pytest
@@ -47,23 +47,6 @@ class TestStore:
         rows = _all_rows(db)
         assert rows[0]['ephemeral'] == 1
 
-
-
-class TestStoreBatch:
-    def test_store_batch(self, svc, db, transcript_id):
-        tool_calls = [
-            {'id': 'tc1', 'name': 'memory', 'input': {'query': 'x'}},
-            {'id': 'tc2', 'name': 'schedule', 'input': {'action': 'list'}},
-        ]
-        results = [
-            {'result': 'memory result', 'status': 'ok'},
-            {'result': 'schedule result', 'status': 'ok'},
-        ]
-        svc.store_batch(transcript_id, tool_calls, results)
-        rows = _all_rows(db)
-        assert len(rows) == 2
-        assert rows[0]['tool_name'] == 'memory'
-        assert rows[1]['tool_name'] == 'schedule'
 
 
 class TestGetByTranscript:

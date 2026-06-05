@@ -44,40 +44,6 @@ class ToolCallService:
         except Exception:
             logger.exception(f"{LOG_PREFIX} Failed to store tool call: tool={tool_name!r} transcript={transcript_id}")
 
-    def store_batch(self, transcript_id, tool_calls, results, ephemeral=True):
-        """Store multiple tool call records from a single LLM response.
-
-        Args:
-            transcript_id: ID of the transcript entry this call belongs to.
-            tool_calls: List of dicts with {'id': str, 'name': str, 'input': dict}.
-            results: List of dispatcher result dicts with 'action_type', 'status', 'result', etc.
-            ephemeral: If True, marks the records as ephemeral.
-        """
-        if not tool_calls:
-            return
-
-        db = get_shared_db_service()
-        ephemeral_int = 1 if ephemeral else 0
-        now = utc_now().isoformat()
-
-        rows = []
-        for tc, r in zip(tool_calls, results):
-            params_str = json.dumps(tc.get('input', {}))
-            result_str = str(r.get('result', ''))
-            rows.append((transcript_id, tc['name'], params_str, result_str, ephemeral_int, now))
-
-        try:
-            with db.connection() as conn:
-                conn.executemany(
-                    "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, ephemeral, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    rows,
-                )
-                conn.commit()
-        except Exception:
-            logger.exception(f"{LOG_PREFIX} Failed to store batch of {len(rows)} tool calls for transcript={transcript_id}")
-
     def get_by_transcript(self, transcript_id, include_ephemeral=True):
         """Get all tool calls for a transcript entry.
 
