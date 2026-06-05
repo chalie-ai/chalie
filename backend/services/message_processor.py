@@ -204,11 +204,6 @@ class MessageProcessor:
         self._loop_exited_cleanly: bool = False
         self._active_tools: list[str] = []
         self._uid: int | None = None
-        # Default is 'low' — classifier must explicitly set medium/high.
-        # A 'medium' default would silently apply deliberation pressure to every
-        # turn where the gate wasn't run (non-user channels) or crashed —
-        # regressing benchmark behaviour on simple recall/chit-chat.
-        self._thinking_level: str = 'low'
         self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
         self._deliberation_ema: float | None = None      # EMA after this turn's update
         # One-shot guard: any overflow recovery (proactive threshold trip
@@ -457,6 +452,10 @@ class MessageProcessor:
         mp.cancel_event: "threading.Event" = (
             cancel_event if cancel_event is not None else threading.Event()
         )
+        # Default is 'low' — the deliberation gate must explicitly set medium/high.
+        # A 'medium' default would silently apply deliberation pressure to every turn
+        # where the gate wasn't run (non-user channels) or crashed — regressing
+        # benchmark behaviour on simple recall/chit-chat.
         mp.thinking_level: str = "low"
         return mp._run()
 

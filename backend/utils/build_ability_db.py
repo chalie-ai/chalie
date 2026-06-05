@@ -30,6 +30,10 @@ from services.file_mapper_service import FileMapperService  # noqa: E402
 _DB_PATH = FileMapperService.get_abilities_db_path()
 _SHA_PATH = FileMapperService.get_abilities_sha_path()
 
+# thinking is an internal, never-discoverable ability — excluded from the
+# search index and the SHA drift map so find_tools never surfaces it.
+_NON_INDEXED_ABILITIES: frozenset[str] = frozenset({"thinking"})
+
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
     conn.enable_load_extension(True)
@@ -133,7 +137,7 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
 
 def _build_sha_map() -> dict[str, str]:
     """SHA map covers every ability indexed in the search DB (thinking excluded)."""
-    return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all() if a.NAME != "thinking"}
+    return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all() if a.NAME not in _NON_INDEXED_ABILITIES}
 
 
 def _build(db_path: Path, sha_path: Path) -> None:
@@ -141,7 +145,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
     # find_tools. Per-processor scoping (which abilities a given processor
     # may discover) is gated at find_tools query time via the calling
     # processor's DISCOVERABLE list.
-    abilities = [a for a in AbilityRegistry.all() if a.NAME != "thinking"]
+    abilities = [a for a in AbilityRegistry.all() if a.NAME not in _NON_INDEXED_ABILITIES]
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 
     emb_service = EmbeddingService() if abilities else None
