@@ -121,7 +121,7 @@ Compaction is triggered by two conditions, both handled by the single `_compact(
 
 2. **Trail** — if `_has_trail()` is true (at least one non-`trail_compaction` row since the last trail boundary), summarises the assembled trail via `MessageProcessor.process(trail_text, TrailHandoverConfig())` and records it as a new `trail_compaction` tool_calls row (`ephemeral=1`). The next `_from_last_compaction()` slice begins at that row — prior rows silently drop out of the trail without a DELETE.
 
-There is one universal compaction config per kind for every channel (delegates included). There is no recursion guard — compaction channels (`CompactionConfig`) are single-iteration by design (`max_iterations=1`) and `suppress_history=True`, so `_previous_rows()` returns `[]` immediately and `_compact()` is a no-op inside them.
+There is one universal compaction config per kind for every channel (delegates included). There is no recursion guard — both compaction configs (`CompactionConfig`, `TrailHandoverConfig`) carry `suppress_history=True` and expose no tools, so inside a compaction turn `_previous_rows()` returns `[]` immediately (no history to summarise) and the empty tool surface produces no trail, leaving `_compact()` a no-op.
 
 **Checkpoint envelope.** When a compaction row exists for the channel, `_wrap_with_checkpoint()` (called inside `Providers.send()`) wraps the user-prompt body into a `### Checkpoint - What you were previously discussing / doing` block followed by `### Current State - What's happening in the current turn`. No-op when no compaction row exists.
 
@@ -178,7 +178,7 @@ Runs internally when a channel's transcript tail grows beyond a threshold. Encod
 
 ## Per-Turn Metrics
 
-Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the `ThinkingAbility` exploration pass (when `thinking_level='high'`), and any compaction call fired by `_handle_overflow()`. Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
+Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the `ThinkingAbility` exploration pass (when `thinking_level='high'`), and any compaction call fired by `_compact()` (on the `_loop` overflow-retry path). Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
 
 ```json
 {

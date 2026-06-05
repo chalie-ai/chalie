@@ -4,7 +4,7 @@ Provider token-limit backfill.
 Reads each provider's get_context_limit() and persists max_tokens into
 the providers table.  Used at boot (every row) and on provider creation
 (single row).  The compaction threshold is no longer a stored column —
-Provider.calculate() divides by max_tokens at call time.
+Providers.pre_flight_check() applies the 90%-of-max_tokens guard at call time.
 """
 import logging
 
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def backfill_one(conn, provider_id: int) -> bool:
-    """Compute and persist max_tokens + compact_at for a single provider row.
+    """Compute and persist max_tokens for a single provider row.
 
     Looks up the provider config via ConfigService.get_providers(), builds an
     LLM service via create_llm_service, calls .get_context_limit(), then

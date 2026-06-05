@@ -27,8 +27,8 @@ The caller instantiates the subclass directly::
     mp = MessageProcessor.process(raw_input, UserConfig(metadata=request_metadata))
 
 The ``job`` property — ``f"{channel}:{role}"`` — is the telemetry label passed
-to ``Providers.calculate`` / ``Providers.send_messages``.  There is no separate
-``LOG_LABEL`` field; ``config.job`` IS the label (§2, AC-13).
+through ``Providers.send`` to the resolved provider and ``_log_after_call``.
+There is no separate ``LOG_LABEL`` field; ``config.job`` IS the label (§2, AC-13).
 """
 
 from __future__ import annotations
@@ -164,9 +164,10 @@ class ProcessorConfig(ABC):
     def job(self) -> str:
         """Telemetry label for Provider calls: ``channel:role``.
 
-        Passed as the ``job`` argument to ``Providers.calculate()`` and
-        ``Providers.send_messages()``.  Replaces the per-subclass
-        ``LOG_LABEL`` class attribute (§2 / AC-13).
+        Passed as the ``job`` argument through ``Providers.send()`` to the
+        resolved provider's ``send_messages()`` and the ``_log_after_call``
+        telemetry.  Replaces the per-subclass ``LOG_LABEL`` class attribute
+        (§2 / AC-13).
         """
         return f"{self.channel}:{self.role}"
 

@@ -5,9 +5,10 @@ role='compaction' whose OWN id is the watermark (compacted_up_to_id). Downstream
 `id > watermark` reads naturally exclude that row and everything before it.
 
 Callers:
-  - MessageProcessor.get_previous_messages  (watermark + prepend)
-  - MessageProcessor._wrap_with_checkpoint (checkpoint envelope)
-  - MessageProcessor._run_full_compaction  (orchestrator reads prior state)
+  - MessageProcessor._previous_rows         (watermark for `id > watermark` reads)
+  - MessageProcessor._wrap_with_checkpoint  (checkpoint envelope prepend)
+  - transcript_service.cleanup_unlinked_entries (watermark-bounded cleanup)
+  - api.system compaction observability     (Brain read-only view)
 """
 
 import logging
