@@ -131,6 +131,12 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "search_files",
     "skill_builder",
     "skill_manager",
+    # thinking: internal never-discoverable ability dispatched at turn 0
+    # (added by the compaction redesign, Task 4.1 / commit eaaaf29a, which
+    # replaced the old exploration hack with abilities/thinking.py). It lives
+    # at the top level so AbilityRegistry._load() registers it, but it is
+    # excluded from find_tools indexing (build_ability_db _NON_INDEXED_ABILITIES).
+    "thinking",
     "timer",
     "ubiquiti",
     "weather",

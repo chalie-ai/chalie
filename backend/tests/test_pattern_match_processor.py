@@ -5,9 +5,11 @@ Each test answers exactly one question: does this service do what it claims?
 Real in-memory SQLite via the `db` fixture (schema.sql through
 SchemaConvergenceService). MemoryStore is the real production implementation.
 
-LLM boundary: Providers.instance().send_messages is the ONLY boundary that
-is stubbed — everything else (DB, DataGraphService, save_pattern, save_graph)
-runs against real production code.
+LLM boundary: the resolved provider service (Providers._resolve) is the ONLY
+boundary that is stubbed — Providers.send itself still runs real prompt
+assembly, tool building, and pre-flight, so everything else (DB,
+DataGraphService, save_pattern, save_graph, _touched_pattern_ids init) runs
+against real production code.
 
 Per feedback_test_philosophy.md: hot path only, no mock theater.
 """
@@ -32,6 +34,31 @@ def _make_llm_response(text="", tool_calls=None):
         provider="mock",
         tool_calls=tool_calls,
     )
+
+
+class _FakeLLMService:
+    """Stand-in for the resolved LLM provider — the single sanctioned boundary.
+
+    Patched in for ``Providers._resolve`` so the real ``Providers.send`` still
+    runs every production step (system/user prompt assembly — which lazily
+    inits ``_touched_pattern_ids`` via PatternConfig.get_user_prompt — tool
+    building, and pre-flight sizing) while only the network round-trip is
+    controlled by ``send_fn``. Mirrors the provider methods that
+    ``Providers.send`` / ``pre_flight_check`` invoke. ``build_request_body``
+    returns a tiny payload so pre-flight never trips the overflow guard.
+    """
+
+    def __init__(self, send_fn):
+        self._send_fn = send_fn
+
+    def get_context_limit(self):
+        return 200_000
+
+    def build_request_body(self, *_args, **_kwargs):
+        return "x"
+
+    def send_messages(self, *_args, **_kwargs):
+        return self._send_fn()
 
 
 def _tool_call(tool_name, **kwargs):
@@ -131,7 +158,7 @@ def _fetch_cursor(db):
 
 # ── Shared patch targets ─────────────────────────────────────────────────────
 
-_PROVIDERS_INSTANCE = "services.providers.Providers.instance"
+_PROVIDERS_RESOLVE = "services.providers.Providers._resolve"
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
@@ -198,16 +225,13 @@ class TestFiftyPlusDeltaFiresAndWritesPattern:
 
         call_count = {"n": 0}
 
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send(*_a, **_kw):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return llm_response_with_tool
             return llm_response_clean
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.calculate.return_value = 0.0
+        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             result = worker._step_pattern_match()
@@ -244,16 +268,13 @@ class TestSavePatternConfidenceCap:
         )
         call_count = {"n": 0}
 
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send(*_a, **_kw):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return _make_llm_response(tool_calls=[tc])
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.calculate.return_value = 0.0
+        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -279,13 +300,10 @@ class TestUntouchedPatternDecaysAndSoftDeletes:
         _seed_transcripts(db, 60)
 
         # LLM returns NO tool calls → postTurn decay fires on all untouched rows.
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send(*_a, **_kw):
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.calculate.return_value = 0.0
+        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -331,16 +349,13 @@ class TestSaveGraphRoutesThroughDataGraphService:
         )
         call_count = {"n": 0}
 
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send(*_a, **_kw):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return _make_llm_response(tool_calls=[tc])
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.calculate.return_value = 0.0
+        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -407,7 +422,7 @@ class TestSavePatternBudgetCapAt20:
 
         call_count = {"n": 0}
 
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send(*_a, **_kw):
             call_count["n"] += 1
             if call_count["n"] == 1:
                 # Return all 21 tool calls in the first pass.
@@ -415,10 +430,7 @@ class TestSavePatternBudgetCapAt20:
             # Subsequent iterations: no more tool calls → loop exits.
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.calculate.return_value = 0.0
+        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()

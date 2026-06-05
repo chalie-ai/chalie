@@ -1,7 +1,5 @@
 """Tests for api/system.py — /health, /metrics, /system/status, /system/observability/* endpoints."""
 
-import json
-
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -245,21 +243,21 @@ class TestSystemAPI:
     # GET /system/observability/compaction
 
     @staticmethod
-    def _seed_compaction(db, *, channel, status, summary, watermark, created_at):
-        """Insert a transcript anchor + a compaction tool_calls row for *channel*."""
+    def _seed_compaction(db, *, channel, summary, created_at):
+        """Seed a compaction summary the way production does (design §3.6): a
+        transcript row with role='compaction' whose OWN id is the watermark.
+
+        Replaces the retired tool_calls audit-row model — compaction state now
+        lives in the transcript table and get_compaction() reads the newest
+        role='compaction' row, taking its id as compacted_up_to_id. Returns that
+        row id (the watermark)."""
         cur = db.execute(
             "INSERT INTO transcript (role, content, channel, created_at) "
-            "VALUES ('user', 'anchor', ?, '2026-01-01 00:00:00')",
-            (channel,),
-        )
-        t_id = cur.lastrowid
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'compaction', ?, ?, 0, ?)",
-            (t_id, json.dumps({'status': status, 'compacted_up_to_id': watermark}), summary, created_at),
+            "VALUES ('compaction', ?, ?, ?)",
+            (summary, channel, created_at),
         )
         db.commit()
-        return t_id
+        return cur.lastrowid
 
     def test_observability_compaction_returns_null_when_none(self, client, db):
         """No compaction rows → 200 with {"compaction": null} (drives the empty-state card)."""
@@ -270,9 +268,9 @@ class TestSystemAPI:
     def test_observability_compaction_returns_summary_and_formatted_timestamp(self, client, db):
         """A success compaction on the 'user' channel surfaces its summary, watermark, and a
         backend-formatted timestamp (locale_service, for_ui — UTC fallback with no telemetry)."""
-        self._seed_compaction(
-            db, channel='user', status='success',
-            summary='Earlier turns condensed here.', watermark=42,
+        watermark = self._seed_compaction(
+            db, channel='user',
+            summary='Earlier turns condensed here.',
             created_at='2026-01-01 00:00:01',
         )
         resp = client.get('/system/observability/compaction')
@@ -280,17 +278,19 @@ class TestSystemAPI:
         comp = resp.get_json()['compaction']
         assert comp is not None
         assert comp['summary'] == 'Earlier turns condensed here.'
-        assert comp['compacted_up_to_id'] == 42
+        # The watermark IS the compaction row's own id (design §3.6).
+        assert comp['compacted_up_to_id'] == watermark
         # Timestamp is pre-formatted server-side; tests have no telemetry → UTC.
         assert comp['compacted_at'] == '2026-01-01 00:00'
 
     def test_observability_compaction_formats_production_iso_timestamp(self, client, db):
-        """Production writes created_at via utc_now().isoformat() — an ISO-8601 string with a
-        'T' separator and a '+00:00' offset. The tab must render it as a clean human-readable
-        string with NO 'T', NO offset, and NO 'Z' (the exact regression the UI scenario guards)."""
+        """transcript.created_at is a free-form TEXT column that may hold an ISO-8601
+        string with a 'T' separator and a '+00:00' offset. The tab must render it as a
+        clean human-readable string with NO 'T', NO offset, and NO 'Z' (the exact
+        regression the UI scenario guards)."""
         self._seed_compaction(
-            db, channel='user', status='success',
-            summary='Condensed.', watermark=99,
+            db, channel='user',
+            summary='Condensed.',
             created_at='2026-05-30T22:45:01.123456+00:00',
         )
         resp = client.get('/system/observability/compaction')
@@ -303,33 +303,32 @@ class TestSystemAPI:
     def test_observability_compaction_channel_isolation(self, client, db):
         """A compaction on a non-user channel must never appear in the chat tab."""
         self._seed_compaction(
-            db, channel='subagent', status='success',
-            summary='subagent only', watermark=7,
+            db, channel='subagent',
+            summary='subagent only',
             created_at='2026-01-01 00:00:01',
         )
         resp = client.get('/system/observability/compaction')
         assert resp.status_code == 200
         assert resp.get_json()['compaction'] is None
 
-    def test_observability_compaction_latest_success_wins_over_failure(self, client, db):
-        """Newest success row is returned; a later failure row never poisons the panel."""
+    def test_observability_compaction_latest_wins(self, client, db):
+        """When several compactions exist, the newest (highest-id) role='compaction'
+        row is returned. Under the redesign _compact() only writes a row when the
+        summary extraction succeeds, so there is no failure-row state to filter —
+        the latest row is always the canonical one."""
         self._seed_compaction(
-            db, channel='user', status='success',
-            summary='old summary', watermark=10, created_at='2026-01-01 00:00:01',
+            db, channel='user',
+            summary='old summary', created_at='2026-01-01 00:00:01',
         )
-        self._seed_compaction(
-            db, channel='user', status='success',
-            summary='new summary', watermark=20, created_at='2026-01-02 00:00:01',
-        )
-        self._seed_compaction(
-            db, channel='user', status='failure',
-            summary='failed attempt', watermark=30, created_at='2026-01-03 00:00:01',
+        new_watermark = self._seed_compaction(
+            db, channel='user',
+            summary='new summary', created_at='2026-01-02 00:00:01',
         )
         resp = client.get('/system/observability/compaction')
         assert resp.status_code == 200
         comp = resp.get_json()['compaction']
         assert comp['summary'] == 'new summary'
-        assert comp['compacted_up_to_id'] == 20
+        assert comp['compacted_up_to_id'] == new_watermark
 
 
     # GET /ready
