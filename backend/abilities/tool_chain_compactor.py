@@ -74,7 +74,7 @@ class ToolChainCompactor(Ability):
             # No non-compactor trail since the last boundary — nothing to do.
             return {"status": "success", "result": ""}
 
-        trail_text = parent._render_act_trail()
+        trail_text = parent._render_act_trail(for_compaction=True)
         if not trail_text.strip():
             return {"status": "success", "result": ""}
 

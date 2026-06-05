@@ -302,23 +302,20 @@ class TestGetPreviousMessagesEmptyChannelWithOtherData:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — window-only fit (NO fixed row cap)
+# get_previous_messages() — window-only, NO fixed row cap (compact-first)
 #
-# SPEC CHANGE (2026-06-05, Dylan — supersedes the 50-row render cap): compaction
-# no longer caps the rendered history at a fixed row count, and the proactive
-# turn-count trigger and COMPACTION_ROW_WINDOW were removed. get_previous_messages()
-# renders EVERY watermark-bounded row; the live request is bounded by context-
-# window size in Providers._fit_request, which drops the oldest rows (via
-# drop_oldest_previous_message) until the request reserves max(10% window, 8k)
-# response headroom. The dropped rows are summarised into the next turn's
-# checkpoint (_dispatch_compaction resets _history_drop first), so nothing is
-# lost. Dylan: "Drop the 50 turn cap. Let's go back to solely relying on context
-# window size … loop and drop the oldest message until it fits."
+# CANONICAL DESIGN (2026-06-06, Dylan — supersedes the trim-first build): there is
+# NO provider-layer trim. get_previous_messages() renders EVERY watermark-bounded
+# row. When the FULL request reaches the cap the ACT loop fires compaction BEFORE
+# sending (compact-first) — it never sends a trimmed/partial view. The only
+# drop-oldest is the ``drop_oldest`` PARAM, used solely by ChatHistoryCompactor's
+# rare bare-request fallback (step 4.2) when even the tool-free compaction request
+# overflows. _previous_rows() is id-ASC, so drop_oldest skips the OLDEST rows.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestGetPreviousMessagesWindowFit:
-    """get_previous_messages() renders every row; drop_oldest trims the oldest."""
+    """get_previous_messages() renders every row; drop_oldest param skips oldest."""
 
     def _seed_rows(self, db, n, channel=_GPM_CHANNEL):
         for i in range(n):
@@ -340,31 +337,104 @@ class TestGetPreviousMessagesWindowFit:
         assert "line-0000-end" in result
         assert f"line-{n - 1:04d}-end" in result
 
-    def test_drop_oldest_trims_from_the_front(self, db):
+    def test_drop_oldest_param_skips_oldest_rows(self, db):
+        # The 4.2 fallback drops the three oldest rows from the compaction input.
         n = 10
         self._seed_rows(db, n)
         p = _GPMFakeProcessor.make()
-        # The fit loop drops the three oldest rows.
-        assert p.drop_oldest_previous_message() is True
-        assert p.drop_oldest_previous_message() is True
-        assert p.drop_oldest_previous_message() is True
-        result = p.get_previous_messages()
+        result = p.get_previous_messages(drop_oldest=3)
         assert len(result.splitlines()) == n - 3
         for i in range(3):
-            assert f"line-{i:04d}-end" not in result   # oldest dropped
+            assert f"line-{i:04d}-end" not in result   # oldest skipped
         assert "line-0003-end" in result               # first surviving row
         assert f"line-{n - 1:04d}-end" in result        # newest always kept
 
-    def test_drop_oldest_terminates_when_history_exhausted(self, db):
-        # The fit loop's termination guarantee: drop_oldest returns False once
-        # every row is gone, so _fit_request can never loop forever.
+    def test_drop_oldest_param_at_or_beyond_count_returns_empty(self, db):
+        # Skipping every row leaves nothing to render — the fallback floor relies
+        # on this to know when there is nothing left to compact.
         n = 2
         self._seed_rows(db, n)
         p = _GPMFakeProcessor.make()
-        assert p.drop_oldest_previous_message() is True
-        assert p.drop_oldest_previous_message() is True
-        assert p.drop_oldest_previous_message() is False
-        assert p.get_previous_messages() == ""
+        assert p.get_previous_messages(drop_oldest=2) == ""
+        assert p.get_previous_messages(drop_oldest=5) == ""
+
+
+# =============================================================================
+# Trail compaction excludes the automatic memory-recall seed
+#
+# Canonical design §2-3: ToolChainCompactor no-ops when there are no tool calls
+# "excluding internal ones (compaction + automatic memory recall)", and when it
+# DOES compact it excludes the automatic memory recall from the act-trail. The
+# seed is the turn-0 memory(action=recall, _auto=True) dispatch; a model-issued
+# memory call has no _auto flag and stays real trail. Real DB rows, real
+# _has_trail / _render_act_trail off a uid-bound processor — zero mocks.
+# =============================================================================
+class TestTrailExcludesAutoMemoryRecall:
+    """The automatic memory-recall seed must not count as compactable trail."""
+
+    def _seed_turn(self, db, channel=_GPM_CHANNEL):
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at) "
+            "VALUES (?, 'user', 'turn input', '2026-04-10 10:00:00')",
+            (channel,),
+        )
+        tid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        db.commit()
+        return tid
+
+    def _add_tool_call(self, db, tid, tool_name, params_json, result, when):
+        db.execute(
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
+            "VALUES (?, ?, ?, ?, 1, ?)",
+            (tid, tool_name, params_json, result, when),
+        )
+        db.commit()
+
+    def test_auto_memory_only_trail_is_no_op(self, db):
+        # Only the turn-0 auto memory seed fired — nothing real to compact.
+        tid = self._seed_turn(db)
+        self._add_tool_call(
+            db, tid, "memory",
+            '{"action": "recall", "query": "who is boss", "_auto": true}',
+            "recalled: boss is Dylan", "2026-04-10 10:00:05",
+        )
+        p = _GPMFakeProcessor.make(uid=tid)
+        assert p._has_trail() is False
+        # Default render (per-turn display) still shows the auto-recall...
+        assert "recalled: boss is Dylan" in p._render_act_trail()
+        # ...but the compaction input drops it, leaving nothing to compact.
+        assert p._render_act_trail(for_compaction=True) == ""
+
+    def test_auto_memory_plus_real_call_compacts_only_real(self, db):
+        tid = self._seed_turn(db)
+        self._add_tool_call(
+            db, tid, "memory",
+            '{"action": "recall", "query": "q", "_auto": true}',
+            "auto recalled facts", "2026-04-10 10:00:05",
+        )
+        self._add_tool_call(
+            db, tid, "search", '{"query": "weather"}',
+            "sunny 24C", "2026-04-10 10:00:10",
+        )
+        p = _GPMFakeProcessor.make(uid=tid)
+        assert p._has_trail() is True
+        compaction_input = p._render_act_trail(for_compaction=True)
+        assert "sunny 24C" in compaction_input            # real call compacted
+        assert "auto recalled facts" not in compaction_input  # auto seed excluded
+        # Default per-turn render keeps both.
+        assert "auto recalled facts" in p._render_act_trail()
+
+    def test_model_initiated_memory_counts_as_real_trail(self, db):
+        # A model-issued memory call has NO _auto flag — it is genuine activity.
+        tid = self._seed_turn(db)
+        self._add_tool_call(
+            db, tid, "memory",
+            '{"action": "recall", "query": "remind me"}',
+            "model recalled X", "2026-04-10 10:00:05",
+        )
+        p = _GPMFakeProcessor.make(uid=tid)
+        assert p._has_trail() is True
+        assert "model recalled X" in p._render_act_trail(for_compaction=True)
 
 
 # =============================================================================

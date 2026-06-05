@@ -20,6 +20,7 @@ The class provides the ACT lifecycle (``process`` → ``_run`` → ``_setup`` �
 the trail/compaction primitives.
 """
 
+import json
 import logging
 import re
 import threading
@@ -49,6 +50,26 @@ _TRAIL_BOUNDARY_TOOL = "tool_chain_compactor"
 #: (_has_trail) and the chat-history marker is never rendered to the model (its
 #: compacted output reaches the model through the checkpoint prepend instead).
 _COMPACTOR_TOOLS: "frozenset[str]" = frozenset({"chat_history_compactor", "tool_chain_compactor"})
+
+
+def _is_auto_memory_recall(row: "dict") -> bool:
+    """True for the framework's turn-0 automatic memory-recall seed.
+
+    The seed is dispatched as ``memory(action='recall', _auto=True)`` in
+    ``_seed_turn_zero``; a model-initiated ``memory`` call carries no ``_auto``
+    flag. Identified off the persisted params (stored as a JSON string by
+    ``ActTrail.record``) so the canonical design's "excluding internal:
+    compaction + automatic memory recall" rule (§2-3) drops ONLY the framework
+    seed from the trail-compaction path — genuine agent ``memory`` calls still
+    count as real trail and are compacted normally."""
+    if row.get("tool_name") != "memory":
+        return False
+    raw = row.get("params") or "{}"
+    try:
+        params = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return False
+    return bool(isinstance(params, dict) and params.get("_auto"))
 
 
 _LLM_SENTINEL_PATTERNS = (
@@ -203,15 +224,6 @@ class MessageProcessor:
         # The mp owns its provider gateway — param-free, scaffolds from self.
         from services.providers import Providers  # noqa: PLC0415
         self.providers = Providers(self)
-        # Window-fit state (design §3.3, trim-then-compact). _history_drop is the
-        # number of oldest history rows the fit loop has dropped for the current
-        # send; _compaction_pending flags that a send had to trim, so _loop
-        # compacts the full history into the next turn's checkpoint.
-        self._history_drop: int = 0
-        self._compaction_pending: bool = False
-        # One-shot guard: a real provider 413 (PayloadTooLargeError) despite the
-        # estimate-based fit triggers a single collapse-and-retry, then fails loud.
-        self._payload_compacted: bool = False
         # Cooperative cancellation flag. Set by stop endpoints to signal the
         # ACT loop to exit at the next iteration boundary. Never raises —
         # the loop checks is_set() at the top of each iteration.
@@ -449,37 +461,30 @@ class MessageProcessor:
                 "content_type": content_type,
             })
 
-    def _loop(self) -> str:  # noqa: C901
-        """ACT game loop — fit-and-send, compact when history had to be trimmed.
+    def _loop(self) -> str:
+        """ACT game loop — compact-first (canonical design).
 
-        Fitting is window-only (design §3.3 — trim-then-compact). Providers.send()
-        builds the request with the full watermark-bounded history and drops the
-        oldest rows until it reserves response headroom (``max(10% window, 8k)``),
-        setting ``_compaction_pending`` when any row was dropped. On that flag the
-        loop fires _dispatch_compaction() once, summarising the full history into
-        the next turn's checkpoint so the dropped messages are not lost — the
-        compaction row's own id becomes the new watermark (design: DB is the state
-        machine), so the next send re-reads a collapsed history.
-
-        A real provider rejection (PayloadTooLargeError — the token estimate
-        under-counted) triggers a single collapse-and-retry; a second rejection
-        re-raises so an irreducible request fails loudly instead of looping.
+        Every iteration rebuilds the request from the DB and measures it.
+        Providers.send() returns the ``OVER_CAP`` sentinel (instead of calling the
+        API) when the FULL request reaches the cap. On that signal the loop fires
+        both compactors FIRST — normal tool calls, so the loop pauses and the
+        act-trail WS events emit for free — which advance the watermark and
+        collapse the act-trail. The next iteration re-reads a collapsed history
+        from the DB: no partial-view turn. If compaction made no progress the
+        request is irreducible, so it is sent as-is (``force``) and the provider
+        is the source of truth — an over-budget request fails loudly rather than
+        looping forever.
         """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services.llm_service import PayloadTooLargeError  # noqa: PLC0415
+        from services.providers import OVER_CAP  # noqa: PLC0415
         while True:
             if self._should_stop():
                 return ""
-            try:
-                response = self.providers.send()
-            except PayloadTooLargeError:
-                if self._payload_compacted:
-                    raise                         # already collapsed once — fail loud
-                self._payload_compacted = True
-                self._dispatch_compaction()
-                continue                          # re-read the compacted DB and retry
-            if self._compaction_pending:          # a send had to trim history
-                self._dispatch_compaction()       # fold the dropped rows into the checkpoint
+            response = self.providers.send()
+            if response is OVER_CAP:
+                if self._dispatch_compaction():
+                    continue                              # rebuild from the collapsed DB
+                response = self.providers.send(force=True)  # irreducible → provider decides
             if not response.tool_calls:
                 return response.text or ""
             dispatcher = ToolDispatcher(self)
@@ -578,20 +583,21 @@ class MessageProcessor:
         watermark = compaction["compacted_up_to_id"] if compaction else 0
         return transcript_service.get_recent(self.config.channel, since_id=watermark)
 
-    def get_previous_messages(self) -> str:
+    def get_previous_messages(self, drop_oldest: int = 0) -> str:
         """Render the ## Previous Messages block from _previous_rows().
 
-        Renders every watermark-bounded row, minus the oldest ``_history_drop``
-        rows the fit loop dropped to reserve response headroom (design §3.3).
-        There is NO fixed row cap: history is bounded by context-window size,
-        not a turn count. _previous_rows() returns id-ASC, so dropping the first
-        ``_history_drop`` entries removes the OLDEST messages."""
+        Renders every watermark-bounded row. There is NO fixed row cap: history is
+        bounded by context-window size, not a turn count. ``drop_oldest`` skips the
+        oldest N rows — used ONLY by ChatHistoryCompactor's rare bare-request
+        fallback (canonical design step 4.2) when even the tool-free compaction
+        request overflows; _previous_rows() is id-ASC, so the first ``drop_oldest``
+        entries are the OLDEST messages."""
         if self.config.suppress_history:
             return ""
         from services.tool_call_service import ToolCallService  # noqa: PLC0415
         entries = self._previous_rows()
-        if self._history_drop:
-            entries = entries[self._history_drop:]   # drop oldest (fit-to-window)
+        if drop_oldest:
+            entries = entries[drop_oldest:]
         if not entries:
             return ""
         all_ids = [e["id"] for e in entries if e.get("id")]
@@ -611,18 +617,6 @@ class MessageProcessor:
                 tc_result = tc.get("result") or ""
                 lines.append(_render_tool_call_for_previous(tc_name, tc_params, tc_result))
         return "\n".join(lines)
-
-    def drop_oldest_previous_message(self) -> bool:
-        """Drop the oldest rendered history row; return False when none remain.
-
-        The window-fit loop (Providers._fit_request) calls this to shrink the
-        request until it reserves response headroom. Monotonic and bounded by the
-        watermark-bounded row count, so the fit loop always terminates (design
-        §3.3)."""
-        if self._history_drop < len(self._previous_rows()):
-            self._history_drop += 1
-            return True
-        return False
 
     # ── Trail API (T4: act-trail-as-a-query) ─────────────────────────────────
 
@@ -652,21 +646,27 @@ class MessageProcessor:
             )
 
     def _has_trail(self) -> bool:
-        """True when real (non-compactor) tool activity exists since the last
+        """True when real (non-internal) tool activity exists since the last
         trail boundary.
 
         Slices from the last tool_chain_compactor boundary and returns True only
-        when at least one row in that slice is NOT a framework compactor marker.
-        Used by ToolChainCompactor to silently no-op when there is nothing to
-        compact.
+        when at least one row in that slice is genuine agent activity — i.e. NOT
+        a framework compactor marker and NOT the automatic turn-0 memory-recall
+        seed (canonical design §2: ToolChainCompactor no-ops when there are no
+        tool calls "excluding internal ones (compaction + automatic memory
+        recall)"). Used by ToolChainCompactor to silently no-op when there is
+        nothing to compact.
         """
         if self.uid is None:
             return False
         from services.act_trail import ActTrail  # noqa: PLC0415
         rows = _from_last_compaction(ActTrail().fetch_by_transcript_id(self.uid))
-        return any(r["tool_name"] not in _COMPACTOR_TOOLS for r in rows)
+        return any(
+            r["tool_name"] not in _COMPACTOR_TOOLS and not _is_auto_memory_recall(r)
+            for r in rows
+        )
 
-    def _render_act_trail(self) -> str:
+    def _render_act_trail(self, for_compaction: bool = False) -> str:
         """Assemble the ACT trail string for the current turn.
 
         Fetches all tool_calls rows for self.uid ordered by id and slices from
@@ -675,6 +675,13 @@ class MessageProcessor:
         are filtered: chat_history_compactor rows never reach the model (their
         compacted history arrives via the checkpoint prepend), and an empty
         tool_chain_compactor no-op row is dropped. Returns '' when uid is None.
+
+        ``for_compaction=True`` additionally drops the automatic turn-0
+        memory-recall seed (canonical design §3: ToolChainCompactor compacts the
+        act-trail "excluding internal: compaction + automatic memory recall").
+        The default (False) keeps the seed so the per-turn act-trail the model
+        sees still shows what was auto-recalled — only the compaction INPUT is
+        filtered, matching the spec's narrow exclusion.
         """
         if self.uid is None:
             return ""
@@ -688,11 +695,14 @@ class MessageProcessor:
                 continue
             if name == _TRAIL_BOUNDARY_TOOL and not (r.get("result") or "").strip():
                 continue
+            if for_compaction and _is_auto_memory_recall(r):
+                continue
             out.append(trail.render(r))
         return "\n".join(out)
 
-    def _dispatch_compaction(self) -> None:
-        """Fire both compactors through the normal tool-dispatch chokepoint.
+    def _dispatch_compaction(self) -> bool:
+        """Fire both compactors through the normal tool-dispatch chokepoint and
+        report whether they made progress.
 
         No alternative path: this is the SAME machinery as the turn-0
         memory/thinking seeds. Each compactor goes through ToolDispatcher.dispatch
@@ -709,17 +719,25 @@ class MessageProcessor:
         the chat-history marker lands. Both are INTERNAL (policy gate bypassed)
         and never-discoverable.
 
-        ``_history_drop`` is reset to 0 first so ChatHistoryCompactor reads the
-        FULL watermark-bounded history — the rows the fit loop dropped from the
-        live request must still be summarised into the checkpoint (design §3.3).
+        Returns True when compaction advanced the state — the act-trail was
+        collapsed OR the chat-history watermark moved forward. The ACT loop uses a
+        False return (nothing left to compact) to detect an irreducible request and
+        stop compacting (send as-is, force) instead of looping forever.
         """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+        from services import compaction_persistence  # noqa: PLC0415
 
-        self._history_drop = 0   # summarise the full (untrimmed) history
+        had_trail = self._has_trail()
+        before = compaction_persistence.get_compaction(self.config.channel)
+        before_id = before["compacted_up_to_id"] if before else 0
+
         dispatcher = ToolDispatcher(self)
-        # compaction tool dispatch
         dispatcher.dispatch("tool_chain_compactor", {"act_summary": "Compacting tool history"})
         dispatcher.dispatch("chat_history_compactor", {"act_summary": "Compacting conversation"})
+
+        after = compaction_persistence.get_compaction(self.config.channel)
+        after_id = after["compacted_up_to_id"] if after else 0
+        return had_trail or after_id > before_id
 
     def _record_narration(self, response: "object") -> None:  # type: ignore[override]
         """Mid-loop: persist LLM text between iterations as an ephemeral trail row.

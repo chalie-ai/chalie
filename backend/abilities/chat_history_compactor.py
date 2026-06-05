@@ -77,17 +77,16 @@ class ChatHistoryCompactor(Ability):
         parent = self.MessageProcessor
         channel = parent.config.channel
 
-        prev = parent.get_previous_messages()
-        if not prev.strip():
-            # Nothing to compact — suppress_history channel or no rows past the
-            # watermark. Do NOT write a watermark (there is no backlog to fold).
-            return {"status": "success", "result": ""}
-
         # Carry forward the prior checkpoint so continuity chains across
         # compactions instead of restarting from the recent tail each time.
         prior_row = compaction_persistence.get_compaction(channel)
         prior = (prior_row.get("compacted_text") or "").strip() if prior_row else ""
-        combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
+
+        combined = self._fit_compaction_input(parent, prior)
+        if combined is None:
+            # Nothing to compact — suppress_history channel or no rows past the
+            # watermark. Do NOT write a watermark (there is no backlog to fold).
+            return {"status": "success", "result": ""}
 
         summary = (MessageProcessor.process(combined, ChatHistoryCompactionConfig()) or "").strip()
         if not summary:
@@ -101,3 +100,38 @@ class ChatHistoryCompactor(Ability):
         # on a non-empty backlog → no silent no-write, no infinite loop).
         transcript_service.write_input_row(channel, "compaction", summary)
         return {"status": "success", "result": "Chat history compacted."}
+
+    @staticmethod
+    def _fit_compaction_input(parent, prior: str):
+        """Build the bare compaction request body and shrink it to fit the cap.
+
+        Canonical design step 4.1/4.2: the compaction request includes ONLY the
+        system prompt, the prior checkpoint, and ``get_previous_messages`` — no
+        tools, no act-trail. That bare request almost always fits, so the drop
+        loop is the EXTREMELY RARE fallback: while the {system + combined} body
+        exceeds the context cap, drop the OLDEST message from get_previous_messages
+        one at a time (typically 1–2) until it fits. A floor of one surviving
+        message prevents dropping everything. Returns the combined text to
+        summarise, or None when there is nothing left to compact.
+        """
+        from services.llm_service import estimate_tokens  # noqa: PLC0415
+        from services.system_message_prompt import ChatHistoryCompactionSystemPrompt  # noqa: PLC0415
+
+        system = ChatHistoryCompactionSystemPrompt().get_prompt()
+        provider = parent.providers.selected_provider()
+        window = parent.providers.get_context_limit()
+        cap = window - max(int(0.10 * window), 8000) if window else 0
+        total = len(parent._previous_rows())
+
+        drop = 0
+        while True:
+            prev = parent.get_previous_messages(drop_oldest=drop)
+            if not prev.strip():
+                return None
+            combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
+            if cap <= 0 or drop >= total - 1:
+                return combined   # cannot shrink further (no window, or one row left)
+            body = provider.build_request_body(system, [{"role": "user", "content": combined}], [])
+            if estimate_tokens(body) <= cap:
+                return combined
+            drop += 1

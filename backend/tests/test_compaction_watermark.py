@@ -75,8 +75,8 @@ def _seed_selected_ollama(db, max_tokens):
     """Seed an offline Ollama provider and mark it selected, returning its id.
 
     Ollama's build_request_body / get_context_limit (via declared max_tokens)
-    run with zero network, so _fit_request exercises the real provider stack
-    without a live model. send_messages is never reached by _fit_request."""
+    run with zero network, so the cap check exercises the real provider stack
+    without a live model. send_messages is never reached by the over-cap path."""
     cur = db.execute(
         "INSERT INTO providers (name, platform, model, host, max_tokens) "
         "VALUES ('fit-test', 'ollama', 'fit-model', 'http://localhost:11434', ?)",
@@ -93,25 +93,25 @@ def _seed_selected_ollama(db, max_tokens):
 
 
 def _build_send_inputs(mp):
-    """Scaffold the exact (system, tools, provider) Providers.send() feeds to
-    _fit_request — real stack, no mocks."""
+    """Scaffold the exact (system, messages, tools, provider) Providers.send()
+    measures — real stack, no mocks. ``messages`` mirrors send()'s
+    checkpoint-wrapped user payload, so the measurement covers the FULL request."""
     from abilities._registry import AbilityRegistry
+    from services.message_processor import _wrap_with_checkpoint
     provider = mp.providers.selected_provider()
     system = mp.config.get_system_prompt(mp)
     tools = AbilityRegistry.build_tools(mp)
-    return system, tools, provider
+    user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
+    return system, [{"role": "user", "content": user}], tools, provider
 
 
-def test_fit_request_trims_oldest_until_request_reserves_headroom(db):
-    """Trim-then-compact (design §3.3): when the full request overflows the
-    window, _fit_request drops the OLDEST history rows one at a time until the
-    request reserves max(10% window, 8k) response headroom, flags
-    _compaction_pending for the loop to compact, and TERMINATES (the hang Dylan's
-    pivot fixes)."""
+def test_over_cap_true_when_full_request_reaches_threshold(db):
+    """Compact-first (canonical step 3): when the FULL request reaches
+    RS >= window - max(10% window, 8k), _over_cap is True so the ACT loop fires
+    compaction BEFORE sending — no trimmed/partial-view turn, no API call."""
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
-    from services.llm_service import estimate_tokens
 
     ch = "user"
     _clear(db, ch)
@@ -128,28 +128,17 @@ def test_fit_request_trims_oldest_until_request_reserves_headroom(db):
     MessageProcessor.__init__(mp, "what should I do next?", None)
     mp.config = UserConfig()
     try:
-        system, tools, provider = _build_send_inputs(mp)
-        window = mp.providers.get_context_limit()
-        assert window == 20000
-        cap = window - max(int(0.10 * window), 8000)   # 12000
-
-        user = mp.providers._fit_request(system, tools, provider)
-
-        # Had to trim → loop must compact the dropped rows into the checkpoint.
-        assert mp._compaction_pending is True
-        # Partial trim that terminated (not the whole history, not zero).
-        assert 0 < mp._history_drop < n_rows
-        # The fitted request honours the response-headroom guarantee.
-        body = provider.build_request_body(system, [{"role": "user", "content": user}], tools)
-        assert estimate_tokens(body) <= cap
+        system, messages, tools, provider = _build_send_inputs(mp)
+        assert mp.providers.get_context_limit() == 20000
+        assert mp.providers._over_cap(system, messages, tools, provider) is True
     finally:
         ProviderCacheService.invalidate()
         _clear(db, ch)
 
 
-def test_fit_request_no_trim_when_request_already_fits(db):
-    """When the request already fits, _fit_request drops nothing and leaves
-    _compaction_pending False — no needless compaction."""
+def test_over_cap_false_when_request_fits(db):
+    """When the request fits under the cap, _over_cap is False so send() proceeds
+    to the API — no compaction fires."""
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
@@ -165,11 +154,130 @@ def test_fit_request_no_trim_when_request_already_fits(db):
     MessageProcessor.__init__(mp, "hi", None)
     mp.config = UserConfig()
     try:
-        system, tools, provider = _build_send_inputs(mp)
-        mp.providers._fit_request(system, tools, provider)
+        system, messages, tools, provider = _build_send_inputs(mp)
+        assert mp.providers._over_cap(system, messages, tools, provider) is False
+    finally:
+        ProviderCacheService.invalidate()
+        _clear(db, ch)
 
-        assert mp._compaction_pending is False
-        assert mp._history_drop == 0
+
+def test_send_returns_over_cap_sentinel_without_calling_provider(db):
+    """send() short-circuits to the OVER_CAP sentinel when the request exceeds the
+    cap — the offline provider is never reached (zero network), proving compaction
+    fires BEFORE any API call (compact-first)."""
+    from services.message_processor import MessageProcessor
+    from services.providers import OVER_CAP
+    from configs.channels import UserConfig
+    from services.provider_cache_service import ProviderCacheService
+
+    ch = "user"
+    _clear(db, ch)
+    big = " ".join(f"w{j}" for j in range(400))
+    for i in range(40):
+        transcript_service.write_input_row(ch, "user", f"row{i:03d} {big}")
+    _seed_selected_ollama(db, 20000)
+    ProviderCacheService.invalidate()
+
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, "what should I do next?", None)
+    mp.config = UserConfig()
+    mp.thinking_level = "low"
+    try:
+        # No NWS / live model — if send() tried to reach Ollama this would raise.
+        assert mp.providers.send() is OVER_CAP
+    finally:
+        ProviderCacheService.invalidate()
+        _clear(db, ch)
+
+
+def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db):
+    """Canonical step 4.2 (rare fallback): ChatHistoryCompactor shrinks its
+    bare {system + prior + get_previous_messages} request by dropping the OLDEST
+    message one at a time until it fits the cap. Real provider stack, no model."""
+    from abilities.chat_history_compactor import ChatHistoryCompactor
+    from services.message_processor import MessageProcessor
+    from services.system_message_prompt import ChatHistoryCompactionSystemPrompt
+    from services.llm_service import estimate_tokens
+    from configs.channels import UserConfig
+    from services.provider_cache_service import ProviderCacheService
+
+    ch = "user"
+    _clear(db, ch)
+    n_rows = 40
+    big = " ".join(f"w{j}" for j in range(400))
+    for i in range(n_rows):
+        transcript_service.write_input_row(ch, "user", f"row{i:03d} {big}")
+    _seed_selected_ollama(db, 20000)
+    ProviderCacheService.invalidate()
+
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, "compact", None)
+    mp.config = UserConfig()
+    try:
+        combined = ChatHistoryCompactor._fit_compaction_input(mp, "")
+        assert combined is not None
+        # Dropped at least one oldest row → the very first row is gone.
+        assert "row000" not in combined
+        # The newest row always survives the floor.
+        assert f"row{n_rows - 1:03d}" in combined
+        # The bare (tool-free) compaction request now fits the cap.
+        system = ChatHistoryCompactionSystemPrompt().get_prompt()
+        provider = mp.providers.selected_provider()
+        body = provider.build_request_body(system, [{"role": "user", "content": combined}], [])
+        cap = 20000 - max(int(0.10 * 20000), 8000)   # 12000
+        assert estimate_tokens(body) <= cap
+    finally:
+        ProviderCacheService.invalidate()
+        _clear(db, ch)
+
+
+def test_fit_compaction_input_no_drop_when_bare_request_fits(db):
+    """When the bare compaction request already fits, _fit_compaction_input keeps
+    every message (no drop) and folds in the prior checkpoint."""
+    from abilities.chat_history_compactor import ChatHistoryCompactor
+    from services.message_processor import MessageProcessor
+    from configs.channels import UserConfig
+    from services.provider_cache_service import ProviderCacheService
+
+    ch = "user"
+    _clear(db, ch)
+    for i in range(3):
+        transcript_service.write_input_row(ch, "user", f"short {i}")
+    _seed_selected_ollama(db, 20000)
+    ProviderCacheService.invalidate()
+
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, "compact", None)
+    mp.config = UserConfig()
+    try:
+        combined = ChatHistoryCompactor._fit_compaction_input(mp, "PRIOR-CHECKPOINT")
+        assert combined is not None
+        assert "## Previous Summary" in combined          # prior carried forward
+        assert "PRIOR-CHECKPOINT" in combined
+        for i in range(3):
+            assert f"short {i}" in combined                # nothing dropped
+    finally:
+        ProviderCacheService.invalidate()
+        _clear(db, ch)
+
+
+def test_fit_compaction_input_returns_none_when_no_history(db):
+    """No rows past the watermark → nothing to compact → None (no watermark write)."""
+    from abilities.chat_history_compactor import ChatHistoryCompactor
+    from services.message_processor import MessageProcessor
+    from configs.channels import UserConfig
+    from services.provider_cache_service import ProviderCacheService
+
+    ch = "user"
+    _clear(db, ch)
+    _seed_selected_ollama(db, 20000)
+    ProviderCacheService.invalidate()
+
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, "compact", None)
+    mp.config = UserConfig()
+    try:
+        assert ChatHistoryCompactor._fit_compaction_input(mp, "") is None
     finally:
         ProviderCacheService.invalidate()
         _clear(db, ch)

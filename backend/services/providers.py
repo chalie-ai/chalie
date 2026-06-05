@@ -7,10 +7,12 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-Providers — per-mp gateway wrapping provider resolution, window-fit, and send.
+Providers — per-mp gateway wrapping provider resolution, fit check, and send.
 
-Resolves the active DB provider, fits the scaffolded request to the context
-window (trim-then-compact, design §3.3), sends, and returns a raw LLMResponse.
+Resolves the active DB provider, measures the scaffolded request against the
+context window (compact-first, canonical design), sends, and returns a raw
+LLMResponse — or the ``OVER_CAP`` sentinel when the request must be compacted
+BEFORE it can be sent.
 """
 
 import json
@@ -23,6 +25,13 @@ logger = logging.getLogger(__name__)
 # never builds a request payload exceeding this size, regardless of what the
 # upstream API reports (e.g. Gemini 1M, future models with larger windows).
 MAX_CONTEXT_WINDOW = 200_000
+
+#: Sentinel returned by :meth:`Providers.send` when the FULL request reaches the
+#: compaction threshold (``RS >= window - max(10% window, 8k)``). The ACT loop
+#: reacts by firing both compactors FIRST (compact-first, canonical design) and
+#: rebuilding a collapsed request from the DB — no API call is made for an
+#: over-cap request, and there is never a partial-view ("trimmed") turn.
+OVER_CAP = object()
 
 
 def resolve_thinking_mode(config_thinking_mode, override, level):
@@ -46,73 +55,58 @@ class Providers:
     def __init__(self, mp):
         self.mp = mp
 
-    def send(self):
-        """Scaffold the request from self.mp, fit it to the context window, send, log.
+    def send(self, force: bool = False):
+        """Scaffold the request from self.mp, measure it, then send or signal compaction.
 
-        Fitting is window-only (design §3.3 — trim-then-compact): the request is
-        built with the full watermark-bounded history, and when it would not
-        leave ``max(10% window, 8k)`` tokens free for the response the oldest
-        history rows are dropped one at a time until it fits. When any row had to
-        be dropped, ``mp._compaction_pending`` is set so the ACT loop compacts the
-        (full) history into the next turn's checkpoint. Returns LLMResponse."""
+        Compact-first (canonical design): the FULL request — system + tools +
+        watermark-bounded history + current input + act-trail — is measured. When
+        ``force`` is False and the request reaches the cap (``RS >= window -
+        max(10% window, 8k)``), NO API call is made: ``OVER_CAP`` is returned so the
+        ACT loop fires both compactors, advances the watermark, and rebuilds a
+        collapsed request from the DB on the next iteration (no partial-view turn).
+        When the request fits — or ``force`` is True for an irreducible request the
+        loop could not shrink — it is sent and logged. Returns LLMResponse or the
+        ``OVER_CAP`` sentinel."""
         mp = self.mp
         system = mp.config.get_system_prompt(mp)
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         tools = AbilityRegistry.build_tools(mp)
-        job = mp.config.job
+        provider = self._resolve(mp.config.job, mp)
+
+        from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
+        user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
+        messages = [{"role": "user", "content": user}]
+
+        if not force and self._over_cap(system, messages, tools, provider):
+            return OVER_CAP
+
         thinking_mode = resolve_thinking_mode(
             getattr(mp.config, "thinking_mode", None),
             getattr(mp, "thinking_override", None),
             mp.thinking_level,
         )
-        provider = self._resolve(job, mp)
-
-        user = self._fit_request(system, tools, provider)
-
-        messages = [{"role": "user", "content": user}]
+        job = mp.config.job
         t0 = time.monotonic()
         response = provider.send_messages(system, messages, True, tools=tools, thinking_mode=thinking_mode)
         wall_ms = int((time.monotonic() - t0) * 1000)
         self._log_after_call(system, messages, tools, job, response, wall_ms, mp)
         return response
 
-    def _fit_request(self, system, tools, provider):
-        """Build the user payload, trimming oldest history until the request
-        reserves response headroom (design §3.3 — trim-then-compact).
+    def _over_cap(self, system, messages, tools, provider) -> bool:
+        """True when the FULL request reaches the compaction threshold.
 
-        The request must leave ``max(10% window, 8k)`` tokens free for the
-        response (Dylan: "10% or 8k, whichever is highest"). While it does not,
-        the oldest rendered history row is dropped (``drop_oldest_previous_message``)
-        and the payload rebuilt. The drop loop is monotonic and bounded by the row
-        count, so it ALWAYS terminates — an irreducible request (system + input +
-        checkpoint already over budget, e.g. a deliberately tiny test window) is
-        sent as-is and fails loudly at the provider rather than looping forever.
-
-        Sets ``mp._compaction_pending`` True whenever any history row had to be
-        dropped, so the ACT loop compacts the full history into the next turn's
-        checkpoint and the dropped rows are not lost."""
-        from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
+        Canonical design step 3: ``RS >= window - max(10% window, 8k)`` (reserve
+        ``max(10% window, 8k)`` tokens for the response — Dylan: "10% or 8k,
+        whichever is highest"). RS is measured on the serialized request body, so
+        tools + watermark-bounded history + current input + act-trail all count.
+        Returns False when no window is known (cannot decide → send as-is)."""
         from services.llm_service import estimate_tokens  # noqa: PLC0415
-        mp = self.mp
-
-        def build():
-            u = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
-            body = provider.build_request_body(system, [{"role": "user", "content": u}], tools)
-            return u, estimate_tokens(body)
-
-        mp._history_drop = 0
-        mp._compaction_pending = False
-        user, req = build()
-        window = self.get_context_limit()   # declared max_tokens, capped 200k (Step 3b)
+        window = self.get_context_limit()   # declared max_tokens, capped 200k
         if not window:
-            return user
-        cap = window - max(int(0.10 * window), 8000)   # reserve response headroom
-        if req <= cap:
-            return user
-        mp._compaction_pending = True
-        while req > cap and mp.drop_oldest_previous_message():
-            user, req = build()
-        return user
+            return False
+        body = provider.build_request_body(system, messages, tools)
+        cap = window - max(int(0.10 * window), 8000)
+        return estimate_tokens(body) >= cap
 
     def selected_provider(self):
         """The resolved provider instance for this mp's job (design §3.1, §6.3)."""
