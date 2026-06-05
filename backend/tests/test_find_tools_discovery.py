@@ -28,6 +28,7 @@ import pytest
 from abilities._search import RRF_K
 from abilities.find_tools import FindToolsAbility
 from services.message_processor import MessageProcessor
+from tests.helpers import make_stub_config
 
 pytestmark = pytest.mark.unit
 
@@ -39,10 +40,12 @@ pytestmark = pytest.mark.unit
 
 
 def _make_stub_processor(discoverable: list[str]) -> MessageProcessor:
-    """Flat MessageProcessor exposing DISCOVERABLE + an empty ACTIVE_TOOLS that
-    find_tools appends discovered names onto via self.MessageProcessor."""
+    """Flat MessageProcessor carrying a config whose ``discoverable`` is the
+    find_tools allow-list gate, plus an empty active_tools that find_tools
+    appends discovered names onto via self.MessageProcessor (TKT-835:
+    find_tools reads ``mp.config.discoverable`` / ``mp.config.blocked``)."""
     proc = object.__new__(MessageProcessor)
-    proc.DISCOVERABLE = discoverable
+    proc.config = make_stub_config(discoverable=discoverable)
     proc._active_tools = []
     return proc
 

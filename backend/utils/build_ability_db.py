@@ -145,9 +145,9 @@ def _build_sha_map() -> dict[str, str]:
 
 def _build(db_path: Path, sha_path: Path) -> None:
     # Index every ability — the search DB is the single source of truth for
-    # find_tools. Per-processor scoping (which abilities a given processor
+    # find_tools. Per-channel scoping (which abilities a given processor
     # may discover) is gated at find_tools query time via the calling
-    # processor's DISCOVERABLE list.
+    # processor's ``config.discoverable`` / ``config.blocked``.
     abilities = [a for a in AbilityRegistry.all() if a.NAME not in _NON_INDEXED_ABILITIES]
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 

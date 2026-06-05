@@ -45,6 +45,43 @@ class StubProcessorConfig(ProcessorConfig):
         return self._b_sp(mp)
 
 
+def make_stub_config(
+    *,
+    discoverable=None,
+    blocked=frozenset(),
+    always_available=None,
+    channel="user",
+    role="user",
+    policy_channel=None,
+):
+    """Build a concrete ProcessorConfig carrying an explicit tool-visibility
+    surface for find_tools mechanics tests.
+
+    find_tools sources its allow-list / block-list from the invoking
+    processor's ``config.discoverable`` / ``config.blocked`` (TKT-835 — the
+    single source of truth is the per-channel ProcessorConfig, not a static
+    class list).  Tests that exercise the discovery mechanics (RRF floor, MCP
+    merge, select-vs-query) attach one of these to a stub MessageProcessor so
+    they control exactly which names are discoverable.  Channel-isolation
+    behaviour is covered separately against the REAL channel configs in
+    test_find_tools_channel_isolation.py.
+    """
+    return StubProcessorConfig(
+        channel=channel,
+        role=role,
+        policy_channel=policy_channel or ProcessorConfig.POLICY_CHANNEL.CHAT,
+        always_available=list(always_available or []),
+        discoverable=list(discoverable or []),
+        blocked=frozenset(blocked),
+        max_iterations=None,
+        skip_transcript=False,
+        skip_input_row=False,
+        suppress_history=False,
+        broadcast_to=None,
+        memory_seed=False,
+    )
+
+
 # ─── scheduled_items ─────────────────────────────────────────────────
 # Column order matches: SELECT id, item_type, message, due_at, recurrence,
 #   window_start, window_end, topic, created_by_session, group_id, is_prompt

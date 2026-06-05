@@ -77,8 +77,6 @@ def test_build_tools_exposes_async_on_user_channel():
     class _Proc:
         config = UserConfig({})
         active_tools = ["weather"]
-        DISCOVERABLE = []
-        _BLOCKED = set()
 
     tools = AbilityRegistry.build_tools(_Proc())
     weather_tool = next(t for t in tools if t["name"] == "weather")

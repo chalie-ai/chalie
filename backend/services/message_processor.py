@@ -144,47 +144,18 @@ class MessageProcessor:
     ``tool_calls`` rows (§4c) rather than held in memory.
     """
 
-    # ── Tool-scope constants ──────────────────────────────────────────────────
+    # ── Tool visibility — per channel, no class-level default (TKT-835) ────────
     #
-    # find_tools reads ``DISCOVERABLE`` (via ``self.MessageProcessor``) to gate
-    # which abilities may be surfaced at runtime.  It is a class-level default
-    # shared by every flat-path turn.
-
-    # ``find_tools`` is gated to ``WHERE name IN DISCOVERABLE`` so a
-    # processor can never discover anything outside this list.
-    DISCOVERABLE: list[str] = [
-        "bash",
-        "browser",
-        "calendar",
-        "chalie_docs",
-        "code_eval",
-        "contacts",
-        "document",
-        "email",
-        "file_permissions",
-        "file_write",
-        "home",
-        "list",
-        # mcp_manager is DISCOVERABLE (find_tools can surface it) but SYSTEM-for-policy
-        # (always-allowed, never shown in Policy Manager).  See McpManagerAbility.
-        "mcp_manager",
-        "news",
-        "place",
-        "programming_docs_search",
-        "read",
-        "review_tool_calls",
-        "review_transcript",
-        "schedule",
-        "search",
-        "search_files",
-        "skill_builder",
-        "timer",
-        "ubiquiti",
-        "weather",
-        "web_browse",
-        "web_download",
-        "web_search",
-    ]
+    # Tool discovery/blocking is NOT a MessageProcessor class constant.  It is
+    # carried per turn by the channel's ``ProcessorConfig``:
+    #   * ``mp.config.discoverable`` — names find_tools may surface for this turn
+    #   * ``mp.config.blocked``      — names never offered, even via find_tools
+    # ``find_tools`` reads both off ``mp.config`` (see FindToolsAbility), so the
+    # single source of truth for the default discoverable surface is
+    # ``configs.channels._common.DEFAULT_DISCOVERABLE``.  The legacy static
+    # ``DISCOVERABLE`` class list and the never-set ``_BLOCKED`` attribute were
+    # removed here: they made the per-config ``blocked`` set dead code and leaked
+    # delegate-exclusive raw tools (browser/search) onto every channel.
     # ─────────────────────────────────────────────────────────────────────────
 
     def __init__(self, raw_input: str, metadata: dict | None = None):

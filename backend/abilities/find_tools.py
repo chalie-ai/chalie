@@ -67,6 +67,26 @@ class FindToolsAbility(SearchableAbility):
     # Maximum number of results returned by the query path after floor filtering.
     MAX_QUERY_RESULTS: ClassVar[int] = 5
 
+    @staticmethod
+    def _config_scope(proc) -> "tuple[list[str], set[str]]":
+        """Return ``(discoverable, blocked)`` for the invoking processor's channel.
+
+        Both are sourced from the per-turn ``ProcessorConfig`` (``config.discoverable``
+        / ``config.blocked``) — the single source of truth introduced by the
+        typed-subclass refactor (TKT-803/804). This is what keeps raw web tools
+        (``browser`` / ``search``) exclusive to the delegate channels and pattern
+        writes exclusive to the pattern channels: every channel declares its own
+        allow-list and block-list. Returns ``([], set())`` when no config is bound
+        (the action-button path / pre-setup), so discovery degrades to empty
+        rather than leaking a global list.
+        """
+        config = getattr(proc, "config", None) if proc is not None else None
+        if config is None:
+            return [], set()
+        discoverable = list(getattr(config, "discoverable", None) or [])
+        blocked = set(getattr(config, "blocked", None) or set())
+        return discoverable, blocked
+
     def _build_tools_index(self, mp=None) -> str:
         """Return a formatted tools index string for discoverable tools.
 
@@ -75,9 +95,7 @@ class FindToolsAbility(SearchableAbility):
         """
         from abilities._registry import AbilityRegistry
 
-        proc = mp
-        discoverable = list(getattr(proc, "DISCOVERABLE", []) or []) if proc else []
-        blocked = set(getattr(proc, "_BLOCKED", set()) or set()) if proc else set()
+        discoverable, blocked = self._config_scope(mp)
 
         index = {}
         for name in discoverable:
@@ -155,8 +173,12 @@ class FindToolsAbility(SearchableAbility):
             return _skill_tag("find_tools", error="params-required")
 
         proc = self.MessageProcessor
-        allow = list(getattr(proc, "DISCOVERABLE", []) or []) if proc is not None else []
-        mcp_names = self._get_online_mcp_names()
+        discoverable, blocked = self._config_scope(proc)
+        # Drop blocked names from BOTH the ability allow-list and the MCP names so
+        # the block holds on every path — select, query, and fallback. (The
+        # descriptive index in _build_tools_index applies the same filter.)
+        allow = [name for name in discoverable if name not in blocked]
+        mcp_names = [name for name in self._get_online_mcp_names() if name not in blocked]
         effective_allow = set(allow) | set(mcp_names)
 
         if not effective_allow:

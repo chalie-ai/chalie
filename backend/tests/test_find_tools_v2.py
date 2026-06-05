@@ -30,6 +30,7 @@ import pytest
 
 from abilities.find_tools import FindToolsAbility
 from services.message_processor import MessageProcessor
+from tests.helpers import make_stub_config
 
 pytestmark = pytest.mark.unit
 
@@ -39,11 +40,12 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 def _stub_proc(discoverable: list[str]) -> MessageProcessor:
-    """Flat MessageProcessor (no subclass, per P1 rule) with the given
-    DISCOVERABLE list.  find_tools reads DISCOVERABLE as the allow-list gate
-    and appends matched names to _active_tools via _append_active()."""
+    """Flat MessageProcessor (no subclass, per P1 rule) carrying a config whose
+    ``discoverable`` is the allow-list gate.  find_tools reads
+    ``mp.config.discoverable`` / ``mp.config.blocked`` (TKT-835) and appends
+    matched names to _active_tools via _append_active()."""
     proc = object.__new__(MessageProcessor)
-    proc.DISCOVERABLE = discoverable
+    proc.config = make_stub_config(discoverable=discoverable)
     proc._active_tools = []
     return proc
 
