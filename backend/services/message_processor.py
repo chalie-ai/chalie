@@ -645,10 +645,15 @@ class MessageProcessor:
         from services import transcript_service  # noqa: PLC0415
 
         # 1. History → transcript (the writer's row id is the watermark).
+        # CompactionConfig emits <analysis>…</analysis><summary>…</summary>; the
+        # <analysis> is a discard-after-use reconciliation scaffold. Only the
+        # dense <summary> body is the durable artifact — persist that, never the
+        # raw blob (would leak the scratchpad + literal XML tags into the prompt).
         prev = self.get_previous_messages()
         if prev.strip():
-            summary = MessageProcessor.process(prev, CompactionConfig())
-            if summary and summary.strip():
+            raw = MessageProcessor.process(prev, CompactionConfig())
+            summary = _extract_compaction_summary(raw)
+            if summary:
                 transcript_service.write_input_row(self.config.channel, "compaction", summary)
 
         # 2. Trail → tool_calls (only when a non-compaction trail row exists).
