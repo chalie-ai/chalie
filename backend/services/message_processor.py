@@ -25,6 +25,7 @@ import re
 import threading
 from typing import TYPE_CHECKING
 
+from services.compaction_constants import COMPACTION_ROW_WINDOW
 from services.metrics_accumulator import MetricsAccumulator
 from services.time_formatter_service import TimeFormatterService
 
@@ -439,7 +440,7 @@ class MessageProcessor:
         while True:
             if self._should_stop():
                 return ""
-            if len(self._previous_rows()) > 50:   # proactive turn-count compaction
+            if len(self._previous_rows()) > COMPACTION_ROW_WINDOW:   # proactive turn-count compaction
                 self._compact()
             try:
                 response = self.providers.send()
@@ -553,7 +554,10 @@ class MessageProcessor:
         if self.config.suppress_history:
             return ""
         from services.tool_call_service import ToolCallService  # noqa: PLC0415
-        entries = self._previous_rows()
+        # Render only the most-recent COMPACTION_ROW_WINDOW rows (oldest fall
+        # off). _previous_rows() returns id-ASC, so [-N:] is the newest N in
+        # chronological order.
+        entries = self._previous_rows()[-COMPACTION_ROW_WINDOW:]
         if not entries:
             return ""
         all_ids = [e["id"] for e in entries if e.get("id")]

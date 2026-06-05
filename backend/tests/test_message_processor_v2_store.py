@@ -301,6 +301,64 @@ class TestGetPreviousMessagesEmptyChannelWithOtherData:
         assert result == ''
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# get_previous_messages() — render bound (most-recent 50 rows)
+#
+# SPEC CHANGE (2026-06-05, Dylan): the watermark relocation (transcript
+# role='compaction') shipped without a migration, so on existing DBs every
+# channel's watermark resets to 0 and _previous_rows() returns the ENTIRE
+# channel history — which on the live instance rendered ~1.76M tokens into one
+# user message and overflowed the compaction window (Ollama 65536). Decision:
+# bound get_previous_messages() to the most-recent 50 transcript rows. On
+# cut-over this restarts compaction from the last 50 messages; memory self-heals
+# the older continuity gap as the user keeps talking. The proactive trigger in
+# _loop still reads the UNCAPPED _previous_rows() count, so it fires on the true
+# backlog (51, 52, …) — only the RENDERED / compacted slice is bounded.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestGetPreviousMessagesRenderBound:
+    """get_previous_messages() renders at most COMPACTION_ROW_WINDOW rows."""
+
+    def _seed_rows(self, db, n, channel=_GPM_CHANNEL):
+        for i in range(n):
+            db.execute(
+                "INSERT INTO transcript (channel, role, content, created_at) "
+                "VALUES (?, 'user', ?, '2026-04-10 10:00:00')",
+                (channel, f"line-{i:04d}-end"),
+            )
+        db.commit()
+
+    def test_renders_only_most_recent_window_rows(self, db):
+        from services.compaction_constants import COMPACTION_ROW_WINDOW
+
+        window = COMPACTION_ROW_WINDOW
+        overflow = 10
+        self._seed_rows(db, window + overflow)
+        p = _GPMFakeProcessor.make()
+        result = p.get_previous_messages()
+
+        # Exactly `window` rendered lines (no durable tool_calls → one per row).
+        assert len(result.splitlines()) == window
+        # The oldest `overflow` rows are dropped …
+        for i in range(overflow):
+            assert f"line-{i:04d}-end" not in result
+        # … and the most-recent `window` rows (boundary + newest) remain.
+        assert f"line-{overflow:04d}-end" in result
+        assert f"line-{window + overflow - 1:04d}-end" in result
+
+    def test_under_window_all_render(self, db):
+        from services.compaction_constants import COMPACTION_ROW_WINDOW
+
+        n = max(1, COMPACTION_ROW_WINDOW - 1)
+        self._seed_rows(db, n)
+        p = _GPMFakeProcessor.make()
+        result = p.get_previous_messages()
+        assert len(result.splitlines()) == n
+        assert f"line-{0:04d}-end" in result
+        assert f"line-{n - 1:04d}-end" in result
+
+
 # =============================================================================
 # _wrap_with_checkpoint — real DB tests
 #
