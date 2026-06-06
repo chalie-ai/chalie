@@ -34,7 +34,9 @@ def extract_text(file_path: str, mime_type: str = None) -> str:
     Dispatches to a format-specific extractor based on MIME type.
     If mime_type is not provided, it is inferred from the file extension.
 
-    Returns empty string on failure (never raises).
+    Most formats return an empty string on failure. The exception is image
+    extraction, which propagates provider errors when a vision provider is
+    configured but failing (TKT-838) — fail loud, never swallowed.
     """
     if not mime_type:
         mime_type = detect_mime_type(file_path)
