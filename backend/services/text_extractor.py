@@ -249,26 +249,18 @@ def _extract_plain(path: str) -> str:
 
 
 def _extract_image(path: str) -> str:
-    """Extract text from an image file via RapidOCR.
+    """Image 'text' = a rich vision description (OCR fallback when no vision
+    provider is configured). Routed through the shared describe_image() core so an
+    uploaded image is embedded + FTS5-indexed by the normal document pipeline and
+    becomes searchable by its visual content. A configured-but-failing vision
+    provider raises (never swallowed) — the upload pipeline decides how to surface
+    that (TKT-838). Only the description is returned; the user-facing no-vision note
+    is intentionally NOT indexed (it is index noise)."""
+    import mimetypes  # noqa: PLC0415
+    from abilities.vision import RICH_INDEX_PROMPT, describe_image  # noqa: PLC0415
+    from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
-    Delegates to services.image_context_service.analyze, which applies safety
-    preprocessing (EXIF strip + dimension normalization) before OCR. Returns
-    empty string on any failure so the upload pipeline marks the doc 'failed'
-    cleanly rather than poisoning clean_text with garbage.
-    """
-    try:
-        with open(path, 'rb') as fh:
-            image_bytes = fh.read()
-    except Exception:
-        logger.exception('[TEXT EXTRACTOR] Image read failed')
-        return ''
-
-    from services import image_context_service
-    result = image_context_service.analyze(image_bytes)
-    if result.get('error'):
-        logger.warning(f"[TEXT EXTRACTOR] Image analysis: {result['error']}")
-    text = result.get('ocr_text') or ''
-    if result.get('vision_used') is False:
-        note = 'note: only text can be extracted. vision model not configured'
-        text = f'{text}\n{note}' if text else note
-    return text
+    mime_type = mimetypes.guess_type(path)[0] or 'image/png'
+    out = describe_image(path, mime_type, RICH_INDEX_PROMPT,
+                         policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT)
+    return out['description'] or ''
