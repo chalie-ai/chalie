@@ -73,9 +73,7 @@ class Providers:
         tools = AbilityRegistry.build_tools(mp)
         provider = self._resolve()
 
-        from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
-        user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
-        messages = [{"role": "user", "content": user}]
+        messages = self._build_user_messages()
 
         if not force and self._over_cap(system, messages, tools, provider):
             return OVER_CAP
@@ -90,6 +88,19 @@ class Providers:
         wall_ms = int((time.monotonic() - t0) * 1000)
         self._log_after_call(system, messages, tools, response, wall_ms)
         return response
+
+    def _build_user_messages(self) -> list[dict]:
+        """Single-element user-message list for this mp's turn, attaching the
+        config's image when get_image() returns one (framework gap #1). Unit-testable
+        without an API call."""
+        from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
+        mp = self.mp
+        user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
+        message = {"role": "user", "content": user}
+        img = mp.config.get_image(mp)
+        if img is not None:
+            message["image"] = img
+        return [message]
 
     def _over_cap(self, system, messages, tools, provider) -> bool:
         """True when the FULL request reaches the compaction threshold.
@@ -227,6 +238,21 @@ class Providers:
         """
         from services.provider_cache_service import ProviderCacheService
         from services.llm_service import create_llm_service
+
+        if getattr(self.mp.config, "uses_vision_provider", False):
+            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            vp = ProviderDbService(get_shared_db_service()).get_vision_provider()
+            if not vp:
+                # describe_image() only spawns this MP when a provider exists, so
+                # unreachable on the live path. Fail loud — never silently use the
+                # global provider.
+                raise RuntimeError("uses_vision_provider set but no vision provider configured")
+            config = dict(vp)
+            config['_job_name'] = self.mp.config.job
+            config['_usage_class'] = getattr(self.mp.config, 'usage_class', None) or 'chat'
+            return create_llm_service(config)
+
         config = ProviderCacheService.get_selected_provider()
         if not config:
             providers = ProviderCacheService.get_providers()

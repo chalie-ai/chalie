@@ -66,6 +66,10 @@ class ProcessorConfig(ABC):
     honour a deferred result, so this is False everywhere except UserConfig
     (§4.0 / §4.8d).  It gates schema *exposure* only — never routing."""
 
+    uses_vision_provider: ClassVar[bool] = False
+    """True -> Providers._resolve reads the brain's Vision Provider from the DB
+    instead of the global selected provider. Only VisionConfig sets it."""
+
     # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
     class POLICY_CHANNEL(str, Enum):
         CHAT           = "chat"
@@ -157,6 +161,15 @@ class ProcessorConfig(ABC):
 
         Every concrete config MUST implement this (return ``""`` when the
         channel has no user definition)."""
+
+    # ── Per-turn image attachment (concrete hook — default: no image) ──────────
+
+    def get_image(self, mp: "MessageProcessor") -> "dict | None":
+        """The image to attach to this turn's single user message, or None.
+        Default: no image. VisionConfig overrides this to return
+        {"data": <base64>, "mime_type": <str>} — the shape every converter
+        consumes."""
+        return None
 
     # ── Derived properties ────────────────────────────────────────────────────
 

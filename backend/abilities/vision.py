@@ -1,0 +1,195 @@
+# Copyright 2026 Chalie AI
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+
+"""VisionAbility — read/see an image via the brain's Vision Provider (TKT-838).
+
+describe_image() is the shared describe core: it forks ONCE on whether a vision
+provider is configured — provider -> a single-shot MessageProcessor on the vision
+provider (image attached via get_image); none -> RapidOCR (image_context_service)
++ a note. The fork is never switched. Two callers: VisionAbility.run() (the
+user-facing tool) and text_extractor (upload-time indexing, a later task)."""
+
+from __future__ import annotations
+
+import base64
+import logging
+from typing import ClassVar
+
+from abilities._ability import Ability
+from services.processor_config import ProcessorConfig
+
+logger = logging.getLogger(__name__)
+
+_VISION_SYSTEM_PROMPT = (
+    "If the user input contains questions or remarks, answer them directly; "
+    "otherwise return a detailed description of what you see in the image. Be rich "
+    "in detail — people, vehicles, animals, resemblances, colours, shapes, and any "
+    "visible text."
+)
+
+RICH_INDEX_PROMPT = (
+    "Describe this image in great detail. Your description will be embedded and "
+    "used to make the image searchable in a semantic database, so be thorough and "
+    "concrete. Cover at least 20 distinct aspects: the overall layout and "
+    "composition; every subject, person, animal, or object and what they are doing; "
+    "dominant and accent colours; any title, heading, label, or visible text "
+    "(transcribe it verbatim); the setting and background; style, mood, and "
+    "lighting; and anything distinctive someone might later search for."
+)
+
+_NO_VISION_NOTE = (
+    "NOTE: A vision provider is not available. The system can only read text from "
+    "images. If the user wants the system to view the images, ask them to set up a "
+    "vision provider in the brain interface."
+)
+
+
+class VisionConfig(ProcessorConfig):
+    """Single-shot, no-tools delegate config that runs on the vision provider.
+    policy_channel is inherited from the caller."""
+
+    uses_vision_provider: ClassVar[bool] = True
+
+    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
+        super().__init__(
+            channel="delegate:vision",
+            role="vision",
+            policy_channel=policy_channel,
+            always_available=[],
+            discoverable=[],
+            blocked=frozenset(),
+            max_iterations=1,
+            skip_transcript=True,
+            skip_input_row=True,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+        )
+
+    def get_user_definition(self, mp) -> str:
+        return ""
+
+    def get_system_prompt(self, mp) -> str:
+        return _VISION_SYSTEM_PROMPT
+
+    def get_user_prompt(self, mp) -> str:
+        return mp._raw_input
+
+    def get_image(self, mp) -> "dict | None":
+        meta = mp._metadata or {}
+        path = meta.get("image_path")
+        if not path:
+            return None
+        with open(path, "rb") as fh:
+            data = base64.b64encode(fh.read()).decode()
+        return {"data": data, "mime_type": meta.get("mime_type") or "image/png"}
+
+
+def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel) -> dict:
+    """Describe an image. Forks ONCE on vision-provider-configured.
+    Returns {"description": str, "vision_used": bool, "note": str|None}.
+    Provider path RAISES on provider failure (never swallowed); the OCR fallback
+    is ONLY for the not-configured path."""
+    from services.database_service import get_shared_db_service  # noqa: PLC0415
+    from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+
+    if ProviderDbService(get_shared_db_service()).get_vision_provider():
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+
+        description = MessageProcessor.process(
+            query,
+            VisionConfig(policy_channel),
+            metadata={"image_path": image_path, "mime_type": mime_type},
+        )
+        return {"description": description, "vision_used": True, "note": None}
+
+    from services import image_context_service  # noqa: PLC0415
+
+    with open(image_path, "rb") as fh:
+        ocr = image_context_service.analyze(fh.read(), mime_type)
+    return {
+        "description": (ocr.get("ocr_text") or "").strip(),
+        "vision_used": False,
+        "note": _NO_VISION_NOTE,
+    }
+
+
+class VisionAbility(Ability):
+    def get_name(self) -> str:
+        return "vision"
+
+    def get_summary(self) -> str:
+        return (
+            "Use this tool to read and see the contents of an image. It gives you "
+            "vision capability even if you don't natively support it."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what is in this image",
+            "describe the photo the user attached",
+            "read the text from this screenshot",
+            "what does the chart in this image show",
+            "is there a person in this picture",
+            "what colour is the car in the image",
+            "transcribe the handwriting in this scan",
+            "what product is shown in this photo",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "read & see image contents"
+
+    _PARAMETERS: ClassVar[dict] = {
+        "type": "object",
+        "properties": {
+            "image": {
+                "type": "string",
+                "description": (
+                    "The 8-character document id (doc_id). If this is not available "
+                    "in context, use the `document.search` tool to look it up."
+                ),
+            },
+            "query": {
+                "type": "string",
+                "description": "What to find out about the image, in natural language.",
+            },
+        },
+        "required": ["image", "query"],
+    }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    def run(self, params: dict) -> dict:
+        doc_id = (params.get("image") or "").strip()
+        query = params.get("query") or ""
+        if not doc_id:
+            return {"status": "error", "result": "vision requires an 'image' (document id)."}
+
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        from services.document_service import DocumentService  # noqa: PLC0415
+        from services.file_mapper_service import FileMapperService  # noqa: PLC0415
+
+        doc = DocumentService(get_shared_db_service()).get_document(doc_id)
+        if not doc:
+            return {"status": "error", "result": f"No document found for id={doc_id}."}
+
+        abs_path = str(FileMapperService.get_documents_path(doc["file_path"]))
+        mime_type = doc.get("mime_type") or "image/png"
+        try:
+            out = describe_image(
+                abs_path, mime_type, query, policy_channel=self.mp.config.policy_channel
+            )
+        except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
+            logger.exception("[VISION] describe failed")
+            return {"status": "error", "result": f"Vision is currently experiencing issues; {exc}"}
+
+        body = out["description"]
+        if out["note"]:
+            body = f"{body}\n\n{out['note']}" if body else out["note"]
+        return {"status": "success", "result": body}
