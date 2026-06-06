@@ -112,6 +112,8 @@ def describe_image(image_path: str, mime_type: str, query: str, *, policy_channe
 
     with open(image_path, "rb") as fh:
         ocr = image_context_service.analyze(fh.read(), mime_type)
+    if ocr.get("error"):
+        logger.warning("[VISION] OCR extraction error: %s", ocr["error"])
     return {
         "description": (ocr.get("ocr_text") or "").strip(),
         "vision_used": False,
@@ -178,6 +180,8 @@ class VisionAbility(Ability):
         doc = DocumentService(get_shared_db_service()).get_document(doc_id)
         if not doc:
             return {"status": "error", "result": f"No document found for id={doc_id}."}
+        if not doc.get("file_path"):
+            return {"status": "error", "result": f"Document {doc_id} has no file on disk."}
 
         abs_path = str(FileMapperService.get_documents_path(doc["file_path"]))
         mime_type = doc.get("mime_type") or "image/png"
