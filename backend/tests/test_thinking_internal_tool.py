@@ -13,13 +13,19 @@ def test_thinking_never_discoverable(db):
     assert "thinking" not in (cfg.discoverable or [])
 
 
-def test_thinking_config_retains_parent_tool_surface(db):
+def test_thinking_config_mirrors_parent_tool_surface(db):
+    """ThinkingConfig mirrors the parent's LIVE tool surface: its always_available
+    is the snapshot of the parent's active_tools it is handed, and the parent's
+    blocked set carries over. No discovery — a single deliberation pass never runs
+    find_tools, so discoverable is empty."""
     from abilities.thinking import ThinkingConfig
     from configs.channels import UserConfig
     parent = UserConfig()
-    tc = ThinkingConfig(parent.always_available, parent.discoverable, parent.policy_channel)
-    assert tc.always_available == list(parent.always_available or [])
-    assert tc.discoverable == list(parent.discoverable or [])
+    active_tools_snapshot = list(parent.always_available or [])
+    tc = ThinkingConfig(active_tools_snapshot, parent.blocked, parent.policy_channel)
+    assert tc.always_available == active_tools_snapshot
+    assert tc.discoverable == []
+    assert tc.blocked == frozenset(parent.blocked or ())
     assert tc.thinking_mode == "high"
     assert tc.max_iterations == 1
 
