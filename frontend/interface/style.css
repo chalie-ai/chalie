@@ -1345,7 +1345,7 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   gap: 16px;
   padding: 4px 0;
   min-width: 220px;
-  max-width: 480px;
+  max-width: 760px;
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;
   line-height: 1.2;
@@ -3411,6 +3411,9 @@ details.block-section[open] > summary.block-section__title::before {
 
   .input-dock { padding: var(--space-sm) var(--space-md); }
   .input-dock__outer { max-width: 100%; }
+  /* Match the controls row to the full-width input box so the Thinking
+     dropdown and Context indicator reach the container edges on mobile. */
+  .dock-controls { max-width: 100%; }
 
   .presence-bar { padding: 0 var(--space-md); }
 

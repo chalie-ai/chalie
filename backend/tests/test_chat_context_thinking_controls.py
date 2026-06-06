@@ -36,8 +36,13 @@ def _make_provider(db, *, name, max_tokens):
 
 class TestContextUsageEndpoint:
 
-    def test_returns_last_chat_request_tokens_and_window(self, authed_client):
-        """GET /system/context-usage = last chat tokens_input / selected window."""
+    def test_returns_last_user_turn_tokens_and_window(self, authed_client):
+        """GET /system/context-usage = last user-turn tokens_input / selected window.
+
+        The production logger keys the row by ``job_name`` = ``channel:role``; the
+        UserConfig turn is 'user:user' (asserted in
+        ``test_indicator_filter_matches_real_config_jobs``).
+        """
         from services.llm_call_log_service import log_call
         from services.provider_db_service import ProviderDbService
         import services.database_service as _db_mod
@@ -47,7 +52,7 @@ class TestContextUsageEndpoint:
         ProviderDbService(_db_mod._shared_db_service).set_selected_provider(pid)
 
         # Production logger writes the real row the endpoint reads.
-        log_call('chat_turn', 'ollama', 'llama3',
+        log_call('user:user', 'ollama', 'llama3',
                  tokens_input=2412, tokens_output=88, latency_ms=10,
                  usage_class='chat')
 
@@ -57,24 +62,54 @@ class TestContextUsageEndpoint:
         assert data['last_request_tokens'] == 2412
         assert data['context_window'] == 64400
 
-    def test_ignores_non_chat_usage_class(self, authed_client):
-        """A later subagent/subconscious call must NOT shadow the last chat call."""
+    def test_delegate_and_thinking_calls_do_not_shadow_user_turn(self, authed_client):
+        """THE regression: thinking + web_search delegate share usage_class='chat'
+        (they inherit the parent's CHAT policy_channel), so a usage_class filter
+        made the indicator oscillate user-turn (~17k) → delegate (~2k). Keying on
+        job_name='user:user' must keep the user turn's size pinned even though
+        the delegate's tiny sub-request is the NEWEST chat-class row.
+        """
         from services.llm_call_log_service import log_call
         from services.provider_db_service import ProviderDbService
         import services.database_service as _db_mod
 
         client, db, _ = authed_client
-        pid = _make_provider(db, name='active', max_tokens=64400)
+        pid = _make_provider(db, name='active', max_tokens=200000)
         ProviderDbService(_db_mod._shared_db_service).set_selected_provider(pid)
 
-        log_call('chat_turn', 'ollama', 'llama3', tokens_input=2412,
-                 tokens_output=10, latency_ms=5, usage_class='chat')
-        # Newer, but a background class — the indicator tracks the user chat turn.
-        log_call('subagent', 'ollama', 'llama3', tokens_input=99999,
-                 tokens_output=10, latency_ms=5, usage_class='subagent')
+        # The real user turn — large request.
+        log_call('user:user', 'ollama', 'llama3', tokens_input=17240,
+                 tokens_output=120, latency_ms=30, usage_class='chat')
+        # Newer rows fired by the SAME turn's sub-agents, all usage_class='chat':
+        #   the thinking pre-pass and several web_search delegate iterations.
+        log_call('thinking:thinking', 'ollama', 'llama3', tokens_input=16980,
+                 tokens_output=40, latency_ms=20, usage_class='chat')
+        log_call('delegate:web_search:web_search', 'ollama', 'llama3',
+                 tokens_input=2010, tokens_output=15, latency_ms=8, usage_class='chat')
+        log_call('delegate:web_search:web_search', 'ollama', 'llama3',
+                 tokens_input=2240, tokens_output=15, latency_ms=8, usage_class='chat')
 
         data = client.get('/system/context-usage').get_json()
-        assert data['last_request_tokens'] == 2412
+        # Pinned to the user turn — NOT the newest (delegate) chat-class row.
+        assert data['last_request_tokens'] == 17240
+
+    def test_indicator_filter_matches_real_config_jobs(self):
+        """Guard the magic string: the endpoint filters job_name='user:user', so
+        the REAL UserConfig must produce that job, and the sub-agent configs that
+        share usage_class='chat' must NOT — else the filter silently breaks.
+        """
+        from configs.channels import UserConfig
+        from services.processor_config import ProcessorConfig
+        from abilities.web_search import WebSearchConfig
+        from abilities.thinking import ThinkingConfig
+
+        chat = ProcessorConfig.POLICY_CHANNEL.CHAT
+        assert UserConfig().job == 'user:user'
+        assert WebSearchConfig(chat).job != 'user:user'
+        assert ThinkingConfig([], frozenset(), chat).job != 'user:user'
+        # All three share the SAME usage_class — proving why usage_class can't
+        # be the discriminator and job_name must be.
+        assert UserConfig().usage_class == WebSearchConfig(chat).usage_class == 'chat'
 
     def test_nulls_when_no_calls_or_provider(self, authed_client):
         """Empty DB → both fields null; endpoint never raises."""

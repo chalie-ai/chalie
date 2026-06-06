@@ -536,12 +536,15 @@ def update_apply():
 @system_bp.route('/system/context-usage', methods=['GET'])
 @require_session
 def get_context_usage():
-    """Last chat request size + context window for the composer indicator.
+    """Last user-turn request size + context window for the composer indicator.
 
     ``last_request_tokens`` is the provider-reported ``tokens_input`` of the most
-    recent ``usage_class='chat'`` call; ``context_window`` is the selected
-    provider's ``max_tokens``. Either is null when unknown — the endpoint never
-    raises so a transient miss can't break the composer.
+    recent main-conversation call (``job_name='user:user'`` — NOT every
+    usage_class='chat' row, which would also include the thinking pre-pass and
+    each web_search/web_browse delegate iteration, making the indicator
+    oscillate); ``context_window`` is the selected provider's ``max_tokens``.
+    Either is null when unknown — the endpoint never raises so a transient miss
+    can't break the composer.
     """
     from services.llm_call_log_service import get_last_chat_request_tokens
     from services.provider_cache_service import ProviderCacheService

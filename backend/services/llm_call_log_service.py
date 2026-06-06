@@ -52,19 +52,28 @@ def log_call(
         logger.debug(f"[LLM_CALL_LOG] Failed to log call: {e}")
 
 
-def get_last_chat_request_tokens(usage_class: str = 'chat') -> 'int | None':
-    """Return ``tokens_input`` of the most recent call for ``usage_class``.
+def get_last_chat_request_tokens(job_name: str = 'user:user') -> 'int | None':
+    """Return ``tokens_input`` of the most recent main-conversation request.
 
-    Powers the composer's context-size indicator (the last user-facing chat
-    request). ``id DESC`` (autoincrement) is the insertion order, so this is the
+    Powers the composer's context-size indicator. It MUST key off ``job_name``
+    ('channel:role'), not ``usage_class``: many processors share usage_class
+    'chat' (the thinking pre-pass and every web_search/web_browse delegate
+    iteration all inherit the parent's CHAT policy_channel), so a usage_class
+    filter makes the indicator oscillate between the real user turn (~17-20k)
+    and a delegate's tiny clean-context sub-request (~2k). ``job_name='user:user'``
+    is the UserConfig turn alone (channel='user', role='user'), so the indicator
+    tracks the conversation's own context size and the legitimate within-turn
+    climb (the act-trail grows across ACT iterations, all logged as user:user).
+
+    ``id DESC`` (autoincrement) is the insertion order, so this is the
     truly-latest row even when two calls share a ``created_at`` second. Returns
     None when no such call has been logged yet.
     """
     db = get_shared_db_service()
     rows = db.fetch_all(
-        "SELECT tokens_input FROM llm_call_log WHERE usage_class = ? "
+        "SELECT tokens_input FROM llm_call_log WHERE job_name = ? "
         "ORDER BY id DESC LIMIT 1",
-        (usage_class,),
+        (job_name,),
     )
     return rows[0]['tokens_input'] if rows else None
 
