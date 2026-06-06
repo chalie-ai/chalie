@@ -8,11 +8,11 @@
 
 """WebBrowseAbility — delegate an interactive web-browsing task to a focused agent.
 
-Pairs with a typed ``ProcessorConfig`` subclass (``WebBrowseConfig``) defined
-alongside it.  Spec §5b / §10f.  Replaces the browsing role the former
-``web_surfer`` subagent performed, scoped down to a clean-context agent that
-drives the raw ``browser`` tool (render / screenshot / interact / monitor) and
-reads what it finds.
+Pairs with a typed ``ProcessorConfig`` subclass (``WebBrowseConfig``, in
+``configs/channels/web_browse.py`` with the other channel configs).  Spec §5b /
+§10f.  Replaces the browsing role the former ``web_surfer`` subagent performed,
+scoped down to a clean-context agent that drives the raw ``browser`` tool
+(render / screenshot / interact / monitor) and reads what it finds.
 
 Named ``web_browse`` (not ``browser``) to avoid a flat-registry collision with
 the raw ``browser`` ability — its tool *surface* still uses the raw ``browser``
@@ -28,68 +28,8 @@ happens at the outer ``web_browse`` tool.
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._delegate import (
-    delegate_goal,
-    render_trail,
-)
-from services.processor_config import ProcessorConfig
-
-_WEB_BROWSE_SYSTEM_PROMPT = (
-    "You are a focused web-browsing agent. You receive a single goal and pursue "
-    "it by driving a real browser: render JavaScript-heavy pages, take "
-    "screenshots, fill forms, click buttons, navigate multi-step flows, and "
-    "read what you find.\n\n"
-    "Work step by step: open the page, observe its actual state, act, then "
-    "re-observe before acting again. Ground every claim in what the page "
-    "actually shows — do not invent content, URLs, or results. If the goal "
-    "cannot be completed in the browser, say so plainly and explain why.\n\n"
-    "Return a clear answer that directly addresses the goal, citing the pages "
-    "you actually visited. You have no conversation history and no user "
-    "personality — work only from the goal you were given."
-)
-
-_WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read")
-
-
-class WebBrowseConfig(ProcessorConfig):
-    """ProcessorConfig for the web_browse delegate.
-
-    Mirrors the TKT-803 ProcessorConfig subclasses: a typed ``__init__`` that
-    calls ``super().__init__(...)`` against the frozen base.  ``policy_channel``
-    is supplied by the caller (inherited from whoever invoked the tool) rather
-    than hardcoded.
-    """
-
-    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
-        tools = list(_WEB_BROWSE_TOOLS)
-        super().__init__(
-            channel="delegate:web_browse",
-            role="web_browse",
-            policy_channel=policy_channel,
-            always_available=[*tools, "memory"],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=50,
-            skip_transcript=True,
-            skip_input_row=True,
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
-        )
-
-    def get_user_definition(self, mp) -> str:
-        return ""
-
-    def get_user_prompt(self, mp) -> str:
-        """Goal-driven user prompt: the goal plus the act-trail so far."""
-        parts = [f"Browsing goal:\n{mp._raw_input}"]  # type: ignore[attr-defined]
-        trail = render_trail(mp)
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
-
-    def get_system_prompt(self, mp) -> str:
-        return _WEB_BROWSE_SYSTEM_PROMPT
+from abilities._delegate import delegate_goal
+from configs.channels.web_browse import WebBrowseConfig
 
 
 class WebBrowseAbility(Ability):

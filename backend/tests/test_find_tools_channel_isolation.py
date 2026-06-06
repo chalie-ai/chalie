@@ -23,7 +23,7 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from configs.channels import DmnConfig, UserConfig
 from configs.channels._common import DELEGATE_INTERNAL_TOOLS
-from abilities.web_browse import WebBrowseConfig
+from configs.channels.web_browse import WebBrowseConfig
 from services.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 

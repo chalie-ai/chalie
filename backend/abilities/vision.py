@@ -10,27 +10,24 @@
 
 describe_image() is the shared describe core: it forks ONCE on whether a vision
 provider is configured — provider -> a single-shot MessageProcessor on the vision
-provider (image attached via get_image); none -> RapidOCR (image_context_service)
-+ a note. The fork is never switched. Two callers: VisionAbility.run() (the
-user-facing tool) and text_extractor (upload-time indexing, a later task)."""
+provider (image attached via VisionConfig.get_image); none -> RapidOCR
+(image_context_service) + a note. The fork is never switched. Two callers:
+VisionAbility.run() (the user-facing tool) and text_extractor (upload-time
+indexing).
+
+The paired channel config (``VisionConfig``) lives in
+``configs/channels/vision.py`` — delegate configs are ProcessorConfig subclasses
+and belong with the other channels, not in the ability."""
 
 from __future__ import annotations
 
-import base64
 import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
-from services.processor_config import ProcessorConfig
+from configs.channels.vision import VisionConfig
 
 logger = logging.getLogger(__name__)
-
-_VISION_SYSTEM_PROMPT = (
-    "If the user input contains questions or remarks, answer them directly; "
-    "otherwise return a detailed description of what you see in the image. Be rich "
-    "in detail — people, vehicles, animals, resemblances, colours, shapes, and any "
-    "visible text."
-)
 
 RICH_INDEX_PROMPT = (
     "Describe this image in great detail. Your description will be embedded and "
@@ -47,47 +44,6 @@ _NO_VISION_NOTE = (
     "images. If the user wants the system to view the images, ask them to set up a "
     "vision provider in the brain interface."
 )
-
-
-class VisionConfig(ProcessorConfig):
-    """Single-shot, no-tools delegate config that runs on the vision provider.
-    policy_channel is inherited from the caller."""
-
-    uses_vision_provider: ClassVar[bool] = True
-
-    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
-        super().__init__(
-            channel="delegate:vision",
-            role="vision",
-            policy_channel=policy_channel,
-            always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=1,
-            skip_transcript=True,
-            skip_input_row=True,
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
-        )
-
-    def get_user_definition(self, mp) -> str:
-        return ""
-
-    def get_system_prompt(self, mp) -> str:
-        return _VISION_SYSTEM_PROMPT
-
-    def get_user_prompt(self, mp) -> str:
-        return mp._raw_input
-
-    def get_image(self, mp) -> "dict | None":
-        meta = mp._metadata or {}
-        path = meta.get("image_path")
-        if not path:
-            return None
-        with open(path, "rb") as fh:
-            data = base64.b64encode(fh.read()).decode()
-        return {"data": data, "mime_type": meta.get("mime_type") or "image/png"}
 
 
 def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel) -> dict:

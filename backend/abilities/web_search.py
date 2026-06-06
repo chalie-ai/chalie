@@ -10,7 +10,8 @@
 
 The foundational delegate-tool template (spec §5b / §10f, TKT-732).  A delegate
 tool is a standalone Ability that pairs with a typed ``ProcessorConfig``
-subclass (``WebSearchConfig``).  ``run()`` instantiates the subclass and calls
+subclass (``WebSearchConfig``, in ``configs/channels/web_search.py`` with the
+other channel configs).  ``run()`` instantiates the subclass and calls
 ``MessageProcessor.process()`` — there is no MessageProcessor subclass, no
 SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
@@ -38,65 +39,8 @@ happens at the outer ``web_search`` tool.
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._delegate import (
-    delegate_goal,
-    render_trail,
-)
-from services.processor_config import ProcessorConfig
-
-_WEB_SEARCH_SYSTEM_PROMPT = (
-    "You are a focused web-research agent. You receive a single research query "
-    "and answer it by searching the web and reading the most relevant sources.\n\n"
-    "Loop: search → read the best results → search again to fill gaps → "
-    "synthesise. Cite the sources you actually read. Do not fabricate URLs, "
-    "quotes, or facts. If the web yields nothing useful, say so honestly.\n\n"
-    "Return a concise, well-grounded synthesis that directly answers the query. "
-    "You have no conversation history and no user personality — work only from "
-    "the query you were given."
-)
-
-_WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "read", "web_download")
-
-
-class WebSearchConfig(ProcessorConfig):
-    """ProcessorConfig for the web_search delegate.
-
-    Mirrors the TKT-803 ProcessorConfig subclasses: a typed ``__init__`` that
-    calls ``super().__init__(...)`` against the frozen base.  ``policy_channel``
-    is supplied by the caller (inherited from whoever invoked the tool) rather
-    than hardcoded.
-    """
-
-    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
-        tools = list(_WEB_SEARCH_TOOLS)
-        super().__init__(
-            channel="delegate:web_search",
-            role="web_search",
-            policy_channel=policy_channel,
-            always_available=[*tools, "memory"],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=50,
-            skip_transcript=True,
-            skip_input_row=True,
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
-        )
-
-    def get_user_definition(self, mp) -> str:
-        return ""
-
-    def get_user_prompt(self, mp) -> str:
-        """Goal-driven user prompt: the raw query plus the act-trail so far."""
-        parts = [f"Research query:\n{mp._raw_input}"]  # type: ignore[attr-defined]
-        trail = render_trail(mp)
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
-
-    def get_system_prompt(self, mp) -> str:
-        return _WEB_SEARCH_SYSTEM_PROMPT
+from abilities._delegate import delegate_goal
+from configs.channels.web_search import WebSearchConfig
 
 
 class WebSearchAbility(Ability):

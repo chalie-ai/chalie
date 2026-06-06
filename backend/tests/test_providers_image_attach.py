@@ -16,7 +16,7 @@ def _png_bytes() -> bytes:
 
 
 def test_build_user_messages_attaches_image_from_get_image(tmp_path):
-    from abilities.vision import VisionConfig
+    from configs.channels.vision import VisionConfig
     from services.processor_config import ProcessorConfig
 
     img = tmp_path / "a.png"
@@ -41,7 +41,7 @@ def test_build_user_messages_attaches_image_from_get_image(tmp_path):
 def test_build_user_messages_no_image_when_get_image_returns_none(tmp_path):
     """A VisionConfig with no image_path in metadata attaches no image — the
     framework hook returns None and the message stays a bare user message."""
-    from abilities.vision import VisionConfig
+    from configs.channels.vision import VisionConfig
     from services.processor_config import ProcessorConfig
 
     mp = object.__new__(MessageProcessor)

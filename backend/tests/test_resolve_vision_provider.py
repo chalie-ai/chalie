@@ -35,7 +35,7 @@ def _make_mp(config) -> MessageProcessor:
 
 
 def test_resolve_uses_vision_provider_not_global(db):
-    from abilities.vision import VisionConfig
+    from configs.channels.vision import VisionConfig
     from configs.channels.user import UserConfig
 
     svc = ProviderDbService(get_shared_db_service())
@@ -85,7 +85,7 @@ def test_resolve_uses_vision_provider_not_global(db):
 def test_resolve_vision_raises_when_no_vision_provider_configured(db):
     """uses_vision_provider set but no vision provider in the DB → fail loud,
     never silently fall back to the global provider."""
-    from abilities.vision import VisionConfig
+    from configs.channels.vision import VisionConfig
 
     svc = ProviderDbService(get_shared_db_service())
     svc.set_vision_provider(None)

@@ -100,7 +100,7 @@ class TestContextUsageEndpoint:
         """
         from configs.channels import UserConfig
         from services.processor_config import ProcessorConfig
-        from abilities.web_search import WebSearchConfig
+        from configs.channels.web_search import WebSearchConfig
         from abilities.thinking import ThinkingConfig
 
         chat = ProcessorConfig.POLICY_CHANNEL.CHAT
