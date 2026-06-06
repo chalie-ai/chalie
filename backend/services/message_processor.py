@@ -417,20 +417,45 @@ class MessageProcessor:
         if getattr(self, "thinking_level", "low") == "high":
             dispatcher.dispatch("thinking", {})
 
-        # b. Attachment uploads — presence-gated, one blocking document.upload
-        #    per file.  No second auto document.view: upload IS the ingest.
-        for path in (self._metadata.get("attachments") or []):
-            try:
-                name, content_b64, content_type = _read_attachment(path)
-            except OSError as exc:
-                logger.warning("[SEED] could not read attachment %s: %s", path, exc)
-                continue
-            dispatcher.dispatch("document", {
-                "action": "upload",
-                "name": name,
-                "content": content_b64,
-                "content_type": content_type,
-            })
+        # b. Attachment uploads — presence-gated.  Each file's upload IS the
+        #    ingest (no second auto document.view).  Every upload internally runs
+        #    its own (now network-bound) vision/OCR extraction, so N attachments
+        #    are fanned out across a bounded thread pool and JOINED before this
+        #    method returns: the model's first request still sees every uploaded
+        #    document, but the extractions overlap instead of serialising.  The
+        #    ``with`` block's exit IS the barrier.  This is safe because each task
+        #    builds its OWN ToolDispatcher (dispatch binds a fresh per-call
+        #    ability) and every write funnels through thread-local connections /
+        #    the single-threaded document write queue (no shared cursor, no rowid
+        #    race — doc_id is a pre-generated random hex).  (TKT-838)
+        attachments = list(self._metadata.get("attachments") or [])
+        if attachments:
+            from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+            with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
+                list(pool.map(self._seed_upload_attachment, attachments))
+
+    def _seed_upload_attachment(self, path: str) -> None:
+        """Read one turn-0 attachment and dispatch its blocking ``document.upload``.
+
+        Runs on a worker thread of ``_seed_turn_zero``'s pool.  Builds its OWN
+        ToolDispatcher (dispatch binds a fresh, isolated per-call ability) so
+        concurrent uploads never share dispatch state.  A read failure for one
+        file is logged and skipped WITHOUT aborting the others (the pool keeps
+        every other task alive).  (TKT-838)
+        """
+        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+
+        try:
+            name, content_b64, content_type = _read_attachment(path)
+        except OSError as exc:
+            logger.warning("[SEED] could not read attachment %s: %s", path, exc)
+            return
+        ToolDispatcher(self).dispatch("document", {
+            "action": "upload",
+            "name": name,
+            "content": content_b64,
+            "content_type": content_type,
+        })
 
     def _loop(self) -> str:
         """ACT game loop — compact-first (canonical design).
