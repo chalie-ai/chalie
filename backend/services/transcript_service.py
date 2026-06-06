@@ -678,6 +678,25 @@ def write_input_row(channel: str, role: str, content: str) -> int:
     return row_id
 
 
+def link_transcript_doc(transcript_id: int, doc_id: str) -> None:
+    """Link an uploaded document to the transcript turn that carried it.
+
+    Powers chat-attachment persistence across page refresh: the live preview is a
+    browser-only blob: URL, so on reload the rebuild (api.conversation
+    .get_recent_history) joins this table to re-render the image/file from
+    /documents/<id>/preview.  INSERT OR IGNORE keeps it idempotent against the
+    composite primary key.  Called from message_processor._seed_upload_attachment.
+    """
+    from services.database_service import get_shared_db_service
+
+    db = get_shared_db_service()
+    with db.connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO transcript_docs (transcript_id, doc_id) VALUES (?, ?)",
+            (transcript_id, doc_id),
+        )
+
+
 def write_assistant_row(channel: str, content: str) -> int:
     """Write the assistant transcript row and fire the rolling episode extraction trigger."""
     from services.database_service import get_shared_db_service

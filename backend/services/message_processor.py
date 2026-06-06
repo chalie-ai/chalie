@@ -458,12 +458,24 @@ class MessageProcessor:
         except OSError as exc:
             logger.warning("[SEED] could not read attachment %s: %s", path, exc)
             return
-        ToolDispatcher(self).dispatch("document", {
+        result = ToolDispatcher(self).dispatch("document", {
             "action": "upload",
             "name": name,
             "content": content_b64,
             "content_type": content_type,
         })
+        # Persist the turn<->doc link so the chat can re-render this attachment on
+        # page refresh — the live preview is a browser-only blob: URL that dies on
+        # reload (api.conversation.get_recent_history reads this link back).
+        # _handle_upload emits the "(id=<doc_id>, ...)" token ONLY on success, so a
+        # failed upload links nothing.  Scoped to the user-attachment seed point on
+        # purpose: a model-issued document.upload mid-turn must NOT render as a user
+        # attachment.  (TKT-842)
+        if self.uid is not None:
+            from services.transcript_service import link_transcript_doc  # noqa: PLC0415
+            match = re.search(r"\(id=([0-9a-f]+)", result)
+            if match:
+                link_transcript_doc(self.uid, match.group(1))
 
     def _loop(self) -> str:
         """ACT game loop — compact-first (canonical design).

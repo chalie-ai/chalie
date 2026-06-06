@@ -353,9 +353,23 @@ export class Chat {
     }).catch(() => {});
   }
 
+  /**
+   * Map persisted attachment refs from /conversation/recent into the shape the
+   * renderer expects. The preview URL becomes the <img>/chip source, re-rendering
+   * the upload that the live blob: preview showed before refresh.
+   */
+  _attachmentsFor(msg) {
+    return (msg.attachments || []).map(a => ({
+      filename: a.filename,
+      objectUrl: a.url,
+      isImage: a.is_image,
+    }));
+  }
+
   _appendMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
-      this._renderer.appendUserForm(msg.content, msg.timestamp, { inWorkingMemory });
+      const attachments = this._attachmentsFor(msg);
+      this._renderer.appendUserForm(msg.content, msg.timestamp, { inWorkingMemory, attachments });
     } else if (msg.content || msg.segments) {
       const meta = { ts: msg.timestamp };
       if (msg.segments) meta.segments = msg.segments;
@@ -365,7 +379,8 @@ export class Chat {
 
   _prependMessage(msg, inWorkingMemory) {
     if (msg.role === 'user') {
-      this._renderer.prependUserForm(msg.content, msg.timestamp, { inWorkingMemory });
+      const attachments = this._attachmentsFor(msg);
+      this._renderer.prependUserForm(msg.content, msg.timestamp, { inWorkingMemory, attachments });
     } else if (msg.content || msg.segments) {
       const meta = { ts: msg.timestamp };
       if (msg.segments) meta.segments = msg.segments;

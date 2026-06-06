@@ -528,6 +528,26 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_transcript ON tool_calls(transcript_id
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC);
 
 -- ────────────────────────────────────────────────────────────────
+-- TRANSCRIPT DOCS — many-to-many link of a transcript turn to the
+-- document(s) attached to it.  Lets the chat re-render uploaded
+-- images/files on page refresh (the live preview is a browser-only
+-- blob: URL that dies on reload).  Written at the upload-seed point
+-- (message_processor._seed_upload_attachment), read by
+-- api.conversation.get_recent_history.  Composite PK dedups links and
+-- serves the WHERE transcript_id IN (...) lookup (no separate index).
+-- ────────────────────────────────────────────────────────────────
+-- foreign_keys=ON is enforced (database_service.py), so both sides CASCADE:
+-- deleting a transcript turn (cancel/compaction/migration) or hard-purging a
+-- document must not be blocked by a dangling link — the link is meaningless once
+-- either end is gone.  The document row itself is untouched by a transcript
+-- delete (only the link drops).
+CREATE TABLE IF NOT EXISTS transcript_docs (
+    transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+    doc_id        TEXT    NOT NULL REFERENCES documents(id)  ON DELETE CASCADE,
+    PRIMARY KEY (transcript_id, doc_id)
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- BROWSER SNAPSHOTS — page monitoring change detection
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS browser_snapshots (

@@ -119,15 +119,21 @@ export class Renderer {
    * Prepend a user speech form (for scroll-up pagination).
    * @param {string} text
    * @param {string|null} [ts]
-   * @param {{inWorkingMemory?: boolean}} [options]
+   * @param {{inWorkingMemory?: boolean, attachments?: Array}} [options]
    */
-  prependUserForm(text, ts = null, { inWorkingMemory = true } = {}) {
+  prependUserForm(text, ts = null, { inWorkingMemory = true, attachments = [] } = {}) {
     const el = this._createEl('div', 'speech-form speech-form--user');
     if (!inWorkingMemory) el.classList.add('message--faded');
     _attachGlyph(el, 'user');
-    const textEl = this._createEl('div', 'speech-form__text');
-    textEl.textContent = text;
-    el.appendChild(textEl);
+
+    this._appendUserAttachments(el, attachments);
+
+    // Mirror appendUserForm: the media is the message when there's no real text.
+    if (!(text === '[File attached]' && attachments.length)) {
+      const textEl = this._createEl('div', 'speech-form__text');
+      textEl.textContent = text;
+      el.appendChild(textEl);
+    }
 
     this._spine.prepend(el);
     return el;
