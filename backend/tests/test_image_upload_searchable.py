@@ -28,15 +28,18 @@ from abilities.document import DocumentAbility
 from services.database_service import get_shared_db_service
 from services.document_service import DocumentService
 from services.provider_db_service import ProviderDbService
+from services.tmp_storage import new_tmp_path
 
 pytestmark = pytest.mark.unit
 
 
-def _ocrable_invoice_png_b64() -> str:
-    """A PNG rendering the word 'INVOICE' large/high-contrast enough for RapidOCR.
+def _ocrable_invoice_png_path() -> str:
+    """A PNG rendering the word 'INVOICE' large/high-contrast enough for RapidOCR,
+    written under the Chalie temp prefix and returned as a PATH.
 
-    Built with PIL. RapidOCR's read of this exact fixture was empirically
-    confirmed (analyze().ocr_text == 'INVOICE') before this test relied on it.
+    ``document.upload`` ingests by path, never bytes (TKT-844). RapidOCR's read of
+    this exact fixture was empirically confirmed (analyze().ocr_text == 'INVOICE')
+    before this test relied on it.
     """
     from PIL import Image, ImageDraw, ImageFont
 
@@ -54,17 +57,21 @@ def _ocrable_invoice_png_b64() -> str:
     draw.text((20, 40), "INVOICE", fill="black", font=font)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode()
+    path = new_tmp_path("inv.png")
+    with open(path, "wb") as fh:
+        fh.write(buf.getvalue())
+    return path
 
 
-def _blank_png_b64() -> str:
-    """A 1x1 white PNG — no words, so RapidOCR yields empty text."""
-    return base64.b64encode(
-        base64.b64decode(
+def _blank_png_path() -> str:
+    """A 1x1 white PNG (no words -> empty OCR), written under the temp prefix."""
+    path = new_tmp_path("blank.png")
+    with open(path, "wb") as fh:
+        fh.write(base64.b64decode(
             b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
             b"+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-        )
-    ).decode()
+        ))
+    return path
 
 
 def _result_text(out):
@@ -82,9 +89,7 @@ def test_uploaded_image_is_findable_via_document_search(db):
     ability = DocumentAbility(mp=None)
     up = ability.run({
         "action": "upload",
-        "name": "inv.png",
-        "content": _ocrable_invoice_png_b64(),
-        "content_type": "image/png",
+        "path": _ocrable_invoice_png_path(),
     })
     up_text = _result_text(up)
     assert "id=" in up_text, up_text
@@ -105,9 +110,7 @@ def test_textless_image_is_ready_not_failed(db):
     ability = DocumentAbility(mp=None)
     up = ability.run({
         "action": "upload",
-        "name": "blank.png",
-        "content": _blank_png_b64(),
-        "content_type": "image/png",
+        "path": _blank_png_path(),
     })
     up_text = _result_text(up)
     assert "id=" in up_text, up_text

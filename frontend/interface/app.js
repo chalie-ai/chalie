@@ -571,7 +571,7 @@ class ChalieApp {
     textarea.addEventListener('input', () => {
       textarea.style.height = 'auto';
       textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
-      sendBtn.disabled = (!textarea.value.trim() && !this._imageAttach.count) || this._imageAttach.isUploading;
+      sendBtn.disabled = !textarea.value.trim() && !this._imageAttach.count;
     });
 
     // Send button click — always sends (Enter = newline; stop button is in ACT cycle).

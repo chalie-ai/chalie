@@ -129,15 +129,13 @@ export class Chat {
   async sendMessage(source = 'text') {
     const textarea = document.getElementById('messageInput');
     const text = textarea.value.trim();
-    const attachments = this._imageAttach ? this._imageAttach.getAttachmentPaths() : [];
+    // Raw File objects ride the multipart POST /chat (TKT-844 — no pre-upload).
+    const files = this._imageAttach ? this._imageAttach.getFiles() : [];
     // Capture preview metadata (object URLs, filenames) BEFORE clear() wipes the
     // strip — used to render the attachments inside the user's own turn bubble.
     const attachmentPreviews = this._imageAttach ? this._imageAttach.getAttachments() : [];
 
-    if (!text && !attachments.length) return;
-
-    // Block send while any upload is still in-flight.
-    if (this._imageAttach?.isUploading) return;
+    if (!text && !files.length) return;
 
     // Mid-ACT: append to existing user bubble, remove old ACT cycle, and
     // POST /chat. The backend cancels the active turn, concatenates original +
@@ -161,7 +159,7 @@ export class Chat {
     textarea.style.height = 'auto';
     if (this._imageAttach) this._imageAttach.clear();
 
-    this._startTurn(text || '[File attached]', source, true, attachments, attachmentPreviews);
+    this._startTurn(text || '[File attached]', source, true, files, attachmentPreviews);
   }
 
   // ---------------------------------------------------------------------------
@@ -238,11 +236,11 @@ export class Chat {
    * @param {string} text — message body to send
    * @param {string} source — "text" | "voice" | "subagent" etc.
    * @param {boolean} showUserBubble — whether to render a user speech-form
-   * @param {string[]} attachments — file paths from POST /upload
+   * @param {File[]} files — raw File objects appended to the multipart POST /chat
    * @param {Array<{filename: string, objectUrl: string|null, isImage: boolean}>} attachmentPreviews
    *        — preview metadata rendered inside the user bubble
    */
-  _startTurn(text, source, showUserBubble = true, attachments = [], attachmentPreviews = []) {
+  _startTurn(text, source, showUserBubble = true, files = [], attachmentPreviews = []) {
     if (showUserBubble) {
       this._lastUserBubble = this._renderer.appendUserForm(text || '[File attached]', null, {
         attachments: attachmentPreviews,
@@ -305,7 +303,7 @@ export class Chat {
         this._onResponseReceivedCb?.();
         this._finaliseTurn(actEl, responseContent, responseMeta, data);
       },
-    }, attachments);
+    }, files);
   }
 
   /**

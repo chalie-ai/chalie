@@ -2,10 +2,9 @@
  * WebSocket client — receive-only server→client push channel.
  *
  * All client→server requests use HTTP:
- *   POST /chat           — user message (always starts a new turn)
+ *   POST /chat           — user message (multipart: text + raw file attachments)
  *   POST /chat/interrupt — cancel the active UMP turn
  *   POST /action         — action button click
- *   POST /upload         — file attachment
  *
  * The WebSocket delivers server-pushed events:
  *   ← status, message, act_narration, act_tool_start, act_tool_end,
@@ -177,9 +176,9 @@ export class WSClient {
    *   onToolStart?: (data: object) => void,
    *   onToolEnd?:   (data: object) => void,
    * }} callbacks
-   * @param {string[]} [attachments] - tmp_paths from POST /upload
+   * @param {File[]} [files] - raw File objects appended to the multipart request
    */
-  send(text, source, callbacks = {}, attachments = []) {
+  send(text, source, callbacks = {}, files = []) {
     this._chatCallbacks = callbacks;
 
     if (!this.isConnected) {
@@ -189,7 +188,7 @@ export class WSClient {
       return;
     }
 
-    this._postChat(text, source, attachments);
+    this._postChat(text, source, files);
   }
 
   /**
@@ -225,15 +224,19 @@ export class WSClient {
     });
   }
 
-  _postChat(text, source, attachments) {
-    const body = { text, source };
-    if (attachments?.length) body.attachments = attachments;
+  _postChat(text, source, files) {
+    // multipart/form-data — text + raw files. The browser sets the multipart
+    // boundary, so no Content-Type header is supplied. The backend ingests each
+    // file via document.upload by PATH, never bytes through the act-trail (TKT-844).
+    const form = new FormData();
+    form.append('text', text);
+    form.append('source', source);
+    for (const file of files || []) form.append('files', file, file.name);
 
     fetch(this._buildHttpUrl('/chat'), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: form,
     })
       .catch(() => {
         this._chatCallbacks?.onError?.({ message: 'Chat request failed.', recoverable: true });

@@ -1,16 +1,16 @@
 import { showToast } from './utils.js';
 
 /**
- * File attachment — upload via POST /upload, preview strip, send as attachments.
+ * File attachment — hold raw File objects, preview strip, send with the message.
  *
- * Replaces the old image-only flow (POST /chat/image + image_ids + base64 files).
- * Images and documents both go through the same path:
+ * No pre-upload round-trip: the raw files ride the multipart POST /chat at send
+ * time and the backend ingests each via `document.upload` (by PATH, never bytes —
+ * TKT-844). Images and documents both go through the same path:
  *   1. User picks or drops a file.
- *   2. POST /upload — saves to /tmp on the server, returns {tmp_path, filename,
- *      content_type, size}.
- *   3. A preview chip is rendered in the strip (image thumbnail or doc icon).
- *   4. The send button is blocked while any upload is in progress.
- *   5. On send, all tmp_paths are passed as the `attachments` array.
+ *   2. A preview chip is rendered immediately (image thumbnail or doc icon) and
+ *      the File is held in memory — nothing is sent to the server yet.
+ *   3. On send, every held File is appended to the multipart /chat request as a
+ *      `files` part (see ws.js `_postChat`).
  */
 export class ImageAttach {
   /**
@@ -20,11 +20,8 @@ export class ImageAttach {
     this._getHost = getHost;
     this._onDocumentDrop = onDocumentDrop || null;
 
-    // [{tmpPath: string, filename: string, element: HTMLElement}]
+    // [{file: File, filename: string, element: HTMLElement, objectUrl, isImage}]
     this._attachments = [];
-
-    // Number of uploads currently in-flight — send is blocked while > 0.
-    this._uploadsInProgress = 0;
   }
 
   // ---------------------------------------------------------------------------
@@ -42,15 +39,15 @@ export class ImageAttach {
   }
 
   /**
-   * Process one file — upload to /upload, show preview chip.
+   * Process one file — hold it and show a preview chip.
    *
-   * The send button is disabled for the duration of the upload and re-evaluated
-   * once the upload completes (success or failure).  Images render as thumbnails;
+   * Nothing is sent to the server here; the raw File is held and uploaded as
+   * part of the multipart POST /chat at send time. Images render as thumbnails;
    * other file types render as a doc icon with the filename.
    *
    * @param {File} file
    */
-  async handleFile(file) {
+  handleFile(file) {
     if (this._attachments.length >= 10) {
       showToast('Maximum 10 attachments per message');
       return;
@@ -66,52 +63,17 @@ export class ImageAttach {
       ? this._addImageChip(file, objectUrl)
       : this._addDocChip(file.name);
 
-    this._uploadsInProgress++;
+    this._attachments.push({ file, filename: file.name, element: chipEl, objectUrl, isImage });
     this._updateSendBtn();
-
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-      const res = await fetch('/upload', {
-        method: 'POST',
-        credentials: 'same-origin',
-        body: formData,
-      });
-      const data = await res.json();
-
-      if (res.ok && data.tmp_path) {
-        // Remove the in-progress spinner and mark as ready.
-        chipEl.classList.remove('analyzing');
-        chipEl.querySelector('.image-preview__spinner')?.remove();
-        this._attachments.push({
-          tmpPath: data.tmp_path,
-          filename: data.filename,
-          element: chipEl,
-          objectUrl,
-          isImage,
-        });
-      } else {
-        chipEl.remove();
-        this._updatePreviewVisibility();
-        showToast(data.error || 'Upload failed');
-      }
-    } catch {
-      chipEl.remove();
-      this._updatePreviewVisibility();
-      showToast('Upload failed');
-    } finally {
-      this._uploadsInProgress--;
-      this._updateSendBtn();
-    }
   }
 
   /**
-   * Returns the list of tmp_paths for all successfully uploaded attachments.
-   * @returns {string[]}
+   * Returns the raw File objects for all held attachments, to be appended to
+   * the multipart POST /chat request.
+   * @returns {File[]}
    */
-  getAttachmentPaths() {
-    return this._attachments.map(a => a.tmpPath);
+  getFiles() {
+    return this._attachments.map(a => a.file);
   }
 
   /**
@@ -142,19 +104,11 @@ export class ImageAttach {
   }
 
   /**
-   * Number of currently attached files (uploaded or in-flight).
+   * Number of currently attached files.
    * @returns {number}
    */
   get count() {
-    return this._attachments.length + this._uploadsInProgress;
-  }
-
-  /**
-   * True while at least one upload is in progress.
-   * @returns {boolean}
-   */
-  get isUploading() {
-    return this._uploadsInProgress > 0;
+    return this._attachments.length;
   }
 
   /**
@@ -219,7 +173,6 @@ export class ImageAttach {
 
   /**
    * Add an image thumbnail chip to the preview strip.
-   * The chip starts with the `analyzing` class and a spinner while uploading.
    *
    * @param {File} file
    * @param {string} objectUrl — pre-created object URL for the file
@@ -230,17 +183,12 @@ export class ImageAttach {
     strip.classList.remove('hidden');
 
     const thumb = document.createElement('div');
-    thumb.className = 'image-preview__thumb analyzing';
+    thumb.className = 'image-preview__thumb';
 
     const img = document.createElement('img');
     img.src = objectUrl || URL.createObjectURL(file);
     img.alt = file.name;
     thumb.appendChild(img);
-
-    const spinner = document.createElement('div');
-    spinner.className = 'image-preview__spinner';
-    spinner.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93 2.83-2.83m8.48-8.48 2.83-2.83M2 12h4m12 0h4m-3.93 7.07-2.83-2.83M7.76 7.76 4.93 4.93"/></svg>';
-    thumb.appendChild(spinner);
 
     thumb.appendChild(this._makeRemoveBtn(thumb));
     strip.appendChild(thumb);
@@ -258,7 +206,7 @@ export class ImageAttach {
     strip.classList.remove('hidden');
 
     const chip = document.createElement('div');
-    chip.className = 'image-preview__thumb image-preview__thumb--doc analyzing';
+    chip.className = 'image-preview__thumb image-preview__thumb--doc';
 
     const icon = document.createElement('div');
     icon.className = 'image-preview__doc-icon';
@@ -270,11 +218,6 @@ export class ImageAttach {
     label.className = 'image-preview__doc-name';
     label.textContent = filename.length > 20 ? filename.slice(0, 18) + '…' : filename;
     chip.appendChild(label);
-
-    const spinner = document.createElement('div');
-    spinner.className = 'image-preview__spinner';
-    spinner.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93 2.83-2.83m8.48-8.48 2.83-2.83M2 12h4m12 0h4m-3.93 7.07-2.83-2.83M7.76 7.76 4.93 4.93"/></svg>';
-    chip.appendChild(spinner);
 
     chip.appendChild(this._makeRemoveBtn(chip));
     strip.appendChild(chip);
@@ -308,14 +251,12 @@ export class ImageAttach {
   }
 
   /**
-   * Enable the send button when there is text OR ready attachments AND no
-   * upload is in progress.  Disabled while any upload is in-flight.
+   * Enable the send button when there is text OR at least one attachment.
    */
   _updateSendBtn() {
     const sendBtn = document.getElementById('sendBtn');
     const textarea = document.getElementById('messageInput');
     if (!sendBtn) return;
-    const hasContent = !!(textarea?.value.trim()) || this._attachments.length > 0;
-    sendBtn.disabled = !hasContent || this._uploadsInProgress > 0;
+    sendBtn.disabled = !((textarea?.value.trim()) || this._attachments.length > 0);
   }
 }

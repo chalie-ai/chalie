@@ -22,12 +22,9 @@ Routes (all require session auth):
   POST   /documents/watched-folders/browse    — browse host directories
 """
 
-import hashlib
 import json
 import logging
 import os
-import mimetypes
-import threading
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, send_file
@@ -193,18 +190,6 @@ def _run_upload_extraction(doc_id: str):
     logger.info(f"[DOCS API] Processed upload {doc_id}: {artifact_count} artifacts")
 
 
-def _process_upload(doc_id: str):
-    """Extract text from uploaded document and create data_graph artifacts."""
-    def _run():
-        try:
-            _run_upload_extraction(doc_id)
-        except Exception as e:
-            logger.exception(f"[DOCS API] Failed to process upload {doc_id}: {e}")
-            _mark_upload_failed(doc_id, str(e))
-
-    threading.Thread(target=_run, daemon=True, name=f"doc-upload-{doc_id[:8]}").start()
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -212,7 +197,15 @@ def _process_upload(doc_id: str):
 @documents_bp.route("/documents/upload", methods=["POST"])
 @require_session
 def upload_document():
-    """Multipart file upload → save to disk, create DB row, enqueue processing."""
+    """Thin Brain/library wrapper over the single mechanical ingest.
+
+    Validates the multipart upload (presence, extension, size), stages it to a
+    temp path, then delegates to ``abilities.document.ingest_file`` — the exact
+    same path chat attachments take — so the path-not-bytes act-trail invariant
+    holds for every upload surface. Duplicate detection is computed after ingest
+    from the returned hash. Extraction is synchronous, so the response carries the
+    terminal status (``ready``/``failed``), not ``pending``. (TKT-844)
+    """
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -220,68 +213,42 @@ def upload_document():
     if not file.filename:
         return jsonify({"error": "No filename provided"}), 400
 
-    # Sanitize filename
     original_name = _sanitize_filename(file.filename)
 
-    # Check extension
     ext = os.path.splitext(original_name)[1].lower()
     if ext and ext not in ALLOWED_EXTENSIONS:
         return jsonify({"error": f"File type '{ext}' is not supported"}), 400
 
-    # Read file content for size check and hash
-    content = file.read()
-    if len(content) > MAX_FILE_SIZE:
-        return jsonify({"error": f"File exceeds {MAX_FILE_SIZE // 1024 // 1024}MB limit"}), 400
-
-    if len(content) == 0:
-        return jsonify({"error": "File is empty"}), 400
-
-    # MIME type validation
-    content_type = file.content_type or mimetypes.guess_type(original_name)[0] or 'application/octet-stream'
-
-    # Compute file hash
-    file_hash = hashlib.sha256(content).hexdigest()
-
+    import uuid
+    from services.tmp_storage import new_tmp_path
+    tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{original_name}")
     try:
+        file.save(tmp_path)
+
+        size = os.path.getsize(tmp_path)
+        if size > MAX_FILE_SIZE:
+            return jsonify({"error": f"File exceeds {MAX_FILE_SIZE // 1024 // 1024}MB limit"}), 400
+        if size == 0:
+            return jsonify({"error": "File is empty"}), 400
+
+        from abilities.document import ingest_file
         svc = _get_document_service()
+        result = ingest_file(svc, tmp_path, name=original_name)
+        if result.get("error"):
+            logger.error(f"[DOCS API] upload error: {result['error']}")
+            return jsonify({"error": "Upload failed"}), 500
 
-        # Create document record
-        import secrets
-        doc_id = secrets.token_hex(4)
-        file_path = f"{doc_id}/{original_name}"
+        doc_id = result["id"]
+        file_hash = result["hash"]
 
-        # Save file to disk
-        dir_path = FileMapperService.get_documents_path(doc_id)
-        os.makedirs(dir_path, exist_ok=True)
-
-        full_path = str(FileMapperService.get_documents_path(doc_id, original_name))
-        if not _validate_file_path(full_path):
-            return jsonify({"error": "Invalid file path"}), 400
-
-        with open(full_path, 'wb') as f:
-            f.write(content)
-
-        # Create DB record
-        doc_id = svc.create_document(
-            original_name=original_name,
-            mime_type=content_type,
-            file_size=len(content),
-            file_path=file_path,
-            file_hash=file_hash,
-            source_type='upload',
-        )
-
-        # Check for exact hash duplicates before processing
+        # Exact-hash duplicate detection, computed from the ingested file's hash.
         duplicates = svc.find_duplicates(file_hash, None, 0, exclude_id=doc_id)
-
-        # Process upload in background
-        _process_upload(doc_id)
 
         response = {
             "id": doc_id,
-            "original_name": original_name,
-            "status": "pending",
-            "file_size": len(content),
+            "original_name": result["name"],
+            "status": result.get("status") or "pending",
+            "file_size": result["size"],
             "file_hash": file_hash,
         }
 
@@ -301,6 +268,11 @@ def upload_document():
     except Exception as e:
         logger.error(f"[DOCS API] upload error: {e}")
         return jsonify({"error": "Upload failed"}), 500
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 @documents_bp.route("/documents", methods=["GET"])

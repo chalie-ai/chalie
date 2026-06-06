@@ -1,15 +1,23 @@
 """
 DocumentAbility — Search and manage documents via the ACT loop.
 
-Actions: search, list, view, delete, restore, create, upload
+LLM-callable actions: search, list, view, delete, restore, create.
+
+``upload`` is NOT in the LLM ``INPUT_SCHEMA``: it is the single MECHANICAL ingest
+for every uploaded file (chat attachments and the Documents library), invoked only
+by code via ``ToolDispatcher.dispatch``. It takes a file PATH, never bytes — a
+path is tiny, so the act-trail (which records every dispatch's params verbatim)
+can never carry a multi-megabyte base64 blob and blow the context window. The
+``_dispatch`` ``upload`` branch is retained for that mechanical route. (TKT-844)
 """
 
-import base64 as _base64
 import hashlib as _hashlib
 import json as _json
 import logging
+import mimetypes as _mimetypes
 import os as _os
 import secrets as _secrets
+import shutil as _shutil
 from typing import ClassVar, Optional
 
 from abilities._ability import Ability
@@ -48,11 +56,10 @@ class DocumentAbility(Ability):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["search", "list", "view", "delete", "restore", "create", "upload"],
+                "enum": ["search", "list", "view", "delete", "restore", "create"],
                 "description": (
                     "Document operation to perform; use `create` when the user asks you to "
-                    "create, save, write, or store a note or document; use `upload` to "
-                    "store a binary or base64-encoded file attachment."
+                    "create, save, write, or store a note or document."
                 ),
             },
             "query": {
@@ -66,21 +73,13 @@ class DocumentAbility(Ability):
             "name": {
                 "type": "string",
                 "description": (
-                    "Required for `create` and `upload`; use a filename like 'research-notes.md' "
+                    "Required for `create`; use a filename like 'research-notes.md' "
                     "if the user didn't give one. Optional fuzzy match for view/delete/restore."
                 ),
             },
             "content": {
                 "type": "string",
-                "description": "The full text body to write. Required for `create`. Base64-encoded file bytes for `upload`.",
-            },
-            "content_type": {
-                "type": "string",
-                "description": "MIME type of uploaded file (e.g. 'application/pdf', 'image/png'). Required for upload.",
-            },
-            "source_type": {
-                "type": "string",
-                "description": "Origin of the document (default 'conversation').",
+                "description": "The full text body to write. Required for `create`.",
             },
         },
         "required": ["action"],
@@ -131,9 +130,11 @@ def _dispatch(service, action: str, params: dict) -> str:
     elif action == "create":
         return _handle_create(service, params)
     elif action == "upload":
+        # Mechanical-only ingest (not in INPUT_SCHEMA): dispatched by code, never
+        # the LLM. Path-based — see _handle_upload / module docstring. (TKT-844)
         return _handle_upload(service, params)
     else:
-        valid = "search, list, view, delete, restore, create, upload"
+        valid = "search, list, view, delete, restore, create"
         return f"[DOCUMENT] Unknown action '{action}'. Use: {valid}"
 
 
@@ -437,39 +438,62 @@ def create_document_artifacts(doc_id: str, text_content: str) -> int:
     return len(artifacts)
 
 
-def _handle_upload(service, params: dict) -> str:
-    name = params.get("name", "attachment")
-    content = params.get("content", "")
-    content_type = params.get("content_type", "application/octet-stream")
+def ingest_file(service, src_path: str, *, name: "str | None" = None) -> dict:
+    """The single mechanical ingest for an uploaded file given by PATH.
 
-    if not name:
-        return "[DOCUMENT] 'name' is required for upload."
-    if not content:
-        return "[DOCUMENT] 'content' (base64 data) is required for upload."
+    Shared by both upload surfaces — chat attachments (via ``_handle_upload`` /
+    ``ToolDispatcher``) and the Documents library (``api.documents.upload_document``).
+    Copies the source file into the document store, creates the DB row, then runs
+    extraction SYNCHRONOUSLY (images route to vision/OCR, text to the extractor —
+    all inside ``_run_upload_extraction`` → ``extract_text``) so the document
+    reaches a terminal state (ready/failed) before returning.
+
+    Takes a path, never bytes, so the act-trail (which records every dispatch's
+    params verbatim) can never carry a file blob and blow the context window.
+    (TKT-844)
+
+    Returns ``{"id", "hash", "name", "size", "status"}`` on success, or
+    ``{"error": <message>}`` on failure.
+    """
+    src_path = (src_path or "").strip()
+    if not src_path:
+        return {"error": "'path' is required for upload."}
+    if not _os.path.isfile(src_path):
+        return {"error": f"No file at path: {src_path}"}
+
+    # Sanitise the stored filename — ingest serves both chat and library files,
+    # so never trust an arbitrary basename into the store path (traversal guard).
+    from services.filename_utils import safe_filename
+    name = safe_filename(name or _os.path.basename(src_path)) or "unnamed_document"
+    content_type = _mimetypes.guess_type(name)[0] or "application/octet-stream"
 
     try:
-        file_bytes = _base64.b64decode(content)
-    except Exception as e:
-        return f"[DOCUMENT] Failed to decode base64 content: {e}"
+        file_size = _os.path.getsize(src_path)
+        hasher = _hashlib.sha256()
+        with open(src_path, "rb") as fh:
+            for block in iter(lambda: fh.read(1024 * 1024), b""):
+                hasher.update(block)
+        file_hash = hasher.hexdigest()
+    except OSError as e:
+        return {"error": f"Failed to read file {src_path}: {e}"}
 
-    file_hash = _hashlib.sha256(file_bytes).hexdigest()
     doc_id = _secrets.token_hex(4)
     file_path_rel = f"{doc_id}/{name}"
 
     try:
-        from api.documents import _run_upload_extraction, _mark_upload_failed
         from services.file_mapper_service import FileMapperService
 
         dir_path = FileMapperService.get_documents_path(doc_id)
         _os.makedirs(dir_path, exist_ok=True)
         full_path = str(FileMapperService.get_documents_path(doc_id, name))
-        with open(full_path, 'wb') as fh:
-            fh.write(file_bytes)
+        if not FileMapperService.validate_document_path(full_path):
+            return {"error": f"Invalid file path for '{name}'."}
+        _shutil.copyfile(src_path, full_path)
 
         service.create_document(
             original_name=name,
             mime_type=content_type,
-            file_size=len(file_bytes),
+            file_size=file_size,
             file_path=file_path_rel,
             file_hash=file_hash,
             source_type='upload',
@@ -477,11 +501,12 @@ def _handle_upload(service, params: dict) -> str:
         )
     except Exception as e:
         logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
-        return f"[DOCUMENT] Failed to upload document: {e}"
+        return {"error": f"Failed to upload document: {e}"}
 
-    # Extraction runs synchronously: the ACT loop MUST block until the document
-    # reaches a terminal state (ready/failed) so a follow-up view in the same
-    # turn returns real text, never "still being processed".
+    # Extraction runs synchronously: callers MUST be able to read the document
+    # immediately (the ACT loop's follow-up view in the same turn, or the library
+    # endpoint's response) — never "still being processed".
+    from api.documents import _run_upload_extraction, _mark_upload_failed
     try:
         _run_upload_extraction(doc_id)
     except Exception as exc:
@@ -489,12 +514,35 @@ def _handle_upload(service, params: dict) -> str:
         _mark_upload_failed(doc_id, str(exc))
 
     doc = service.get_document(doc_id)
-    if doc and doc.get("status") == "ready":
+    return {
+        "id": doc_id,
+        "hash": file_hash,
+        "name": name,
+        "size": file_size,
+        "status": doc.get("status") if doc else None,
+    }
+
+
+def _handle_upload(service, params: dict) -> str:
+    """Mechanical upload dispatch (not LLM-callable) → string for the act-trail.
+
+    Thin formatter over ``ingest_file``. Preserves the ``(id=<doc_id>, hash=...)``
+    token that the turn-0 seed parses to build the TKT-842 transcript-doc link.
+    """
+    result = ingest_file(
+        service,
+        params.get("path"),
+        name=params.get("name"),
+    )
+    if result.get("error"):
+        return f"[DOCUMENT] {result['error']}"
+    if result.get("status") == "ready":
         return (
-            f"[DOCUMENT] Uploaded '{name}' (id={doc_id}, hash={file_hash}). "
-            f"Call document(action='view', id='{doc_id}') to read contents."
+            f"[DOCUMENT] Uploaded '{result['name']}' "
+            f"(id={result['id']}, hash={result['hash']}). "
+            f"Call document(action='view', id='{result['id']}') to read contents."
         )
-    return f"Failed to process document {name}"
+    return f"Failed to process document {result['name']}"
 
 
 def _handle_create(service, params: dict) -> str:
@@ -513,7 +561,7 @@ def _handle_create(service, params: dict) -> str:
         doc_id = service.create_document_from_text(
             original_name=name,
             text_content=content,
-            source_type=params.get("source_type", "conversation"),
+            source_type='conversation',
         )
 
         artifact_count = create_document_artifacts(doc_id, content)

@@ -90,38 +90,6 @@ def _sanitize_llm_args(value):
     return value
 
 
-# ── Attachment reader — used by _seed_turn_zero() ─────────────────────────────
-
-def _read_attachment(path: str) -> "tuple[str, str, str]":
-    """Read a temp attachment and return (name, base64_content, content_type).
-
-    Applies a path-traversal guard: only paths under the Chalie temp prefix
-    (see ``services.tmp_storage``) are accepted. Raises OSError if the path is
-    rejected or the file cannot be read.
-
-    Returns:
-        (filename, base64-encoded file bytes, MIME type string)
-    """
-    import base64
-    import mimetypes
-    import os
-
-    from services.tmp_storage import TMP_PATH_PREFIX
-
-    real = os.path.realpath(path)
-    if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
-        raise OSError(f"Unsafe or missing attachment path: {path!r}")
-
-    with open(real, "rb") as fh:
-        file_bytes = fh.read()
-
-    name = os.path.basename(real)
-    content_type, _ = mimetypes.guess_type(real)
-    content_type = content_type or "application/octet-stream"
-    content_b64 = base64.b64encode(file_bytes).decode()
-    return name, content_b64, content_type
-
-
 # ── Traceability spine ────────────────────────────────────────────────────────
 #
 # The MessageProcessor instance is the "parent" of everything that runs inside a
@@ -443,26 +411,30 @@ class MessageProcessor:
             dispatcher.dispatch("thinking", {})
 
     def _seed_upload_attachment(self, path: str) -> None:
-        """Read one turn-0 attachment and dispatch its blocking ``document.upload``.
+        """Dispatch one turn-0 attachment's blocking ``document.upload`` by PATH.
 
         Runs on a worker thread of ``_seed_turn_zero``'s pool.  Builds its OWN
         ToolDispatcher (dispatch binds a fresh, isolated per-call ability) so
-        concurrent uploads never share dispatch state.  A read failure for one
-        file is logged and skipped WITHOUT aborting the others (the pool keeps
-        every other task alive).  (TKT-838)
-        """
-        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+        concurrent uploads never share dispatch state.  An unsafe/missing path is
+        logged and skipped WITHOUT aborting the others (the pool keeps every other
+        task alive).  (TKT-838)
 
-        try:
-            name, content_b64, content_type = _read_attachment(path)
-        except OSError as exc:
-            logger.warning("[SEED] could not read attachment %s: %s", path, exc)
+        Dispatches the file PATH, never its bytes: the dispatch params land in the
+        act-trail verbatim, so a base64 blob would blow the context window.  Only
+        paths under the Chalie temp prefix are accepted (path-traversal guard).
+        (TKT-844)
+        """
+        import os  # noqa: PLC0415
+        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+        from services.tmp_storage import TMP_PATH_PREFIX  # noqa: PLC0415
+
+        real = os.path.realpath(path)
+        if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
+            logger.warning("[SEED] unsafe or missing attachment path: %r", path)
             return
         result = ToolDispatcher(self).dispatch("document", {
             "action": "upload",
-            "name": name,
-            "content": content_b64,
-            "content_type": content_type,
+            "path": real,
         })
         # Persist the turn<->doc link so the chat can re-render this attachment on
         # page refresh — the live preview is a browser-only blob: URL that dies on

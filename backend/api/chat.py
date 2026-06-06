@@ -245,7 +245,8 @@ def dispatch_message(
         text: Message content.
         source: Origin identifier (``"text"``, ``"voice"``, ``"scheduled"``,
                 ``"external_agent"``).
-        attachments: Optional file paths from POST /upload.
+        attachments: Optional temp file paths staged from the /chat multipart
+                      request (see ``_stage_chat_uploads``).
         hidden_input: When True the input row is NOT written to the transcript
                       (the synthesized assistant response still is).
     """
@@ -311,25 +312,47 @@ def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
 
 
+def _stage_chat_uploads(files: list) -> list:
+    """Stage each multipart upload to a unique temp path for turn-0 ingest.
+
+    Returns the temp paths (under ``TMP_PATH_PREFIX``) that ``_seed_turn_zero``
+    feeds to ``document.upload`` — which ingests by PATH, never bytes, so no file
+    blob ever reaches the act-trail. A per-file token keeps same-named uploads
+    from colliding. Files with no filename are skipped. (TKT-844)
+    """
+    from services.filename_utils import safe_filename  # noqa: PLC0415
+    from services.tmp_storage import new_tmp_path  # noqa: PLC0415
+
+    paths = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        name = safe_filename(f.filename) or "attachment"
+        tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
+        f.save(tmp_path)
+        paths.append(tmp_path)
+    return paths
+
+
 @chat_bp.route("/chat", methods=["POST"])
 @require_auth
 def post_chat():
-    """Receive a user message and start a new UMP turn.
+    """Receive a user message (multipart/form-data) and start a new UMP turn.
 
-    Body (JSON):
+    Form fields:
         text (str): Message text.
         source (str, optional): ``"text"`` or ``"voice"``. Default ``"text"``.
-        attachments (list[str], optional): Up to 10 tmp_path values from
-            POST /upload.
+    Files (``request.files``, field name ``files``):
+        Up to 10 raw file attachments. Each is staged to a temp path and ingested
+        via ``document.upload`` (by PATH, never bytes) at turn 0. (TKT-844)
 
     Response:
         202 Accepted — the message was received.
         Response arrives asynchronously via WebSocketBroker.broadcast().
     """
-    body = request.get_json(silent=True) or {}
-    text = (body.get("text") or "").strip()
-    source = body.get("source") or "text"
-    attachments = (body.get("attachments") or [])[:10]
+    text = (request.form.get("text") or "").strip()
+    source = request.form.get("source") or "text"
+    attachments = _stage_chat_uploads(request.files.getlist("files")[:10])
 
     if not text and not attachments:
         return jsonify({"status": "ignored", "reason": "empty message"}), 202

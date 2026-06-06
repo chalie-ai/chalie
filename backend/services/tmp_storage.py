@@ -8,11 +8,13 @@
 
 """Shared location + guard for Chalie's transient upload/attachment files.
 
-Single source of truth so the three sites that touch these files can never
-drift apart:
+Single source of truth so the sites that touch these files can never drift
+apart:
 
-  * write  — ``api/upload.py`` saves an uploaded file
-  * read   — ``services/message_processor.py`` reads it back as an attachment
+  * write  — ``api/chat.py`` (chat attachments) and ``api/documents.py`` (the
+             Documents library) save the raw uploaded file here
+  * ingest — ``abilities/document.py`` copies it into the documents store by
+             PATH (``document.upload`` never carries bytes — TKT-844)
   * sweep  — ``workers/tmp_cleanup_worker.py`` deletes stale ones
 
 Files live under the OS temp directory (``tempfile.gettempdir()``) rather than a
