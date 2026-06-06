@@ -46,20 +46,28 @@ _RICH_MEDIA_INSTRUCTION = (
 
 
 class SearchAbility(Ability):
-    NAME = "search"
-    SEARCH_TOOLTIP = "web and knowledge search"
-    SUMMARY = "Search Wikipedia, GitHub, Reddit, arXiv, news, and more with automatic provider routing from a plain language query."
-    EXAMPLES = [
-        "what is the current price of EUR compared to USD",
-        "find recent papers on transformer architecture improvements",
-        "look up Python asyncio on Stack Overflow",
-        "search GitHub for open source calendar sync libraries",
-        "what are people on Reddit saying about the new iPhone",
-        "find the Wikipedia article on the history of the internet",
-        "search for news about electric vehicle battery breakthroughs",
-        "look up the book 'The Pragmatic Programmer' on Open Library",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "search"
+
+    def get_summary(self) -> str:
+        return "Search Wikipedia, GitHub, Reddit, arXiv, news, and more with automatic provider routing from a plain language query."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what is the current price of EUR compared to USD",
+            "find recent papers on transformer architecture improvements",
+            "look up Python asyncio on Stack Overflow",
+            "search GitHub for open source calendar sync libraries",
+            "what are people on Reddit saying about the new iPhone",
+            "find the Wikipedia article on the history of the internet",
+            "search for news about electric vehicle battery breakthroughs",
+            "look up the book 'The Pragmatic Programmer' on Open Library",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "web and knowledge search"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "query": {
@@ -83,6 +91,9 @@ class SearchAbility(Ability):
         },
         "required": ["query"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
     _providers: ClassVar[dict | None] = None

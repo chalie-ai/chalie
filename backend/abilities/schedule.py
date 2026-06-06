@@ -101,26 +101,34 @@ def query_items(
 
 
 class ScheduleAbility(Ability):
-    NAME = "schedule"
-    SEARCH_TOOLTIP = "reminders and scheduled tasks"
-    SUMMARY = (
-        "Create, list, or cancel persistent reminders and recurring prompts at a "
-        "specific calendar date/time, with optional destination for departure reminders. "
-        "For a short ephemeral countdown the user wants "
-        "to watch tick down on screen (focus blocks, kitchen timers, breath holds), "
-        "use the `timer` tool instead — not `schedule`."
-    )
-    EXAMPLES = [
-        "remind me to call the dentist tomorrow at 3pm",
-        "set a daily reminder at 8am to take my vitamins",
-        "what reminders do I have this week",
-        "cancel my dentist reminder",
-        "schedule a weekly check-in every Monday at 9am",
-        "remind me to email the quarterly report by Friday 5pm",
-        "remind me to go to the gym at 7pm",
-        "set a reminder to leave for work at 8am",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "schedule"
+
+    def get_summary(self) -> str:
+        return (
+            "Create, list, or cancel persistent reminders and recurring prompts at a "
+            "specific calendar date/time, with optional destination for departure reminders. "
+            "For a short ephemeral countdown the user wants "
+            "to watch tick down on screen (focus blocks, kitchen timers, breath holds), "
+            "use the `timer` tool instead — not `schedule`."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "remind me to call the dentist tomorrow at 3pm",
+            "set a daily reminder at 8am to take my vitamins",
+            "what reminders do I have this week",
+            "cancel my dentist reminder",
+            "schedule a weekly check-in every Monday at 9am",
+            "remind me to email the quarterly report by Friday 5pm",
+            "remind me to go to the gym at 7pm",
+            "set a reminder to leave for work at 8am",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "reminders and scheduled tasks"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -213,6 +221,9 @@ class ScheduleAbility(Ability):
         "required": ["action"],
     }
 
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
     def run(self, params: dict) -> dict | str:
@@ -220,12 +231,12 @@ class ScheduleAbility(Ability):
         ordinal = params.get("_rich_media_ordinal")
 
         if action == "create":
-            channel = getattr(getattr(self.MessageProcessor, "config", None), "channel", "") or ""
+            channel = getattr(getattr(self.mp, "config", None), "channel", "") or ""
             result = _create(channel, params, self._PAST_DUE_GRACE_SECONDS)
         elif action == "list":
             result = _list(params)
         elif action == "search":
-            result = _search(params, self.MessageProcessor)
+            result = _search(params, self.mp)
         elif action == "cancel":
             result = _cancel(params)
         else:

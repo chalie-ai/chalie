@@ -42,12 +42,13 @@ pytestmark = pytest.mark.unit
 def _make_stub_processor(discoverable: list[str]) -> MessageProcessor:
     """Flat MessageProcessor carrying a config whose ``discoverable`` is the
     find_tools allow-list gate, plus an empty active_tools that find_tools
-    appends discovered names onto via self.MessageProcessor (TKT-835:
+    appends discovered names onto via self.mp (TKT-835:
     find_tools reads ``mp.config.discoverable`` / ``mp.config.blocked``)."""
     proc = object.__new__(MessageProcessor)
     proc.config = make_stub_config(discoverable=discoverable)
     proc._active_tools = []
     return proc
+
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +118,7 @@ def _execute_with_discoverable(ability, query, discoverable, limit=None):
     params = {"query": query}
     if limit is not None:
         params["limit"] = limit
-    ability.MessageProcessor = proc
+    ability.mp = proc
     result = ability.run(params)
     return result, proc.active_tools
 
@@ -408,7 +409,7 @@ class TestFindToolsPhase3Gaps:
 
         ability = FindToolsAbility()
         proc = _make_stub_processor(discoverable=["sandboxer"])
-        ability.MessageProcessor = proc
+        ability.mp = proc
         ability._fallback("sandbox", 5, ["sandboxer"])
 
         assert proc.active_tools == ["sandboxer"]

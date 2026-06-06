@@ -53,12 +53,12 @@ def test_email_calendar_contacts_are_registered():
     for name in ("email", "calendar", "contacts"):
         ability = AbilityRegistry.get(name)
         assert isinstance(ability, Ability), f"{name} is not an Ability subclass"
-        assert ability.NAME == name
-        assert isinstance(ability.SUMMARY, str) and ability.SUMMARY
-        assert isinstance(ability.INPUT_SCHEMA, dict)
-        # EXAMPLES count is enforced by _base.py's __init_subclass__ (6–8).
-        assert 6 <= len(ability.EXAMPLES) <= 8, (
-            f"{name}.EXAMPLES has {len(ability.EXAMPLES)} entries, expected 6–8"
+        assert ability.get_name() == name
+        assert isinstance(ability.get_summary(), str) and ability.get_summary()
+        assert isinstance(ability.get_parameters(), dict)
+        # EXAMPLES count is enforced by __init_subclass__ (6–8).
+        assert 6 <= len(ability.get_examples()) <= 8, (
+            f"{name}.get_examples() has {len(ability.get_examples())} entries, expected 6–8"
         )
 
 

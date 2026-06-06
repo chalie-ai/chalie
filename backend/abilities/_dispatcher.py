@@ -94,39 +94,25 @@ class ToolDispatcher:
 
     # ── Resolution ─────────────────────────────────────────────────────────────
 
-    def _match(self, tool_name: str) -> "Ability | None":
-        """Resolve a tool name to its handler. Native → the registry singleton
-        (a shared template); _mcp_* → a fresh synthetic _MCPAbility proxy (so MCP
-        flows through the same gate); unknown native name → None (dispatch()
-        turns this into an 'Unknown tool' string)."""
-        if tool_name.startswith("_mcp_"):
-            return _MCPAbility(tool_name)
-        try:
-            return AbilityRegistry.get(tool_name)
-        except KeyError:
-            return None
-
     def _bind(self, tool_name: str) -> "Ability | None":
         """Resolve *tool_name* to a FRESH per-call Ability instance bound to the
-        invoking ``mp``.
+        invoking ``mp`` (passed to ``Ability.__init__`` → ``self.mp``).
 
         Native abilities live in the registry as singletons; binding *mp* onto a
         shared instance would race across concurrent turns. So every call gets
-        its own instance (abilities are stateless, no custom ``__init__``) with
-        the invoking MessageProcessor attached as ``self.MessageProcessor`` — the
-        parent the tool reads its context from. ``_mcp_*`` names resolve to a
-        proxy that is already per-call, so it is bound as-is. Unknown name → None.
+        its own instance (abilities are stateless, no custom ``__init__``)
+        constructed with the invoking MessageProcessor — the parent the tool
+        reads its context from via ``self.mp``. ``_mcp_*`` names resolve to a
+        fresh synthetic ``_MCPAbility`` proxy, also mp-bound. Unknown native name
+        → None (dispatch() turns this into an 'Unknown tool' string).
         """
-        ability = self._match(tool_name)
-        if ability is None:
+        if tool_name.startswith("_mcp_"):
+            return _MCPAbility(tool_name, mp=self._mp)
+        try:
+            template = AbilityRegistry.get(tool_name)
+        except KeyError:
             return None
-        # The registry returns a shared singleton template for native tools —
-        # instantiate a fresh copy so the per-call mp binding never races. The
-        # _mcp_* proxy is already a fresh per-call instance (custom __init__).
-        if not tool_name.startswith("_mcp_"):
-            ability = type(ability)()
-        ability.MessageProcessor = self._mp
-        return ability
+        return type(template)(mp=self._mp)
 
     # ── Self-scaffolding executor — the allow-path callback dispatch() hands to wrap ──
 
@@ -138,9 +124,9 @@ class ToolDispatcher:
         is identical either way. Returns the result text STRING. Recording is
         dispatch()'s job, not ours.
 
-        Reads the bound parent off ``ability.MessageProcessor`` (set by _bind()).
-        act_summary (popped from params by dispatch()) is the WS tooltip; it is
-        NOT a run() argument. Spec §4.0 / §4.2 / D5.
+        Reads the bound parent off ``ability.mp`` (set by _bind()). act_summary
+        (popped from params by dispatch()) is the WS tooltip; it is NOT a run()
+        argument. Spec §4.0 / §4.2 / D5.
         """
         run_async = bool(params.pop("async", False))
         config = getattr(self._mp, "config", None)
@@ -148,7 +134,7 @@ class ToolDispatcher:
         call_id = uuid4().hex[:12]
         emitter.emit({
             "type": "act_tool_start",
-            "name": ability.NAME,
+            "name": ability.get_name(),
             "id": call_id,
             "summary": act_summary,
         })
@@ -164,7 +150,7 @@ class ToolDispatcher:
             result = self._run(ability, params)
 
         ok = result.get("status") != "error"
-        emitter.emit({"type": "act_tool_end", "name": ability.NAME, "id": call_id, "ok": ok})
+        emitter.emit({"type": "act_tool_end", "name": ability.get_name(), "id": call_id, "ok": ok})
         return str(result.get("result", ""))
 
     # ── Synchronous run primitive (shared by inline dispatch + AsyncDelegateRunner) ──
@@ -174,7 +160,7 @@ class ToolDispatcher:
         """Execute ability.run() synchronously and normalise the result.
 
         Loads the flattened client telemetry onto ``ability.telemetry`` just
-        before run(); the ability reads its parent off ``self.MessageProcessor``.
+        before run(); the ability reads its parent off ``self.mp``.
 
         There is no wall-clock bound — an ability runs to completion. The
         framework never abandons a tool call: the only things that stop a running

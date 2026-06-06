@@ -20,18 +20,26 @@ _CHUNK_SIZE = 8192
 
 
 class WebDownloadAbility(Ability):
-    NAME = "web_download"
-    SUMMARY = "Download a file from the internet to a temporary location for later reading or processing."
-    SEARCH_TOOLTIP = "File download from URL"
-    EXAMPLES: ClassVar[list[str]] = [
-        "download this PDF so I can read it",
-        "fetch the CSV file from this URL",
-        "download the image at this link",
-        "grab that JSON file from the API",
-        "save this webpage as a file",
-        "pull down the spreadsheet from that URL",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+    def get_name(self) -> str:
+        return "web_download"
+
+    def get_summary(self) -> str:
+        return "Download a file from the internet to a temporary location for later reading or processing."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "download this PDF so I can read it",
+            "fetch the CSV file from this URL",
+            "download the image at this link",
+            "grab that JSON file from the API",
+            "save this webpage as a file",
+            "pull down the spreadsheet from that URL",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "File download from URL"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "url": {
@@ -45,6 +53,9 @@ class WebDownloadAbility(Ability):
         },
         "required": ["url"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> str:
         url = params.get("url", "").strip()

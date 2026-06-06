@@ -29,7 +29,7 @@ Properties (spec §5b "Properties of every delegate tool"):
     daemon thread when it does.  run() is ALWAYS synchronous in itself.
 
 Permission boundary — ``policy_channel`` is inherited from the caller that
-invoked the ``web_search`` tool (``self.MessageProcessor.config.policy_channel``):
+invoked the ``web_search`` tool (``self.mp.config.policy_channel``):
 the delegate's internal tool calls are gated under the SAME policy channel as
 the caller, not a hardcoded value.  The user-facing permission check still
 happens at the outer ``web_search`` tool.
@@ -100,23 +100,31 @@ class WebSearchConfig(ProcessorConfig):
 
 
 class WebSearchAbility(Ability):
-    NAME = "web_search"
-    SEARCH_TOOLTIP = "delegate a focused web search"
-    SUMMARY = (
-        "Delegate a web-research task to a focused agent that searches the web, "
-        "reads the best sources, and returns a grounded synthesis with citations."
-    )
-    EXAMPLES = [
-        "search the web for the latest news on AI regulation",
-        "find out what the current consensus is on intermittent fasting",
-        "research the best practices for Postgres connection pooling",
-        "look up recent reviews of the new Framework laptop",
-        "what are the latest developments in fusion energy",
-        "find current pricing for AWS Lambda vs Cloudflare Workers",
-        "search for documentation on the Stripe webhooks API",
-        "what happened in the latest SpaceX Starship test flight",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+    def get_name(self) -> str:
+        return "web_search"
+
+    def get_summary(self) -> str:
+        return (
+            "Delegate a web-research task to a focused agent that searches the web, "
+            "reads the best sources, and returns a grounded synthesis with citations."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "search the web for the latest news on AI regulation",
+            "find out what the current consensus is on intermittent fasting",
+            "research the best practices for Postgres connection pooling",
+            "look up recent reviews of the new Framework laptop",
+            "what are the latest developments in fusion energy",
+            "find current pricing for AWS Lambda vs Cloudflare Workers",
+            "search for documentation on the Stripe webhooks API",
+            "what happened in the latest SpaceX Starship test flight",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "delegate a focused web search"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "query": {
@@ -127,11 +135,14 @@ class WebSearchAbility(Ability):
         "required": ["query"],
     }
 
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
     def run(self, params: dict) -> dict:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         result = MessageProcessor.process(
             delegate_goal(params),
-            WebSearchConfig(self.MessageProcessor.config.policy_channel),
+            WebSearchConfig(self.mp.config.policy_channel),
         )
         return {"status": "success", "result": result}

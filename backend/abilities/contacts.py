@@ -8,6 +8,8 @@ capability is not yet connected.
 
 import json
 import logging
+from typing import ClassVar
+
 from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
 
@@ -23,22 +25,33 @@ _RICH_MEDIA_INSTRUCTION = (
 
 
 class ContactsAbility(Ability):
-    NAME = "contacts"
-    SEARCH_TOOLTIP = "contact book"
-    SUMMARY = (
-        "Search and look up contacts from the connected address book (CardDAV). "
-        "Available when the user asks for someone's phone number, email, or contact details."
-    )
-    EXAMPLES = [
-        "find John's phone number",
-        "look up Sarah's email address",
-        "who is in my contacts",
-        "get me the contact details for Mike",
-        "search my address book for someone named Alex",
-        "what's the phone number for the dentist",
-        "show me all my contacts",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "contacts"
+
+    def get_summary(self) -> str:
+        return (
+            "Search and look up contacts from the connected address book (CardDAV). "
+            "Available when the user asks for someone's phone number, email, or contact details."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "find John's phone number",
+            "look up Sarah's email address",
+            "who is in my contacts",
+            "get me the contact details for Mike",
+            "search my address book for someone named Alex",
+            "what's the phone number for the dentist",
+            "show me all my contacts",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "contact book"
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {

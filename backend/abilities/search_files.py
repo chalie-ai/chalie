@@ -31,24 +31,32 @@ _WALK_BUDGET_S = 30
 
 
 class SearchFilesAbility(Ability):
-    NAME = "search_files"
-    SUMMARY = (
-        "Locate files on disk by filename pattern (glob) or by content (grep). "
-        "Use this BEFORE reaching for bash when you need to find a file you "
-        "don't already know the path of."
-    )
-    SEARCH_TOOLTIP = "Find files by name or content"
-    EXAMPLES: ClassVar[list[str]] = [
-        "find all yaml files under chalie-nightly-test",
-        "where is the message_processor file",
-        "search the backend for files containing 'PolicyService'",
-        "list every markdown doc under docs/",
-        "grep for 'TODO' in my notes folder",
-        "which file defines _FIND_TOOLS_GUARDRAILS",
-        "show me all log files in /tmp",
-        "find files matching test_*.py",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+    def get_name(self) -> str:
+        return "search_files"
+
+    def get_summary(self) -> str:
+        return (
+            "Locate files on disk by filename pattern (glob) or by content (grep). "
+            "Use this BEFORE reaching for bash when you need to find a file you "
+            "don't already know the path of."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "find all yaml files under chalie-nightly-test",
+            "where is the message_processor file",
+            "search the backend for files containing 'PolicyService'",
+            "list every markdown doc under docs/",
+            "grep for 'TODO' in my notes folder",
+            "which file defines _FIND_TOOLS_GUARDRAILS",
+            "show me all log files in /tmp",
+            "find files matching test_*.py",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "Find files by name or content"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -95,6 +103,9 @@ class SearchFilesAbility(Ability):
         },
         "required": ["action", "query"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         action = params.get("action", "")

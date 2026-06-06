@@ -12,8 +12,9 @@ current ACT turn.
 
 import json
 import logging
-from abilities._ability import Ability
+from typing import ClassVar
 
+from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
@@ -21,24 +22,35 @@ LOG_PREFIX = "[EMAIL ABILITY]"
 
 
 class EmailAbility(Ability):
-    NAME = "email"
-    SEARCH_TOOLTIP = "email inbox and sending"
-    SUMMARY = (
-        "Read, search, draft, send, reply, forward, and manage emails via the connected "
-        "mail account. Available when the user asks to check, find, compose, send, "
-        "reply to, forward, or manage email."
-    )
-    EXAMPLES = [
-        "check my email",
-        "search emails from John",
-        "do I have any unread messages",
-        "read that email from Sarah",
-        "draft an email to the team about the meeting",
-        "send an email to John about the meeting",
-        "reply to Alice's email saying I agree",
-        "forward the newsletter to the marketing team",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "email"
+
+    def get_summary(self) -> str:
+        return (
+            "Read, search, draft, send, reply, forward, and manage emails via the connected "
+            "mail account. Available when the user asks to check, find, compose, send, "
+            "reply to, forward, or manage email."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "check my email",
+            "search emails from John",
+            "do I have any unread messages",
+            "read that email from Sarah",
+            "draft an email to the team about the meeting",
+            "send an email to John about the meeting",
+            "reply to Alice's email saying I agree",
+            "forward the newsletter to the marketing team",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "email inbox and sending"
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {

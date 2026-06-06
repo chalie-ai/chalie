@@ -83,10 +83,10 @@ def test_find_tools_appended_names_are_resolved_and_deduped():
 
 
 def test_build_tools_does_not_mutate_ability_classvar():
-    """act_summary injection must deep-copy — never pollute the ClassVar."""
+    """act_summary injection must deep-copy — never pollute the declared params."""
     code_eval = AbilityRegistry.get("code_eval")
     AbilityRegistry.build_tools(_make_mp(["code_eval"]))
-    assert "act_summary" not in code_eval.INPUT_SCHEMA.get("properties", {})
+    assert "act_summary" not in code_eval.get_parameters().get("properties", {})
 
 
 def test_unknown_name_is_skipped_not_fatal():

@@ -54,19 +54,27 @@ _CLEAR_WORDS = ("clear", "sunny", "mainly clear")
 
 
 class WeatherAbility(Ability):
-    NAME = "weather"
-    SEARCH_TOOLTIP = "weather forecasts"
-    SUMMARY = "Get current weather and tomorrow's forecast for a city or device coordinates."
-    EXAMPLES = [
-        "what's the weather like today",
-        "will it rain tomorrow",
-        "do I need a jacket",
-        "is it sunny outside",
-        "temperature in London",
-        "weather forecast for tomorrow",
-        "should I bring an umbrella",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "weather"
+
+    def get_summary(self) -> str:
+        return "Get current weather and tomorrow's forecast for a city or device coordinates."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what's the weather like today",
+            "will it rain tomorrow",
+            "do I need a jacket",
+            "is it sunny outside",
+            "temperature in London",
+            "weather forecast for tomorrow",
+            "should I bring an umbrella",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "weather forecasts"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "location": {
@@ -79,6 +87,9 @@ class WeatherAbility(Ability):
         },
         "required": [],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     _cache: ClassVar[dict] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes

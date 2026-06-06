@@ -6,6 +6,7 @@ email.py (no rich-media rendering).
 
 import json
 import logging
+from typing import ClassVar
 
 from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -14,24 +15,32 @@ logger = logging.getLogger(__name__)
 
 
 class HomeAbility(Ability):
-    NAME = "home"
-    SEARCH_TOOLTIP = "smart home control"
-    SUMMARY = (
-        "Control smart home devices and automations via the connected "
-        "Home Assistant instance. Available when the user asks about "
-        "devices, lights, climate, sensors, or automations."
-    )
-    EXAMPLES = [
-        "turn on the living room light",
-        "what's the temperature in the bedroom",
-        "is the front door locked",
-        "turn off all lights downstairs",
-        "what automations do I have",
-        "trigger the good morning routine",
-        "what devices are currently on",
-        "set the thermostat to 21 degrees",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "home"
+
+    def get_summary(self) -> str:
+        return (
+            "Control smart home devices and automations via the connected "
+            "Home Assistant instance. Available when the user asks about "
+            "devices, lights, climate, sensors, or automations."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "turn on the living room light",
+            "what's the temperature in the bedroom",
+            "is the front door locked",
+            "turn off all lights downstairs",
+            "what automations do I have",
+            "trigger the good morning routine",
+            "what devices are currently on",
+            "set the thermostat to 21 degrees",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "smart home control"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -80,6 +89,9 @@ class HomeAbility(Ability):
         },
         "required": ["action"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict | str:
         action = params.get("action", "list_devices").lower()

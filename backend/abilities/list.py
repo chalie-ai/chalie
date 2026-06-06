@@ -14,7 +14,7 @@ Rich-media rendering:
 
 import json
 import logging
-from typing import Optional
+from typing import ClassVar, Optional
 
 from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -30,18 +30,26 @@ _RICH_MEDIA_INSTRUCTION = (
 
 
 class ListAbility(Ability):
-    NAME = "list"
-    SEARCH_TOOLTIP = "list and checklist manager"
-    SUMMARY = "Create and manage named lists — shopping, to-do, chores — addressed by id."
-    EXAMPLES = [
-        "create a grocery list and add milk, eggs, and bread",
-        "show me all my lists",
-        "add bananas to list abc12345",
-        "check off milk on list abc12345",
-        "rename list abc12345 to weekend chores",
-        "delete list abc12345",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "list"
+
+    def get_summary(self) -> str:
+        return "Create and manage named lists — shopping, to-do, chores — addressed by id."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "create a grocery list and add milk, eggs, and bread",
+            "show me all my lists",
+            "add bananas to list abc12345",
+            "check off milk on list abc12345",
+            "rename list abc12345 to weekend chores",
+            "delete list abc12345",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "list and checklist manager"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -87,6 +95,9 @@ class ListAbility(Ability):
         },
         "required": ["action"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict | str:
         action = params.get("action", "list_all")

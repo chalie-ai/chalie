@@ -53,23 +53,34 @@ class ToolChainCompactionConfig(ProcessorConfig):
 
 
 class ToolChainCompactor(Ability):
-    NAME = "tool_chain_compactor"
-    SEARCH_TOOLTIP = "internal act-trail compaction"
-    SUMMARY = "Internal-only act-trail (tool-chain) compaction. Never user-invocable."
-    EXAMPLES: ClassVar[list] = [
-        "internal: compact the current turn's tool-call trail into a handover",
-        "internal: summarise tool results before the trail overflows the window",
-        "internal: collapse a long act-trail mid-turn",
-        "internal: hand over what tools ran and returned this turn",
-        "internal: bound the act-trail so pre-compacted calls drop out",
-        "internal: preserve tool findings while shrinking the trail",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {"type": "object", "properties": {}}
+    def get_name(self) -> str:
+        return "tool_chain_compactor"
+
+    def get_summary(self) -> str:
+        return "Internal-only act-trail (tool-chain) compaction. Never user-invocable."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "internal: compact the current turn's tool-call trail into a handover",
+            "internal: summarise tool results before the trail overflows the window",
+            "internal: collapse a long act-trail mid-turn",
+            "internal: hand over what tools ran and returned this turn",
+            "internal: bound the act-trail so pre-compacted calls drop out",
+            "internal: preserve tool findings while shrinking the trail",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "internal act-trail compaction"
+
+    _PARAMETERS: ClassVar[dict] = {"type": "object", "properties": {}}
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        parent = self.MessageProcessor
+        parent = self.mp
         if not parent._has_trail():
             # No non-compactor trail since the last boundary — nothing to do.
             return {"status": "success", "result": ""}

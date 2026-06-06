@@ -38,20 +38,28 @@ _RICH_MEDIA_INSTRUCTION = (
 
 
 class NewsAbility(Ability):
-    NAME = "news"
-    SEARCH_TOOLTIP = "news article search"
-    SUMMARY = "Search news articles across global sources by query, with optional category filtering for broad topic browsing."
-    EXAMPLES = [
-        "what's in the news about artificial intelligence today",
-        "latest tech news",
-        "what happened in sports today",
-        "news about the US election",
-        "any recent business news about Apple",
-        "what's happening in science this week",
-        "show me today's UK headlines",
-        "news about climate change legislation",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "news"
+
+    def get_summary(self) -> str:
+        return "Search news articles across global sources by query, with optional category filtering for broad topic browsing."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what's in the news about artificial intelligence today",
+            "latest tech news",
+            "what happened in sports today",
+            "news about the US election",
+            "any recent business news about Apple",
+            "what's happening in science this week",
+            "show me today's UK headlines",
+            "news about climate change legislation",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "news article search"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "query": {
@@ -66,6 +74,9 @@ class NewsAbility(Ability):
         },
         "required": ["query"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     _service: ClassVar[Optional[NewsService]] = None
 

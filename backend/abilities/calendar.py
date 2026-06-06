@@ -11,6 +11,8 @@ MailCapability's CalDAV handler which pushes changes to the server.
 
 import json as _json
 import logging
+from typing import ClassVar
+
 from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
 from utils.data_utils import parse_json_column
@@ -27,23 +29,34 @@ _RICH_MEDIA_INSTRUCTION = (
 
 
 class CalendarAbility(Ability):
-    NAME = "calendar"
-    SEARCH_TOOLTIP = "calendar events"
-    SUMMARY = (
-        "List, view, and update calendar events from the connected CalDAV account. "
-        "Available when the user asks about meetings, appointments, or schedule."
-    )
-    EXAMPLES = [
-        "what's on my calendar today",
-        "show my meetings this week",
-        "do I have anything scheduled tomorrow",
-        "what time is my next meeting",
-        "update the project meeting time to 3pm",
-        "get details for that appointment",
-        "what events do I have coming up",
-        "show me my schedule for next Monday",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "calendar"
+
+    def get_summary(self) -> str:
+        return (
+            "List, view, and update calendar events from the connected CalDAV account. "
+            "Available when the user asks about meetings, appointments, or schedule."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what's on my calendar today",
+            "show my meetings this week",
+            "do I have anything scheduled tomorrow",
+            "what time is my next meeting",
+            "update the project meeting time to 3pm",
+            "get details for that appointment",
+            "what events do I have coming up",
+            "show me my schedule for next Monday",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "calendar events"
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {

@@ -19,19 +19,27 @@ _MAX_OCTAL = 0o7777
 
 
 class FilePermissionsAbility(Ability):
-    NAME = "file_permissions"
-    SUMMARY = "Change Unix-style filesystem permissions (chmod) on a file or directory."
-    SEARCH_TOOLTIP = "Change file permissions (chmod)"
-    EXAMPLES: ClassVar[list[str]] = [
-        "make this script executable",
-        "chmod 755 /home/user/scripts/deploy.sh",
-        "make this file read-only",
-        "give this file 644 permissions",
-        "set permissions to 600 on my ssh key",
-        "make this binary executable so I can run it",
-        "lock down this config file to owner-only",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+    def get_name(self) -> str:
+        return "file_permissions"
+
+    def get_summary(self) -> str:
+        return "Change Unix-style filesystem permissions (chmod) on a file or directory."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "make this script executable",
+            "chmod 755 /home/user/scripts/deploy.sh",
+            "make this file read-only",
+            "give this file 644 permissions",
+            "set permissions to 600 on my ssh key",
+            "make this binary executable so I can run it",
+            "lock down this config file to owner-only",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "Change file permissions (chmod)"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "path": {
@@ -49,6 +57,9 @@ class FilePermissionsAbility(Ability):
         },
         "required": ["path", "permissions"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         path_str = (params.get("path") or "").strip()

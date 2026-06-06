@@ -127,7 +127,7 @@ def _read_attachment(path: str) -> "tuple[str, str, str]":
 # The MessageProcessor instance is the "parent" of everything that runs inside a
 # turn. Rather than hide it behind a global ContextVar, it is threaded
 # explicitly: ``ToolDispatcher(self).dispatch(…)`` binds it onto each per-call
-# ability as ``self.MessageProcessor``, and the Providers facade receives it as ``mp=``.
+# ability as ``self.mp`` (constructor-injected), and the Providers facade receives it as ``mp=``.
 # Wherever we are in a turn we can always reach the parent — and reconstruct the
 # full path that got us there — by holding a real reference, not by reaching
 # into a thread-local.

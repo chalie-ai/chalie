@@ -29,23 +29,34 @@ _ERR_URL_REQUIRED = "url parameter required"
 
 
 class BrowserAbility(Ability):
-    NAME = "browser"
-    SEARCH_TOOLTIP = "interactive web browser"
-    SUMMARY = (
-        "Control a headless browser to render JavaScript-heavy pages, take screenshots, "
-        "interact with forms and buttons, and monitor pages for changes."
-    )
-    EXAMPLES = [
-        "open this webpage and tell me what it says",
-        "take a screenshot of the BBC homepage",
-        "log into my account on this site and check my balance",
-        "fill in this web form and submit it",
-        "watch this product page and tell me if the price drops",
-        "render this JavaScript-heavy dashboard and extract the table",
-        "click the Accept cookies button on this site",
-        "check whether this page content has changed since yesterday",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "browser"
+
+    def get_summary(self) -> str:
+        return (
+            "Control a headless browser to render JavaScript-heavy pages, take screenshots, "
+            "interact with forms and buttons, and monitor pages for changes."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "open this webpage and tell me what it says",
+            "take a screenshot of the BBC homepage",
+            "log into my account on this site and check my balance",
+            "fill in this web form and submit it",
+            "watch this product page and tell me if the price drops",
+            "render this JavaScript-heavy dashboard and extract the table",
+            "click the Accept cookies button on this site",
+            "check whether this page content has changed since yesterday",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "interactive web browser"
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {

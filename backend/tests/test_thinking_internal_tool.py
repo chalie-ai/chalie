@@ -7,7 +7,7 @@ pytestmark = pytest.mark.integration
 
 def test_thinking_never_discoverable(db):
     # thinking is registered but in no discoverable/always_available list.
-    assert "thinking" in {a.NAME for a in AbilityRegistry.all()}
+    assert "thinking" in {a.get_name() for a in AbilityRegistry.all()}
     cfg = UserConfig()
     assert "thinking" not in (cfg.always_available or [])
     assert "thinking" not in (cfg.discoverable or [])

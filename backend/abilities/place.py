@@ -13,6 +13,7 @@ returns an informative error rather than storing a null record.
 
 import json
 import logging
+from typing import ClassVar
 
 from abilities._ability import Ability
 from services.data_graph_service import KIND_PLACE, get_data_graph_service
@@ -34,23 +35,31 @@ _ERR_NOT_FOUND = "No saved place found with that name."
 
 
 class PlaceAbility(Ability):
-    NAME = "place"
-    SEARCH_TOOLTIP = "place and location lookup"
-    SUMMARY = (
-        "Save, list, or delete named places (home, work, gym, etc.). "
-        "Use when the user wants to save their current location with a name, "
-        "list their saved places, or delete a named place."
-    )
-    EXAMPLES = [
-        "save this location as home",
-        "remember this place as my office",
-        "where is my home?",
-        "list my saved places",
-        "delete the gym location",
-        "save my current location as work",
-        "what places do I have saved?",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "place"
+
+    def get_summary(self) -> str:
+        return (
+            "Save, list, or delete named places (home, work, gym, etc.). "
+            "Use when the user wants to save their current location with a name, "
+            "list their saved places, or delete a named place."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "save this location as home",
+            "remember this place as my office",
+            "where is my home?",
+            "list my saved places",
+            "delete the gym location",
+            "save my current location as work",
+            "what places do I have saved?",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "place and location lookup"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -73,6 +82,9 @@ class PlaceAbility(Ability):
         },
         "required": ["action"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         action = params.get("action", "").lower()

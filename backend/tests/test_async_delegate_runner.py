@@ -32,10 +32,11 @@ class _GatedAbility(Ability):
     keeps it out of the static registry (matches dynamic/MCP abilities)."""
 
     _SYNTHETIC = True
-    NAME = "test_runner_gated"
-    SEARCH_TOOLTIP = "block until released — runner feature-test fixture"
-    SUMMARY = "Block until released — feature-test fixture only."
-    EXAMPLES = [
+
+    def get_name(self): return "test_runner_gated"
+    def get_search_tooltip(self): return "block until released — runner feature-test fixture"
+    def get_summary(self): return "Block until released — feature-test fixture only."
+    def get_examples(self): return [
         "block until released",
         "wait for the gate",
         "hold until signalled",
@@ -43,7 +44,7 @@ class _GatedAbility(Ability):
         "stay blocked",
         "wait then return",
     ]
-    INPUT_SCHEMA = {"type": "object", "properties": {}, "required": []}
+    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
 
     def __init__(self, release: threading.Event, started: threading.Event, done: list):
         self._release = release
@@ -62,10 +63,10 @@ def test_spawn_is_non_blocking_registers_and_deregisters():
     started = threading.Event()
     done = []
     ability = _GatedAbility(release, started, done)
-    ability.MessageProcessor = object()  # delivery is skipped (cancelled below)
+    ability.mp = object()  # delivery is skipped (cancelled below)
 
     runner = AsyncDelegateRunner()
-    placeholder = runner.spawn(ability, {}, mp=ability.MessageProcessor)
+    placeholder = runner.spawn(ability, {}, mp=ability.mp)
 
     # Returns immediately with the placeholder while run() is still blocked.
     assert placeholder.startswith("test_runner_gated dispatched (id: ")

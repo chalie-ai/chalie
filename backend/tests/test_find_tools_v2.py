@@ -52,7 +52,7 @@ def _stub_proc(discoverable: list[str]) -> MessageProcessor:
 
 def _run(ability: FindToolsAbility, proc: MessageProcessor, params: dict) -> str:
     """Bind proc to ability and call run(); return the result string."""
-    ability.MessageProcessor = proc
+    ability.mp = proc
     return ability.run(params)
 
 

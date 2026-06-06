@@ -16,7 +16,8 @@ import logging
 from typing import ClassVar
 
 # Ability is the shared base every dispatchable tool subclasses; _MCPAbility is
-# a synthetic member of that hierarchy so MCP calls reuse the one gate.
+# a synthetic member of that hierarchy so MCP calls reuse the one gate AND the
+# one schema assembler (get_input_schema → framework-field injection).
 from abilities._ability import Ability
 
 logger = logging.getLogger(__name__)
@@ -43,18 +44,53 @@ def _dispatch_mcp(tool_name: str, params: dict) -> dict:
 
 class _MCPAbility(Ability):
     """Synthetic proxy for an _mcp_* tool so MCP calls flow through
-    match → wrap → execute exactly like a native ability — gated for the
-    first time.
+    match → wrap → execute AND name → description → input_schema assembly
+    exactly like a native ability — both gated and schema-built for the first
+    time through the single path.
 
-    _SYNTHETIC=True exempts it from __init_subclass__ validation (no
-    EXAMPLES/SEARCH_TOOLTIP) and from the registry's boot-time instantiation
-    (_all_concrete_subclasses skips it — it cannot be built with no args).
+    Its metadata getters source the description / parameters from the remote
+    tool schema (lazily fetched + cached via McpClientService); the search-facing
+    getters return empty because a synthetic proxy is never indexed.
+
+    _SYNTHETIC=True exempts it from __init_subclass__ metadata validation (no
+    EXAMPLES/SEARCH_TOOLTIP shape check) and from the registry's boot-time
+    instantiation (_all_concrete_subclasses skips it — it takes a tool_name).
     """
 
     _SYNTHETIC: ClassVar[bool] = True
 
-    def __init__(self, tool_name: str) -> None:
-        self.NAME = tool_name
+    def __init__(self, tool_name: str, mp: "object | None" = None) -> None:
+        super().__init__(mp)
+        self._tool_name = tool_name
+        self._remote: "dict | None" = None
+        self._fetched = False
+
+    def remote_schema(self) -> "dict | None":
+        """The remote MCP tool schema (``{'name','description','input_schema'}``),
+        fetched once and cached. None when the server exposes no such tool —
+        build_tools treats that as 'skip this tool'."""
+        if not self._fetched:
+            from services.mcp_client_service import McpClientService  # noqa: PLC0415
+            self._remote = McpClientService().get_tool_schema(self._tool_name)
+            self._fetched = True
+        return self._remote
+
+    def get_name(self) -> str:
+        return self._tool_name
+
+    def get_summary(self) -> str:
+        remote = self.remote_schema()
+        return (remote or {}).get("description", "")
+
+    def get_examples(self) -> list[str]:
+        return []
+
+    def get_search_tooltip(self) -> str:
+        return ""
+
+    def get_parameters(self) -> dict:
+        remote = self.remote_schema()
+        return (remote or {}).get("input_schema", {})
 
     def run(self, params: dict) -> dict:
-        return _dispatch_mcp(self.NAME, params)
+        return _dispatch_mcp(self._tool_name, params)

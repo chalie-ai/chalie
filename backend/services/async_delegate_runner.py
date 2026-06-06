@@ -52,7 +52,8 @@ class AsyncDelegateRunner:
         daemon thread, and returns immediately — the ACT iteration is never
         blocked (spec §4.0).
         """
-        delegate_id = f"{ability.NAME}_{uuid4().hex[:8]}"
+        name = ability.get_name()
+        delegate_id = f"{name}_{uuid4().hex[:8]}"
         cancel_event = threading.Event()
         self._active[delegate_id] = cancel_event
         ctx = contextvars.copy_context()
@@ -62,7 +63,7 @@ class AsyncDelegateRunner:
             daemon=True,
         ).start()
         return (
-            f"{ability.NAME} dispatched (id: {delegate_id}). "
+            f"{name} dispatched (id: {delegate_id}). "
             "You will be notified when it completes."
         )
 

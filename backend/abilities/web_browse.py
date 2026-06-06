@@ -19,7 +19,7 @@ the raw ``browser`` ability — its tool *surface* still uses the raw ``browser`
 tool (spec amendment 2026-06-02, Dylan, AC-3).
 
 Permission boundary — ``policy_channel`` is inherited from the caller that
-invoked the ``web_browse`` tool (``self.MessageProcessor.config.policy_channel``):
+invoked the ``web_browse`` tool (``self.mp.config.policy_channel``):
 the delegate's internal tool calls are gated under the SAME policy channel as
 the caller, not a hardcoded value.  The user-facing permission check still
 happens at the outer ``web_browse`` tool.
@@ -93,24 +93,32 @@ class WebBrowseConfig(ProcessorConfig):
 
 
 class WebBrowseAbility(Ability):
-    NAME = "web_browse"
-    SEARCH_TOOLTIP = "delegate an interactive web-browsing task"
-    SUMMARY = (
-        "Delegate an interactive web-browsing task to a focused agent that "
-        "drives a real browser — rendering pages, taking screenshots, filling "
-        "forms, and navigating flows — and reports what it finds."
-    )
-    EXAMPLES = [
-        "browse this site and book the earliest available appointment",
-        "log into my account on this page and read my current balance",
-        "navigate this multi-step checkout and tell me the final total",
-        "open the dashboard and extract the table after it finishes loading",
-        "click through this cookie banner and read the article behind it",
-        "fill in this web form with my details and submit it",
-        "step through this site's signup flow and report where it fails",
-        "open this JavaScript app and tell me what the page shows",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+    def get_name(self) -> str:
+        return "web_browse"
+
+    def get_summary(self) -> str:
+        return (
+            "Delegate an interactive web-browsing task to a focused agent that "
+            "drives a real browser — rendering pages, taking screenshots, filling "
+            "forms, and navigating flows — and reports what it finds."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "browse this site and book the earliest available appointment",
+            "log into my account on this page and read my current balance",
+            "navigate this multi-step checkout and tell me the final total",
+            "open the dashboard and extract the table after it finishes loading",
+            "click through this cookie banner and read the article behind it",
+            "fill in this web form with my details and submit it",
+            "step through this site's signup flow and report where it fails",
+            "open this JavaScript app and tell me what the page shows",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "delegate an interactive web-browsing task"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "goal": {
@@ -121,11 +129,14 @@ class WebBrowseAbility(Ability):
         "required": ["goal"],
     }
 
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
     def run(self, params: dict) -> dict:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         result = MessageProcessor.process(
             delegate_goal(params),
-            WebBrowseConfig(self.MessageProcessor.config.policy_channel),
+            WebBrowseConfig(self.mp.config.policy_channel),
         )
         return {"status": "success", "result": result}

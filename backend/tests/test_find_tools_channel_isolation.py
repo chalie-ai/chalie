@@ -42,7 +42,7 @@ def _mp_for(config) -> MessageProcessor:
 def _find_tools_on(mp: MessageProcessor, params: dict) -> str:
     """Drive the real find_tools dispatch path: bind the invoking mp and run."""
     ability = FindToolsAbility()
-    ability.MessageProcessor = mp
+    ability.mp = mp
     return ability.run(params)
 
 

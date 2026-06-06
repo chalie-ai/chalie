@@ -45,7 +45,7 @@ def clean_registry():
 
 def test_all_includes_registered_abilities():
     """AbilityRegistry.all() surfaces every concrete subclass on disk."""
-    names = [a.NAME for a in AbilityRegistry.all()]
+    names = [a.get_name() for a in AbilityRegistry.all()]
     assert "weather" in names
 
 
@@ -59,12 +59,13 @@ def test_get_raises_key_error_for_unknown_name_with_subclass_present():
     """AbilityRegistry.get() raises KeyError for a name that no subclass owns."""
 
     class _KnownAbility(Ability):
-        NAME = "known"
-        SUMMARY = "known ability"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
+        def get_name(self): return "known"
+        def get_summary(self): return "known ability"
+        def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
+        def get_search_tooltip(self): return ""
+        def get_parameters(self): return {}
 
-        def run(self, channel, params, telemetry):
+        def run(self, params):
             return {}
 
     _reset_for_tests()
@@ -91,19 +92,20 @@ def test_registry_reflects_concrete_subclass_after_reset():
     """After reset, a newly defined subclass appears in the registry."""
 
     class _NewAbility(Ability):
-        NAME = "new_ability"
-        SUMMARY = "a freshly defined ability"
-        EXAMPLES = ["do it", "run it", "start it", "go now", "begin", "execute"]
-        INPUT_SCHEMA = {}
+        def get_name(self): return "new_ability"
+        def get_summary(self): return "a freshly defined ability"
+        def get_examples(self): return ["do it", "run it", "start it", "go now", "begin", "execute"]
+        def get_search_tooltip(self): return ""
+        def get_parameters(self): return {}
 
-        def run(self, channel, params, telemetry):
+        def run(self, params):
             return {"text": "ok"}
 
     _reset_for_tests()
 
-    names = [a.NAME for a in AbilityRegistry.all()]
+    names = [a.get_name() for a in AbilityRegistry.all()]
     assert "new_ability" in names
-    assert AbilityRegistry.get("new_ability").NAME == "new_ability"
+    assert AbilityRegistry.get("new_ability").get_name() == "new_ability"
 
     del _NewAbility
     gc.collect()

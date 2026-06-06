@@ -32,24 +32,28 @@ _KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
 
 
 class MemoryAbility(Ability):
-    NAME = "memory"
-    SEARCH_TOOLTIP = "personal memory store"
-    # SYSTEM tool: always allowed in every context and never shown in the Policy
-    # Manager. Memory is core to Chalie's operation, so it bypasses policy like
-    # skill_manager.
-    SYSTEM = True
-    SUMMARY = "Store, recall, or forget first-party facts about the user — traits, preferences, relationships, goals, and habits."
-    EXAMPLES = [
-        "please remember that my wifi password is BlueSky42",
-        "what's my wifi password again",
-        "I want you to forget that I told you my salary",
-        "do you know anything about my dietary preferences",
-        "save the fact that I have a dog named Biscuit",
-        "reflect on everything you know about my exercise habits",
-        "what happened at home last week",
-        "recall conversations in Zabbar",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "memory"
+
+    def get_summary(self) -> str:
+        return "Store, recall, or forget first-party facts about the user — traits, preferences, relationships, goals, and habits."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "please remember that my wifi password is BlueSky42",
+            "what's my wifi password again",
+            "I want you to forget that I told you my salary",
+            "do you know anything about my dietary preferences",
+            "save the fact that I have a dog named Biscuit",
+            "reflect on everything you know about my exercise habits",
+            "what happened at home last week",
+            "recall conversations in Zabbar",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "personal memory store"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -116,6 +120,14 @@ class MemoryAbility(Ability):
         "required": ["action"],
     }
 
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    # SYSTEM tool: always allowed in every context and never shown in the Policy
+    # Manager. Memory is core to Chalie's operation, so it bypasses policy like
+    # skill_manager.
+    SYSTEM = True
+
     RECALL_RADIUS_BASELINE: ClassVar[float] = 0.5
     SEED_RADIUS_BASELINE: ClassVar[float] = 0.4
 
@@ -129,7 +141,7 @@ class MemoryAbility(Ability):
 
     def run(self, params: dict) -> dict:
         action = params.get("action", "recall")
-        mp = self.MessageProcessor
+        mp = self.mp
         channel = getattr(getattr(mp, "config", None), "channel", "") or ""
 
         try:

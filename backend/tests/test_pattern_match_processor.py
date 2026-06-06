@@ -378,7 +378,7 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
     def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(self, db, store):
         from abilities.save_graph import SaveGraph
 
-        # SaveGraph reads its budget counter via self.MessageProcessor + getattr.
+        # SaveGraph reads its budget counter via self.mp + getattr.
         # No processor is bound here — getattr falls back to 0, validation
         # short-circuits before any DB write.
         instance = SaveGraph()
@@ -449,7 +449,7 @@ class TestSaveGraphBudgetCapAt50:
     def test_save_graph_budget_cap_at_50(self, db, store):
         from abilities.save_graph import SaveGraph
 
-        # SaveGraph reads/writes its budget counter via self.MessageProcessor
+        # SaveGraph reads/writes its budget counter via self.mp
         # + getattr/setattr. Bind a stub as the processor so the counter
         # persists across 51 calls.
         class _StubProcessor:
@@ -457,7 +457,7 @@ class TestSaveGraphBudgetCapAt50:
 
         stub_processor = _StubProcessor()
         instance = SaveGraph()
-        instance.MessageProcessor = stub_processor
+        instance.mp = stub_processor
 
         results = [
             instance.run(

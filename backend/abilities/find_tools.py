@@ -22,20 +22,7 @@ class FindToolsAbility(SearchableAbility):
     When both are supplied, select takes precedence and query is ignored.
     """
 
-    NAME = "find_tools"
-    SEARCH_TOOLTIP = "discover available tools"
-    SUMMARY = "Use this tool to discover more tools and capabilities. Search for the tools you need."
-    EXAMPLES = [
-        "I want to check if Apple's Q2 earnings report is out yet",
-        "can you look up a flight for me",
-        "I need to send an email to my team",
-        "find me a tool that can track stock prices",
-        "search for a capability that lets you read my calendar",
-        "is there a way to check the current weather in another city",
-        "can you help me monitor a webpage for changes",
-        "look up something from my gmail",
-    ]
-    INPUT_SCHEMA = {
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "select": {
@@ -50,6 +37,27 @@ class FindToolsAbility(SearchableAbility):
         },
         "required": [],
     }
+
+    def get_name(self) -> str:
+        return "find_tools"
+
+    def get_summary(self) -> str:
+        return "Use this tool to discover more tools and capabilities. Search for the tools you need."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "I want to check if Apple's Q2 earnings report is out yet",
+            "can you look up a flight for me",
+            "I need to send an email to my team",
+            "find me a tool that can track stock prices",
+            "search for a capability that lets you read my calendar",
+            "is there a way to check the current weather in another city",
+            "can you help me monitor a webpage for changes",
+            "look up something from my gmail",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "discover available tools"
 
     _DB_PATH: ClassVar[Path] = FileMapperService.get_abilities_db_path()
     # Separate runtime DB for dynamically-synced MCP client tools.
@@ -103,7 +111,7 @@ class FindToolsAbility(SearchableAbility):
                 continue
             try:
                 ability = AbilityRegistry.get(name)
-                index[name] = getattr(ability, "SEARCH_TOOLTIP", "") or ability.SUMMARY
+                index[name] = ability.get_search_tooltip() or ability.get_summary()
             except KeyError:
                 pass
 
@@ -150,18 +158,19 @@ class FindToolsAbility(SearchableAbility):
             logger.debug("[FIND_TOOLS] Could not fetch MCP tool index: %s", exc)
             return []
 
-    def get_input_schema(self, mp=None) -> dict:
-        # Start from the base schema so the framework `async` property injection
-        # (gated on mp.config.SUPPORTS_ASYNC) applies uniformly here too.
-        schema = super().get_input_schema(mp)
-        tools_index = self._build_tools_index(mp)
-        if not tools_index:
-            return schema
-        schema = copy.deepcopy(schema)
-        schema["properties"]["select"]["description"] = (
-            f"Exact tool names to activate directly. Available tools: {tools_index}"
-        )
-        return schema
+    def get_parameters(self) -> dict:
+        # Enrich the `select` description with the live discoverable-tools index.
+        # Gated on self.mp via _config_scope: at build time (mp=None) the scope is
+        # empty, so the base schema is returned unchanged and the search index /
+        # SHA map stay deterministic. The framework fields (act_summary / async)
+        # are injected uniformly afterwards by the final get_input_schema().
+        params = copy.deepcopy(self._PARAMETERS)
+        tools_index = self._build_tools_index(self.mp)
+        if tools_index:
+            params["properties"]["select"]["description"] = (
+                f"Exact tool names to activate directly. Available tools: {tools_index}"
+            )
+        return params
 
     def run(self, params: dict) -> str:
         """Dispatch to the select or query path and return a tagged result string."""
@@ -172,7 +181,7 @@ class FindToolsAbility(SearchableAbility):
         if not select_names and not query:
             return _skill_tag("find_tools", error="params-required")
 
-        proc = self.MessageProcessor
+        proc = self.mp
         discoverable, blocked = self._config_scope(proc)
         # Drop blocked names from BOTH the ability allow-list and the MCP names so
         # the block holds on every path — select, query, and fallback. (The
@@ -219,7 +228,7 @@ class FindToolsAbility(SearchableAbility):
 
         try:
             from services.embedding_service import EmbeddingService
-            query_embedding = EmbeddingService().generate_embedding(query, mp=self.MessageProcessor)
+            query_embedding = EmbeddingService().generate_embedding(query, mp=self.mp)
         except Exception as exc:
             logger.warning("%s Embedding generation failed: %s", self._LOG_PREFIX, exc)
             return self._fallback(query, effective_allow)
@@ -247,11 +256,11 @@ class FindToolsAbility(SearchableAbility):
         """Append newly-discovered tool names to the live processor's active_tools.
 
         Build_tools resolves active_tools to schemas on the next ACT iteration.
-        No-op when MessageProcessor is None (action-button path) or names is empty.
+        No-op when self.mp is None (action-button path) or names is empty.
         """
         if not names:
             return
-        proc = self.MessageProcessor
+        proc = self.mp
         if proc is None:
             return
         active = proc.active_tools
@@ -287,8 +296,11 @@ class FindToolsAbility(SearchableAbility):
                     return result["input_schema"]
                 return {}
             from abilities._registry import AbilityRegistry
-            ability = AbilityRegistry.get(name)
-            return ability.get_input_schema(self.MessageProcessor)
+            template = AbilityRegistry.get(name)
+            # Bind a fresh per-call instance to mp so the discovered tool's body
+            # carries the same framework injection / enrichment build_tools gives
+            # it; return the input_schema BODY (what _format_universal embeds).
+            return type(template)(mp=self.mp).get_input_schema()["input_schema"]
         except Exception as exc:
             logger.warning("%s Schema lookup failed for %r: %s", self._LOG_PREFIX, name, exc)
             return {}

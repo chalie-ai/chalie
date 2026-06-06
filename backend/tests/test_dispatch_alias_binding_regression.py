@@ -45,6 +45,6 @@ def test_dispatch_unknown_tool_is_graceful_not_keyerror():
 
 def test_real_tool_resolves_from_registry():
     """A genuinely registered ability is found through the real registry."""
-    names = {a.NAME for a in AbilityRegistry.all()}
+    names = {a.get_name() for a in AbilityRegistry.all()}
     assert "memory" in names
     assert "find_tools" in names

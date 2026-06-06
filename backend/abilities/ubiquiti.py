@@ -6,6 +6,7 @@ home.py (no rich-media rendering).
 
 import json
 import logging
+from typing import ClassVar
 
 from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -14,25 +15,33 @@ logger = logging.getLogger(__name__)
 
 
 class UbiquitiAbility(Ability):
-    NAME = "ubiquiti"
-    SEARCH_TOOLTIP = "UniFi network control"
-    SUMMARY = (
-        "Control and monitor a UniFi network: list devices and connected clients, "
-        "get device info and site health, block or disconnect clients, restart or "
-        "locate devices, manage WiFi networks and port forwarding, toggle traffic "
-        "rules, and authorize guest access."
-    )
-    EXAMPLES = [
-        "What UniFi devices are on my network?",
-        "Show me who's connected to the WiFi",
-        "Block that unknown device on my network",
-        "Restart the office access point",
-        "Disable the guest WiFi",
-        "Is my network healthy?",
-        "Enable port forwarding for the game server",
-        "Authorize this device as a guest for 2 hours",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "ubiquiti"
+
+    def get_summary(self) -> str:
+        return (
+            "Control and monitor a UniFi network: list devices and connected clients, "
+            "get device info and site health, block or disconnect clients, restart or "
+            "locate devices, manage WiFi networks and port forwarding, toggle traffic "
+            "rules, and authorize guest access."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "What UniFi devices are on my network?",
+            "Show me who's connected to the WiFi",
+            "Block that unknown device on my network",
+            "Restart the office access point",
+            "Disable the guest WiFi",
+            "Is my network healthy?",
+            "Enable port forwarding for the game server",
+            "Authorize this device as a guest for 2 hours",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "UniFi network control"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -121,6 +130,9 @@ class UbiquitiAbility(Ability):
         },
         "required": ["action"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict | str:
         action = params.get("action", "list_devices").lower()

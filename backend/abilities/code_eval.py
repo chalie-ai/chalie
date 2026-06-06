@@ -43,20 +43,31 @@ def _guarded_getattr(obj, name):
 
 
 class CodeEvalAbility(Ability):
-    NAME = "code_eval"
-    SEARCH_TOOLTIP = "Python code execution"
-    SUMMARY = "Run Python code in a restricted sandbox to compute formulas, verify logic, and perform precise calculations."
-    EXAMPLES = [
-        "calculate the exact monthly payment on a mortgage at 6.5% over 30 years",
-        "verify this mathematical formula for me",
-        "what is the compound interest on $10,000 at 4% for 15 years",
-        "run this Python snippet and tell me the output",
-        "calculate the standard deviation of these numbers",
-        "compute the fibonacci sequence up to the 20th term",
-        "convert 37.5°C to Fahrenheit precisely",
-        "check if this sorting algorithm is correct",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "code_eval"
+
+    def get_summary(self) -> str:
+        return "Run Python code in a restricted sandbox to compute formulas, verify logic, and perform precise calculations."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "calculate the exact monthly payment on a mortgage at 6.5% over 30 years",
+            "verify this mathematical formula for me",
+            "what is the compound interest on $10,000 at 4% for 15 years",
+            "run this Python snippet and tell me the output",
+            "calculate the standard deviation of these numbers",
+            "compute the fibonacci sequence up to the 20th term",
+            "convert 37.5°C to Fahrenheit precisely",
+            "check if this sorting algorithm is correct",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "Python code execution"
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "code": {

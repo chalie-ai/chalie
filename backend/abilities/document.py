@@ -10,7 +10,7 @@ import json as _json
 import logging
 import os as _os
 import secrets as _secrets
-from typing import Optional
+from typing import ClassVar, Optional
 
 from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -19,20 +19,31 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentAbility(Ability):
-    NAME = "document"
-    SEARCH_TOOLTIP = "document and notes manager"
-    SUMMARY = "Search, view, create, and manage persistent documents and notes in the document library."
-    EXAMPLES = [
-        "search my documents for information about coral bleaching",
-        "what documents do I have uploaded",
-        "show me the climate report",
-        "create a note called project-ideas.md with my brainstorm",
-        "save this text as a document",
-        "delete the old invoice document",
-        "what did that report say about carbon emissions",
-        "list all my documents",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "document"
+
+    def get_summary(self) -> str:
+        return "Search, view, create, and manage persistent documents and notes in the document library."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "search my documents for information about coral bleaching",
+            "what documents do I have uploaded",
+            "show me the climate report",
+            "create a note called project-ideas.md with my brainstorm",
+            "save this text as a document",
+            "delete the old invoice document",
+            "what did that report say about carbon emissions",
+            "list all my documents",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "document and notes manager"
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {

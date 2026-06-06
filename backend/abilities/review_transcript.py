@@ -12,6 +12,7 @@ subagent task found or produced.
 """
 
 import logging
+from typing import ClassVar
 
 from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -23,23 +24,32 @@ _MAX_BUFFER_MINUTES = 30
 
 
 class ReviewTranscriptAbility(Ability):
-    NAME = "review_transcript"
-    SEARCH_TOOLTIP = "review conversation history"
     SYSTEM = True
-    SUMMARY = (
-        "Retrieve recent conversation messages (user and assistant) within "
-        "±N minutes of a timestamp to re-read details lost to compaction. "
-        "Set include_subagent_transcripts=true to also search subagent task history."
-    )
-    EXAMPLES = [
-        "what did I say about the email earlier",
-        "what was the draft I approved at 3pm",
-        "re-read what you said about the meeting",
-        "what exactly did I ask you to send",
-        "check what we discussed around 2pm today",
-        "show me the subagent task results from this afternoon",
-    ]
-    INPUT_SCHEMA = {
+
+    def get_name(self) -> str:
+        return "review_transcript"
+
+    def get_summary(self) -> str:
+        return (
+            "Retrieve recent conversation messages (user and assistant) within "
+            "±N minutes of a timestamp to re-read details lost to compaction. "
+            "Set include_subagent_transcripts=true to also search subagent task history."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what did I say about the email earlier",
+            "what was the draft I approved at 3pm",
+            "re-read what you said about the meeting",
+            "what exactly did I ask you to send",
+            "check what we discussed around 2pm today",
+            "show me the subagent task results from this afternoon",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "review conversation history"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "date_time": {
@@ -68,6 +78,9 @@ class ReviewTranscriptAbility(Ability):
         },
         "required": ["date_time"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         date_time = (params.get("date_time") or "").strip()

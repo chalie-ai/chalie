@@ -4,7 +4,7 @@ Reachable when a processor lists ``"save_pattern"`` in its ``ALWAYS_AVAILABLE``
 or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
 
 Budget + decay-tracking state lives on the calling processor (read via
-``self.MessageProcessor``).  PMP initialises ``_save_pattern_calls = 0`` and
+``self.mp``).  PMP initialises ``_save_pattern_calls = 0`` and
 ``_touched_pattern_ids = set()`` in ``__init__``; this Ability uses ``getattr``
 defaults so it remains usable from any processor that opts it in.
 """
@@ -12,6 +12,7 @@ import json
 import logging
 import math
 import re
+from typing import ClassVar
 
 from abilities._ability import Ability
 from services.database_service import get_shared_db_service
@@ -27,24 +28,33 @@ _BUDGET_CAP = 20
 
 
 class SavePattern(Ability):
-    NAME = "save_pattern"
-    SEARCH_TOOLTIP = "record behavioural patterns"
     SYSTEM = True
-    SUMMARY = (
-        "Record a repeating behavioural pattern observed in the user's "
-        "transcripts. Use snake_case names; reuse existing names exactly "
-        "when reinforcing (case-sensitive). Requires at least 2 evidence "
-        "transcript ids."
-    )
-    EXAMPLES = [
-        "user goes for a run every weekday morning",
-        "user reads before bed most nights",
-        "user checks email first thing each morning",
-        "user has coffee around 07:30 on workdays",
-        "user meditates on weekends",
-        "user takes a walk after lunch on weekdays",
-    ]
-    INPUT_SCHEMA = {
+
+    def get_name(self) -> str:
+        return "save_pattern"
+
+    def get_summary(self) -> str:
+        return (
+            "Record a repeating behavioural pattern observed in the user's "
+            "transcripts. Use snake_case names; reuse existing names exactly "
+            "when reinforcing (case-sensitive). Requires at least 2 evidence "
+            "transcript ids."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "user goes for a run every weekday morning",
+            "user reads before bed most nights",
+            "user checks email first thing each morning",
+            "user has coffee around 07:30 on workdays",
+            "user meditates on weekends",
+            "user takes a walk after lunch on weekdays",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "record behavioural patterns"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "name": {
@@ -71,8 +81,11 @@ class SavePattern(Ability):
         "required": ["name", "frequency", "summary", "evidence_transcript_ids"],
     }
 
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
     def run(self, params: dict) -> dict:
-        proc = self.MessageProcessor
+        proc = self.mp
         count = getattr(proc, "_save_pattern_calls", 0) if proc is not None else 0
         if count >= _BUDGET_CAP:
             return {"budget_exceeded": True, "tool": "save_pattern"}

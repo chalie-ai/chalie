@@ -20,6 +20,7 @@ user having to open the Brain UI.  This ability handles that path.
 """
 
 import logging
+from typing import ClassVar
 
 from abilities._ability import Ability
 
@@ -31,27 +32,31 @@ _LOG_PREFIX = "[MCP MANAGER]"
 class McpManagerAbility(Ability):
     """Manage outbound MCP client server connections (add/list/enable/disable)."""
 
-    NAME = "mcp_manager"
-    SEARCH_TOOLTIP = "connect to a remote MCP server"
-    # SYSTEM: always-allowed, hidden from Policy Manager (same pattern as memory
-    # after TKT-753).  Management operations are Chalie self-configuration, not
-    # user-data writes — no per-action policy gate is appropriate.
-    SYSTEM = True
-    SUMMARY = (
-        "Connect Chalie to a remote MCP server so its tools become available. "
-        "Use to add, list, enable, or disable outbound MCP server connections."
-    )
-    EXAMPLES = [
-        "connect to the MCP server at http://grck.lan:5100/mcp",
-        "add an MCP connection named taskie at http://grck.lan:5100/mcp",
-        "list all connected MCP servers",
-        "enable the taskie MCP server",
-        "disable the weather MCP server",
-        "show me which external tools are available from remote MCP servers",
-        "set up a connection to an external agent via MCP",
-        "what remote tools can you access through MCP?",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "mcp_manager"
+
+    def get_summary(self) -> str:
+        return (
+            "Connect Chalie to a remote MCP server so its tools become available. "
+            "Use to add, list, enable, or disable outbound MCP server connections."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "connect to the MCP server at http://grck.lan:5100/mcp",
+            "add an MCP connection named taskie at http://grck.lan:5100/mcp",
+            "list all connected MCP servers",
+            "enable the taskie MCP server",
+            "disable the weather MCP server",
+            "show me which external tools are available from remote MCP servers",
+            "set up a connection to an external agent via MCP",
+            "what remote tools can you access through MCP?",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "connect to a remote MCP server"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -93,6 +98,14 @@ class McpManagerAbility(Ability):
         },
         "required": ["action"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
+    # SYSTEM: always-allowed, hidden from Policy Manager (same pattern as memory
+    # after TKT-753).  Management operations are Chalie self-configuration, not
+    # user-data writes — no per-action policy gate is appropriate.
+    SYSTEM = True
 
     def run(self, params: dict) -> dict:
         """Dispatch to the appropriate sub-action handler."""

@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from html.parser import HTMLParser
+from typing import ClassVar
 
 from abilities._ability import Ability
 
@@ -867,20 +868,28 @@ def lookup(language, query):
 # ---------------------------------------------------------------------------
 
 class ProgrammingDocsSearchAbility(Ability):
-    NAME = "programming_docs_search"
-    SEARCH_TOOLTIP = "programming docs search"
-    SUMMARY = "Search official documentation for 12 programming languages and 11 frameworks by language name and query."
-    EXAMPLES = [
-        "how do I use asyncio in Python",
-        "what is the signature of array_map in PHP",
-        "look up the useState hook in React",
-        "how does Eloquent ORM work in Laravel",
-        "what is the difference between Arc and Rc in Rust",
-        "Django queryset filter documentation",
-        "how to use goroutines in Go",
-        "look up the pandas DataFrame merge method",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "programming_docs_search"
+
+    def get_summary(self) -> str:
+        return "Search official documentation for 12 programming languages and 11 frameworks by language name and query."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "how do I use asyncio in Python",
+            "what is the signature of array_map in PHP",
+            "look up the useState hook in React",
+            "how does Eloquent ORM work in Laravel",
+            "what is the difference between Arc and Rc in Rust",
+            "Django queryset filter documentation",
+            "how to use goroutines in Go",
+            "look up the pandas DataFrame merge method",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "programming docs search"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "language": {
@@ -900,6 +909,9 @@ class ProgrammingDocsSearchAbility(Ability):
         },
         "required": ["language", "query"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         language = (params.get("language") or "").strip()

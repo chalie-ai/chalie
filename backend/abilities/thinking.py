@@ -89,22 +89,33 @@ class ThinkingConfig(ProcessorConfig):
 
 
 class ThinkingAbility(Ability):
-    NAME = "thinking"
-    SEARCH_TOOLTIP = "internal deliberation pass"
-    SUMMARY = "Internal-only high-deliberation exploration. Never user-invocable."
-    EXAMPLES: ClassVar[list] = [
-        "internal: pre-turn deliberation pass",
-        "internal: high-mode chain-of-thought exploration",
-        "internal: assess which tools are needed before acting",
-        "internal: identify gaps in knowledge before responding",
-        "internal: plan tool sequence for complex request",
-        "internal: flag non-obvious aspects of a user request",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {"type": "object", "properties": {}}
+    def get_name(self) -> str:
+        return "thinking"
+
+    def get_summary(self) -> str:
+        return "Internal-only high-deliberation exploration. Never user-invocable."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "internal: pre-turn deliberation pass",
+            "internal: high-mode chain-of-thought exploration",
+            "internal: assess which tools are needed before acting",
+            "internal: identify gaps in knowledge before responding",
+            "internal: plan tool sequence for complex request",
+            "internal: flag non-obvious aspects of a user request",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "internal deliberation pass"
+
+    _PARAMETERS: ClassVar[dict] = {"type": "object", "properties": {}}
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
-        parent = self.MessageProcessor
+        parent = self.mp
         # Mirror the parent's about-to-be-sent request EXACTLY: its rendered user
         # message (user definition + world state + ## Previous Messages + input +
         # act-trail) and its live tool surface. Delegating to parent.config.* keeps

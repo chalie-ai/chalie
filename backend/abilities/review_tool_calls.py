@@ -8,6 +8,7 @@ timestamp.
 """
 
 import logging
+from typing import ClassVar
 
 from abilities._ability import Ability
 from services.innate_skills._tag import tag as _skill_tag
@@ -16,21 +17,30 @@ logger = logging.getLogger(__name__)
 
 
 class ReviewToolCallsAbility(Ability):
-    NAME = "review_tool_calls"
-    SEARCH_TOOLTIP = "inspect past tool calls"
     SYSTEM = True
-    SUMMARY = "Retrieve raw tool call records within ±5 minutes of a timestamp to inspect details not captured in turn synthesis."
-    EXAMPLES = [
-        "what tools did you use at 2pm yesterday",
-        "show me the raw output of the search call you made earlier",
-        "can you review the tool calls from this morning",
-        "what did the weather tool return at 10am",
-        "I need to see the exact result from that memory recall",
-        "show me what tools fired during our last conversation about the report",
-        "review the tool calls from around 3:30pm today",
-        "what happened in that tool call that returned an error",
-    ]
-    INPUT_SCHEMA = {
+
+    def get_name(self) -> str:
+        return "review_tool_calls"
+
+    def get_summary(self) -> str:
+        return "Retrieve raw tool call records within ±5 minutes of a timestamp to inspect details not captured in turn synthesis."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what tools did you use at 2pm yesterday",
+            "show me the raw output of the search call you made earlier",
+            "can you review the tool calls from this morning",
+            "what did the weather tool return at 10am",
+            "I need to see the exact result from that memory recall",
+            "show me what tools fired during our last conversation about the report",
+            "review the tool calls from around 3:30pm today",
+            "what happened in that tool call that returned an error",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "inspect past tool calls"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "date_time": {
@@ -44,6 +54,9 @@ class ReviewToolCallsAbility(Ability):
         },
         "required": ["date_time"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         date_time = (params.get("date_time") or "").strip()

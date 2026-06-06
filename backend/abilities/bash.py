@@ -105,9 +105,7 @@ _SECRET_PREFIXES: tuple[str, ...] = ("ANTHROPIC_", "OPENAI_")
 class BashAbility(Ability):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
 
-    NAME = "bash"
-    SEARCH_TOOLTIP = "Shell command execution"
-    SUMMARY = (
+    _SUMMARY: ClassVar[str] = (
         "Run a shell command via bash. "
         "DO USE bash when you need to perform CLI actions which are NOT "
         "possible via any other available tool. "
@@ -117,17 +115,38 @@ class BashAbility(Ability):
         "file_permissions, search_files). "
         "Prefer document over direct file tools when the file is within your workspace."
     )
-    EXAMPLES: ClassVar[list[str]] = [
-        "run this bash script for me",
-        "execute ffmpeg -i input.mp4 output.gif to convert this video",
-        "check what process is listening on port 8080",
-        "run git status in my project directory",
-        "what does uname -a return on this machine",
-        "run the deploy script at /home/user/scripts/deploy.sh",
-        "compress the /tmp/logs folder into a tarball",
-        "count the total lines of Python code under /app",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+
+    def get_name(self) -> str:
+        return "bash"
+
+    def get_search_tooltip(self) -> str:
+        return "Shell command execution"
+
+    def get_summary(self) -> str:
+        # At build/introspection time (mp is None) return the bare base text so
+        # the search index + SHA map stay machine-independent. On a live request
+        # append the working directory so the model knows where commands run.
+        if self.mp is None:
+            return self._SUMMARY
+        cwd = Path.home()
+        return (
+            self._SUMMARY
+            + f" Working directory: {cwd}. Use absolute paths or cd to operate elsewhere."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "run this bash script for me",
+            "execute ffmpeg -i input.mp4 output.gif to convert this video",
+            "check what process is listening on port 8080",
+            "run git status in my project directory",
+            "what does uname -a return on this machine",
+            "run the deploy script at /home/user/scripts/deploy.sh",
+            "compress the /tmp/logs folder into a tarball",
+            "count the total lines of Python code under /app",
+        ]
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "command": {
@@ -173,9 +192,8 @@ class BashAbility(Ability):
         "required": ["command", "action"],
     }
 
-    def get_description(self) -> str:
-        cwd = Path.home()
-        return self.SUMMARY + f"Working directory: {cwd}. Use absolute paths or cd to operate elsewhere."
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         command = (params.get("command") or "").strip()

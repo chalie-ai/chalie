@@ -28,20 +28,28 @@ logger = logging.getLogger(__name__)
 
 
 class ReadAbility(Ability):
-    NAME = "read"
-    SEARCH_TOOLTIP = "fetch URL or file contents"
-    SUMMARY = "Fetch and extract clean text from any URL or local file — web pages, PDFs, DOCX, PPTX, and plain text."
-    EXAMPLES = [
-        "can you read this page and tell me what it says? https://example.com",
-        "summarise the article at this link",
-        "fetch the content of https://bbc.com/news/science",
-        "read my PDF at /home/user/report.pdf",
-        "what does that URL say",
-        "open this link and give me a summary",
-        "read the documentation page at https://docs.python.org/3/library/json.html",
-        "extract the text from this document",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "read"
+
+    def get_summary(self) -> str:
+        return "Fetch and extract clean text from any URL or local file — web pages, PDFs, DOCX, PPTX, and plain text."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "can you read this page and tell me what it says? https://example.com",
+            "summarise the article at this link",
+            "fetch the content of https://bbc.com/news/science",
+            "read my PDF at /home/user/report.pdf",
+            "what does that URL say",
+            "open this link and give me a summary",
+            "read the documentation page at https://docs.python.org/3/library/json.html",
+            "extract the text from this document",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "fetch URL or file contents"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "source": {
@@ -55,6 +63,9 @@ class ReadAbility(Ability):
         },
         "required": ["source"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15
 

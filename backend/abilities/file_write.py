@@ -8,6 +8,7 @@ is executed.
 import json
 import logging
 from pathlib import Path
+from typing import ClassVar
 
 from abilities._ability import Ability
 
@@ -15,18 +16,26 @@ logger = logging.getLogger(__name__)
 
 
 class FileWriteAbility(Ability):
-    NAME = "file_write"
-    SUMMARY = "Write content to a file. You MUST call the 'read' tool on the target path before writing."
-    SEARCH_TOOLTIP = "File writing and creation"
-    EXAMPLES = [
-        "save this text to a file",
-        "write this configuration to /etc/myapp/config.yaml",
-        "create a new script file",
-        "save the output to a temporary file",
-        "write this JSON to a file so I can use it later",
-        "overwrite the contents of that file",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "file_write"
+
+    def get_summary(self) -> str:
+        return "Write content to a file. You MUST call the 'read' tool on the target path before writing."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "save this text to a file",
+            "write this configuration to /etc/myapp/config.yaml",
+            "create a new script file",
+            "save the output to a temporary file",
+            "write this JSON to a file so I can use it later",
+            "overwrite the contents of that file",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "File writing and creation"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "path": {
@@ -40,6 +49,9 @@ class FileWriteAbility(Ability):
         },
         "required": ["path", "contents"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         path_str = params.get("path", "")
@@ -72,7 +84,7 @@ class FileWriteAbility(Ability):
 
     def _check_read_guard(self, db, target: Path) -> str | None:
         """Return an error message if ``read`` was not called on this path first."""
-        proc = self.MessageProcessor
+        proc = self.mp
         if proc is None:
             return None
 

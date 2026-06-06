@@ -4,11 +4,12 @@ Reachable when a processor lists ``"save_graph"`` in its ``ALWAYS_AVAILABLE``
 or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
 
 Budget state lives on the calling processor (read via
-``self.MessageProcessor``).  PMP initialises ``_save_graph_calls = 0`` in
+``self.mp``).  PMP initialises ``_save_graph_calls = 0`` in
 ``__init__``; this Ability uses ``getattr`` defaults so it remains usable
 from any processor that opts it in.
 """
 import logging
+from typing import ClassVar
 
 from abilities._ability import Ability
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
@@ -22,25 +23,34 @@ _BUDGET_CAP = 50
 
 
 class SaveGraph(Ability):
-    NAME = "save_graph"
-    SEARCH_TOOLTIP = "store user facts to knowledge graph"
     SYSTEM = True
-    SUMMARY = (
-        "Record a durable fact about the user that is NOT a repeating "
-        "behaviour (preferences, identity, relationships, places, "
-        "documents, timestamped events). Pick the right `kind`. Use "
-        "save_pattern for repeating behaviours. Allowed kinds: "
-        f"{', '.join(ALLOWED_KINDS)}."
-    )
-    EXAMPLES = [
-        "user's favourite colour is blue",
-        "user lives in Lisbon",
-        "user's partner is called Ana",
-        "user prefers dark mode interfaces",
-        "user bought a new laptop on 2026-04-15",
-        "user's workplace is downtown",
-    ]
-    INPUT_SCHEMA = {
+
+    def get_name(self) -> str:
+        return "save_graph"
+
+    def get_summary(self) -> str:
+        return (
+            "Record a durable fact about the user that is NOT a repeating "
+            "behaviour (preferences, identity, relationships, places, "
+            "documents, timestamped events). Pick the right `kind`. Use "
+            "save_pattern for repeating behaviours. Allowed kinds: "
+            f"{', '.join(ALLOWED_KINDS)}."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "user's favourite colour is blue",
+            "user lives in Lisbon",
+            "user's partner is called Ana",
+            "user prefers dark mode interfaces",
+            "user bought a new laptop on 2026-04-15",
+            "user's workplace is downtown",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "store user facts to knowledge graph"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "kind": {"type": "string", "enum": ALLOWED_KINDS},
@@ -50,8 +60,11 @@ class SaveGraph(Ability):
         "required": ["kind", "key", "value"],
     }
 
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
     def run(self, params: dict) -> dict:
-        proc = self.MessageProcessor
+        proc = self.mp
         count = getattr(proc, "_save_graph_calls", 0) if proc is not None else 0
         if count >= _BUDGET_CAP:
             return {"budget_exceeded": True, "tool": "save_graph"}

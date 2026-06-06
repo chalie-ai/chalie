@@ -57,24 +57,35 @@ class ChatHistoryCompactionConfig(ProcessorConfig):
 
 
 class ChatHistoryCompactor(Ability):
-    NAME = "chat_history_compactor"
-    SEARCH_TOOLTIP = "internal chat-history compaction"
-    SUMMARY = "Internal-only chat-history compaction. Never user-invocable."
-    EXAMPLES: ClassVar[list] = [
-        "internal: compact conversation history into the living checkpoint",
-        "internal: advance the compaction watermark for a channel",
-        "internal: summarise previous messages when the context window fills",
-        "internal: carry forward continuity memory across turns",
-        "internal: replace older turns with a dense memory snapshot",
-        "internal: fold the recent transcript tail into the checkpoint",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {"type": "object", "properties": {}}
+    def get_name(self) -> str:
+        return "chat_history_compactor"
+
+    def get_summary(self) -> str:
+        return "Internal-only chat-history compaction. Never user-invocable."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "internal: compact conversation history into the living checkpoint",
+            "internal: advance the compaction watermark for a channel",
+            "internal: summarise previous messages when the context window fills",
+            "internal: carry forward continuity memory across turns",
+            "internal: replace older turns with a dense memory snapshot",
+            "internal: fold the recent transcript tail into the checkpoint",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "internal chat-history compaction"
+
+    _PARAMETERS: ClassVar[dict] = {"type": "object", "properties": {}}
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
         from services import compaction_persistence, transcript_service  # noqa: PLC0415
 
-        parent = self.MessageProcessor
+        parent = self.mp
         channel = parent.config.channel
 
         # Carry forward the prior checkpoint so continuity chains across

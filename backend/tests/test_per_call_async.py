@@ -43,36 +43,39 @@ pytestmark = pytest.mark.unit
 
 
 class _Ctx:
-    """Minimal real MP-shaped context — exactly what execute/_bind read off the
-    live processor: ``config`` (for the SUPPORTS_ASYNC gate + emitter) and
-    ``MessageProcessor`` is set to this object on the ability instance."""
+    """Minimal real MP-shaped context — exactly what execute / get_input_schema
+    read off the live processor: ``config`` (for the SUPPORTS_ASYNC gate + the
+    emitter). The MessageProcessor is constructor-injected onto the ability as
+    ``self.mp`` (TKT-837)."""
 
     def __init__(self, config):
         self.config = config
 
 
 def test_async_property_exposed_only_on_supports_async_channel():
-    """§4.8d — the schema-exposure gate keys off config.SUPPORTS_ASYNC alone."""
-    weather = AbilityRegistry.get("weather")
+    """§4.8d / TKT-837 — the schema-exposure gate keys off config.SUPPORTS_ASYNC
+    alone, applied at the single ``get_input_schema()`` assembler. The processor
+    is constructor-injected, so a fresh mp-bound instance is built per channel."""
+    weather_cls = type(AbilityRegistry.get("weather"))
 
-    user_schema = weather.get_input_schema(_Ctx(UserConfig({})))
+    user_schema = weather_cls(mp=_Ctx(UserConfig({}))).get_input_schema()["input_schema"]
     assert "async" in user_schema["properties"]
     assert user_schema["properties"]["async"]["type"] == "boolean"
     assert user_schema["properties"]["async"]["default"] is False
-    # The real INPUT_SCHEMA is never mutated — exposure is a per-call deepcopy.
-    assert "async" not in weather.INPUT_SCHEMA["properties"]
+    # The declared params (get_parameters) are never mutated — exposure deepcopies.
+    assert "async" not in weather_cls().get_parameters()["properties"]
 
     # A non-async channel (delegate/system) never sees the flag.
-    dmn_schema = weather.get_input_schema(_Ctx(DmnConfig()))
+    dmn_schema = weather_cls(mp=_Ctx(DmnConfig())).get_input_schema()["input_schema"]
     assert "async" not in dmn_schema.get("properties", {})
 
-    # No live processor → synchronous default, no flag.
-    assert "async" not in weather.get_input_schema(None).get("properties", {})
+    # No live processor (mp=None) → synchronous default, no flag.
+    assert "async" not in weather_cls().get_input_schema()["input_schema"].get("properties", {})
 
 
 def test_build_tools_exposes_async_on_user_channel():
-    """The real tool-presentation path (build_tools → get_input_schema →
-    _with_act_summary) surfaces the async flag alongside act_summary."""
+    """The real tool-presentation path (build_tools → mp-bound get_input_schema)
+    surfaces the async flag alongside act_summary."""
 
     class _Proc:
         config = UserConfig({})
@@ -95,25 +98,36 @@ class _EchoAbility(Ability):
     """
 
     _SYNTHETIC = True
-    NAME = "test_per_call_echo"
-    SEARCH_TOOLTIP = "echo back the input for the per-call-async feature test"
-    SUMMARY = "Echo the given text straight back — feature-test fixture only."
-    EXAMPLES = [
-        "echo hello",
-        "echo the word banana",
-        "repeat this phrase back to me",
-        "say exactly what I say",
-        "mirror my input",
-        "give me back my text",
-    ]
-    INPUT_SCHEMA = {
-        "type": "object",
-        "properties": {"text": {"type": "string"}},
-        "required": ["text"],
-    }
 
-    def __init__(self):
+    def __init__(self, mp=None):
+        super().__init__(mp)
         self.ran_with = None
+
+    def get_name(self) -> str:
+        return "test_per_call_echo"
+
+    def get_search_tooltip(self) -> str:
+        return "echo back the input for the per-call-async feature test"
+
+    def get_summary(self) -> str:
+        return "Echo the given text straight back — feature-test fixture only."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "echo hello",
+            "echo the word banana",
+            "repeat this phrase back to me",
+            "say exactly what I say",
+            "mirror my input",
+            "give me back my text",
+        ]
+
+    def get_parameters(self) -> dict:
+        return {
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+        }
 
     def run(self, params: dict) -> str:
         self.ran_with = dict(params)
@@ -124,10 +138,10 @@ def test_dispatch_without_async_runs_inline():
     """async absent → default False → execute runs run() inline and returns it.
     DmnConfig keeps broadcast_to=None so the emitter is a no-op (no WS side
     effects); the async DECISION is independent of channel."""
-    ability = _EchoAbility()
-    ability.MessageProcessor = _Ctx(DmnConfig())
+    ctx = _Ctx(DmnConfig())
+    ability = _EchoAbility(mp=ctx)
 
-    result = ToolDispatcher(ability.MessageProcessor)._execute(ability, {"text": "hi"}, None)
+    result = ToolDispatcher(ctx)._execute(ability, {"text": "hi"}, None)
 
     assert result == "echoed: hi"
     # The framework popped the async flag before handing params to run().
@@ -145,18 +159,28 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
 
     class _BlockingAbility(Ability):
         _SYNTHETIC = True  # keep out of the static registry (see _EchoAbility)
-        NAME = "test_per_call_blocking"
-        SEARCH_TOOLTIP = "block until released — async feature-test fixture"
-        SUMMARY = "Block until a test releases it — feature-test fixture only."
-        EXAMPLES = [
-            "block until I say go",
-            "wait for my signal",
-            "hold here until released",
-            "pause until the gate opens",
-            "stay blocked for the test",
-            "wait then finish",
-        ]
-        INPUT_SCHEMA = {"type": "object", "properties": {}, "required": []}
+
+        def get_name(self) -> str:
+            return "test_per_call_blocking"
+
+        def get_search_tooltip(self) -> str:
+            return "block until released — async feature-test fixture"
+
+        def get_summary(self) -> str:
+            return "Block until a test releases it — feature-test fixture only."
+
+        def get_examples(self) -> list[str]:
+            return [
+                "block until I say go",
+                "wait for my signal",
+                "hold here until released",
+                "pause until the gate opens",
+                "stay blocked for the test",
+                "wait then finish",
+            ]
+
+        def get_parameters(self) -> dict:
+            return {"type": "object", "properties": {}, "required": []}
 
         def run(self, params: dict) -> str:
             started.set()
@@ -164,11 +188,11 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
             finished.append(True)
             return "done"
 
-    ability = _BlockingAbility()
-    ability.MessageProcessor = _Ctx(DmnConfig())
+    ctx = _Ctx(DmnConfig())
+    ability = _BlockingAbility(mp=ctx)
 
     before = set(async_delegate_runner.active_ids())
-    result = ToolDispatcher(ability.MessageProcessor)._execute(ability, {"async": True}, None)
+    result = ToolDispatcher(ctx)._execute(ability, {"async": True}, None)
 
     # Non-blocking: the placeholder came back while run() is still blocked.
     assert "dispatched (id:" in result

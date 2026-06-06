@@ -44,19 +44,28 @@ _MIN_DURATION_SECONDS = 1
 
 
 class TimerAbility(Ability):
-    NAME = "timer"
-    SEARCH_TOOLTIP = "countdown timer"
     SYSTEM = True
-    SUMMARY = "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."
-    EXAMPLES = [
-        "start a 25 minute focus timer",
-        "set a 10 minute timer for the pasta",
-        "ring me in 5 minutes",
-        "kick off a 90 second breath hold",
-        "start a 1 hour deep work block",
-        "remind me in 15 minutes the laundry is ready",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+
+    def get_name(self) -> str:
+        return "timer"
+
+    def get_summary(self) -> str:
+        return "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "start a 25 minute focus timer",
+            "set a 10 minute timer for the pasta",
+            "ring me in 5 minutes",
+            "kick off a 90 second breath hold",
+            "start a 1 hour deep work block",
+            "remind me in 15 minutes the laundry is ready",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "countdown timer"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "title": {
@@ -72,6 +81,9 @@ class TimerAbility(Ability):
         },
         "required": ["title", "duration_seconds"],
     }
+
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
 
     def run(self, params: dict) -> dict | str:
         ordinal = params.get("_rich_media_ordinal")

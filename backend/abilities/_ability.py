@@ -1,95 +1,163 @@
 """The ``Ability`` ABC — describes and runs one tool, nothing more.
 
-An Ability declares what a tool *is* (NAME / SUMMARY / EXAMPLES / INPUT_SCHEMA /
-SEARCH_TOOLTIP) and how it *runs* (``run()``). Dispatch — matching, binding,
-policy gating, execution, recording — lives in ``ToolDispatcher``
-(``abilities/_dispatcher.py``), the single chokepoint every ACT-loop tool call
-takes. This module imports nothing from the registry / policy / dispatcher, so
-``_registry`` can import ``Ability`` here with no circular-import dance.
+An Ability declares what a tool *is* through five zero-arg getters
+(``get_name`` / ``get_summary`` / ``get_examples`` / ``get_search_tooltip`` /
+``get_parameters``) and how it *runs* (``run()``). The full LLM-facing tool
+descriptor is assembled in ONE place — the ``final`` ``get_input_schema()`` — which
+is also the SINGLE site that injects the two framework fields (``act_summary``
+and ``async``). Subclasses cannot override it; they only fill in the getters.
 
-Spec: ACT Loop Orchestrator Refactor §5; eliminate-_base §4.1.
+Dispatch — matching, binding, policy gating, execution, recording — lives in
+``ToolDispatcher`` (``abilities/_dispatcher.py``), the single chokepoint every
+ACT-loop tool call takes. This module imports nothing from the registry / policy
+/ dispatcher, so ``_registry`` can import ``Ability`` here with no circular-import
+dance.
+
+Spec: docs/superpowers/specs/2026-06-06-ability-schema-getters-design.md (TKT-837);
+ACT Loop Orchestrator Refactor §5; eliminate-_base §4.1.
 """
 
 from __future__ import annotations
 
 import copy
+import typing
 from abc import ABC, abstractmethod
-from typing import ClassVar
+
+# The framework fields injected into EVERY tool descriptor by get_input_schema —
+# the one place either is declared. act_summary is the per-call act-trail tooltip
+# (always present, required); async is the per-call backgrounding flag, injected
+# only on channels whose config sets SUPPORTS_ASYNC.
+_ACT_SUMMARY_PROPERTY: dict = {
+    "type": "string",
+    "description": (
+        "A ~3-10 word summary of what this specific tool call does, shown to"
+        ' the user as a tooltip (e.g. "Searching for laptops in Malta",'
+        ' "Looking up the weather in London").'
+    ),
+}
+_ASYNC_PROPERTY: dict = {
+    "type": "boolean",
+    "default": False,
+    "description": (
+        "Run in the background instead of blocking this step. You get an "
+        "immediate acknowledgement and the result is delivered on this channel "
+        "when it completes. Use for long-running calls."
+    ),
+}
 
 
 class Ability(ABC):
     """Base class for every dispatchable tool.
 
-    Tool *scope* (always-available vs discoverable) lives on ProcessorConfig
-    (always_available / discoverable / blocked fields).  Abilities only describe
-    what the tool is (NAME / SUMMARY / EXAMPLES / INPUT_SCHEMA).  Whether a call
-    blocks or runs in the background is a per-call decision (the framework
-    ``async`` flag), not an ability-level trait.
+    A concrete Ability implements five getters (the metadata) plus ``run()`` (the
+    behaviour). The getters read ``self.mp`` (the invoking MessageProcessor,
+    constructor-injected) when a value depends on the live request; at
+    ``self.mp is None`` — introspection / search-index build — they MUST return
+    deterministic base text.
 
-    Spec: §5 / AC-4.
+    Tool *scope* (always-available vs discoverable) lives on ProcessorConfig
+    (always_available / discoverable / blocked). Whether a call blocks or runs in
+    the background is a per-call decision (the framework ``async`` flag), not an
+    ability-level trait.
+
+    Spec: §5 / AC-4; TKT-837.
     """
 
-    NAME: ClassVar[str]
-    SUMMARY: ClassVar[str]
-    EXAMPLES: ClassVar[list[str]]
-    INPUT_SCHEMA: ClassVar[dict]
-    SEARCH_TOOLTIP: ClassVar[str] = ""
-
-    # Bound per-call by ToolDispatcher._bind(): the invoking MessageProcessor
-    # (the "parent" of this tool call). A tool reads ALL its context off this —
-    # self.MessageProcessor.config.channel, .config.policy_channel, ._uid, etc.
-    # This is the traceability spine: every hop holds a real reference to its
-    # parent instead of reaching into a hidden global. None only on a synthetic
-    # / never-bound instance.
-    MessageProcessor: "object | None" = None
-    # Set by ToolDispatcher._run() immediately before run(): the flattened
-    # client telemetry dict (location / locale / time / currency …) or None when
-    # no client context is stored yet (fresh boot, no heartbeat).
-    telemetry: "dict | None" = None
+    # Constructor-injected, the invoking MessageProcessor (the "parent" of this
+    # tool call). A tool reads ALL its context off this — self.mp.config.channel,
+    # .config.policy_channel, ._uid, etc. This is the traceability spine: every
+    # hop holds a real reference to its parent instead of reaching into a hidden
+    # global. None only on a synthetic / introspection / build-time instance.
+    def __init__(self, mp: "object | None" = None) -> None:
+        self.mp = mp
+        # Set by ToolDispatcher._run() immediately before run(): the flattened
+        # client telemetry dict (location / locale / time / currency …) or None
+        # when no client context is stored yet (fresh boot, no heartbeat).
+        self.telemetry: "dict | None" = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        # Synthetic proxies (e.g. _MCPAbility) carry no EXAMPLES/SEARCH_TOOLTIP
-        # and are constructed with arguments — skip all validation for them.
+        # get_input_schema / _inject_framework_fields are the single assembler and
+        # the single injection site — sealed. A subclass that redefines either
+        # (e.g. to "also enrich the schema") would silently fork the async /
+        # act_summary contract, so it is rejected at import. Subclasses enrich via
+        # get_parameters() / get_summary() instead.
+        for sealed in ("get_input_schema", "_inject_framework_fields"):
+            if sealed in cls.__dict__:
+                raise TypeError(
+                    f"{cls.__name__} must not override Ability.{sealed} — "
+                    f"enrich get_parameters()/get_summary() instead"
+                )
+
+        # Synthetic proxies (e.g. _MCPAbility) source their metadata from a remote
+        # schema and are constructed with arguments — skip metadata validation.
         if getattr(cls, "_SYNTHETIC", False):
             return
-        # Abstract subclasses (marked with abstractmethod) are exempt.
-        if ABC in cls.__bases__:
+        # Abstract subclasses (still missing a getter or run) cannot be
+        # instantiated and never reach the registry — skip them.
+        if ABC in cls.__bases__ or getattr(cls, "__abstractmethods__", None):
             return
-        # Skip intermediate abstract classes that still have abstract methods.
-        if getattr(cls, "__abstractmethods__", None):
-            return
-        for attr in ("NAME", "INPUT_SCHEMA"):
-            if not hasattr(cls, attr):
-                raise TypeError(f"{cls.__name__} must define class attribute '{attr}'")
-        for attr in ("SUMMARY", "EXAMPLES"):
-            if not hasattr(cls, attr):
-                raise TypeError(f"{cls.__name__} must define class attribute '{attr}'")
-        if not isinstance(cls.EXAMPLES, list) or not all(
-            isinstance(e, str) for e in cls.EXAMPLES
-        ):
-            raise TypeError(f"{cls.__name__}.EXAMPLES must be list[str]")
-        if not (6 <= len(cls.EXAMPLES) <= 8):
+
+        # Concrete ability: validate its metadata shape AT IMPORT, through the
+        # getters, on a throwaway mp=None instance (deterministic at build time).
+        # This keeps the "won't import with bad metadata" guarantee for EVERY
+        # ability — including the never-indexed ones (thinking, the compactors)
+        # that the search-index builder skips.
+        probe = cls()
+        examples = probe.get_examples()
+        if not isinstance(examples, list) or not all(isinstance(e, str) for e in examples):
+            raise TypeError(f"{cls.__name__}.get_examples() must return list[str]")
+        if not (6 <= len(examples) <= 8):
             raise TypeError(
-                f"{cls.__name__}.EXAMPLES must have 6–8 entries, got {len(cls.EXAMPLES)}"
+                f"{cls.__name__}.get_examples() must return 6–8 entries, got {len(examples)}"
             )
-        if (
-            getattr(cls, "__module__", "").startswith("abilities.")
-            and not getattr(cls, "SEARCH_TOOLTIP", "")
-        ):
-            raise TypeError(f"{cls.__name__} must define a non-empty SEARCH_TOOLTIP")
+        if cls.__module__.startswith("abilities.") and not probe.get_search_tooltip():
+            raise TypeError(f"{cls.__name__}.get_search_tooltip() must be non-empty")
+
+    # ── Metadata getters — every concrete ability implements all five ──────────
+
+    @abstractmethod
+    def get_name(self) -> str:
+        """The tool's stable identifier (the name the model calls)."""
+        ...
+
+    @abstractmethod
+    def get_summary(self) -> str:
+        """The tool description shown to the model AND the base text embedded for
+        semantic search. Override to enrich at runtime (e.g. bash appends the cwd)
+        — but gate enrichment on ``self.mp is not None`` so the build-time index
+        stays deterministic."""
+        ...
+
+    @abstractmethod
+    def get_examples(self) -> list[str]:
+        """6–8 natural-language example invocations, embedded + FTS-indexed for
+        find_tools search."""
+        ...
+
+    @abstractmethod
+    def get_search_tooltip(self) -> str:
+        """A short search-facing label for the tool."""
+        ...
+
+    @abstractmethod
+    def get_parameters(self) -> dict:
+        """The bare JSON-schema body for the tool's inputs
+        (``{"type": "object", "properties": {...}, "required": [...]}``) WITHOUT
+        the framework fields. Override to enrich at runtime (e.g. find_tools folds
+        the discoverable-tools index into the ``select`` description) — gate on
+        ``self.mp`` so the build-time schema stays deterministic."""
+        ...
 
     # ── Instance method — the actual tool logic ───────────────────────────────
 
     @abstractmethod
     def run(self, params: dict) -> "dict | str":
-        """Execute the ability.  Called by ToolDispatcher._run().
+        """Execute the ability. Called by ToolDispatcher._run().
 
-        Override this method on every Ability subclass — it is the single tool
-        entrypoint. The invoking MessageProcessor is available as
-        ``self.MessageProcessor`` (read ``self.MessageProcessor.config.channel``
-        where the old signature passed ``channel``), and the flattened client
-        telemetry as ``self.telemetry`` (or None).
+        The invoking MessageProcessor is available as ``self.mp`` (read
+        ``self.mp.config.channel`` where the old signature passed ``channel``),
+        and the flattened client telemetry as ``self.telemetry`` (or None).
 
         Must return either:
         - A dict with 'status' and 'result' keys (canonical form).
@@ -99,52 +167,43 @@ class Ability(ABC):
         Args:
             params: Input parameters from the LLM, framework keys stripped.
 
-        Returns:
-            dict when the result is structured data, or str for plain text.
-
         Spec §5.
         """
         ...
 
-    # ── Schema hooks ──────────────────────────────────────────────────────────
+    # ── The single, final tool-descriptor assembler ───────────────────────────
 
-    def get_description(self) -> str:
-        """Return the tool description for LLM tool presentation.
+    @typing.final
+    def get_input_schema(self) -> dict:
+        """Assemble the full LLM-facing tool descriptor from the getters and inject
+        the framework fields. This is the ONE place a tool schema is built and the
+        ONE place ``act_summary`` + ``async`` are declared. ``final`` — sealed at
+        import by ``__init_subclass__``.
 
-        Override to enrich the description at runtime (e.g. find_tools
-        appends a discoverable-tools index).  The default returns SUMMARY.
+        Spec §4.3 / TKT-837.
         """
-        return self.SUMMARY
-
-    def get_input_schema(self, mp=None) -> dict:
-        """Return the INPUT_SCHEMA for LLM tool presentation, with the framework
-        ``async`` property injected on channels that support backgrounding.
-
-        ``mp`` is the invoking MessageProcessor (threaded by ``build_tools``
-        because that path operates on the unbound registry singleton).  The
-        ``async`` boolean is injected **iff** ``mp`` is known and its config sets
-        ``SUPPORTS_ASYNC`` (only the user channel today, §4.8d); elsewhere — and
-        when ``mp`` is None (synchronous is the safe default) — the property is
-        omitted, so the model cannot pick async and every tool is synchronous.
-
-        This is the ONLY place ``async`` is declared.  Overrides that enrich the
-        schema MUST start from ``super().get_input_schema(mp)`` so this gate
-        applies uniformly (§4.1).
-
-        Spec §4.0 / §4.1.
-        """
-        if mp is None or not getattr(getattr(mp, "config", None), "SUPPORTS_ASYNC", False):
-            return self.INPUT_SCHEMA
-        schema = copy.deepcopy(self.INPUT_SCHEMA)
-        schema.setdefault("properties", {})["async"] = {
-            "type": "boolean",
-            "default": False,
-            "description": (
-                "Run in the background instead of blocking this step. You get an "
-                "immediate acknowledgement and the result is delivered on this "
-                "channel when it completes. Use for long-running calls."
-            ),
+        return {
+            "name": self.get_name(),
+            "description": self.get_summary(),
+            "input_schema": self._inject_framework_fields(self.get_parameters()),
         }
+
+    def _inject_framework_fields(self, params: dict) -> dict:
+        """Return a copy of *params* with the framework fields added: ``act_summary``
+        (always, required) and ``async`` (iff this channel backgrounds — i.e. the
+        invoking ``mp``'s config sets ``SUPPORTS_ASYNC``). Deep-copies so a getter
+        that returns a shared dict is never mutated."""
+        schema = copy.deepcopy(params)
+        properties = schema.setdefault("properties", {})
+        required = schema.setdefault("required", [])
+
+        properties["act_summary"] = dict(_ACT_SUMMARY_PROPERTY)
+        if "act_summary" not in required:
+            required.append("act_summary")
+
+        if getattr(getattr(self.mp, "config", None), "SUPPORTS_ASYNC", False):
+            properties["async"] = dict(_ASYNC_PROPERTY)
+
         return schema
 
     @classmethod

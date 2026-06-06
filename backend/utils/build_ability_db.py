@@ -77,7 +77,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
 
 def _compute_sha(ability) -> str:
-    raw = json.dumps([ability.SUMMARY, *ability.EXAMPLES], ensure_ascii=False)
+    raw = json.dumps([ability.get_summary(), *ability.get_examples()], ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -104,15 +104,16 @@ def _dedup_entries(
 
 def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability) -> int:
     """Insert one ability and its search entries; return count of entries inserted."""
+    summary = ability.get_summary()
     conn.execute(
         "INSERT INTO abilities(name, summary) VALUES (?, ?)",
-        (ability.NAME, ability.SUMMARY),
+        (ability.get_name(), summary),
     )
     ability_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     raw_entries: list[tuple[str, str]] = [
-        (ability.SUMMARY, "summary"),
-        *((ex, "example") for ex in ability.EXAMPLES),
+        (summary, "summary"),
+        *((ex, "example") for ex in ability.get_examples()),
     ]
     texts = [e[0] for e in raw_entries]
     embeddings = list(emb_service.generate_embeddings_batch(texts))
@@ -140,7 +141,11 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
 
 def _build_sha_map() -> dict[str, str]:
     """SHA map covers every ability indexed in the search DB (thinking excluded)."""
-    return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all() if a.NAME not in _NON_INDEXED_ABILITIES}
+    return {
+        a.get_name(): _compute_sha(a)
+        for a in AbilityRegistry.all()
+        if a.get_name() not in _NON_INDEXED_ABILITIES
+    }
 
 
 def _build(db_path: Path, sha_path: Path) -> None:
@@ -148,7 +153,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
     # find_tools. Per-channel scoping (which abilities a given processor
     # may discover) is gated at find_tools query time via the calling
     # processor's ``config.discoverable`` / ``config.blocked``.
-    abilities = [a for a in AbilityRegistry.all() if a.NAME not in _NON_INDEXED_ABILITIES]
+    abilities = [a for a in AbilityRegistry.all() if a.get_name() not in _NON_INDEXED_ABILITIES]
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 
     emb_service = EmbeddingService() if abilities else None
@@ -167,7 +172,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
         total_entries = 0
         for ability in abilities:
             n = _insert_ability(conn, emb_service, ability)
-            print(f"  {ability.NAME}: {n} entries")
+            print(f"  {ability.get_name()}: {n} entries")
             total_entries += n
     finally:
         conn.close()

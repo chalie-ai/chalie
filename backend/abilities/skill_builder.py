@@ -9,6 +9,7 @@ Only user-created skills (source='user') can be edited or deleted.
 
 import logging
 import sqlite3
+from typing import ClassVar
 
 from abilities._ability import Ability
 from services.file_mapper_service import FileMapperService
@@ -46,23 +47,31 @@ def _discover_tool_names() -> str:
 
 
 class SkillBuilderAbility(Ability):
-    NAME = "skill_builder"
-    SEARCH_TOOLTIP = "create, edit, delete, or list user-defined skill playbooks"
-    SUMMARY = (
-        "Create, edit, delete, or list custom skill playbooks. "
-        "Use this to save step-by-step procedures that Chalie should follow for recurring tasks."
-    )
-    EXAMPLES = [
-        "create a skill for tracking my weekly expenses",
-        "save a playbook for how I like to research new topics",
-        "add a skill called Morning Briefing that checks weather and news",
-        "edit my Track Flights skill to also check for delays",
-        "delete the skill I created for meal planning",
-        "show me all my custom skills",
-        "list the skills I've created",
-        "what custom playbooks do I have",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "skill_builder"
+
+    def get_summary(self) -> str:
+        return (
+            "Create, edit, delete, or list custom skill playbooks. "
+            "Use this to save step-by-step procedures that Chalie should follow for recurring tasks."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "create a skill for tracking my weekly expenses",
+            "save a playbook for how I like to research new topics",
+            "add a skill called Morning Briefing that checks weather and news",
+            "edit my Track Flights skill to also check for delays",
+            "delete the skill I created for meal planning",
+            "show me all my custom skills",
+            "list the skills I've created",
+            "what custom playbooks do I have",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "create, edit, delete, or list user-defined skill playbooks"
+
+    _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "action": {
@@ -117,9 +126,12 @@ class SkillBuilderAbility(Ability):
         "required": ["action"],
     }
 
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
     def run(self, params: dict) -> dict:
         action = params.get("action", "list")
-        logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, self.MessageProcessor.config.channel)
+        logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, self.mp.config.channel)
 
         try:
             if action == "create":
