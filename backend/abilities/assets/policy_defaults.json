@@ -74,6 +74,7 @@
   {"channel": "chat", "permission": "ubiquiti.manage_traffic_rule", "setting": "ask"},
   {"channel": "chat", "permission": "ubiquiti.manage_wlan", "setting": "ask"},
   {"channel": "chat", "permission": "weather", "setting": "allow"},
+  {"channel": "chat", "permission": "vision", "setting": "allow"},
   {"channel": "chat", "permission": "web_browse", "setting": "allow"},
   {"channel": "chat", "permission": "web_search", "setting": "allow"},
   {"channel": "external_agent", "permission": "bash.compound", "setting": "deny"},
@@ -150,6 +151,7 @@
   {"channel": "external_agent", "permission": "ubiquiti.manage_port_forward", "setting": "deny"},
   {"channel": "external_agent", "permission": "ubiquiti.manage_traffic_rule", "setting": "deny"},
   {"channel": "external_agent", "permission": "ubiquiti.manage_wlan", "setting": "deny"},
+  {"channel": "external_agent", "permission": "vision", "setting": "allow"},
   {"channel": "external_agent", "permission": "weather", "setting": "allow"},
   {"channel": "external_agent", "permission": "web_browse", "setting": "deny"},
   {"channel": "external_agent", "permission": "web_search", "setting": "deny"},
@@ -227,6 +229,7 @@
   {"channel": "subconscious", "permission": "ubiquiti.manage_port_forward", "setting": "deny"},
   {"channel": "subconscious", "permission": "ubiquiti.manage_traffic_rule", "setting": "deny"},
   {"channel": "subconscious", "permission": "ubiquiti.manage_wlan", "setting": "deny"},
+  {"channel": "subconscious", "permission": "vision", "setting": "deny"},
   {"channel": "subconscious", "permission": "weather", "setting": "allow"},
   {"channel": "subconscious", "permission": "web_browse", "setting": "deny"},
   {"channel": "subconscious", "permission": "web_search", "setting": "deny"}

@@ -36,7 +36,7 @@ PATTERN_WRITE_TOOLS: frozenset[str] = frozenset({"save_pattern", "save_graph"})
 # Delegate (subagent-as-tool) names — blocked on every discovery-capable loop
 # except the user-facing ones (UserConfig, EAMPConfig) so background loops can
 # never spawn delegate work.
-DELEGATE_TOOLS: frozenset[str] = frozenset({"web_search", "web_browse"})
+DELEGATE_TOOLS: frozenset[str] = frozenset({"web_search", "web_browse", "vision"})
 
 # Raw web tools exclusive to the delegate agents (WebSearchConfig drives
 # ``search``, WebBrowseConfig drives ``browser``).  Every discovery-capable loop
@@ -70,6 +70,7 @@ DEFAULT_DISCOVERABLE: list[str] = [
     "skill_builder",
     "timer",
     "ubiquiti",
+    "vision",
     "weather",
     "web_browse",
     "web_download",
