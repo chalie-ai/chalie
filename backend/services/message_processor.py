@@ -413,10 +413,6 @@ class MessageProcessor:
         if self.config.memory_seed:
             dispatcher.dispatch("memory", {"action": "recall", "query": self._raw_input, "_auto": True})
 
-        # c. High-deliberation thinking pass — programmatic, never model-visible.
-        if getattr(self, "thinking_level", "low") == "high":
-            dispatcher.dispatch("thinking", {})
-
         # b. Attachment uploads — presence-gated.  Each file's upload IS the
         #    ingest (no second auto document.view).  Every upload internally runs
         #    its own (now network-bound) vision/OCR extraction, so N attachments
@@ -436,6 +432,15 @@ class MessageProcessor:
             from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
             with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
                 list(pool.map(self._seed_upload_attachment, attachments))
+
+        # c. High-deliberation thinking pass — programmatic, never model-visible.
+        #    Fires LAST, after the upload barrier above, so the deliberation
+        #    snapshot already carries the uploaded documents' act-trail rows: the
+        #    thinking pass is single-pass with tools disabled, so it can only
+        #    reason about vision output that is ALREADY in the parent's rendered
+        #    body at dispatch time.  (TKT-838 follow-up)
+        if getattr(self, "thinking_level", "low") == "high":
+            dispatcher.dispatch("thinking", {})
 
     def _seed_upload_attachment(self, path: str) -> None:
         """Read one turn-0 attachment and dispatch its blocking ``document.upload``.
