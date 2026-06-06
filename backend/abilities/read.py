@@ -46,7 +46,7 @@ class ReadAbility(Ability):
         "properties": {
             "source": {
                 "type": "string",
-                "description": "URL (e.g. 'https://example.com/article') or filesystem path (e.g. '/home/user/doc.pdf').",
+                "description": "URL (e.g. 'https://example.com/article') or filesystem path (e.g. '/home/user/doc.pdf'). Aliases 'url' and 'path' are also accepted.",
             },
             "max_chars": {
                 "type": "integer",
@@ -85,9 +85,18 @@ class ReadAbility(Ability):
     _BLOCKED_PATH_PREFIXES: ClassVar[tuple] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
 
     def run(self, params: dict) -> dict:
-        source = params.get("source", "").strip()
+        source = _first_source(params)
         if not source:
-            return {"text": _skill_tag("read", error="source-required")}
+            # No usable target under any accepted key. Echo what the model DID
+            # send so it self-corrects instead of looping on the same opaque
+            # error (TKT-834: models pass url=/path= and never learn why).
+            received = "|".join(params.keys()) or "none"
+            return {"text": _skill_tag(
+                "read",
+                error="source-required",
+                received_keys=received,
+                hint="pass the URL or file path as 'source'",
+            )}
 
         max_chars = params.get("max_chars", 20000)
         try:
@@ -105,6 +114,25 @@ class ReadAbility(Ability):
         except Exception as e:
             logger.exception(f"[READ SKILL] Unexpected error for source={source!r}: {e}")
             return {"text": _skill_tag("read", source=source, error=str(e)[:200])}
+
+
+#: The canonical key plus the keys a model naturally emits for the read target.
+#: When ``source`` is absent we honour these in order so a call like
+#: ``read({"url": …})`` or ``read({"path": …})`` works instead of bouncing on
+#: ``source-required`` (TKT-834). ``source`` stays first so it always wins.
+_SOURCE_KEYS = ("source", "url", "uri", "link", "href", "path", "file", "filepath", "file_path")
+
+
+def _first_source(params: dict) -> str:
+    """Return the first non-empty read target among the accepted keys, stripped.
+
+    Returns "" when no accepted key carries a usable string value.
+    """
+    for key in _SOURCE_KEYS:
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _classify_source(source: str) -> str:
