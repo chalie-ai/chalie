@@ -70,15 +70,28 @@ class SearchableAbility(Ability, ABC):
         fts_sql: str,
         vec_params: tuple,
         fts_params: tuple,
+        db_path: Path | None = None,
     ) -> list[dict]:
-        if not self._DB_PATH.exists():
-            logger.warning(f"{self._LOG_PREFIX} DB not found at {self._DB_PATH}")
+        """RRF-fused vec+FTS search against ``db_path`` (defaults to ``_DB_PATH``).
+
+        The vec query is wrapped in its own try/except so a missing vec table or
+        invalid blob degrades gracefully to FTS-only — never fewer results, never
+        raises.  Callers may pass any sqlite DB that shares the vec+FTS schema
+        (e.g. mcp_tools.sqlite via ``_MCP_DB_PATH``).
+        """
+        target = db_path if db_path is not None else self._DB_PATH
+        if not target.exists():
+            logger.warning(f"{self._LOG_PREFIX} DB not found at {target}")
             return []
         try:
-            conn = sqlite3.connect(str(self._DB_PATH))
+            conn = sqlite3.connect(str(target))
             try:
-                self._load_vec(conn)
-                vec_rows = conn.execute(vec_sql, vec_params).fetchall()
+                try:
+                    self._load_vec(conn)
+                    vec_rows = conn.execute(vec_sql, vec_params).fetchall()
+                except Exception as exc:
+                    logger.warning(f"{self._LOG_PREFIX} Vec query failed (degrading to FTS): {exc}")
+                    vec_rows = []
                 try:
                     fts_rows = conn.execute(fts_sql, fts_params).fetchall()
                 except sqlite3.OperationalError as exc:
@@ -92,11 +105,21 @@ class SearchableAbility(Ability, ABC):
 
         return self.rrf_merge(vec_rows, fts_rows, k)
 
-    def _fts_only_search(self, fts_sql: str, fts_params: tuple) -> list:
-        if not self._DB_PATH.exists():
+    def _fts_only_search(
+        self,
+        fts_sql: str,
+        fts_params: tuple,
+        db_path: Path | None = None,
+    ) -> list:
+        """FTS-only search against ``db_path`` (defaults to ``_DB_PATH``).
+
+        Callers may pass any sqlite DB that exposes the FTS5 schema.
+        """
+        target = db_path if db_path is not None else self._DB_PATH
+        if not target.exists():
             return []
         try:
-            conn = sqlite3.connect(str(self._DB_PATH))
+            conn = sqlite3.connect(str(target))
             try:
                 return conn.execute(fts_sql, fts_params).fetchall()
             finally:

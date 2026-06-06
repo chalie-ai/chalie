@@ -1,7 +1,6 @@
 import copy
 import json
 import logging
-import sqlite3
 from pathlib import Path
 from typing import ClassVar
 
@@ -201,17 +200,50 @@ class FindToolsAbility(SearchableAbility):
         return self._run_query(query, list(allow), list(mcp_names))
 
     def _run_select(self, requested: list[str], effective_allow: set[str]) -> str:
-        """Exact case-insensitive match against effective_allow; append matched names."""
+        """Exact case-insensitive match against effective_allow; append matched names.
+
+        Builds a display.lower()→call_name alias map from get_online_mcp_tools_index()
+        so callers can use the bare server-reported name (e.g. 'list_tickets') in
+        addition to the prefixed call name ('_mcp_taskie_list_tickets').
+
+        Ambiguity rule: if a bare display name maps to more than one distinct call
+        name across servers, the alias is dropped — the caller must use the prefixed
+        form to avoid silent wrong-server selection.
+        """
         allow_lower = {name.lower(): name for name in effective_allow}
+
+        # Build display → call_name alias map for MCP tools in effective_allow.
+        # display_to_calls accumulates all call_names for each bare display name so we
+        # can detect cross-server collisions before committing to any alias.
+        display_to_calls: dict[str, list[str]] = {}
+        for call_name, display in self._get_online_mcp_tools_index():
+            if call_name not in effective_allow:
+                continue
+            key = display.lower()
+            display_to_calls.setdefault(key, []).append(call_name)
+
+        # Alias is valid only when exactly one call_name owns the bare display name.
+        display_alias: dict[str, str] = {
+            key: calls[0]
+            for key, calls in display_to_calls.items()
+            if len(calls) == 1
+        }
+
         matched: list[str] = []
         not_found: list[str] = []
 
         for name in requested:
-            canonical = allow_lower.get(name.lower())
+            lower = name.lower()
+            canonical = allow_lower.get(lower) or display_alias.get(lower)
             if canonical is not None:
                 matched.append(canonical)
             else:
                 not_found.append(name)
+
+        # Two requested aliases (e.g. the bare display name and its prefixed call
+        # name) can resolve to the same canonical tool — collapse so the result
+        # JSON and the found= count never double-report a single tool.
+        matched = list(dict.fromkeys(matched))
 
         self._append_active(matched)
         parts: list[str] = []
@@ -334,44 +366,42 @@ class FindToolsAbility(SearchableAbility):
         )
 
     def _query_mcp(self, query: str, blob: bytes, limit: int, mcp_names: list[str]) -> list:
-        """FTS-only search against mcp_tools.sqlite for enabled+online tools.
+        """Hybrid vec+FTS RRF search against mcp_tools.sqlite for enabled+online tools.
 
-        MCP tools don't have vector embeddings (they are dynamic and not passed
-        through the embedding pipeline), so this uses FTS keyword search only.
-        Returns rows in the same format as _hybrid_search: {key, label, score}.
+        Delegates entirely to _hybrid_search with the MCP-specific SQL and
+        db_path=_MCP_DB_PATH.  When the vec table is absent (sqlite_vec unavailable)
+        or the blob is empty/invalid, _hybrid_search degrades gracefully to FTS-only
+        via its resilient-vec try/except — no branch needed here.
+
+        Returns rows in the same {key, label, score} format as _query so the caller
+        can merge both lists directly.
         """
-        if not mcp_names or not self._MCP_DB_PATH.exists():
+        if not mcp_names:
             return []
         placeholders = ",".join("?" * len(mcp_names))
-        try:
-            conn = sqlite3.connect(str(self._MCP_DB_PATH))
-            try:
-                rows = conn.execute(
-                    f"""
-                    SELECT mt.tool_name, mt.summary, bm25(mcp_tools_fts) AS score
-                    FROM mcp_tools_fts
-                    JOIN mcp_tools mt ON mt.id = mcp_tools_fts.rowid
-                    WHERE mcp_tools_fts MATCH ?
-                      AND mt.tool_name IN ({placeholders})
-                    ORDER BY score ASC
-                    LIMIT ?
-                    """,
-                    (query, *mcp_names, limit),
-                ).fetchall()
-                # Cap MCP score at 0.12 — ability RRF max is ~0.125 (best of
-                # both vector+FTS signals: 2×(1/16)).  This keeps strong MCP
-                # matches just below the best ability score so a highly-relevant
-                # ability can still edge them out, while weak MCP matches rank
-                # low.  bm25() is negative in SQLite; abs() normalizes it.
-                return [
-                    {"key": r[0], "label": r[1] or "", "score": min(0.12, abs(r[2]))}
-                    for r in rows
-                ]
-            finally:
-                conn.close()
-        except Exception as exc:
-            logger.debug("[FIND_TOOLS] mcp_tools FTS failed: %s", exc)
-            return []
+        vec_sql = f"""
+            SELECT mt.tool_name, mt.summary, v.distance
+            FROM mcp_tools_vec v
+            JOIN mcp_tool_vectors mv ON mv.rowid = v.rowid
+            JOIN mcp_tools mt ON mt.tool_name = mv.tool_name
+            WHERE v.embedding MATCH ? AND k = ? AND mt.tool_name IN ({placeholders})
+            ORDER BY v.distance ASC
+        """
+        fts_sql = f"""
+            SELECT mt.tool_name, mt.summary, bm25(mcp_tools_fts) AS score
+            FROM mcp_tools_fts
+            JOIN mcp_tools mt ON mt.id = mcp_tools_fts.rowid
+            WHERE mcp_tools_fts MATCH ? AND mt.tool_name IN ({placeholders})
+            ORDER BY score ASC
+        """
+        return self._hybrid_search(
+            query, blob, limit,
+            vec_sql=vec_sql,
+            fts_sql=fts_sql,
+            vec_params=(blob, KNN_DEPTH, *mcp_names),
+            fts_params=(query, *mcp_names),
+            db_path=self._MCP_DB_PATH,
+        )
 
     @staticmethod
     def _merge_and_truncate(rows: list[dict]) -> list[dict]:

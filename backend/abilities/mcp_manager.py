@@ -159,6 +159,10 @@ class McpManagerAbility(Ability):
         tool_count = sync_result["tool_count"]
 
         if sync_result["reachable"]:
+            # Build vector embeddings for the newly-synced tools so semantic
+            # queries can reach them immediately.  Add-only — never called on
+            # heartbeat or enable so the 15-min sync path stays zero-cost.
+            svc.embed_server_tools(server_id)
             msg = (
                 f"Connected to MCP server {name!r} at {host}. "
                 f"Synced {tool_count} tool(s). Server is now online."

@@ -64,7 +64,12 @@ def add_server():
     # Trigger an immediate ping+sync so tools are indexed promptly.
     # Errors are swallowed — the row is persisted regardless.
     try:
-        svc.ping_and_sync(server["id"])
+        sync_result = svc.ping_and_sync(server["id"])
+        if sync_result.get("reachable"):
+            # Build vector embeddings for the newly-synced tools so semantic
+            # queries can reach them immediately.  Add-only — not called on the
+            # /test endpoint or heartbeat so the sync path stays zero-cost.
+            svc.embed_server_tools(server["id"])
         # Reload to get the updated status.
         refreshed = svc.get_server(server["id"])
         if refreshed:

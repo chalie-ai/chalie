@@ -140,9 +140,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mcp_tools_fts USING fts5(
 );
 """
 
+# Vector embedding tables — keyed by tool_name (stable across _write_tools churn).
+# mcp_tools_vec.rowid == mcp_tool_vectors.rowid for the JOIN.
+# Created in the same _open_tools_db() call so callers get a unified DB handle.
+_TOOLS_VECTOR_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mcp_tool_vectors (
+    rowid     INTEGER PRIMARY KEY,
+    tool_name TEXT UNIQUE NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS mcp_tools_vec USING vec0(embedding float[768]);
+"""
+
 
 def _open_tools_db() -> sqlite3.Connection:
-    """Open (and initialize if necessary) the mcp_tools.sqlite runtime DB."""
+    """Open (and initialize if necessary) the mcp_tools.sqlite runtime DB.
+
+    Creates the FTS table and, when sqlite_vec is available, the vector
+    embedding tables.  If sqlite_vec cannot be loaded the vec tables are
+    skipped and the DB remains FTS-only — queries degrade gracefully.
+    """
     db_path: Path = FileMapperService.get_mcp_tools_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -152,6 +168,20 @@ def _open_tools_db() -> sqlite3.Connection:
         conn.executescript(_TOOLS_FTS_SCHEMA)
     except sqlite3.OperationalError:
         pass  # FTS5 may not be available in all environments
+    try:
+        conn.enable_load_extension(True)
+        try:
+            import sqlite_vec  # noqa: PLC0415
+            sqlite_vec.load(conn)
+        except Exception as exc:
+            logger.debug("%s sqlite_vec module load failed, trying vec0: %s", _LOG_PREFIX, exc)
+            conn.load_extension("vec0")
+        conn.executescript(_TOOLS_VECTOR_SCHEMA)
+    except Exception as exc:
+        logger.warning(
+            "%s sqlite_vec unavailable — vec tables skipped, FTS-only mode: %s",
+            _LOG_PREFIX, exc,
+        )
     conn.commit()
     return conn
 
@@ -267,15 +297,18 @@ class McpClientService:
                          headers: dict) -> dict:
         """Re-add of a known endpoint: update fields and re-enable.
 
-        The local tool prefix is derived from the server name, so when the name
-        changes we purge the old ``_mcp_<oldname>_*`` tool + policy rows first —
-        otherwise the post-add re-sync would leave orphaned entries under the
-        stale prefix.
+        Always purge the existing toolset (rows + vector embeddings) before the
+        caller's re-sync repopulates it.  This reads the *current* tool_names off
+        ``mcp_tools`` while they are still present, so a tool the server has since
+        removed can never leave an orphaned vector row — the post-add
+        ``ping_and_sync`` then writes back only the live toolset.  The tool prefix
+        is derived from the server name, so a name change additionally invalidates
+        the old ``_mcp_<oldname>_*`` policy rows.
         """
         old_prefix = f"_mcp_{_sanitize_name(existing['name'])}_"
         new_prefix = f"_mcp_{_sanitize_name(name)}_"
+        self._delete_tools_for_server(existing["id"])
         if old_prefix != new_prefix:
-            self._delete_tools_for_server(existing["id"])
             self._delete_policy_rows(old_prefix)
         logger.info(
             "%s Re-add of existing endpoint %r → upsert id=%s",
@@ -579,6 +612,111 @@ class McpClientService:
                     _LOG_PREFIX, name, server_id, exc,
                 )
 
+    def embed_server_tools(self, server_id: str) -> None:
+        """Generate and store vector embeddings for one server's tools.
+
+        Called only on add (never on heartbeat/enable) so the 15-min sync path
+        has zero embedding overhead.  Embeddings are keyed by the stable
+        tool_name (not by mcp_tools.id, which is reassigned on every _write_tools
+        call).  Vectors for the server's *current* toolset are replaced in place,
+        so re-embedding is idempotent.  Orphan-free re-adds (where the server has
+        dropped a tool) are guaranteed upstream: ``_upsert_existing`` purges the
+        prior toolset via ``_delete_tools_for_server`` before ``ping_and_sync``
+        repopulates only the live tools.
+
+        Lazy-imports EmbeddingService (avoids import-time cost and circular refs).
+        Wraps the entire body so a failure leaves the server FTS-searchable
+        without surfacing an error to the caller.
+
+        Depends on: services.embedding_service.EmbeddingService (offline ONNX,
+        no provider/mp required) and services.embedding_utils.pack_embedding.
+        McpClientService is the only add-time embedding trigger — do not call
+        this from _write_tools or run_heartbeat.
+        """
+        try:
+            # Lazy imports — avoid circular import chain and expensive ONNX load
+            # at module initialisation time.  EmbeddingService depends on
+            # McpClientService indirectly (via find_tools); importing at call
+            # site breaks the cycle cleanly.
+            from services.embedding_service import EmbeddingService  # noqa: PLC0415
+            from services.embedding_utils import pack_embedding  # noqa: PLC0415
+
+            server = self.get_server(server_id)
+            if server is None:
+                logger.warning("%s embed_server_tools: server %r not found", _LOG_PREFIX, server_id)
+                return
+
+            conn = _open_tools_db()
+            try:
+                rows = conn.execute(
+                    "SELECT tool_name, summary FROM mcp_tools WHERE server_id = ?",
+                    (server_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+
+            if not rows:
+                logger.debug("%s embed_server_tools: no tools for server %r", _LOG_PREFIX, server_id)
+                return
+
+            server_name = server["name"]
+            prefix = f"_mcp_{_sanitize_name(server_name)}_"
+            tool_names = [r["tool_name"] for r in rows]
+            texts = []
+            for r in rows:
+                tool_name = r["tool_name"]
+                display = tool_name[len(prefix):] if tool_name.startswith(prefix) else tool_name
+                display_words = display.replace("_", " ")
+                summary = r["summary"] or ""
+                texts.append(f"{display_words}. {summary}" if summary else display_words)
+
+            embeddings = EmbeddingService().generate_embeddings_batch(texts)
+
+            conn = _open_tools_db()
+            try:
+                # Replace-all-for-server: purge existing vec rows for these tool_names.
+                placeholders = ",".join("?" * len(tool_names))
+                existing = conn.execute(
+                    f"SELECT rowid FROM mcp_tool_vectors WHERE tool_name IN ({placeholders})",
+                    tool_names,
+                ).fetchall()
+                if existing:
+                    vec_rowids = [r[0] for r in existing]
+                    rowid_placeholders = ",".join("?" * len(vec_rowids))
+                    conn.execute(
+                        f"DELETE FROM mcp_tools_vec WHERE rowid IN ({rowid_placeholders})",
+                        vec_rowids,
+                    )
+                    conn.execute(
+                        f"DELETE FROM mcp_tool_vectors WHERE tool_name IN ({placeholders})",
+                        tool_names,
+                    )
+
+                # Insert fresh rows — mcp_tool_vectors assigns a new rowid.
+                for tool_name, embedding in zip(tool_names, embeddings):
+                    conn.execute(
+                        "INSERT INTO mcp_tool_vectors (tool_name) VALUES (?)",
+                        (tool_name,),
+                    )
+                    rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                    blob = pack_embedding(embedding)
+                    conn.execute(
+                        "INSERT INTO mcp_tools_vec (rowid, embedding) VALUES (?, ?)",
+                        (rowid, blob),
+                    )
+                conn.commit()
+                logger.info(
+                    "%s Embedded %d tools for server %r",
+                    _LOG_PREFIX, len(tool_names), server_name,
+                )
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.warning(
+                "%s embed_server_tools failed for server %r — FTS-only fallback: %s",
+                _LOG_PREFIX, server_id, exc,
+            )
+
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _get_server(self, server_id: str) -> dict:
@@ -658,16 +796,50 @@ class McpClientService:
             conn.close()
 
     def _delete_tools_for_server(self, server_id: str) -> None:
-        """Remove all tool rows for a server from mcp_tools.sqlite."""
+        """Remove all tool rows (including vector embeddings) for a server.
+
+        Purges mcp_tool_vectors + mcp_tools_vec BEFORE deleting mcp_tools so
+        we can still read the tool_names for the vec lookup.  This single
+        chokepoint covers both delete_server and the _upsert_existing name-change
+        path — neither needs to repeat the purge logic.
+        """
         conn = _open_tools_db()
         try:
-            conn.execute(
-                "DELETE FROM mcp_tools WHERE server_id = ?", (server_id,)
-            )
+            tool_rows = conn.execute(
+                "SELECT tool_name FROM mcp_tools WHERE server_id = ?", (server_id,)
+            ).fetchall()
+            tool_names = [r["tool_name"] for r in tool_rows]
+
+            if tool_names:
+                placeholders = ",".join("?" * len(tool_names))
+                try:
+                    vec_rows = conn.execute(
+                        f"SELECT rowid FROM mcp_tool_vectors WHERE tool_name IN ({placeholders})",
+                        tool_names,
+                    ).fetchall()
+                    if vec_rows:
+                        vec_rowids = [r[0] for r in vec_rows]
+                        rowid_placeholders = ",".join("?" * len(vec_rowids))
+                        conn.execute(
+                            f"DELETE FROM mcp_tools_vec WHERE rowid IN ({rowid_placeholders})",
+                            vec_rowids,
+                        )
+                    conn.execute(
+                        f"DELETE FROM mcp_tool_vectors WHERE tool_name IN ({placeholders})",
+                        tool_names,
+                    )
+                except sqlite3.OperationalError as exc:
+                    if "no such table" in str(exc).lower():
+                        # Vec tables absent (sqlite_vec unavailable) — expected.
+                        logger.debug("%s Vec purge skipped (tables absent): %s", _LOG_PREFIX, exc)
+                    else:
+                        # Any other operational error (locked/corrupt DB) is real —
+                        # surface it instead of masking it behind the absent-table case.
+                        logger.warning("%s Vec purge failed unexpectedly: %s", _LOG_PREFIX, exc)
+
+            conn.execute("DELETE FROM mcp_tools WHERE server_id = ?", (server_id,))
             try:
-                conn.execute(
-                    "INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')"
-                )
+                conn.execute("INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')")
             except sqlite3.OperationalError:
                 pass
             conn.commit()
