@@ -47,7 +47,9 @@ User (WebSocket)
   │    - memory recall dispatch │
   │      (if memory_seed=True)  │
   │    - document.upload per    │
-  │      attachment (if any)    │
+  │      attachment, uploaded   │
+  │      in parallel at a       │
+  │      barrier (if any)       │
   └────────────┬────────────────┘
                │
                ▼
@@ -73,6 +75,8 @@ User (WebSocket)
 ```
 
 **History is literal text, not a messages array.** The previous conversation is assembled as a text block inside the user message body. The provider always receives a single-element messages list. This keeps history portable and independent of provider multi-turn formats.
+
+**Image attachments are uploaded, vision-indexed, and searchable (TKT-838).** When a user turn carries attachments, `_seed_turn_zero()` uploads them **in parallel** through a `ThreadPoolExecutor` barrier — each via its own `ToolDispatcher` issuing a blocking `document.upload` — so the turn-0 context already holds every upload result before the ACT loop starts. A bad attachment path is logged and skipped without aborting its siblings. At upload, `text_extractor` routes images to `vision.describe_image(path, RICH_INDEX_PROMPT)` (the brain's Vision Provider, or RapidOCR when no provider is configured) and feeds the rich description into the existing `extract_text → create_document_artifacts → data_graph.store` pipeline — which embeds (sqlite-vec), FTS5-indexes, and doc2query-expands it — so `document.search` finds the image by its visual content. A textless image with no vision provider persists `status='ready'` (not `failed`). On later turns the model re-invokes the `vision` tool (`image=doc_id`, a new `query`) against the same document. PDFs keep their existing OCR extraction untouched.
 
 ---
 
