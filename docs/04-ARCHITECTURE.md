@@ -96,12 +96,13 @@ No worker shares its processor instance with another. Each channel is fully isol
 
 ### Delegate tools
 
-The **delegate tools** replace the former `subagent` ability and its `SubagentProcessor` (both removed). Each is a standalone `Ability` (`backend/abilities/{web_search,web_browse}.py`) with a typed `ProcessorConfig` subclass (`WebSearchConfig`, `WebBrowseConfig`) defined alongside it; `run()` instantiates the subclass and runs a focused ACT turn via `MessageProcessor.process(goal, config)` — there is no `MessageProcessor` subclass, no `SUBAGENT_TYPES` registry, and no `make_subagent_config()` factory.
+The **delegate tools** replace the former `subagent` ability and its `SubagentProcessor` (both removed). Each is a standalone `Ability` (`backend/abilities/{web_search,web_browse,vision}.py`) paired with a typed `ProcessorConfig` subclass (`WebSearchConfig`, `WebBrowseConfig`, `VisionConfig`) that lives with the other channel configs in `backend/configs/channels/{web_search,web_browse,vision}.py` — each is imported directly by its ability, not re-exported through `configs/channels/__init__.py`. `run()` instantiates the subclass and runs a focused ACT turn via `MessageProcessor.process(goal, config)` — there is no `MessageProcessor` subclass, no `SUBAGENT_TYPES` registry, and no `make_subagent_config()` factory.
 
 | Tool | `always_available` surface | Goal param |
 |------|----------------------------|------------|
 | `web_search` | `search`, `read`, `web_download`, `memory` | `query` |
 | `web_browse` | `browser`, `read`, `memory` | `goal` |
+| `vision` | (none — single-shot `max_iterations=1` on the Vision Provider) | `image` + `query` |
 
 Every delegate carries `memory` (an INTERNAL tool) so it can recall while it works.
 
