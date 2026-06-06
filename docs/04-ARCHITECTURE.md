@@ -275,7 +275,7 @@ Upload *is* the ingest: there is no second auto `document(action='view')` call. 
 
 Both calls go through `ToolDispatcher(self).dispatch()` — policy enforcement, WS tool events, and `tool_calls` audit rows are generated naturally. The results land in the ACT trail so the LLM sees file content on iter-0 of the ACT loop.
 
-Image attachments are handled by the document pipeline: `image_context_service.analyze()` uses the configured vision provider for a comprehensive description when one is set, otherwise local OCR. The `/documents/upload` REST endpoint remains available for the Brain document-management UI.
+Image attachments are handled by the document pipeline: `text_extractor._extract_image()` routes through the shared `abilities.vision.describe_image()` core (TKT-838), which forks once on whether a vision provider is configured — provider set → a single-shot `MessageProcessor` on the vision provider produces a rich description (`RICH_INDEX_PROMPT`); none → local RapidOCR via `image_context_service.analyze()`. The returned description is what gets embedded + FTS5-indexed, so an uploaded image becomes searchable by its visual content. The no-vision user-facing note is intentionally NOT indexed (index noise). A configured-but-failing vision provider raises rather than being swallowed — `extract_text` can therefore propagate a provider error on the upload path. The `/documents/upload` REST endpoint remains available for the Brain document-management UI.
 
 ---
 
