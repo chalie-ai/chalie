@@ -491,7 +491,7 @@ def _handle_upload(service, params: dict) -> str:
     doc = service.get_document(doc_id)
     if doc and doc.get("status") == "ready":
         return (
-            f"[DOCUMENT] Uploaded '{name}' (id={doc_id}). "
+            f"[DOCUMENT] Uploaded '{name}' (id={doc_id}, hash={file_hash}). "
             f"Call document(action='view', id='{doc_id}') to read contents."
         )
     return f"Failed to process document {name}"

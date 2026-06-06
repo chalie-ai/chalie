@@ -167,7 +167,14 @@ def _run_upload_extraction(doc_id: str):
         return
 
     text = extract_text(str(FileMapperService.get_documents_path(file_path)))
+    is_image = (doc.get('mime_type') or '').startswith('image/')
     if not text:
+        if is_image:
+            # A textless image with no vision provider (e.g. a photo with no
+            # words): persist 'ready' so it stays viewable / re-queryable via the
+            # vision tool; there is simply nothing to index. NOT a failure. (TKT-838)
+            svc.update_status(doc_id, 'ready', chunk_count=0)
+            return
         svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
         return
 
