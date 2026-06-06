@@ -425,9 +425,12 @@ class MessageProcessor:
         #    document, but the extractions overlap instead of serialising.  The
         #    ``with`` block's exit IS the barrier.  This is safe because each task
         #    builds its OWN ToolDispatcher (dispatch binds a fresh per-call
-        #    ability) and every write funnels through thread-local connections /
-        #    the single-threaded document write queue (no shared cursor, no rowid
-        #    race — doc_id is a pre-generated random hex).  (TKT-838)
+        #    ability) and each thread holds its own thread-local connection:
+        #    documents-table writes serialise through the single-threaded write
+        #    queue, while data_graph and act-trail writes serialise at the SQLite
+        #    WAL layer (single-writer + 15s busy_timeout).  No shared cursor, and
+        #    last_insert_rowid is never read cross-connection — doc_id is a
+        #    pre-generated random hex, not a rowid.  (TKT-838)
         attachments = list(self._metadata.get("attachments") or [])
         if attachments:
             from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
