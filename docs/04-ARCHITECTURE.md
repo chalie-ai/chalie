@@ -105,11 +105,11 @@ The **delegate tools** replace the former `subagent` ability and its `SubagentPr
 
 Every delegate carries `memory` (an INTERNAL tool) so it can recall while it works.
 
-**Shared config shape** (encoded in each subclass's `__init__`): `channel=f"delegate:{NAME}"`, `role=NAME`, `policy_channel` inherited directly from the dispatching processor (`self.MessageProcessor.config.policy_channel`, passed into the subclass constructor), `max_iterations=50`, `discoverable=[]`, `blocked=frozenset()`, plus `skip_transcript=True`, `skip_input_row=True`, `suppress_history=True`, `broadcast_to=None`, `memory_seed=False` — a delegate is a scratch turn, not a conversation.
+**Shared config shape** (encoded in each subclass's `__init__`): `channel=f"delegate:{NAME}"`, `role=NAME`, `policy_channel` inherited directly from the dispatching processor (`self.mp.config.policy_channel`, passed into the subclass constructor), `max_iterations=50`, `discoverable=[]`, `blocked=frozenset()`, plus `skip_transcript=True`, `skip_input_row=True`, `suppress_history=True`, `broadcast_to=None`, `memory_seed=False` — a delegate is a scratch turn, not a conversation.
 
 **Recursion guard.** A delegate carries no `find_tools` and `discoverable=[]`, so it can only call the fixed tools in its own `always_available` surface — and no delegate tool is in that surface. A delegate therefore can never spawn another delegate; the guard is *structural*, so the former `build_blocked()` / `DELEGATE_TOOL_NAMES` helpers (and per-delegate `blocked` sets) were removed. `_delegate.py` retains just two helpers: `delegate_goal(params)` (normalises `goal`/`query`) and `render_trail(mp)` (renders the caller's act-trail into the delegate's user prompt). There is no delegate deadline — `DELEGATE_DEADLINE_SECONDS` was removed along with the framework execution watchdog.
 
-**Delivery is per-call, not per-ability.** There is no `ASYNC_CAPABLE` flag on abilities. `Ability.get_input_schema(mp)` injects a framework `async` boolean into a tool's schema only when the invoking `mp.config.SUPPORTS_ASYNC` is `True` (a `ClassVar[bool]` on `ProcessorConfig`; `False` by default; only `UserConfig` sets it `True`). On channels where `SUPPORTS_ASYNC` is `False` the property is omitted entirely, so the model cannot request async and every call is synchronous.
+**Delivery is per-call, not per-ability.** There is no `ASYNC_CAPABLE` flag on abilities. The `@typing.final Ability.get_input_schema()` assembler injects a framework `async` boolean into a tool's schema only when the invoking `self.mp.config.SUPPORTS_ASYNC` is `True` (a `ClassVar[bool]` on `ProcessorConfig`; `False` by default; only `UserConfig` sets it `True`); `mp` is constructor-injected, so the getter takes no argument. On channels where `SUPPORTS_ASYNC` is `False` the property is omitted entirely, so the model cannot request async and every call is synchronous.
 
 `ToolDispatcher._execute()` pops `params["async"]`; when `True` it calls `async_delegate_runner.spawn(ability, params, mp)` (returns an immediate placeholder, daemon thread, result delivered back via the captured mp); when `False` it calls `ToolDispatcher._run()` inline and blocks the iteration.
 
@@ -204,15 +204,17 @@ This is the single source of truth — no ability constructs its own format stri
 
 ### `Ability` ABC and `SearchableAbility`
 
-Every concrete ability subclasses `Ability` (`backend/abilities/_ability.py`) and declares:
+Every concrete ability subclasses `Ability` (`backend/abilities/_ability.py`) and implements five zero-arg metadata getters (`@abstractmethod`) — these replaced the old `NAME`/`SEARCH_TOOLTIP`/`SUMMARY`/`EXAMPLES`/`INPUT_SCHEMA` ClassVars (TKT-837):
 
-| Class attribute | Type | Notes |
-|-----------------|------|-------|
-| `NAME` | `str` | Stable identifier; matches the channel-level tool name. |
-| `SEARCH_TOOLTIP` | `str` | 2–5 word description for the `find_tools` index. Required on every non-INTERNAL ability (enforced by `__init_subclass__`). |
-| `SUMMARY` | `str` | One sentence used as the SUMMARY row in `abilities.sqlite`. |
-| `EXAMPLES` | `list[str]` | 6–8 natural-language phrases for EXAMPLE rows (enforced by `__init_subclass__`). |
-| `INPUT_SCHEMA` | `dict` | JSON Schema for `run()` params. |
+| Getter | Returns | Notes |
+|--------|---------|-------|
+| `get_name()` | `str` | Stable identifier; matches the channel-level tool name. |
+| `get_search_tooltip()` | `str` | 2–5 word description for the `find_tools` index. Required non-empty on every non-INTERNAL ability (enforced by `__init_subclass__`). |
+| `get_summary()` | `str` | The model-facing tool description AND the SUMMARY row in `abilities.sqlite` (there is no separate `description`). |
+| `get_examples()` | `list[str]` | 6–8 natural-language phrases for EXAMPLE rows (enforced by `__init_subclass__`). |
+| `get_parameters()` | `dict` | The bare JSON Schema for `run()` params, WITHOUT the framework fields. |
+
+The getters are zero-arg and read `self.mp` (the invoking MessageProcessor, constructor-injected via `Ability(mp=None)`) when a value depends on the live request — e.g. `bash.get_summary()` appends the cwd, `find_tools.get_parameters()` folds in the discoverable-tools index. At `self.mp is None` (introspection / `build_ability_db`) they MUST return deterministic base text so the embedded index stays machine-independent; `__init_subclass__` validates each concrete ability's metadata shape at import by probing a throwaway `mp=None` instance. The full LLM-facing descriptor is assembled in ONE place — the `@typing.final Ability.get_input_schema()` template method — which returns `{name, description: get_summary(), input_schema}` and is the SINGLE site injecting the two framework fields: `act_summary` (always, required) and `async` (iff `mp.config.SUPPORTS_ASYNC`), on a `copy.deepcopy` of `get_parameters()` so a getter's shared dict is never mutated. Overriding `get_input_schema` or `_inject_framework_fields` is an import-time `TypeError` (`__init_subclass__` seal), so the contract can never be silently forked or dropped. `_MCPAbility` implements the getters from its remote schema, so MCP tools build through the same assembler and also receive `async`.
 
 Tool scope (always-available vs discoverable) is **not** declared on the `Ability` ABC. It is owned by each channel's `ProcessorConfig` via its `always_available` and `discoverable` lists (see Tools and Skills section).
 
@@ -253,7 +255,7 @@ Per-ability implementation notes:
 
 ### Pattern-match helpers — `save_pattern` / `save_graph`
 
-`abilities/save_pattern.py` (`SavePattern`) and `abilities/save_graph.py` (`SaveGraph`) are `Ability` subclasses flagged `SYSTEM = True`. The `SYSTEM` flag is an informational marker; the actual mechanism keeping them out of the policy UI is their membership in `PolicyManager.INTERNAL` — the frozenset that causes `authorize()` to short-circuit before any DB lookup, so they carry no seed rows and never surface in the Brain policy UI. They register like any other ability and `abilities.sqlite` indexes them, but they are reachable only because the pattern and geo-pattern configs set `always_available = ["save_pattern", "save_graph"]` (with `discoverable = []`); no other config lists them, so no other channel can surface them and `find_tools` never offers them. They are resolved into native tool schemas by `AbilityRegistry.build_tools()` from the config's `always_available` list — there is no `get_tools()` method on the flat `MessageProcessor`. Per-call budget and decay-tracking state (`_save_pattern_calls`, `_save_graph_calls`, `_touched_pattern_ids`, …) lives on the calling processor instance and is read via `self.MessageProcessor` (the per-call binding set by `ToolDispatcher._bind()`).
+`abilities/save_pattern.py` (`SavePattern`) and `abilities/save_graph.py` (`SaveGraph`) are `Ability` subclasses flagged `SYSTEM = True`. The `SYSTEM` flag is an informational marker; the actual mechanism keeping them out of the policy UI is their membership in `PolicyManager.INTERNAL` — the frozenset that causes `authorize()` to short-circuit before any DB lookup, so they carry no seed rows and never surface in the Brain policy UI. They register like any other ability and `abilities.sqlite` indexes them, but they are reachable only because the pattern and geo-pattern configs set `always_available = ["save_pattern", "save_graph"]` (with `discoverable = []`); no other config lists them, so no other channel can surface them and `find_tools` never offers them. They are resolved into native tool schemas by `AbilityRegistry.build_tools()` from the config's `always_available` list — there is no `get_tools()` method on the flat `MessageProcessor`. Per-call budget and decay-tracking state (`_save_pattern_calls`, `_save_graph_calls`, `_touched_pattern_ids`, …) lives on the calling processor instance and is read via `self.mp` (constructor-injected when `ToolDispatcher._bind()` builds the per-call ability instance).
 
 ### Registry (`backend/abilities/_registry.py`)
 

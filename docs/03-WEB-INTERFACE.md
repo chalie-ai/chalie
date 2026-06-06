@@ -55,7 +55,7 @@ While the ACT loop runs:                    Final:
 - **Tool list** (`act-tools`) — cumulative across the entire ACT loop (NOT per-iteration). Indented 24 px under the logo so it visually belongs to the row.
 - **Final response**: `replaceActWithResponse` removes the `act-cycle` node and appends a fresh `.speech-form--chalie` bubble in its place.
 
-Tool rows are minimal monospace lines — name LEFT, optional summary, state RIGHT — with no chrome. When the LLM provides an `act_summary` (a ~3-10 word description injected into every tool's `INPUT_SCHEMA` at request time), the row displays `tool_name — summary` (e.g. `search — Searching for laptops in Malta`). The summary uses `var(--text-secondary)` at `font-weight: 400` and truncates with ellipsis when space is constrained. When `act_summary` is absent the row falls back to showing only the tool name.
+Tool rows are minimal monospace lines — name LEFT, optional summary, state RIGHT — with no chrome. When the LLM provides an `act_summary` (a ~3-10 word description the framework injects as a required field into every tool's input schema at request time, via the single `Ability.get_input_schema()` assembler), the row displays `tool_name — summary` (e.g. `search — Searching for laptops in Malta`). The summary uses `var(--text-secondary)` at `font-weight: 400` and truncates with ellipsis when space is constrained. When `act_summary` is absent the row falls back to showing only the tool name.
 
 | State | Class | Color | Status slot |
 |---|---|---|---|

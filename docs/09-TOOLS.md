@@ -8,7 +8,7 @@ Every dispatchable capability in Chalie is an `Ability` subclass under `backend/
 
 **Blocked abilities (`blocked`)** is a per-config `frozenset` (empty by default). A config narrows the discoverable scope by listing tool names to exclude from both `discoverable` and the `find_tools` index. The three discovery-capable loops — user, DMN, and external-agent — each carry a `blocked` set built from shared constants in `configs/channels/_common.py`: all three block `PATTERN_WRITE_TOOLS` (`save_pattern`/`save_graph`, exclusive to the pattern passes) and `DELEGATE_INTERNAL_TOOLS` (`browser`/`search`, the raw web tools reachable only via the `web_search`/`web_browse` delegates); `DMN_CONFIG` additionally blocks `DELEGATE_TOOLS` (`web_search`/`web_browse`), preventing the background reflection loop from spawning delegate work (the delegate tools replaced the retired single `subagent` tool).
 
-**SEARCH_TOOLTIP** is a required `ClassVar[str]` on every non-INTERNAL `Ability` subclass (enforced at import time by `__init_subclass__`). It provides a 2–5 word description used to build the `find_tools` index.
+**`get_search_tooltip()`** is a required zero-arg getter (`@abstractmethod`) on every non-INTERNAL `Ability` subclass, returning a non-empty 2–5 word description used to build the `find_tools` index — enforced at import time by `__init_subclass__` (which probes a throwaway `mp=None` instance). It is one of the five metadata getters every concrete ability implements: `get_name`, `get_summary`, `get_examples`, `get_search_tooltip`, `get_parameters` (see "Adding a first-party ability" below).
 
 ## How tools are loaded on a turn
 
@@ -33,28 +33,40 @@ Three status values appear in the tools list:
 
 ## Adding a first-party ability
 
-A first-party ability is a Python module under `backend/abilities/` that subclasses `Ability` and implements a single dispatch method:
+A first-party ability is a Python module under `backend/abilities/` that subclasses `Ability`, implements the five zero-arg metadata getters, and a single dispatch method `run(self, params)`:
 
 ```python
 from abilities._ability import Ability
 
 class WeatherAbility(Ability):
-    NAME = "weather"
-    SUMMARY = "Live weather lookup by coordinates or city name."
-    EXAMPLES = [
-        "what is the weather in Valletta",
-        "is it raining in San Francisco",
-        # 6 to 8 entries total — enforced by __init_subclass__
-    ]
-    INPUT_SCHEMA = {"type": "object", "properties": {...}}
+    def get_name(self) -> str:
+        return "weather"
+
+    def get_summary(self) -> str:
+        return "Live weather lookup by coordinates or city name."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what is the weather in Valletta",
+            "is it raining in San Francisco",
+            # 6 to 8 entries total — enforced by __init_subclass__
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "weather lookup"
+
+    def get_parameters(self) -> dict:
+        return {"type": "object", "properties": {...}}
 
     def run(self, params):
         ...
 ```
 
-`params` are the LLM-extracted arguments validated against `INPUT_SCHEMA`. The conversation channel and flattened client telemetry (location, time, locale — fields may be null) are reached via `self.MessageProcessor.config.channel` and `self.telemetry` (set by the dispatch spine immediately before `run()`). Abilities run to completion — there is no framework execution timeout. The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. SUMMARY + EXAMPLES drive the semantic search row that `find_tools` matches on; SUMMARY is the most important field — it determines whether `find_tools` surfaces this ability. SEARCH_TOOLTIP provides a compact label for the `find_tools` index. Both `find_tools` and `find_skills` inherit from `SearchableAbility` (`abilities/_search.py`) which provides the shared vec+FTS5 RRF fusion search infrastructure.
+The metadata getters replaced the old `NAME` / `SUMMARY` / `EXAMPLES` / `SEARCH_TOOLTIP` / `INPUT_SCHEMA` ClassVars (TKT-837). They are zero-arg and read `self.mp` (the invoking MessageProcessor, constructor-injected) when a value depends on the live request; at `self.mp is None` (introspection / `build_ability_db`) they MUST return deterministic base text so the embedded index stays machine-independent. The full LLM-facing descriptor — `{name, description, input_schema}` plus the framework fields `act_summary` (always, required) and `async` (iff `config.SUPPORTS_ASYNC`) — is assembled in ONE place, the `@typing.final Ability.get_input_schema()`; overriding it (or `_inject_framework_fields`) is an import-time error. There is no `description` field — `get_summary()` is both the model-facing description and the search-corpus base text.
 
-After registering the ability, wire it into the appropriate config(s). For a discoverable ability, add its `NAME` to `DEFAULT_DISCOVERABLE` in `backend/configs/channels.py`. For an always-available ability, add it to `DEFAULT_ALWAYS_AVAILABLE` instead. If a specific channel should not see the ability, add the name to that config's `blocked` frozenset. Then regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
+`params` are the LLM-extracted arguments validated against `get_parameters()` (the framework `act_summary` / `async` keys are stripped before `run()` sees them). The conversation channel and flattened client telemetry (location, time, locale — fields may be null) are reached via `self.mp.config.channel` and `self.telemetry` (set by the dispatch spine immediately before `run()`). Abilities run to completion — there is no framework execution timeout. The return value is dispatched through `ToolRenderAndRecordService` and tag-formatted by `services/innate_skills/_tag.py`. `get_summary()` + `get_examples()` drive the semantic search row that `find_tools` matches on; `get_summary()` is the most important — it determines whether `find_tools` surfaces this ability. `get_search_tooltip()` provides a compact label for the `find_tools` index. Both `find_tools` and `find_skills` inherit from `SearchableAbility` (`abilities/_search.py`) which provides the shared vec+FTS5 RRF fusion search infrastructure.
+
+After registering the ability, wire it into the appropriate config(s). For a discoverable ability, add its name (the string `get_name()` returns) to `DEFAULT_DISCOVERABLE` in `backend/configs/channels.py`. For an always-available ability, add it to `DEFAULT_ALWAYS_AVAILABLE` instead. If a specific channel should not see the ability, add the name to that config's `blocked` frozenset. Then regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
 
 ## Configuration
 
