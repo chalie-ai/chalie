@@ -93,9 +93,16 @@ class Ability(ABC):
         # schema and are constructed with arguments — skip metadata validation.
         if getattr(cls, "_SYNTHETIC", False):
             return
-        # Abstract subclasses (still missing a getter or run) cannot be
-        # instantiated and never reach the registry — skip them.
-        if ABC in cls.__bases__ or getattr(cls, "__abstractmethods__", None):
+        # Abstract base mix-ins (e.g. SearchableAbility, which lists ABC directly
+        # in its bases) are not concrete abilities — skip their metadata probe.
+        # We deliberately do NOT consult __abstractmethods__ here: ABCMeta sets it
+        # AFTER __init_subclass__ returns, so it is always unset at this point. A
+        # concrete-looking subclass that still omits a getter is caught downstream
+        # instead — get_examples / get_search_tooltip by the probe below (the
+        # inherited abstract getter returns None and fails the shape check), and
+        # get_name / get_summary / get_parameters / run at registry instantiation
+        # (ABC blocks it).
+        if ABC in cls.__bases__:
             return
 
         # Concrete ability: validate its metadata shape AT IMPORT, through the

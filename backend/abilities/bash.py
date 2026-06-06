@@ -19,6 +19,10 @@ _DEFAULT_TIMEOUT_S = 30
 _MAX_TIMEOUT_S = 300
 _NONPRINTABLE_THRESHOLD = 0.10
 _EMPTY_SUCCESS_MSG = "(no output — command succeeded silently)"
+# Single source of truth for where bash runs — the same value the model is told
+# in get_summary() and the cwd _run_command actually uses, so the two can never
+# drift.
+_WORKING_DIR = Path.home()
 
 _ACTION_SEVERITY: dict[str, int] = {
     "read": 0,
@@ -128,10 +132,9 @@ class BashAbility(Ability):
         # append the working directory so the model knows where commands run.
         if self.mp is None:
             return self._SUMMARY
-        cwd = Path.home()
         return (
             self._SUMMARY
-            + f" Working directory: {cwd}. Use absolute paths or cd to operate elsewhere."
+            + f" Working directory: {_WORKING_DIR}. Use absolute paths or cd to operate elsewhere."
         )
 
     def get_examples(self) -> list[str]:
@@ -330,7 +333,7 @@ def _run_command(command: str, timeout_s: int, env: dict) -> dict:
             ["bash", "-c", command],
             capture_output=True,
             timeout=timeout_s,
-            cwd=str(Path.home()),
+            cwd=str(_WORKING_DIR),
             env=env,
         )
     except subprocess.TimeoutExpired:
