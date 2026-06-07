@@ -64,7 +64,7 @@ class TestGeminiToolCallIds:
         same millisecond produced identical ids. Pin a constant clock so the
         pre-fix behaviour fails deterministically.
         """
-        from services.llm_service import _gemini_accumulate_part
+        from services.llm_clients.gemini import _accumulate_part as _gemini_accumulate_part
 
         def make_part(name):
             return SimpleNamespace(
@@ -73,7 +73,7 @@ class TestGeminiToolCallIds:
             )
 
         tool_calls = []
-        with patch('services.llm_service.time.time', return_value=1_700_000_000.0):
+        with patch('services.llm_clients.gemini.time.time', return_value=1_700_000_000.0):
             _gemini_accumulate_part(make_part('find_tools'), [], tool_calls)
             _gemini_accumulate_part(make_part('find_tools'), [], tool_calls)
 

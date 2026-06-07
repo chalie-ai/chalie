@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 from configs.channels import UserConfig
 from services.database_service import get_shared_db_service
-from services.llm_service import LLMResponse
+from services.provider_api import ProviderApiResponse, ThinkingLevel
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
@@ -41,10 +41,17 @@ _PROVIDERS_RESOLVE = "services.providers.Providers._resolve"
 class _RecordingProvider:
     """Stand-in for the resolved LLM provider — the single sanctioned boundary.
 
-    Captures every ``send_messages`` request and returns a one-shot ``NOTHING``
-    response (no tool calls) so the thinking ACT loop ends after a single send.
-    ``build_request_body`` is real so the over-cap measurement runs exactly as
-    production would."""
+    Captures every ``send(dto)`` request and returns a one-shot ``NOTHING``
+    ProviderApiResponse (no tool calls) so the thinking ACT loop ends after a
+    single send. ``estimate_request_tokens`` returns 1 so the pre-flight
+    over-cap check always passes (never raises RequestOverCapError).
+
+    TKT-846 spec change (doc 131): Providers._resolve now returns a ProviderClient.
+    Updated from send_messages/build_request_body interface to send(dto)/
+    estimate_request_tokens(dto) interface.
+    """
+
+    CONTENT_FIELD_LABEL = "message.content"
 
     def __init__(self):
         self.sends = []
@@ -52,18 +59,18 @@ class _RecordingProvider:
     def get_context_limit(self):
         return 200000
 
-    def build_request_body(self, system, messages, tools):
-        import json
-        return json.dumps({"system": system, "messages": messages, "tools": tools})
+    def estimate_request_tokens(self, dto):
+        """Return 1 so the pre-flight over-cap check never triggers."""
+        return 1
 
-    def send_messages(self, system, messages, stream=True, *, tools=None, thinking_mode=None):
+    def send(self, dto):
         self.sends.append({
-            "system": system,
-            "messages": messages,
-            "tools": tools,
-            "thinking_mode": thinking_mode,
+            "system": dto.system,
+            "messages": dto.messages,
+            "tools": dto.tools,
+            "thinking_mode": dto.thinking_mode,
         })
-        return LLMResponse(text="NOTHING", model="recorder", tool_calls=None)
+        return ProviderApiResponse(text="NOTHING", model="recorder", tool_calls=None)
 
 
 def _png_with_text(text: str) -> bytes:
@@ -130,7 +137,8 @@ def test_turn0_thinking_pass_sees_uploaded_image_in_its_snapshot(db):
         _build_parent([attachment])._seed_turn_zero()
 
     # Exactly one high-deliberation send reached the boundary — the thinking pass.
-    high_sends = [s for s in recorder.sends if s["thinking_mode"] == "high"]
+    # TKT-846: thinking_mode is now a ThinkingLevel enum, not a plain string.
+    high_sends = [s for s in recorder.sends if s["thinking_mode"] == ThinkingLevel.HIGH]
     assert len(high_sends) == 1, (
         f"expected exactly one high-deliberation send, got {len(high_sends)} "
         f"(total sends={len(recorder.sends)})"

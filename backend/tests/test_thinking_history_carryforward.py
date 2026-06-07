@@ -25,7 +25,7 @@ import json
 import pytest
 from unittest.mock import patch
 
-from services.llm_service import LLMResponse
+from services.provider_api import ProviderApiResponse, ThinkingLevel
 
 pytestmark = pytest.mark.unit
 
@@ -35,10 +35,17 @@ _PROVIDERS_RESOLVE = "services.providers.Providers._resolve"
 class _RecordingProvider:
     """Stand-in for the resolved LLM provider — the single sanctioned boundary.
 
-    Captures every ``send_messages`` request (system + messages + tools) and
-    returns a one-shot ``NOTHING`` response (no tool calls) so the thinking ACT
-    loop ends after a single send. ``build_request_body`` is real so the over-cap
-    measurement runs against this provider exactly as production would."""
+    Captures every ``send(dto)`` request (system + messages + tools) and
+    returns a one-shot ``NOTHING`` ProviderApiResponse (no tool calls) so the
+    thinking ACT loop ends after a single send. ``estimate_request_tokens``
+    returns 1 so the pre-flight over-cap check never triggers.
+
+    TKT-846 spec change (doc 131): Providers._resolve now returns a ProviderClient.
+    Updated from send_messages/build_request_body interface to send(dto)/
+    estimate_request_tokens(dto) interface.
+    """
+
+    CONTENT_FIELD_LABEL = "message.content"
 
     def __init__(self):
         self.sends = []
@@ -46,17 +53,18 @@ class _RecordingProvider:
     def get_context_limit(self):
         return 200000
 
-    def build_request_body(self, system, messages, tools):
-        return json.dumps({"system": system, "messages": messages, "tools": tools})
+    def estimate_request_tokens(self, dto):
+        """Return 1 so the pre-flight over-cap check never triggers."""
+        return 1
 
-    def send_messages(self, system, messages, stream=True, *, tools=None, thinking_mode=None):
+    def send(self, dto):
         self.sends.append({
-            "system": system,
-            "messages": messages,
-            "tools": tools,
-            "thinking_mode": thinking_mode,
+            "system": dto.system,
+            "messages": dto.messages,
+            "tools": dto.tools,
+            "thinking_mode": dto.thinking_mode,
         })
-        return LLMResponse(text="NOTHING", model="recorder", tool_calls=None)
+        return ProviderApiResponse(text="NOTHING", model="recorder", tool_calls=None)
 
 
 def _build_parent(raw_input):
@@ -108,7 +116,8 @@ def test_thinking_prepass_mirrors_parent_user_message(db):
     content = thinking_req["messages"][0]["content"]
 
     # Sanity: this really is the high-deliberation pass (config pins 'high').
-    assert thinking_req["thinking_mode"] == "high"
+    # TKT-846: thinking_mode is now a ThinkingLevel enum, not a plain string.
+    assert thinking_req["thinking_mode"] == ThinkingLevel.HIGH
 
     # The mirror: the parent's exact Previous Messages block (verbatim) and input
     # line are present in the thinking request — it is the parent's body, not a stub.

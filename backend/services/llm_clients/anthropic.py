@@ -3,12 +3,15 @@ Anthropic thin client — transforms ProviderApiRequest → Anthropic Messages A
 and parses back to ProviderApiResponse.
 
 Native size-rejection signal: HTTP 413 → ResponseOverLimitError.
-UNVERIFIED: The Anthropic SDK may surface a 413 as anthropic.APIStatusError
-with status_code 413.  The existing code does NOT have a 413 handler for
-Anthropic (only RateLimitError is caught); this client adds the catch.
-Flag: # UNVERIFIED: Anthropic 413 — SDK exception class not confirmed from
-existing code.  anthropic.APIStatusError with status_code 413 is the most
-likely surface; left as a best-effort catch on status_code attribute.
+VERIFIED: anthropic._exceptions.RequestTooLargeError has class-level
+status_code == 413 and is a subclass of anthropic.APIError.  The catch
+``except (anthropic.BadRequestError, anthropic.APIError)`` with
+``getattr(exc, 'status_code', None) == 413`` therefore correctly intercepts
+it.  Confirmed via:
+  python3 -c "import anthropic._exceptions as e, anthropic;
+              print(e.RequestTooLargeError.status_code,
+                    issubclass(e.RequestTooLargeError, anthropic.APIError))"
+  → 413 True
 
 Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
 _app_user_agent, _resolve_api_key — utilities kept in llm_service during migration).
@@ -195,8 +198,9 @@ class AnthropicClient(ProviderClient):
                             pass
                 raise RateLimitError(str(exc), retry_after=retry_after, provider='anthropic') from exc
             except (anthropic.BadRequestError, anthropic.APIError) as exc:
-                # UNVERIFIED: Anthropic 413 surface — checking status_code attribute
-                # (anthropic.APIStatusError subclass). This is best-effort.
+                # VERIFIED: anthropic._exceptions.RequestTooLargeError subclasses
+                # anthropic.APIError with class-level status_code == 413.
+                # getattr(exc, 'status_code', None) returns 413 for that class.
                 status = getattr(exc, 'status_code', None)
                 if status == 413:
                     raise ResponseOverLimitError(
@@ -248,22 +252,20 @@ class AnthropicClient(ProviderClient):
         return 200_000
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
-        """Estimate tokens via Anthropic's server-side API, falling back to heuristic."""
+        """Estimate the token cost of a request using a local heuristic.
+
+        Uses the same strategy as the pre-refactor _over_cap path: serialise
+        the request body and apply estimate_tokens() (no live API call).  This
+        matches the old behaviour — the old providers._over_cap called
+        build_request_body() + estimate_tokens(), never count_tokens().
+
+        The Anthropic count_tokens API (exact but a live round-trip) is NOT
+        called here.  That would double the number of API calls per ACT
+        iteration and introduce a new failure mode (rate-limit on count_tokens
+        before the main send).  Pre-flight over-cap checks only need a safe
+        heuristic, not an exact count.
+        """
         from services.llm_service import estimate_tokens  # noqa: PLC0415
-        try:
-            client = self._get_client()
-            kwargs: dict = {
-                'model': self.model,
-                'messages': _anthropic_convert_messages(dto.messages),
-            }
-            if dto.system:
-                kwargs['system'] = dto.system
-            if dto.tools:
-                kwargs['tools'] = dto.tools
-            result = client.messages.count_tokens(**kwargs)
-            return result.input_tokens
-        except Exception as exc:
-            logger.debug("[AnthropicClient] count_tokens API failed, using estimate: %s", exc)
         body = json.dumps({
             'model': self.model,
             'system': dto.system,

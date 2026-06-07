@@ -4,16 +4,20 @@ Feature tests for the openai_compatible LLM platform.
 What this tests:
   A user configures a third-party OpenAI-compatible provider (e.g., MiniMax) by
   POSTing to /api/providers with platform='openai_compatible' and a custom host.
-  The server stores the provider, lists it back correctly, and the LLM service
-  factory returns an OpenAIService whose client is wired to the supplied base_url.
+  The server stores the provider, lists it back correctly, and the LLM client
+  factory returns an OpenAIClient whose client is wired to the supplied base_url.
 
 Real-stack — no mocks of production code.
   - Flask test client backed by the real authed_client fixture
   - Real SQLite database built from schema.sql via SchemaConvergenceService
   - Real vault (initialized + unlocked) so api_key encryption round-trips
-  - Real create_llm_service() factory and OpenAIService._get_client()
+  - Real build_client() factory and OpenAIClient._get_client()
   - The openai.OpenAI() constructor never makes network calls on init, so
     asserting on client.base_url is safe and does not require network access.
+
+TKT-846 spec change (doc 131 §6.1 + §8): create_llm_service and OpenAIService
+are deleted; replaced by build_client (factory.py) and OpenAIClient (openai.py
+in llm_clients/). Tests 3 and 4 updated to use the new symbols.
 """
 
 import secrets
@@ -121,13 +125,19 @@ class TestOpenAICompatibleProvider:
         assert provider['host'] == 'https://api.minimax.io/v1'
 
     # ------------------------------------------------------------------
-    # 3. create_llm_service returns OpenAIService for openai_compatible
+    # 3. build_client returns OpenAIClient for openai_compatible
     # ------------------------------------------------------------------
 
-    def test_create_llm_service_returns_openai_service(self):
-        """create_llm_service with platform='openai_compatible' returns an
-        OpenAIService instance, not an unknown-platform error."""
-        from services.llm_service import create_llm_service, OpenAIService
+    def test_build_client_returns_openai_client(self):
+        """build_client with platform='openai_compatible' returns an OpenAIClient
+        instance — the platform is handled by the openai thin client, not an
+        unknown-platform error.
+
+        TKT-846: create_llm_service + OpenAIService deleted; replaced by
+        build_client + OpenAIClient in services/llm_clients/factory.py + openai.py.
+        """
+        from services.llm_clients.factory import build_client
+        from services.llm_clients.openai import OpenAIClient
 
         config = {
             'platform': 'openai_compatible',
@@ -136,18 +146,21 @@ class TestOpenAICompatibleProvider:
             'api_key': secrets.token_hex(16),
         }
 
-        service = create_llm_service(config)
+        client = build_client(config)
 
-        assert isinstance(service, OpenAIService)
+        assert isinstance(client, OpenAIClient)
 
     # ------------------------------------------------------------------
     # 4. _get_client() wires base_url from the host field
     # ------------------------------------------------------------------
 
     def test_get_client_uses_host_as_base_url(self):
-        """OpenAIService._get_client() for an openai_compatible config returns
-        an openai.OpenAI client whose base_url points to the configured host."""
-        from services.llm_service import OpenAIService
+        """OpenAIClient._get_client() for an openai_compatible config returns
+        an openai.OpenAI client whose base_url points to the configured host.
+
+        TKT-846: OpenAIService → OpenAIClient in services/llm_clients/openai.py.
+        """
+        from services.llm_clients.openai import OpenAIClient
 
         config = {
             'platform': 'openai_compatible',
@@ -156,19 +169,22 @@ class TestOpenAICompatibleProvider:
             'api_key': secrets.token_hex(16),
         }
 
-        service = OpenAIService(config)
-        client = service._get_client()
+        client = OpenAIClient(config)
+        openai_client = client._get_client()
 
         # openai.OpenAI stores base_url as httpx.URL (trailing slash normalised)
         from urllib.parse import urlparse
-        parsed = urlparse(str(client.base_url))
+        parsed = urlparse(str(openai_client.base_url))
         assert parsed.hostname == 'api.minimax.io'
         assert parsed.path.startswith('/v1')
 
     def test_standard_openai_platform_uses_default_base_url(self):
-        """OpenAIService for platform='openai' (no host) uses the default
-        OpenAI base URL — verifies the two code paths are distinct."""
-        from services.llm_service import OpenAIService
+        """OpenAIClient for platform='openai' (no host) uses the default
+        OpenAI base URL — verifies the two code paths are distinct.
+
+        TKT-846: OpenAIService → OpenAIClient in services/llm_clients/openai.py.
+        """
+        from services.llm_clients.openai import OpenAIClient
 
         config = {
             'platform': 'openai',
@@ -176,11 +192,11 @@ class TestOpenAICompatibleProvider:
             'api_key': secrets.token_hex(16),
         }
 
-        service = OpenAIService(config)
-        client = service._get_client()
+        client = OpenAIClient(config)
+        openai_client = client._get_client()
 
         from urllib.parse import urlparse
-        assert urlparse(str(client.base_url)).hostname == 'api.openai.com'
+        assert urlparse(str(openai_client.base_url)).hostname == 'api.openai.com'
 
     # ------------------------------------------------------------------
     # 5. Missing host → 4xx on POST

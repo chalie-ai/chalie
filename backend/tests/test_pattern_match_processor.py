@@ -5,21 +5,33 @@ Each test answers exactly one question: does this service do what it claims?
 Real in-memory SQLite via the `db` fixture (schema.sql through
 SchemaConvergenceService). MemoryStore is the real production implementation.
 
-LLM boundary: the resolved provider service (Providers._resolve) is the ONLY
+LLM boundary: the resolved provider client (Providers._resolve) is the ONLY
 boundary that is stubbed — Providers.send itself still runs real prompt
 assembly, tool building, and pre-flight, so everything else (DB,
 DataGraphService, save_pattern, save_graph, _touched_pattern_ids init) runs
 against real production code.
 
 Per feedback_test_philosophy.md: hot path only, no mock theater.
+
+TKT-846 spec change (doc 131): Providers is now mp-free; _resolve returns a
+ProviderClient (not LoggingLLMService). _FakeLLMService is a proper ProviderClient
+subclass: send(dto); estimate_request_tokens(dto) returns 1 so pre-flight passes;
+CONTENT_FIELD_LABEL declared as a ClassVar.
+
+Injection seam: Providers._resolve is swapped at the class level via a plain
+try/finally context manager (_inject_fake_client) — no unittest.mock.patch.
+This is the sanctioned LLM-network-boundary seam (Pattern H): the only thing
+standing in for a real external API call. Everything in-process is real.
 """
 
+import contextlib
 import json
-from unittest.mock import patch
 
 import pytest
 
-from services.llm_service import LLMResponse
+from services.llm_clients.base import ProviderClient
+from services.provider_api import ProviderApiResponse
+from services.providers import Providers
 
 pytestmark = pytest.mark.unit
 
@@ -27,8 +39,8 @@ pytestmark = pytest.mark.unit
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_llm_response(text="", tool_calls=None):
-    """Return a minimal LLMResponse with the given tool_calls list."""
-    return LLMResponse(
+    """Return a minimal ProviderApiResponse with the given tool_calls list."""
+    return ProviderApiResponse(
         text=text,
         model="test-model",
         provider="mock",
@@ -36,29 +48,52 @@ def _make_llm_response(text="", tool_calls=None):
     )
 
 
-class _FakeLLMService:
-    """Stand-in for the resolved LLM provider — the single sanctioned boundary.
+class _FakeLLMService(ProviderClient):
+    """Stand-in for the resolved LLM provider client — the single sanctioned boundary.
 
-    Patched in for ``Providers._resolve`` so the real ``Providers.send`` still
-    runs every production step (system/user prompt assembly — which lazily
-    inits ``_touched_pattern_ids`` via PatternConfig.get_user_prompt — tool
-    building, and the over-cap size check) while only the network round-trip is
-    controlled by ``send_fn``. Mirrors the provider methods that
-    ``Providers.send`` / ``_over_cap`` invoke. ``build_request_body``
-    returns a tiny payload so the request always fits (never OVER_CAP).
+    A proper ProviderClient subclass injected via Providers._resolve so the
+    real Providers.send still runs every production step (system/user prompt
+    assembly — which lazily inits _touched_pattern_ids via
+    PatternConfig.get_user_prompt — tool building, and the over-cap size
+    check) while only the network round-trip is controlled by send_fn.
+
+    TKT-846 contract (doc 131):
+      - estimate_request_tokens(dto) returns 1 so pre-flight never triggers.
+      - send(dto) returns the controlled response.
+      - CONTENT_FIELD_LABEL mirrors the Ollama client label.
     """
+
+    CONTENT_FIELD_LABEL = "message.content"
 
     def __init__(self, send_fn):
         self._send_fn = send_fn
 
-    def get_context_limit(self):
+    def get_context_limit(self) -> int:
         return 200_000
 
-    def build_request_body(self, *_args, **_kwargs):
-        return "x"
+    def estimate_request_tokens(self, dto) -> int:
+        """Return 1 so the pre-flight over-cap check never triggers."""
+        return 1
 
-    def send_messages(self, *_args, **_kwargs):
+    def send(self, dto) -> ProviderApiResponse:
         return self._send_fn()
+
+
+@contextlib.contextmanager
+def _inject_fake_client(send_fn):
+    """Swap Providers._resolve at the class level for the duration of the block.
+
+    This is the sanctioned LLM network-boundary seam: the only thing
+    intercepted is the external API call. Everything in-process (Providers.send
+    pre-flight, tool building, DB writes) runs as real production code.
+    No unittest.mock is used.
+    """
+    original = Providers._resolve
+    Providers._resolve = lambda self, *_a, **_kw: _FakeLLMService(send_fn)
+    try:
+        yield
+    finally:
+        Providers._resolve = original
 
 
 def _tool_call(tool_name, **kwargs):
@@ -156,11 +191,6 @@ def _fetch_cursor(db):
         return None
 
 
-# ── Shared patch targets ─────────────────────────────────────────────────────
-
-_PROVIDERS_RESOLVE = "services.providers.Providers._resolve"
-
-
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
@@ -231,8 +261,7 @@ class TestFiftyPlusDeltaFiresAndWritesPattern:
                 return llm_response_with_tool
             return llm_response_clean
 
-        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
-
+        with _inject_fake_client(_fake_send):
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             result = worker._step_pattern_match()
 
@@ -274,7 +303,7 @@ class TestSavePatternConfidenceCap:
                 return _make_llm_response(tool_calls=[tc])
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
+        with _inject_fake_client(_fake_send):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -303,7 +332,7 @@ class TestUntouchedPatternDecaysAndSoftDeletes:
         def _fake_send(*_a, **_kw):
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
+        with _inject_fake_client(_fake_send):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -355,7 +384,7 @@ class TestSaveGraphRoutesThroughDataGraphService:
                 return _make_llm_response(tool_calls=[tc])
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
+        with _inject_fake_client(_fake_send):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -430,7 +459,7 @@ class TestSavePatternBudgetCapAt20:
             # Subsequent iterations: no more tool calls → loop exits.
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_RESOLVE, lambda self, *_a, **_kw: _FakeLLMService(_fake_send)):
+        with _inject_fake_client(_fake_send):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()

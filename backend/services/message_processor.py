@@ -479,20 +479,17 @@ class MessageProcessor:
         uses_vision = getattr(self.config, "uses_vision_provider", False)
         provider_type = ProviderType.VISION if uses_vision else ProviderType.CHAT
 
-        dto = ProviderApiRequest(
+        return ProviderApiRequest(
             system=system,
             messages=messages,
             type=provider_type,
             tools=tools or None,
             thinking_mode=level,
             cache_prefix=True,
+            _job_name=self.config.job,
+            _usage_class=getattr(self.config, 'usage_class', None) or 'chat',
+            _caller=type(self).__name__,
         )
-        # Attach telemetry metadata the Providers chokepoint needs but that must
-        # not be part of the provider-neutral DTO contract.
-        dto._job_name = self.config.job
-        dto._usage_class = getattr(self.config, 'usage_class', None) or 'chat'
-        dto._caller = type(self).__name__
-        return dto
 
     def _build_send_messages(self) -> list[dict]:
         """Build the single-element user-message list for this mp's turn.
@@ -552,15 +549,31 @@ class MessageProcessor:
 
         Bypasses Providers.send() to skip the over-cap check, but still routes
         through the client and telemetry so the call is logged correctly.
+
+        Telemetry (_log_after_call + _record_metrics) fires only on success — a
+        failed send writes NO accounting row, matching the pre-refactor success-
+        only logging.  Writing a sentinel under the real job_name would corrupt
+        get_last_chat_request_tokens (context indicator → 0).  On failure the
+        attempt is surfaced via logger.warning with wall-time, then the exception
+        propagates to kill the turn.
         """
         import time  # noqa: PLC0415
         client = self.providers._resolve(dto.type)
         t0 = time.monotonic()
-        response = client.send(dto)
-        wall_ms = int((time.monotonic() - t0) * 1000)
-        self.providers._log_after_call(dto, response, wall_ms)
-        self._record_metrics(response, wall_ms)
-        return response
+        response = None
+        try:
+            response = client.send(dto)
+            return response
+        finally:
+            wall_ms = int((time.monotonic() - t0) * 1000)
+            if response is not None:
+                self.providers._log_after_call(dto, response, wall_ms)
+                self._record_metrics(response, wall_ms)
+            else:
+                logger.warning(
+                    "[FORCE-SEND] provider send failed after %dms; no telemetry row written",
+                    wall_ms,
+                )
 
     def _record_metrics(self, response, wall_ms=None) -> None:
         """Fold per-send telemetry into the turn's MetricsAccumulator.

@@ -1,3 +1,12 @@
+"""Feature tests for compaction watermark and over-cap detection.
+
+TKT-846 spec change (doc 131): OVER_CAP sentinel is gone, replaced by
+RequestOverCapError. Providers is mp-free; send(dto) takes a ProviderApiRequest.
+_over_cap() and build_request_body() are deleted; replaced by
+providers.measure(dto) + the cap formula. Tests migrated to exercise the real
+new production entry points.
+"""
+
 import pytest
 from services import compaction_persistence, transcript_service
 from services.database_service import get_shared_db_service
@@ -74,9 +83,10 @@ def test_get_context_limit_reads_declared_max_tokens_capped():
 def _seed_selected_ollama(db, max_tokens):
     """Seed an offline Ollama provider and mark it selected, returning its id.
 
-    Ollama's build_request_body / get_context_limit (via declared max_tokens)
-    run with zero network, so the cap check exercises the real provider stack
-    without a live model. send_messages is never reached by the over-cap path."""
+    OllamaClient.estimate_request_tokens / get_context_limit (via declared
+    max_tokens) run with zero network, so the cap check exercises the real
+    provider stack without a live model. client.send(dto) is never reached
+    by the over-cap path — RequestOverCapError is raised before the call."""
     cur = db.execute(
         "INSERT INTO providers (name, platform, model, host, max_tokens) "
         "VALUES ('fit-test', 'ollama', 'fit-model', 'http://localhost:11434', ?)",
@@ -92,23 +102,16 @@ def _seed_selected_ollama(db, max_tokens):
     return pid
 
 
-def _build_send_inputs(mp):
-    """Scaffold the exact (system, messages, tools, provider) Providers.send()
-    measures — real stack, no mocks. ``messages`` mirrors send()'s
-    checkpoint-wrapped user payload, so the measurement covers the FULL request."""
-    from abilities._registry import AbilityRegistry
-    from services.message_processor import _wrap_with_checkpoint
-    provider = mp.providers.selected_provider()
-    system = mp.config.get_system_prompt(mp)
-    tools = AbilityRegistry.build_tools(mp)
-    user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
-    return system, [{"role": "user", "content": user}], tools, provider
+def test_measure_true_when_full_request_reaches_threshold(db):
+    """Compact-first (canonical step 3): when the FULL request's measured token
+    count reaches RS >= window - max(10% window, 8k), providers.measure(dto)
+    returns a value at or above the cap so the ACT loop fires compaction BEFORE
+    sending — no trimmed/partial-view turn, no API call.
 
-
-def test_over_cap_true_when_full_request_reaches_threshold(db):
-    """Compact-first (canonical step 3): when the FULL request reaches
-    RS >= window - max(10% window, 8k), _over_cap is True so the ACT loop fires
-    compaction BEFORE sending — no trimmed/partial-view turn, no API call."""
+    TKT-846: _over_cap(system, messages, tools, provider) deleted; replaced by
+    providers.measure(dto) which exercises the real ProviderClient.estimate_request_tokens
+    path. The cap formula is preserved: window - max(int(0.10*window), 8000).
+    """
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
@@ -127,18 +130,28 @@ def test_over_cap_true_when_full_request_reaches_threshold(db):
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "what should I do next?", None)
     mp.config = UserConfig()
+    mp.thinking_level = "low"
     try:
-        system, messages, tools, provider = _build_send_inputs(mp)
-        assert mp.providers.get_context_limit() == 20000
-        assert mp.providers._over_cap(system, messages, tools, provider) is True
+        window = mp.providers.get_context_limit()
+        assert window == 20000
+        cap = window - max(int(0.10 * window), 8000)   # 12000
+        dto = mp._build_send_dto()
+        measured = mp.providers.measure(dto)
+        assert measured >= cap, (
+            f"Expected measured ({measured}) >= cap ({cap}); "
+            f"over-cap check should trigger compaction"
+        )
     finally:
         ProviderCacheService.invalidate()
         _clear(db, ch)
 
 
-def test_over_cap_false_when_request_fits(db):
-    """When the request fits under the cap, _over_cap is False so send() proceeds
-    to the API — no compaction fires."""
+def test_measure_false_when_request_fits(db):
+    """When the request fits under the cap, providers.measure(dto) returns a
+    value below the cap so send() proceeds to the API — no compaction fires.
+
+    TKT-846: _over_cap deleted; replaced by providers.measure(dto) < cap.
+    """
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
@@ -153,20 +166,31 @@ def test_over_cap_false_when_request_fits(db):
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "hi", None)
     mp.config = UserConfig()
+    mp.thinking_level = "low"
     try:
-        system, messages, tools, provider = _build_send_inputs(mp)
-        assert mp.providers._over_cap(system, messages, tools, provider) is False
+        window = mp.providers.get_context_limit()
+        cap = window - max(int(0.10 * window), 8000)
+        dto = mp._build_send_dto()
+        measured = mp.providers.measure(dto)
+        assert measured < cap, (
+            f"Expected measured ({measured}) < cap ({cap}); "
+            f"a tiny request must not trigger over-cap"
+        )
     finally:
         ProviderCacheService.invalidate()
         _clear(db, ch)
 
 
-def test_send_returns_over_cap_sentinel_without_calling_provider(db):
-    """send() short-circuits to the OVER_CAP sentinel when the request exceeds the
-    cap — the offline provider is never reached (zero network), proving compaction
-    fires BEFORE any API call (compact-first)."""
+def test_send_raises_request_over_cap_without_calling_provider(db):
+    """providers.send(dto) raises RequestOverCapError when the request exceeds
+    the cap — the offline provider is never reached (zero network), proving
+    compaction fires BEFORE any API call (compact-first).
+
+    TKT-846: OVER_CAP sentinel replaced by RequestOverCapError. Sentinel
+    pattern `response is OVER_CAP` becomes `except RequestOverCapError`.
+    """
     from services.message_processor import MessageProcessor
-    from services.providers import OVER_CAP
+    from services.provider_api import RequestOverCapError
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
 
@@ -181,10 +205,13 @@ def test_send_returns_over_cap_sentinel_without_calling_provider(db):
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "what should I do next?", None)
     mp.config = UserConfig()
-    mp.thinking_level = "low"
+    mp.thinking_level = "low"  # set here because process() sets this; __init__ doesn't
     try:
-        # No NWS / live model — if send() tried to reach Ollama this would raise.
-        assert mp.providers.send() is OVER_CAP
+        # No live model — if send() tried to reach Ollama this would raise
+        # a network error, not RequestOverCapError.
+        dto = mp._build_send_dto()
+        with pytest.raises(RequestOverCapError):
+            mp.providers.send(dto)
     finally:
         ProviderCacheService.invalidate()
         _clear(db, ch)
@@ -193,11 +220,15 @@ def test_send_returns_over_cap_sentinel_without_calling_provider(db):
 def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db):
     """Canonical step 4.2 (rare fallback): ChatHistoryCompactor shrinks its
     bare {system + prior + get_previous_messages} request by dropping the OLDEST
-    message one at a time until it fits the cap. Real provider stack, no model."""
+    message one at a time until it fits the cap. Real provider stack, no model.
+
+    TKT-846: provider.build_request_body(system, [msg], []) removed; compactor
+    now calls parent.providers.measure(candidate_dto) via ProviderApiRequest.
+    """
     from abilities.chat_history_compactor import ChatHistoryCompactor
     from services.message_processor import MessageProcessor
     from services.system_message_prompt import ChatHistoryCompactionSystemPrompt
-    from services.llm_service import estimate_tokens
+    from services.provider_api import ProviderApiRequest, ProviderType, ThinkingLevel
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
 
@@ -222,10 +253,17 @@ def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db):
         assert f"row{n_rows - 1:03d}" in combined
         # The bare (tool-free) compaction request now fits the cap.
         system = ChatHistoryCompactionSystemPrompt().get_prompt()
-        provider = mp.providers.selected_provider()
-        body = provider.build_request_body(system, [{"role": "user", "content": combined}], [])
-        cap = 20000 - max(int(0.10 * 20000), 8000)   # 12000
-        assert estimate_tokens(body) <= cap
+        candidate_dto = ProviderApiRequest(
+            system=system,
+            messages=[{"role": "user", "content": combined}],
+            type=ProviderType.CHAT,
+            tools=None,
+            thinking_mode=ThinkingLevel.HIGH,
+        )
+        window = mp.providers.get_context_limit()
+        cap = window - max(int(0.10 * window), 8000)   # 12000
+        measured = mp.providers.measure(candidate_dto)
+        assert measured <= cap
     finally:
         ProviderCacheService.invalidate()
         _clear(db, ch)

@@ -16,9 +16,16 @@ Consumed by: services.message_processor, api.providers,
 
 import json
 import logging
+import threading
 import time
 
 logger = logging.getLogger(__name__)
+
+# First-failure-warning flags (mirrors llm_request_logger._warned_on_failure).
+# Disk-full / DB-lock errors are surfaced at WARNING once per process; all
+# subsequent failures drop to DEBUG to avoid log spam.
+_log_call_warned = False
+_log_call_warn_lock = threading.Lock()
 
 # Hard ceiling on any provider's reported context window.
 MAX_CONTEXT_WINDOW = 200_000
@@ -175,7 +182,14 @@ class Providers:
                     usage_class=usage_class,
                 )
             except Exception as exc:
-                logger.debug("[LLM LOG] log_call failed (non-fatal): %s", exc)
+                global _log_call_warned  # noqa: PLW0603
+                with _log_call_warn_lock:
+                    first = not _log_call_warned
+                    _log_call_warned = True
+                if first:
+                    logger.warning("[LLM LOG] log_call failed (non-fatal): %s", exc)
+                else:
+                    logger.debug("[LLM LOG] log_call failed (non-fatal): %s", exc)
 
         # File-based request log (verbatim prompt/response log).
         try:

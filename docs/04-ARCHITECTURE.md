@@ -57,6 +57,85 @@ Background channels (episode encoders, the user-summary synthesiser, and the com
 
 ---
 
+## Provider Layer
+
+The provider layer is a standalone send chokepoint: every LLM call in the process — user turns, thinking passes, compaction, delegates, vision probes, and test-connection — flows through `Providers().send(dto)` in `backend/services/providers.py`. There are no mp-aware singletons; every caller builds its own `ProviderApiRequest` and calls `send()`.
+
+### Contract (`services/provider_api.py`)
+
+**`ProviderApiRequest`** — caller-built, provider-neutral DTO:
+
+| Field | Default | Notes |
+|---|---|---|
+| `system: str` | — | Assembled by the caller from its own config |
+| `messages: list[dict]` | — | Neutral role/content array |
+| `type: ProviderType` | `CHAT` | Routing enum (see below) |
+| `tools: list[dict] \| None` | `None` | |
+| `thinking_mode: ThinkingLevel` | `MEDIUM` | Formalises existing `low/medium/high` strings; adds `MAX` (additive) |
+| `format: str` | `"text"` | |
+| `cache_prefix: bool` | `True` | Anthropic ephemeral cache prefix |
+| `max_tokens: int \| None` | `None` | `None` = use `resolve_max_tokens(window)`: `max(window*0.1, 8000)` |
+
+Telemetry metadata (`_job_name`, `_usage_class`, `_caller`) is attached at construction, excluded from `__eq__`/`repr` so it never affects compaction comparisons.
+
+**`ProviderApiResponse`** — standardised response across all providers:
+`text`, `model`, `provider`, `tokens_input`, `tokens_output`, `tokens_thinking`, `tokens_cache_read`, `tokens_cache_create`, `tool_calls`, `stop_reason`, `latency_ms`, `thinking_block` (NEW — surfaced for telemetry), `response_code` (NEW — HTTP status).
+
+**`ProviderType` enum:** `CHAT` (globally selected provider via `ProviderCacheService`) · `VISION` (DB vision provider via `ProviderDbService`) · `VISUAL_OUTPUT` (reserved).
+
+**`ThinkingLevel` enum:** `LOW` · `MEDIUM` · `HIGH` · `MAX`. Each thin client maps the level to its native flag internally. Ollama's quirk (think gated on model capability, ignores level) is preserved in `OllamaClient`.
+
+**Exception hierarchy** (all in `services/provider_api.py`):
+- `ProviderError` — base
+  - `RequestOverCapError` — pre-flight; measured request exceeds `window − max(10%·window, 8k)`. Raised by `Providers.send()`, caught by `_loop` → compact-and-retry.
+  - `ResponseOverLimitError` — post-flight; provider rejected the payload server-side (Anthropic/Ollama HTTP 413, OpenAI `context_length_exceeded`, Gemini token-count error). Caught by `_loop` with the same compact-and-retry path.
+  - `ProviderResponseError` — other API error; carries `response_code`.
+    - `RateLimitError` — HTTP 429; carries `retry_after`.
+
+### `Providers` facade (`services/providers.py`)
+
+`Providers()` takes no constructor argument. The `MessageProcessor` holds `self.providers = Providers()` but the facade never reaches into mp — resolution is purely by `dto.type`.
+
+`send(dto)` steps:
+1. `_resolve(dto.type)` — returns a `ProviderClient`; CHAT → `ProviderCacheService`, VISION → `ProviderDbService`.
+2. `window = min(client.get_context_limit(), MAX_CONTEXT_WINDOW)`.
+3. `measured = client.estimate_request_tokens(dto)`; if `measured >= cap` → raise `RequestOverCapError`.
+4. `client.send(dto)` — may raise `ResponseOverLimitError` / `ProviderResponseError` / `RateLimitError`.
+5. `_log_after_call(dto, response, wall_ms)` — single telemetry chokepoint: `llm_call_log_service.log_call` (per-call token accounting, feeds the context-usage indicator) + `llm_request_logger.log_llm_request` (verbatim prompt log). `_job_name == ''` (probe DTOs) → `log_call` skipped.
+6. Return `ProviderApiResponse`.
+
+`measure(dto) -> int` — non-sending token estimate for `ChatHistoryCompactor._fit_compaction_input()` (replaced `provider.build_request_body()`).
+
+`get_context_limit(provider_type) -> int` — reads backfilled `providers.max_tokens` first (fast path); falls back to `client.get_context_limit()`.
+
+`selected_provider()` — returns the resolved CHAT client. Consumed by `configs/channels/_common.py` for `CONTENT_FIELD_LABEL` system-prompt placeholder substitution.
+
+`resolve_thinking_mode(config_thinking_mode, override, level)` — module-level pure function; precedence: config pin > persisted user override > gate-computed level.
+
+### Thin clients (`services/llm_clients/`)
+
+One `ProviderClient` subclass per platform, all in `services/llm_clients/`:
+
+| Module | Platform(s) |
+|---|---|
+| `anthropic.py` | Anthropic |
+| `openai.py` | `openai` and `openai_compatible` |
+| `gemini.py` | Google Gemini |
+| `ollama.py` | Ollama |
+
+Each subclass implements the `ProviderClient` ABC (`base.py`): `send(dto) -> ProviderApiResponse`, `get_context_limit() -> int`, `estimate_request_tokens(dto) -> int`, and the `CONTENT_FIELD_LABEL: ClassVar[str]` class attribute. `factory.py` exports `build_client(config) -> ProviderClient` — the single dispatch point that picks the right subclass by `config['platform']`.
+
+`services/llm_service.py` (~133 lines) retains only the shared helpers used by the clients: `_resolve_api_key`, `_app_user_agent`, `_call_with_retry`, `estimate_tokens`, `_strip_think_blocks`, `_parse_retry_after`, `_is_thinking_rejection`. The old `AnthropicService`, `OpenAIService`, `GeminiService` service classes, `OllamaService`, `LLMResponse`, `FallbackLLMService`, `LoggingLLMService`, and `create_llm_service()` are all deleted; `services/ollama_service.py` retains only the shared helpers `_validate_model`, `_validate_host`, `_parse_chat_response`, `_ollama_convert_messages`.
+
+### Three DTO-creation points
+
+The caller builds the DTO — `Providers.send()` receives it, never scaffolds it:
+1. `MessageProcessor._build_send_dto()` — the main ACT loop path.
+2. `api/providers.py` `_test_api_provider` — lightweight test-connection endpoint (no mp context).
+3. `services/vision_service.py` `send_image_with_config` — vision capability probe (`vision_probe.py`).
+
+---
+
 ## Memory Hierarchy
 
 Four layers, each optimised for a different timescale and purpose:

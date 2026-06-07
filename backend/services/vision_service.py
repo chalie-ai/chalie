@@ -20,14 +20,6 @@ _VISION_SYSTEM = (
     "You are a precise vision assistant. Follow the user's instructions exactly."
 )
 
-# Comprehensive prompt for document-image understanding (NOT the probe).
-DOCUMENT_VISION_PROMPT = (
-    "Describe this image comprehensively for document understanding. "
-    "Transcribe ALL visible text exactly as written. Describe any diagrams, "
-    "charts, tables, UI elements, photographs, people, objects, and the overall "
-    "layout. Be thorough and literal — do not summarise away detail."
-)
-
 
 def build_vision_config(provider: Dict[str, Any]) -> Dict[str, Any]:
     """Build a client config dict from a provider row for a vision call.

@@ -7,7 +7,7 @@ _IMG = {"data": "QkFTRTY0", "mime_type": "image/png"}
 
 
 def test_anthropic_emits_image_block():
-    from services.llm_service import _anthropic_convert_messages
+    from services.llm_clients.anthropic import _anthropic_convert_messages
     out = _anthropic_convert_messages(
         [{"role": "user", "content": "what is this?", "image": _IMG}]
     )
@@ -22,7 +22,7 @@ def test_anthropic_emits_image_block():
 
 
 def test_anthropic_image_only_no_text():
-    from services.llm_service import _anthropic_convert_messages
+    from services.llm_clients.anthropic import _anthropic_convert_messages
     out = _anthropic_convert_messages([{"role": "user", "content": "", "image": _IMG}])
     assert out[0]["content"] == [
         {"type": "image", "source": {
@@ -31,13 +31,13 @@ def test_anthropic_image_only_no_text():
 
 
 def test_anthropic_text_only_unchanged():
-    from services.llm_service import _anthropic_convert_messages
+    from services.llm_clients.anthropic import _anthropic_convert_messages
     msg = {"role": "user", "content": "plain text"}
     assert _anthropic_convert_messages([msg]) == [msg]
 
 
 def test_openai_emits_image_url_block():
-    from services.llm_service import _openai_convert_messages
+    from services.llm_clients.openai import _openai_convert_messages
     out = _openai_convert_messages(
         [{"role": "user", "content": "describe", "image": _IMG}]
     )
@@ -52,7 +52,7 @@ def test_openai_emits_image_url_block():
 
 
 def test_openai_image_only_no_text():
-    from services.llm_service import _openai_convert_messages
+    from services.llm_clients.openai import _openai_convert_messages
     out = _openai_convert_messages([{"role": "user", "content": "", "image": _IMG}])
     assert out[0]["content"] == [
         {"type": "image_url",
@@ -61,7 +61,7 @@ def test_openai_image_only_no_text():
 
 
 def test_openai_text_only_unchanged():
-    from services.llm_service import _openai_convert_messages
+    from services.llm_clients.openai import _openai_convert_messages
     msg = {"role": "user", "content": "plain"}
     assert _openai_convert_messages([msg]) == [msg]
 
@@ -70,7 +70,7 @@ def test_openai_assistant_tool_calls_unchanged():
     # Guards the image branch staying in the FINAL else, after the
     # assistant+tool_calls and tool branches — an image-less assistant
     # tool-call message must pass through its dedicated branch untouched.
-    from services.llm_service import _openai_convert_messages
+    from services.llm_clients.openai import _openai_convert_messages
     msg = {
         "role": "assistant",
         "content": "",
@@ -83,7 +83,7 @@ def test_openai_assistant_tool_calls_unchanged():
 
 
 def test_gemini_emits_inline_data_part():
-    from services.llm_service import _gemini_convert_messages
+    from services.llm_clients.gemini import _gemini_convert_messages
     out = _gemini_convert_messages(
         [{"role": "user", "content": "look", "image": _IMG}]
     )
@@ -100,7 +100,7 @@ def test_gemini_image_only_keeps_empty_text_part():
     # Deliberate divergence from Anthropic/OpenAI: Gemini always emits a
     # leading text part (even ""), then the inline_data part. Documented in
     # message-processing.md; Gemini tolerates the empty text part.
-    from services.llm_service import _gemini_convert_messages
+    from services.llm_clients.gemini import _gemini_convert_messages
     out = _gemini_convert_messages([{"role": "user", "content": "", "image": _IMG}])
     assert out == [{
         "role": "user",
@@ -112,7 +112,7 @@ def test_gemini_image_only_keeps_empty_text_part():
 
 
 def test_gemini_text_only_unchanged():
-    from services.llm_service import _gemini_convert_messages
+    from services.llm_clients.gemini import _gemini_convert_messages
     out = _gemini_convert_messages([{"role": "user", "content": "plain"}])
     assert out == [{"role": "user", "parts": [{"text": "plain"}]}]
 

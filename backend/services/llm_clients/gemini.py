@@ -1,15 +1,36 @@
 """
 Gemini thin client — transforms ProviderApiRequest → Google Gemini API.
 
-Native size-rejection signal:
-  UNVERIFIED: The Gemini SDK does not have a well-documented HTTP 413 path.
-  The most likely surface is a google.api_core.exceptions.InvalidArgument or
-  ResourceExhausted when the token count exceeds the model limit. The existing
-  code does NOT catch a specific "too large" error from Gemini — it only catches
-  ResourceExhausted (429) and ServerError (5xx). This client adds a best-effort
-  catch on token-limit strings in the exception message.
-  # UNVERIFIED: Gemini size-rejection — no confirmed SDK exception class / code
-  # from existing production code. Checking message strings as best-effort.
+Native size-rejection signal — VERIFIED (google-genai 1.65.0):
+  The google.genai SDK raises ClientError (a subclass of APIError) for all
+  4xx responses, and ServerError for all 5xx responses.  There is no
+  dedicated "token limit exceeded" exception subclass.
+
+  HTTP codes relevant to Chalie:
+    400 → ClientError; exc.code == 400; exc.status == 'INVALID_ARGUMENT'
+    429 → ClientError; exc.code == 429; exc.status == 'RESOURCE_EXHAUSTED'
+    500/503 → ServerError; exc.code == 500 or 503
+
+  Token-limit rejections arrive as HTTP 400 with status 'INVALID_ARGUMENT'.
+  The same HTTP 400 / INVALID_ARGUMENT status covers many unrelated error
+  causes (wrong parameter type, unsupported region, etc.), so a bare
+  ``exc.code == 400`` check would over-trigger.  The most reliable
+  discriminator is ``exc.code == 400 AND exc.status == 'INVALID_ARGUMENT'
+  AND any(s in (exc.message or '').lower() for s in _TOKEN_LIMIT_STRINGS)``.
+
+  Residual gap: Gemini may produce a token-limit 400 with a message phrasing
+  not in _TOKEN_LIMIT_STRINGS.  If the string-match misses, the exception
+  falls through to the bare ``raise``, is retried by _call_with_retry, then
+  propagates as an unhandled exception — the turn dies without compaction.
+  This is an improvement over the old GeminiService which had NO token-limit
+  catch at all (confirmed: git show 88421fc0^:backend/services/llm_service.py
+  shows no size-rejection handler in GeminiService.send_messages).
+  The logger.warning on mismatch (see _generate_with_fallback) surfaces misses
+  in production logs so the strings can be extended.
+
+  Note: the old _generate_with_fallback checked ``'ResourceExhausted' in ename``
+  for rate limits, but the SDK raises ``ClientError`` (not a class named
+  ``ResourceExhausted``); ``'429' in str(exc)`` is the reliable catch and is kept.
 
 Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
 _app_user_agent, _resolve_api_key).
@@ -41,12 +62,19 @@ _THINKING_BUDGETS: dict[str, int] = {
     ThinkingLevel.HIGH.value: 16384,
 }
 
+# Message substrings used as a fallback discriminator for Gemini token-limit
+# errors.  All token-limit rejections arrive as HTTP 400 / INVALID_ARGUMENT,
+# but that same code covers many unrelated causes.  These strings narrow it
+# to size-related errors; mismatches fall through and are logged at WARNING
+# so the set can be extended if needed.
 _TOKEN_LIMIT_STRINGS = frozenset({
     'token limit',
     'context length',
     'too long',
     'maximum context',
     'input too large',
+    'request payload size',
+    'exceeds the limit',
 })
 
 
@@ -174,7 +202,15 @@ class GeminiClient(ProviderClient):
         return '\n'.join(text_parts), tool_calls or None, finish_reason
 
     def _generate_with_fallback(self, client, genai, contents, gen_cfg: dict):
-        """Execute generate_content, handling errors and thinking fallback."""
+        """Execute generate_content, handling errors and thinking fallback.
+
+        Error discrimination is based on the structured fields of
+        google.genai.errors.ClientError / ServerError (verified, google-genai
+        1.65.0): exc.code is the HTTP status int; exc.status is the gRPC
+        status string.  String-matching on exc.message is used only as a
+        secondary discriminator for token-limit errors because HTTP 400 /
+        INVALID_ARGUMENT covers many unrelated causes.
+        """
         try:
             return client.models.generate_content(
                 model=self.model,
@@ -182,20 +218,45 @@ class GeminiClient(ProviderClient):
                 config=genai.types.GenerateContentConfig(**gen_cfg),
             )
         except Exception as exc:
-            ename = type(exc).__name__
+            exc_code = getattr(exc, 'code', None)
+            exc_status = getattr(exc, 'status', None) or ''
             exc_str = str(exc).lower()
-            if 'ResourceExhausted' in ename or '429' in str(exc):
+
+            # HTTP 429 — rate limit.
+            # SDK raises ClientError with code=429, status='RESOURCE_EXHAUSTED'.
+            # Kept '429' in str(exc) as belt-and-suspenders for SDK version drift.
+            if exc_code == 429 or exc_status == 'RESOURCE_EXHAUSTED' or '429' in str(exc):
                 raise RateLimitError(str(exc), retry_after=None, provider='gemini') from exc
-            if 'ServerError' in ename or '500' in str(exc) or '503' in str(exc):
+
+            # HTTP 5xx — transient server error.
+            if exc_code is not None and exc_code >= 500:
                 raise ProviderResponseError(
-                    f"Gemini server error: {exc}", response_code=500, provider='gemini',
+                    f"Gemini server error: {exc}", response_code=exc_code, provider='gemini',
                 ) from exc
-            # UNVERIFIED: size-rejection detection via message strings
-            if any(s in exc_str for s in _TOKEN_LIMIT_STRINGS):
-                raise ResponseOverLimitError(
-                    f"Gemini rejected payload (token limit): {exc}",
-                    response_code=400, provider='gemini',
+
+            # HTTP 400 / INVALID_ARGUMENT — may be a token-limit rejection.
+            # Primary: structured code + status confirms this is a 400 INVALID_ARGUMENT.
+            # Secondary: message string narrows to size-related errors; a bare
+            # code==400 check would over-trigger (covers wrong params, regions, etc.).
+            # If the string-match misses, log a WARNING so the set can be extended.
+            if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
+                exc_msg = (getattr(exc, 'message', None) or '').lower()
+                if any(s in exc_msg for s in _TOKEN_LIMIT_STRINGS):
+                    raise ResponseOverLimitError(
+                        f"Gemini rejected payload (token limit): {exc}",
+                        response_code=400, provider='gemini',
+                    ) from exc
+                logger.warning(
+                    "[GeminiClient] 400 INVALID_ARGUMENT not matched as token-limit "
+                    "(msg=%r); propagating. Add matching string to _TOKEN_LIMIT_STRINGS "
+                    "if this is a size rejection.",
+                    getattr(exc, 'message', str(exc))[:200],
+                )
+                raise ProviderResponseError(
+                    f"Gemini 400 INVALID_ARGUMENT: {exc}", response_code=400, provider='gemini',
                 ) from exc
+
+            # Thinking fallback: retry without thinking_config on rejection.
             if 'thinking_config' in gen_cfg and (
                 'thinking' in exc_str or 'unsupported' in exc_str
             ):

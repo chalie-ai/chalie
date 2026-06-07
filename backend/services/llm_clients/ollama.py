@@ -11,8 +11,8 @@ for the on/off decision; only MEDIUM/HIGH/MAX enable the think flag at all,
 but whether it actually appears in the payload depends on the model.
 
 Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
-_app_user_agent), services.ollama_service (_validate_model, _validate_host,
-_ollama_convert_messages — kept for re-use).
+_app_user_agent), services.ollama_service (_validate_model, _validate_host —
+CodeQL sanitisation barriers kept there for backward-compat with tester imports).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
