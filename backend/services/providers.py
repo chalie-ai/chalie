@@ -56,8 +56,10 @@ class Providers:
 
         CHAT → globally selected provider (ProviderCacheService).
         VISION → DB vision provider (ProviderDbService).
+        Any other type (e.g. the reserved VISUAL_OUTPUT) raises ProviderError
+        rather than silently resolving to the CHAT provider.
         """
-        from services.provider_api import ProviderType  # noqa: PLC0415
+        from services.provider_api import ProviderType, ProviderError  # noqa: PLC0415
         from services.llm_clients.factory import build_client  # noqa: PLC0415
 
         pt = provider_type or ProviderType.CHAT
@@ -69,6 +71,9 @@ class Providers:
             if not vp:
                 raise RuntimeError("VISION type requested but no vision provider configured")
             return build_client(dict(vp))
+
+        if pt != ProviderType.CHAT:
+            raise ProviderError(f"Unsupported provider type for send: {pt}")
 
         from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
         config = ProviderCacheService.get_selected_provider()

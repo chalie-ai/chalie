@@ -2,8 +2,9 @@
 LLM service utilities — shared helpers used by the thin provider clients.
 
 This module retains shared utilities (estimate_tokens, _call_with_retry,
-_app_user_agent, _resolve_api_key, converters, etc.) after the main client
-classes were moved to services/llm_clients/*.
+_app_user_agent, _resolve_api_key, _strip_think_blocks, _parse_retry_after,
+_is_thinking_rejection) after the main client classes — and the message
+converters — were moved to services/llm_clients/*.
 
 DELETED in TKT-846 refactor:
   - AnthropicService, OpenAIService, GeminiService → llm_clients/anthropic.py etc.
@@ -16,10 +17,9 @@ DELETED in TKT-846 refactor:
   - NonRetryableError — replaced by ProviderResponseError hierarchy.
   - RateLimitError — moved to services.provider_api.
 
-Backwards-compat shims (thin re-exports) are present for LLMResponse,
-RateLimitError, PayloadTooLargeError, and NonRetryableError so that existing
-tests that import them from here do not break immediately. The tester agent
-should migrate those test imports.
+No backward-compat re-export shims remain: every caller (production and test)
+imports these symbols from their new homes (services.provider_api,
+services.llm_clients.*) directly.
 """
 
 import re

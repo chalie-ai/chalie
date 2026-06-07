@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 def backfill_one(conn, provider_id: int) -> bool:
     """Compute and persist max_tokens for a single provider row.
 
-    Looks up the provider config via ConfigService.get_providers(), builds an
-    LLM service via create_llm_service, calls .get_context_limit(), then
+    Looks up the provider config via ConfigService.get_providers(), builds a
+    ProviderClient via build_client, calls .get_context_limit(), then
     UPDATEs the row. Caller owns the connection and the commit.
 
     Returns True on successful UPDATE, False on any failure (failure is
