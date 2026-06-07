@@ -1,0 +1,300 @@
+"""
+Gemini thin client — transforms ProviderApiRequest → Google Gemini API.
+
+Native size-rejection signal:
+  UNVERIFIED: The Gemini SDK does not have a well-documented HTTP 413 path.
+  The most likely surface is a google.api_core.exceptions.InvalidArgument or
+  ResourceExhausted when the token count exceeds the model limit. The existing
+  code does NOT catch a specific "too large" error from Gemini — it only catches
+  ResourceExhausted (429) and ServerError (5xx). This client adds a best-effort
+  catch on token-limit strings in the exception message.
+  # UNVERIFIED: Gemini size-rejection — no confirmed SDK exception class / code
+  # from existing production code. Checking message strings as best-effort.
+
+Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
+_app_user_agent, _resolve_api_key).
+Consumed by: services.llm_clients.factory (platform dispatch).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from typing import ClassVar, Optional
+from uuid import uuid4
+
+from services.llm_clients.base import ProviderClient
+from services.provider_api import (
+    ProviderApiRequest,
+    ProviderApiResponse,
+    RateLimitError,
+    ResponseOverLimitError,
+    ProviderResponseError,
+    ThinkingLevel,
+)
+
+logger = logging.getLogger(__name__)
+
+_THINKING_BUDGETS: dict[str, int] = {
+    ThinkingLevel.MEDIUM.value: 4096,
+    ThinkingLevel.HIGH.value: 16384,
+}
+
+_TOKEN_LIMIT_STRINGS = frozenset({
+    'token limit',
+    'context length',
+    'too long',
+    'maximum context',
+    'input too large',
+})
+
+
+def _gemini_convert_messages(messages: list) -> list:
+    """Convert normalised messages to Gemini content format."""
+    result = []
+    for msg in messages:
+        role = "model" if msg['role'] == 'assistant' else msg['role']
+        if msg['role'] == 'tool':
+            result.append({
+                "role": "user",
+                "parts": [{
+                    "function_response": {
+                        "name": msg.get('name', ''),
+                        "response": {"content": msg.get('content', '')},
+                    }
+                }],
+            })
+        elif msg['role'] == 'assistant' and msg.get('tool_calls'):
+            parts = []
+            text = msg.get('content', '')
+            if text:
+                parts.append({"text": text})
+            for tc in msg['tool_calls']:
+                parts.append({
+                    "function_call": {"name": tc['name'], "args": tc['input']},
+                })
+            result.append({"role": "model", "parts": parts})
+        else:
+            parts = [{"text": msg.get('content', '')}]
+            img = msg.get('image')
+            if img:
+                parts.append({
+                    "inline_data": {"mime_type": img['mime_type'], "data": img['data']},
+                })
+            result.append({"role": role, "parts": parts})
+    return result
+
+
+def _accumulate_part(part, text_parts: list, tool_calls: list) -> None:
+    """Append text or a tool-call dict from a single Gemini response part."""
+    if getattr(part, 'text', None):
+        text_parts.append(part.text)
+    fc = getattr(part, 'function_call', None)
+    if fc:
+        tool_calls.append({
+            'id': f"gemini_{fc.name}_{uuid4().hex[:8]}",
+            'name': fc.name,
+            'input': dict(fc.args) if fc.args else {},
+        })
+
+
+class GeminiClient(ProviderClient):
+    """Google Gemini API thin client."""
+
+    CONTENT_FIELD_LABEL: ClassVar[str] = "candidates[].content.parts[].text"
+
+    def __init__(self, config: dict) -> None:
+        self._config = config
+        self.model: str = config.get('model', 'gemini-2.5-flash')
+        self._format: str = config.get('format', 'text')
+
+    def _get_sdk(self):
+        try:
+            from google import genai  # noqa: PLC0415
+            return genai
+        except ImportError:
+            raise RuntimeError(
+                "google-genai package is not installed. Run: pip install google-genai"
+            )
+
+    def _get_client(self, genai):
+        from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        return genai.Client(
+            api_key=_resolve_api_key(self._config),
+            http_options={"headers": {"User-Agent": _app_user_agent()}},
+        )
+
+    def _thinking_native(self, genai, level: ThinkingLevel, cfg: dict) -> None:
+        """Inject thinking_config into cfg for MEDIUM/HIGH/MAX."""
+        value = level.value
+        if level == ThinkingLevel.MAX:
+            # Gemini has no explicit model-ceiling budget; use a large fixed value.
+            budget = 32768
+            cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=budget)
+            logger.info(
+                "[THINKING] native flag passed: provider=gemini mode=max model=%s budget=%d",
+                self.model, budget,
+            )
+        elif value in _THINKING_BUDGETS:
+            budget = _THINKING_BUDGETS[value]
+            cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=budget)
+            logger.info(
+                "[THINKING] native flag passed: provider=gemini mode=%s model=%s",
+                value, self.model,
+            )
+
+    def _build_gen_config(self, genai, system: str, tools: Optional[list],
+                          thinking_mode: ThinkingLevel) -> dict:
+        cfg: dict = {'system_instruction': system}
+        if self._format == 'json' and not tools:
+            cfg['response_mime_type'] = 'application/json'
+        if tools:
+            cfg['tools'] = [
+                genai.types.Tool(function_declarations=[
+                    genai.types.FunctionDeclaration(
+                        name=t['name'],
+                        description=t.get('description', ''),
+                        parameters=t.get('input_schema'),
+                    )
+                    for t in tools
+                ])
+            ]
+        self._thinking_native(genai, thinking_mode, cfg)
+        return cfg
+
+    def _parse_response(self, response) -> tuple[str, Optional[list], Optional[str]]:
+        text_parts: list[str] = []
+        tool_calls: list[dict] = []
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate is not None:
+            for part in (candidate.content.parts or []):
+                _accumulate_part(part, text_parts, tool_calls)
+        finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
+        return '\n'.join(text_parts), tool_calls or None, finish_reason
+
+    def _generate_with_fallback(self, client, genai, contents, gen_cfg: dict):
+        """Execute generate_content, handling errors and thinking fallback."""
+        try:
+            return client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=genai.types.GenerateContentConfig(**gen_cfg),
+            )
+        except Exception as exc:
+            ename = type(exc).__name__
+            exc_str = str(exc).lower()
+            if 'ResourceExhausted' in ename or '429' in str(exc):
+                raise RateLimitError(str(exc), retry_after=None, provider='gemini') from exc
+            if 'ServerError' in ename or '500' in str(exc) or '503' in str(exc):
+                raise ProviderResponseError(
+                    f"Gemini server error: {exc}", response_code=500, provider='gemini',
+                ) from exc
+            # UNVERIFIED: size-rejection detection via message strings
+            if any(s in exc_str for s in _TOKEN_LIMIT_STRINGS):
+                raise ResponseOverLimitError(
+                    f"Gemini rejected payload (token limit): {exc}",
+                    response_code=400, provider='gemini',
+                ) from exc
+            if 'thinking_config' in gen_cfg and (
+                'thinking' in exc_str or 'unsupported' in exc_str
+            ):
+                logger.info(
+                    "[THINKING] native flag rejected by provider=gemini model=%s — retried without",
+                    self.model,
+                )
+                fallback = {k: v for k, v in gen_cfg.items() if k != 'thinking_config'}
+                return client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=genai.types.GenerateContentConfig(**fallback),
+                )
+            raise
+
+    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
+        """Transform DTO → Gemini generate_content API → ProviderApiResponse."""
+        from services.llm_service import _call_with_retry  # noqa: PLC0415
+        genai = self._get_sdk()
+        client = self._get_client(genai)
+        start = time.time()
+
+        contents = _gemini_convert_messages(dto.messages)
+        gen_cfg = self._build_gen_config(genai, dto.system, dto.tools, dto.thinking_mode)
+
+        response = _call_with_retry(
+            lambda: self._generate_with_fallback(client, genai, contents, gen_cfg)
+        )
+        latency_ms = int((time.time() - start) * 1000)
+        text, tool_calls, finish_reason = self._parse_response(response)
+
+        if not text and not tool_calls:
+            logger.warning("[GeminiClient] Empty response, finish_reason=%s", finish_reason)
+            raise ProviderResponseError(
+                f"Empty Gemini response (finish_reason={finish_reason})",
+                response_code=200, provider='gemini',
+            )
+
+        usage = getattr(response, 'usage_metadata', None)
+        tokens_input = getattr(usage, 'prompt_token_count', None) if usage else None
+        tokens_output = getattr(usage, 'candidates_token_count', None) if usage else None
+        tokens_thinking = getattr(usage, 'thoughts_token_count', None) if usage else None
+
+        logger.info(
+            "[GeminiClient] model=%s tokens=%s+%s latency=%dms%s",
+            self.model, tokens_input, tokens_output, latency_ms,
+            f" tools={len(tool_calls)}" if tool_calls else "",
+        )
+
+        return ProviderApiResponse(
+            text=text,
+            model=self.model,
+            provider='gemini',
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            tokens_thinking=tokens_thinking,
+            latency_ms=latency_ms,
+            tool_calls=tool_calls,
+            stop_reason=finish_reason,
+            response_code=200,
+        )
+
+    def get_context_limit(self) -> int:
+        """Query Gemini API for model's input token limit, cached."""
+        if hasattr(self, '_cached_context_limit'):
+            return self._cached_context_limit  # type: ignore[attr-defined]
+        try:
+            genai = self._get_sdk()
+            from services.llm_service import _resolve_api_key  # noqa: PLC0415
+            client = genai.Client(api_key=_resolve_api_key(self._config))
+            model_info = client.models.get(model=self.model)
+            self._cached_context_limit: int = model_info.input_token_limit
+            return self._cached_context_limit
+        except Exception as exc:
+            logger.debug("[GeminiClient] Failed to get context limit: %s", exc)
+            self._cached_context_limit = 1_000_000
+            return self._cached_context_limit
+
+    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
+        """Estimate using build_request_body + heuristic estimate_tokens."""
+        from services.llm_service import estimate_tokens  # noqa: PLC0415
+        contents = _gemini_convert_messages(dto.messages)
+        config_dict: dict = {'system_instruction': dto.system}
+        if dto.tools:
+            config_dict['tools'] = [
+                {
+                    'function_declarations': [
+                        {
+                            'name': t['name'],
+                            'description': t.get('description', ''),
+                            'parameters': t.get('input_schema'),
+                        }
+                        for t in dto.tools
+                    ]
+                }
+            ]
+        body = json.dumps({
+            'model': self.model,
+            'contents': contents,
+            'config': config_dict,
+        }, default=str)
+        return estimate_tokens(body)

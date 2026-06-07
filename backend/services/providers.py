@@ -1,18 +1,17 @@
-# Copyright 2026 Chalie AI
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-
 """
-Providers — per-mp gateway wrapping provider resolution, fit check, and send.
+Providers — standalone orchestrator facade for all provider API communication.
 
-Resolves the active DB provider, measures the scaffolded request against the
-context window (compact-first, canonical design), sends, and returns a raw
-LLMResponse — or the ``OVER_CAP`` sentinel when the request must be compacted
-BEFORE it can be sent.
+Single chokepoint for every LLM call. Resolves the concrete client by
+ProviderType, pre-flight checks, calls, folds telemetry, returns.
+
+No mp is ever passed in. Every caller builds its own ProviderApiRequest and
+calls Providers().send(dto). The three DTO-creation points are:
+  1. MessageProcessor.send()
+  2. api/providers.py _test_api_provider (test-connection)
+  3. services/vision_service.py send_image_with_config (vision probe)
+
+Consumed by: services.message_processor, api.providers,
+             services.vision_service, abilities.chat_history_compactor.
 """
 
 import json
@@ -21,175 +20,189 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# Hard ceiling on any provider's reported context window. Ensures the system
-# never builds a request payload exceeding this size, regardless of what the
-# upstream API reports (e.g. Gemini 1M, future models with larger windows).
+# Hard ceiling on any provider's reported context window.
 MAX_CONTEXT_WINDOW = 200_000
-
-#: Sentinel returned by :meth:`Providers.send` when the FULL request reaches the
-#: compaction threshold (``RS >= window - max(10% window, 8k)``). The ACT loop
-#: reacts by firing both compactors FIRST (compact-first, canonical design) and
-#: rebuilding a collapsed request from the DB — no API call is made for an
-#: over-cap request, and there is never a partial-view ("trimmed") turn.
-OVER_CAP = object()
 
 
 def resolve_thinking_mode(config_thinking_mode, override, level):
     """Single precedence rule for a send's thinking level.
 
-    1. ``config_thinking_mode`` — a config that hard-pins a level (the thinking
-       ability and the two compactors pin ``"high"``). These are deliberate,
-       quality-critical internals and win over everything, so a user ``medium``
-       override never downgrades compaction.
-    2. ``override`` — the persisted user override (``'medium'`` | ``'high'`` |
-       None). When set it replaces the deliberation gate on every channel.
-    3. ``level`` — the gate-computed ``mp.thinking_level`` (auto behaviour).
+    1. config_thinking_mode — a config that hard-pins a level (thinking ability
+       and both compactors pin "high"). Wins over everything.
+    2. override — the persisted user override ('medium' | 'high' | None).
+    3. level — the gate-computed mp.thinking_level (auto behaviour).
     """
     return config_thinking_mode or override or level
 
 
 class Providers:
-    """Per-mp provider gateway. Owns the bound MessageProcessor and scaffolds
-    every send / size-check / resolution from it. One instance per mp."""
+    """Standalone orchestrator facade — no mp, no scaffolding.
 
-    def __init__(self, mp):
-        self.mp = mp
+    Each caller builds a ProviderApiRequest from its own state and calls
+    send(dto). Provider resolution is driven entirely by dto.type.
+    """
 
-    def send(self, force: bool = False):
-        """Scaffold the request from self.mp, measure it, then send or signal compaction.
+    # ── Resolution ──────────────────────────────────────────────────────────
 
-        Compact-first (canonical design): the FULL request — system + tools +
-        watermark-bounded history + current input + act-trail — is measured. When
-        ``force`` is False and the request reaches the cap (``RS >= window -
-        max(10% window, 8k)``), NO API call is made: ``OVER_CAP`` is returned so the
-        ACT loop fires both compactors, advances the watermark, and rebuilds a
-        collapsed request from the DB on the next iteration (no partial-view turn).
-        When the request fits — or ``force`` is True for an irreducible request the
-        loop could not shrink — it is sent and logged. Returns LLMResponse or the
-        ``OVER_CAP`` sentinel."""
-        mp = self.mp
-        system = mp.config.get_system_prompt(mp)
-        from abilities._registry import AbilityRegistry  # noqa: PLC0415
-        tools = AbilityRegistry.build_tools(mp)
-        provider = self._resolve()
+    def _resolve(self, provider_type=None):
+        """Return the ProviderClient for the given ProviderType.
 
-        messages = self._build_user_messages()
+        CHAT → globally selected provider (ProviderCacheService).
+        VISION → DB vision provider (ProviderDbService).
+        """
+        from services.provider_api import ProviderType  # noqa: PLC0415
+        from services.llm_clients.factory import build_client  # noqa: PLC0415
 
-        if not force and self._over_cap(system, messages, tools, provider):
-            return OVER_CAP
+        pt = provider_type or ProviderType.CHAT
 
-        thinking_mode = resolve_thinking_mode(
-            getattr(mp.config, "thinking_mode", None),
-            getattr(mp, "thinking_override", None),
-            mp.thinking_level,
-        )
+        if pt == ProviderType.VISION:
+            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            vp = ProviderDbService(get_shared_db_service()).get_vision_provider()
+            if not vp:
+                raise RuntimeError("VISION type requested but no vision provider configured")
+            return build_client(dict(vp))
+
+        from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
+        config = ProviderCacheService.get_selected_provider()
+        if not config:
+            providers = ProviderCacheService.get_providers()
+            config = dict(next(iter(providers.values()))) if providers else {}
+        return build_client(dict(config))
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def send(self, dto):
+        """Pre-flight check, call, telemetry — the single chokepoint.
+
+        Steps:
+          1. Resolve client by dto.type.
+          2. Get context window (capped at MAX_CONTEXT_WINDOW).
+          3. Pre-flight: estimate tokens; raise RequestOverCapError if over cap.
+          4. client.send(dto) — may raise ResponseOverLimitError / ProviderResponseError.
+          5. Fold telemetry.
+          6. Return ProviderApiResponse.
+        """
+        from services.provider_api import RequestOverCapError  # noqa: PLC0415
+
+        client = self._resolve(dto.type)
+        window = min(client.get_context_limit(), MAX_CONTEXT_WINDOW)
+        cap = window - max(int(0.10 * window), 8000)
+
+        measured = client.estimate_request_tokens(dto)
+        if measured >= cap:
+            raise RequestOverCapError(
+                f"Request ({measured} tokens) exceeds cap ({cap}); window={window}",
+                window=window,
+                measured=measured,
+                cap=cap,
+                provider=getattr(client, 'provider', ''),
+                model=getattr(client, 'model', ''),
+            )
+
         t0 = time.monotonic()
-        response = provider.send_messages(system, messages, True, tools=tools, thinking_mode=thinking_mode)
+        response = client.send(dto)
         wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(system, messages, tools, response, wall_ms)
+        self._log_after_call(dto, response, wall_ms)
         return response
 
-    def _build_user_messages(self) -> list[dict]:
-        """Single-element user-message list for this mp's turn, attaching the
-        config's image when get_image() returns one (framework gap #1). Unit-testable
-        without an API call."""
-        from services.message_processor import _wrap_with_checkpoint  # noqa: PLC0415
-        mp = self.mp
-        user = _wrap_with_checkpoint(mp.config.channel, mp.config.get_user_prompt(mp))
-        message = {"role": "user", "content": user}
-        img = mp.config.get_image(mp)
-        if img is not None:
-            message["image"] = img
-        return [message]
+    def measure(self, dto) -> int:
+        """Return the estimated token cost of dto without sending.
 
-    def _over_cap(self, system, messages, tools, provider) -> bool:
-        """True when the FULL request reaches the compaction threshold.
+        Used by ChatHistoryCompactor to size a candidate request before
+        deciding whether to compact further.
+        """
+        client = self._resolve(dto.type)
+        return client.estimate_request_tokens(dto)
 
-        Canonical design step 3: ``RS >= window - max(10% window, 8k)`` (reserve
-        ``max(10% window, 8k)`` tokens for the response — Dylan: "10% or 8k,
-        whichever is highest"). RS is measured on the serialized request body, so
-        tools + watermark-bounded history + current input + act-trail all count.
-        Returns False when no window is known (cannot decide → send as-is)."""
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
-        window = self.get_context_limit()   # declared max_tokens, capped 200k
-        if not window:
-            return False
-        body = provider.build_request_body(system, messages, tools)
-        cap = window - max(int(0.10 * window), 8000)
-        return estimate_tokens(body) >= cap
+    def get_context_limit(self, provider_type=None) -> int:
+        """Declared context window for the active provider/model, hard-capped at MAX_CONTEXT_WINDOW.
+
+        Reads the backfilled providers.max_tokens first (fast path; set by
+        provider_token_limits.backfill_one). Falls back to the live client
+        method if the column is unset (before first backfill).
+        """
+        from services.provider_api import ProviderType  # noqa: PLC0415
+        pt = provider_type or ProviderType.CHAT
+
+        if pt == ProviderType.CHAT:
+            from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
+            config = ProviderCacheService.get_selected_provider() or {}
+            declared = config.get("max_tokens")
+            if declared and int(declared) > 0:
+                return min(int(declared), MAX_CONTEXT_WINDOW)
+
+        return min(self._resolve(pt).get_context_limit(), MAX_CONTEXT_WINDOW)
 
     def selected_provider(self):
-        """The resolved provider instance for this mp's job (design §3.1, §6.3)."""
+        """Return the resolved CHAT provider client.
+
+        Consumed by configs/channels/_common.py:15 for CONTENT_FIELD_LABEL
+        system-prompt placeholder substitution. Preserved per design resolution #3.
+        """
         return self._resolve()
 
-    def _log_after_call(self, system_prompt, messages, tools, response, wall_ms=None):
-        """Write the LLM request log file. Best-effort, never raises.
+    # ── Telemetry ────────────────────────────────────────────────────────────
 
-        Called from :meth:`send` — the single logging chokepoint every LLM
-        request flows through. This is also THE metrics recording site (spec
-        §4e): every send records, next to the latency capture and bucketed by
-        the bound processor's ``config.channel``:
+    def _log_after_call(self, dto, response, wall_ms=None):
+        """Write the LLM request log file and persist per-call token accounting.
 
-          * the send's token totals (folded into the processor's
-            MetricsAccumulator — the loop never calls ``.accumulate()``);
-          * a per-send ``requests_total`` counter; and
-          * the per-channel turn counter (``dmn_turns_total`` for the dmn
-            channel, ``subagent_turns_total`` for delegate channels).
-
-        Recording once at the send means delegate / sub-processor token
-        attribution is correct for free (``self.mp`` binds the right
-        accumulator), and the per-turn timing snapshot reflects every LLM
-        round-trip (ACT iterations, exploration, compaction).
+        Single logging chokepoint every LLM request flows through.
+        Absorbs LoggingLLMService (deleted) — including log_call (resolution #4).
         """
-        proc = self.mp
-        try:
-            # Prefer the gateway-level wall_ms so providers that forget to
-            # populate response.latency_ms (e.g. OllamaService prior to the
-            # parallel patch) still report accurately. Fall back to the
-            # provider-reported value if wall_ms wasn't passed.
-            latency_ms = wall_ms if wall_ms is not None else getattr(response, 'latency_ms', None)
-            if latency_ms is not None:
-                try:
-                    proc._metrics.record_llm_call(latency_ms)
-                except Exception as exc:
-                    logger.debug(f"[LLM LOG] record_llm_call failed: {exc}")
-            # Token totals fold into the processor's accumulator at the send
-            # (§4e) — the loop no longer calls .accumulate().
+        # Metrics (record_llm_call, accumulate) are the CALLER's responsibility —
+        # the mp calls _record_metrics() after send() returns. For standalone
+        # calls (test-connection, vision-probe) no accumulator is available.
+
+        # Per-call token accounting (was LoggingLLMService._log_llm_call).
+        # job_name is carried on the DTO via the _job_name metadata key (set
+        # by MessageProcessor.send() and the probe callers).
+        job_name = getattr(dto, '_job_name', None) or ''
+        usage_class = getattr(dto, '_usage_class', None) or 'chat'
+        if job_name:
             try:
-                proc._metrics.accumulate(response)
+                from services.llm_call_log_service import log_call  # noqa: PLC0415
+                log_call(
+                    job_name=job_name,
+                    provider=getattr(response, 'provider', 'unknown'),
+                    model=getattr(response, 'model', 'unknown'),
+                    tokens_input=getattr(response, 'tokens_input', 0) or 0,
+                    tokens_output=getattr(response, 'tokens_output', 0) or 0,
+                    tokens_cache_read=getattr(response, 'tokens_cache_read', 0) or 0,
+                    tokens_cache_create=getattr(response, 'tokens_cache_create', 0) or 0,
+                    tokens_thinking=getattr(response, 'tokens_thinking', 0) or 0,
+                    latency_ms=getattr(response, 'latency_ms', 0) or 0,
+                    usage_class=usage_class,
+                )
             except Exception as exc:
-                logger.debug(f"[LLM LOG] accumulate failed: {exc}")
-            # Per-send / per-channel counters (§4e).
-            self._record_send_counters(proc)
-        except Exception as exc:
-            logger.debug(f"[LLM LOG] processor lookup failed: {exc}")
+                logger.debug("[LLM LOG] log_call failed (non-fatal): %s", exc)
+
+        # File-based request log (verbatim prompt/response log).
         try:
-            from services.llm_request_logger import log_llm_request
+            from services.llm_request_logger import log_llm_request  # noqa: PLC0415
             log_llm_request(
-                caller=type(proc).__name__,
-                job=self.mp.config.job,
+                caller=getattr(dto, '_caller', 'Providers'),
+                job=job_name,
                 provider=getattr(response, 'provider', 'unknown'),
                 model=getattr(response, 'model', 'unknown'),
-                system_message=system_prompt or '',
-                user_message=self._render_messages_for_log(messages),
-                tools=tools,
+                system_message=dto.system or '',
+                user_message=self._render_messages_for_log(dto.messages),
+                tools=dto.tools,
             )
-        except Exception as e:
-            logger.debug(f"[LLM LOG] Hook failed: {e}", exc_info=True)
+        except Exception as exc:
+            logger.debug("[LLM LOG] log_llm_request failed: %s", exc, exc_info=True)
 
     @staticmethod
-    def _record_send_counters(proc):
-        """Record the per-send, per-channel turn counters (spec §4e).
+    def _record_send_counters(proc) -> None:
+        """Record per-send, per-channel turn counters (spec §4e).
 
-        Every send increments ``requests_total``. The channel-specific turn
-        counter is selected from the bound processor's ``config.channel``:
-        ``dmn`` → ``dmn_turns_total``; a ``delegate:*`` channel →
-        ``subagent_turns_total``. Best-effort: a metrics failure must never
-        break the send path.
+        Called by MessageProcessor._record_metrics after every send.
+        Every send increments requests_total; the channel-specific turn counter
+        is selected from the bound processor's config.channel.
         """
         try:
             channel = getattr(getattr(proc, 'config', None), 'channel', '') or ''
-            from services.metrics_service import MetricsService
+            from services.metrics_service import MetricsService  # noqa: PLC0415
             m = MetricsService()
             m.record_counter('requests_total')
             if channel == 'dmn':
@@ -197,21 +210,11 @@ class Providers:
             elif channel.startswith('delegate:'):
                 m.record_counter('subagent_turns_total')
         except Exception as exc:
-            logger.debug(f"[LLM LOG] send-counter record failed: {exc}")
+            logger.debug("[LLM LOG] send-counter record failed: %s", exc)
 
     @staticmethod
-    def _render_messages_for_log(messages):
-        """Render the messages array verbatim for a log file.
-
-        Fidelity rules:
-          * list-valued ``content`` (Anthropic content-block form) is
-            JSON-serialised so nothing is silently lost to ``str(list)``.
-          * Single-element user messages (the MessageProcessor v2 common case)
-            are written as the raw string with no ``[user]`` prefix — the spec
-            says "verbatim".
-          * Multi-element arrays keep the ``[role]`` prefix per entry so
-            reviewers can tell the messages apart in the log.
-        """
+    def _render_messages_for_log(messages) -> str:
+        """Render the messages array verbatim for a log file."""
         msgs = messages or []
 
         def _content_to_str(content):
@@ -221,55 +224,7 @@ class Providers:
 
         if len(msgs) == 1 and msgs[0].get('role') == 'user':
             return _content_to_str(msgs[0].get('content', ''))
-
         return '\n\n'.join(
             f"[{m.get('role', '?')}] {_content_to_str(m.get('content', ''))}"
             for m in msgs
         )
-
-    def _resolve(self):
-        """Resolve the active DB provider and wrap it as an LLM service.
-
-        Reads everything it needs from the bound ``self.mp`` (the per-mp gateway
-        already owns it — no raw params are threaded in): ``_job_name`` (for
-        LoggingLLMService) from ``mp.config.job`` and ``_usage_class`` (for
-        llm_call_log tagging) from ``mp.config.usage_class``. Both are injected
-        into the config dict before calling create_llm_service.
-        """
-        from services.provider_cache_service import ProviderCacheService
-        from services.llm_service import create_llm_service
-
-        if getattr(self.mp.config, "uses_vision_provider", False):
-            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
-            vp = ProviderDbService(get_shared_db_service()).get_vision_provider()
-            if not vp:
-                # describe_image() only spawns this MP when a provider exists, so
-                # unreachable on the live path. Fail loud — never silently use the
-                # global provider.
-                raise RuntimeError("uses_vision_provider set but no vision provider configured")
-            config = dict(vp)
-            config['_job_name'] = self.mp.config.job
-            config['_usage_class'] = getattr(self.mp.config, 'usage_class', None) or 'chat'
-            return create_llm_service(config)
-
-        config = ProviderCacheService.get_selected_provider()
-        if not config:
-            providers = ProviderCacheService.get_providers()
-            config = dict(next(iter(providers.values()))) if providers else {}
-        config = dict(config)  # don't mutate the cached dict
-        config['_job_name'] = self.mp.config.job
-        config['_usage_class'] = getattr(self.mp.config, 'usage_class', None) or 'chat'
-        return create_llm_service(config)
-
-    def get_context_limit(self):
-        """Declared context window for the active provider/model, hard-capped at
-        MAX_CONTEXT_WINDOW (200k). Reads the backfilled providers.max_tokens
-        (set by provider_token_limits.backfill_one = min(model window, 200k)).
-        Falls back to the live provider method before backfill has run. §3.3."""
-        from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
-        config = ProviderCacheService.get_selected_provider() or {}
-        declared = config.get("max_tokens")
-        if declared and int(declared) > 0:
-            return min(int(declared), MAX_CONTEXT_WINDOW)
-        return min(self._resolve().get_context_limit(), MAX_CONTEXT_WINDOW)

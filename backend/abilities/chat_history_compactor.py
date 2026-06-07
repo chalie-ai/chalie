@@ -124,12 +124,13 @@ class ChatHistoryCompactor(Ability):
         one at a time (typically 1–2) until it fits. A floor of one surviving
         message prevents dropping everything. Returns the combined text to
         summarise, or None when there is nothing left to compact.
+
+        Uses parent.providers.measure(dto) for sizing — no raw provider object.
         """
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
+        from services.provider_api import ProviderApiRequest, ThinkingLevel  # noqa: PLC0415
         from services.system_message_prompt import ChatHistoryCompactionSystemPrompt  # noqa: PLC0415
 
         system = ChatHistoryCompactionSystemPrompt().get_prompt()
-        provider = parent.providers.selected_provider()
         window = parent.providers.get_context_limit()
         cap = window - max(int(0.10 * window), 8000) if window else 0
         total = len(parent._previous_rows())
@@ -142,7 +143,13 @@ class ChatHistoryCompactor(Ability):
             combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
             if cap <= 0 or drop >= total - 1:
                 return combined   # cannot shrink further (no window, or one row left)
-            body = provider.build_request_body(system, [{"role": "user", "content": combined}], [])
-            if estimate_tokens(body) <= cap:
+            candidate_dto = ProviderApiRequest(
+                system=system,
+                messages=[{"role": "user", "content": combined}],
+                tools=None,
+                thinking_mode=ThinkingLevel.LOW,
+                cache_prefix=False,
+            )
+            if parent.providers.measure(candidate_dto) <= cap:
                 return combined
             drop += 1

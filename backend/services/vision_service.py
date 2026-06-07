@@ -1,10 +1,13 @@
 """Vision service — one-shot multimodal (text + image → text) calls.
 
-Reuses the per-platform converters in llm_service / ollama_service by attaching
-an ``image`` key to a normalized message and sending it via ``send_messages``.
-The converters translate the key into each provider's native image block; the
-text send-path is unchanged for image-free messages. Fully defensive: every
-public function returns ``None`` on failure so callers never raise.
+Builds a ProviderApiRequest with type=VISION and calls through the factory
+directly (no mp / no Providers facade) since this is a pure infrastructure probe
+with no transcript or act-loop context. Fully defensive: every public function
+returns None on failure so callers never raise.
+
+Depends on: services.provider_api (ProviderApiRequest, ProviderType),
+            services.llm_clients.factory (build_client).
+Consumed by: services.vision_probe (capability probe).
 """
 
 import base64
@@ -27,10 +30,10 @@ DOCUMENT_VISION_PROMPT = (
 
 
 def build_vision_config(provider: Dict[str, Any]) -> Dict[str, Any]:
-    """Build an llm_service config dict from a provider row for a vision call.
+    """Build a client config dict from a provider row for a vision call.
 
-    ``timeout`` bounds Anthropic/OpenAI calls (GeminiService ignores it).
-    ``max_tokens`` is intentionally omitted — the services use their own ceiling.
+    ``timeout`` bounds Anthropic/OpenAI calls (GeminiClient ignores it).
+    ``max_tokens`` is intentionally omitted — the DTO formula is used.
     """
     config: Dict[str, Any] = {
         'platform': provider.get('platform', ''),
@@ -48,18 +51,28 @@ def send_image_with_config(config: Dict[str, Any], image_bytes: bytes,
                            prompt: str, mime_type: str = 'image/png') -> Optional[str]:
     """Send one text+image message to an explicit provider config; return text.
 
-    Returns None on any failure (build error, network, empty response).
+    Builds a ProviderApiRequest and calls the thin client directly (no Providers
+    facade — this is a probe path with no mp context). Returns None on any failure.
     """
     try:
-        from services.llm_service import create_llm_service
+        from services.provider_api import ProviderApiRequest, ProviderType, ThinkingLevel  # noqa: PLC0415
+        from services.llm_clients.factory import build_client  # noqa: PLC0415
+
         b64 = base64.b64encode(image_bytes).decode('ascii')
         message = {
             'role': 'user',
             'content': prompt,
             'image': {'data': b64, 'mime_type': mime_type},
         }
-        llm = create_llm_service(config)
-        response = llm.send_messages(_VISION_SYSTEM, [message])
+        dto = ProviderApiRequest(
+            system=_VISION_SYSTEM,
+            messages=[message],
+            type=ProviderType.VISION,
+            thinking_mode=ThinkingLevel.LOW,
+            cache_prefix=False,
+        )
+        client = build_client(config)
+        response = client.send(dto)
         text = (response.text or '').strip()
         return text or None
     except Exception as exc:

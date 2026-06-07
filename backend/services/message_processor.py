@@ -160,9 +160,9 @@ class MessageProcessor:
         self.thinking_override: str | None = None
         # Accumulator starts immediately so exploration + compaction tokens count.
         self._metrics: MetricsAccumulator = MetricsAccumulator()
-        # The mp owns its provider gateway — param-free, scaffolds from self.
+        # The mp owns its provider gateway — mp-free standalone orchestrator.
         from services.providers import Providers  # noqa: PLC0415
-        self.providers = Providers(self)
+        self.providers = Providers()
         # Cooperative cancellation flag. Set by stop endpoints to signal the
         # ACT loop to exit at the next iteration boundary. Never raises —
         # the loop checks is_set() at the top of each iteration.
@@ -449,30 +449,94 @@ class MessageProcessor:
             if match:
                 link_transcript_doc(self.uid, match.group(1))
 
+    def _build_send_dto(self):
+        """Build a ProviderApiRequest from this mp's current state.
+
+        Assembles system prompt, user messages (with checkpoint), act-trail,
+        tools, and thinking level. Called by both the normal and force-send paths
+        in _loop(). The DTO carries _job_name and _usage_class as attributes for
+        the telemetry chokepoint in Providers._log_after_call.
+        """
+        from services.provider_api import ProviderApiRequest, ThinkingLevel, ProviderType  # noqa: PLC0415
+        from abilities._registry import AbilityRegistry  # noqa: PLC0415
+        from services.providers import resolve_thinking_mode  # noqa: PLC0415
+
+        system = self.config.get_system_prompt(self)
+        messages = self._build_send_messages()
+        tools = AbilityRegistry.build_tools(self)
+
+        thinking_str = resolve_thinking_mode(
+            getattr(self.config, "thinking_mode", None),
+            getattr(self, "thinking_override", None),
+            self.thinking_level,
+        )
+        try:
+            level = ThinkingLevel(thinking_str) if thinking_str else ThinkingLevel.LOW
+        except ValueError:
+            level = ThinkingLevel.LOW
+
+        # Derive provider type from the config flag (replaces uses_vision_provider).
+        uses_vision = getattr(self.config, "uses_vision_provider", False)
+        provider_type = ProviderType.VISION if uses_vision else ProviderType.CHAT
+
+        dto = ProviderApiRequest(
+            system=system,
+            messages=messages,
+            type=provider_type,
+            tools=tools or None,
+            thinking_mode=level,
+            cache_prefix=True,
+        )
+        # Attach telemetry metadata the Providers chokepoint needs but that must
+        # not be part of the provider-neutral DTO contract.
+        dto._job_name = self.config.job
+        dto._usage_class = getattr(self.config, 'usage_class', None) or 'chat'
+        dto._caller = type(self).__name__
+        return dto
+
+    def _build_send_messages(self) -> list[dict]:
+        """Build the single-element user-message list for this mp's turn.
+
+        Attaches the checkpoint wrapper and the config's image when present.
+        """
+        user = _wrap_with_checkpoint(self.config.channel, self.config.get_user_prompt(self))
+        message: dict = {"role": "user", "content": user}
+        img = self.config.get_image(self)
+        if img is not None:
+            message["image"] = img
+        return [message]
+
     def _loop(self) -> str:
         """ACT game loop — compact-first (canonical design).
 
         Every iteration rebuilds the request from the DB and measures it.
-        Providers.send() returns the ``OVER_CAP`` sentinel (instead of calling the
-        API) when the FULL request reaches the cap. On that signal the loop fires
-        both compactors FIRST — normal tool calls, so the loop pauses and the
-        act-trail WS events emit for free — which advance the watermark and
-        collapse the act-trail. The next iteration re-reads a collapsed history
-        from the DB: no partial-view turn. If compaction made no progress the
-        request is irreducible, so it is sent as-is (``force``) and the provider
-        is the source of truth — an over-budget request fails loudly rather than
-        looping forever.
+        Providers.send(dto) raises RequestOverCapError when the FULL request
+        reaches the cap. On that signal the loop fires both compactors FIRST —
+        normal tool calls, so the loop pauses and the act-trail WS events emit
+        for free — which advance the watermark and collapse the act-trail. The
+        next iteration re-reads a collapsed history from the DB: no partial-view
+        turn. If compaction made no progress the request is irreducible, so it is
+        sent as-is (force path) and the provider is the source of truth — an
+        over-budget request fails loudly rather than looping forever.
+
+        ResponseOverLimitError (server-side 413) triggers the same compact-and-retry
+        path: both over-limit types drive the same recovery.
         """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services.providers import OVER_CAP  # noqa: PLC0415
+        from services.provider_api import RequestOverCapError, ResponseOverLimitError  # noqa: PLC0415
         while True:
             if self._should_stop():
                 return ""
-            response = self.providers.send()
-            if response is OVER_CAP:
+            dto = self._build_send_dto()
+            try:
+                response = self.providers.send(dto)
+                self._record_metrics(response, getattr(response, 'latency_ms', None))
+            except (RequestOverCapError, ResponseOverLimitError):
                 if self._dispatch_compaction():
                     continue                              # rebuild from the collapsed DB
-                response = self.providers.send(force=True)  # irreducible → provider decides
+                # Irreducible — rebuild dto and send without the cap check.
+                force_dto = self._build_send_dto()
+                response = self._force_send(force_dto)
             if not response.tool_calls:
                 return response.text or ""
             dispatcher = ToolDispatcher(self)
@@ -482,6 +546,43 @@ class MessageProcessor:
                 dispatcher.dispatch(tc["name"], tc["input"])
             self._record_narration(response)
             self.current_iteration += 1
+
+    def _force_send(self, dto):
+        """Send without the pre-flight cap check (irreducible path).
+
+        Bypasses Providers.send() to skip the over-cap check, but still routes
+        through the client and telemetry so the call is logged correctly.
+        """
+        import time  # noqa: PLC0415
+        client = self.providers._resolve(dto.type)
+        t0 = time.monotonic()
+        response = client.send(dto)
+        wall_ms = int((time.monotonic() - t0) * 1000)
+        self.providers._log_after_call(dto, response, wall_ms)
+        self._record_metrics(response, wall_ms)
+        return response
+
+    def _record_metrics(self, response, wall_ms=None) -> None:
+        """Fold per-send telemetry into the turn's MetricsAccumulator.
+
+        Called after every successful send (normal and force paths). Best-effort:
+        failures must never break the send path.
+        """
+        from services.providers import Providers  # noqa: PLC0415
+        latency_ms = wall_ms if wall_ms is not None else getattr(response, 'latency_ms', None)
+        try:
+            if latency_ms is not None:
+                self._metrics.record_llm_call(latency_ms)
+        except Exception as exc:
+            logger.debug("[LLM LOG] record_llm_call failed: %s", exc)
+        try:
+            self._metrics.accumulate(response)
+        except Exception as exc:
+            logger.debug("[LLM LOG] accumulate failed: %s", exc)
+        try:
+            Providers._record_send_counters(self)
+        except Exception as exc:
+            logger.debug("[LLM LOG] send-counter record failed: %s", exc)
 
     def _should_stop(self) -> bool:
         """Single stop check: cancel OR iteration cap.

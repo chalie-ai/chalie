@@ -25,7 +25,7 @@ def backfill_one(conn, provider_id: int) -> bool:
     """
     from services.providers import MAX_CONTEXT_WINDOW
     from services.config_service import ConfigService
-    from services.llm_service import create_llm_service
+    from services.llm_clients.factory import build_client
 
     try:
         row = conn.execute(
@@ -49,7 +49,7 @@ def backfill_one(conn, provider_id: int) -> bool:
             )
             return False
 
-        svc = create_llm_service(dict(pcfg))
+        svc = build_client(dict(pcfg))
         max_tokens = svc.get_context_limit()
         if not isinstance(max_tokens, (int, float)) or max_tokens <= 0:
             logger.warning(

@@ -568,9 +568,18 @@ def _test_api_provider(config: dict, platform: str, model: str, start: float):
         host = config.get('host')
         if host:
             test_config['host'] = host
-        from services.llm_service import create_llm_service
-        llm = create_llm_service(test_config)
-        llm.send_message("You are a test assistant.", "Say: ok")
+        from services.llm_clients.factory import build_client
+        from services.provider_api import ProviderApiRequest, ThinkingLevel, ProviderType
+        client = build_client(test_config)
+        dto = ProviderApiRequest(
+            system="You are a test assistant.",
+            messages=[{"role": "user", "content": "Say: ok"}],
+            type=ProviderType.CHAT,
+            thinking_mode=ThinkingLevel.LOW,
+            cache_prefix=False,
+            max_tokens=1,
+        )
+        client.send(dto)
         latency_ms = int((time.time() - start) * 1000)
         return jsonify({
             "success": True, "model": model, "latency_ms": latency_ms,
