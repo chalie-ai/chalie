@@ -259,10 +259,11 @@
 
     <!-- Mic error label — shown below the input dock when mic access fails -->
     <p id="voiceRecError" class="voice-rec-error hidden"></p>
-    <!-- Hidden file input for image capture (capture="environment" triggers native camera on mobile) -->
+    <!-- Hidden file input for image attachment. No capture attr: lets mobile show the
+         standard OS picker (photo library + take-photo option), WhatsApp-style. -->
     <input type="file" id="imageFileInput"
            accept="image/jpeg,image/png,image/webp,image/gif"
-           capture="environment" hidden>
+           hidden>
   </footer>
 
   <!-- Voice player overlay — modal audio player for Chalie message playback -->
