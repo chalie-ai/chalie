@@ -535,7 +535,7 @@ class MessageProcessor:
                 force_dto = self._build_send_dto()
                 response = self._force_send(force_dto)
             if not response.tool_calls:
-                return response.text or ""
+                return self._format_final_response(response.text)
             dispatcher = ToolDispatcher(self)
             for tc in response.tool_calls:
                 if self.cancel_event.is_set():
@@ -543,6 +543,25 @@ class MessageProcessor:
                 dispatcher.dispatch(tc["name"], tc["input"])
             self._record_narration(response)
             self.current_iteration += 1
+
+    def _format_final_response(self, text: "str | None") -> str:
+        """Final user-visible text leaving the loop, before any other pipeline.
+
+        On the user-facing channel the LLM is asked to emit Chalie's HTML subset,
+        but models still occasionally leak the most common markdown markers
+        (``**bold**``, ``_under_``, `` `code` ``). Run a best-effort
+        markdown→HTML fallback here — the single point the final response leaves
+        the loop, ahead of ``_record`` / ``write_assistant_row`` / post-turn
+        hooks and the api-layer ``sanitize()``.
+
+        Gated on ``broadcast_to == 'user'``: every other channel emits JSON or
+        plain text (DMN summaries, encoders, compaction) that must not have
+        markdown markers rewritten into tags.
+        """
+        if self.config.broadcast_to == "user":
+            from services.markup import markdown_to_html  # noqa: PLC0415
+            return markdown_to_html(text)
+        return text or ""
 
     def _force_send(self, dto):
         """Send without the pre-flight cap check (irreducible path).

@@ -120,6 +120,67 @@ def escape_attr(value: str) -> str:
     )
 
 
+# ── Heuristic markdown fallback ───────────────────────────────────────────────
+#
+# The system prompt instructs the LLM to emit Chalie's HTML subset directly, but
+# models still occasionally leak the most common markdown emphasis markers. This
+# is a best-effort, INLINE-ONLY fallback applied to the final user-facing text
+# before it reaches ``sanitize()``. It rewrites only the handful of markers that
+# map cleanly onto allowlisted tags and leaves everything else untouched (HTML
+# the model already emitted, unrecognised markdown, block constructs, links). It
+# is deliberately NOT a markdown parser.
+#
+#   **bold**   →  <b>bold</b>
+#   *italic*   →  <i>italic</i>
+#   _under_    →  <u>under</u>      (Chalie maps ``_`` to underline, not italic)
+#   `code`     →  <code>code</code>
+
+# Inline code is masked before emphasis runs so markers INSIDE a code span (e.g.
+# ``a_b`` or ``x**y``) survive verbatim and are not rewritten.
+_CODE_SPAN_RE = re.compile(r"`([^`\n]+?)`")
+# Bold before italic: the ``**`` pair must be consumed before the single-``*``
+# rule sees it. ``(?=\S)`` / ``(?<=\S)`` forbid leading / trailing whitespace so
+# a stray ``** `` or a multiplication ``2 * 3`` is left alone.
+_BOLD_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", re.DOTALL)
+_ITALIC_RE = re.compile(r"(?<!\*)\*(?=\S)([^*\n]+?)(?<=\S)\*(?!\*)")
+# Underline markers must not sit between word chars, so identifiers like
+# ``snake_case`` and ``__dunder__`` are never mangled.
+_UNDERLINE_RE = re.compile(r"(?<!\w)_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)")
+_CODE_TOKEN_RE = re.compile("\x00C(\\d+)\x00")
+
+
+def markdown_to_html(text: str | None) -> str:
+    """Best-effort rewrite of leaked markdown markers to the allowlisted HTML
+    subset. Inline-only; a pre-pass for ``sanitize()``, NOT a markdown parser.
+
+    Handles exactly four markers — ``**bold**`` → ``<b>``, ``*italic*`` →
+    ``<i>``, ``_under_`` → ``<u>``, `` `code` `` → ``<code>`` — and returns
+    everything else unchanged, including any HTML the model already emitted.
+    Empty / ``None`` input returns ``""``.
+    """
+    if not text:
+        return ""
+
+    # 1. Mask inline code so emphasis markers inside it are preserved verbatim.
+    code_spans: list[str] = []
+
+    def _stash(m: re.Match) -> str:
+        code_spans.append(m.group(1))
+        return f"\x00C{len(code_spans) - 1}\x00"
+
+    out = _CODE_SPAN_RE.sub(_stash, text)
+
+    # 2. Emphasis — bold before italic so ``**`` is not eaten by the ``*`` rule.
+    out = _BOLD_RE.sub(r"<b>\1</b>", out)
+    out = _ITALIC_RE.sub(r"<i>\1</i>", out)
+    out = _UNDERLINE_RE.sub(r"<u>\1</u>", out)
+
+    # 3. Restore masked code spans as <code> tags.
+    return _CODE_TOKEN_RE.sub(
+        lambda m: f"<code>{code_spans[int(m.group(1))]}</code>", out
+    )
+
+
 def extract_plaintext(html: str) -> str:
     """Strip all tags + drop ``<actions>`` subtree, return spoken plain text.
 
