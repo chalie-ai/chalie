@@ -2,7 +2,6 @@
 Ollama thin client — wraps the Ollama /api/chat endpoint.
 
 Native size-rejection signal: HTTP 413 → ResponseOverLimitError.
-Confirmed from ollama_service.py:227: HTTP 413 raises PayloadTooLargeError.
 This client maps it to ResponseOverLimitError instead.
 
 Known quirk (preserved): the `think` flag is gated on model capability
@@ -11,8 +10,7 @@ for the on/off decision; only MEDIUM/HIGH/MAX enable the think flag at all,
 but whether it actually appears in the payload depends on the model.
 
 Depends on: services.provider_api (contract), services.llm_service (estimate_tokens,
-_app_user_agent), services.ollama_service (_validate_model, _validate_host —
-CodeQL sanitisation barriers kept there for backward-compat with tester imports).
+_app_user_agent).
 Consumed by: services.llm_clients.factory (platform dispatch).
 """
 
@@ -20,8 +18,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import ClassVar, Optional
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import requests
@@ -37,6 +37,40 @@ from services.provider_api import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Model identifier accepts alphanumeric, dot, underscore, dash, slash, and the
+# `:cloud` / `:7b` size suffix separator. Validating in __init__ acts as a
+# CodeQL sanitisation barrier so logging the model name later does not
+# trip py/clear-text-logging-sensitive-data on the config-derived value.
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._:\-/]+$")
+_ALLOWED_HOST_SCHEMES = frozenset({"http", "https"})
+
+
+def _validate_model(raw_model) -> str:
+    """Reject Ollama model identifiers that contain anything but the canonical
+    name characters. Raising here acts as a CodeQL sanitisation barrier so
+    ``self.model`` is no longer treated as derived-from-config-dict tainted
+    data when it later lands in log calls.
+    """
+    if raw_model is None:
+        raise ValueError("Ollama config requires a 'model' field")
+    text = str(raw_model)
+    if not _MODEL_NAME_RE.fullmatch(text):
+        raise ValueError(f"Invalid Ollama model identifier: {raw_model!r}")
+    return text
+
+
+def _validate_host(raw_host) -> str:
+    """Validate the Ollama host URL via ``urllib.parse.urlparse`` + scheme +
+    netloc gates. Same CodeQL-barrier rationale as ``_validate_model``.
+    """
+    if raw_host is None:
+        raise ValueError("Ollama config requires a 'host' field")
+    text = str(raw_host)
+    parsed = urlparse(text)
+    if parsed.scheme not in _ALLOWED_HOST_SCHEMES or not parsed.netloc:
+        raise ValueError(f"Invalid Ollama host URL: {raw_host!r}")
+    return text
 
 
 def _ollama_convert_messages(messages: list) -> list:
@@ -100,7 +134,6 @@ class OllamaClient(ProviderClient):
     CONTENT_FIELD_LABEL: ClassVar[str] = "message.content"
 
     def __init__(self, config: dict) -> None:
-        from services.ollama_service import _validate_model, _validate_host  # noqa: PLC0415
         self._config = config
         self.host: str = _validate_host(config.get('host'))
         self.model: str = _validate_model(config.get('model'))

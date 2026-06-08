@@ -37,7 +37,7 @@ class TestOllamaToolCallIds:
         scheme produces ``ollama_find_tools_0`` both times. That collision is
         the root cause of the stuck/duplicate ACT pill.
         """
-        from services.ollama_service import _parse_chat_response
+        from services.llm_clients.ollama import _parse_chat_response
 
         first = _parse_chat_response(_ollama_response_with('find_tools'), 'm')
         second = _parse_chat_response(_ollama_response_with('find_tools'), 'm')
@@ -47,7 +47,7 @@ class TestOllamaToolCallIds:
         assert id_a != id_b, f"colliding ids across responses: {id_a!r}"
 
     def test_same_tool_twice_in_one_response_unique(self):
-        from services.ollama_service import _parse_chat_response
+        from services.llm_clients.ollama import _parse_chat_response
 
         resp = _parse_chat_response(
             _ollama_response_with('find_tools', 'find_tools'), 'm'

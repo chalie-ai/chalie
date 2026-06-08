@@ -118,7 +118,7 @@ def test_gemini_text_only_unchanged():
 
 
 def test_ollama_emits_images_array():
-    from services.ollama_service import _ollama_convert_messages
+    from services.llm_clients.ollama import _ollama_convert_messages
     out = _ollama_convert_messages(
         [{"role": "user", "content": "what", "image": _IMG}]
     )
@@ -126,12 +126,12 @@ def test_ollama_emits_images_array():
 
 
 def test_ollama_image_only():
-    from services.ollama_service import _ollama_convert_messages
+    from services.llm_clients.ollama import _ollama_convert_messages
     out = _ollama_convert_messages([{"role": "user", "content": "", "image": _IMG}])
     assert out == [{"role": "user", "content": "", "images": ["QkFTRTY0"]}]
 
 
 def test_ollama_text_only_unchanged():
-    from services.ollama_service import _ollama_convert_messages
+    from services.llm_clients.ollama import _ollama_convert_messages
     msg = {"role": "user", "content": "plain"}
     assert _ollama_convert_messages([msg]) == [msg]
