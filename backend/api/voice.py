@@ -4,10 +4,12 @@ Voice blueprint — STT + TTS via two single-purpose ONNX libraries.
 * TTS → ``kokoro_onnx.Kokoro`` (Kokoro v1.0 + espeak-ng phonemizer)
 * STT → ``moonshine_onnx.MoonshineOnnxModel`` (Moonshine base, ONNX)
 
-Both ONNX model files ship with the install — ``installer/install.sh`` writes
-them to ``resources/voice-models/`` at install time, so the first request does
-not have to wait on a network download. If the deps or files are missing every
-route returns ``{"status":"unavailable"}`` or 503 with a precise hint.
+The ONNX model files are downloaded on demand, not bundled with the install.
+Turning voice on in Settings (``PUT /api/voice-settings``) calls
+``RuntimeDepsService.enable_voice()``, which background-installs the voice deps
+and downloads the models into ``resources/voice-models/``. Until the deps or
+model files are present every route returns ``{"status":"unavailable"}`` or 503
+with a precise hint pointing the user back to that setting.
 
 Kokoro uses phonemizer-fork + espeakng-loader under the hood, which preserves
 punctuation as IPA pause tokens and handles numbers, abbreviations, and 2-3
@@ -40,9 +42,11 @@ voice_bp = Blueprint("voice", __name__)
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
-# Models are baked into the install by installer/install.sh into a directory
-# sibling to backend/, intentionally OUTSIDE the data/ volume so the files
-# travel with the image and survive `chalie update` on native installs.
+# Models live in resources/voice-models/ — a directory sibling to backend/,
+# intentionally OUTSIDE the data/ volume so the files survive `chalie update` on
+# native installs. They are downloaded at runtime by
+# RuntimeDepsService.enable_voice() when the user turns voice on in Settings,
+# not baked in by the installer.
 _KOKORO_MODEL = FileMapperService.get_voice_models_path("kokoro", "kokoro-v1.0.onnx")
 _KOKORO_VOICES = FileMapperService.get_voice_models_path("kokoro", "voices-v1.0.bin")
 _MOONSHINE_DIR = FileMapperService.get_voice_models_path("moonshine", "base")
@@ -118,7 +122,7 @@ def _loading_or_missing_response():
             "error": "Voice models not installed",
             "reason": "models_missing",
             "missing": missing,
-            "hint": "Re-run installer to download voice models.",
+            "hint": "Enable voice in Settings to download voice models.",
         }), 503
     return jsonify({
         "error": "Models still loading",
@@ -606,7 +610,7 @@ def voice_health():
             "status": "unavailable",
             "reason": "models_missing",
             "missing": missing_files,
-            "hint": "Re-run installer to download voice models.",
+            "hint": "Enable voice in Settings to download voice models.",
         }), 200
 
     threading.Thread(target=_ensure_models, daemon=True).start()
