@@ -12,10 +12,17 @@ The typed ``ProcessorConfig`` for the web-research delegate (spec §5b / §10f,
 TKT-732). Paired with ``WebSearchAbility`` in ``abilities/web_search.py``, whose
 ``run()`` instantiates this config and calls ``MessageProcessor.process()``.
 
-Clean context (skip_transcript / skip_input_row / suppress_history all True), a
-goal-driven system prompt, and a finite tool surface (search/read/web_download +
-memory, discoverable=[]) so the delegate can never spawn another delegate.
-``policy_channel`` is inherited from the caller that invoked the tool.
+Clean *cross-turn* context (``suppress_history=True``) but a real per-turn
+transcript row on its own ``delegate:web_search`` channel, so the delegate can
+render its own act-trail across ACT iterations. Without that row the turn uid is
+never assigned and ``_render_act_trail`` returns "" — the loop then re-searches
+blind to its own results until it exhausts ``max_iterations`` (TKT-881).
+``skip_input_row`` (HiddenInput) is deliberately *not* set: it is the async-return
+mechanism (``deliver_async_result`` / ``with_hidden_input``), not a delegate
+property. A goal-driven system prompt and a finite tool surface
+(search/read/web_download + memory, discoverable=[]) keep the delegate from ever
+spawning another delegate. ``policy_channel`` is inherited from the caller that
+invoked the tool.
 """
 
 from __future__ import annotations
@@ -56,8 +63,8 @@ class WebSearchConfig(ProcessorConfig):
             discoverable=[],
             blocked=frozenset(),
             max_iterations=50,
-            skip_transcript=True,
-            skip_input_row=True,
+            skip_transcript=False,  # write a delegate-channel transcript row so
+            skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,

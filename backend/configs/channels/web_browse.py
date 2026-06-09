@@ -13,8 +13,12 @@ The typed ``ProcessorConfig`` for the interactive web-browsing delegate (spec
 whose ``run()`` instantiates this config and calls ``MessageProcessor.process()``.
 
 Drives the raw ``browser`` tool (render / screenshot / interact / monitor) plus
-``read`` in a clean-context loop. ``policy_channel`` is inherited from the caller
-that invoked the tool; the user-facing permission check happens at the outer
+``read`` in a clean *cross-turn* context (``suppress_history=True``). It writes a
+real per-turn transcript row on its own ``delegate:web_browse`` channel so the
+turn uid is assigned and the delegate can render its own act-trail across ACT
+iterations — without it the loop re-browses blind to its own results until the
+iteration cap (TKT-881). ``policy_channel`` is inherited from the caller that
+invoked the tool; the user-facing permission check happens at the outer
 ``web_browse`` tool.
 """
 
@@ -59,8 +63,8 @@ class WebBrowseConfig(ProcessorConfig):
             discoverable=[],
             blocked=frozenset(),
             max_iterations=50,
-            skip_transcript=True,
-            skip_input_row=True,
+            skip_transcript=False,  # write a delegate-channel transcript row so
+            skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
