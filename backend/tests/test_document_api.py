@@ -23,8 +23,17 @@ The previous mock-saturated endpoint tests (patching `_get_document_service`,
 `_process_upload`, `get_data_graph_service`) asserted on patched return values
 and mock call counts — they passed even when the feature was broken, so they
 were removed in favour of the nightly scenarios above.
+
+`TestDocumentUploadRealStack` (added per TKT-646) closes the gap that deletion
+left in the pre-merge `pytest -m unit` gate: the upload *happy path* was only
+exercised by the nightly scenarios, never by a deterministic in-repo test. It
+drives the real POST /documents/upload route through the `authed_client`
+fixture (real Flask app + real SQLite + real MemoryStore, auth bypassed) and
+asserts the real downstream effects — the synchronous ingest persisting a
+`ready` documents row and copying the bytes into the document store on disk.
 """
 
+import hashlib
 import io
 
 import pytest
@@ -72,6 +81,63 @@ class TestDocumentsAPI:
         )
         assert resp.status_code == 400
         assert "not supported" in resp.get_json()["error"].lower()
+
+
+@pytest.mark.unit
+class TestDocumentUploadRealStack:
+    """Real-stack feature test for the upload happy path (TKT-646).
+
+    Drives the real POST /documents/upload route end-to-end via `authed_client`
+    (real Flask app, real SQLite, real MemoryStore — only the session check and
+    secret are bypassed by the fixture's harness concession) and asserts every
+    downstream effect of the synchronous ingest (TKT-844): the HTTP response,
+    the persisted `documents` row, and the bytes copied into the document store
+    on disk. Zero business-logic / service mocking.
+    """
+
+    def test_upload_text_document_persists_ready_row_and_file(self, authed_client, tmp_path):
+        client, db_conn, _store = authed_client
+
+        body = b"Quarterly revenue summary 2026. Invoice total 4200 EUR."
+
+        # Redirect the document store to an isolated tmp root so the disk
+        # assertion is deterministic and the real store is never polluted.
+        # (Same seam the traversal test below uses; the staging temp path the
+        # route writes to first is independent of _DOCUMENTS_DIR.)
+        with patch.object(FileMapperService, "_DOCUMENTS_DIR", tmp_path):
+            resp = client.post(
+                "/documents/upload",
+                data={"file": (io.BytesIO(body), "note.txt")},
+                content_type="multipart/form-data",
+            )
+
+            # Route returns 201 with the TERMINAL status — ingest is synchronous,
+            # so the response carries 'ready', never 'pending' (TKT-844).
+            assert resp.status_code == 201, resp.get_data(as_text=True)
+            payload = resp.get_json()
+            assert payload["status"] == "ready", f"expected ready, got {payload!r}"
+            assert payload["file_hash"] == hashlib.sha256(body).hexdigest()
+            assert payload["file_size"] == len(body)
+            assert payload["original_name"] == "note.txt"
+            doc_id = payload["id"]
+
+            # The real documents row landed via DocumentService.create_document.
+            row = db_conn.execute(
+                "SELECT status, file_hash, file_path, original_name, source_type "
+                "FROM documents WHERE id=?",
+                (doc_id,),
+            ).fetchone()
+            assert row is not None, "no documents row was persisted"
+            assert row[0] == "ready"
+            assert row[1] == payload["file_hash"]
+            assert row[2] == f"{doc_id}/note.txt"
+            assert row[3] == "note.txt"
+            assert row[4] == "upload"
+
+            # The bytes were really copied into the document store on disk.
+            disk_path = FileMapperService.get_documents_path(doc_id, "note.txt")
+            assert disk_path.exists(), f"file not written to store at {disk_path}"
+            assert disk_path.read_bytes() == body
 
 
 @pytest.mark.unit

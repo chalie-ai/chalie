@@ -473,66 +473,109 @@ class TestSavePatternBudgetCapAt20:
 
 
 class TestSaveGraphBudgetCapAt50:
-    """Test 10 — 51 save_graph calls → 50 land, 51st returns budget_exceeded."""
+    """Test 10 — 51 save_graph calls in one tick → 50 land, 51st hits the budget cap.
+
+    Driven through the REAL ACT loop (no hand-bound stub processor), mirroring
+    Test 9's save_pattern budget proof. ``kind='misc'`` stores verbatim
+    (DataGraphService policy: reinforce=False, contradiction=None), so each of
+    the 51 unique keys is a distinct row — the 51st never lands because the real
+    SaveGraph budget counter (carried on the real MessageProcessor) caps at 50.
+    Rewritten from a hand-bound ``_StubProcessor`` per TKT-646.
+    """
 
     def test_save_graph_budget_cap_at_50(self, db, store):
-        from abilities.save_graph import SaveGraph
+        from services.subconscious_worker import SubconsciousWorker
 
-        # SaveGraph reads/writes its budget counter via self.mp
-        # + getattr/setattr. Bind a stub as the processor so the counter
-        # persists across 51 calls.
-        class _StubProcessor:
-            _save_graph_calls = 0
+        _seed_transcripts(db, 60)
 
-        stub_processor = _StubProcessor()
-        instance = SaveGraph()
-        instance.mp = stub_processor
-
-        results = [
-            instance.run(
-                {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
+        # 51 unique save_graph calls.
+        tcs_batch = [
+            _tool_call(
+                "save_graph",
+                kind="misc",
+                key=f"fact_{i:02d}",
+                value=f"value_{i:02d}",
             )
             for i in range(51)
         ]
 
-        # First 50 must succeed.
-        for i, r in enumerate(results[:50]):
-            assert r.get("ok") is True, f"Call {i} expected ok=True, got: {r}"
+        call_count = {"n": 0}
 
-        # 51st must return budget_exceeded.
-        assert results[50].get("budget_exceeded") is True, (
-            f"Expected budget_exceeded on 51st call, got: {results[50]}"
-        )
-        assert results[50].get("tool") == "save_graph"
+        def _fake_send(*_a, **_kw):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Return all 51 tool calls in the first pass.
+                return _make_llm_response(tool_calls=tcs_batch)
+            # Subsequent iterations: no more tool calls → loop exits.
+            return _make_llm_response(tool_calls=None)
 
-        # Counter must be exactly 50.
-        assert stub_processor._save_graph_calls == 50, (
-            f"Expected _save_graph_calls=50, got {stub_processor._save_graph_calls}"
-        )
+        with _inject_fake_client(_fake_send):
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
+            worker._step_pattern_match()
+
+        # Exactly 50 misc rows should have landed (51st rejected by the budget cap).
+        count = db.execute(
+            "SELECT COUNT(*) FROM data_graph "
+            "WHERE kind='misc' AND source='pattern_match'"
+        ).fetchone()[0]
+        assert count == 50, f"Expected 50 rows (budget cap), got {count}"
 
 
 class TestReinforcementDiminishingBoost:
     """Test 12 — each successive reinforce adds a smaller storage_strength boost and
-    the value is capped at 1.0 (TKT-581 fix, diminishing returns)."""
+    the value is capped at 1.0 (TKT-581 fix, diminishing returns).
+
+    Driven through the REAL hot path: three successive
+    ``SubconsciousWorker._step_pattern_match()`` ticks, each firing one
+    ``save_pattern`` tool call for the same pattern through the real ACT loop
+    (MessageProcessor → ToolDispatcher → SavePattern.run → _upsert_pattern).
+    The only stubbed seam is the LLM provider (Providers._resolve); reinforcement
+    strength is read back from the real ``data_graph`` SQL columns after each tick.
+    Rewritten from a direct ``_upsert_pattern()`` call per TKT-646 (the named
+    MagicMock/private-fn-bypass anti-pattern — no internal shortcut).
+    """
 
     def test_multiple_reinforcements_give_diminishing_boost(self, db, store):
-        from abilities.save_pattern import _upsert_pattern
+        from services.subconscious_worker import SubconsciousWorker
 
         # Seed with SQL defaults (evidence_count=1, storage_strength=0.5).
         _seed_pattern(db, "evening_read", confidence=3.0)
 
-        tc_params = {
-            "name": "evening_read",
-            "frequency": "daily",
-            "time_anchor": "evening",
-            "summary": "reads before bed",
-            "evidence_transcript_ids": [1, 2],
-        }
+        tc = _tool_call(
+            "save_pattern",
+            name="evening_read",
+            frequency="daily",
+            time_anchor="evening",
+            summary="reads before bed",
+            evidence_transcript_ids=[1, 2],
+        )
 
-        # Reinforce 3 times directly via the production upsert function.
+        def _reinforce_once(tool_call):
+            """A fresh LLM stub: one save_pattern call on the first turn, then stop."""
+            state = {"n": 0}
+
+            def _send(*_a, **_kw):
+                state["n"] += 1
+                if state["n"] == 1:
+                    return _make_llm_response(tool_calls=[tool_call])
+                return _make_llm_response(tool_calls=None)
+
+            return _send
+
+        # Three real background ticks. Each needs a fresh >=50-transcript window
+        # (the worker advances pattern_match_cursor to the latest id on a fire),
+        # so seed 60 more transcripts before each tick. "evening_read" is touched
+        # every turn → the post-turn decay hook excludes it, so storage_strength
+        # evolves purely by reinforcement.
         strengths = []
-        for _ in range(3):
-            _upsert_pattern({**tc_params, "evidence": tc_params["evidence_transcript_ids"]})
+        for tick in range(3):
+            _seed_transcripts(db, 60)
+            with _inject_fake_client(_reinforce_once(tc)):
+                worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
+                result = worker._step_pattern_match()
+            assert result.startswith("fired"), (
+                f"tick {tick}: expected the matcher to fire, got {result!r}"
+            )
             cols = _fetch_pattern_sql_cols(db, "evening_read")
             strengths.append(cols["storage_strength"])
 
