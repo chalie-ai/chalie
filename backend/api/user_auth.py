@@ -198,7 +198,7 @@ def login():
     * ``"unlocked"``      — the live ``vault_config`` row opened normally.
     * ``"restored"``      — the live row was missing/corrupt but a filesystem
                             backup key matched; the vault was rebuilt and opened
-                            with no data loss (TKT-676).
+                            with no data loss.
     * ``"unrecoverable"`` — neither the live row nor any backup opened. The DEK is
                             permanently lost, so the master account is wiped and a
                             401 with ``onboarding_required: True`` is returned to
@@ -245,7 +245,7 @@ def login():
 
         # The password is now verified against the account hash. Open the vault
         # with it, recovering from a filesystem backup if the live vault_config
-        # row is missing or corrupt (TKT-676). If neither the row nor any backup
+        # row is missing or corrupt. If neither the row nor any backup
         # opens, the DEK is permanently lost — wipe the account to force a clean
         # re-onboarding rather than logging the user into an unusable vault.
         vault = get_vault_service()

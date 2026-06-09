@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for TKT-834 — the ``read`` tool must accept the argument key a
+"""Feature tests — the ``read`` tool must accept the argument key a
 model naturally emits (``url`` for a URL, ``path``/``file`` for a file), not only
 the schema's canonical ``source``.
 

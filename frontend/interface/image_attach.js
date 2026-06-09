@@ -4,8 +4,8 @@ import { showToast } from './utils.js';
  * File attachment — hold raw File objects, preview strip, send with the message.
  *
  * No pre-upload round-trip: the raw files ride the multipart POST /chat at send
- * time and the backend ingests each via `document.upload` (by PATH, never bytes —
- * TKT-844). Images and documents both go through the same path:
+ * time and the backend ingests each via `document.upload` (by PATH, never bytes).
+ * Images and documents both go through the same path:
  *   1. User picks or drops a file.
  *   2. A preview chip is rendered immediately (image thumbnail or doc icon) and
  *      the File is held in memory — nothing is sent to the server yet.

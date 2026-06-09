@@ -227,7 +227,7 @@ export class WSClient {
   _postChat(text, source, files) {
     // multipart/form-data — text + raw files. The browser sets the multipart
     // boundary, so no Content-Type header is supplied. The backend ingests each
-    // file via document.upload by PATH, never bytes through the act-trail (TKT-844).
+    // file via document.upload by PATH, never bytes through the act-trail.
     const form = new FormData();
     form.append('text', text);
     form.append('source', source);

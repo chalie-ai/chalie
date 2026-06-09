@@ -1,8 +1,8 @@
 """
 Episodic memory tuning constants.
 
-All constants are module-level literals so the meta-harness can diff-patch
-them mechanically. Do NOT read these from config/env at import time.
+All constants are module-level literals so they can be diff-patched
+mechanically. Do NOT read these from config/env at import time.
 """
 
 # Pairwise cosine similarity floor for super-episode cluster membership.

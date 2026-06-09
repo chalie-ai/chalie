@@ -79,7 +79,7 @@ class TestMemoryRecallBodyFormat:
         The 'No memories found' semantic stays a tag arg (results=0), and an
         explicit (model-invoked) recall now also carries the guardrail body line
         steering the model to the document/schedule stores ON ITS OWN judgement
-        instead of memory.recall silently fanning out to them. (TKT-878)
+        instead of memory.recall silently fanning out to them.
         """
         result = _handle_memory('topic', {'action': 'recall', 'query': 'xyzzy_nonexistent_key_abc'})
 

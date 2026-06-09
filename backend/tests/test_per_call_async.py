@@ -46,14 +46,14 @@ class _Ctx:
     """Minimal real MP-shaped context — exactly what execute / get_input_schema
     read off the live processor: ``config`` (for the SUPPORTS_ASYNC gate + the
     emitter). The MessageProcessor is constructor-injected onto the ability as
-    ``self.mp`` (TKT-837)."""
+    ``self.mp``."""
 
     def __init__(self, config):
         self.config = config
 
 
 def test_async_property_exposed_only_on_supports_async_channel():
-    """§4.8d / TKT-837 — the schema-exposure gate keys off config.SUPPORTS_ASYNC
+    """§4.8d — the schema-exposure gate keys off config.SUPPORTS_ASYNC
     alone, applied at the single ``get_input_schema()`` assembler. The processor
     is constructor-injected, so a fresh mp-bound instance is built per channel."""
     weather_cls = type(AbilityRegistry.get("weather"))

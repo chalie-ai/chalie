@@ -16,13 +16,13 @@ from typing import Optional
 from urllib.parse import quote_plus, urlparse
 
 # feedparser: tolerant RSS/Atom/RDF parsing + media/date normalisation,
-# replaces hand-rolled ElementTree pipeline (TKT-733)
+# replaces hand-rolled ElementTree pipeline
 import feedparser
 
-# rapidfuzz: SIMD-accelerated Levenshtein, replaces two-row DP implementation (TKT-733)
+# rapidfuzz: SIMD-accelerated Levenshtein, replaces two-row DP implementation
 from rapidfuzz.distance import Levenshtein as _Levenshtein
 
-# nh3: HTML sanitiser strips tags from feed descriptions (TKT-733; same lib used in services/markup.py)
+# nh3: HTML sanitiser strips tags from feed descriptions (same lib used in services/markup.py)
 import nh3
 import numpy as np
 import requests

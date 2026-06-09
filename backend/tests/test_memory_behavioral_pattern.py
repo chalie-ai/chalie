@@ -1,4 +1,4 @@
-"""Feature tests for behavioral_pattern support in the memory ability (TKT-582).
+"""Feature tests for behavioral_pattern support in the memory ability.
 
 Three behaviours under test:
 1. _render_behavioral_pattern() produces a human-readable line from a valid
@@ -154,7 +154,7 @@ class TestSearchDataGraphIncludesBehavioralPattern:
     def test_behavioral_pattern_row_is_returned_by_search(self, db):
         """A seeded behavioral_pattern row is visible in _search_data_graph results.
 
-        This is the regression-protection case for TKT-582: before the fix,
+        This is the regression-protection case: before the fix,
         KIND_BEHAVIORAL_PATTERN was absent from the kinds filter passed to
         dgs.recall(), so behavioral_pattern rows were silently dropped.
         """

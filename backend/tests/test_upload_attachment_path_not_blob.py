@@ -1,6 +1,6 @@
 """Feature test: turn-0 attachment ingest dispatches a FILE PATH, never bytes.
 
-Root cause of the deepseek ``400 The prompt is too long`` (TKT-844): the turn-0
+Root cause of the deepseek ``400 The prompt is too long``: the turn-0
 upload path base64-encoded the whole attachment and dispatched
 ``document.upload(content=<base64>)``.  ``ToolDispatcher.dispatch`` records every
 call's params verbatim into ``tool_calls.params`` (``ActTrail.record``), and
@@ -22,7 +22,7 @@ and asserting the trail row the dispatch produced:
   * its params carry the attachment PATH and NO ``content`` / base64 blob,
   * the whole params JSON stays small (a path can't bloat the window),
   * the upload still landed a ``ready`` document row with a content hash
-    (the ``(id=, hash=)`` token the TKT-842 transcript-doc link depends on).
+    (the ``(id=, hash=)`` token the transcript-doc link depends on).
 
 Zero mocks.  The upload never touches the LLM boundary (no vision provider -> the
 deterministic OCR fork), so no provider seam is needed.
@@ -115,7 +115,7 @@ def test_turn0_upload_records_path_not_base64_blob(db):
     # The structural invariant: a path went over the wire, not bytes.
     assert "content" not in params, (
         "upload dispatched file bytes via 'content' — the act-trail will carry a "
-        "base64 blob and blow the context window (the TKT-844 bug)"
+        "base64 blob and blow the context window"
     )
     assert params.get("path") == attachment, (
         f"upload must dispatch the file PATH; got params={params!r}"
@@ -127,7 +127,7 @@ def test_turn0_upload_records_path_not_base64_blob(db):
     )
 
     # The upload still landed a real, ready document with a content hash — the
-    # '(id=, hash=)' contract the chat refresh link (TKT-842) parses.
+    # '(id=, hash=)' contract the chat refresh link parses.
     result = rows[0]["result"]
     assert "id=" in result and "hash=" in result, f"upload result lost its id/hash token: {result!r}"
     doc_id = result.split("id=", 1)[1].split(",", 1)[0].split(")", 1)[0].strip()

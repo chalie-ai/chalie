@@ -36,7 +36,7 @@ def extract_text(file_path: str, mime_type: str = None) -> str:
 
     Most formats return an empty string on failure. The exception is image
     extraction, which propagates provider errors when a vision provider is
-    configured but failing (TKT-838) — fail loud, never swallowed.
+    configured but failing — fail loud, never swallowed.
     """
     if not mime_type:
         mime_type = detect_mime_type(file_path)
@@ -256,7 +256,7 @@ def _extract_image(path: str) -> str:
     uploaded image is embedded + FTS5-indexed by the normal document pipeline and
     becomes searchable by its visual content. A configured-but-failing vision
     provider raises (never swallowed) — the upload pipeline decides how to surface
-    that (TKT-838). Only the description is returned; the user-facing no-vision note
+    that. Only the description is returned; the user-facing no-vision note
     is intentionally NOT indexed (it is index noise)."""
     import mimetypes  # noqa: PLC0415
     from abilities.vision import RICH_INDEX_PROMPT, describe_image  # noqa: PLC0415

@@ -1,7 +1,7 @@
 """Feature test: Providers._resolve branches to the brain's Vision Provider
-when dto.type == ProviderType.VISION (TKT-838, migrated for TKT-846).
+when dto.type == ProviderType.VISION.
 
-TKT-846 spec change (doc 131 resolution #1): Providers is now mp-free.
+Providers is now mp-free.
 _resolve(provider_type) takes a ProviderType instead of reading mp.config.
 It returns a ProviderClient, not a LoggingLLMService, so the attribute
 access path changes from ._service.model → .model directly on the client.

@@ -318,7 +318,7 @@ def _stage_chat_uploads(files: list) -> list:
     Returns the temp paths (under ``TMP_PATH_PREFIX``) that ``_seed_turn_zero``
     feeds to ``document.upload`` — which ingests by PATH, never bytes, so no file
     blob ever reaches the act-trail. A per-file token keeps same-named uploads
-    from colliding. Files with no filename are skipped. (TKT-844)
+    from colliding. Files with no filename are skipped.
     """
     from services.filename_utils import safe_filename  # noqa: PLC0415
     from services.tmp_storage import new_tmp_path  # noqa: PLC0415
@@ -344,7 +344,7 @@ def post_chat():
         source (str, optional): ``"text"`` or ``"voice"``. Default ``"text"``.
     Files (``request.files``, field name ``files``):
         Up to 10 raw file attachments. Each is staged to a temp path and ingested
-        via ``document.upload`` (by PATH, never bytes) at turn 0. (TKT-844)
+        via ``document.upload`` (by PATH, never bytes) at turn 0.
 
     Response:
         202 Accepted — the message was received.

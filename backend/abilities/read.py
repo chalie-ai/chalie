@@ -100,7 +100,7 @@ class ReadAbility(Ability):
         if not source:
             # No usable target under any accepted key. Echo what the model DID
             # send so it self-corrects instead of looping on the same opaque
-            # error (TKT-834: models pass url=/path= and never learn why).
+            # error (models pass url=/path= and never learn why).
             received = "|".join(params.keys()) or "none"
             return {"text": _skill_tag(
                 "read",
@@ -130,7 +130,7 @@ class ReadAbility(Ability):
 #: The canonical key plus the keys a model naturally emits for the read target.
 #: When ``source`` is absent we honour these in order so a call like
 #: ``read({"url": …})`` or ``read({"path": …})`` works instead of bouncing on
-#: ``source-required`` (TKT-834). ``source`` stays first so it always wins.
+#: ``source-required``. ``source`` stays first so it always wins.
 _SOURCE_KEYS = ("source", "url", "uri", "link", "href", "path", "file", "filepath", "file_path")
 
 

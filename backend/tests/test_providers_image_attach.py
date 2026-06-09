@@ -1,7 +1,7 @@
 """Feature test: the mp's user-message builder attaches an image from
-config.get_image when the metadata carries image_path (TKT-838).
+config.get_image when the metadata carries image_path.
 
-TKT-846 spec change (doc 131 resolution #1): Providers is mp-free.
+Providers is mp-free.
 The method that builds the user-message list — previously
 Providers._build_user_messages() — moved to MessageProcessor._build_send_messages()
 where it is called when assembling the ProviderApiRequest DTO. This test

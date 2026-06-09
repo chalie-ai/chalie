@@ -1,7 +1,7 @@
 """Feature tests for McpClientService — network-free behaviors.
 
-The nightly scenario 163-mcp-client-taskie-e2e.yaml owns the end-to-end
-MCP-over-HTTP path.  These tests cover only the deterministic, network-free
+The end-to-end MCP-over-HTTP path is covered by a separate end-to-end
+scenario.  These tests cover only the deterministic, network-free
 behaviors that can be exercised against a real temporary SQLite database
 without any mocks.
 
@@ -180,8 +180,8 @@ def test_add_server_persists_row_with_correct_defaults(db):
     """add_server writes a row to mcp_client_servers with status='unknown',
     the supplied enabled flag, and proper JSON-serialized headers.
 
-    Tests that the row actually reaches the DB and that the contract the
-    nightly scenario's step 3 checks is met: row exists with enabled=1.
+    Tests that the row actually reaches the DB and that the end-to-end
+    contract is met: row exists with enabled=1.
     """
     svc = McpClientService()
     server = svc.add_server(
@@ -225,7 +225,7 @@ def test_get_tool_schema_round_trips_stored_input_schema(db, tmp_path, monkeypat
 
     This is the schema the LLM sees when find_tools surfaces an _mcp_* tool.
     Without this round-trip the model receives a parameter-less tool spec and
-    must brute-force its arguments (nightly finding #5, 30-iteration failure).
+    must brute-force its arguments.
 
     Isolation: _DATA_DIR is redirected so mcp_tools.sqlite lands in tmp_path.
     The seed is done via the real production writer _write_tools — no hand-
@@ -275,7 +275,7 @@ def test_get_tool_schema_round_trips_stored_input_schema(db, tmp_path, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# Dedup / idempotent upsert on add (TKT-785)
+# Dedup / idempotent upsert on add
 # ---------------------------------------------------------------------------
 
 from services.mcp_client_service import _normalize_host, _open_tools_db  # noqa: E402

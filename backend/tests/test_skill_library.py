@@ -1,4 +1,4 @@
-"""Feature tests for the Self-Refining Skill Library pure functions (TKT-579).
+"""Feature tests for the Self-Refining Skill Library pure functions.
 
 Two behaviours under test:
 

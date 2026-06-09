@@ -1,6 +1,6 @@
 """Feature tests for compaction watermark and over-cap detection.
 
-TKT-846 spec change (doc 131): OVER_CAP sentinel is gone, replaced by
+Spec change: OVER_CAP sentinel is gone, replaced by
 RequestOverCapError. Providers is mp-free; send(dto) takes a ProviderApiRequest.
 _over_cap() and build_request_body() are deleted; replaced by
 providers.measure(dto) + the cap formula. Tests migrated to exercise the real
@@ -108,7 +108,7 @@ def test_measure_true_when_full_request_reaches_threshold(db):
     returns a value at or above the cap so the ACT loop fires compaction BEFORE
     sending — no trimmed/partial-view turn, no API call.
 
-    TKT-846: _over_cap(system, messages, tools, provider) deleted; replaced by
+    _over_cap(system, messages, tools, provider) deleted; replaced by
     providers.measure(dto) which exercises the real ProviderClient.estimate_request_tokens
     path. The cap formula is preserved: window - max(int(0.10*window), 8000).
     """
@@ -150,7 +150,7 @@ def test_measure_false_when_request_fits(db):
     """When the request fits under the cap, providers.measure(dto) returns a
     value below the cap so send() proceeds to the API — no compaction fires.
 
-    TKT-846: _over_cap deleted; replaced by providers.measure(dto) < cap.
+    _over_cap deleted; replaced by providers.measure(dto) < cap.
     """
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
@@ -186,7 +186,7 @@ def test_send_raises_request_over_cap_without_calling_provider(db):
     the cap — the offline provider is never reached (zero network), proving
     compaction fires BEFORE any API call (compact-first).
 
-    TKT-846: OVER_CAP sentinel replaced by RequestOverCapError. Sentinel
+    OVER_CAP sentinel replaced by RequestOverCapError. Sentinel
     pattern `response is OVER_CAP` becomes `except RequestOverCapError`.
     """
     from services.message_processor import MessageProcessor
@@ -222,7 +222,7 @@ def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db):
     bare {system + prior + get_previous_messages} request by dropping the OLDEST
     message one at a time until it fits the cap. Real provider stack, no model.
 
-    TKT-846: provider.build_request_body(system, [msg], []) removed; compactor
+    provider.build_request_body(system, [msg], []) removed; compactor
     now calls parent.providers.measure(candidate_dto) via ProviderApiRequest.
     """
     from abilities.chat_history_compactor import ChatHistoryCompactor

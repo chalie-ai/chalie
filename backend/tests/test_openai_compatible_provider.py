@@ -15,7 +15,7 @@ Real-stack — no mocks of production code.
   - The openai.OpenAI() constructor never makes network calls on init, so
     asserting on client.base_url is safe and does not require network access.
 
-TKT-846 spec change (doc 131 §6.1 + §8): create_llm_service and OpenAIService
+Spec change: create_llm_service and OpenAIService
 are deleted; replaced by build_client (factory.py) and OpenAIClient (openai.py
 in llm_clients/). Tests 3 and 4 updated to use the new symbols.
 """
@@ -133,7 +133,7 @@ class TestOpenAICompatibleProvider:
         instance — the platform is handled by the openai thin client, not an
         unknown-platform error.
 
-        TKT-846: create_llm_service + OpenAIService deleted; replaced by
+        create_llm_service + OpenAIService deleted; replaced by
         build_client + OpenAIClient in services/llm_clients/factory.py + openai.py.
         """
         from services.llm_clients.factory import build_client
@@ -158,7 +158,7 @@ class TestOpenAICompatibleProvider:
         """OpenAIClient._get_client() for an openai_compatible config returns
         an openai.OpenAI client whose base_url points to the configured host.
 
-        TKT-846: OpenAIService → OpenAIClient in services/llm_clients/openai.py.
+        OpenAIService → OpenAIClient in services/llm_clients/openai.py.
         """
         from services.llm_clients.openai import OpenAIClient
 
@@ -182,7 +182,7 @@ class TestOpenAICompatibleProvider:
         """OpenAIClient for platform='openai' (no host) uses the default
         OpenAI base URL — verifies the two code paths are distinct.
 
-        TKT-846: OpenAIService → OpenAIClient in services/llm_clients/openai.py.
+        OpenAIService → OpenAIClient in services/llm_clients/openai.py.
         """
         from services.llm_clients.openai import OpenAIClient
 

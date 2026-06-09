@@ -1,4 +1,4 @@
-"""Feature test: image_context_service.analyze is OCR-only (TKT-838).
+"""Feature test: image_context_service.analyze is OCR-only.
 
 Proves the regression that even with a fully-resolvable vision provider
 configured in the real DB, analyze() does pure local OCR and never dials the

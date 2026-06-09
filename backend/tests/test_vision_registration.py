@@ -1,4 +1,4 @@
-"""Feature tests — the ``vision`` delegate tool is fully registered (TKT-838).
+"""Feature tests — the ``vision`` delegate tool is fully registered.
 
 Task 7 of the Vision Subagent feature wires an already-built ``VisionAbility``
 into three production surfaces. These tests drive the REAL production hot paths

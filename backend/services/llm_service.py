@@ -6,7 +6,7 @@ _app_user_agent, _resolve_api_key, _strip_think_blocks, _parse_retry_after,
 _is_thinking_rejection) after the main client classes — and the message
 converters — were moved to services/llm_clients/*.
 
-DELETED in TKT-846 refactor:
+DELETED in the provider-client refactor:
   - AnthropicService, OpenAIService, GeminiService → llm_clients/anthropic.py etc.
   - FallbackLLMService — dead code (fallback_provider never set in DB/schema).
   - LoggingLLMService — absorbed by Providers._log_after_call chokepoint.

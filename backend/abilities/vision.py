@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""VisionAbility — read/see an image via the brain's Vision Provider (TKT-838).
+"""VisionAbility — read/see an image via the brain's Vision Provider.
 
 describe_image() is the shared describe core: it forks ONCE on whether a vision
 provider is configured — provider -> a single-shot MessageProcessor on the vision

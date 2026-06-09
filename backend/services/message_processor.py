@@ -112,7 +112,7 @@ class MessageProcessor:
     ``tool_calls`` rows (§4c) rather than held in memory.
     """
 
-    # ── Tool visibility — per channel, no class-level default (TKT-835) ────────
+    # ── Tool visibility — per channel, no class-level default ──────────────────
     #
     # Tool discovery/blocking is NOT a MessageProcessor class constant.  It is
     # carried per turn by the channel's ``ProcessorConfig``:
@@ -394,7 +394,7 @@ class MessageProcessor:
         #    queue, while data_graph and act-trail writes serialise at the SQLite
         #    WAL layer (single-writer + 15s busy_timeout).  No shared cursor, and
         #    last_insert_rowid is never read cross-connection — doc_id is a
-        #    pre-generated random hex, not a rowid.  (TKT-838)
+        #    pre-generated random hex, not a rowid.
         attachments = list(self._metadata.get("attachments") or [])
         if attachments:
             from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
@@ -406,7 +406,7 @@ class MessageProcessor:
         #    snapshot already carries the uploaded documents' act-trail rows: the
         #    thinking pass is single-pass with tools disabled, so it can only
         #    reason about vision output that is ALREADY in the parent's rendered
-        #    body at dispatch time.  (TKT-838 follow-up)
+        #    body at dispatch time.
         if getattr(self, "thinking_level", "low") == "high":
             dispatcher.dispatch("thinking", {})
 
@@ -417,12 +417,11 @@ class MessageProcessor:
         ToolDispatcher (dispatch binds a fresh, isolated per-call ability) so
         concurrent uploads never share dispatch state.  An unsafe/missing path is
         logged and skipped WITHOUT aborting the others (the pool keeps every other
-        task alive).  (TKT-838)
+        task alive).
 
         Dispatches the file PATH, never its bytes: the dispatch params land in the
         act-trail verbatim, so a base64 blob would blow the context window.  Only
         paths under the Chalie temp prefix are accepted (path-traversal guard).
-        (TKT-844)
         """
         import os  # noqa: PLC0415
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
@@ -442,7 +441,7 @@ class MessageProcessor:
         # _handle_upload emits the "(id=<doc_id>, ...)" token ONLY on success, so a
         # failed upload links nothing.  Scoped to the user-attachment seed point on
         # purpose: a model-issued document.upload mid-turn must NOT render as a user
-        # attachment.  (TKT-842)
+        # attachment.
         if self.uid is not None:
             from services.transcript_service import link_transcript_doc  # noqa: PLC0415
             match = re.search(r"\(id=([0-9a-f]+)", result)

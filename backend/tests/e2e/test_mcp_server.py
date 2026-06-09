@@ -7,7 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-E2E test for the MCP server external agent communication feature (TKT-438).
+E2E test for the MCP server external agent communication feature.
 
 Tests:
 1. MCP server starts and exposes the talk_to_chalie tool
@@ -380,7 +380,7 @@ class TestMCPServerToolCall:
                     "arguments": {
                         "message": "What's on my schedule today?",
                         "agent_name": "Claude Code",
-                        "project_or_task_name": "Chalie TKT-438",
+                        "project_or_task_name": "Chalie Demo Project",
                     },
                 },
                 auth_token,

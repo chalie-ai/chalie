@@ -43,8 +43,8 @@ class McpManagerAbility(Ability):
 
     def get_examples(self) -> list[str]:
         return [
-            "connect to the MCP server at http://grck.lan:5100/mcp",
-            "add an MCP connection named taskie at http://grck.lan:5100/mcp",
+            "connect to the MCP server at https://mcp.example.com/mcp",
+            "add an MCP connection named taskie at https://mcp.example.com/mcp",
             "list all connected MCP servers",
             "enable the taskie MCP server",
             "disable the weather MCP server",
@@ -81,7 +81,7 @@ class McpManagerAbility(Ability):
                 "type": "string",
                 "description": (
                     "For add: full URL including port, e.g. "
-                    "'http://grck.lan:5100/mcp'."
+                    "'https://mcp.example.com/mcp'."
                 ),
             },
             "headers": {
@@ -102,8 +102,8 @@ class McpManagerAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    # SYSTEM: always-allowed, hidden from Policy Manager (same pattern as memory
-    # after TKT-753).  Management operations are Chalie self-configuration, not
+    # SYSTEM: always-allowed, hidden from Policy Manager (same pattern as memory).
+    # Management operations are Chalie self-configuration, not
     # user-data writes — no per-action policy gate is appropriate.
     SYSTEM = True
 

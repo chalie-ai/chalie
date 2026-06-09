@@ -12,8 +12,6 @@ back, so there is no circular-import dance and no alias hack). ``_MCPAbility``
 is imported normally too. Only ``_sanitize_llm_args`` (defined in
 ``message_processor``, which imports this module) and the async runner are
 deferred to break the import cycle.
-
-Spec: ACT Loop Orchestrator Refactor §5, §7b; eliminate-_base §4.2; TKT-797.
 """
 
 from __future__ import annotations
@@ -62,7 +60,7 @@ class ToolDispatcher:
         → record → return a STRING. Records EVERY outcome (allow result, block,
         unknown) so the rendered trail tells the model what happened and it does
         not retry a blocked tool forever. No cancel check — the loop guards
-        cancel_event one line before calling this. Spec §5 / TKT-797.
+        cancel_event one line before calling this. Spec §5.
         """
         from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
 

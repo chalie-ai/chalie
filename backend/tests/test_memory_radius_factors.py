@@ -12,7 +12,7 @@ from abilities.memory import MemoryAbility, _compute_radius_factors
 pytestmark = pytest.mark.unit
 
 # Shorthand constants pulled from MemoryAbility so tests stay in sync if
-# the meta-harness tunes the values.
+# the values are tuned.
 NARROW_MIN = MemoryAbility.NARROW_MIN_DIST      # 0.25
 NARROW_MAX = MemoryAbility.NARROW_MAX_DIST      # 0.05
 NARROW_FLOOR = MemoryAbility.NARROW_FACTOR_FLOOR  # 0.35

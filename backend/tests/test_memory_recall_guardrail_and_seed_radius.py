@@ -1,5 +1,4 @@
-"""Feature test: memory.recall guardrail + the 30%-narrower turn-0 seed radius
-(TKT-878).
+"""Feature test: memory.recall guardrail + the 30%-narrower turn-0 seed radius.
 
 Two behaviour changes are proven here against the REAL production chokepoint —
 ``ToolDispatcher(mp).dispatch("memory", …)`` — the single path BOTH the model's

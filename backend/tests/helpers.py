@@ -58,9 +58,9 @@ def make_stub_config(
     surface for find_tools mechanics tests.
 
     find_tools sources its allow-list / block-list from the invoking
-    processor's ``config.discoverable`` / ``config.blocked`` (TKT-835 — the
+    processor's ``config.discoverable`` / ``config.blocked`` — the
     single source of truth is the per-channel ProcessorConfig, not a static
-    class list).  Tests that exercise the discovery mechanics (RRF floor, MCP
+    class list.  Tests that exercise the discovery mechanics (RRF floor, MCP
     merge, select-vs-query) attach one of these to a stub MessageProcessor so
     they control exactly which names are discoverable.  Channel-isolation
     behaviour is covered separately against the REAL channel configs in

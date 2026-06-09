@@ -8,7 +8,7 @@
 
 """VisionConfig — the delegate channel that runs on the brain's Vision Provider.
 
-The typed ``ProcessorConfig`` for the ``vision`` delegate tool (TKT-838). Paired
+The typed ``ProcessorConfig`` for the ``vision`` delegate tool. Paired
 with ``VisionAbility`` in ``abilities/vision.py``: the ability's
 ``describe_image()`` core instantiates this config and calls
 ``MessageProcessor.process()``. ``uses_vision_provider=True`` is what makes

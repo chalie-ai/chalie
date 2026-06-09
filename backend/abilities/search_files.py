@@ -43,7 +43,7 @@ class SearchFilesAbility(Ability):
 
     def get_examples(self) -> list[str]:
         return [
-            "find all yaml files under chalie-nightly-test",
+            "find all yaml files under config",
             "where is the message_processor file",
             "search the backend for files containing 'PolicyService'",
             "list every markdown doc under docs/",

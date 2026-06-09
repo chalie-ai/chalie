@@ -2,7 +2,7 @@
 MemoryAbility — Store, recall, and forget first-party facts about the user.
 
 Covers all actions: store, recall, reflect, forget.
-Module-level radius constants are ClassVar for meta-harness patching.
+Module-level radius constants are ClassVar so they can be tuned mechanically.
 """
 
 import hashlib
@@ -23,11 +23,11 @@ _KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
 #
 # Composition: effective_input = BASELINE × narrow_factor × expand_factor
 # `episodic_retrieval_service.retrieve` then applies its own population-aware
-# adaptive shrink on top. All eight constants are tuned by the meta-harness
-# loop (loop_improve.sh) against the d1-context-recall benchmark suite.
+# adaptive shrink on top. All eight constants are tuned offline against a
+# context-recall evaluation suite.
 #
 # Do NOT read these values from config/env at import time. They are literal
-# ClassVar floats so the meta-harness can diff-patch them mechanically.
+# ClassVar floats so they can be diff-patched mechanically.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -131,7 +131,7 @@ class MemoryAbility(Ability):
     RECALL_RADIUS_BASELINE: ClassVar[float] = 0.5
     # Turn-0 auto-seed recall (caller="seed"). 0.35 = RECALL_RADIUS_BASELINE − 30%
     # so the background seed retrieves a tighter, higher-precision set than an
-    # explicit model-invoked recall, which stays at 0.5. (TKT-878)
+    # explicit model-invoked recall, which stays at 0.5.
     SEED_RADIUS_BASELINE: ClassVar[float] = 0.35
 
     NARROW_MIN_DIST: ClassVar[float] = 0.25
@@ -317,7 +317,6 @@ def _format_forget_response(result: dict) -> str:
 # memory.recall silently dispatching those searches behind its back. The
 # turn-0 auto-seed recall (_auto=True) stays silent — no hint, no fan-out.
 # Tool names are exact: `document` and `schedule`, each with action="search".
-# (TKT-878)
 _RECALL_FALLBACK_HINT = (
     "If you cannot find the information in memory, try using the "
     "`document` (action: search) or `schedule` (action: search) tools."
@@ -332,7 +331,7 @@ def _handle_recall(mp, channel: str, params: dict) -> str:
 
     # The turn-0 background seed (_auto=True) retrieves at the tighter
     # SEED_RADIUS_BASELINE; an explicit model-invoked recall uses the wider
-    # RECALL_RADIUS_BASELINE. (TKT-878)
+    # RECALL_RADIUS_BASELINE.
     caller = "seed" if params.get("_auto") else "llm_recall"
 
     limit = 10

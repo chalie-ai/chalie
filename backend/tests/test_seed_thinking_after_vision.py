@@ -1,6 +1,6 @@
 """Feature test: at turn 0 the high-deliberation ``thinking`` pass fires LAST —
 AFTER the attachment uploads (and their vision/OCR extraction) — so the
-deliberation can reason about what vision produced (TKT-838 follow-up).
+deliberation can reason about what vision produced.
 
 Bug: ``_seed_turn_zero`` dispatched the ``thinking`` pass BEFORE the attachment
 upload block, so the thinking pass — which is single-pass, tools disabled, and
@@ -46,7 +46,7 @@ class _RecordingProvider:
     single send. ``estimate_request_tokens`` returns 1 so the pre-flight
     over-cap check always passes (never raises RequestOverCapError).
 
-    TKT-846 spec change (doc 131): Providers._resolve now returns a ProviderClient.
+    Providers._resolve now returns a ProviderClient.
     Updated from send_messages/build_request_body interface to send(dto)/
     estimate_request_tokens(dto) interface.
     """
@@ -137,7 +137,7 @@ def test_turn0_thinking_pass_sees_uploaded_image_in_its_snapshot(db):
         _build_parent([attachment])._seed_turn_zero()
 
     # Exactly one high-deliberation send reached the boundary — the thinking pass.
-    # TKT-846: thinking_mode is now a ThinkingLevel enum, not a plain string.
+    # thinking_mode is now a ThinkingLevel enum, not a plain string.
     high_sends = [s for s in recorder.sends if s["thinking_mode"] == ThinkingLevel.HIGH]
     assert len(high_sends) == 1, (
         f"expected exactly one high-deliberation send, got {len(high_sends)} "

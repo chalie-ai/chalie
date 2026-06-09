@@ -1,6 +1,6 @@
 """
 Feature tests for the vault DEK backup and password-verified restore/wipe
-behaviors introduced by TKT-676.
+behaviors.
 
 Backup model (append-forever): every DEK generation writes a fresh, uniquely
 stamped ``vault_backup_<stamp>.json`` and never overwrites or deletes an earlier

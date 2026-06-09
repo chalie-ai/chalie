@@ -8,7 +8,7 @@
 
 """WebSearchAbility — delegate a web-research task to a focused search agent.
 
-The foundational delegate-tool template (spec §5b / §10f, TKT-732).  A delegate
+The foundational delegate-tool template (spec §5b / §10f).  A delegate
 tool is a standalone Ability that pairs with a typed ``ProcessorConfig``
 subclass (``WebSearchConfig``, in ``configs/channels/web_search.py`` with the
 other channel configs).  ``run()`` instantiates the subclass and calls

@@ -14,8 +14,6 @@ user-gated and carry no seed rows. ANY action on these tools runs unconditionall
 The gate is dead simple: short-circuit INTERNAL tools, else SELECT the setting
 (lazily creating an 'ask' row on a miss), then run | block | prompt. It has ZERO
 knowledge of threads/timeouts — those live in the callback (Ability.execute).
-
-Spec: Taskie doc 119 v2.
 """
 
 import json

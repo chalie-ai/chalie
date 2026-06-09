@@ -1,4 +1,4 @@
-"""Feature tests for TKT-622: FileMapperService path resolution.
+"""Feature tests for FileMapperService path resolution.
 
 FileMapperService is a pure classmethod service — all methods are deterministic
 transforms over class-level Path constants resolved once at import time.

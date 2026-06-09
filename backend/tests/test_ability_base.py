@@ -2,9 +2,9 @@
 
 Asserts the metadata-getter enforcement, the sealed single-assembler
 ``get_input_schema()``, and the framework-field injection behave exactly as the
-TKT-837 design specifies — no mocks, no stubs, no IO.
+current design specifies — no mocks, no stubs, no IO.
 
-SPEC CHANGE (TKT-837): the five ``NAME`` / ``SUMMARY`` / ``EXAMPLES`` /
+SPEC CHANGE: the five ``NAME`` / ``SUMMARY`` / ``EXAMPLES`` /
 ``SEARCH_TOOLTIP`` / ``INPUT_SCHEMA`` ClassVars were replaced by five zero-arg
 ``@abstractmethod`` getters (``get_name`` / ``get_summary`` / ``get_examples`` /
 ``get_search_tooltip`` / ``get_parameters``), and ``get_input_schema()`` became a

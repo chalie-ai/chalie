@@ -1,6 +1,6 @@
 """Tool-call ids must be globally unique across a turn.
 
-Regression guard for TKT-786: the ACT-trail keys tool pills by ``call_id``.
+Regression guard: the ACT-trail keys tool pills by ``call_id``.
 Ollama minted ids as ``ollama_<name>_<index>`` where the index resets every
 LLM response, so the same tool at the same position in two ACT iterations
 collided on one id. The frontend then rendered a duplicate pill and left the

@@ -1,4 +1,4 @@
-"""Feature tests for TKT-596: SkillBuilderAbility and skills_io helpers.
+"""Feature tests for SkillBuilderAbility and skills_io helpers.
 
 Two modules are covered:
 

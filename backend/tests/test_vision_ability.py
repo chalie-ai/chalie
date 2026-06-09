@@ -1,4 +1,4 @@
-"""Feature tests for VisionAbility + describe_image (TKT-838).
+"""Feature tests for VisionAbility + describe_image.
 
 Drives the real describe_image() core and the real VisionAbility.run() entry
 point against the real test DB, with real provider rows created by the

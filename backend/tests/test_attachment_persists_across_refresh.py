@@ -1,4 +1,4 @@
-"""Feature test: chat attachments survive a page refresh (TKT-842).
+"""Feature test: chat attachments survive a page refresh.
 
 Drives the REAL production chain end-to-end with ZERO mocks:
 

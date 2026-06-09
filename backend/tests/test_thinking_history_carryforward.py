@@ -1,6 +1,5 @@
 """Feature test — the high-deliberation ``thinking`` pre-pass MIRRORS THE PARENT
-turn exactly: same user message, same tool surface; only the system prompt differs
-(TKT-833).
+turn exactly: same user message, same tool surface; only the system prompt differs.
 
 Bug history: the thinking pre-pass built its own bespoke user prompt (exploration
 prefix + raw input) with NO conversation history, so token-per-request collapsed
@@ -20,8 +19,6 @@ dispatcher/policy gate. The ONLY stand-in is the external LLM boundary
 that captures the EXACT request the thinking pass sends. Zero internal mocks.
 """
 
-import json
-
 import pytest
 from unittest.mock import patch
 
@@ -40,8 +37,8 @@ class _RecordingProvider:
     thinking ACT loop ends after a single send. ``estimate_request_tokens``
     returns 1 so the pre-flight over-cap check never triggers.
 
-    TKT-846 spec change (doc 131): Providers._resolve now returns a ProviderClient.
-    Updated from send_messages/build_request_body interface to send(dto)/
+    Providers._resolve now returns a ProviderClient. Updated from
+    send_messages/build_request_body interface to send(dto)/
     estimate_request_tokens(dto) interface.
     """
 
@@ -116,7 +113,7 @@ def test_thinking_prepass_mirrors_parent_user_message(db):
     content = thinking_req["messages"][0]["content"]
 
     # Sanity: this really is the high-deliberation pass (config pins 'high').
-    # TKT-846: thinking_mode is now a ThinkingLevel enum, not a plain string.
+    # thinking_mode is now a ThinkingLevel enum, not a plain string.
     assert thinking_req["thinking_mode"] == ThinkingLevel.HIGH
 
     # The mirror: the parent's exact Previous Messages block (verbatim) and input

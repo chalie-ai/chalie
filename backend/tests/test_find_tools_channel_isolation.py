@@ -1,6 +1,6 @@
-"""Feature tests — find_tools enforces per-channel tool visibility (TKT-835).
+"""Feature tests — find_tools enforces per-channel tool visibility.
 
-The ProcessorConfig typed-subclass refactor (TKT-803/804) made tool visibility
+The ProcessorConfig typed-subclass refactor made tool visibility
 per-channel: every ``ProcessorConfig`` carries ``discoverable`` and ``blocked``.
 ``find_tools`` MUST gate discovery on the *invoking processor's* config — not on
 a global static list — so that raw web tools (``browser`` / ``search``) stay

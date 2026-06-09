@@ -1,4 +1,4 @@
-"""Feature test: an uploaded image is findable by its visual content (TKT-838).
+"""Feature test: an uploaded image is findable by its visual content.
 
 END-TO-END SEARCHABILITY PROOF — the heart of the Vision Subagent addendum.
 
@@ -37,7 +37,7 @@ def _ocrable_invoice_png_path() -> str:
     """A PNG rendering the word 'INVOICE' large/high-contrast enough for RapidOCR,
     written under the Chalie temp prefix and returned as a PATH.
 
-    ``document.upload`` ingests by path, never bytes (TKT-844). RapidOCR's read of
+    ``document.upload`` ingests by path, never bytes. RapidOCR's read of
     this exact fixture was empirically confirmed (analyze().ocr_text == 'INVOICE')
     before this test relied on it.
     """

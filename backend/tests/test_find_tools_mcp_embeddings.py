@@ -1,6 +1,6 @@
-"""Feature tests for TKT-839 — real-time MCP tool embeddings + find_tools discovery fixes.
+"""Feature tests — real-time MCP tool embeddings + find_tools discovery fixes.
 
-Six TDD tests that MUST FAIL at baseline (no TKT-839 implementation yet) and
+Six TDD tests that MUST FAIL at baseline (no embeddings implementation yet) and
 PASS once the implementation is complete.
 
 Failure modes at baseline:
@@ -73,7 +73,7 @@ def _seed_server_online(svc: McpClientService, name: str, tools: list[dict]) -> 
     return server
 
 
-# Representative Taskie tool definitions — match the kinds of tools TKT-839 targets.
+# Representative Taskie tool definitions — match the kinds of tools this targets.
 _TASKIE_TOOLS = [
     {
         "name": "list_tickets",
@@ -114,7 +114,7 @@ class TestSelectAdvertisedName:
         NOT appear in effective_allow (which contains '_mcp_taskie_list_tickets').
         allow_lower maps lowercase prefixed names, not bare display names → found=0.
 
-        After TKT-839: _run_select builds a display→call alias map from
+        After the fix: _run_select builds a display→call alias map from
         get_online_mcp_tools_index() and resolves the bare name to the prefixed form.
         """
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
@@ -169,7 +169,7 @@ class TestSemanticQueryViaEmbeddings:
           That is identical behaviour to the ability index and is correct, not a bug.
 
         At baseline: embed_server_tools doesn't exist → AttributeError.
-        After TKT-839: vectors land in mcp_tools_vec; _query_mcp uses hybrid
+        After the fix: vectors land in mcp_tools_vec; _query_mcp uses hybrid
         vec+FTS RRF; dual-signal query surfaces list_tickets / create_ticket.
 
         NOTE: This test calls the real ONNX model — it is intentionally slow.
@@ -219,7 +219,7 @@ class TestLooseMultiWordQuery:
 
         At baseline: embed_server_tools absent → no vec table → _query_mcp falls back to
         FTS-only; single-signal 0.0625 < 0.075 floor → result is empty.
-        After TKT-839: _query_mcp delegates to _hybrid_search with vec+FTS RRF; the
+        After the fix: _query_mcp delegates to _hybrid_search with vec+FTS RRF; the
         embedding provides the second signal lifting add_attachment above the floor.
 
         NOTE: Calls real ONNX model — intentionally slow.
@@ -286,7 +286,7 @@ class TestEmbeddingsSurviveHeartbeatSync:
         reassigns ids above that mark, guaranteeing ids_before != ids_after.
 
         At baseline: embed_server_tools absent → AttributeError.
-        After TKT-839: vectors survive because the join goes through tool_name.
+        After the fix: vectors survive because the join goes through tool_name.
 
         NOTE: Calls real ONNX model — intentionally slow.
         """
@@ -377,7 +377,7 @@ class TestAddOnlyEmbeddingTrigger:
         before and after the sync; they must be identical.
 
         At baseline: embed_server_tools absent → AttributeError.
-        After TKT-839: _write_tools is intentionally NOT a trigger for re-embedding;
+        After the fix: _write_tools is intentionally NOT a trigger for re-embedding;
         the vector rows are stable across non-add syncs.
         """
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
@@ -438,7 +438,7 @@ class TestAmbiguousBareNameDropped:
         must use the prefixed form.  Neither server's tool must be activated.
 
         At baseline: Phase A assertion fails (no alias map → found=0 for bare name).
-        After TKT-839: Phase A passes (unambiguous alias resolved); Phase B passes
+        After the fix: Phase A passes (unambiguous alias resolved); Phase B passes
         (ambiguous alias dropped, found=0, prefixed form required).
         """
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)

@@ -84,12 +84,12 @@ Names describe the real-world scenario: `test_architecture_question_routes_to_hi
 | Tier | Location | Purpose |
 |---|---|---|
 | Python feature tests | `backend/tests/` | Fast-feedback for individual service behaviour |
-| Nightly YAML scenarios | `chalie-nightly-test/scenarios/` | Primary system tests — full stack, HTTP to response |
-| Benchmarks | `chalie-nightly-test/benchmark_tasks/` | Scored quality measurement, not pass/fail |
+| System-level scenarios | Separate end-to-end harness | Primary system tests — full stack, HTTP to response |
+| Benchmarks | Separate end-to-end harness | Scored quality measurement, not pass/fail |
 
-Python-level tests are a fast-feedback supplement. They do not replace the nightly scenarios. See `.claude/commands/nightly-tests.md` for the nightly scenario spec.
+Python-level tests are a fast-feedback supplement. They do not replace the system-level scenario tests, which run end to end in a separate harness against the full stack.
 
-**Boundary-contract sentinels.** Some test files exist specifically to canary a cross-layer invariant that the nightly scenarios would catch too late and too silently. `backend/tests/test_rich_media_subagent_isolation.py` (12 tests across three classes) is the reference example. It locks the rich-media round-3 architectural contract: `ActDispatcherService` must not inject `_rich_media_ordinal` on non-user-channel dispatches, and `SubagentAbility` must strip every `<span id='name_N'>…</span>` wrapper from returned text before handing it to the parent. Without these guards, nightly scenarios 058 and 059 regress silently — the LLM stops receiving the rich-media instruction trailer, cards stop rendering, and the only observable symptom is a plain-text response where a card was expected (the round-432 failure mode). If a refactor of `act_dispatcher_service.py` or `abilities/subagent.py` causes these sentinels to fail, treat it as a must-fix before merging.
+**Boundary-contract sentinels.** Some test files exist specifically to canary a cross-layer invariant that the end-to-end scenarios would catch too late and too silently. `backend/tests/test_rich_media_subagent_isolation.py` (12 tests across three classes) is the reference example. It locks the rich-media round-3 architectural contract: `ActDispatcherService` must not inject `_rich_media_ordinal` on non-user-channel dispatches, and `SubagentAbility` must strip every `<span id='name_N'>…</span>` wrapper from returned text before handing it to the parent. Without these guards, the rich-media end-to-end scenarios regress silently — the LLM stops receiving the rich-media instruction trailer, cards stop rendering, and the only observable symptom is a plain-text response where a card was expected. If a refactor of `act_dispatcher_service.py` or `abilities/subagent.py` causes these sentinels to fail, treat it as a must-fix before merging.
 
 ## What If a Service Cannot Be Tested Without Mocks?
 
@@ -99,6 +99,6 @@ If the only way to test a service is to mock its collaborators, the code is too 
 
 - Add a legitimate dependency-injection seam (via the coder agent, not the tester)
 - Test the behaviour at a higher level where real collaborators can run
-- Accept that the behaviour is covered by a nightly scenario and leave the Python-level test unwritten
+- Accept that the behaviour is covered by an end-to-end system scenario and leave the Python-level test unwritten
 
 The wrong answer is always: write a mock-heavy test that proves nothing.

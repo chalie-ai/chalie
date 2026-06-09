@@ -1,4 +1,4 @@
-"""Feature test: image extraction routes through describe_image() (TKT-838).
+"""Feature test: image extraction routes through describe_image().
 
 Drives the REAL public entry point ``extract_text`` against the real test DB and
 real PNG files. Proves the searchability-hinge rewrite of ``_extract_image``:
@@ -10,7 +10,7 @@ real PNG files. Proves the searchability-hinge rewrite of ``_extract_image``:
      the provider error bubbles out of extract_text and is NOT swallowed to ''.
 
 Deterministic cross-step proofs only — the unit tier never asserts RapidOCR read
-specific glyphs (that proof lives in Task 6 + the nightly).
+specific glyphs (that proof lives in the end-to-end evaluation suite).
 """
 
 import base64

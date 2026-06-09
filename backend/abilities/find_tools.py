@@ -80,7 +80,7 @@ class FindToolsAbility(SearchableAbility):
 
         Both are sourced from the per-turn ``ProcessorConfig`` (``config.discoverable``
         / ``config.blocked``) — the single source of truth introduced by the
-        typed-subclass refactor (TKT-803/804). This is what keeps raw web tools
+        typed-subclass refactor. This is what keeps raw web tools
         (``browser`` / ``search``) exclusive to the delegate channels and pattern
         writes exclusive to the pattern channels: every channel declares its own
         allow-list and block-list. Returns ``([], set())`` when no config is bound

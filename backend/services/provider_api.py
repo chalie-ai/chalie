@@ -111,7 +111,6 @@ class ProviderApiResponse:
     tool_calls: Optional[list] = None
     stop_reason: Optional[str] = None
     latency_ms: Optional[int] = None
-    # New in TKT-846
     thinking_block: Optional[str] = None
     response_code: Optional[int] = None
 

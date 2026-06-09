@@ -42,8 +42,8 @@ pytestmark = pytest.mark.unit
 def _make_stub_processor(discoverable: list[str]) -> MessageProcessor:
     """Flat MessageProcessor carrying a config whose ``discoverable`` is the
     find_tools allow-list gate, plus an empty active_tools that find_tools
-    appends discovered names onto via self.mp (TKT-835:
-    find_tools reads ``mp.config.discoverable`` / ``mp.config.blocked``)."""
+    appends discovered names onto via self.mp (find_tools reads
+    ``mp.config.discoverable`` / ``mp.config.blocked``)."""
     proc = object.__new__(MessageProcessor)
     proc.config = make_stub_config(discoverable=discoverable)
     proc._active_tools = []

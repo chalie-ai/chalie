@@ -454,7 +454,7 @@ class VaultService:
             )
 
     # ------------------------------------------------------------------
-    # Filesystem key-material backup (TKT-676)
+    # Filesystem key-material backup
     # ------------------------------------------------------------------
 
     def _write_backup(self, km: "_VaultKeyMaterial") -> None:

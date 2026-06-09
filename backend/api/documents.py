@@ -169,7 +169,7 @@ def _run_upload_extraction(doc_id: str):
         if is_image:
             # A textless image with no vision provider (e.g. a photo with no
             # words): persist 'ready' so it stays viewable / re-queryable via the
-            # vision tool; there is simply nothing to index. NOT a failure. (TKT-838)
+            # vision tool; there is simply nothing to index. NOT a failure.
             svc.update_status(doc_id, 'ready', chunk_count=0)
             return
         svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
@@ -204,7 +204,7 @@ def upload_document():
     same path chat attachments take — so the path-not-bytes act-trail invariant
     holds for every upload surface. Duplicate detection is computed after ingest
     from the returned hash. Extraction is synchronous, so the response carries the
-    terminal status (``ready``/``failed``), not ``pending``. (TKT-844)
+    terminal status (``ready``/``failed``), not ``pending``.
     """
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400

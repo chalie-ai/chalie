@@ -23,7 +23,7 @@ import pytest
 # function). But if a test `patch()`es the function directly, also patch the
 # CONSUMING module's own reference — see test_policies_api.py (mcp_client_service).
 # A blanket pre-load guard used to live here; it rotted (pointed at the deleted
-# `services.dmn_service`) and was removed (TKT-645).
+# `services.dmn_service`) and was removed.
 
 
 # ── Real-SQLite fixtures ──────────────────────────────────────────

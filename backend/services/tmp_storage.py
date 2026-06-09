@@ -14,7 +14,7 @@ apart:
   * write  — ``api/chat.py`` (chat attachments) and ``api/documents.py`` (the
              Documents library) save the raw uploaded file here
   * ingest — ``abilities/document.py`` copies it into the documents store by
-             PATH (``document.upload`` never carries bytes — TKT-844)
+             PATH (``document.upload`` never carries bytes)
   * sweep  — ``workers/tmp_cleanup_worker.py`` deletes stale ones
 
 Files live under the OS temp directory (``tempfile.gettempdir()``) rather than a

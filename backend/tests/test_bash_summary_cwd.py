@@ -1,4 +1,4 @@
-"""Feature test for BashAbility's mp-gated summary enrichment (TKT-837).
+"""Feature test for BashAbility's mp-gated summary enrichment.
 
 bash is the canonical example of a getter that enriches on a live request:
 ``get_summary()`` appends the working directory when bound to a real processor

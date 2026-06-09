@@ -1,5 +1,4 @@
-"""Feature test: web_search / web_browse delegates render their own act-trail
-(TKT-881).
+"""Feature test: web_search / web_browse delegates render their own act-trail.
 
 Both delegate configs used to set ``skip_transcript=True`` AND
 ``skip_input_row=True`` — a "clean context" bundle that wrongly folded in the

@@ -8,15 +8,15 @@
 
 """WebSearchConfig — the delegate channel for the ``web_search`` tool.
 
-The typed ``ProcessorConfig`` for the web-research delegate (spec §5b / §10f,
-TKT-732). Paired with ``WebSearchAbility`` in ``abilities/web_search.py``, whose
-``run()`` instantiates this config and calls ``MessageProcessor.process()``.
+The typed ``ProcessorConfig`` for the web-research delegate. Paired with
+``WebSearchAbility`` in ``abilities/web_search.py``, whose ``run()`` instantiates
+this config and calls ``MessageProcessor.process()``.
 
 Clean *cross-turn* context (``suppress_history=True``) but a real per-turn
 transcript row on its own ``delegate:web_search`` channel, so the delegate can
 render its own act-trail across ACT iterations. Without that row the turn uid is
 never assigned and ``_render_act_trail`` returns "" — the loop then re-searches
-blind to its own results until it exhausts ``max_iterations`` (TKT-881).
+blind to its own results until it exhausts ``max_iterations``.
 ``skip_input_row`` (HiddenInput) is deliberately *not* set: it is the async-return
 mechanism (``deliver_async_result`` / ``with_hidden_input``), not a delegate
 property. A goal-driven system prompt and a finite tool surface
@@ -47,7 +47,7 @@ _WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "read", "web_download")
 class WebSearchConfig(ProcessorConfig):
     """ProcessorConfig for the web_search delegate.
 
-    Mirrors the TKT-803 ProcessorConfig subclasses: a typed ``__init__`` that
+    Mirrors the other ProcessorConfig subclasses: a typed ``__init__`` that
     calls ``super().__init__(...)`` against the frozen base.  ``policy_channel``
     is supplied by the caller (inherited from whoever invoked the tool) rather
     than hardcoded.

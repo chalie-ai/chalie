@@ -1,4 +1,4 @@
-"""Feature tests for the TKT-846 unified provider API contract.
+"""Feature tests for the unified provider API contract.
 
 Covers the NEW behaviours introduced by the refactor:
   - Providers().send(dto) raises RequestOverCapError on pre-flight over-cap.
@@ -9,7 +9,7 @@ Covers the NEW behaviours introduced by the refactor:
     when the provider is unreachable (defensive probe path).
 
 All tests drive the real production stack — real DB, real provider clients,
-real DTO construction — zero mocks. Spec: Taskie doc 131 v2 (TKT-846).
+real DTO construction — zero mocks.
 """
 
 import base64

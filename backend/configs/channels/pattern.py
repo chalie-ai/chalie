@@ -165,7 +165,7 @@ class PatternConfig(ProcessorConfig):
                     "WHERE id > ? AND id <= ? "
                     "AND content IS NOT NULL AND content != '' "
                     # Delegate sub-turns (web_search/web_browse) now write their
-                    # own transcript rows (TKT-881); they are internal research
+                    # own transcript rows; they are internal research
                     # loops, not user behaviour — exclude them from pattern windows.
                     "AND channel NOT LIKE 'delegate:%' "
                     "ORDER BY id ASC",

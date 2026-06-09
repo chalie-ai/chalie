@@ -129,7 +129,7 @@ export class Chat {
   async sendMessage(source = 'text') {
     const textarea = document.getElementById('messageInput');
     const text = textarea.value.trim();
-    // Raw File objects ride the multipart POST /chat (TKT-844 — no pre-upload).
+    // Raw File objects ride the multipart POST /chat (no pre-upload).
     const files = this._imageAttach ? this._imageAttach.getFiles() : [];
     // Capture preview metadata (object URLs, filenames) BEFORE clear() wipes the
     // strip — used to render the attachments inside the user's own turn bubble.

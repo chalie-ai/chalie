@@ -42,7 +42,7 @@ def _fetch_attachments_for_transcripts(conn, transcript_ids: list[int]) -> dict:
     so a removed file silently does not render).  Each attachment carries the
     inline-serving ``/documents/<id>/preview`` URL the renderer uses as the
     <img>/chip source — the same media the live blob: preview showed before reload.
-    Written by message_processor._seed_upload_attachment.  (TKT-842)
+    Written by message_processor._seed_upload_attachment.
 
     Ordered by ``td.rowid`` (insertion order).  Uploads fan out across a thread
     pool, so for a multi-attachment turn this stable order may differ from the

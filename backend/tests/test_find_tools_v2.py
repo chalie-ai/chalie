@@ -1,4 +1,4 @@
-"""Feature tests for find_tools v2 (TKT-830).
+"""Feature tests for find_tools v2.
 
 All six tests run against the REAL production stack:
 - Real FindToolsAbility.run() entry point
@@ -9,7 +9,7 @@ All six tests run against the REAL production stack:
 
 These tests are written BEFORE the v2 implementation exists.
 They MUST FAIL on current (v1) code — that is the required failing
-baseline per /chalie-feature Nightly Rule #5.
+baseline for the feature.
 
 Empirically-pinned floor query
 -------------------------------
@@ -42,7 +42,7 @@ pytestmark = pytest.mark.unit
 def _stub_proc(discoverable: list[str]) -> MessageProcessor:
     """Flat MessageProcessor (no subclass, per P1 rule) carrying a config whose
     ``discoverable`` is the allow-list gate.  find_tools reads
-    ``mp.config.discoverable`` / ``mp.config.blocked`` (TKT-835) and appends
+    ``mp.config.discoverable`` / ``mp.config.blocked`` and appends
     matched names to _active_tools via _append_active()."""
     proc = object.__new__(MessageProcessor)
     proc.config = make_stub_config(discoverable=discoverable)

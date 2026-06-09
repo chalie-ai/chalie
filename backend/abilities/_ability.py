@@ -12,9 +12,6 @@ Dispatch — matching, binding, policy gating, execution, recording — lives in
 ACT-loop tool call takes. This module imports nothing from the registry / policy
 / dispatcher, so ``_registry`` can import ``Ability`` here with no circular-import
 dance.
-
-Spec: docs/superpowers/specs/2026-06-06-ability-schema-getters-design.md (TKT-837);
-ACT Loop Orchestrator Refactor §5; eliminate-_base §4.1.
 """
 
 from __future__ import annotations
@@ -59,8 +56,6 @@ class Ability(ABC):
     (always_available / discoverable / blocked). Whether a call blocks or runs in
     the background is a per-call decision (the framework ``async`` flag), not an
     ability-level trait.
-
-    Spec: §5 / AC-4; TKT-837.
     """
 
     # Constructor-injected, the invoking MessageProcessor (the "parent" of this
@@ -187,7 +182,7 @@ class Ability(ABC):
         ONE place ``act_summary`` + ``async`` are declared. ``final`` — sealed at
         import by ``__init_subclass__``.
 
-        Spec §4.3 / TKT-837.
+        Spec §4.3.
         """
         return {
             "name": self.get_name(),

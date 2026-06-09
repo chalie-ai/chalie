@@ -1,4 +1,4 @@
-"""Feature tests for the TKT-557 geo-tagging components.
+"""Feature tests for the geo-tagging components.
 
 Three services are covered:
 

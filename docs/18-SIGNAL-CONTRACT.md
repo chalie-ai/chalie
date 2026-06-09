@@ -26,7 +26,7 @@ Concrete rules:
 
 ### Independent Testability
 
-Every service must be testable in complete isolation. Unit tests use in-memory storage with no shared state and no dependency on another service being initialized. Integration between services is tested by the nightly suite, not by unit tests.
+Every service must be testable in complete isolation. Unit tests use in-memory storage with no shared state and no dependency on another service being initialized. Integration between services is tested by the end-to-end system scenarios, not by unit tests.
 
 ---
 
@@ -82,7 +82,7 @@ Emission is always fire-and-forget. Emitters never wait for a response and never
 | `user_message` | User sent a chat message | 1.0 |
 | `goal_inferred` | Recurring topic pattern detected as potential goal | 0.6 |
 
-Adding a new signal type requires: an entry in this table, a nightly test scenario, and documentation of what the consumer should do with it.
+Adding a new signal type requires: an entry in this table, an end-to-end scenario test, and documentation of what the consumer should do with it.
 
 ---
 

@@ -1,4 +1,4 @@
-"""Feature test: turn-0 attachment uploads fan out in parallel at a barrier (TKT-838).
+"""Feature test: turn-0 attachment uploads fan out in parallel at a barrier.
 
 Drives the REAL ``MessageProcessor._seed_turn_zero`` — the SAME production method
 that fires once before iteration 0 — with N real image attachments on a real
