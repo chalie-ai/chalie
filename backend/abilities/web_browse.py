@@ -39,8 +39,10 @@ class WebBrowseAbility(Ability):
     def get_summary(self) -> str:
         return (
             "Delegate an interactive web-browsing task to a focused agent that "
-            "drives a real browser — rendering pages, taking screenshots, filling "
-            "forms, and navigating flows — and reports what it finds."
+            "drives a real browser — rendering pages, filling forms, navigating "
+            "flows, and taking screenshots it inspects with its own vision — and "
+            "reports what it finds. Screenshots are saved as documents whose "
+            "doc_id any vision-capable tool can view later."
         )
 
     def get_examples(self) -> list[str]:
@@ -52,7 +54,7 @@ class WebBrowseAbility(Ability):
             "click through this cookie banner and read the article behind it",
             "fill in this web form with my details and submit it",
             "step through this site's signup flow and report where it fails",
-            "open this JavaScript app and tell me what the page shows",
+            "take a screenshot of this page and tell me what it shows",
         ]
 
     def get_search_tooltip(self) -> str:
