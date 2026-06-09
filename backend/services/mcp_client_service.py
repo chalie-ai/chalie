@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[MCP CLIENT]"
 
-# Status strings — these exact values are checked by the nightly scenario.
+# Status strings — these exact values are part of the public status contract.
 _STATUS_UNKNOWN = "unknown"
 _STATUS_ONLINE = "online"
 _STATUS_OFFLINE = "offline"

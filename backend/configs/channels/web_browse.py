@@ -12,9 +12,9 @@ Paired with ``WebBrowseAbility`` (abilities/web_browse.py). Drives the rebuilt
 9-verb ``browser`` tool plus ``read``, ``vision`` and ``memory`` in a clean
 cross-turn context. It writes a real per-turn transcript row on its own
 ``delegate:web_browse`` channel so the turn uid is assigned and the delegate
-renders its own act-trail across ACT iterations (TKT-881 — do NOT set the two
+renders its own act-trail across ACT iterations (do NOT set the two
 skip flags True). That same uid keys the per-run browser PageSession and the
-screenshot ledger; the post-turn hook closes both when the run ends (TKT-877).
+screenshot ledger; the post-turn hook closes both when the run ends.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ class WebBrowseConfig(ProcessorConfig):
             discoverable=[],
             blocked=frozenset(),
             max_iterations=200,
-            skip_transcript=False,  # TKT-881: uid + own transcript row, or the
+            skip_transcript=False,  # uid + own transcript row, or the
             skip_input_row=False,   # act-trail dies and the loop runs blind
             suppress_history=True,
             broadcast_to=None,

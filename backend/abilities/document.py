@@ -8,7 +8,7 @@ for every uploaded file (chat attachments and the Documents library), invoked on
 by code via ``ToolDispatcher.dispatch``. It takes a file PATH, never bytes — a
 path is tiny, so the act-trail (which records every dispatch's params verbatim)
 can never carry a multi-megabyte base64 blob and blow the context window. The
-``_dispatch`` ``upload`` branch is retained for that mechanical route. (TKT-844)
+``_dispatch`` ``upload`` branch is retained for that mechanical route.
 """
 
 import hashlib as _hashlib
@@ -131,7 +131,7 @@ def _dispatch(service, action: str, params: dict) -> str:
         return _handle_create(service, params)
     elif action == "upload":
         # Mechanical-only ingest (not in INPUT_SCHEMA): dispatched by code, never
-        # the LLM. Path-based — see _handle_upload / module docstring. (TKT-844)
+        # the LLM. Path-based — see _handle_upload / module docstring.
         return _handle_upload(service, params)
     else:
         valid = "search, list, view, delete, restore, create"
@@ -457,12 +457,11 @@ def ingest_file(
 
     Takes a path, never bytes, so the act-trail (which records every dispatch's
     params verbatim) can never carry a file blob and blow the context window.
-    (TKT-844)
 
     ``subdir`` nests the document under a named folder inside the documents
     root (``<subdir>/<doc_id>/<name>``) so machine-generated files (browser
     screenshots) never clutter the flat upload listing; ``source_type`` is
-    stored verbatim on the row (TKT-877).
+    stored verbatim on the row.
 
     Returns ``{"id", "hash", "name", "size", "status"}`` on success, or
     ``{"error": <message>}`` on failure.
@@ -542,7 +541,7 @@ def _handle_upload(service, params: dict) -> str:
     """Mechanical upload dispatch (not LLM-callable) → string for the act-trail.
 
     Thin formatter over ``ingest_file``. Preserves the ``(id=<doc_id>, hash=...)``
-    token that the turn-0 seed parses to build the TKT-842 transcript-doc link.
+    token that the turn-0 seed parses to build the transcript-doc link.
     """
     result = ingest_file(
         service,

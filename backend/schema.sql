@@ -433,9 +433,8 @@ CREATE INDEX IF NOT EXISTS idx_llm_call_log_usage_class
 -- MEMORY RECALL LOG — telemetry for dynamic memory radius tuning
 -- One row per memory recall call (seed or llm-driven). Written by
 -- memory_skill after EpisodicService.retrieve_episodes returns.
--- Consumed by the meta-harness (nightly tests) to tune the 8
--- radius constants in memory_skill.py — see
--- /Volumes/llm/chalie-plans/v0.3.2/memory-dynamic-radius.md.
+-- Consumed offline to tune the 8 radius constants in
+-- memory_skill.py.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS memory_recall_log (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,

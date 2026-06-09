@@ -6,7 +6,7 @@ Auto-registered by api/__init__._register_blueprints() — no edits to
 __init__.py required.
 
 All endpoints return 200 (not 201 for create) per the design contract
-locked by nightly scenario 163.
+locked by an end-to-end scenario.
 """
 
 import logging
@@ -88,8 +88,8 @@ def add_server():
 def get_discoverable():
     """Return the currently-discoverable _mcp_* tool names (enabled+online only).
 
-    This is the deterministic proxy for the find_tools gate — the scenario
-    asserts _mcp_taskie_create_document appears here after a ping_and_sync.
+    This is the deterministic proxy for the find_tools gate — an end-to-end
+    scenario asserts _mcp_taskie_create_document appears here after a ping_and_sync.
     """
     names = _svc().get_online_mcp_tool_names()
     return jsonify({"tools": names, "count": len(names)}), 200

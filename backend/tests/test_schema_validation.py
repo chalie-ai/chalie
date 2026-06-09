@@ -1,7 +1,7 @@
 """
 Tests for backend/schema.sql structural integrity.
 
-Each test absorbs a specific nightly scenario, validating that the production
+Each test absorbs a specific end-to-end scenario, validating that the production
 schema contains the expected tables, columns, indexes, and seed data.
 The fixture loads the full schema into an in-memory SQLite database so these
 tests run with zero external dependencies.
@@ -72,10 +72,10 @@ class TestSchemaValidation:
         yield conn
         conn.close()
 
-    # ── Scenario 201 ─────────────────────────────────────────────────────────
+    # ── Reliability defaults ─────────────────────────────────────────────────
 
     def test_reliability_default_values(self, schema_db):
-        """Absorbs scenario 201: episodes table inserts without error.
+        """Absorbs an end-to-end scenario: episodes table inserts without error.
 
         The reliability column concept only applied to the removed knowledge table.
         We verify episodes inserts still work correctly.

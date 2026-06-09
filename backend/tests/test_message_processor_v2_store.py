@@ -10,7 +10,7 @@
 
 Uses real in-memory SQLite DB — no mocks for the data path. The watermark /
 overflow / compaction-write behaviour is covered by the feature tests in
-test_compaction_watermark.py and nightly scenario 120; the old singleton-mocked
+test_compaction_watermark.py and the end-to-end scenario suite; the old singleton-mocked
 _run_full_compaction / _handle_overflow tests were removed with the redesign.
 """
 

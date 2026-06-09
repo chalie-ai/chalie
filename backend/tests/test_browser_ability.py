@@ -1,9 +1,9 @@
-"""Feature tests: the rebuilt 9-verb browser ability (TKT-877).
+"""Feature tests: the rebuilt 9-verb browser ability.
 
 Drives the REAL ``BrowserAbility.run`` entry point — the same call
 ``ToolDispatcher._execute`` makes — with zero mocks. The SSRF guard blocks every
 local/private address (security.py:21-29), so anything requiring real navigation
-lives in tests/e2e/test_browser_live.py (marker: e2e) and the nightly scenarios;
+lives in tests/e2e/test_browser_live.py (marker: e2e) and the end-to-end scenarios;
 these tests cover the full no-network surface: schema, validation, the SSRF
 guard itself, the no-open-page guard, and the uniform error envelope.
 """

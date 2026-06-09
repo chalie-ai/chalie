@@ -1,8 +1,8 @@
-"""Feature tests: the rebuilt web_browse delegate config (TKT-877).
+"""Feature tests: the rebuilt web_browse delegate config.
 
 Real config + real MessageProcessor._setup (uid assignment is prod's, not the
 test's) + the real screenshot ledger module the browser ability writes to.
-Locks: vision in the toolset, 200 iterations, TKT-881 flags, the STOP RULE
+Locks: vision in the toolset, 200 iterations, the act-trail flags, the STOP RULE
 prompt, the compaction-immune screenshot ledger in the user prompt, the
 post-turn close hook wiring, and the cap-hit message.
 """
@@ -32,7 +32,7 @@ def test_config_contract():
     assert cfg.max_iterations == 200
     assert set(cfg.always_available) == {"browser", "read", "vision", "memory"}
     assert cfg.discoverable == []
-    # TKT-881: both False or the delegate goes act-trail-blind again.
+    # Both False or the delegate goes act-trail-blind again.
     assert cfg.skip_transcript is False
     assert cfg.skip_input_row is False
     assert cfg.suppress_history is True
@@ -71,7 +71,7 @@ def test_cap_hit_returns_explicit_message_not_empty():
     path, message_processor.py:524-526) must reach the outer agent as words,
     never as silence. ``_final_text`` is the SINGLE prod formatter that
     ``run()`` routes EVERY result through — driving the full run() here would
-    launch a real 200-iteration LLM delegate, which is nightly territory."""
+    launch a real 200-iteration LLM delegate, which is end-to-end territory."""
     from abilities.web_browse import WebBrowseAbility
 
     assert WebBrowseAbility._final_text("") == (

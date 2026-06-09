@@ -438,7 +438,7 @@ class TestSuperEpisodeWriteContract:
         stored = json.loads(row[0])
         assert stored == src_ids, (
             f"consolidated_from round-trip failed: stored={stored!r} expected={src_ids!r}. "
-            "This is the exact failure mode reported by nightly 103 "
+            "This is the exact failure mode reported by an end-to-end scenario "
             "('Super-episodes were created but contained 0 source references')."
         )
 

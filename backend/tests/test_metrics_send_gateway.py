@@ -16,8 +16,8 @@ it on demand from the transcript table:
 These two tests exercise that pure read-path against a real SQLite database (no
 mocked collaborators): a stale stored counter is ignored, and the COUNT is exact
 and scoped to user/user rows. The per-send gateway wiring (token accumulation,
-request/turn counters) is covered end-to-end by nightly scenario
-052-tool-code-eval (message-event ``metrics`` object).
+request/turn counters) is covered end-to-end by the scenario suite
+(message-event ``metrics`` object).
 """
 
 import pytest

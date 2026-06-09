@@ -369,7 +369,7 @@ class OnnxInferenceService:
             extra_feature_dim=extra_feature_dim,
         )
 
-        # Emit boot marker — format is contractual (scenarios grep exact prefix)
+        # Emit boot marker — format is contractual (downstream consumers grep the exact prefix)
         if task_type == "regression":
             logger.info(
                 "[CLASSIFIER BOOT] %s sha256=%s input_dim=%d num_outputs=%d task=%s",

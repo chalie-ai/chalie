@@ -22,7 +22,7 @@ Real hot path, zero mocks:
     ``run`` is still in flight) and registers exactly one active delegate.
 
 The async LLM follow-up turn delivery (the captured-mp synthesis on the user
-channel) is exercised end-to-end in the QA-env / nightly run, not here — it
+channel) is exercised end-to-end in the QA-env / scenario run, not here — it
 requires a real model.  This test proves the *decision* and the *non-blocking*
 contract without firing the LLM by cancelling the delegate before releasing it,
 which makes ``AsyncDelegateRunner._run`` skip delivery (§4.4).

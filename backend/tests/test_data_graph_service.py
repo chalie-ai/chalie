@@ -658,8 +658,8 @@ class TestForget:
     patch.object because they touch the ONNX model and sqlite-vec extension,
     neither of which is available in the unit test environment.  All DB writes,
     reads, edge deletions, and FTS operations run against the real SQLite
-    fixture.  The nightly scenarios 084, 096, 097, 098, 099 provide end-to-end
-    coverage for these paths against the production stack.
+    fixture.  The end-to-end scenario suite provides coverage for these paths
+    against the production stack.
     """
 
     _FAKE_EMB = [0.1] * 768

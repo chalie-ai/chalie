@@ -13,7 +13,7 @@ fire_threshold_overrides:      # null = use classifier_meta.json value
   coding:     null
   brainstorm: null
   analyze:    null
-  plan:       0.5      # baked 0.8 too high — schedule/goal_pursuit gated out of natural prompts (run 314 scenario 033)
+  plan:       0.5      # baked 0.8 too high — schedule/goal_pursuit gated out of natural prompts
   write:      null
   math:       null
   converse:   null

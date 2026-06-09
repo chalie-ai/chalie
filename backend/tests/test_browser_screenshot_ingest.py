@@ -1,11 +1,11 @@
-"""Feature test: browser screenshots land in the document pipeline (TKT-877).
+"""Feature test: browser screenshots land in the document pipeline.
 
 Drives the REAL shared ingest (``ingest_file`` — the exact call
 ``BrowserAbility._screenshot`` makes) and then the REAL ``vision`` tool through
 the REAL ``ToolDispatcher`` on a REAL web_browse delegate mp. Zero mocks; the
 no-vision-provider fork exercises RapidOCR exactly as production does (the
-'INVOICE' fixture's OCR readability was empirically proven in TKT-838).
-Locks the TKT-877 contract end to end: png → screenshots/ subdir →
+'INVOICE' fixture's OCR readability was empirically proven).
+Locks the contract end to end: png → screenshots/ subdir →
 source_type='screenshot' → ready doc → vision reads it on the delegate channel.
 """
 
@@ -28,7 +28,7 @@ pytestmark = pytest.mark.unit
 
 
 def _invoice_png_path() -> str:
-    """High-contrast 'INVOICE' PNG under the Chalie tmp prefix (TKT-838-proven OCR fixture)."""
+    """High-contrast 'INVOICE' PNG under the Chalie tmp prefix (proven OCR fixture)."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.new("RGB", (480, 160), "white")

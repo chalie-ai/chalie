@@ -13,7 +13,7 @@ against real production code.
 
 Per feedback_test_philosophy.md: hot path only, no mock theater.
 
-TKT-846 spec change (doc 131): Providers is now mp-free; _resolve returns a
+Spec change: Providers is now mp-free; _resolve returns a
 ProviderClient (not LoggingLLMService). _FakeLLMService is a proper ProviderClient
 subclass: send(dto); estimate_request_tokens(dto) returns 1 so pre-flight passes;
 CONTENT_FIELD_LABEL declared as a ClassVar.
@@ -57,7 +57,7 @@ class _FakeLLMService(ProviderClient):
     PatternConfig.get_user_prompt — tool building, and the over-cap size
     check) while only the network round-trip is controlled by send_fn.
 
-    TKT-846 contract (doc 131):
+    Provider contract:
       - estimate_request_tokens(dto) returns 1 so pre-flight never triggers.
       - send(dto) returns the controlled response.
       - CONTENT_FIELD_LABEL mirrors the Ollama client label.
@@ -480,7 +480,7 @@ class TestSaveGraphBudgetCapAt50:
     (DataGraphService policy: reinforce=False, contradiction=None), so each of
     the 51 unique keys is a distinct row — the 51st never lands because the real
     SaveGraph budget counter (carried on the real MessageProcessor) caps at 50.
-    Rewritten from a hand-bound ``_StubProcessor`` per TKT-646.
+    Rewritten from a hand-bound ``_StubProcessor``.
     """
 
     def test_save_graph_budget_cap_at_50(self, db, store):
@@ -523,7 +523,7 @@ class TestSaveGraphBudgetCapAt50:
 
 class TestReinforcementDiminishingBoost:
     """Test 12 — each successive reinforce adds a smaller storage_strength boost and
-    the value is capped at 1.0 (TKT-581 fix, diminishing returns).
+    the value is capped at 1.0 (diminishing returns).
 
     Driven through the REAL hot path: three successive
     ``SubconsciousWorker._step_pattern_match()`` ticks, each firing one
@@ -531,7 +531,7 @@ class TestReinforcementDiminishingBoost:
     (MessageProcessor → ToolDispatcher → SavePattern.run → _upsert_pattern).
     The only stubbed seam is the LLM provider (Providers._resolve); reinforcement
     strength is read back from the real ``data_graph`` SQL columns after each tick.
-    Rewritten from a direct ``_upsert_pattern()`` call per TKT-646 (the named
+    Rewritten from a direct ``_upsert_pattern()`` call (the named
     MagicMock/private-fn-bypass anti-pattern — no internal shortcut).
     """
 

@@ -79,7 +79,7 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 - One-shot migration `backend/utils/migrate_canonicalize_user_keys.py`: backfills existing `user_specific` rows to canonical keys; idempotent
 - Cosine formula: `cos = max(0.0, 1.0 - distance ** 2 / 2.0)` via `_l2_dist_to_cosine()`
 - Constants: `_CONCEPT_LUT_THRESHOLD = 0.80`, `_SYSTEM_KEY_THRESHOLD = 0.80`, `_RECALL_COSINE_FLOOR = 0.42`
-- New nightly scenarios: `096-lut-canonicalize-residence-temporal.yaml`, `097-lut-coexist-favorite-foods.yaml`, `098-job-title-temporal-supersedes.yaml`, `099-lut-miss-recorded.yaml`, `100-contradiction-classifier-removed.yaml`
+- New end-to-end coverage for LUT canonicalization (residence temporal supersession, coexisting favorite foods, job-title supersession), LUT-miss logging, and contradiction-classifier removal
 
 ### DB-Backed Context Window Management (2026-04-09)
 - Eliminated in-memory message accumulation in the LLM tool-calling loop; OOM kills in Docker containers no longer occur regardless of tool loop depth

@@ -96,9 +96,9 @@ class TestDeliberationScoreServiceBucketing:
     def test_reflexive_single_word_inputs_score_at_or_below_half(self, reflexive_input):
         """Reflexive single-word acknowledgments must score <= 0.5.
 
-        Migrated from deleted nightly scenario 013 — classifier input/output
+        Migrated from a deleted end-to-end scenario — classifier input/output
         contracts belong here as deterministic unit-style assertions, not in
-        end-to-end nightly flow tests.
+        end-to-end flow tests.
         """
         _require_encoder()
         svc = _real_svc()

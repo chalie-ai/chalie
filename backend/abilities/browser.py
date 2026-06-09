@@ -1,4 +1,4 @@
-"""BrowserAbility — drive one persistent web page with nine flat verbs (TKT-877).
+"""BrowserAbility — drive one persistent web page with nine flat verbs.
 
 The model thinks as little as possible: it names WHAT to act on by visible text
 ("Sign in", "Email") and the code resolves WHERE mechanically

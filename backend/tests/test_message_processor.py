@@ -11,9 +11,9 @@ collaborators) live here:
 
 The loop-control, transcript-row, thinking-gate, post-turn, and history-read
 orchestration that used to live here was mock-collaborator wiring; that
-behaviour is covered end-to-end by the nightly scenarios (e.g.
-123-scheduled-prompt-fires-act-loop, 111-memory-pre-act-seed,
-120-compaction-continuity-long-history, 015-multi-capability-single-turn).
+behaviour is covered end-to-end by the scenario suite (scheduled-prompt act
+loop, memory pre-act seed, compaction continuity over long history, and
+multi-capability single turn).
 """
 
 import pytest

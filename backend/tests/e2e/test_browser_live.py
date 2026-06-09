@@ -1,4 +1,4 @@
-"""LIVE e2e: the persistent-page browser against the real web (TKT-877).
+"""LIVE e2e: the persistent-page browser against the real web.
 
 The SSRF guard blocks every local/private address by design, so true-navigation
 coverage runs against example.com (IANA-reserved, stable, JS-free). Real entry

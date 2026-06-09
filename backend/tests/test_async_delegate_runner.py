@@ -13,7 +13,7 @@ the placeholder immediately (non-blocking), registers the delegate, runs the
 real ability through the shared sync-run primitive, and deregisters on
 completion. cancel() sets the cooperative cancel event, which also makes the
 ``_run`` body skip the captured-mp delivery — so the happy lifecycle is provable
-without firing the real-LLM synthesis turn (that is QA-env / nightly territory).
+without firing the real-LLM synthesis turn (that is QA-env / end-to-end-suite territory).
 """
 
 import threading

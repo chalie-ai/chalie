@@ -17,7 +17,7 @@ tool-scope spec:
    pre-injected; processor-innate abilities live solely on the owning
    processor.
  * No production code calls AbilityRegistry.all() outside an allowlist —
-   prevents the bloat regression that broke nightly run 346.
+   prevents the bloat regression that broke an end-to-end run.
 """
 
 import re
@@ -213,7 +213,7 @@ _REGISTRY_ALL_PATTERN = re.compile(r"AbilityRegistry\.all\(\)")
 def test_no_production_code_calls_ability_registry_all_outside_allowlist():
     """Static scan: AbilityRegistry.all() must only be called from allowlisted files.
 
-    The bloat regression in nightly run 346 originated from
+    The bloat regression in an end-to-end run originated from
     `NATIVE_TOOLS = sorted(a.NAME for a in AbilityRegistry.all())` in
     UserMessageProcessor.  This gate prevents the same shape from sneaking
     back into another processor.  Tests are exempt — they may need to inspect

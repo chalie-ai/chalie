@@ -3,7 +3,7 @@
 Every path must return a non-empty, actionable result: printed output on
 success, a full stack trace on failure, and explicit errors for no-output and
 no-code. A silent empty success previously caused the LLM to retry the same
-call until the ACT-loop iteration wall (nightly 052-tool-code-eval).
+call until the ACT-loop iteration wall (caught by the end-to-end scenario suite).
 """
 
 import time

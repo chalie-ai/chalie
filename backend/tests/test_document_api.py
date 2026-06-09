@@ -12,21 +12,21 @@ The end-to-end behaviour of the document endpoints (upload → process →
 list/get/content → confirm/augment → soft-delete, plus RAG search over
 ingested documents) requires the real stack — DocumentService + a real
 DataGraphService DB, the embedding pipeline, and background processing.
-That behaviour is proven by the nightly scenarios, NOT by mocking the
+That behaviour is proven by the end-to-end scenario suite, NOT by mocking the
 DB-backed services here:
 
-  * scenarios/060-document-lifecycle.yaml       — upload/confirm/augment/list/get/content/delete
-  * scenarios/062-image-upload-and-context.yaml — image upload + context recall (search)
-  * scenarios/063-pdf-upload-and-context.yaml   — pdf upload + context recall (search)
+  * the document lifecycle — upload/confirm/augment/list/get/content/delete
+  * image upload + context recall (search)
+  * pdf upload + context recall (search)
 
 The previous mock-saturated endpoint tests (patching `_get_document_service`,
 `_process_upload`, `get_data_graph_service`) asserted on patched return values
 and mock call counts — they passed even when the feature was broken, so they
-were removed in favour of the nightly scenarios above.
+were removed in favour of the end-to-end scenarios above.
 
-`TestDocumentUploadRealStack` (added per TKT-646) closes the gap that deletion
+`TestDocumentUploadRealStack` closes the gap that deletion
 left in the pre-merge `pytest -m unit` gate: the upload *happy path* was only
-exercised by the nightly scenarios, never by a deterministic in-repo test. It
+exercised by the end-to-end scenarios, never by a deterministic in-repo test. It
 drives the real POST /documents/upload route through the `authed_client`
 fixture (real Flask app + real SQLite + real MemoryStore, auth bypassed) and
 asserts the real downstream effects — the synchronous ingest persisting a
@@ -85,12 +85,12 @@ class TestDocumentsAPI:
 
 @pytest.mark.unit
 class TestDocumentUploadRealStack:
-    """Real-stack feature test for the upload happy path (TKT-646).
+    """Real-stack feature test for the upload happy path.
 
     Drives the real POST /documents/upload route end-to-end via `authed_client`
     (real Flask app, real SQLite, real MemoryStore — only the session check and
     secret are bypassed by the fixture's harness concession) and asserts every
-    downstream effect of the synchronous ingest (TKT-844): the HTTP response,
+    downstream effect of the synchronous ingest: the HTTP response,
     the persisted `documents` row, and the bytes copied into the document store
     on disk. Zero business-logic / service mocking.
     """
@@ -112,7 +112,7 @@ class TestDocumentUploadRealStack:
             )
 
             # Route returns 201 with the TERMINAL status — ingest is synchronous,
-            # so the response carries 'ready', never 'pending' (TKT-844).
+            # so the response carries 'ready', never 'pending'.
             assert resp.status_code == 201, resp.get_data(as_text=True)
             payload = resp.get_json()
             assert payload["status"] == "ready", f"expected ready, got {payload!r}"
