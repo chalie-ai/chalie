@@ -71,7 +71,7 @@ def test_allow_and_internal_run_callback(mgr, db, setting):
 
 # 1b. INTERNAL tools ALWAYS bypass — every channel, no row, even over a deny row
 @pytest.mark.parametrize("channel", [CH.CHAT, CH.SUBCONSCIOUS, CH.EXTERNAL_AGENT])
-@pytest.mark.parametrize("permission", ["read", "search", "browser.render", "memory.store", "save_graph"])
+@pytest.mark.parametrize("permission", ["read", "search", "browser.open", "memory.store", "save_graph"])
 def test_internal_tools_always_bypass(mgr, db, channel, permission):
     # a deny row for the same key must be ignored — INTERNAL wins, no DB lookup
     _seed(db, channel.value, permission, "deny")

@@ -16,6 +16,10 @@ factory — only these small shared primitives.
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def delegate_goal(params: dict) -> str:
     """Extract the delegate's goal/query from the tool params.
@@ -32,4 +36,5 @@ def render_trail(mp: object) -> str:
         trail = mp._render_act_trail()  # type: ignore[attr-defined]
         return trail or ""
     except Exception:
+        logger.warning("[DELEGATE] act-trail render failed", exc_info=True)
         return ""

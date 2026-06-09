@@ -147,5 +147,6 @@ def setup_page_security(page, dns_cache: DnsCache | None = None):
     # Block file downloads — never write to disk
     page.on("download", lambda dl: dl.cancel())
 
-    # Auto-dismiss dialogs (alert, confirm, prompt, beforeunload)
-    page.on("dialog", lambda d: d.dismiss())
+    # Dialogs are owned by tools/browser/session.PageSession, which records the
+    # message for the action diff and then dismisses. (A second dismiss here
+    # would raise on the already-handled dialog.)

@@ -438,7 +438,14 @@ def create_document_artifacts(doc_id: str, text_content: str) -> int:
     return len(artifacts)
 
 
-def ingest_file(service, src_path: str, *, name: "str | None" = None) -> dict:
+def ingest_file(
+    service,
+    src_path: str,
+    *,
+    name: "str | None" = None,
+    subdir: "str | None" = None,
+    source_type: str = "upload",
+) -> dict:
     """The single mechanical ingest for an uploaded file given by PATH.
 
     Shared by both upload surfaces — chat attachments (via ``_handle_upload`` /
@@ -451,6 +458,11 @@ def ingest_file(service, src_path: str, *, name: "str | None" = None) -> dict:
     Takes a path, never bytes, so the act-trail (which records every dispatch's
     params verbatim) can never carry a file blob and blow the context window.
     (TKT-844)
+
+    ``subdir`` nests the document under a named folder inside the documents
+    root (``<subdir>/<doc_id>/<name>``) so machine-generated files (browser
+    screenshots) never clutter the flat upload listing; ``source_type`` is
+    stored verbatim on the row (TKT-877).
 
     Returns ``{"id", "hash", "name", "size", "status"}`` on success, or
     ``{"error": <message>}`` on failure.
@@ -465,6 +477,8 @@ def ingest_file(service, src_path: str, *, name: "str | None" = None) -> dict:
     # so never trust an arbitrary basename into the store path (traversal guard).
     from services.filename_utils import safe_filename
     name = safe_filename(name or _os.path.basename(src_path)) or "unnamed_document"
+    if subdir is not None and subdir != safe_filename(subdir):
+        return {"error": f"Invalid subdir: {subdir!r}"}
     content_type = _mimetypes.guess_type(name)[0] or "application/octet-stream"
 
     try:
@@ -478,14 +492,15 @@ def ingest_file(service, src_path: str, *, name: "str | None" = None) -> dict:
         return {"error": f"Failed to read file {src_path}: {e}"}
 
     doc_id = _secrets.token_hex(4)
-    file_path_rel = f"{doc_id}/{name}"
+    rel_parts = ([subdir] if subdir else []) + [doc_id, name]
+    file_path_rel = "/".join(rel_parts)
 
     try:
         from services.file_mapper_service import FileMapperService
 
-        dir_path = FileMapperService.get_documents_path(doc_id)
+        dir_path = FileMapperService.get_documents_path(*rel_parts[:-1])
         _os.makedirs(dir_path, exist_ok=True)
-        full_path = str(FileMapperService.get_documents_path(doc_id, name))
+        full_path = str(FileMapperService.get_documents_path(*rel_parts))
         if not FileMapperService.validate_document_path(full_path):
             return {"error": f"Invalid file path for '{name}'."}
         _shutil.copyfile(src_path, full_path)
@@ -496,7 +511,7 @@ def ingest_file(service, src_path: str, *, name: "str | None" = None) -> dict:
             file_size=file_size,
             file_path=file_path_rel,
             file_hash=file_hash,
-            source_type='upload',
+            source_type=source_type,
             doc_id=doc_id,
         )
     except Exception as e:

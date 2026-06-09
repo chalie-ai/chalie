@@ -12,7 +12,7 @@ Pairs with a typed ``ProcessorConfig`` subclass (``WebBrowseConfig``, in
 ``configs/channels/web_browse.py`` with the other channel configs).  Spec §5b /
 §10f.  Replaces the browsing role the former ``web_surfer`` subagent performed,
 scoped down to a clean-context agent that drives the raw ``browser`` tool
-(render / screenshot / interact / monitor) and reads what it finds.
+(open / read / find / click / fill / select / scroll / back / screenshot) and reads what it finds.
 
 Named ``web_browse`` (not ``browser``) to avoid a flat-registry collision with
 the raw ``browser`` ability — its tool *surface* still uses the raw ``browser``
@@ -79,4 +79,9 @@ class WebBrowseAbility(Ability):
             delegate_goal(params),
             WebBrowseConfig(self.mp.config.policy_channel),
         )
-        return {"status": "success", "result": result}
+        return {"status": "success", "result": self._final_text(result)}
+
+    @staticmethod
+    def _final_text(result: str) -> str:
+        """Cap-hit (_loop returns '') must surface as words, never silence."""
+        return result or "Stopped: iteration budget exhausted before an answer."

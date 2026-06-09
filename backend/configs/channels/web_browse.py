@@ -8,74 +8,85 @@
 
 """WebBrowseConfig — the delegate channel for the ``web_browse`` tool.
 
-The typed ``ProcessorConfig`` for the interactive web-browsing delegate (spec
-§5b / §10f). Paired with ``WebBrowseAbility`` in ``abilities/web_browse.py``,
-whose ``run()`` instantiates this config and calls ``MessageProcessor.process()``.
-
-Drives the raw ``browser`` tool (render / screenshot / interact / monitor) plus
-``read`` in a clean *cross-turn* context (``suppress_history=True``). It writes a
-real per-turn transcript row on its own ``delegate:web_browse`` channel so the
-turn uid is assigned and the delegate can render its own act-trail across ACT
-iterations — without it the loop re-browses blind to its own results until the
-iteration cap (TKT-881). ``policy_channel`` is inherited from the caller that
-invoked the tool; the user-facing permission check happens at the outer
-``web_browse`` tool.
+Paired with ``WebBrowseAbility`` (abilities/web_browse.py). Drives the rebuilt
+9-verb ``browser`` tool plus ``read``, ``vision`` and ``memory`` in a clean
+cross-turn context. It writes a real per-turn transcript row on its own
+``delegate:web_browse`` channel so the turn uid is assigned and the delegate
+renders its own act-trail across ACT iterations (TKT-881 — do NOT set the two
+skip flags True). That same uid keys the per-run browser PageSession and the
+screenshot ledger; the post-turn hook closes both when the run ends (TKT-877).
 """
 
 from __future__ import annotations
 
 from abilities._delegate import render_trail
+from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
+from tools.browser.session import close_session, screenshot_ledger
 
 _WEB_BROWSE_SYSTEM_PROMPT = (
-    "You are a focused web-browsing agent. You receive a single goal and pursue "
-    "it by driving a real browser: render JavaScript-heavy pages, take "
-    "screenshots, fill forms, click buttons, navigate multi-step flows, and "
-    "read what you find.\n\n"
-    "Work step by step: open the page, observe its actual state, act, then "
-    "re-observe before acting again. Ground every claim in what the page "
-    "actually shows — do not invent content, URLs, or results. If the goal "
-    "cannot be completed in the browser, say so plainly and explain why.\n\n"
-    "Return a clear answer that directly addresses the goal, citing the pages "
-    "you actually visited. You have no conversation history and no user "
-    "personality — work only from the goal you were given."
+    "You are a web-browsing agent with one goal, given below. You drive a real "
+    "browser through the `browser` tool: open a page, read or search it, click "
+    "and fill what you need by visible text, then read the result. Every call "
+    "returns JSON describing the page and what changed — trust it over your "
+    "assumptions, and never invent content, URLs, or results.\n\n"
+    "Screenshots are saved as documents; use the `vision` tool with the "
+    "returned doc_id to see one. Use `memory` to recall user preferences when "
+    "the task needs them. If a page demands a login or CAPTCHA, report that "
+    "plainly instead of trying to get past it.\n\n"
+    "STOP RULE: the moment you can answer the goal — or know you cannot — stop "
+    "calling tools and give your final answer, citing the pages you actually "
+    "visited."
 )
 
-_WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read")
+_WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read", "vision")
+
+
+class _CloseBrowserSession(PostTurnHook):
+    """End-of-run cleanup: close the delegate's browser tab + screenshot ledger."""
+
+    def run(self, mp, result_text: str) -> None:  # noqa: ARG002 — hook signature
+        uid = getattr(mp, "uid", None)
+        if uid:
+            close_session(uid)
 
 
 class WebBrowseConfig(ProcessorConfig):
-    """ProcessorConfig for the web_browse delegate.
-
-    Mirrors the TKT-803 ProcessorConfig subclasses: a typed ``__init__`` that
-    calls ``super().__init__(...)`` against the frozen base.  ``policy_channel``
-    is supplied by the caller (inherited from whoever invoked the tool) rather
-    than hardcoded.
-    """
+    """ProcessorConfig for the web_browse delegate. ``policy_channel`` is
+    inherited from the caller that invoked the tool; the user-facing permission
+    check happens at the outer ``web_browse`` tool."""
 
     def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
-        tools = list(_WEB_BROWSE_TOOLS)
         super().__init__(
             channel="delegate:web_browse",
             role="web_browse",
             policy_channel=policy_channel,
-            always_available=[*tools, "memory"],
+            always_available=[*_WEB_BROWSE_TOOLS, "memory"],
             discoverable=[],
             blocked=frozenset(),
-            max_iterations=50,
-            skip_transcript=False,  # write a delegate-channel transcript row so
-            skip_input_row=False,   # _setup assigns the uid the act-trail needs
+            max_iterations=200,
+            skip_transcript=False,  # TKT-881: uid + own transcript row, or the
+            skip_input_row=False,   # act-trail dies and the loop runs blind
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
+            post_turn_hooks=(_CloseBrowserSession(),),
         )
 
     def get_user_definition(self, mp) -> str:
         return ""
 
     def get_user_prompt(self, mp) -> str:
-        """Goal-driven user prompt: the goal plus the act-trail so far."""
+        """Goal + mechanical screenshot ledger + act-trail.
+
+        The ledger line is rebuilt from session state on EVERY iteration, so a
+        mid-run act-trail compaction can never lose a screenshot doc_id (the
+        compactor handover is LLM-written and probabilistic; this is not)."""
         parts = [f"Browsing goal:\n{mp._raw_input}"]  # type: ignore[attr-defined]
+        shots = screenshot_ledger(getattr(mp, "uid", None) or 0)
+        if shots:
+            lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
+            parts.append(f"Screenshots captured this run (view with the vision tool):\n{lines}")
         trail = render_trail(mp)
         if trail:
             parts.append(trail)

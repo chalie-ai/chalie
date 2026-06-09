@@ -548,36 +548,6 @@ CREATE TABLE IF NOT EXISTS transcript_docs (
 );
 
 -- ────────────────────────────────────────────────────────────────
--- BROWSER SNAPSHOTS — page monitoring change detection
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS browser_snapshots (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id   INTEGER NOT NULL,
-    snapshot_key TEXT NOT NULL,
-    url          TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    content_text TEXT NOT NULL,
-    captured_at  TEXT NOT NULL,
-    UNIQUE(account_id, snapshot_key)
-);
-
--- ────────────────────────────────────────────────────────────────
--- BROWSER CREDENTIALS — encrypted credential vault
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS browser_credentials (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    account_id      INTEGER NOT NULL,
-    domain          TEXT NOT NULL,
-    label           TEXT NOT NULL,
-    credential_type TEXT NOT NULL,
-    encrypted_data  TEXT NOT NULL,
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL,
-    last_used_at    TEXT,
-    UNIQUE(account_id, domain, label)
-);
-
--- ────────────────────────────────────────────────────────────────
 -- DATA GRAPH — research-informed knowledge graph (replaces knowledge)
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS data_graph (

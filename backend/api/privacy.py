@@ -5,7 +5,7 @@ User data tables covered: episodes, transcript, tool_calls,
 list_items, data_graph_edges, data_graph,
 lists, scheduled_items, documents, watched_folders,
 user_tool_preferences, memory_recall_log, llm_call_log,
-concept_lut_misses, browser_snapshots, browser_credentials.
+concept_lut_misses.
 """
 
 import json
@@ -41,8 +41,6 @@ _DELETE_ALL_TABLES = (
     "memory_recall_log",
     "llm_call_log",
     "concept_lut_misses",
-    "browser_snapshots",
-    "browser_credentials",
 )
 
 # MemoryStore key patterns that belong to the user and must be cleared.
@@ -252,8 +250,7 @@ def delete_all():
     Wipes every user-owned table (episodes, transcript, tool_calls,
     list_items, data_graph_edges, data_graph, lists, scheduled_items,
     documents, watched_folders, user_tool_preferences, memory_recall_log,
-    llm_call_log, concept_lut_misses, browser_snapshots,
-    browser_credentials) and clears MemoryStore working_memory keys.
+    llm_call_log, concept_lut_misses) and clears MemoryStore working_memory keys.
 
     System / auth / config tables are deliberately excluded.
     """
