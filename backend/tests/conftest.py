@@ -13,25 +13,17 @@ from unittest.mock import patch
 import pytest
 
 
-# ── Pre-import modules that bind get_shared_db_service at module level ────────
-# `services.dmn_service` does `from services.database_service import
-# get_shared_db_service` at import time. If the very first import of
-# `services.dmn_service` happens INSIDE a `patch('services.database_service
-# .get_shared_db_service', ...)` block (e.g. tests that mock the DB before
-# referencing dmn_service), the local reference inside dmn_service binds
-# permanently to the MagicMock and never recovers — polluting every later
-# test that touches DMNService.
-#
-# Pre-importing here forces the binding to happen against the real function
-# before any test patches can interfere.
-def _preload_db_bound_modules():
-    try:
-        import services.dmn_service  # noqa: F401
-    except Exception:
-        pass  # If something fails to import in this env, individual tests will surface it.
-
-
-_preload_db_bound_modules()
+# ── NOTE: get_shared_db_service import-time-binding hazard ────────────────────
+# Modules that do `from services.database_service import get_shared_db_service`
+# at module scope copy the function reference at import time. If such a module's
+# FIRST import happens inside a `patch('services.database_service
+# .get_shared_db_service', ...)` block, its local name binds permanently to the
+# MagicMock and never recovers — polluting every later test. The `db` fixture
+# below is immune: it rebinds the `_shared_db_service` singleton (not the
+# function). But if a test `patch()`es the function directly, also patch the
+# CONSUMING module's own reference — see test_policies_api.py (mcp_client_service).
+# A blanket pre-load guard used to live here; it rotted (pointed at the deleted
+# `services.dmn_service`) and was removed (TKT-645).
 
 
 # ── Real-SQLite fixtures ──────────────────────────────────────────
