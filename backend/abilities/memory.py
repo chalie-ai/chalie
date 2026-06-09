@@ -129,7 +129,10 @@ class MemoryAbility(Ability):
     SYSTEM = True
 
     RECALL_RADIUS_BASELINE: ClassVar[float] = 0.5
-    SEED_RADIUS_BASELINE: ClassVar[float] = 0.4
+    # Turn-0 auto-seed recall (caller="seed"). 0.35 = RECALL_RADIUS_BASELINE − 30%
+    # so the background seed retrieves a tighter, higher-precision set than an
+    # explicit model-invoked recall, which stays at 0.5. (TKT-878)
+    SEED_RADIUS_BASELINE: ClassVar[float] = 0.35
 
     NARROW_MIN_DIST: ClassVar[float] = 0.25
     NARROW_MAX_DIST: ClassVar[float] = 0.05
@@ -309,12 +312,28 @@ def _format_forget_response(result: dict) -> str:
 
 # ── Recall ───────────────────────────────────────────────────────────
 
+# Guardrail appended to every explicit (model-invoked) recall so the model
+# falls back to the document/schedule stores ON ITS OWN JUDGEMENT rather than
+# memory.recall silently dispatching those searches behind its back. The
+# turn-0 auto-seed recall (_auto=True) stays silent — no hint, no fan-out.
+# Tool names are exact: `document` and `schedule`, each with action="search".
+# (TKT-878)
+_RECALL_FALLBACK_HINT = (
+    "If you cannot find the information in memory, try using the "
+    "`document` (action: search) or `schedule` (action: search) tools."
+)
+
 
 def _handle_recall(mp, channel: str, params: dict) -> str:
     query = params.get("query", "")
     location = params.get("location", "")
     if not query and not location:
         return _tag("memory", action="recall", error="no-query-or-location")
+
+    # The turn-0 background seed (_auto=True) retrieves at the tighter
+    # SEED_RADIUS_BASELINE; an explicit model-invoked recall uses the wider
+    # RECALL_RADIUS_BASELINE. (TKT-878)
+    caller = "seed" if params.get("_auto") else "llm_recall"
 
     limit = 10
     results: List[Dict] = []
@@ -325,7 +344,7 @@ def _handle_recall(mp, channel: str, params: dict) -> str:
         loc_ids = {h["id"] for h in loc_hits}
         loc_by_id = {h["id"]: h for h in loc_hits}
 
-        sem_hits, _ = _search_episodes(mp, channel, query, limit * 3)
+        sem_hits, _ = _search_episodes(mp, channel, query, limit * 3, caller=caller)
         sem_ids = {h["id"] for h in sem_hits}
         sem_by_id = {h["id"]: h for h in sem_hits}
 
@@ -348,28 +367,21 @@ def _handle_recall(mp, channel: str, params: dict) -> str:
         hits, _ = _search_data_graph(query, limit)
         results.extend(hits)
 
-        hits, _ = _search_episodes(mp, channel, query, limit)
+        hits, _ = _search_episodes(mp, channel, query, limit, caller=caller)
         results.extend(hits)
-
-    if not params.get('_auto'):
-        try:
-            proc = mp
-            if proc is not None and proc._uid is not None:
-                if query:
-                    from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-                    dispatcher = ToolDispatcher(proc)
-                    dispatcher.dispatch('document', {'action': 'search', 'query': query})
-                    dispatcher.dispatch('schedule', {'action': 'search', 'query': query})
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} recall delegation failed: {exc}")
 
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
     _store_fok_signal(channel, partial)
 
+    # Explicit recalls carry the fallback guardrail; the silent seed does not.
+    hint = "" if caller == "seed" else _RECALL_FALLBACK_HINT
+
     if not results:
-        return _tag("memory", query=query or location, results=0)
+        return _tag("memory", hint, query=query or location, results=0)
 
     body = _format_results(results)
+    if hint:
+        body = f"{body}\n{hint}"
     return _tag("memory", body, query=query or location, results=len(results))
 
 
@@ -881,13 +893,13 @@ def recall_episodes(
 
 
 def _search_episodes(
-    mp, channel: str, query: str, limit: int
+    mp, channel: str, query: str, limit: int, caller: str = "llm_recall"
 ) -> Tuple[List[Dict], str]:
     return recall_episodes(
         mp,
         channel=channel,
         query=query,
-        caller="llm_recall",
+        caller=caller,
         limit=limit,
     )
 

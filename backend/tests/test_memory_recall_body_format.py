@@ -73,21 +73,27 @@ class TestMemoryRecallBodyFormat:
         # The stored value must appear in the body
         assert 'Valletta' in body, f"Stored value 'Valletta' missing from body: {body!r}"
 
-    def test_recall_no_results_has_results_zero_arg(self, db):
-        """Empty recall produces [memory(query=..., results=0)]\\n[end:memory].
+    def test_recall_no_results_carries_fallback_guardrail(self, db):
+        """Empty EXPLICIT recall is [memory(...results=0)] + the fallback hint.
 
-        Verifies the 'No memories found' semantic is now expressed as a tag
-        arg rather than a body string, keeping the wire format consistent.
+        The 'No memories found' semantic stays a tag arg (results=0), and an
+        explicit (model-invoked) recall now also carries the guardrail body line
+        steering the model to the document/schedule stores ON ITS OWN judgement
+        instead of memory.recall silently fanning out to them. (TKT-878)
         """
         result = _handle_memory('topic', {'action': 'recall', 'query': 'xyzzy_nonexistent_key_abc'})
 
         assert '[memory(' in result
         assert '[end:memory]' in result
         assert 'results=0' in result
-        # No body between the markers (empty recall has no body line)
+        # The guardrail hint is the body, naming the exact fallback tools.
+        assert 'If you cannot find the information in memory' in result
+        assert '`document` (action: search)' in result
+        assert '`schedule` (action: search)' in result
+        # Opener + single hint line + terminator.
         lines = result.split('\n')
-        assert len(lines) == 2, (
-            f"Expected exactly 2 lines for empty recall, got {len(lines)}: {result!r}"
+        assert len(lines) == 3, (
+            f"Expected exactly 3 lines for empty explicit recall, got {len(lines)}: {result!r}"
         )
 
     def test_recall_body_key_matches_stored_key(self, db):
