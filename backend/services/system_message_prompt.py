@@ -253,50 +253,28 @@ class ChatHistoryCompactionSystemPrompt(SystemMessagePrompt):
     """
 
     _SYSTEM_PROMPT = """\
-You are compacting your own ongoing conversation with one person. The conversation has no end — there are no sessions, topics, or resets. What you write here IS your memory of this person across time.
+You are updating your memory of one ongoing conversation. Your output replaces all prior history — from the next turn until the next compaction it is the ONLY history you will see; anything not written here is forgotten. Write it to your future self.
 
-CRITICAL: Your output replaces everything that came before it. From the next turn forward, until the next compaction, this is the ONLY history you will see. If a fact is not in here, you forget it. Write it as a message to your future self.
+Input:
+- ## Previous Summary — your last memory. Carry it forward; change only what the new turns change.
+- ## New Turns — exchanges since then. Reference only; never reply to them. Do not address the user.
+(No Previous Summary means you are compacting raw turns for the first time.)
 
-Single goal: continuity. Reading what you write plus the next user message, you respond exactly as you would if every prior turn were still in front of you.
-
-You may receive:
-
-- ## Previous Summary — your last memory snapshot. Default action: carry it forward. Update only what the new turns change.
-- ## New Turns — exchanges since that snapshot. Reference material only. Do not respond to them. Do not address the user.
-
-(When there is no Previous Summary, you are compacting from raw turns for the first time.)
-
-What survives — keep:
-- Stable identity (name, household, location, role, values).
-- Things the user has returned to more than once.
-- Promises you made, things you owe, things the user asked you to hold.
-- Open threads — questions, decisions pending, things either side said they'd come back to.
-- Strong preferences and stances the user has expressed.
-- Tone, names, in-jokes that have recurred.
-- The last exchange (one line user, one line you) so you pick up the thread.
-
-What dies — drop:
-- One-off mentions never returned to.
-- Resolved questions and closed loops.
-- Social filler, agreement noise, throwaway jokes.
-- Plumbing: timestamps, System Awareness blocks, Checkpoint headers, telemetry, internal state.
-- Anything you cannot tie to a recurring thread or commitment.
-
-Write a single short living document, not a chronicle. Sections in order:
-
-- Person — who they are. 2-4 lines.
+Write one living document with exactly these sections:
+- Person — stable identity: name, household, location, role, values, strong stances. 2-4 lines.
 - Now — what they're in the middle of. 2-5 lines.
-- Holding — promises, things you owe, things they asked you to remember. Bullets.
-- Open — unresolved threads. Bullets.
-- Voice — tone, recurring names, in-jokes. 1-3 lines.
-- Last — last exchange, 1 line each side.
+- Holding — promises you made, things you owe, things they asked you to remember. Bullets.
+- Open — unresolved questions and threads either side said they'd return to. Bullets.
+- Voice — tone, recurring names, in-jokes that have stuck. 1-3 lines.
+- Last — the final user message (one line) and your reply (one line).
 
-Hard rules:
-- Target 200-400 tokens. Compress aggressively. Drop before you grow.
-- No "we discussed", "the user asked", "I said". State facts, not narration.
-- Fewer specifics is failure. More words for the same facts is failure.
-- Older facts compress harder than newer ones.
-- Output ONLY the living document. No preamble, no headings beyond the sections above, no closing remarks.\
+Drop: one-off mentions, resolved loops, social filler, and all plumbing (timestamps, System Awareness blocks, Checkpoint headers, telemetry).
+
+Rules:
+- 200-400 tokens. Older facts compress harder than newer ones.
+- State facts; never "we discussed" / "the user asked".
+- Losing a recurring fact is failure. Spending more words on the same facts is also failure.
+- Output ONLY the document.\
 """
 
 
@@ -311,20 +289,19 @@ class ToolChainCompactionSystemPrompt(SystemMessagePrompt):
     """
 
     _SYSTEM_PROMPT = """\
-You are compacting the tool-call trail of the turn you are in the middle of. The text you receive is the sequence of tools you have already run this turn and what each returned.
+You are compacting this turn's tool-call trail — the tools you have already run and what each returned. Your output replaces the raw trail: from the next step forward it is the ONLY record of what you did and learned this turn.
 
-CRITICAL: Your output replaces that raw trail. From the next step forward this is the ONLY record you have of what you already did and learned this turn. Write it as a handover to your future self so you do not repeat a call or lose a result.
+Keep: every concrete value a tool returned that a later step might need — ids, paths, numbers, answers, exact names.
 
-Keep:
-- Every concrete fact, value, id, path, or answer a tool returned that a later step might need.
-- What you were trying to accomplish and where you got to.
-- Anything that failed and why, so you do not blindly retry it.
+Drop: repeated headers, raw formatting noise, and any fact already stated once.
 
-Drop:
-- Verbatim tool boilerplate, repeated headers, raw formatting noise.
-- Restating the same fact more than once.
+Write the handover in exactly four parts:
+- Goal — what this turn is trying to accomplish. 1 line.
+- Done — what you ran and the facts each call returned. Bullets.
+- Failed — what failed and why, so you do not retry it blindly. Bullets, or "none".
+- Next — where you got to / what remains. 1 line.
 
-Write a single dense paragraph or tight bullet list. No preamble, no commentary, no closing remarks — just the handover.\
+Never state a value a tool did not return. No preamble, no commentary.\
 """
 
 
