@@ -3,10 +3,26 @@ ScheduleAbility — Native innate skill for reminders and scheduled tasks.
 
 Backed by SQLite (scheduled_items table). Provides create, list, search, and cancel actions.
 All DB access via get_shared_db_service() (lazy import inside function).
+
+``due_at`` accepts natural language ("tomorrow 9am", "in 2 hours") OR ISO 8601.
+Natural language is resolved in the user's timezone (read from the telemetry
+heartbeat via ``locale_service``) — the highest-reasoning-load field in the
+fleet no longer demands a hand-authored UTC offset. The resolved instant is
+echoed back in the success body (``due_at_utc`` / ``due_at_local``) so the model
+can confirm to the user; an unparseable string returns ``code=invalid-time``
+with example forms — NEVER a guessed time and NEVER the ``parse_utc``
+``datetime.min`` sentinel.
+
+Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
+rich scheduler card travels via ``ToolResult(rich=…)``; the dispatcher owns the
+ordinal + the single span instruction and injects the card only when the
+invoking channel broadcasts to the user. This ability never formats a wire
+envelope.
 """
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import ClassVar
@@ -21,12 +37,9 @@ LOG_PREFIX = "[SCHEDULER SKILL]"
 # ISO 8601 with offset, used by TimeFormatterService.local() to render due_at in the user's timezone.
 _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
 
-_RICH_MEDIA_INSTRUCTION = (
-    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "The span will render as a scheduler card; without it, the user sees only "
-    "plain text. Write a brief confirmation. Example: "
-    "\"<span id='{tag}'>Done — 30 min with Mira on Thursday at 14:30.</span>\""
-)
+# Example due_at forms surfaced in the invalid-time hint so a weak model can
+# self-correct without re-reading the schema.
+_DUE_AT_EXAMPLES = "'tomorrow 9am', 'in 2 hours', 'friday 5pm', or ISO 8601 like '2026-03-20T09:00:00+02:00'"
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +113,23 @@ def query_items(
     return [dict(zip(columns, row)) for row in rows]
 
 
+_ACTIONS = ("create", "list", "search", "cancel")
+
+
 class ScheduleAbility(Ability):
+    # Pre-gated by the dispatcher BEFORE run(): create requires a 'message';
+    # search requires a 'query'; list/cancel require nothing at this layer
+    # (cancel needs item_id OR message — an either/or the map cannot express, so
+    # run() validates it). An unknown action → one unknown-action error whose
+    # valid= names these keys; a known action missing a required param → one
+    # missing-params error. run() never sees a malformed call.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
+        "create": ("message",),
+        "list": (),
+        "search": ("query",),
+        "cancel": (),
+    }
+
     def get_name(self) -> str:
         return "schedule"
 
@@ -154,9 +183,12 @@ class ScheduleAbility(Ability):
                 "description": (
                     "Required for create UNLESS destination_location is provided "
                     "(location-triggered reminders do not need a time). "
-                    "ISO 8601 timestamp with timezone offset "
-                    "(e.g. '2026-03-20T09:00:00+02:00'). Use the user's timezone offset. "
-                    "Must be in the future. If off by a few seconds, the scheduler will auto-correct."
+                    "Natural language is accepted and resolved in the user's "
+                    "timezone (e.g. 'tomorrow 9am', 'in 2 hours', 'friday 5pm', "
+                    "'today at 5pm'), OR an ISO 8601 timestamp "
+                    "(e.g. '2026-03-20T09:00:00+02:00'). You do NOT need to compute "
+                    "the user's UTC offset — pass the time as the user said it. "
+                    "Must resolve to a future instant."
                 ),
             },
             "item_type": {
@@ -207,6 +239,13 @@ class ScheduleAbility(Ability):
                     "Required for search: semantic query to find matching scheduled items."
                 ),
             },
+            "limit": {
+                "type": "integer",
+                "description": (
+                    "Optional for search: maximum number of matching items to "
+                    "return (default 5, clamped to 1–50)."
+                ),
+            },
             "destination_location": {
                 "type": "string",
                 "description": (
@@ -227,27 +266,26 @@ class ScheduleAbility(Ability):
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
     def run(self, params: dict) -> ToolResult:
-        action = params.get("action", "list").lower()
-        ordinal = params.get("_rich_media_ordinal")
+        action = (params.get("action") or "list").lower()
 
         if action == "create":
             channel = getattr(getattr(self.mp, "config", None), "channel", "") or ""
-            result = _create(channel, params, self._PAST_DUE_GRACE_SECONDS)
-        elif action == "list":
-            result = _list(params)
-        elif action == "search":
-            result = _search(params, self.mp)
-        elif action == "cancel":
-            result = _cancel(params)
-        else:
-            result = {"status": "error", "error": f"Unknown scheduler action: {action}"}
+            return _create(channel, params, self._PAST_DUE_GRACE_SECONDS)
+        if action == "list":
+            return _list(params)
+        if action == "search":
+            return _search(self, params, self.mp)
+        if action == "cancel":
+            return _cancel(params)
 
-        if ordinal is not None and action == "create" and result.get("status") == "success":
-            same_day = _fetch_same_day_items(result.get("record", {}))
-            return ToolResult.ok(_serialise_rich(result, action, ordinal, same_day), action=action)
-
-        body = json.dumps(result)
-        return ToolResult.ok(body, action=action)
+        # Unreachable in practice (ACTION_REQUIRED pre-gates unknown actions);
+        # kept as a self-correcting belt-and-braces error.
+        return ToolResult.err(
+            f"Unknown scheduler action: {action}",
+            code="unknown-action",
+            hint="choose one of the valid actions below.",
+            valid=_ACTIONS,
+        )
 
 
 
@@ -288,29 +326,89 @@ def _build_destination_metadata(destination: str) -> dict:
     return meta
 
 
-def _validate_message(params: dict) -> tuple[str, dict | None]:
-    """Validate the `message` field. Returns (message, error_response | None)."""
-    message = params.get("message", "").strip()
+def _validate_message(params: dict) -> tuple[str, ToolResult | None]:
+    """Validate the `message` field. Returns (message, error | None)."""
+    message = (params.get("message") or "").strip()
     if not message:
-        return "", {"status": "error", "error": "message is required"}
+        return "", ToolResult.err(
+            "message is required for create.",
+            code="missing-message",
+            hint="pass the reminder text in 'message'.",
+        )
     if len(message) > 1000:
-        return "", {"status": "error", "error": "message exceeds 1000 characters"}
+        return "", ToolResult.err(
+            "message exceeds 1000 characters.",
+            code="message-too-long",
+            hint="shorten the reminder text to 1000 characters or fewer.",
+        )
     return message, None
 
 
-def _resolve_due_at(params: dict, past_due_grace: int):
-    """Parse due_at, apply grace if past, return (due_at, error_response | None)."""
-    due_at_str = params.get("due_at", "").strip()
-    if not due_at_str:
-        if params.get("destination_location", "").strip():
-            return utc_now() + timedelta(days=30), None
-        return None, {"status": "error", "error": "due_at (ISO 8601 with timezone) is required"}
+def _parse_due_at(due_at_str: str) -> datetime | None:
+    """Resolve a natural-language OR ISO 8601 ``due_at`` to a UTC datetime.
 
-    from services.time_utils import parse_utc
-    sentinel = datetime.min.replace(tzinfo=timezone.utc)
-    due_at = parse_utc(due_at_str)
-    if due_at == sentinel:
-        return None, {"status": "error", "error": f"invalid ISO 8601 due_at: '{due_at_str}'"}
+    Natural language ("tomorrow 9am", "in 2 hours", "friday 5pm") is resolved in
+    the user's timezone (read from the telemetry heartbeat via ``locale_service``)
+    so the model never has to compute a UTC offset. ISO 8601 with an offset is
+    parsed too. Returns a tz-aware UTC ``datetime`` on success, or ``None`` when
+    the string is unparseable — the caller maps ``None`` to ``code=invalid-time``
+    and NEVER persists the ``parse_utc`` ``datetime.min`` sentinel.
+    """
+    import dateparser
+    from services.locale_service import get_timezone_name, local_now
+
+    tz_name = get_timezone_name()
+    base_local = local_now()
+    parsed = dateparser.parse(
+        _normalise_due_at(due_at_str),
+        settings={
+            "TIMEZONE": tz_name,
+            "TO_TIMEZONE": "UTC",
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "RELATIVE_BASE": base_local,
+            "PREFER_DATES_FROM": "future",
+        },
+    )
+    if parsed is None:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+# Weekday tokens dateparser handles when bare but chokes on with a leading
+# 'next/this/coming/on' qualifier — we strip the qualifier (dateparser already
+# rolls a bare weekday forward) and drop the connective 'at' before a clock time.
+_WEEKDAY = r"(?:mon|tue|wed|thu|fri|sat|sun)"
+_QUALIFIED_WEEKDAY_RE = re.compile(rf"\b(?:next|this|coming|on)\s+({_WEEKDAY}[a-z]*)", re.IGNORECASE)
+_AT_TIME_RE = re.compile(r"\bat\s+(?=\d|noon\b|midnight\b)", re.IGNORECASE)
+
+
+def _normalise_due_at(text: str) -> str:
+    """Light pre-normalisation so common phrasings dateparser otherwise misses
+    ('next monday at 8am', 'this friday at 5pm') resolve cleanly."""
+    text = _QUALIFIED_WEEKDAY_RE.sub(r"\1", text)
+    text = _AT_TIME_RE.sub("", text)
+    return text.strip()
+
+
+def _resolve_due_at(params: dict, past_due_grace: int) -> tuple[datetime | None, ToolResult | None]:
+    """Resolve due_at (NL or ISO), apply past-due grace, return (due_at, error | None)."""
+    due_at_str = (params.get("due_at") or "").strip()
+    if not due_at_str:
+        if (params.get("destination_location") or "").strip():
+            return utc_now() + timedelta(days=30), None
+        return None, ToolResult.err(
+            "due_at is required for create (unless a destination_location is given).",
+            code="invalid-time",
+            hint=f"pass a time like {_DUE_AT_EXAMPLES}.",
+        )
+
+    due_at = _parse_due_at(due_at_str)
+    if due_at is None:
+        return None, ToolResult.err(
+            f"Could not understand the time {due_at_str!r}.",
+            code="invalid-time",
+            hint=f"pass a time like {_DUE_AT_EXAMPLES}.",
+        )
 
     now = utc_now()
     if due_at > now:
@@ -325,15 +423,19 @@ def _resolve_due_at(params: dict, past_due_grace: int):
 
     from services.time_formatter_service import TimeFormatterService
     logger.warning(f"{LOG_PREFIX} _create rejected — due_at {due_at.isoformat()} is not in the future (now={now.isoformat()})")
-    local_now = TimeFormatterService.local(now, fmt=_LOCAL_ISO_FMT) or now.isoformat()
-    return None, {"status": "error", "error": f"due_at must be in the future (current time: {local_now})"}
+    local_now_str = TimeFormatterService.local(now, fmt=_LOCAL_ISO_FMT) or now.isoformat()
+    return None, ToolResult.err(
+        f"due_at resolved to a past time (current time: {local_now_str}).",
+        code="due-in-past",
+        hint="pass a future time, e.g. 'tomorrow 9am' or 'in 2 hours'.",
+    )
 
 
 _VALID_RECURRENCES = ("daily", "weekly", "monthly", "weekdays", "hourly")
 
 
-def _validate_recurrence(params: dict) -> tuple[str | None, dict | None]:
-    """Validate `recurrence`. Returns (normalized_recurrence | None, error_response | None)."""
+def _validate_recurrence(params: dict) -> tuple[str | None, ToolResult | None]:
+    """Validate `recurrence`. Returns (normalized_recurrence | None, error | None)."""
     recurrence = params.get("recurrence")
     if not recurrence:
         return None, None
@@ -344,14 +446,29 @@ def _validate_recurrence(params: dict) -> tuple[str | None, dict | None]:
         try:
             mins = int(recurrence.split(":", 1)[1])
         except (ValueError, IndexError):
-            return None, {"status": "error", "error": "interval recurrence must be 'interval:N' where N is 1–1440"}
+            return None, ToolResult.err(
+                "interval recurrence must be 'interval:N' where N is 1–1440.",
+                code="invalid-recurrence",
+                hint="use e.g. 'interval:30' for every 30 minutes.",
+                valid=(*_VALID_RECURRENCES, "interval:N"),
+            )
         if not (1 <= mins <= 1440):
-            return None, {"status": "error", "error": f"interval minutes must be 1–1440, got {mins}"}
+            return None, ToolResult.err(
+                f"interval minutes must be 1–1440, got {mins}.",
+                code="invalid-recurrence",
+                hint="use an interval between 1 and 1440 minutes.",
+                valid=(*_VALID_RECURRENCES, "interval:N"),
+            )
         return f"interval:{mins}", None
-    return None, {"status": "error", "error": f"recurrence must be one of {_VALID_RECURRENCES} or 'interval:N', got {recurrence}"}
+    return None, ToolResult.err(
+        f"Unknown recurrence {recurrence!r}.",
+        code="invalid-recurrence",
+        hint="omit for one-time, or use one of the valid keywords below.",
+        valid=(*_VALID_RECURRENCES, "interval:N"),
+    )
 
 
-def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None, str | None, dict | None]:
+def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None, str | None, ToolResult | None]:
     """Validate window_start/window_end pairing with hourly recurrence."""
     window_start = params.get("window_start")
     window_end = params.get("window_end")
@@ -359,29 +476,63 @@ def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None,
     if not (window_start or window_end):
         return None, None, None
     if recurrence != "hourly":
-        return None, None, {"status": "error", "error": "window_start/window_end only valid with recurrence='hourly'"}
+        return None, None, ToolResult.err(
+            "window_start/window_end are only valid with recurrence='hourly'.",
+            code="invalid-window",
+            hint="set recurrence='hourly' to use an active window, or drop the window params.",
+        )
     if not (window_start and window_end):
-        return None, None, {"status": "error", "error": "both window_start and window_end required if using hourly windows"}
+        return None, None, ToolResult.err(
+            "both window_start and window_end are required for an hourly window.",
+            code="invalid-window",
+            hint="pass both, e.g. window_start='09:00' and window_end='17:00'.",
+        )
     window_start = _normalize_hhmm(window_start)
     if not window_start:
-        return None, None, {"status": "error", "error": "window_start must be HH:MM format (e.g., '09:00')"}
+        return None, None, ToolResult.err(
+            "window_start must be HH:MM (e.g. '09:00').",
+            code="invalid-window",
+            hint="pass a 24-hour time like '09:00'.",
+        )
     window_end = _normalize_hhmm(window_end)
     if not window_end:
-        return None, None, {"status": "error", "error": "window_end must be HH:MM format (e.g., '17:00')"}
+        return None, None, ToolResult.err(
+            "window_end must be HH:MM (e.g. '17:00').",
+            code="invalid-window",
+            hint="pass a 24-hour time like '17:00'.",
+        )
     if window_start >= window_end:
-        return None, None, {"status": "error", "error": "window_start must be before window_end"}
+        return None, None, ToolResult.err(
+            "window_start must be before window_end.",
+            code="invalid-window",
+            hint="set window_start earlier than window_end.",
+        )
     return window_start, window_end, None
 
 
-def _validate_item_type(params: dict) -> tuple[str, dict | None]:
+def _validate_item_type(params: dict) -> tuple[str, ToolResult | None]:
     """Validate the `item_type` field."""
-    item_type = params.get("item_type", "notification").lower()
+    item_type = (params.get("item_type") or "notification").lower()
     if item_type not in ("notification", "prompt"):
-        return "", {"status": "error", "error": f"item_type must be 'notification' or 'prompt', got {item_type}"}
+        return "", ToolResult.err(
+            f"item_type must be 'notification' or 'prompt', got {item_type!r}.",
+            code="invalid-item-type",
+            hint="use 'notification' (shown as-is) or 'prompt' (fed back to Chalie).",
+            valid=("notification", "prompt"),
+        )
     return item_type, None
 
 
-def _create(channel: str, params: dict, past_due_grace: int) -> dict:
+def _due_at_strings(due_at: datetime) -> tuple[str, str]:
+    """Return (utc_iso, local_iso) for a tz-aware UTC datetime — the resolved
+    instant echoed back so the model can confirm to the user."""
+    from services.time_formatter_service import TimeFormatterService
+    utc_iso = due_at.astimezone(timezone.utc).isoformat()
+    local_iso = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or utc_iso
+    return utc_iso, local_iso
+
+
+def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
     try:
         from services.database_service import get_shared_db_service
 
@@ -450,14 +601,15 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
                 existing_row = cursor.fetchone()
                 existing_id = existing_row[0] if existing_row else item_id
                 logger.info(f"{LOG_PREFIX} Dedup: '{message[:60]}' already exists as {existing_id}")
-                from services.time_formatter_service import TimeFormatterService
-                local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or due_at.isoformat()
-                return {
-                    "status": "success",
-                    "action_performed": "create",
-                    "record": {"id": existing_id, "message": message, "due_at": local_due},
+                utc_iso, local_iso = _due_at_strings(due_at)
+                record = {
+                    "id": existing_id,
+                    "message": message,
+                    "due_at_utc": utc_iso,
+                    "due_at_local": local_iso,
                     "note": "already_existed",
                 }
+                return _create_result(record)
 
         destination = (params.get("destination_location") or "").strip()
         if destination:
@@ -479,45 +631,56 @@ def _create(channel: str, params: dict, past_due_grace: int) -> dict:
             logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 
         logger.info(f"{LOG_PREFIX} Created {item_type}: {item_id}")
-        from services.time_formatter_service import TimeFormatterService
-        local_due = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or due_at.isoformat()
-        return {
-            "status": "success",
-            "action_performed": "create",
-            "record": {
-                "id": item_id,
-                "message": message,
-                "due_at": local_due,
-                "item_type": item_type,
-                "recurrence": recurrence,
-            },
+        utc_iso, local_iso = _due_at_strings(due_at)
+        record = {
+            "id": item_id,
+            "message": message,
+            "due_at_utc": utc_iso,
+            "due_at_local": local_iso,
+            "item_type": item_type,
+            "recurrence": recurrence,
         }
+        return _create_result(record)
 
     except Exception as e:
         logger.exception(f"{LOG_PREFIX} Create failed: {e}")
-        return {"status": "error", "error": f"Create failed: {e}"}
+        return ToolResult.err(f"Create failed: {e}", code="create-failed")
 
 
-def _search(params: dict, mp=None) -> dict:
+def _create_result(record: dict) -> ToolResult:
+    """Build the create success ToolResult: a structured body the model reads PLUS
+    a rich scheduler card (the dispatcher injects the ordinal + span instruction
+    only when the invoking channel broadcasts to the user)."""
+    body = {"status": "success", "action_performed": "create", "record": record}
+    card = {"action_performed": "create", "record": record}
+    same_day = _fetch_same_day_items(record)
+    if same_day:
+        card["same_day_items"] = same_day
+    return ToolResult.ok(body, rich=card, action="create")
+
+
+def _search(ability: "ScheduleAbility", params: dict, mp=None) -> ToolResult:
     query = (params.get("query") or "").strip()
-    if not query:
-        return {"status": "error", "error": "query is required for search"}
-
-    limit = params.get("limit", 5)
+    limit = ability.param(params, "limit", default=5, clamp=(1, 50))
 
     try:
         from services.embedding_service import get_embedding_service
         from services.database_service import get_shared_db_service
         from services.embedding_utils import pack_embedding
-        from services.time_formatter_service import TimeFormatterService
 
         emb = get_embedding_service().generate_embedding(query, mp=mp)
         if not emb:
-            return {"status": "success", "action_performed": "search", "records": []}
+            return ToolResult.ok(
+                {"status": "success", "action_performed": "search", "records": []},
+                action="search", count=0,
+            )
 
         blob = pack_embedding(emb)
         if blob is None:
-            return {"status": "success", "action_performed": "search", "records": []}
+            return ToolResult.ok(
+                {"status": "success", "action_performed": "search", "records": []},
+                action="search", count=0,
+            )
 
         db = get_shared_db_service()
         with db.connection() as conn:
@@ -539,31 +702,23 @@ def _search(params: dict, mp=None) -> dict:
 
         records = []
         for row in rows:
-            local_due = TimeFormatterService.local(row["due_at"], fmt=_LOCAL_ISO_FMT) or str(row["due_at"])
-            records.append({
-                "id": row["id"],
-                "message": row["message"],
-                "due_at": local_due,
-                "item_type": row["item_type"],
-                "recurrence": row["recurrence"],
-                "status": row["status"],
-                "distance": float(row["distance"]),
-            })
+            rec = _serialise_item_row(dict(row))
+            rec["distance"] = float(row["distance"])
+            records.append(rec)
 
-        return {
-            "status": "success",
-            "action_performed": "search",
-            "records": records,
-        }
+        return ToolResult.ok(
+            {"status": "success", "action_performed": "search", "records": records},
+            action="search", count=len(records),
+        )
 
     except Exception as e:
         logger.exception(f"{LOG_PREFIX} Search failed: {e}")
-        return {"status": "error", "error": f"Search failed: {e}"}
+        return ToolResult.err(f"Search failed: {e}", code="search-failed")
 
 
-def _list(params: dict) -> dict:
+def _list(params: dict) -> ToolResult:
     try:
-        time_range = params.get("time_range", "all").lower()
+        time_range = (params.get("time_range") or "all").lower()
         start_dt, end_dt, _ = _resolve_time_range(time_range)
 
         rows = query_items(
@@ -573,28 +728,36 @@ def _list(params: dict) -> dict:
             date_to=end_dt,
         )
 
-        from services.time_formatter_service import TimeFormatterService
-        records = []
-        for row in rows:
-            local_due = TimeFormatterService.local(row["due_at"], fmt=_LOCAL_ISO_FMT) or str(row["due_at"])
-            records.append({
-                "id": row["id"],
-                "message": row["message"],
-                "due_at": local_due,
-                "item_type": row["item_type"],
-                "recurrence": row["recurrence"],
-                "status": row["status"],
-            })
-
-        return {
-            "status": "success",
-            "action_performed": "list",
-            "records": records,
-        }
+        records = [_serialise_item_row(row) for row in rows]
+        return ToolResult.ok(
+            {"status": "success", "action_performed": "list", "records": records},
+            action="list", count=len(records),
+        )
 
     except Exception as e:
         logger.exception(f"{LOG_PREFIX} List failed: {e}")
-        return {"status": "error", "error": f"List failed: {e}"}
+        return ToolResult.err(f"List failed: {e}", code="list-failed")
+
+
+def _serialise_item_row(row: dict) -> dict:
+    """Convert a scheduled_items row to the contract row shape: id, message,
+    due_at_utc, due_at_local, item_type, recurrence, status."""
+    from services.time_formatter_service import TimeFormatterService
+    from services.time_utils import parse_utc
+    due_raw = row.get("due_at")
+    utc_dt = parse_utc(due_raw)
+    sentinel = datetime.min.replace(tzinfo=timezone.utc)
+    utc_iso = utc_dt.isoformat() if utc_dt != sentinel else str(due_raw)
+    local_iso = TimeFormatterService.local(due_raw, fmt=_LOCAL_ISO_FMT) or utc_iso
+    return {
+        "id": row.get("id"),
+        "message": row.get("message"),
+        "due_at_utc": utc_iso,
+        "due_at_local": local_iso,
+        "item_type": row.get("item_type"),
+        "recurrence": row.get("recurrence"),
+        "status": row.get("status"),
+    }
 
 
 def _resolve_time_range(time_range: str):
@@ -635,15 +798,19 @@ def _resolve_time_range(time_range: str):
         return None, None, "All Scheduled Items"
 
 
-def _cancel(params: dict) -> dict:
+def _cancel(params: dict) -> ToolResult:
     try:
         from services.database_service import get_shared_db_service
 
-        item_id = params.get("item_id", "").strip()
-        message_query = params.get("message", "").strip()
+        item_id = (params.get("item_id") or "").strip()
+        message_query = (params.get("message") or "").strip()
 
         if not item_id and not message_query:
-            return {"status": "error", "error": "item_id or message is required to cancel"}
+            return ToolResult.err(
+                "item_id or message is required to cancel.",
+                code="cancel-target-required",
+                hint="pass item_id (exact) or message (fuzzy match).",
+            )
 
         db = get_shared_db_service()
 
@@ -669,20 +836,22 @@ def _cancel(params: dict) -> dict:
 
                 if not matches:
                     conn.commit()
-                    return {"status": "error", "error": f"no pending reminder matching '{message_query}' found"}
+                    return ToolResult.err(
+                        f"No pending reminder matching {message_query!r} found.",
+                        code="not-found",
+                        hint="call schedule with action=list to see what exists.",
+                    )
 
                 if len(matches) > 1:
                     descriptions = ", ".join(
                         f"'{r[2][:40]}' (id:{r[0]})" for r in matches
                     )
                     conn.commit()
-                    return {
-                        "status": "error",
-                        "error": (
-                            f"multiple pending reminders match '{message_query}': {descriptions}. "
-                            f"Use item_id to cancel the specific one."
-                        ),
-                    }
+                    return ToolResult.err(
+                        f"Multiple pending reminders match {message_query!r}: {descriptions}.",
+                        code="ambiguous-match",
+                        hint="pass item_id to cancel the specific one.",
+                    )
 
                 item_id = matches[0][0]
                 cursor.execute(
@@ -694,7 +863,11 @@ def _cancel(params: dict) -> dict:
             conn.commit()
 
         if affected == 0:
-            return {"status": "error", "error": f"item {item_id} not found or already fired/cancelled"}
+            return ToolResult.err(
+                f"Item {item_id} not found or already fired/cancelled.",
+                code="not-found",
+                hint="call schedule with action=list to see pending items.",
+            )
 
         logger.info(f"{LOG_PREFIX} Cancelled {item_id}")
 
@@ -708,26 +881,25 @@ def _cancel(params: dict) -> dict:
                 )
                 row = cursor.fetchone()
                 if row:
-                    record = {
+                    record = _serialise_item_row({
                         "id": row[0],
                         "item_type": row[1],
                         "message": row[2],
-                        "due_at": str(row[3]),
+                        "due_at": row[3],
                         "recurrence": row[4],
                         "status": row[5],
-                    }
+                    })
         except Exception as fetch_err:
             logger.debug(f"{LOG_PREFIX} Could not fetch cancelled row (non-fatal): {fetch_err}")
 
-        return {
-            "status": "success",
-            "action_performed": "delete",
-            "record": record,
-        }
+        return ToolResult.ok(
+            {"status": "success", "action_performed": "cancel", "record": record},
+            action="cancel",
+        )
 
     except Exception as e:
         logger.exception(f"{LOG_PREFIX} Cancel failed: {e}")
-        return {"status": "error", "error": f"Cancel failed: {e}"}
+        return ToolResult.err(f"Cancel failed: {e}", code="cancel-failed")
 
 
 def _normalize_hhmm(time_str: str) -> str | None:
@@ -747,30 +919,16 @@ def _normalize_hhmm(time_str: str) -> str | None:
         return None
 
 
-def _serialise_rich(result: dict, action: str, ordinal: int, same_day: list | None = None) -> str:
-    tag = f"schedule_{ordinal}"
-    payload = {"action_performed": action}
-    if "record" in result:
-        payload["record"] = result["record"]
-    elif "records" in result:
-        payload["records"] = result["records"]
-    if same_day:
-        payload["same_day_items"] = same_day
-    data_json = json.dumps(payload)
-    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-    return f"{data_json}\n\n{instruction}"
-
-
 def _fetch_same_day_items(new_record: dict) -> list:
     """Return other pending items that share the same local calendar day.
 
     Excludes the just-created item (matched by id). Returns an empty list on
-    any failure — the rich-media payload is the only consumer and the missing
+    any failure — the rich-media card is the only consumer and the missing
     section degrades gracefully on the client.
     """
     new_id = new_record.get("id")
-    new_due_local = new_record.get("due_at")
-    if not new_id or not new_due_local:
+    new_due_utc_str = new_record.get("due_at_utc")
+    if not new_id or not new_due_utc_str:
         return []
 
     try:
@@ -779,7 +937,7 @@ def _fetch_same_day_items(new_record: dict) -> list:
         from services.time_utils import parse_utc
         from services.locale_service import to_local
 
-        new_due_utc = parse_utc(new_due_local)
+        new_due_utc = parse_utc(new_due_utc_str)
         if new_due_utc == datetime.min.replace(tzinfo=timezone.utc):
             return []
 
