@@ -6,7 +6,8 @@ What each test asserts:
   1. All three abilities are discovered by AbilityRegistry with the correct
      NAME, SUMMARY, and EXAMPLES count (6–8 enforced by _base.py metaclass).
   2. When the mail capability is not connected (no credentials in test env),
-     each ability returns a structured error dict — not an exception.
+     each ability returns a structured ``ToolResult.err`` (code=not-connected)
+     from the shared CapabilityAbility base — not an exception, not a JSON body.
   3. MailCapability scheduler-driven sync is the authoritative sync path
      (not the subconscious worker).
 
@@ -16,26 +17,9 @@ every execute() call on these abilities exercises the not-connected error
 path without requiring real IMAP/CalDAV/CardDAV credentials.
 """
 
-import json
-
 import pytest
 
 pytestmark = pytest.mark.unit
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _extract_json(result) -> dict:
-    """Parse the JSON payload out of a ``ToolResult``.
-
-    The abilities return a ``ToolResult`` whose ``body`` is the JSON payload
-    string (the dispatcher wraps it in the ``[name(...)]`` envelope at render
-    time). This helper parses that body.
-    """
-    return json.loads(result.body)
-
 
 # ---------------------------------------------------------------------------
 # 1. Ability registration
@@ -65,18 +49,22 @@ def test_email_calendar_contacts_are_registered():
 
 
 def test_email_not_connected_returns_structured_error():
-    """EmailAbility.execute returns {status: error} when mail is not connected.
+    """EmailAbility returns a ToolResult not-connected error when mail is not connected.
 
-    In the test environment no IMAP credentials are configured, so
-    is_connected() returns False. The ability must return a structured error
-    dict (not raise) so the ACT loop can surface it to the model.
+    email migrated onto CapabilityAbility in TKT-889, so the not-connected
+    surface is the base class's ``ToolResult.err`` (status=error,
+    code=not-connected, hint naming the integration) — the canonical contract
+    form, no longer the legacy JSON ``{status: error}`` body. In the test
+    environment no IMAP credentials are configured, so is_connected() returns
+    False and ``search`` (a valid action needing no params) reaches the gate.
     """
     from abilities.email import EmailAbility
 
     result = EmailAbility().run({"action": "search"})
-    payload = _extract_json(result)
-    assert payload["status"] == "error"
-    assert "not connected" in payload["error"].lower()
+    assert result.status == "error"
+    assert result.code == "not-connected"
+    assert "not connected" in result.body.lower()
+    assert "mail integration" in (result.hint or "").lower()
 
 
 def test_calendar_write_not_connected_returns_tool_result_error():
@@ -106,8 +94,8 @@ def test_contacts_not_connected_returns_structured_error():
     contacts is the TKT-883 exemplar migrated onto CapabilityAbility, so its
     not-connected surface is now a first-class ``ToolResult.err`` (status=error,
     code=not-connected, hint naming the integration) rather than a JSON body —
-    the canonical contract form. calendar followed in TKT-888; email keeps the
-    legacy JSON body until its own migration ticket.
+    the canonical contract form. calendar followed in TKT-888 and email in
+    TKT-889; all three capability abilities now share the base's surface.
     """
     from abilities.contacts import ContactsAbility
 
