@@ -65,7 +65,8 @@ class ToolDispatcher:
     def dispatch(self, tool_name: str, params: dict) -> str:
         """The one path every ACT-loop tool call takes.
 
-        match → bind → resolve permission (inline) → PolicyManager.wrap(execute)
+        match → bind → ACTION_REQUIRED pre-gate → resolve permission (inline) →
+        PolicyManager.wrap(execute)
         → record → return a STRING. Records EVERY outcome (allow result, block,
         unknown) so the rendered trail tells the model what happened and it does
         not retry a blocked tool forever. No cancel check — the loop guards
@@ -80,6 +81,12 @@ class ToolDispatcher:
         ability = self._bind(tool_name)
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
+        elif (pre := self._prevalidate(ability, params)) is not None:
+            # ACTION_REQUIRED pre-gate fires BEFORE the permission is formed: a
+            # hallucinated action would otherwise lazily seed a bogus
+            # '<tool>.<action>' ask row and freeze the turn waiting for human
+            # approval. Malformed input never reaches the policy gate or run().
+            result_text = self._render(tool_name, pre, None)
         else:
             # The risk class the gate keys on is derived from the inputs via the
             # ability's classify_action hook (default None), NOT trusted from a
@@ -154,12 +161,7 @@ class ToolDispatcher:
             "summary": act_summary,
         })
 
-        # ACTION_REQUIRED pre-gate: unknown action / missing params are reported
-        # in ONE error BEFORE run() ever sees malformed input.
-        pre = self._prevalidate(ability, params)
-        if pre is not None:
-            tr = pre
-        elif run_async:
+        if run_async:
             # AsyncDelegateRunner owns the daemon-thread lifecycle + the captured
             # mp it delivers through; it returns the placeholder immediately so
             # this ACT iteration is never blocked (spec §4.0 / §4.4). The
@@ -187,7 +189,7 @@ class ToolDispatcher:
 
     @staticmethod
     def _prevalidate(ability: "Ability", params: dict) -> "ToolResult | None":
-        """Validate the ability's ACTION_REQUIRED map BEFORE run().
+        """Validate the ability's ACTION_REQUIRED map BEFORE the policy gate.
 
         An empty map (the default) means no pre-validation — unmigrated tools are
         untouched. Otherwise: an unknown action → ``code=unknown-action`` with
