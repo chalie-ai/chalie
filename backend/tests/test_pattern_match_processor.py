@@ -402,10 +402,11 @@ class TestSaveGraphRoutesThroughDataGraphService:
 
 
 class TestSaveGraphBehavioralPatternKindReturnsError:
-    """Test 8 — save_graph with kind='behavioral_pattern' returns invalid_kind error."""
+    """Test 8 — save_graph with kind='behavioral_pattern' returns a loud
+    invalid-param error (TKT-912 contract), not a success-shaped rejection."""
 
     def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(self, db, store):
-        from abilities.save_graph import SaveGraph
+        from abilities.save_graph import ALLOWED_KINDS, SaveGraph
 
         # SaveGraph reads its budget counter via self.mp + getattr.
         # No processor is bound here — getattr falls back to 0, validation
@@ -415,14 +416,14 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
             {"kind": "behavioral_pattern", "key": "x", "value": "y"},
         )
 
-        # run() returns ToolResult.ok(<dict>); the rejection payload is the body.
-        assert result.status == "success", f"SaveGraph.run errored: {result!r}"
-        body = result.body
-        assert isinstance(body, dict), f"SaveGraph.run body non-dict: {body!r}"
-        assert body.get("error") == "invalid_kind", (
-            f"Expected error='invalid_kind', got: {body}"
+        # run() now returns an error ToolResult — the invalid kind is loud.
+        assert result.status == "error", f"Expected error result, got: {result!r}"
+        assert result.code == "invalid-param", (
+            f"Expected code='invalid-param', got: {result.code}"
         )
-        assert body.get("kind") == "behavioral_pattern"
+        # The valid ladder lists the real storable kinds and excludes the rejected one.
+        assert tuple(ALLOWED_KINDS) == result.valid
+        assert "behavioral_pattern" not in result.valid
 
         # No row should have been written to data_graph.
         row = db.execute(

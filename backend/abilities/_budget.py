@@ -43,9 +43,25 @@ class BudgetCappedAbility(Ability, ABC):
         return getattr(proc, self.BUDGET_COUNTER_ATTR, 0)
 
     def budget_exceeded(self) -> ToolResult | None:
-        """Return the ``budget_exceeded`` result when the cap is hit, else None."""
+        """Return a loud ``capped`` result when the per-turn cap is hit, else None.
+
+        The result is a SUCCESS (nothing failed — the budget is a deliberate
+        ceiling) but it is never silent: ``meta capped=true`` is the flat signal
+        the model reads, and the body spells out that nothing was stored. Returns
+        ``None`` while the ability is still under its cap.
+        """
         if self._budget_count() >= self.BUDGET_CAP:
-            return ToolResult.ok({"budget_exceeded": True, "tool": self.get_name()})
+            return ToolResult.ok(
+                {
+                    "saved": 0,
+                    "skipped": 1,
+                    "note": (
+                        f"per-turn cap of {self.BUDGET_CAP} reached; "
+                        "nothing was stored"
+                    ),
+                },
+                capped=True,
+            )
         return None
 
     def bump_budget(self) -> None:
