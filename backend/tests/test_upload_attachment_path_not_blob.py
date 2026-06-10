@@ -22,7 +22,8 @@ and asserting the trail row the dispatch produced:
   * its params carry the attachment PATH and NO ``content`` / base64 blob,
   * the whole params JSON stays small (a path can't bloat the window),
   * the upload still landed a ``ready`` document row with a content hash
-    (the ``(id=, hash=)`` token the transcript-doc link depends on).
+    (the ``"id":``/``"hash":`` keys of the structured upload body the
+    transcript-doc link depends on — TKT-893).
 
 Zero mocks.  The upload never touches the LLM boundary (no vision provider -> the
 deterministic OCR fork), so no provider seam is needed.
@@ -127,10 +128,13 @@ def test_turn0_upload_records_path_not_base64_blob(db):
     )
 
     # The upload still landed a real, ready document with a content hash — the
-    # '(id=, hash=)' contract the chat refresh link parses.
+    # structured ``{"id","hash",...}`` body the chat refresh link parses (TKT-893).
     result = rows[0]["result"]
-    assert "id=" in result and "hash=" in result, f"upload result lost its id/hash token: {result!r}"
-    doc_id = result.split("id=", 1)[1].split(",", 1)[0].split(")", 1)[0].strip()
+    assert '"id":"' in result and '"hash":"' in result, (
+        f"upload result lost its id/hash keys: {result!r}"
+    )
+    from services.message_processor import _SEED_UPLOAD_ID_RE
+    doc_id = _SEED_UPLOAD_ID_RE.search(result).group(1)
 
     doc = DocumentService(get_shared_db_service()).get_document(doc_id)
     assert doc is not None, f"document {doc_id} was not persisted"

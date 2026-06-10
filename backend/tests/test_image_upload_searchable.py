@@ -74,15 +74,6 @@ def _blank_png_path() -> str:
     return path
 
 
-def _result_text(out):
-    """DocumentAbility.run returns a ``ToolResult``; the body is the text the
-    model sees (the dispatcher adds the ``[document(...)]`` envelope)."""
-    body = out.body
-    if isinstance(body, dict):
-        return body.get("text") or body.get("result") or ""
-    return body
-
-
 def test_uploaded_image_is_findable_via_document_search(db):
     """No vision provider -> OCR description -> the existing embed+FTS5 pipeline ->
     document.search finds the image by content (real recall, FTS5 + vector)."""
@@ -93,15 +84,16 @@ def test_uploaded_image_is_findable_via_document_search(db):
         "action": "upload",
         "path": _ocrable_invoice_png_path(),
     })
-    up_text = _result_text(up)
-    assert "id=" in up_text, up_text
-    assert "hash=" in up_text, up_text  # Task 6: result now carries the file hash
+    # TKT-893: upload now returns a structured ToolResult body
+    # ``{"id","hash","name","status"}`` (Task 6 hash preserved as a body key).
+    assert up.status == "success", up
+    assert up.body["id"], up.body
+    assert up.body["hash"], up.body
 
     found = ability.run({"action": "search", "query": "invoice"})
-    found_text = _result_text(found)
-    # The image surfaced via the REAL recall path. _handle_search renders the
-    # matched document's original_name in the result body.
-    assert "inv.png" in found_text, found_text
+    # TKT-893: search returns a JSON list of document rows; the matched image
+    # surfaces via the REAL recall path under its original_name.
+    assert any("inv.png" in (row.get("name") or "") for row in found.body), found.body
 
 
 def test_textless_image_is_ready_not_failed(db):
@@ -114,12 +106,10 @@ def test_textless_image_is_ready_not_failed(db):
         "action": "upload",
         "path": _blank_png_path(),
     })
-    up_text = _result_text(up)
-    assert "id=" in up_text, up_text
-
-    # Extract the doc_id from the result body ("... (id=<hex>, hash=...)").
-    doc_id = up_text.split("id=", 1)[1].split(",", 1)[0].split(")", 1)[0].strip()
+    # TKT-893: doc id comes straight off the structured upload body.
+    assert up.status == "success", up
+    doc_id = up.body["id"]
 
     doc = DocumentService(get_shared_db_service()).get_document(doc_id)
-    assert doc is not None, up_text
+    assert doc is not None, up
     assert doc["status"] == "ready", doc.get("status")

@@ -146,8 +146,9 @@ def test_turn0_thinking_pass_sees_uploaded_image_in_its_snapshot(db):
 
     content = high_sends[0]["messages"][0]["content"]
     # The deliberation snapshot must contain the upload's act-trail row — proof the
-    # thinking pass fired AFTER the vision-bearing upload, not before.
-    assert "Uploaded" in content and name in content, (
+    # thinking pass fired AFTER the vision-bearing upload, not before. The upload's
+    # structured success body carries the doc name + status=ready (TKT-893).
+    assert "[document(status=success" in content and name in content, (
         "thinking pass snapshot is missing the uploaded document — it fired before "
         "the upload barrier, so the deliberation cannot reason about the image"
     )

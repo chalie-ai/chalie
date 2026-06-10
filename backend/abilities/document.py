@@ -9,6 +9,21 @@ by code via ``ToolDispatcher.dispatch``. It takes a file PATH, never bytes — a
 path is tiny, so the act-trail (which records every dispatch's params verbatim)
 can never carry a multi-megabyte base64 blob and blow the context window. The
 ``_dispatch`` ``upload`` branch is retained for that mechanical route.
+
+Every action returns a :class:`abilities._result.ToolResult` built only via
+``ok()`` / ``err()``; the dispatcher renders the wire envelope. Errors carry a
+stable kebab-case ``code`` (never the ``code="error"`` placeholder) so a weak
+model can self-correct without re-reading the schema.
+
+The destructive ``delete`` never silently picks the first fuzzy hit: a ``name``
+that matches more than one document — or matches a single document only as a
+non-exact substring — returns ``code=ambiguous-match`` with the candidate rows
+(id, name, snippet) so the model can re-call with the exact ``id``. Deletion
+proceeds only on an exact ``id`` or a single exact-name match.
+
+Chunking/extraction-enqueue math lives in ``services.document_chunking`` (shared
+by the library upload pipeline and the watched-folder ingest); this ability only
+orchestrates it.
 """
 
 import hashlib as _hashlib
@@ -18,7 +33,7 @@ import mimetypes as _mimetypes
 import os as _os
 import secrets as _secrets
 import shutil as _shutil
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
@@ -26,8 +41,27 @@ from services.document_chunking import create_document_artifacts
 
 logger = logging.getLogger(__name__)
 
+# Substring of a candidate's text shown in an ambiguous-match candidate row so the
+# model has enough context to pick the right document by id.
+_SNIPPET_CHARS = 120
+
 
 class DocumentAbility(Ability):
+    # Required params per action, validated by the dispatcher's ACTION_REQUIRED
+    # pre-gate BEFORE the policy gate or run(). ``delete``/``view``/``restore``
+    # require neither id nor name here because either addresses the document; the
+    # handlers raise the precise missing-target error. ``upload`` is mechanical
+    # (not in INPUT_SCHEMA) and validated inside ingest_file.
+    ACTION_REQUIRED: ClassVar[dict] = {
+        "search": ("query",),
+        "list": (),
+        "view": (),
+        "delete": (),
+        "restore": (),
+        "create": ("name", "content"),
+        "upload": (),
+    }
+
     def get_name(self) -> str:
         return "document"
 
@@ -69,13 +103,17 @@ class DocumentAbility(Ability):
             },
             "id": {
                 "type": "string",
-                "description": "Document ID for exact match (view, delete, restore).",
+                "description": (
+                    "Exact document ID (view, delete, restore). Prefer this over `name`: "
+                    "delete only proceeds on an exact id or a single exact-name match."
+                ),
             },
             "name": {
                 "type": "string",
                 "description": (
                     "Required for `create`; use a filename like 'research-notes.md' "
-                    "if the user didn't give one. Optional fuzzy match for view/delete/restore."
+                    "if the user didn't give one. For view/delete/restore an EXACT name; "
+                    "an inexact or non-unique name returns the candidate list to pick from by id."
                 ),
             },
             "content": {
@@ -89,18 +127,12 @@ class DocumentAbility(Ability):
     def run(self, params: dict) -> ToolResult:
         action = params.get("action", "search")
 
-        try:
-            from services.document_service import DocumentService
-            from services.database_service import get_shared_db_service
+        from services.database_service import get_shared_db_service
+        from services.document_service import DocumentService
 
-            db = get_shared_db_service()
-            service = DocumentService(db)
-            body = _dispatch(service, action, params)
-        except Exception as e:
-            logger.exception(f"[DOCUMENT SKILL] Error: {e}")
-            return ToolResult.err(str(e)[:200], code="error", action=action)
-
-        return ToolResult.ok(body, action=action)
+        db = get_shared_db_service()
+        service = DocumentService(db)
+        return _dispatch(service, action, params)
 
 
 def _parse_extracted_metadata(raw) -> dict:
@@ -116,41 +148,104 @@ def _parse_extracted_metadata(raw) -> dict:
     return {}
 
 
-def _dispatch(service, action: str, params: dict) -> str:
+_VALID_ACTIONS = ("search", "list", "view", "delete", "restore", "create")
+
+
+def _dispatch(service, action: str, params: dict) -> ToolResult:
     if action == "search":
         return _handle_search(service, params)
-    elif action == "list":
+    if action == "list":
         return _handle_list(service)
-    elif action == "view":
+    if action == "view":
         return _handle_view(service, params)
-    elif action == "delete":
+    if action == "delete":
         return _handle_delete(service, params)
-    elif action == "restore":
+    if action == "restore":
         return _handle_restore(service, params)
-    elif action == "create":
+    if action == "create":
         return _handle_create(service, params)
-    elif action == "upload":
+    if action == "upload":
         # Mechanical-only ingest (not in INPUT_SCHEMA): dispatched by code, never
         # the LLM. Path-based — see _handle_upload / module docstring.
         return _handle_upload(service, params)
-    else:
-        valid = "search, list, view, delete, restore, create"
-        return f"[DOCUMENT] Unknown action '{action}'. Use: {valid}"
+    return ToolResult.err(
+        f"Unknown action {action!r}.",
+        code="unknown-action",
+        valid=_VALID_ACTIONS,
+    )
 
 
-def _resolve_document(service, params: dict) -> Optional[dict]:
-    doc_id = params.get("id", "").strip()
-    name = params.get("name", "").strip()
+def _exact_name_matches(docs: list, name: str) -> list:
+    """Candidates whose ``original_name`` equals *name* case-insensitively."""
+    lowered = name.lower()
+    return [d for d in docs if (d.get("original_name") or "").lower() == lowered]
 
+
+def _candidate_rows(docs: list) -> list:
+    """Render candidate documents as JSON rows (id, name, snippet) for an
+    ambiguous-match error body so the model can re-call with the chosen id."""
+    rows = []
+    for d in docs:
+        snippet = (d.get("summary") or d.get("clean_text") or "").strip()[:_SNIPPET_CHARS]
+        rows.append({
+            "id": d.get("id"),
+            "name": d.get("original_name"),
+            "snippet": snippet,
+        })
+    return rows
+
+
+def _resolve_unique(service, params: dict) -> "dict | ToolResult":
+    """Resolve a single document for a destructive/addressed action.
+
+    Returns the document dict on an unambiguous resolution, or an error
+    ``ToolResult`` (``missing-target`` / ``not-found`` / ``ambiguous-match``).
+    Resolution is consent-safe: an exact ``id`` always proceeds; a ``name``
+    proceeds ONLY on a single exact-name match — more than one candidate, or a
+    single non-exact (substring) match, returns ``ambiguous-match`` with the
+    candidate rows rather than silently picking the first hit.
+    """
+    doc_id = (params.get("id") or "").strip()
     if doc_id:
-        return service.get_document(doc_id)
+        doc = service.get_document(doc_id)
+        if not doc:
+            return ToolResult.err(
+                f"No document with id {doc_id!r}.",
+                code="not-found",
+                hint="call document with action=list to see existing ids.",
+            )
+        return doc
 
-    if name:
-        docs = service.search_documents_metadata(name)
-        if docs:
-            return docs[0]
+    name = (params.get("name") or "").strip()
+    if not name:
+        return ToolResult.err(
+            "id or name is required to address the document.",
+            code="missing-target",
+            hint="pass the document's id, or an exact name.",
+        )
 
-    return None
+    candidates = service.search_documents_metadata(name)
+    if not candidates:
+        return ToolResult.err(
+            f"No document matching {name!r} was found.",
+            code="not-found",
+            hint="call document with action=list to see what exists.",
+        )
+
+    exact = _exact_name_matches(candidates, name)
+    if len(exact) == 1:
+        return exact[0]
+
+    # >1 candidate, or a single non-exact (substring) match, or several exact
+    # matches → never a silent first-hit pick. Surface the candidate rows.
+    rows = _candidate_rows(exact if len(exact) > 1 else candidates)
+    return ToolResult.err(
+        f"{name!r} matches {len(rows)} document(s); re-call with the exact id. "
+        f"Candidates: {_json.dumps(rows, ensure_ascii=False, separators=(',', ':'))}",
+        code="ambiguous-match",
+        hint="re-issue the action with action and id set to the chosen candidate.",
+        count=len(rows),
+    )
 
 
 def _group_results_by_doc(results: list) -> dict:
@@ -167,78 +262,51 @@ def _group_results_by_doc(results: list) -> dict:
     return doc_artifacts
 
 
-def _handle_search(service, params: dict) -> str:
+def _handle_search(service, params: dict) -> ToolResult:
     query = params.get("query", "").strip()
-    if not query:
-        return "[DOCUMENT] 'query' is required for search."
 
-    try:
-        from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
+    from services.data_graph_service import KIND_DOCUMENT, get_data_graph_service
 
-        dgs = get_data_graph_service()
-        results = dgs.recall(query, kinds=[KIND_DOCUMENT], limit=10)
+    dgs = get_data_graph_service()
+    results = dgs.recall(query, kinds=[KIND_DOCUMENT], limit=10)
 
-        if not results:
-            return f"[DOCUMENT] No documents match '{query}'."
+    rows = []
+    for doc_id, artifacts in _group_results_by_doc(results).items():
+        doc = service.get_document(doc_id)
+        if not doc or doc.get("deleted_at"):
+            continue
+        rows.append({
+            "id": doc_id,
+            "name": doc.get("original_name", doc_id),
+            "chunks": doc.get("chunk_count", 0),
+            "matches": len(artifacts),
+        })
 
-        doc_artifacts = _group_results_by_doc(results)
-
-        lines = []
-        for doc_id, artifacts in doc_artifacts.items():
-            doc = service.get_document(doc_id)
-            if not doc or doc.get("deleted_at"):
-                continue
-            doc_name = doc.get("original_name", doc_id)
-            chunk_count = doc.get("chunk_count", 0)
-            lines.append(
-                f"  · id={doc_id}: \"{doc_name}\" ({chunk_count} chunks, {len(artifacts)} match(es))"
-            )
-
-        if not lines:
-            return f"[DOCUMENT] No documents match '{query}'."
-
-        lines.insert(0, f"[DOCUMENT] Found {len(lines)} document(s) matching '{query}':")
-        lines.append("\nUse action \"view\" with the document id to read its full content.")
-        return "\n".join(lines)
-
-    except Exception as e:
-        logger.exception(f"[DOCUMENT SKILL] Search failed: {e}")
-        return f"[DOCUMENT] Search failed: {e}"
+    return ToolResult.ok(rows, action="search", count=len(rows))
 
 
-def _handle_list(service) -> str:
-    docs = service.get_all_documents()
-    docs = [d for d in docs if d.get("status") == "ready"]
+def _handle_list(service) -> ToolResult:
+    docs = [d for d in service.get_all_documents() if d.get("status") == "ready"]
 
-    if not docs:
-        return "[DOCUMENT] No documents in library."
-
-    lines = ["[DOCUMENT] Document library:"]
+    rows = []
     for doc in docs:
-        _meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
-        doc_type = _meta.get("document_type", {})
+        meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
+        doc_type = meta.get("document_type", {})
         if isinstance(doc_type, dict):
             doc_type = doc_type.get("value", "")
         elif not isinstance(doc_type, str):
             doc_type = ""
-        type_str = f" [{doc_type}]" if doc_type and doc_type != "document" else ""
-        pages = doc.get("page_count")
-        page_str = f", {pages}p" if pages else ""
-        status = doc.get("status", "unknown")
-        created = doc.get("created_at")
-        date_str = ""
-        if created:
-            from services.time_formatter_service import TimeFormatterService
-            local = TimeFormatterService.local(created, fmt="%b %d")
-            if local:
-                date_str = f", uploaded {local}"
+        rows.append({
+            "id": doc.get("id"),
+            "name": doc.get("original_name"),
+            "type": doc_type,
+            "pages": doc.get("page_count"),
+            "chunks": doc.get("chunk_count", 0),
+            "status": doc.get("status", "unknown"),
+            "created_at": doc.get("created_at"),
+        })
 
-        lines.append(
-            f"  · {doc['original_name']}{type_str}"
-            f" ({status}{page_str}, {doc.get('chunk_count', 0)} chunks{date_str})"
-        )
-
-    return "\n".join(lines)
+    return ToolResult.ok(rows, action="list", count=len(rows))
 
 
 def _append_meta_summary(lines: list, doc: dict, meta: dict) -> None:
@@ -270,28 +338,33 @@ def _fetch_doc_fragments(doc_id: str) -> list:
     """Pull data_graph artifact fragments for a document, ordered by key."""
     from services.data_graph_service import get_data_graph_service
     dgs = get_data_graph_service()
-    try:
-        with dgs.db.connection() as conn:
-            cursor = conn.execute(
-                "SELECT value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
-                (f'document:{doc_id}',),
-            )
-            return [row[0] for row in cursor.fetchall() if row[0]]
-    except Exception as exc:
-        logger.warning("[DOCUMENT SKILL] Fragment query failed: %s", exc, exc_info=True)
-        return []
+    with dgs.db.connection() as conn:
+        cursor = conn.execute(
+            "SELECT value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
+            (f'document:{doc_id}',),
+        )
+        return [row[0] for row in cursor.fetchall() if row[0]]
 
 
-def _handle_view(service, params: dict) -> str:
-    doc = _resolve_document(service, params)
-    if not doc:
-        return "[DOCUMENT] Document not found. Specify 'name' or 'id'."
+def _handle_view(service, params: dict) -> ToolResult:
+    doc = _resolve_unique(service, params)
+    if isinstance(doc, ToolResult):
+        return doc
 
     status = doc.get("status")
     if status != "ready":
         if status == "failed":
-            return f"Failed to process document {doc['original_name']}"
-        return f"[DOCUMENT] '{doc['original_name']}' is still being processed or awaiting confirmation."
+            return ToolResult.err(
+                f"Document {doc['original_name']!r} failed to process.",
+                code="extraction-failed",
+                action="view",
+            )
+        return ToolResult.err(
+            f"{doc['original_name']!r} is still being processed or awaiting confirmation.",
+            code="not-ready",
+            hint="try again once processing completes.",
+            action="view",
+        )
 
     meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
     lines = [f"[DOCUMENT] {doc['original_name']}:"]
@@ -300,59 +373,89 @@ def _handle_view(service, params: dict) -> str:
     clean_text = doc.get("clean_text", "")
     if clean_text:
         lines.append(f"\n--- Full Document Text ---\n{clean_text}")
-        return "\n".join(lines)
-
-    fragments = _fetch_doc_fragments(doc["id"])
-    if fragments:
-        lines.append("\n--- Full Document Text ---\n" + "\n\n".join(fragments))
     else:
-        lines.append("\n  (No text content available)")
+        fragments = _fetch_doc_fragments(doc["id"])
+        if fragments:
+            lines.append("\n--- Full Document Text ---\n" + "\n\n".join(fragments))
+        else:
+            lines.append("\n  (No text content available)")
 
-    return "\n".join(lines)
+    return ToolResult.ok("\n".join(lines), action="view", id=doc["id"])
 
 
-def _handle_delete(service, params: dict) -> str:
-    doc = _resolve_document(service, params)
-    if not doc:
-        return "[DOCUMENT] Document not found. Specify 'name' or 'id'."
+def _handle_delete(service, params: dict) -> ToolResult:
+    doc = _resolve_unique(service, params)
+    if isinstance(doc, ToolResult):
+        return doc
 
     doc_id = doc["id"]
-    success = service.soft_delete(doc_id)
-    if not success:
-        return f"[DOCUMENT] Failed to delete '{doc['original_name']}'."
+    if not service.soft_delete(doc_id):
+        return ToolResult.err(
+            f"Failed to delete {doc['original_name']!r}.",
+            code="delete-failed",
+            action="delete",
+        )
 
     from services.data_graph_service import get_data_graph_service
-    dgs = get_data_graph_service()
-    deleted_count = dgs.hard_delete_by_source_prefix(f"document:{doc_id}")
+    deleted_count = get_data_graph_service().hard_delete_by_source_prefix(f"document:{doc_id}")
 
-    return f"[DOCUMENT] Deleted '{doc['original_name']}'. {deleted_count} artifact(s) removed."
+    return ToolResult.ok(
+        {"id": doc_id, "name": doc["original_name"], "artifacts_removed": deleted_count},
+        action="delete",
+    )
 
 
-def _handle_restore(service, params: dict) -> str:
-    doc_id = params.get("id", "").strip()
-    name = params.get("name", "").strip()
+def _handle_restore(service, params: dict) -> ToolResult:
+    doc_id = (params.get("id") or "").strip()
+    name = (params.get("name") or "").strip()
 
     if doc_id:
         doc = service.get_document(doc_id)
     elif name:
-        all_docs = service.get_all_documents(include_deleted=True)
-        doc = next(
-            (d for d in all_docs if name.lower() in d["original_name"].lower() and d.get("deleted_at")),
-            None,
-        )
+        deleted = [
+            d for d in service.get_all_documents(include_deleted=True)
+            if d.get("deleted_at") and (d.get("original_name") or "").lower() == name.lower()
+        ]
+        if len(deleted) > 1:
+            rows = _candidate_rows(deleted)
+            return ToolResult.err(
+                f"{name!r} matches {len(rows)} deleted document(s); re-call with the exact id. "
+                f"Candidates: {_json.dumps(rows, ensure_ascii=False, separators=(',', ':'))}",
+                code="ambiguous-match",
+                hint="re-issue restore with id set to the chosen candidate.",
+                count=len(rows),
+            )
+        doc = deleted[0] if deleted else None
     else:
-        return "[DOCUMENT] Specify 'name' or 'id' to restore."
+        return ToolResult.err(
+            "id or name is required to restore a document.",
+            code="missing-target",
+            hint="pass the document's id, or an exact name.",
+        )
 
     if not doc:
-        return "[DOCUMENT] Document not found."
-
+        return ToolResult.err(
+            "Document not found.",
+            code="not-found",
+            hint="call document with action=list to see what exists.",
+        )
     if not doc.get("deleted_at"):
-        return f"[DOCUMENT] '{doc['original_name']}' is not deleted."
+        return ToolResult.err(
+            f"{doc['original_name']!r} is not deleted.",
+            code="not-deleted",
+            action="restore",
+        )
 
-    success = service.restore(doc["id"])
-    if success:
-        return f"[DOCUMENT] Restored '{doc['original_name']}'."
-    return f"[DOCUMENT] Failed to restore '{doc['original_name']}'."
+    if not service.restore(doc["id"]):
+        return ToolResult.err(
+            f"Failed to restore {doc['original_name']!r}.",
+            code="restore-failed",
+            action="restore",
+        )
+    return ToolResult.ok(
+        {"id": doc["id"], "name": doc["original_name"]},
+        action="restore",
+    )
 
 
 def ingest_file(
@@ -437,7 +540,7 @@ def ingest_file(
     # Extraction runs synchronously: callers MUST be able to read the document
     # immediately (the ACT loop's follow-up view in the same turn, or the library
     # endpoint's response) — never "still being processed".
-    from api.documents import _run_upload_extraction, _mark_upload_failed
+    from api.documents import _mark_upload_failed, _run_upload_extraction
     try:
         _run_upload_extraction(doc_id)
     except Exception as exc:
@@ -454,11 +557,12 @@ def ingest_file(
     }
 
 
-def _handle_upload(service, params: dict) -> str:
-    """Mechanical upload dispatch (not LLM-callable) → string for the act-trail.
+def _handle_upload(service, params: dict) -> ToolResult:
+    """Mechanical upload dispatch (not LLM-callable).
 
-    Thin formatter over ``ingest_file``. Preserves the ``(id=<doc_id>, hash=...)``
-    token that the turn-0 seed parses to build the transcript-doc link.
+    Thin orchestrator over ``ingest_file``. The structured success body
+    ``{"id","hash","name","status"}`` is parsed by the turn-0 seed
+    (``message_processor._SEED_UPLOAD_ID_RE``) to build the transcript-doc link.
     """
     result = ingest_file(
         service,
@@ -466,49 +570,48 @@ def _handle_upload(service, params: dict) -> str:
         name=params.get("name"),
     )
     if result.get("error"):
-        return f"[DOCUMENT] {result['error']}"
-    if result.get("status") == "ready":
-        return (
-            f"[DOCUMENT] Uploaded '{result['name']}' "
-            f"(id={result['id']}, hash={result['hash']}). "
-            f"Call document(action='view', id='{result['id']}') to read contents."
+        return ToolResult.err(result["error"], code="upload-failed", action="upload")
+    if result.get("status") != "ready":
+        return ToolResult.err(
+            f"Failed to process document {result['name']!r}.",
+            code="extraction-failed",
+            action="upload",
+            id=result["id"],
         )
-    return f"Failed to process document {result['name']}"
+    return ToolResult.ok(
+        {
+            "id": result["id"],
+            "hash": result["hash"],
+            "name": result["name"],
+            "status": result["status"],
+        },
+        action="upload",
+    )
 
 
-def _handle_create(service, params: dict) -> str:
+def _handle_create(service, params: dict) -> ToolResult:
     name = params.get("name", "").strip()
     content = params.get("content", "").strip()
-
-    if not name:
-        return "[DOCUMENT] 'name' is required for create."
-    if not content:
-        return "[DOCUMENT] 'content' is required for create."
 
     if "." not in name:
         name = f"{name}.md"
 
-    try:
-        doc_id = service.create_document_from_text(
-            original_name=name,
-            text_content=content,
-            source_type='conversation',
-        )
+    doc_id = service.create_document_from_text(
+        original_name=name,
+        text_content=content,
+        source_type='conversation',
+    )
 
-        artifact_count = create_document_artifacts(doc_id, content)
-        service.update_status(doc_id, "ready", chunk_count=artifact_count)
+    artifact_count = create_document_artifacts(doc_id, content)
+    service.update_status(doc_id, "ready", chunk_count=artifact_count)
 
-        summary = content[:500]
-        dot_pos = summary.rfind(". ")
-        if dot_pos > 200:
-            summary = summary[:dot_pos + 1]
-        service.update_summary(doc_id, summary)
+    summary = content[:500]
+    dot_pos = summary.rfind(". ")
+    if dot_pos > 200:
+        summary = summary[:dot_pos + 1]
+    service.update_summary(doc_id, summary)
 
-        return (
-            f"[DOCUMENT] Created '{name}' (id={doc_id}). "
-            f"{artifact_count} artifact(s) indexed."
-        )
-
-    except Exception as e:
-        logger.exception(f"[DOCUMENT SKILL] Create failed: {e}")
-        return f"[DOCUMENT] Failed to create document: {e}"
+    return ToolResult.ok(
+        {"id": doc_id, "name": name, "artifacts": artifact_count},
+        action="create",
+    )

@@ -51,6 +51,13 @@ _TRAIL_BOUNDARY_TOOL = "tool_chain_compactor"
 #: compacted output reaches the model through the checkpoint prepend instead).
 _COMPACTOR_TOOLS: "frozenset[str]" = frozenset({"chat_history_compactor", "tool_chain_compactor"})
 
+#: Parses the document id out of a rendered ``document.upload`` success envelope so
+#: the turn-0 attachment seed can build the transcript<->doc link. The upload body
+#: is the structured ToolResult JSON ``{"id":"<hex>",...}`` (TKT-893); ``id`` is a
+#: ``secrets.token_hex`` value, so the capture is hex-only. A failed upload renders
+#: ``status=error`` with no ``"id":`` key and therefore links nothing.
+_SEED_UPLOAD_ID_RE = re.compile(r'"id":"([0-9a-f]+)"')
+
 
 def _is_auto_memory_recall(row: "dict") -> bool:
     """True for the framework's turn-0 automatic memory-recall seed.
@@ -438,13 +445,13 @@ class MessageProcessor:
         # Persist the turn<->doc link so the chat can re-render this attachment on
         # page refresh — the live preview is a browser-only blob: URL that dies on
         # reload (api.conversation.get_recent_history reads this link back).
-        # _handle_upload emits the "(id=<doc_id>, ...)" token ONLY on success, so a
-        # failed upload links nothing.  Scoped to the user-attachment seed point on
-        # purpose: a model-issued document.upload mid-turn must NOT render as a user
-        # attachment.
+        # The upload's structured success body carries "id":"<doc_id>" ONLY on
+        # success, so a failed upload (status=error, no id key) links nothing.
+        # Scoped to the user-attachment seed point on purpose: a model-issued
+        # document.upload mid-turn must NOT render as a user attachment.
         if self.uid is not None:
             from services.transcript_service import link_transcript_doc  # noqa: PLC0415
-            match = re.search(r"\(id=([0-9a-f]+)", result)
+            match = _SEED_UPLOAD_ID_RE.search(result)
             if match:
                 link_transcript_doc(self.uid, match.group(1))
 
