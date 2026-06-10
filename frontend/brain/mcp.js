@@ -5,8 +5,8 @@
 // Outbound: the new MCP-client manager for Chalie connecting OUT to
 //   remote MCP servers (wired to /api/mcp-clients).
 //
-// Dylan's decision #4 (2026-05-31): both sections live in this file,
-// in the existing 'mcp' tab — no new tab, no mcp_clients.js.
+// Design decision: both sections live in this file, in the existing
+// 'mcp' tab — no new tab, no mcp_clients.js.
 const PanelMcp = (() => {
   // ── State ──
   let _root = null;

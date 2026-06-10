@@ -304,7 +304,7 @@ class TestGetPreviousMessagesEmptyChannelWithOtherData:
 # ─────────────────────────────────────────────────────────────────────────────
 # get_previous_messages() — window-only, NO fixed row cap (compact-first)
 #
-# CANONICAL DESIGN (2026-06-06, Dylan — supersedes the trim-first build): there is
+# CANONICAL DESIGN (supersedes the trim-first build): there is
 # NO provider-layer trim. get_previous_messages() renders EVERY watermark-bounded
 # row. When the FULL request reaches the cap the ACT loop fires compaction BEFORE
 # sending (compact-first) — it never sends a trimmed/partial view. The only
@@ -396,12 +396,12 @@ class TestTrailExcludesAutoMemoryRecall:
         self._add_tool_call(
             db, tid, "memory",
             '{"action": "recall", "query": "who is boss", "_auto": true}',
-            "recalled: boss is Dylan", "2026-04-10 10:00:05",
+            "recalled: boss is Alex", "2026-04-10 10:00:05",
         )
         p = _GPMFakeProcessor.make(uid=tid)
         assert p._has_trail() is False
         # Default render (per-turn display) still shows the auto-recall...
-        assert "recalled: boss is Dylan" in p._render_act_trail()
+        assert "recalled: boss is Alex" in p._render_act_trail()
         # ...but the compaction input drops it, leaving nothing to compact.
         assert p._render_act_trail(for_compaction=True) == ""
 

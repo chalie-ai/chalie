@@ -192,7 +192,7 @@ def test_abilities_directory_has_expected_non_underscore_modules():
 #
 # AbilityRegistry.all() returns every Ability instance — including the
 # discoverable externals AND the processor-innate ones.  Calling it from a
-# processor's ALWAYS_AVAILABLE comprehension is exactly how the run-346 bloat
+# processor's ALWAYS_AVAILABLE comprehension is exactly how a past tool-bloat
 # regression slipped in.  This test bans new callers outside legitimate sites:
 #
 #   * abilities/_registry.py        — owns the method
