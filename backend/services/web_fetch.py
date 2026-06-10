@@ -118,6 +118,36 @@ def fetch_text(
     :class:`requests.RequestException` (incl. ``raise_for_status``) on any HTTP
     failure — errors bubble so callers surface them, never swallow.
     """
+    text, _ = fetch_page(
+        url,
+        profile=profile,
+        timeout=timeout,
+        verify=verify,
+        allow_redirects=allow_redirects,
+    )
+    return text
+
+
+def fetch_page(
+    url: str,
+    *,
+    profile: FetchProfile = BROWSER,
+    timeout: float = DEFAULT_TIMEOUT,
+    verify: bool = False,
+    allow_redirects: bool = True,
+) -> tuple[str, str]:
+    """GET *url* behind the SSRF guard; return ``(text, content_type)``.
+
+    The bare ``Content-Type`` header — lower-cased, charset suffix stripped (the
+    part before any ``;``) — is returned alongside the decoded body so a caller
+    can decide whether the body is HTML to extract or plain text to pass through
+    verbatim (the ``read`` ability's ``.diff`` / ``.patch`` case). An empty string
+    is returned when the server sends no ``Content-Type``.
+
+    Raises :class:`FetchBlocked` for a private/internal host and
+    :class:`requests.RequestException` (incl. ``raise_for_status``) on any HTTP
+    failure — errors bubble so callers surface them, never swallow.
+    """
     _guard(url)
     with requests.Session() as session:
         session.headers.update(profile.headers)
@@ -125,7 +155,8 @@ def fetch_text(
             url, timeout=timeout, allow_redirects=allow_redirects, verify=verify
         )
         response.raise_for_status()
-        return response.text
+        content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        return response.text, content_type
 
 
 def stream_to_file(
