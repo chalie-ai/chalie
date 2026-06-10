@@ -9,6 +9,12 @@ a cosine-supersede replacement, matching the KIND_PLACE policy in data_graph_ser
 Location data is read from the telemetry dict injected by act_dispatcher_service
 at dispatch time (lat, lon, location_name keys). When GPS is not available, save
 returns an informative error rather than storing a null record.
+
+Every action returns a :class:`ToolResult`: ``ok`` with a structured body the
+model can read (the saved record / the place list / the resolved place / the
+deletion confirmation) or ``err`` with a stable kebab-case ``code``, a one-line
+``hint``, and — for input errors — a ``valid`` ladder. The dispatcher renders the
+wire envelope; this ability never formats one.
 """
 
 import json
@@ -28,14 +34,29 @@ _ACTION_LIST = "list"
 _ACTION_GET = "get"
 _ACTION_DELETE = "delete"
 
+_ACTIONS = (_ACTION_SAVE, _ACTION_LIST, _ACTION_GET, _ACTION_DELETE)
+
 _SOURCE_LABEL = "place_ability"
 
 _ERR_NO_LOCATION = "No GPS location available. Please grant location permission in your browser."
-_ERR_MISSING_NAME = "A place name is required for this action."
 _ERR_NOT_FOUND = "No saved place found with that name."
+
+_HINT_NO_LOCATION = "ask the user to grant location permission, then retry save."
+_HINT_NOT_FOUND = "call place with action=list to see the names that exist."
 
 
 class PlaceAbility(Ability):
+    # Pre-gated by the dispatcher BEFORE run(): save/get/delete each require a
+    # 'name'; list requires nothing. An unknown action → one unknown-action error
+    # whose valid= names these keys; a known action missing 'name' → one
+    # missing-params error. The ability's run() never sees a malformed call.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
+        _ACTION_SAVE: ("name",),
+        _ACTION_LIST: (),
+        _ACTION_GET: ("name",),
+        _ACTION_DELETE: ("name",),
+    }
+
     def get_name(self) -> str:
         return "place"
 
@@ -88,7 +109,7 @@ class PlaceAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        action = params.get("action", "").lower()
+        action = (params.get("action") or "").lower()
         name = (params.get("name") or "").strip().lower()
 
         if action == _ACTION_SAVE:
@@ -100,17 +121,21 @@ class PlaceAbility(Ability):
         if action == _ACTION_DELETE:
             return self._handle_delete(name)
 
-        return ToolResult.err(f"Unknown place action: {action}", code="error")
+        # ACTION_REQUIRED pre-gates unknown actions, so this is unreachable in
+        # practice; kept as a self-correcting belt-and-braces error.
+        return ToolResult.err(
+            f"Unknown place action: {action}",
+            code="unknown-action",
+            hint="choose one of the valid actions below.",
+            valid=_ACTIONS,
+        )
 
     # ── Action handlers ───────────────────────────────────────────────────────
 
     def _handle_save(self, name: str, telemetry: dict | None) -> ToolResult:
-        if not name:
-            return ToolResult.err(_ERR_MISSING_NAME, code="error")
-
         lat, lon, location_name = _extract_location(telemetry)
         if lat is None or lon is None:
-            return ToolResult.err(_ERR_NO_LOCATION, code="error")
+            return ToolResult.err(_ERR_NO_LOCATION, code="no-location", hint=_HINT_NO_LOCATION)
 
         value = json.dumps({
             "lat": lat,
@@ -119,92 +144,64 @@ class PlaceAbility(Ability):
             "radius_m": _DEFAULT_RADIUS_M,
         })
 
-        try:
-            result = get_data_graph_service().store(
-                kind=KIND_PLACE,
-                key=name,
-                value=value,
-                source=_SOURCE_LABEL,
-            )
-        except Exception as exc:
-            logger.exception("%s save failed for name=%s: %s", LOG_PREFIX, name, exc)
-            return ToolResult.err(str(exc), code="error")
+        result = get_data_graph_service().store(
+            kind=KIND_PLACE,
+            key=name,
+            value=value,
+            source=_SOURCE_LABEL,
+        )
 
-        status = result.get("status") if result else "stored"
+        status = (result or {}).get("status", "stored")
         logger.info("%s saved place name=%s lat=%s lon=%s status=%s", LOG_PREFIX, name, lat, lon, status)
-        return ToolResult.ok({
-            "status": "ok",
-            "action": _ACTION_SAVE,
-            "name": name,
-            "lat": lat,
-            "lon": lon,
-            "location_name": location_name or name,
-        })
+        return ToolResult.ok(
+            {
+                "name": name,
+                "lat": lat,
+                "lon": lon,
+                "location_name": location_name or name,
+                "source": _SOURCE_LABEL,
+                "status": status,
+            },
+            saved=name,
+        )
 
     def _handle_list(self) -> ToolResult:
-        try:
-            rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
-        except Exception as exc:
-            logger.exception("%s list failed: %s", LOG_PREFIX, exc)
-            return ToolResult.err(str(exc), code="error")
-
+        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
         places = [_row_to_place(r) for r in rows if r]
-        return ToolResult.ok({
-            "status": "ok",
-            "action": _ACTION_LIST,
-            "count": len(places),
-            "places": places,
-        })
+        return ToolResult.ok(places, count=len(places))
 
     def _handle_get(self, name: str) -> ToolResult:
-        if not name:
-            return ToolResult.err(_ERR_MISSING_NAME, code="error")
-
-        try:
-            rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
-        except Exception as exc:
-            logger.exception("%s get failed for name=%s: %s", LOG_PREFIX, name, exc)
-            return ToolResult.err(str(exc), code="error")
-
+        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
         matched = next((r for r in rows if r and r.get("key", "").lower() == name), None)
         if matched is None:
-            return ToolResult.err(_ERR_NOT_FOUND, code="error", name=name)
-
-        return ToolResult.ok({
-            "status": "ok",
-            "action": _ACTION_GET,
-            "place": _row_to_place(matched),
-        })
+            return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)
+        return ToolResult.ok(_row_to_place(matched))
 
     def _handle_delete(self, name: str) -> ToolResult:
-        if not name:
-            return ToolResult.err(_ERR_MISSING_NAME, code="error")
-
-        try:
-            rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
-        except Exception as exc:
-            logger.exception("%s delete fetch failed for name=%s: %s", LOG_PREFIX, name, exc)
-            return ToolResult.err(str(exc), code="error")
-
+        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
         matched = next((r for r in rows if r and r.get("key", "").lower() == name), None)
         if matched is None:
-            return ToolResult.err(_ERR_NOT_FOUND, code="error", name=name)
+            return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)
 
         row_id = matched.get("id")
         if row_id is None:
-            return ToolResult.err("Place record has no id.", code="error", name=name)
+            return ToolResult.err(
+                "Saved place has no id and cannot be deleted.",
+                code="delete-failed",
+                name=name,
+            )
 
-        try:
-            deleted = get_data_graph_service().soft_delete_by_id(row_id)
-        except Exception as exc:
-            logger.exception("%s delete failed for name=%s id=%s: %s", LOG_PREFIX, name, row_id, exc)
-            return ToolResult.err(str(exc), code="error")
-
+        deleted = get_data_graph_service().soft_delete_by_id(row_id)
         if not deleted:
-            return ToolResult.err("Delete failed.", code="error", name=name)
+            return ToolResult.err(
+                f"Could not delete the place {name!r}.",
+                code="delete-failed",
+                hint="retry, or list the saved places to confirm it still exists.",
+                name=name,
+            )
 
         logger.info("%s deleted place name=%s id=%s", LOG_PREFIX, name, row_id)
-        return ToolResult.ok({"status": "ok", "action": _ACTION_DELETE, "name": name})
+        return ToolResult.ok({"name": name, "deleted": True}, deleted=name)
 
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
