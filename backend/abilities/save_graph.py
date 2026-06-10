@@ -11,7 +11,7 @@ from any processor that opts it in.
 import logging
 from typing import ClassVar
 
-from abilities._ability import Ability
+from abilities._budget import BudgetCappedAbility
 from abilities._result import ToolResult
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
 
@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 # Subset: exclude behavioral_pattern (own tool) and system (internal use).
 ALLOWED_KINDS = sorted(VALID_KINDS - {"behavioral_pattern", "system"})
 
-_BUDGET_CAP = 50
 
-
-class SaveGraph(Ability):
+class SaveGraph(BudgetCappedAbility):
     SYSTEM = True
+
+    BUDGET_COUNTER_ATTR: ClassVar[str] = "_save_graph_calls"
+    BUDGET_CAP: ClassVar[int] = 50
 
     def get_name(self) -> str:
         return "save_graph"
@@ -65,11 +66,11 @@ class SaveGraph(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        proc = self.mp
-        count = getattr(proc, "_save_graph_calls", 0) if proc is not None else 0
-        if count >= _BUDGET_CAP:
-            return ToolResult.ok({"budget_exceeded": True, "tool": "save_graph"})
+        capped = self.budget_exceeded()
+        if capped is not None:
+            return capped
 
+        proc = self.mp
         kind = params.get("kind", "")
         if kind not in ALLOWED_KINDS:
             return ToolResult.ok({"error": "invalid_kind", "kind": kind})
@@ -95,8 +96,8 @@ class SaveGraph(Ability):
         except Exception as exc:
             return ToolResult.ok({"error": "store_failed", "message": str(exc)})
 
+        self.bump_budget()
         if proc is not None:
-            proc._save_graph_calls = count + 1
             if seen is None:
                 proc._save_graph_seen = set()
             proc._save_graph_seen.add(dedup_key)

@@ -14,7 +14,7 @@ import math
 import re
 from typing import ClassVar
 
-from abilities._ability import Ability
+from abilities._budget import BudgetCappedAbility
 from abilities._result import ToolResult
 from services.database_service import get_shared_db_service
 from services.time_utils import utc_now
@@ -25,11 +25,12 @@ logger = logging.getLogger(__name__)
 _NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 _VALID_FREQUENCIES = frozenset({"daily", "weekly", "weekday", "weekend", "ad-hoc"})
 
-_BUDGET_CAP = 20
 
-
-class SavePattern(Ability):
+class SavePattern(BudgetCappedAbility):
     SYSTEM = True
+
+    BUDGET_COUNTER_ATTR: ClassVar[str] = "_save_pattern_calls"
+    BUDGET_CAP: ClassVar[int] = 20
 
     def get_name(self) -> str:
         return "save_pattern"
@@ -86,10 +87,9 @@ class SavePattern(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        proc = self.mp
-        count = getattr(proc, "_save_pattern_calls", 0) if proc is not None else 0
-        if count >= _BUDGET_CAP:
-            return ToolResult.ok({"budget_exceeded": True, "tool": "save_pattern"})
+        capped = self.budget_exceeded()
+        if capped is not None:
+            return capped
 
         validated = _validate_pattern_params(params)
         if "error" in validated:
@@ -97,8 +97,9 @@ class SavePattern(Ability):
 
         row_id, confidence_out = _upsert_pattern(validated)
 
+        self.bump_budget()
+        proc = self.mp
         if proc is not None:
-            proc._save_pattern_calls = count + 1
             touched = getattr(proc, "_touched_pattern_ids", None)
             if touched is not None:
                 touched.add(row_id)
