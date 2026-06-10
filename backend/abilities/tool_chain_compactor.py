@@ -16,41 +16,16 @@ the trail is empty the ability silently returns nothing (no boundary, no LLM cal
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
-from services.processor_config import ProcessorConfig
+from services.system_message_prompt import ToolChainCompactionSystemPrompt
 
 
-class ToolChainCompactionConfig(ProcessorConfig):
+class ToolChainCompactionConfig(CompactionConfig):
     """Single-pass act-trail compaction. No tools, no transcript writes.
     Thinking is forced high so no fact a later step needs is dropped."""
 
-    thinking_mode: ClassVar[str] = "high"
-
-    def __init__(self) -> None:
-        super().__init__(
-            channel="compaction",
-            role="compaction",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=1,
-            skip_transcript=True,
-            skip_input_row=True,
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
-        )
-
-    def get_user_definition(self, mp) -> str:
-        return ""
-
-    def get_user_prompt(self, mp) -> str:
-        return mp._raw_input
-
-    def get_system_prompt(self, mp) -> str:
-        from services.system_message_prompt import ToolChainCompactionSystemPrompt  # noqa: PLC0415
-        return ToolChainCompactionSystemPrompt().get_prompt()
+    SYSTEM_PROMPT_CLASS: ClassVar[type] = ToolChainCompactionSystemPrompt
 
 
 class ToolChainCompactor(Ability):

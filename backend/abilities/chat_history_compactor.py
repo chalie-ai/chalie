@@ -17,44 +17,19 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
-from services.processor_config import ProcessorConfig
+from services.system_message_prompt import ChatHistoryCompactionSystemPrompt
 
 logger = logging.getLogger(__name__)
 
 
-class ChatHistoryCompactionConfig(ProcessorConfig):
+class ChatHistoryCompactionConfig(CompactionConfig):
     """Single-pass chat-history compaction. No tools, no transcript writes of its
     own (the ability writes the durable watermark row explicitly). Thinking is
     forced high so the model reasons hard about what continuity to preserve."""
 
-    thinking_mode: ClassVar[str] = "high"
-
-    def __init__(self) -> None:
-        super().__init__(
-            channel="compaction",
-            role="compaction",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
-            always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=1,
-            skip_transcript=True,
-            skip_input_row=True,
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
-        )
-
-    def get_user_definition(self, mp) -> str:
-        return ""
-
-    def get_user_prompt(self, mp) -> str:
-        return mp._raw_input
-
-    def get_system_prompt(self, mp) -> str:
-        from services.system_message_prompt import ChatHistoryCompactionSystemPrompt  # noqa: PLC0415
-        return ChatHistoryCompactionSystemPrompt().get_prompt()
+    SYSTEM_PROMPT_CLASS: ClassVar[type] = ChatHistoryCompactionSystemPrompt
 
 
 class ChatHistoryCompactor(Ability):
@@ -129,7 +104,6 @@ class ChatHistoryCompactor(Ability):
         Uses parent.providers.measure(dto) for sizing — no raw provider object.
         """
         from services.provider_api import ProviderApiRequest, ThinkingLevel  # noqa: PLC0415
-        from services.system_message_prompt import ChatHistoryCompactionSystemPrompt  # noqa: PLC0415
 
         system = ChatHistoryCompactionSystemPrompt().get_prompt()
         window = parent.providers.get_context_limit()
