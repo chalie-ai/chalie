@@ -5,11 +5,10 @@ import uuid
 from typing import ClassVar
 from urllib.parse import urlparse
 
-import requests
-
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from services.ssrf import is_private_url
+from services.web_fetch import DOWNLOAD, stream_to_file
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +16,6 @@ _DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "chalie_downloads")
 _BLOCKED_SCHEMES = frozenset({"file", "data"})
 _DEFAULT_TIMEOUT_MIN = 15
 _MAX_TIMEOUT_MIN = 120
-_CHUNK_SIZE = 8192
 
 
 class WebDownloadAbility(Ability):
@@ -102,17 +100,4 @@ def _build_dest_path(url: str) -> str:
 
 
 def _download(url: str, dest_path: str, timeout_sec: float) -> None:
-    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-
-    response = requests.get(url, stream=True, timeout=timeout_sec)
-    with response:
-        response.raise_for_status()
-        try:
-            with open(dest_path, "wb") as fh:
-                for chunk in response.iter_content(chunk_size=_CHUNK_SIZE):
-                    if chunk:
-                        fh.write(chunk)
-        except Exception:
-            if os.path.exists(dest_path):
-                os.remove(dest_path)
-            raise
+    stream_to_file(url, dest_path, profile=DOWNLOAD, timeout=timeout_sec)

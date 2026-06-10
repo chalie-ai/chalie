@@ -21,6 +21,7 @@ import requests
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from services.ssrf import is_private_url
+from services.web_fetch import BROWSER, fetch_text
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -68,30 +69,6 @@ class ReadAbility(Ability):
         return self._PARAMETERS
 
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15
-
-    _BROWSER_HEADERS: ClassVar[dict] = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Accept": (
-            "text/html,application/xhtml+xml,application/xml;q=0.9,"
-            "image/avif,image/webp,image/apng,*/*;q=0.8,"
-            "application/signed-exchange;v=b3;q=0.7"
-        ),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "max-age=0",
-        "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"macOS"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Upgrade-Insecure-Requests": "1",
-    }
 
     _BLOCKED_PATH_PREFIXES: ClassVar[tuple] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
 
@@ -159,16 +136,9 @@ def _read_url(url: str, max_chars: int) -> ToolResult:
         )
 
     try:
-        with requests.Session() as session:
-            session.headers.update(ReadAbility._BROWSER_HEADERS)
-            response = session.get(
-                url,
-                timeout=ReadAbility._URL_FETCH_TIMEOUT,
-                allow_redirects=True,
-                verify=False,
-            )
-            response.raise_for_status()
-            html = response.text
+        html = fetch_text(
+            url, profile=BROWSER, timeout=ReadAbility._URL_FETCH_TIMEOUT
+        )
     except requests.RequestException as e:
         return ToolResult.err(f"fetch-failed:{str(e)[:150]}", code="fetch-failed", source=url)
 
