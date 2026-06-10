@@ -108,7 +108,11 @@ class TestUserChannelBlocksRawWebTools:
         assert "web_search" in mp.active_tools, (
             f"web_search delegate must stay available on user. active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" not in result.lower()
+        # find_tools now returns a structured body: a successful select reports
+        # nothing under not_found (neither delegate was treated as unavailable).
+        assert result["not_found"] == [], (
+            f"delegate tools must not be reported unavailable. result={result!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -111,15 +111,14 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     conn.close()
 
 
-def _execute_with_discoverable(ability, query, discoverable, limit=None):
+def _execute_with_discoverable(ability, query, discoverable):
     """Run ability.run() inside a stub-processor binding; return
-    (result_text, active_tools) so callers assert on the appended names."""
+    (result, active_tools) so callers assert on the appended names. The query
+    path caps results at ``MAX_QUERY_RESULTS`` internally — there is no caller
+    'limit' knob (dropped in the v2 select/query split)."""
     proc = _make_stub_processor(discoverable=discoverable)
-    params = {"query": query}
-    if limit is not None:
-        params["limit"] = limit
     ability.mp = proc
-    result = ability.run(params)
+    result = ability.run({"query": query})
     return result, proc.active_tools
 
 
@@ -151,10 +150,12 @@ class TestFindToolsDiscovery:
     def test_fts_keyword_path_surfaces_ability(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """Ability with keyword match in FTS5 surfaces even when vec rank is low.
+        """Ability with a keyword match in FTS5 surfaces above the relevance floor.
 
-        Uses a query containing 'sandbox' — FTS5 picks it up directly from the
-        code_eval summary text, independent of semantic similarity.
+        Uses the query 'python sandbox' — every token is present in the code_eval
+        summary text, so FTS5 (whose default tokenizer requires ALL query terms)
+        fires and combines with the vec signal to clear ``MIN_RRF_SCORE``. A single
+        vec-only signal would sit under the floor; the FTS hit is what lifts it.
         """
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [
@@ -173,7 +174,7 @@ class TestFindToolsDiscovery:
 
         ability = FindToolsAbility()
         _, active = _execute_with_discoverable(
-            ability, "sandbox python execution", ["weather", "code_eval"]
+            ability, "python sandbox", ["weather", "code_eval"]
         )
 
         assert "code_eval" in active, (
@@ -183,11 +184,17 @@ class TestFindToolsDiscovery:
     def test_rrf_merges_vec_and_fts_results(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """With limit=2 and two abilities each winning one retriever, both appear.
+        """RRF fuses the vec and FTS retrievers: one query, both abilities ranked.
 
-        'weather forecast' is semantically close to weather (vec wins). 'sandbox'
-        keyword in the query hits code_eval's summary via FTS5. RRF combines both.
+        The query 'weather forecast' is a dual signal for weather (vec close + FTS
+        on 'weather'/'forecast') and a vec-only signal for code_eval. The real
+        ``_query`` (which does NOT apply the relevance floor — that is layered on
+        in ``_run_query``) must therefore return BOTH abilities, fused into one
+        ranked list with no duplicates and weather ahead of code_eval.
         """
+        from services.embedding_service import EmbeddingService
+        from services.embedding_utils import pack_embedding
+
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [
             {
@@ -204,16 +211,18 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(
-            ability, "weather forecast sandbox", ["weather", "code_eval"], limit=2
-        )
+        blob = pack_embedding(EmbeddingService().generate_embedding("weather forecast"))
+        rows = ability._query("weather forecast", blob, ["weather", "code_eval"])
 
-        assert len(active) == len(set(active)), (
-            f"Duplicates in active: {active}"
+        names = [r["key"] for r in rows]
+        assert len(names) == len(set(names)), f"Duplicates in merged rows: {names}"
+        assert set(names) == {"weather", "code_eval"}, (
+            f"RRF should fuse both retrievers (weather dual-signal, code_eval via "
+            f"vec). Got: {names}"
         )
-        assert set(active) == {"weather", "code_eval"}, (
-            f"RRF should surface both abilities (weather via vec, code_eval via FTS). "
-            f"Got: {active}"
+        assert names[0] == "weather", (
+            f"weather (dual vec+FTS signal) must outrank code_eval (vec only). "
+            f"Got order: {names}"
         )
 
     def test_no_duplicates_when_ability_in_both_retrievers(
@@ -230,7 +239,7 @@ class TestFindToolsDiscovery:
 
         ability = FindToolsAbility()
         _, active = _execute_with_discoverable(
-            ability, "weather forecast", ["weather"], limit=5
+            ability, "weather forecast", ["weather"]
         )
 
         assert active.count("weather") <= 1, (
@@ -383,7 +392,7 @@ class TestFindToolsPhase3Gaps:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
         ability = FindToolsAbility()
         blob = pack_embedding(q_vec.tolist())
-        rows = ability._query("zetakeyword", blob, 5, ["ability_a", "ability_b"])
+        rows = ability._query("zetakeyword", blob, ["ability_a", "ability_b"])
 
         names = [r["key"] for r in rows]
         assert len(names) >= 2, f"Expected both abilities in results, got: {names}"
@@ -410,7 +419,7 @@ class TestFindToolsPhase3Gaps:
         ability = FindToolsAbility()
         proc = _make_stub_processor(discoverable=["sandboxer"])
         ability.mp = proc
-        ability._fallback("sandbox", 5, ["sandboxer"])
+        ability._fallback("sandbox", ["sandboxer"])
 
         assert proc.active_tools == ["sandboxer"]
 
@@ -439,7 +448,7 @@ class TestFindToolsPhase3Gaps:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
         ability = FindToolsAbility()
         blob = pack_embedding(q_vec.tolist())
-        rows = ability._query("alphajet", blob, 5, ["allowed_ability"])
+        rows = ability._query("alphajet", blob, ["allowed_ability"])
 
         names = {r["key"] for r in rows}
         assert names == {"allowed_ability"}, (

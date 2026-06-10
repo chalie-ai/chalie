@@ -68,10 +68,10 @@ def test_dispatch_runs_real_registered_tool_through_gate_and_records(db):
     result = ToolDispatcher(mp).dispatch("find_tools", {"query": ""})
 
     # Real find_tools output: the deterministic no-params error, rendered in the
-    # canonical envelope by the dispatcher.
+    # canonical envelope by the dispatcher with a stable kebab-case code.
     assert isinstance(result, str)
-    assert result.startswith("[find_tools(status=error, code=error)]")
-    assert "params-required" in result
+    assert result.startswith("[find_tools(status=error, code=missing-params)]")
+    assert "code=error]" not in result
     assert result.endswith("[end:find_tools]")
 
     # The dispatch recorded exactly one outcome against the transcript anchor,
@@ -79,7 +79,7 @@ def test_dispatch_runs_real_registered_tool_through_gate_and_records(db):
     rows = ActTrail().fetch_by_transcript_id(transcript_id)
     assert [r["tool_name"] for r in rows] == ["find_tools"]
     assert ActTrail.render(rows[0]).startswith("[find_tools]")
-    assert "params-required" in rows[0]["result"]
+    assert "missing-params" in rows[0]["result"]
 
 
 def test_dispatch_records_unknown_tool_outcome(db):

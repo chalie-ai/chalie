@@ -122,7 +122,11 @@ class TestVisionVisibility:
             f"vision delegate must be selectable on the user channel. "
             f"active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" not in result.lower()
+        # find_tools now returns a structured body: a successful select reports
+        # nothing under not_found (vision was injected, not treated as unavailable).
+        assert result["not_found"] == [], (
+            f"vision must not be reported unavailable on the user channel. result={result!r}"
+        )
 
     def test_vision_blocked_on_dmn_background_channel(self):
         """DmnConfig.blocked = DELEGATE_TOOLS | ... so vision (a delegate tool)

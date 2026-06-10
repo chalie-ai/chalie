@@ -1,5 +1,4 @@
 import copy
-import json
 import logging
 from pathlib import Path
 from typing import ClassVar
@@ -172,13 +171,26 @@ class FindToolsAbility(SearchableAbility):
         return params
 
     def run(self, params: dict) -> ToolResult:
-        """Dispatch to the select or query path and return a ToolResult."""
+        """Dispatch to the select or query path and return a ToolResult.
+
+        The result is structured so a weak model can tell what it actually got:
+        the success body is ``{"injected": [{"name", "summary"}, …], "not_found":
+        […]}`` with ``injected``/``not_found`` counts in the meta, and a request
+        that yields nothing usable errors loudly (``unknown-tool`` /
+        ``blocked-on-channel``) with a ``valid:`` ladder of real selectable names
+        — never a prose-only result that hides whether a tool was injected.
+        """
         select_names = params.get("select")
         query = params.get("query", "").strip()
 
         # Require at least one param.
         if not select_names and not query:
-            return ToolResult.err("params-required", code="error")
+            return ToolResult.err(
+                "find_tools requires either 'select' (exact tool names) or 'query' "
+                "(a description of what you need).",
+                code="missing-params",
+                valid=("select", "query"),
+            )
 
         proc = self.mp
         discoverable, blocked = self._config_scope(proc)
@@ -189,19 +201,20 @@ class FindToolsAbility(SearchableAbility):
         mcp_names = [name for name in self._get_online_mcp_names() if name not in blocked]
         effective_allow = set(allow) | set(mcp_names)
 
-        if not effective_allow:
-            meta = {"query": query} if query else {}
-            return ToolResult.ok(self._no_results_text(query or ""), **meta)
-
         # select wins over query when both are provided.
         if select_names:
-            return self._run_select(select_names, effective_allow)
+            return self._run_select(select_names, effective_allow, blocked)
+
+        if not effective_allow:
+            return ToolResult.ok({"injected": [], "not_found": []}, injected=0, query=query)
 
         logger.info("%s query='%s'", self._LOG_PREFIX, query)
         return self._run_query(query, list(allow), list(mcp_names))
 
-    def _run_select(self, requested: list[str], effective_allow: set[str]) -> ToolResult:
-        """Exact case-insensitive match against effective_allow; append matched names.
+    def _run_select(
+        self, requested: list[str], effective_allow: set[str], blocked: set[str]
+    ) -> ToolResult:
+        """Exact case-insensitive match against effective_allow; inject matched names.
 
         Builds a display.lower()→call_name alias map from get_online_mcp_tools_index()
         so callers can use the bare server-reported name (e.g. 'list_tickets') in
@@ -210,8 +223,14 @@ class FindToolsAbility(SearchableAbility):
         Ambiguity rule: if a bare display name maps to more than one distinct call
         name across servers, the alias is dropped — the caller must use the prefixed
         form to avoid silent wrong-server selection.
+
+        A name blocked on the invoking channel is NEVER injected (today's silent
+        partial success); it lands in not_found and, when every requested name is
+        unusable, drives a loud ``blocked-on-channel`` / ``unknown-tool`` error so
+        the model never believes a blocked delegate is now available.
         """
         allow_lower = {name.lower(): name for name in effective_allow}
+        blocked_lower = {name.lower() for name in blocked}
 
         # Build display → call_name alias map for MCP tools in effective_allow.
         # display_to_calls accumulates all call_names for each bare display name so we
@@ -232,6 +251,7 @@ class FindToolsAbility(SearchableAbility):
 
         matched: list[str] = []
         not_found: list[str] = []
+        any_blocked = False
 
         for name in requested:
             lower = name.lower()
@@ -240,20 +260,43 @@ class FindToolsAbility(SearchableAbility):
                 matched.append(canonical)
             else:
                 not_found.append(name)
+                if lower in blocked_lower:
+                    any_blocked = True
 
         # Two requested aliases (e.g. the bare display name and its prefixed call
         # name) can resolve to the same canonical tool — collapse so the result
-        # JSON and the found= count never double-report a single tool.
+        # JSON and the injected= count never double-report a single tool.
         matched = list(dict.fromkeys(matched))
 
-        self._append_active(matched)
-        parts: list[str] = []
-        if matched:
-            parts.append(self._format_universal(matched, "Selected and added the following tools"))
-        if not_found:
-            parts.append(f"Tools not found or unavailable: {', '.join(not_found)}")
+        # Nothing usable: loud error so the model self-corrects rather than
+        # believing a blocked/unknown tool was injected. blocked-on-channel when
+        # the failure was a real-but-blocked name; unknown-tool otherwise. The
+        # valid ladder is the real selectable names on this channel.
+        if not matched:
+            valid = tuple(sorted(effective_allow))
+            if any_blocked:
+                return ToolResult.err(
+                    f"Tools not found or unavailable on this channel: {', '.join(not_found)}.",
+                    code="blocked-on-channel",
+                    hint="These tools are not offered on this channel; pick one from the valid list.",
+                    valid=valid,
+                )
+            return ToolResult.err(
+                f"Tools not found or unavailable: {', '.join(not_found)}.",
+                code="unknown-tool",
+                hint="No tool by that name is selectable here; pick one from the valid list.",
+                valid=valid,
+            )
 
-        return ToolResult.ok("\n".join(parts), found=len(matched))
+        self._append_active(matched)
+        body = {
+            "injected": [{"name": n, "summary": self._summary_for(n)} for n in matched],
+            "not_found": not_found,
+        }
+        meta = {"injected": len(matched)}
+        if not_found:
+            meta["not_found"] = len(not_found)
+        return ToolResult.ok(body, **meta)
 
     def _run_query(self, query: str, allow: list[str], mcp_names: list[str]) -> ToolResult:
         """Hybrid vec+FTS RRF search with relevance floor and top-N cap."""
@@ -277,13 +320,9 @@ class FindToolsAbility(SearchableAbility):
         for row in rows:
             logger.info("%s RRF: %s score=%.4f", self._LOG_PREFIX, row["key"], row["score"])
 
-        if not rows:
-            return ToolResult.ok("No tools match the query specified", query=query)
-
         names = [r["key"] for r in rows]
         self._append_active(names)
-        raw_text = self._format_universal(names, f'Query "{query}" matched and added the following tools')
-        return ToolResult.ok(raw_text, query=query, found=len(names))
+        return ToolResult.ok(self._query_body(names), injected=len(names), query=query)
 
     def _append_active(self, names: list[str]) -> None:
         """Append newly-discovered tool names to the live processor's active_tools.
@@ -301,42 +340,38 @@ class FindToolsAbility(SearchableAbility):
             if name not in active:
                 active.append(name)
 
-    def _format_universal(self, names: list[str], lead: str) -> str:
-        """Build the universal v2 result string carrying per-tool input_schema.
+    def _query_body(self, names: list[str]) -> dict:
+        """Structured query/fallback body: the same ``{"injected", "not_found"}``
+        shape the select path emits, so every find_tools success has one body
+        contract. Each injected entry is ``{"name", "summary"}``; the discovered
+        names are already on ``active_tools`` so build_tools resolves their full
+        input_schema on the next ACT iteration."""
+        return {
+            "injected": [{"name": n, "summary": self._summary_for(n)} for n in names],
+            "not_found": [],
+        }
 
-        Each entry is {"name": <name>, "input_schema": <schema dict>} so the
-        literal token "input_schema" always appears in the serialised output.
-        Schema lookup failures are logged and skipped — find_tools must always
-        complete.
-        """
-        entries = []
-        for name in names:
-            schema = self._resolve_schema(name)
-            entries.append({"name": name, "input_schema": schema})
-        return f"{lead}:\n{json.dumps(entries)}"
+    def _summary_for(self, name: str) -> str:
+        """Return a one-line summary for a tool name (ability or MCP).
 
-    def _resolve_schema(self, name: str) -> dict:
-        """Return the input_schema dict for a tool name (ability or MCP).
-
-        Never raises — returns an empty dict on any failure so the caller can
-        always produce a result string.
+        Never raises — returns an empty string on any failure so the caller can
+        always produce a body. The full input_schema is NOT embedded here: the
+        name is appended to active_tools, and build_tools resolves the live schema
+        on the next ACT iteration.
         """
         try:
             if name.startswith("_mcp_"):
                 from services.mcp_client_service import McpClientService
                 result = McpClientService().get_tool_schema(name)
-                if result and "input_schema" in result:
-                    return result["input_schema"]
-                return {}
+                if result:
+                    return result.get("description") or ""
+                return ""
             from abilities._registry import AbilityRegistry
-            template = AbilityRegistry.get(name)
-            # Bind a fresh per-call instance to mp so the discovered tool's body
-            # carries the same framework injection / enrichment build_tools gives
-            # it; return the input_schema BODY (what _format_universal embeds).
-            return type(template)(mp=self.mp).get_input_schema()["input_schema"]
+            ability = AbilityRegistry.get(name)
+            return ability.get_search_tooltip() or ability.get_summary() or ""
         except Exception as exc:
-            logger.warning("%s Schema lookup failed for %r: %s", self._LOG_PREFIX, name, exc)
-            return {}
+            logger.warning("%s Summary lookup failed for %r: %s", self._LOG_PREFIX, name, exc)
+            return ""
 
     def _query(self, query: str, blob: bytes, allow: list[str]) -> list:
         if not allow:
@@ -416,18 +451,14 @@ class FindToolsAbility(SearchableAbility):
         merged.sort(key=lambda r: r["score"], reverse=True)
         return merged
 
-    @staticmethod
-    def _no_results_text(query: str) -> str:
-        return f'INFO: The best tools for "{query}" are already available.'
-
     def _fallback(self, query: str, allow: list[str]) -> ToolResult:
         """FTS-only fallback for abilities.sqlite when embedding fails.
 
-        No relevance floor applied (single-signal by nature); adapts to the
-        v2 universal result format.
+        No relevance floor applied (single-signal by nature); emits the same
+        structured ``{"injected", "not_found"}`` body the primary query path uses.
         """
         if not allow:
-            return ToolResult.ok(self._no_results_text(query), query=query)
+            return ToolResult.ok({"injected": [], "not_found": []}, injected=0, query=query)
 
         mcp_names = [n for n in allow if n.startswith("_mcp_")]
         ability_names = [n for n in allow if not n.startswith("_mcp_")]
@@ -458,9 +489,5 @@ class FindToolsAbility(SearchableAbility):
 
         discovered = discovered[:self.MAX_QUERY_RESULTS]
 
-        if not discovered:
-            return ToolResult.ok(self._no_results_text(query), query=query)
-
         self._append_active(discovered)
-        raw_text = self._format_universal(discovered, f'Query "{query}" matched and added the following tools')
-        return ToolResult.ok(raw_text, query=query, found=len(discovered))
+        return ToolResult.ok(self._query_body(discovered), injected=len(discovered), query=query)

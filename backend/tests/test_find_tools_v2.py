@@ -146,11 +146,12 @@ class TestSelectExact:
 class TestSelectNotFound:
 
     def test_select_valid_added_bogus_reported_as_not_found(self):
-        """run({'select': ['weather', 'bogus_tool_xyz']}) → weather added to
-        active_tools, result contains 'not found or unavailable' and
-        'bogus_tool_xyz'.
+        """run({'select': ['weather', 'bogus_tool_xyz']}) → weather injected into
+        active_tools; the unresolved name is reported EXPLICITLY under the result
+        body's ``not_found`` (TKT-894) and counted in ``not_found=`` meta — partial
+        success is never silent.
 
-        v1 returns query-required error → neither behaviour. Test FAILS on v1.
+        v1 returned a query-required error → neither behaviour. Test FAILS on v1.
         """
         ability = FindToolsAbility()
         proc = _stub_proc(discoverable=["weather", "email"])
@@ -164,14 +165,17 @@ class TestSelectNotFound:
             f"Non-existent 'bogus_tool_xyz' must NOT be added. "
             f"active_tools={proc.active_tools}"
         )
-        # The result string must report the unresolved name
-        result_lower = result.lower()
-        assert "not found or unavailable" in result_lower, (
-            f"Result must contain 'not found or unavailable' for missing names. "
-            f"result={result!r}"
+        # Partial success: success envelope with the unresolved name surfaced
+        # explicitly under not_found (in both the meta count and the JSON body).
+        assert "status=success" in result
+        assert "not_found=1" in result, (
+            f"Result must count the unresolved name in not_found= meta. result={result!r}"
         )
         assert "bogus_tool_xyz" in result, (
             f"Result must name the unresolved tool 'bogus_tool_xyz'. result={result!r}"
+        )
+        assert "weather" in result, (
+            f"Result must name the injected tool 'weather'. result={result!r}"
         )
 
 
@@ -279,15 +283,19 @@ class TestNeitherParam:
 
 class TestResultFormat:
 
-    def test_successful_run_result_contains_required_v2_phrases_not_v1(self):
-        """A successful find_tools call must produce a result string that:
-          - Contains 'added the following tools'  (v2 universal result format)
-          - Contains the added tool's 'input_schema' key  (v2 embeds full schema)
-          - Does NOT contain 'relevance'  (v1 cosmetic field, dropped in v2)
-          - Does NOT contain 'added_tools'  (v1 result envelope, dropped in v2)
+    def test_successful_run_result_contains_required_v3_contract_not_v1(self):
+        """A successful find_tools call must produce a ToolResult (TKT-894) whose
+        rendered body carries structured ``injected`` rows — each a ``name`` +
+        ``summary`` — and drops the legacy prose/schema dump:
+          - Contains 'injected'  (v3 structured success body)
+          - Contains 'summary'   (each injected row carries the search tooltip)
+          - Names the injected tool 'weather'
+          - Does NOT contain 'input_schema'  (v2 schema dump, dropped in v3)
+          - Does NOT contain 'relevance'     (v1 cosmetic field)
+          - Does NOT contain 'added_tools'   (v1 result envelope)
 
-        On v1 code: result contains 'added_tools' + 'relevance', no
-        'added the following tools', no 'input_schema'. All four assertions fail.
+        On v1 code: result contains 'added_tools' + 'relevance', no structured
+        'injected'/'summary' body. The contract assertions fail.
         """
         ability = FindToolsAbility()
         # Use a single discoverable tool so the result is deterministic.
@@ -296,19 +304,28 @@ class TestResultFormat:
 
         result = _run(ability, proc, {"query": "weather forecast"})
 
-        assert "added the following tools" in result, (
-            "v2 universal result must contain 'added the following tools'. "
+        assert "status=success" in result
+        assert "injected" in result, (
+            "v3 success body must carry the structured 'injected' list. "
             f"result={result!r}"
         )
-        assert "input_schema" in result, (
-            "v2 result must carry the tool's input_schema. "
+        assert "summary" in result, (
+            "v3 success body must carry each injected tool's 'summary'. "
+            f"result={result!r}"
+        )
+        assert "weather" in result, (
+            "v3 result must name the injected tool 'weather'. "
+            f"result={result!r}"
+        )
+        assert "input_schema" not in result, (
+            "v3 result must NOT dump the tool's input_schema. "
             f"result={result!r}"
         )
         assert "relevance" not in result, (
-            "v2 result must NOT contain the legacy 'relevance' field. "
+            "v3 result must NOT contain the legacy 'relevance' field. "
             f"result={result!r}"
         )
         assert "added_tools" not in result, (
-            "v2 result must NOT contain the legacy 'added_tools' envelope. "
+            "v3 result must NOT contain the legacy 'added_tools' envelope. "
             f"result={result!r}"
         )
