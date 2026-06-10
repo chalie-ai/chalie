@@ -7,7 +7,6 @@ Pure-function tests for ``_parse_octal`` and ``_format_octal`` are permitted
 under tester.md rule 5 (no collaborators, deterministic).
 """
 
-import json
 import os
 import stat
 
@@ -76,9 +75,10 @@ def test_format_octal_preserves_special_bits():
 
 
 def _result_payload(result) -> dict:
-    """``run()`` returns a ``ToolResult`` whose ``body`` is the JSON payload
-    string; the dispatcher adds the ``[file_permissions(...)]`` envelope."""
-    return json.loads(result.body)
+    """``run()`` returns a ``ToolResult`` whose success ``body`` is the structured
+    dict the dispatcher renders as compact JSON. The dispatcher adds the
+    ``[file_permissions(...)]`` envelope around it."""
+    return result.body
 
 
 def test_execute_changes_permissions_and_reports_before_after(tmp_path):
@@ -89,10 +89,11 @@ def test_execute_changes_permissions_and_reports_before_after(tmp_path):
     result = FilePermissionsAbility().run({"path": str(target), "permissions": "755"})
     payload = _result_payload(result)
 
-    assert payload["status"] == "success"
+    assert result.status == "success"
     assert payload["path"] == str(target.resolve())
-    assert payload["permissions_before"] == "0644"
-    assert payload["permissions_after"] == "0755"
+    assert payload["mode_octal"] == "0755"
+    assert payload["mode_symbolic"] == "rwxr-xr-x"
+    assert result.meta["previous"] == "0644"
     assert (target.stat().st_mode & 0o7777) == 0o755
 
 
@@ -102,7 +103,29 @@ def test_execute_accepts_leading_zero_permissions(tmp_path):
     os.chmod(target, 0o644)
 
     result = FilePermissionsAbility().run({"path": str(target), "permissions": "0600"})
-    assert _result_payload(result)["permissions_after"] == "0600"
+    assert _result_payload(result)["mode_octal"] == "0600"
+    assert (target.stat().st_mode & 0o7777) == 0o600
+
+
+def test_execute_accepts_symbolic_clause(tmp_path):
+    target = tmp_path / "script.sh"
+    target.write_text("#!/bin/bash\n")
+    os.chmod(target, 0o644)
+
+    result = FilePermissionsAbility().run({"path": str(target), "permissions": "+x"})
+    assert result.status == "success"
+    assert _result_payload(result)["mode_octal"] == "0755"
+    assert (target.stat().st_mode & 0o7777) == 0o755
+
+
+def test_execute_accepts_intent_keyword(tmp_path):
+    target = tmp_path / "key.pem"
+    target.write_text("x")
+    os.chmod(target, 0o666)
+
+    result = FilePermissionsAbility().run({"path": str(target), "permissions": "owner-only"})
+    assert result.status == "success"
+    assert _result_payload(result)["mode_octal"] == "0600"
     assert (target.stat().st_mode & 0o7777) == 0o600
 
 
@@ -112,7 +135,7 @@ def test_execute_works_on_directories(tmp_path):
     os.chmod(target, 0o755)
 
     result = FilePermissionsAbility().run({"path": str(target), "permissions": "700"})
-    assert _result_payload(result)["status"] == "success"
+    assert result.status == "success"
     assert (target.stat().st_mode & 0o7777) == 0o700
 
 
@@ -123,28 +146,33 @@ def test_execute_works_on_directories(tmp_path):
 
 def test_execute_rejects_missing_path():
     result = FilePermissionsAbility().run({"permissions": "755"})
-    assert _result_payload(result) == {"error": "path-required"}
+    assert result.status == "error"
+    assert result.code == "missing-params"
 
 
 def test_execute_rejects_missing_permissions(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("x")
     result = FilePermissionsAbility().run({"path": str(target)})
-    assert _result_payload(result) == {"error": "permissions-required"}
+    assert result.status == "error"
+    assert result.code == "missing-params"
 
 
-def test_execute_rejects_invalid_octal(tmp_path):
+def test_execute_rejects_invalid_mode(tmp_path):
     target = tmp_path / "f.txt"
     target.write_text("x")
+    os.chmod(target, 0o644)
     result = FilePermissionsAbility().run({"path": str(target), "permissions": "abc"})
-    payload = _result_payload(result)
-    assert payload["error"] == "invalid-permissions"
-    assert payload["permissions"] == "abc"
+    assert result.status == "error"
+    assert result.code == "invalid-mode"
+    assert result.hint is not None
+    # The file mode is unchanged when the value cannot be parsed.
+    assert (target.stat().st_mode & 0o7777) == 0o644
 
 
 def test_execute_rejects_path_not_found(tmp_path):
     missing = tmp_path / "does-not-exist.txt"
     result = FilePermissionsAbility().run({"path": str(missing), "permissions": "644"})
-    payload = _result_payload(result)
-    assert payload["error"] == "path-not-found"
-    assert payload["path"] == str(missing)
+    assert result.status == "error"
+    assert result.code == "path-not-found"
+    assert str(missing) in result.body
