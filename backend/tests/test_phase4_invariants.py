@@ -146,6 +146,9 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "chat_history_compactor",
     "tool_chain_compactor",
     "timer",
+    # vision: image-description delegate ability (TKT-838) — registered at the
+    # top level like every dispatchable tool.
+    "vision",
     "ubiquiti",
     "weather",
     "web_browse",
