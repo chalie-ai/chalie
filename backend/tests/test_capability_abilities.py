@@ -79,29 +79,25 @@ def test_email_not_connected_returns_structured_error():
     assert "not connected" in payload["error"].lower()
 
 
-def test_calendar_read_returns_structured_error_without_db():
-    """CalendarAbility.execute read ops return structured error when DB is unavailable.
+def test_calendar_write_not_connected_returns_tool_result_error():
+    """CalendarAbility write ops return a ToolResult not-connected error.
 
-    Read operations (list_events, get_event) query scheduled_items via the
-    schedule ability's query_items — they do NOT require the mail capability
-    to be connected. In test env the DB is absent, so we get a DB error
-    wrapped in a structured dict.
+    calendar migrated onto CapabilityAbility in TKT-888, so the not-connected
+    surface is the base class's ``ToolResult.err`` (status=error,
+    code=not-connected, hint naming the integration) — the canonical contract
+    form. Reads (list_events/get_event) query scheduled_items and are covered
+    against a real DB in test_ability_calendar_tool_result.py; without a DB
+    they raise, and the dispatcher owns unhandled-exception wrapping.
     """
     from abilities.calendar import CalendarAbility
 
-    result = CalendarAbility().run({"action": "list_events"})
-    payload = _extract_json(result)
-    assert payload.get("status") == "error" or "error" in payload
-
-
-def test_calendar_write_not_connected_returns_structured_error():
-    """CalendarAbility.execute write ops return {status: error} when mail not connected."""
-    from abilities.calendar import CalendarAbility
-
-    result = CalendarAbility().run({"action": "update_event", "uid": "test-123", "summary": "New title"})
-    payload = _extract_json(result)
-    assert payload["status"] == "error"
-    assert "not connected" in payload["error"].lower()
+    result = CalendarAbility().run(
+        {"action": "update_event", "uid": "test-123", "summary": "New title"}
+    )
+    assert result.status == "error"
+    assert result.code == "not-connected"
+    assert "not connected" in result.body.lower()
+    assert "mail integration" in (result.hint or "").lower()
 
 
 def test_contacts_not_connected_returns_structured_error():
@@ -110,8 +106,8 @@ def test_contacts_not_connected_returns_structured_error():
     contacts is the TKT-883 exemplar migrated onto CapabilityAbility, so its
     not-connected surface is now a first-class ``ToolResult.err`` (status=error,
     code=not-connected, hint naming the integration) rather than a JSON body —
-    the canonical contract form. email/calendar keep the legacy JSON body until
-    their own migration tickets.
+    the canonical contract form. calendar followed in TKT-888; email keeps the
+    legacy JSON body until its own migration ticket.
     """
     from abilities.contacts import ContactsAbility
 
