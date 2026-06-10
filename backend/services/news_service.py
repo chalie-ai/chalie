@@ -34,8 +34,28 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[news]"
 
+
+class NewsFetchError(Exception):
+    """A news provider was unreachable or returned a transport-level error.
+
+    Raised by :meth:`NewsService.fetch_google_news` when the HTTP fetch to the
+    Google News RSS endpoint fails (connection refused, timeout, non-2xx). The
+    message carries the provider/URL context. The ability maps this to
+    ``code=provider-unreachable`` instead of letting a dead provider masquerade
+    as an empty result set.
+
+    Per-feed RSS failures inside :meth:`NewsService._parse_feed` are NOT raised:
+    a single dead feed in a multi-feed aggregate is normal and tolerated.
+    """
+
+
 # ── Constants ─────────────────────────────────────────────────
 USER_AGENT = "Chalie-NewsAggregator/1.0 (RSS reader)"
+
+# Google News RSS search endpoint base. Module-level so the search query, country
+# code, and language are appended at call time and so tests can point the fetch at
+# a closed loopback port to exercise the real transport-failure path.
+GOOGLE_NEWS_BASE = "https://news.google.com/rss/search"
 FEED_CACHE_TTL = 600  # 10 minutes
 PER_FEED_TIMEOUT = 5.0
 TOTAL_BUDGET = 8.0
@@ -187,7 +207,7 @@ class NewsService:
             except Exception:
                 pass
 
-        url = f"https://news.google.com/rss/search?q={quote_plus(full_query)}&hl=en&gl={country_code}&ceid={country_code}:en"
+        url = f"{GOOGLE_NEWS_BASE}?q={quote_plus(full_query)}&hl=en&gl={country_code}&ceid={country_code}:en"
         try:
             resp = requests.get(
                 url, timeout=timeout,
@@ -196,7 +216,7 @@ class NewsService:
             resp.raise_for_status()
         except Exception as e:
             logger.debug(f"{LOG_PREFIX} Google News fetch failed: {e}")
-            return []
+            raise NewsFetchError(f"Google News fetch failed for {url!r}: {e}") from e
 
         feed = feedparser.parse(resp.content)
         dummy_src = news_sources.Source("google_news", "Google News", "international", url, "US")
