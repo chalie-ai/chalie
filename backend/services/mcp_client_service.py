@@ -46,6 +46,28 @@ _STATUS_OFFLINE = "offline"
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]")
 
 
+class McpToolUnknown(Exception):
+    """An ``_mcp_*`` name resolves to no enabled/registered server.
+
+    Distinct from a reachable-but-failing call: the tool name itself cannot be
+    routed (no matching server, or the matching server is disabled), so retrying
+    is pointless until the server is (re-)added/enabled.
+    """
+
+
+class McpServerUnreachable(Exception):
+    """The remote MCP server could not be reached (transport/connect/timeout).
+
+    Carries the human-facing ``server_name`` so the proxy can NAME the failing
+    endpoint in its error envelope instead of leaking a transport stack trace.
+    """
+
+    def __init__(self, server_name: str, detail: str) -> None:
+        super().__init__(f"MCP server {server_name!r} is unreachable: {detail}")
+        self.server_name = server_name
+        self.detail = detail
+
+
 def _sanitize_name(name: str) -> str:
     """Convert a server name to a safe [a-z0-9_] identifier fragment."""
     lowered = name.lower().strip()
@@ -218,8 +240,10 @@ async def _async_call_tool(
 ) -> Any:
     """Connect to a remote MCP server and call a single tool.
 
-    Returns the raw tool result content (may be a list of content blocks or
-    a plain value depending on the server).
+    Returns the full ``CallToolResult`` so the caller can read ``isError`` and
+    ``structuredContent`` alongside the content blocks — an MCP tool signalling
+    failure via ``isError=true`` must NOT be mistaken for success, and structured
+    JSON must be preserved as structure rather than collapsed into a blob.
     """
     from mcp.client.streamable_http import streamablehttp_client
     from mcp.client.session import ClientSession
@@ -227,8 +251,7 @@ async def _async_call_tool(
     async with streamablehttp_client(host, headers=headers) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result = await session.call_tool(remote_tool, params)
-            return result.content
+            return await session.call_tool(remote_tool, params)
 
 
 # ── McpClientService ──────────────────────────────────────────────────────────
@@ -552,40 +575,50 @@ class McpClientService:
     # ── Dispatch ──────────────────────────────────────────────────────────────
 
     def dispatch_mcp_tool(self, tool_name: str, params: dict) -> dict:
-        """Dispatch a _mcp_* tool call to the appropriate remote server.
+        """Dispatch a ``_mcp_*`` tool call to the appropriate remote server.
 
-        Parses the tool_name to find the server and remote tool, opens a
-        fresh MCP session, calls the tool, and returns a result dict
-        compatible with ActDispatcherService._build_success_result().
+        Resolves the server + remote tool, opens a fresh MCP session, calls the
+        tool, and returns a SHAPED result the synthetic ``_MCPAbility`` proxy maps
+        straight onto the ``ToolResult`` contract::
 
-        Raises ValueError if the tool is unknown or the server is offline.
+            {"server": <server name>, "is_error": <bool>, "body": <str|dict|list>}
+
+        ``body`` is a ``str`` when the remote returned prose (text content blocks
+        joined) and a ``dict``/``list`` when the remote returned structured JSON
+        (preserved as structure, never re-serialised into a string). ``is_error``
+        carries the remote's ``isError`` flag so an MCP-level tool failure is
+        surfaced as an error, not dressed up as success.
+
+        Raises :class:`McpToolUnknown` when the name routes to no enabled server,
+        and :class:`McpServerUnreachable` (naming the server) on any transport /
+        connect / timeout failure.
         """
-        server, remote_tool = self._resolve_tool(tool_name)
+        try:
+            server, remote_tool = self._resolve_tool(tool_name)
+        except ValueError as exc:
+            raise McpToolUnknown(str(exc)) from exc
+
         host = server["host"]
         headers = server.get("headers") or {}
         if isinstance(headers, str):
             headers = json.loads(headers) if headers else {}
 
-        # Strip dispatcher-internal keys before forwarding to the remote server.
-        clean_params = {
-            k: v for k, v in params.items()
-            if k not in ("type", "exchange_id", "_rich_media_ordinal")
-        }
-
         try:
-            content = asyncio.run(
-                _async_call_tool(host, headers, remote_tool, clean_params)
+            result = asyncio.run(
+                _async_call_tool(host, headers, remote_tool, params)
             )
-            result_text = self._format_tool_result(content)
-            logger.info(
-                "%s Dispatched %r → server %r", _LOG_PREFIX, tool_name, server["name"]
-            )
-            return {"text": result_text}
         except Exception as exc:
             logger.warning("%s Tool dispatch failed for %r: %s", _LOG_PREFIX, tool_name, exc)
-            raise RuntimeError(
-                f"MCP tool {tool_name!r} failed: {exc}"
-            ) from exc
+            raise McpServerUnreachable(server["name"], str(exc)) from exc
+
+        logger.info(
+            "%s Dispatched %r → server %r", _LOG_PREFIX, tool_name, server["name"]
+        )
+        return {
+            "server": server["name"],
+            "is_error": bool(getattr(result, "isError", False)),
+            "body": self._shape_tool_result(result),
+        }
 
     # ── Heartbeat ─────────────────────────────────────────────────────────────
 
@@ -887,13 +920,28 @@ class McpClientService:
         return server, remote_tool
 
     @staticmethod
-    def _format_tool_result(content: Any) -> str:
-        """Serialize MCP tool result content to a string for the ACT trail."""
+    def _shape_tool_result(result: Any) -> str | dict | list:
+        """Shape an MCP ``CallToolResult`` into a ``str`` (prose) or ``dict``/``list``
+        (structured) body for the ToolResult contract.
+
+        The text content blocks are the reliable, consistent channel every MCP
+        server populates (``structuredContent`` is an optional parallel field that
+        servers fill inconsistently — e.g. FastMCP wraps every scalar return in
+        ``{"result": …}`` noise — so it is NOT used as the body source). The blocks
+        are joined; if that joined text parses cleanly as a JSON object/array it is
+        returned as the parsed structure (so a server that emits text-encoded JSON
+        still yields a structured body the dispatcher renders as compact JSON —
+        never a JSON-string wrapped inside another JSON string). Otherwise the
+        joined text is returned verbatim as prose.
+
+        A bare value (no ``content`` attribute) degrades to its string form.
+        """
+        content = getattr(result, "content", result)
         if content is None:
             return ""
         if isinstance(content, str):
-            return content
-        if isinstance(content, list):
+            text = content
+        elif isinstance(content, list):
             parts = []
             for block in content:
                 if hasattr(block, "text"):
@@ -902,5 +950,16 @@ class McpClientService:
                     parts.append(block.get("text", json.dumps(block)))
                 else:
                     parts.append(str(block))
-            return "\n".join(parts)
-        return json.dumps(content, default=str)
+            text = "\n".join(parts)
+        else:
+            return str(content)
+
+        stripped = text.strip()
+        if stripped[:1] in ("{", "["):
+            try:
+                parsed = json.loads(stripped)
+            except (json.JSONDecodeError, ValueError):
+                return text
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        return text
