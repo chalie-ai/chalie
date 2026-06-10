@@ -376,7 +376,7 @@ class MessageProcessor:
 
         # a. Memory auto-seed — fire once when the declarative flag is set.
         #    _auto=True marks this as the background seed recall so memory's
-        #    _handle_recall does NOT fan out to document.search + schedule.search
+        #    recall handler does NOT fan out to document.search + schedule.search
         #    (that delegation is reserved for explicit, model-invoked recalls).
         if self.config.memory_seed:
             dispatcher.dispatch("memory", {"action": "recall", "query": self._raw_input, "_auto": True})

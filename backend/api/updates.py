@@ -174,8 +174,8 @@ def update_memory():
         # the memory ability's run() (which reads its channel from the bound
         # processor) does not apply. Call the store primitive directly, passing
         # ``topic`` as the provenance channel for the source tag.
-        from abilities.memory import _handle_store
-        text = _handle_store(
+        from services.memory_retrieval import handle_store
+        text = handle_store(
             topic,
             {
                 "action": "store",
