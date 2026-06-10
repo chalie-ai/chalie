@@ -1,3 +1,26 @@
+"""WebDownloadAbility — stream a file from the internet to a temporary path.
+
+Pulls a URL's body to a unique temp path (for later reading or processing) and
+returns the path, byte count, and content type so the model can hand it to
+``document.upload`` or a file tool.
+
+Security:
+  - SSRF guard: a SINGLE gate in ``services.web_fetch`` blocks requests to
+    private/internal IP ranges (resolved, not string-matched) before any socket
+    opens. The ability catches :class:`FetchBlocked` and maps it to
+    ``code=blocked-url``. There is no second guard in this module.
+  - Scheme check: ``file:`` / ``data:`` URLs are refused inline (network-free,
+    catches ``data:`` URLs urlparse-cheaply) with the same ``code=blocked-url``.
+
+Result contract: every return is a :class:`abilities._result.ToolResult` built
+only via ``ok()`` / ``err()``; the dispatcher renders the wire envelope. Success
+body is the structured dict ``{"path", "bytes", "content_type"}`` (rendered as
+compact JSON) with the enforced size cap declared in ``meta`` (``max_bytes``);
+errors carry a stable kebab-case ``code`` (``blocked-url`` / ``too-large`` /
+``download-failed``) so a weak model can self-correct without re-reading the
+schema. A too-large download is an ERROR — never silently clipped.
+"""
+
 import logging
 import os
 import tempfile
@@ -5,20 +28,29 @@ import uuid
 from typing import ClassVar
 from urllib.parse import urlparse
 
+import requests
+
 from abilities._ability import Ability
 from abilities._result import ToolResult
-from services.ssrf import is_private_url
-from services.web_fetch import DOWNLOAD, stream_to_file
+from services.web_fetch import DOWNLOAD, DownloadTooLarge, FetchBlocked, stream_to_file
 
 logger = logging.getLogger(__name__)
 
 _DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "chalie_downloads")
 _BLOCKED_SCHEMES = frozenset({"file", "data"})
-_DEFAULT_TIMEOUT_MIN = 15
-_MAX_TIMEOUT_MIN = 120
 
 
 class WebDownloadAbility(Ability):
+    #: The download size cap (100 MB). Enforced by ``stream_to_file`` during the
+    #: stream and declared in ``meta`` on success; an over-cap pull is a
+    #: ``too-large`` error with the partial file removed.
+    _MAX_DOWNLOAD_BYTES: ClassVar[int] = 100 * 1024 * 1024
+
+    #: Action-less tool — the ``""`` key drives the dispatcher's ACTION_REQUIRED
+    #: pre-gate to reject a missing/blank url with ``code=missing-params`` BEFORE
+    #: run() (instead of run() returning a status=success "url required" prose).
+    ACTION_REQUIRED: ClassVar[dict] = {"": ("url",)}
+
     def get_name(self) -> str:
         return "web_download"
 
@@ -57,38 +89,58 @@ class WebDownloadAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        url = params.get("url", "").strip()
-        if not url:
-            return ToolResult.ok("url parameter is required")
+        url = self.param(params, "url", required=True)
+        url = str(url).strip()
 
-        error = _validate_url(url)
-        if error:
-            return ToolResult.ok(error)
+        scheme = urlparse(url).scheme
+        if scheme in _BLOCKED_SCHEMES:
+            return ToolResult.err(
+                f"The '{scheme}:' URL scheme cannot be downloaded.",
+                code="blocked-url",
+                hint="provide an http(s) URL to a file",
+                source=url,
+            )
 
-        timeout_min = params.get("timeout", _DEFAULT_TIMEOUT_MIN)
-        try:
-            timeout_min = float(timeout_min)
-        except (TypeError, ValueError):
-            timeout_min = _DEFAULT_TIMEOUT_MIN
-        timeout_sec = max(1, min(timeout_min, _MAX_TIMEOUT_MIN)) * 60
+        timeout_min = self.param(params, "timeout", default=15, clamp=(1, 120))
+        timeout_sec = float(timeout_min) * 60
 
         dest_path = _build_dest_path(url)
         try:
-            _download(url, dest_path, timeout_sec)
-        except Exception as e:
-            logger.exception("[WEB_DOWNLOAD] url=%r: %s", url, e)
-            return ToolResult.ok(str(e))
+            bytes_written, content_type = stream_to_file(
+                url,
+                dest_path,
+                profile=DOWNLOAD,
+                timeout=timeout_sec,
+                max_bytes=self._MAX_DOWNLOAD_BYTES,
+            )
+        except FetchBlocked:
+            # The single SSRF gate in web_fetch refused this host.
+            return ToolResult.err(
+                "This URL resolves to a private or internal address and was blocked.",
+                code="blocked-url",
+                source=url,
+            )
+        except DownloadTooLarge as e:
+            return ToolResult.err(
+                f"The file exceeds the {e.max_bytes}-byte download cap and was not saved.",
+                code="too-large",
+                hint="download a smaller file or a specific part of it",
+                max_bytes=e.max_bytes,
+                source=url,
+            )
+        except requests.RequestException as e:
+            return ToolResult.err(
+                f"Could not download the file: {str(e)[:150]}",
+                code="download-failed",
+                hint="check the URL is reachable and try again",
+                source=url,
+            )
 
-        return ToolResult.ok(dest_path)
-
-
-def _validate_url(url: str) -> str | None:
-    parsed = urlparse(url)
-    if parsed.scheme in _BLOCKED_SCHEMES:
-        return f"URL scheme '{parsed.scheme}' is blocked"
-    if is_private_url(url):
-        return "private or internal URL blocked"
-    return None
+        return ToolResult.ok(
+            {"path": dest_path, "bytes": bytes_written, "content_type": content_type},
+            source=url,
+            max_bytes=self._MAX_DOWNLOAD_BYTES,
+        )
 
 
 def _build_dest_path(url: str) -> str:
@@ -97,7 +149,3 @@ def _build_dest_path(url: str) -> str:
     if not filename:
         filename = "download"
     return os.path.join(_DOWNLOAD_DIR, uuid.uuid4().hex, filename)
-
-
-def _download(url: str, dest_path: str, timeout_sec: float) -> None:
-    stream_to_file(url, dest_path, profile=DOWNLOAD, timeout=timeout_sec)

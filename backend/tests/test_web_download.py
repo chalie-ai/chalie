@@ -1,14 +1,16 @@
-"""Tests for WebDownloadAbility.
+"""Integration tests for WebDownloadAbility — real downloads against httpbin.org.
 
-Two tiers, kept strictly separate:
+The offline contract (missing-url pre-gate, blocked schemes, the single SSRF
+guard, module hygiene) is pinned in the feature-test file
+``test_ability_web_download_tool_result.py``, which drives the real
+``ToolDispatcher.dispatch`` hot path. This file holds ONLY the network tier:
+real downloads that cannot run offline, guarded by a skip when httpbin is
+unreachable so air-gapped CI, proxied environments, and httpbin outages do not
+produce spurious failures.
 
-* ``@pytest.mark.unit`` — pure, deterministic, zero external dependencies.
-  Exercises URL validation: blocked schemes, private/internal-IP SSRF
-  rejection, and missing-URL handling. These never touch the network.
-
-* ``@pytest.mark.integration`` — real downloads against ``httpbin.org``.
-  Guarded by a skip when the host is unreachable so air-gapped CI, proxied
-  environments, and httpbin outages do not produce spurious failures.
+TKT-900 changed the success contract: ``run()`` now returns a structured
+``{"path", "bytes", "content_type"}`` body (was a bare path string) with the
+size cap declared in ``meta``; an over-cap download is a ``too-large`` error.
 """
 
 import os
@@ -46,65 +48,75 @@ def httpbin():
         pytest.skip(f"{_HTTPBIN_HOST} unreachable — skip network-dependent download tests.")
 
 
-# ── Unit tier: pure URL validation, no network ───────────────────────────────
-
-
-@pytest.mark.unit
-def test_blocked_schemes():
-    assert "blocked" in _ability.run({"url": "file:///etc/passwd"}).body.lower()
-    assert "blocked" in _ability.run({"url": "data:text/plain;base64,SGVsbG8="}).body.lower()
-
-
-@pytest.mark.unit
-def test_private_ip_blocked():
-    result = _ability.run({"url": "http://127.0.0.1/secret"}).body
-    assert "blocked" in result.lower() or "private" in result.lower()
-
-
-@pytest.mark.unit
-def test_missing_url_is_rejected():
-    assert "required" in _ability.run({}).body.lower()
-    assert "required" in _ability.run({"url": ""}).body.lower()
-
-
 # ── Integration tier: real downloads against httpbin.org ─────────────────────
 
 
 @pytest.mark.integration
 def test_successful_download(httpbin):
-    result = _ability.run({"url": "https://httpbin.org/robots.txt"}).body
-    assert os.path.isabs(result)
-    assert result.startswith(_TMP)
-    assert os.path.exists(result)
-    assert os.path.getsize(result) > 0
-    assert result.endswith("robots.txt")
+    result = _ability.run({"url": "https://httpbin.org/robots.txt"})
+    assert result.status == "success"
+    body = result.body
+    assert isinstance(body, dict)
+    path = body["path"]
+    assert os.path.isabs(path)
+    assert path.startswith(_TMP)
+    assert os.path.exists(path)
+    assert body["bytes"] == os.path.getsize(path) > 0
+    assert path.endswith("robots.txt")
+    # The cap is declared on success so the model knows the enforced limit.
+    assert result.meta["max_bytes"] == WebDownloadAbility._MAX_DOWNLOAD_BYTES
+    assert result.meta["source"] == "https://httpbin.org/robots.txt"
 
-    second = _ability.run({"url": "https://httpbin.org/robots.txt"}).body
-    assert second != result
-    assert second.endswith("robots.txt")
-    assert os.path.exists(second)
+    second = _ability.run({"url": "https://httpbin.org/robots.txt"})
+    assert second.status == "success"
+    second_path = second.body["path"]
+    assert second_path != path
+    assert second_path.endswith("robots.txt")
+    assert os.path.exists(second_path)
 
-    os.remove(result)
-    os.remove(second)
+    os.remove(path)
+    os.remove(second_path)
 
 
 @pytest.mark.integration
 def test_timeout_and_edge_values(httpbin):
-    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": 5}).body
-    assert os.path.exists(result)
-    os.remove(result)
+    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": 5})
+    assert result.status == "success"
+    assert os.path.exists(result.body["path"])
+    os.remove(result.body["path"])
 
-    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": 999}).body
-    assert os.path.exists(result)
-    os.remove(result)
+    # Over-max timeout is clamped (param clamp=(1, 120)) — still downloads.
+    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": 999})
+    assert result.status == "success"
+    assert os.path.exists(result.body["path"])
+    os.remove(result.body["path"])
 
-    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": "banana"}).body
-    assert os.path.exists(result)
-    os.remove(result)
+    # Non-numeric timeout falls back via the param clamp default — still downloads.
+    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": "banana"})
+    assert result.status == "success"
+    assert os.path.exists(result.body["path"])
+    os.remove(result.body["path"])
 
 
 @pytest.mark.integration
 def test_http_error_status_is_reported(httpbin):
-    result = _ability.run({"url": "https://httpbin.org/status/404"}).body
-    assert "404" in result or "not found" in result.lower() or "error" in result.lower()
-    assert not os.path.exists(result)
+    result = _ability.run({"url": "https://httpbin.org/status/404"})
+    assert result.status == "error"
+    assert result.code == "download-failed"
+    assert "404" in result.body or "not found" in result.body.lower()
+
+
+@pytest.mark.integration
+def test_too_large_download_is_an_error(httpbin):
+    """A body exceeding the 100 MB cap aborts with ``too-large`` and leaves no
+    partial file — the cap is enforced mid-stream, never silently truncated.
+
+    httpbin's ``/bytes/<n>`` streams ``n`` random bytes; request just past the
+    cap so the running byte count trips the abort."""
+    over = WebDownloadAbility._MAX_DOWNLOAD_BYTES + 1
+    result = _ability.run({"url": f"https://httpbin.org/bytes/{over}"})
+    assert result.status == "error"
+    assert result.code == "too-large"
+    assert result.meta["max_bytes"] == WebDownloadAbility._MAX_DOWNLOAD_BYTES
+    # The partial file was removed.
+    assert "path" not in (result.body if isinstance(result.body, dict) else {})

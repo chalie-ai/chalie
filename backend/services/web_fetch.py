@@ -41,6 +41,19 @@ class FetchBlocked(Exception):
     """Raised when the SSRF guard refuses a destination (private/internal host)."""
 
 
+class DownloadTooLarge(Exception):
+    """Raised by :func:`stream_to_file` when a download exceeds its byte cap.
+
+    Carries the enforced ``max_bytes`` cap so the caller can report it to the
+    model verbatim. The partial file is removed before this is raised — a
+    too-large download is an ERROR, never a silent truncation.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        super().__init__(f"download exceeds the {max_bytes}-byte cap")
+        self.max_bytes = max_bytes
+
+
 @dataclass(frozen=True)
 class FetchProfile:
     """A named header bundle describing how Chalie presents itself for a fetch."""
@@ -166,12 +179,25 @@ def stream_to_file(
     profile: FetchProfile = DOWNLOAD,
     timeout: float = DEFAULT_TIMEOUT,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
-) -> None:
+    max_bytes: int | None = None,
+) -> tuple[int, str]:
     """GET *url* behind the SSRF guard and stream the body to *dest_path*.
 
     Creates the parent directory, streams in ``chunk_size`` blocks (never
     buffering the whole file), and removes a partial file if the write fails.
-    Raises :class:`FetchBlocked` for a private/internal host and
+    Returns ``(bytes_written, content_type)`` — the bare ``Content-Type`` header
+    lower-cased with any charset suffix stripped (mirrors :func:`fetch_page`),
+    or an empty string when the server sends none.
+
+    When *max_bytes* is set the cap is enforced: an obviously-too-large download
+    is aborted before the body is pulled if the ``Content-Length`` header already
+    exceeds it, and the running byte count is checked during streaming so a
+    server that under-declares (or omits) its length is still stopped. On
+    over-cap the partial file is removed and :class:`DownloadTooLarge` is raised
+    — never a silent truncation.
+
+    Raises :class:`FetchBlocked` for a private/internal host,
+    :class:`DownloadTooLarge` when the cap is exceeded, and
     :class:`requests.RequestException` on any HTTP failure.
     """
     _guard(url)
@@ -182,12 +208,29 @@ def stream_to_file(
     )
     with response:
         response.raise_for_status()
+
+        if max_bytes is not None:
+            declared = response.headers.get("Content-Length")
+            if declared is not None and declared.isdigit() and int(declared) > max_bytes:
+                raise DownloadTooLarge(max_bytes)
+
+        content_type = (
+            response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        )
+
+        written = 0
         try:
             with open(dest_path, "wb") as fh:
                 for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        fh.write(chunk)
-        except Exception:
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if max_bytes is not None and written > max_bytes:
+                        raise DownloadTooLarge(max_bytes)
+                    fh.write(chunk)
+        except (DownloadTooLarge, requests.RequestException, OSError):
             if os.path.exists(dest_path):
                 os.remove(dest_path)
             raise
+
+        return written, content_type
