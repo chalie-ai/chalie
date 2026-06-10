@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import logging
 
+from abilities._result import ToolResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,6 +30,30 @@ def delegate_goal(params: dict) -> str:
     normalise to a single string.
     """
     return params.get("goal") or params.get("query") or ""
+
+
+def delegate_result(result: str, *, hint: str) -> ToolResult:
+    """Map a delegate's final answer onto the shared ToolResult contract.
+
+    ``MessageProcessor.process`` returns the delegate's prose synthesis, or an
+    EMPTY string when the inner ACT loop exited without a final answer — it hit
+    ``max_iterations`` or was cancelled (``_loop`` returns ``""`` on every such
+    exit). An empty body is not a success: rendered as ``ok("")`` the outer model
+    sees a tool that "succeeded" yet returned nothing and silently moves on. Map
+    it to ``code=delegate-no-answer`` with a one-line *hint* so a weak outer model
+    self-corrects (narrow the goal / query) instead of trusting the silence.
+
+    A non-empty answer is the delegate's verbatim prose synthesis — returned as
+    success.
+    """
+    if not result.strip():
+        return ToolResult.err(
+            "The delegate finished without producing an answer "
+            "(it exhausted its iteration budget or was cancelled).",
+            code="delegate-no-answer",
+            hint=hint,
+        )
+    return ToolResult.ok(result)
 
 
 def render_trail(mp: object) -> str:

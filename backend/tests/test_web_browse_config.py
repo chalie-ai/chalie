@@ -64,17 +64,3 @@ def test_post_turn_hook_clears_the_ledger(db):
     hook = mp.config.post_turn_hooks[0]
     hook.run(mp, "final answer")
     assert "ff00ff00" not in mp.config.get_user_prompt(mp)
-
-
-def test_cap_hit_returns_explicit_message_not_empty():
-    """The delegate's '' return on iteration-cap exhaustion (_loop's _should_stop
-    path, message_processor.py:524-526) must reach the outer agent as words,
-    never as silence. ``_final_text`` is the SINGLE prod formatter that
-    ``run()`` routes EVERY result through — driving the full run() here would
-    launch a real 200-iteration LLM delegate, which is end-to-end territory."""
-    from abilities.web_browse import WebBrowseAbility
-
-    assert WebBrowseAbility._final_text("") == (
-        "Stopped: iteration budget exhausted before an answer."
-    )
-    assert WebBrowseAbility._final_text("real answer") == "real answer"

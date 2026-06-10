@@ -28,7 +28,7 @@ happens at the outer ``web_browse`` tool.
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._delegate import delegate_goal
+from abilities._delegate import delegate_goal, delegate_result
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
 
@@ -72,6 +72,12 @@ class WebBrowseAbility(Ability):
         "required": ["goal"],
     }
 
+    # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
+    # ``""`` key covers action-less tools) rejects a missing/empty ``goal`` with
+    # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
+    # goal never spawns an expensive browser delegate on nothing.
+    ACTION_REQUIRED: ClassVar[dict] = {"": ("goal",)}
+
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
@@ -82,9 +88,6 @@ class WebBrowseAbility(Ability):
             delegate_goal(params),
             WebBrowseConfig(self.mp.config.policy_channel),
         )
-        return ToolResult.ok(self._final_text(result))
-
-    @staticmethod
-    def _final_text(result: str) -> str:
-        """Cap-hit (_loop returns '') must surface as words, never silence."""
-        return result or "Stopped: iteration budget exhausted before an answer."
+        return delegate_result(
+            result, hint="Restate the goal more concretely or break it into steps, then retry."
+        )
