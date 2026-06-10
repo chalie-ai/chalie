@@ -2,7 +2,17 @@
 
 Act-trail guard: if the target file already exists, a prior ``read`` call on
 the same resolved path in the current transcript is required before the write
-is executed.
+is executed — so an overwrite is never blind.
+
+Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
+
+* Success → ``{"path": <abs>, "bytes": <int>, "created": <bool>}`` with
+  ``created`` True when the file did not exist before the write. An empty
+  ``contents`` is VALID user data: a 0-byte file is written and echoed with
+  ``bytes: 0`` (touch / .gitkeep / truncate).
+* Bad inputs → ``err()`` with a stable kebab ``code`` (``missing-params`` /
+  ``invalid-param`` / ``invalid-path`` / ``permission-denied`` /
+  ``read-required``) — errors never masquerade as success.
 """
 
 import json
@@ -17,6 +27,13 @@ logger = logging.getLogger(__name__)
 
 
 class FileWriteAbility(Ability):
+    #: Action-less tool — the ``""`` key drives the dispatcher's ACTION_REQUIRED
+    #: pre-gate to reject a missing/blank ``path`` with ``code=missing-params``
+    #: BEFORE run(). ``contents`` is deliberately NOT listed: the pre-gate check
+    #: is truthiness-based, so an empty-string ``contents`` (valid user data)
+    #: would be falsely rejected there. run() guards a MISSING contents key.
+    ACTION_REQUIRED: ClassVar[dict] = {"": ("path",)}
+
     def get_name(self) -> str:
         return "file_write"
 
@@ -45,7 +62,10 @@ class FileWriteAbility(Ability):
             },
             "contents": {
                 "type": "string",
-                "description": "Content to write to the file.",
+                "description": (
+                    "Content to write to the file. Pass an empty string to "
+                    "create a 0-byte file or truncate an existing one."
+                ),
             },
         },
         "required": ["path", "contents"],
@@ -56,43 +76,75 @@ class FileWriteAbility(Ability):
 
     def run(self, params: dict) -> ToolResult:
         path_str = params.get("path", "")
-        contents = params.get("contents", "")
 
-        if not path_str:
-            return ToolResult.ok("Error: 'path' is required.")
-        if not contents:
-            return ToolResult.ok("Error: 'contents' is required.")
+        # 'contents' is NOT pre-gated (an empty string is valid), so a MISSING
+        # key is guarded here; a present "" proceeds to write a 0-byte file.
+        if "contents" not in params:
+            return ToolResult.err(
+                "contents is required.",
+                code="missing-params",
+                hint="pass a 'contents' string (an empty string writes a 0-byte file).",
+            )
+        contents = params["contents"]
+        if not isinstance(contents, str):
+            return ToolResult.err(
+                f"contents must be a string, got {type(contents).__name__}.",
+                code="invalid-param",
+                hint="pass the file body as a string; serialise structured data yourself first.",
+            )
+
+        if not Path(path_str).is_absolute():
+            return ToolResult.err(
+                f"Path is not absolute: {path_str!r}.",
+                code="invalid-path",
+                hint="pass an absolute path (one starting from the filesystem root).",
+            )
 
         target = Path(path_str).resolve()
 
-        if target.exists():
+        existed = target.exists()
+        if existed:
             from services.database_service import get_shared_db_service
-            guard_error = self._check_read_guard(get_shared_db_service(), target)
-            if guard_error:
-                return ToolResult.ok(guard_error)
+            if not self._read_called_first(get_shared_db_service(), target):
+                return ToolResult.err(
+                    f"You must read {target} before overwriting it.",
+                    code="read-required",
+                    hint=f"call the 'read' tool on {target} first, then retry the write",
+                )
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(contents)
-            return ToolResult.ok(json.dumps({
-                "success": True,
-                "path": str(target),
-                "file_size": target.stat().st_size,
-            }))
+            bytes_written = target.stat().st_size
+        except PermissionError as exc:
+            return ToolResult.err(
+                f"Permission denied writing to {target}: {exc}",
+                code="permission-denied",
+                hint=f"you do not have write access to {target} or its parent directory.",
+            )
         except OSError as exc:
-            return ToolResult.ok(f"Error writing to {target}: {exc}")
+            return ToolResult.err(
+                f"Could not write to {target}: {exc}",
+                code="invalid-path",
+                hint="check the path shape and that its parent can hold a file.",
+            )
 
-    def _check_read_guard(self, db, target: Path) -> str | None:
-        """Return an error message if ``read`` was not called on this path first."""
+        return ToolResult.ok(
+            {"path": str(target), "bytes": bytes_written, "created": not existed}
+        )
+
+    def _read_called_first(self, db, target: Path) -> bool:
+        """True if a prior ``read`` call on this resolved path exists in the
+        transcript (or the guard cannot anchor and so does not block)."""
         proc = self.mp
         if proc is None:
-            return None
+            return True
 
         transcript_id = getattr(proc, "_uid", None)
         if transcript_id is None:
             logger.warning("file_write read-guard: active processor has no _uid — guard bypassed")
-            return None
+            return True
 
         target_str = str(target)
         rows = db.fetch_all(
@@ -110,12 +162,9 @@ class FileWriteAbility(Ability):
                 continue
             try:
                 if Path(source).resolve() == target:
-                    return None
+                    return True
             except (ValueError, OSError):
                 if source == target_str:
-                    return None
+                    return True
 
-        return (
-            f"You need to call the 'read' tool with parameter '{target}' "
-            f"before using 'file_write'."
-        )
+        return False
