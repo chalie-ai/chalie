@@ -20,7 +20,7 @@ import requests
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
-from abilities._ssrf import is_private_url
+from services.ssrf import is_private_url
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 

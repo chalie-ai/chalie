@@ -8,25 +8,19 @@ Extends the read skill's SSRF protection with browser-specific additions:
   - Download blocking, dialog auto-dismiss
 """
 
-import ipaddress
 import logging
-import socket
 import threading
 import time
 from urllib.parse import urlparse
 
+# SSRF policy lives in ONE place — services.ssrf. The browser layer re-exports
+# the single blocklist and resolver so its request interceptor can never drift
+# from what the read/web_download abilities enforce.
+from services.ssrf import BLOCKED_NETS, resolve_and_check
+
 logger = logging.getLogger(__name__)
 
-# Same ranges as read_skill.py — single source of truth for SSRF policy
-_BLOCKED_NETS = [
-    ipaddress.ip_network('127.0.0.0/8'),
-    ipaddress.ip_network('10.0.0.0/8'),
-    ipaddress.ip_network('172.16.0.0/12'),
-    ipaddress.ip_network('192.168.0.0/16'),
-    ipaddress.ip_network('169.254.0.0/16'),   # link-local / AWS metadata
-    ipaddress.ip_network('::1/128'),           # IPv6 loopback
-    ipaddress.ip_network('fc00::/7'),          # IPv6 unique-local
-]
+__all__ = ["BLOCKED_NETS", "resolve_and_check", "DnsCache", "validate_url", "setup_page_security"]
 
 _BLOCKED_SCHEMES = frozenset({
     "file", "ftp", "javascript", "data", "blob",
@@ -57,27 +51,10 @@ class DnsCache:
             if entry and (now - entry[2]) < self._ttl:
                 return entry[0], entry[1]
 
-        ok, reason = _resolve_and_check(hostname)
+        ok, reason = resolve_and_check(hostname)
         with self._lock:
             self._cache[hostname] = (ok, reason, now)
         return ok, reason
-
-
-def _resolve_and_check(hostname: str) -> tuple[bool, str]:
-    """Resolve hostname and check against blocked networks."""
-    if not hostname:
-        return False, "Empty hostname"
-    try:
-        results = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
-        return False, f"DNS resolution failed: {hostname}"
-
-    for family, _, _, _, addr in results:
-        ip = ipaddress.ip_address(addr[0])
-        for net in _BLOCKED_NETS:
-            if ip in net:
-                return False, f"Blocked IP range: {ip} ({hostname})"
-    return True, ""
 
 
 # -- URL validation ------------------------------------------------------------
@@ -112,7 +89,7 @@ def validate_url(url: str, dns_cache: DnsCache | None = None) -> tuple[bool, str
 
     if dns_cache:
         return dns_cache.check(hostname)
-    return _resolve_and_check(hostname)
+    return resolve_and_check(hostname)
 
 
 # -- Page-level security setup -------------------------------------------------

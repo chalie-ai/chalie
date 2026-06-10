@@ -9,7 +9,7 @@ import requests
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
-from abilities._ssrf import is_private_url
+from services.ssrf import is_private_url
 
 logger = logging.getLogger(__name__)
 
