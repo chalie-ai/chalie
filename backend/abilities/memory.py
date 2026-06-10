@@ -3,19 +3,18 @@ MemoryAbility — Store, recall, and forget first-party facts about the user.
 
 Covers all actions: store, recall, reflect, forget. This module is a **thin
 adapter**: it owns only the tool's metadata (name, summary, examples, parameter
-schema) and the action dispatch in ``run()``. Every retrieval/mutation handler,
-the episode recall engine with its dynamic radius, data-graph search, reflection
-layer expansion, response formatting and recall telemetry live in
-``services.memory_retrieval`` so the same engine is reachable from non-ability
-callers (e.g. the ``/api/updates/memory`` REST endpoint) without importing an
-ability.
+schema) and the action dispatch in ``run()`` — ``params → service handler →
+ToolResult``. Every retrieval/mutation handler, the episode recall engine with
+its dynamic radius, data-graph search, reflection layer expansion, response
+formatting and recall telemetry live in ``services.memory_retrieval`` so the same
+engine is reachable from non-ability callers (e.g. the ``/api/updates/memory``
+REST endpoint) without importing an ability.
 
 The dynamic-radius tuning constants are the service's source of truth; they are
 re-exposed here as ``MemoryAbility`` ClassVars so they remain mechanically
-tunable and inspectable via the ability surface. The engine helpers the tests
-drive through this module (``_compute_radius_factors``, ``_render_behavioral_pattern``,
-``_format_results``, ``_search_data_graph``) are imported from the service — the
-ability module IS the public surface those harnesses exercise.
+tunable and inspectable via the ability surface. The engine functions live ONLY
+in the service module — there are no re-exports from here: callers and tests
+import them from ``services.memory_retrieval`` directly.
 """
 
 import logging
@@ -24,13 +23,6 @@ from typing import ClassVar
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from services import memory_retrieval
-from services.memory_retrieval import (  # noqa: F401  (re-exported engine surface)
-    _compute_radius_factors,
-    _format_results,
-    _render_behavioral_pattern,
-    _search_data_graph,
-    recall_episodes,
-)
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
@@ -133,6 +125,20 @@ class MemoryAbility(Ability):
     # skill_manager.
     SYSTEM = True
 
+    # Action → required params, pre-validated by the dispatcher BEFORE run(): an
+    # unknown action yields one ``unknown-action`` error listing these keys; a
+    # known action missing a param yields one ``missing-params`` error naming it.
+    # Every action MUST appear (the pre-gate rejects any action not in this map),
+    # so ``recall`` is listed with NO required params — it accepts EITHER
+    # ``query`` OR ``location`` (an OR the flat map cannot express), and the
+    # handler validates that pair itself, returning ``code=no-query-or-location``.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
+        "store": ("key", "value"),
+        "recall": (),
+        "reflect": ("query",),
+        "forget": ("key",),
+    }
+
     # Dynamic-radius tuning constants — the service holds the source of truth;
     # these ClassVars re-expose them on the ability surface so they stay
     # inspectable and mechanically tunable. (TKT-878: RECALL=0.5, SEED=0.35.)
@@ -152,6 +158,11 @@ class MemoryAbility(Ability):
         mp = self.mp
         channel = getattr(getattr(mp, "config", None), "channel", "") or ""
 
+        # The dispatcher's ACTION_REQUIRED pre-gate has already rejected unknown
+        # actions and missing required params before run() is reached; this maps
+        # the validated action to its service handler. The unknown-action branch
+        # below is defensive belt-and-braces for direct callers that bypass the
+        # gate (the engine is also reachable outside the ACT loop).
         try:
             if action == "store":
                 return memory_retrieval.handle_store(channel, params)
@@ -162,10 +173,14 @@ class MemoryAbility(Ability):
             if action == "forget":
                 return memory_retrieval.handle_forget(params)
             return ToolResult.err(
-                f"unknown-action:{action}",
-                code="error",
+                f"Unknown memory action: {action!r}.",
+                code="unknown-action",
                 valid=("store", "recall", "reflect", "forget"),
             )
         except Exception as e:
             logger.exception(f"{LOG_PREFIX} Error in {action}: {e}")
-            return ToolResult.err(str(e)[:200], code="error", action=action)
+            return ToolResult.err(
+                f"Memory {action} failed: {str(e)[:200]}",
+                code="unhandled-exception",
+                action=action,
+            )

@@ -175,7 +175,7 @@ def update_memory():
         # processor) does not apply. Call the store primitive directly, passing
         # ``topic`` as the provenance channel for the source tag.
         from services.memory_retrieval import handle_store
-        text = handle_store(
+        result = handle_store(
             topic,
             {
                 "action": "store",
@@ -184,8 +184,11 @@ def update_memory():
                 "kind": "misc",
             },
         )
-        if "error=" in text.split('\n', 1)[0]:
-            logger.warning("[Updates API] memory update result: %s", text)
+        if result.status == "error":
+            logger.warning(
+                "[Updates API] memory update failed: code=%s body=%s",
+                result.code, result.body,
+            )
             return jsonify({"error": "Memory encoding failed"}), 422
     except Exception as exc:
         logger.error("[Updates API] memory update failed: %s", exc)

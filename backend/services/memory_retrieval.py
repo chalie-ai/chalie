@@ -8,6 +8,15 @@ reflection layer expansion, response formatting, and recall telemetry — so the
 same engine is reachable from non-ability callers (e.g. the ``/api/updates/memory``
 REST endpoint) without importing an ability.
 
+Every handler returns an ``abilities._result.ToolResult`` — never a string and
+never a legacy dict. ``recall`` returns a STRUCTURED body
+(``{"results": [{id, content, score, kind, created_at}, …]}``, + ``fallback`` on
+explicit recalls) so the model reads machine-parseable rows, and so a dead
+retrieval backend surfaces as ``ToolResult.err(code='memory-backend-error')``
+rather than a silent ``results=0`` — the model must never be told "nothing is
+stored" when the store simply failed. When some (not all) backend lanes error,
+recall succeeds with ``meta degraded=true`` so the partial result is honest.
+
 Dynamic memory radius — tuning constants
 -----------------------------------------
 Composition: ``effective_input = BASELINE × narrow_factor × expand_factor``.
@@ -35,7 +44,6 @@ from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
-_KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
 
 
 # ── Dynamic memory radius — tuning constants ────────────────────────────────
@@ -63,9 +71,19 @@ def handle_store(channel: str, params: dict) -> ToolResult:
     kind = params.get("kind", "user_specific")
 
     if not key:
-        return ToolResult.err("key-required", code="error", action="store")
+        return ToolResult.err(
+            "store needs a 'key' naming the fact.",
+            code="key-required",
+            action="store",
+            hint="pass a canonical 'key' (e.g. 'residence', 'employment').",
+        )
     if value is None:
-        return ToolResult.err("value-required", code="error", action="store")
+        return ToolResult.err(
+            "store needs a 'value' — the fact to remember.",
+            code="value-required",
+            action="store",
+            hint="pass the atomic 'value' to store under the key.",
+        )
 
     from services.data_graph_service import get_data_graph_service
 
@@ -74,7 +92,11 @@ def handle_store(channel: str, params: dict) -> ToolResult:
 
     if result is None:
         return ToolResult.err(
-            f"store-failed-invalid-kind:{kind}", code="error", action="store", key=key
+            f"Could not store '{key}': '{kind}' is not a valid memory kind.",
+            code="invalid-kind",
+            action="store",
+            key=key,
+            valid=("user_specific", "system", "misc"),
         )
 
     body = _format_store_response(result)
@@ -141,7 +163,12 @@ def handle_forget(params: dict) -> ToolResult:
     kind = params.get("kind", "user_specific")
 
     if not key:
-        return ToolResult.err("key-required", code="error", action="forget")
+        return ToolResult.err(
+            "forget needs a 'key' naming the memory to remove.",
+            code="key-required",
+            action="forget",
+            hint="pass the canonical 'key' of the fact to forget.",
+        )
 
     from services.data_graph_service import get_data_graph_service
 
@@ -150,7 +177,11 @@ def handle_forget(params: dict) -> ToolResult:
 
     if result is None:
         return ToolResult.err(
-            "forget-failed-invalid-kind", code="error", action="forget", key=key
+            f"Could not forget '{key}': '{kind}' is not a valid memory kind.",
+            code="invalid-kind",
+            action="forget",
+            key=key,
+            valid=("user_specific", "system", "misc"),
         )
 
     body = _format_forget_response(result)
@@ -211,12 +242,38 @@ _RECALL_FALLBACK_HINT = (
     "`document` (action: search) or `schedule` (action: search) tools."
 )
 
+# Stable, machine-readable code surfaced when EVERY retrieval backend a recall
+# touched failed (e.g. a dead sqlite-vec extension). A weak model must be able to
+# tell "the store is broken" apart from "nothing is stored" — otherwise it
+# confidently asserts the user never said something it simply could not look up.
+_BACKEND_ERROR_CODE = "memory-backend-error"
+_BACKEND_ERROR_HINT = (
+    "The memory store is unavailable right now — this is an infrastructure "
+    "failure, NOT a confirmation that nothing is stored. Do not tell the user "
+    "you have no record; say you could not reach memory and try again later."
+)
+
+
+def _is_backend_error(status: str) -> bool:
+    """A search helper signals an infra failure with a status prefixed ``error:``.
+
+    Genuine empties report ``0 matches`` / ``0 matches (N candidates evaluated)``;
+    only a real backend exception yields ``error: …`` — the single discriminator
+    between "the store is broken" and "nothing matched".
+    """
+    return isinstance(status, str) and status.startswith("error:")
+
 
 def handle_recall(mp, channel: str, params: dict) -> ToolResult:
     query = params.get("query", "")
     location = params.get("location", "")
     if not query and not location:
-        return ToolResult.err("no-query-or-location", code="error", action="recall")
+        return ToolResult.err(
+            "Recall needs a 'query' or a 'location' to search for.",
+            code="no-query-or-location",
+            action="recall",
+            hint="pass a 'query' (a topic) and/or a 'location'.",
+        )
 
     # The turn-0 background seed (_auto=True) retrieves at the tighter
     # SEED_RADIUS_BASELINE; an explicit model-invoked recall uses the wider
@@ -225,14 +282,18 @@ def handle_recall(mp, channel: str, params: dict) -> ToolResult:
 
     limit = 10
     results: List[Dict] = []
+    # Track every backend the recall actually queried so a dead store surfaces as
+    # a loud error (all-failed) or a degraded success (some-failed) instead of a
+    # silent "0 results". ``statuses`` only holds the lanes we ran for this call.
+    statuses: List[str] = []
 
     if query and location:
         # AND gate: only episodes that satisfy both location AND semantic query.
-        loc_hits, _ = _search_episodes_by_location(channel, location, limit * 3)
+        loc_hits, loc_status = _search_episodes_by_location(channel, location, limit * 3)
         loc_ids = {h["id"] for h in loc_hits}
         loc_by_id = {h["id"]: h for h in loc_hits}
 
-        sem_hits, _ = _search_episodes(mp, channel, query, limit * 3, caller=caller)
+        sem_hits, sem_status = _search_episodes(mp, channel, query, limit * 3, caller=caller)
         sem_ids = {h["id"] for h in sem_hits}
         sem_by_id = {h["id"]: h for h in sem_hits}
 
@@ -244,33 +305,60 @@ def handle_recall(mp, channel: str, params: dict) -> ToolResult:
             hit["relevance"] = sem_hit["relevance"]
             results.append(hit)
 
-        dg_hits, _ = _search_data_graph(query, limit)
+        dg_hits, dg_status = _search_data_graph(query, limit)
         results.extend(dg_hits)
+        statuses.extend([loc_status, sem_status, dg_status])
 
     elif location:
-        hits, _ = _search_episodes_by_location(channel, location, limit)
+        hits, loc_status = _search_episodes_by_location(channel, location, limit)
         results.extend(hits)
+        statuses.append(loc_status)
 
     else:
-        hits, _ = _search_data_graph(query, limit)
-        results.extend(hits)
+        dg_hits, dg_status = _search_data_graph(query, limit)
+        results.extend(dg_hits)
 
-        hits, _ = _search_episodes(mp, channel, query, limit, caller=caller)
-        results.extend(hits)
+        ep_hits, sem_status = _search_episodes(mp, channel, query, limit, caller=caller)
+        results.extend(ep_hits)
+        statuses.extend([dg_status, sem_status])
+
+    errored = [s for s in statuses if _is_backend_error(s)]
+    # All lanes failed → the store is down. Surface a loud, stable error so the
+    # model knows it could not look up rather than that nothing is stored.
+    if statuses and len(errored) == len(statuses):
+        logger.warning(
+            "%s recall hit a dead backend (all %d lane(s) errored): %s",
+            LOG_PREFIX, len(statuses), "; ".join(errored),
+        )
+        return ToolResult.err(
+            "Could not search memory — the retrieval backend failed.",
+            code=_BACKEND_ERROR_CODE,
+            hint=_BACKEND_ERROR_HINT,
+            query=query or location,
+        )
+
+    degraded = bool(errored)
+    if degraded:
+        logger.warning(
+            "%s recall degraded — %d/%d backend lane(s) errored: %s",
+            LOG_PREFIX, len(errored), len(statuses), "; ".join(errored),
+        )
 
     partial = sum(1 for r in results if r.get("confidence", 0) < 0.5)
     _store_fok_signal(channel, partial)
 
-    # Explicit recalls carry the fallback guardrail; the silent seed does not.
-    hint = "" if caller == "seed" else _RECALL_FALLBACK_HINT
+    body: Dict = {"results": _recall_payload(results)}
+    # Explicit recalls carry the fallback guardrail in the structured body; the
+    # silent turn-0 seed (caller='seed') carries no fallback and fires no fan-out.
+    if caller != "seed":
+        body["fallback"] = _RECALL_FALLBACK_HINT
 
-    if not results:
-        return ToolResult.ok(hint, query=query or location, results=0)
-
-    body = _format_results(results)
-    if hint:
-        body = f"{body}\n{hint}"
-    return ToolResult.ok(body, query=query or location, results=len(results))
+    return ToolResult.ok(
+        body,
+        query=query or location,
+        results=len(results),
+        degraded=degraded,
+    )
 
 
 # ── Reflect ──────────────────────────────────────────────────────────
@@ -279,7 +367,12 @@ def handle_recall(mp, channel: str, params: dict) -> ToolResult:
 def handle_reflect(mp, channel: str, params: dict) -> ToolResult:
     query = params.get("query", "")
     if not query:
-        return ToolResult.err("no-query", code="error", action="reflect")
+        return ToolResult.err(
+            "reflect needs a 'query' — the topic to deep-search.",
+            code="no-query",
+            action="reflect",
+            hint="pass a 'query' naming the topic to reflect on.",
+        )
 
     raw_episodes, _ = recall_episodes(
         mp,
@@ -501,6 +594,7 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
                 "text": text,
                 "relevance": _relevance_label(cos),
                 "confidence": cos,
+                "created_at": None,
             })
 
         return hits, f"{len(hits)} matches"
@@ -771,6 +865,8 @@ def recall_episodes(
                 "relevance": _relevance_label(conf),
                 "confidence": conf,
                 "location": ep.get("location_name"),
+                "kind": "episode",
+                "created_at": ep.get("created_at"),
             })
 
         return hits, f"{len(hits)} matches"
@@ -807,28 +903,31 @@ def _count_episode_candidates(db_service, channel: str) -> int:
         return 0
 
 
-def _format_results(results: List[Dict]) -> str:
-    """Format recall hits into tagged lines for LLM consumption.
+def _recall_payload(results: List[Dict]) -> List[Dict]:
+    """Project recall hits into structured rows the model and the transcript
+    back-reference both read.
 
-    Labels behavioral_pattern hits explicitly. Includes location when present.
-    Omits lat/lon to avoid token bloat.
+    Each row is ``{id, content, score, kind, created_at}`` (+ ``location`` when an
+    episode hit carries one). ``score`` is the relevance label (high/medium/low);
+    the raw confidence stays internal. The structured shape replaces the old
+    ``[id:X,relevance:Y] text`` prose: it is machine-parseable for the model AND
+    is what ``transcript_service._fetch_referenced_episodes`` keys its episode
+    back-reference on (the ``id`` field), so the format is load-bearing.
     """
-    lines = []
+    rows: List[Dict] = []
     for hit in results:
-        rid = hit.get("id", "")
-        relevance = hit.get("relevance", "low")
-        text = hit.get("text", "")
+        row: Dict = {
+            "id": hit.get("id", ""),
+            "content": hit.get("text", ""),
+            "score": hit.get("relevance", "low"),
+            "kind": hit.get("kind", "") or "",
+            "created_at": hit.get("created_at"),
+        }
         location = hit.get("location")
-        kind = hit.get("kind", "")
-        parts = [f"id:{rid}"]
-        if kind == _KIND_BEHAVIORAL_PATTERN:
-            parts.append("kind:behavioral_pattern")
-        parts.append(f"relevance:{relevance}")
         if location:
-            parts.append(f"at:{location}")
-        prefix = f"[{','.join(parts)}]"
-        lines.append(f"{prefix} {text}")
-    return "\n".join(lines)
+            row["location"] = location
+        rows.append(row)
+    return rows
 
 
 _LOCATION_SEARCH_CONFIDENCE = 0.9
@@ -869,7 +968,7 @@ def _search_episodes_by_location(
 
         with db.connection() as conn:
             sql = (
-                "SELECT e.id, e.gist, e.location_name "
+                "SELECT e.id, e.gist, e.location_name, e.created_at "
                 "FROM episodes e "
                 f"WHERE e.deleted_at IS NULL AND e.channel = ? AND ({like_clauses}) "
                 "AND e.location_name IS NOT NULL "
@@ -883,13 +982,15 @@ def _search_episodes_by_location(
 
         hits = []
         for row in rows:
-            ep_id, gist, loc_name = row
+            ep_id, gist, loc_name, created_at = row
             hits.append({
                 "id": str(ep_id),
                 "text": (gist or "")[:200],
                 "relevance": _LOCATION_SEARCH_RELEVANCE,
                 "confidence": _LOCATION_SEARCH_CONFIDENCE,
                 "location": loc_name,
+                "kind": "episode",
+                "created_at": created_at,
             })
 
         return hits, f"{len(hits)} matches"

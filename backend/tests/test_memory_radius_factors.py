@@ -7,7 +7,8 @@ import math
 
 import pytest
 
-from abilities.memory import MemoryAbility, _compute_radius_factors
+from abilities.memory import MemoryAbility
+from services.memory_retrieval import _compute_radius_factors
 
 pytestmark = pytest.mark.unit
 

@@ -3,8 +3,8 @@
 Three behaviours under test:
 1. _render_behavioral_pattern() produces a human-readable line from a valid
    JSON string and degrades gracefully on invalid input.
-2. _format_results() labels behavioral_pattern hits with kind:behavioral_pattern
-   in the prefix, and omits that label for other kinds.
+2. _recall_payload() projects every hit into a structured row that carries its
+   own kind field (behavioral_pattern, user_specific, …).
 3. _search_data_graph() includes KIND_BEHAVIORAL_PATTERN in the kinds list
    passed to DataGraphService.recall() so the rows actually surface.
 
@@ -30,7 +30,7 @@ class TestRenderBehavioralPattern:
 
     def test_valid_json_produces_readable_line(self):
         """Full JSON with all fields renders as 'name (freq @ anchor): summary [confidence=N]'."""
-        from abilities.memory import _render_behavioral_pattern
+        from services.memory_retrieval import _render_behavioral_pattern
 
         raw = json.dumps({
             "name": "dawn_meditation_practice",
@@ -51,7 +51,7 @@ class TestRenderBehavioralPattern:
 
     def test_missing_time_anchor_omits_at_segment(self):
         """When time_anchor is absent the '@ HH:MM' segment is omitted entirely."""
-        from abilities.memory import _render_behavioral_pattern
+        from services.memory_retrieval import _render_behavioral_pattern
 
         raw = json.dumps({
             "name": "evening_walk",
@@ -68,7 +68,7 @@ class TestRenderBehavioralPattern:
 
     def test_invalid_json_returns_raw_string(self):
         """Unparseable JSON is returned verbatim — no crash, no data loss."""
-        from abilities.memory import _render_behavioral_pattern
+        from services.memory_retrieval import _render_behavioral_pattern
 
         raw = "not valid { json"
         result = _render_behavioral_pattern(raw)
@@ -79,68 +79,68 @@ class TestRenderBehavioralPattern:
 
     def test_non_string_input_returns_raw(self):
         """Non-string input (e.g. already-decoded dict) is handled without crash."""
-        from abilities.memory import _render_behavioral_pattern
+        from services.memory_retrieval import _render_behavioral_pattern
 
         result = _render_behavioral_pattern(None)
         assert result == "", f"None input should produce empty string, got: {result!r}"
 
 
 # ---------------------------------------------------------------------------
-# 2. _format_results — pure-function, no IO
+# 2. _recall_payload — pure-function projection, no IO
 # ---------------------------------------------------------------------------
 
 
-class TestFormatResults:
-    """_format_results labels behavioral_pattern hits distinctly from other kinds."""
+class TestRecallPayload:
+    """_recall_payload projects recall hits into structured {id, content, score,
+    kind, created_at} rows — the machine-parseable shape the model and the
+    transcript back-reference both read."""
 
     def _make_hit(self, kind, key="some_key", text="some text", relevance="high"):
         return {"id": key, "kind": kind, "text": text, "relevance": relevance}
 
-    def test_behavioral_pattern_hit_includes_kind_label(self):
-        """A hit with kind='behavioral_pattern' must have kind:behavioral_pattern in prefix."""
-        from abilities.memory import _format_results
+    def test_behavioral_pattern_row_carries_kind_field(self):
+        """A behavioral_pattern hit projects to a row whose kind field is set."""
+        from services.memory_retrieval import _recall_payload
 
         hit = self._make_hit(kind="behavioral_pattern", key="dawn_meditation_practice",
                               text="dawn_meditation_practice (daily @ 06:00): ...")
-        result = _format_results([hit])
+        rows = _recall_payload([hit])
 
-        assert "kind:behavioral_pattern" in result, (
-            f"Expected kind:behavioral_pattern in output, got: {result!r}"
-        )
-        assert "id:dawn_meditation_practice" in result
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["kind"] == "behavioral_pattern"
+        assert row["id"] == "dawn_meditation_practice"
+        assert row["content"] == "dawn_meditation_practice (daily @ 06:00): ..."
+        assert row["score"] == "high"
 
-    def test_non_behavioral_pattern_hit_omits_kind_label(self):
-        """A user_specific hit must NOT have kind: in its prefix."""
-        from abilities.memory import _format_results
+    def test_every_row_carries_its_kind_field(self):
+        """Unlike the old prose format, kind is a first-class field on EVERY row."""
+        from services.memory_retrieval import _recall_payload
 
         hit = self._make_hit(kind="user_specific", key="residence", text="Valletta")
-        result = _format_results([hit])
+        rows = _recall_payload([hit])
 
-        assert "kind:" not in result, (
-            f"kind: label must only appear for behavioral_pattern, got: {result!r}"
-        )
-        assert "id:residence" in result
-        assert "Valletta" in result
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["kind"] == "user_specific"
+        assert row["id"] == "residence"
+        assert row["content"] == "Valletta"
 
-    def test_mixed_results_labels_only_behavioral_pattern(self):
-        """In a mixed list only behavioral_pattern rows carry the kind label."""
-        from abilities.memory import _format_results
+    def test_mixed_results_each_keep_their_own_kind(self):
+        """In a mixed list every row reports its own kind verbatim."""
+        from services.memory_retrieval import _recall_payload
 
         hits = [
             self._make_hit(kind="behavioral_pattern", key="morning_run",
                            text="morning_run (daily): runs 5km [confidence=7.0]"),
             self._make_hit(kind="user_specific", key="food_preference", text="pasta"),
         ]
-        result = _format_results(hits)
+        rows = _recall_payload(hits)
 
-        lines = result.splitlines()
-        assert len(lines) == 2
-
-        bp_line = next(line for line in lines if "morning_run" in line)
-        user_line = next(line for line in lines if "food_preference" in line)
-
-        assert "kind:behavioral_pattern" in bp_line
-        assert "kind:" not in user_line
+        assert len(rows) == 2
+        by_id = {r["id"]: r for r in rows}
+        assert by_id["morning_run"]["kind"] == "behavioral_pattern"
+        assert by_id["food_preference"]["kind"] == "user_specific"
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ class TestSearchDataGraphIncludesBehavioralPattern:
             source="test:seed",
         )
 
-        from abilities.memory import _search_data_graph
+        from services.memory_retrieval import _search_data_graph
 
         hits, _ = _search_data_graph("meditation morning routine", limit=10)
 
@@ -208,7 +208,7 @@ class TestSearchDataGraphIncludesBehavioralPattern:
             source="test:seed",
         )
 
-        from abilities.memory import _search_data_graph
+        from services.memory_retrieval import _search_data_graph
 
         hits, _ = _search_data_graph("evening exercise running", limit=10)
 

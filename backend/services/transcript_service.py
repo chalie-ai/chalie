@@ -534,17 +534,52 @@ def _format_window_entries(entries: list) -> str:
     return "\n".join(lines)
 
 
+def _parse_episode_ids_from_results(result_texts: List[str]) -> set:
+    """Extract episode IDs from rendered memory recall envelopes.
+
+    Each recall result is ``[memory(status=…, …)]\\n<json>\\n[end:memory]`` whose
+    body is ``{"results": [{"id":…, "kind":"episode", …}, …]}``. We isolate the
+    JSON between the open tag and ``[end:memory]`` and collect the ``id`` of every
+    row whose ``kind`` is ``episode`` — the only rows that back-reference an
+    episodes-table row (data-graph rows are keyed by data-graph key, not an
+    episode id). Malformed / non-recall envelopes are skipped silently.
+    """
+    import json as _json
+
+    episode_ids: set = set()
+    for text in result_texts:
+        if not text or "[end:memory]" not in text:
+            continue
+        nl = text.find("]\n")
+        end = text.find("\n[end:memory]")
+        if nl == -1 or end == -1 or end <= nl:
+            continue
+        body = text[nl + 2:end]
+        try:
+            parsed = _json.loads(body)
+        except (ValueError, TypeError):
+            continue
+        rows = parsed.get("results") if isinstance(parsed, dict) else None
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if isinstance(row, dict) and row.get("kind") == "episode":
+                eid = str(row.get("id", "")).strip()
+                if eid:
+                    episode_ids.add(eid)
+    return episode_ids
+
+
 def _fetch_referenced_episodes(entries: list, db) -> list:
     """Query tool_calls for memory skill invocations within the window.
 
-    Parses each result for episode IDs in the format `[id:{uuid},...]`
-    (the output format of _format_results in memory_skill.py). Fetches
-    the matching episodes from the DB and returns them as dicts.
+    Parses each result for episode IDs in the structured recall body
+    (``{"results": [{"id":…, "kind":"episode"}, …]}``). Fetches the matching
+    episodes from the DB and returns them as dicts.
 
     tool_name='memory' covers both auto-seed (tool_name='memory') and
     LLM-invoked recall (also dispatched as tool_name='memory').
     """
-    import re as _re
 
     t_ids = [e['id'] for e in entries if e.get('id')]
     if not t_ids:
@@ -569,15 +604,13 @@ def _fetch_referenced_episodes(entries: list, db) -> list:
         logger.warning(f"{LOG_PREFIX} _fetch_referenced_episodes query failed: {exc}")
         return []
 
-    # Parse episode IDs from memory result strings: [id:{uuid},relevance:...]
-    episode_ids = set()
-    _id_pattern = _re.compile(r'\[id:([^,\]]+)')
-    for row in rows:
-        result_text = row[0] or ''
-        for match in _id_pattern.finditer(result_text):
-            eid = match.group(1).strip()
-            if eid:
-                episode_ids.add(eid)
+    # Parse episode IDs out of each memory recall envelope. recall renders a
+    # structured JSON body — ``[memory(status=success, …)]\n{"results": [{"id":…,
+    # "kind":"episode", …}, …]}\n[end:memory]`` — so we pull the JSON between the
+    # open tag and ``[end:memory]`` and collect the ``id`` of every row whose
+    # ``kind`` is ``episode`` (data-graph rows carry their own kind and are keyed
+    # by data-graph key, not an episode id, so they are skipped).
+    episode_ids = _parse_episode_ids_from_results([row[0] or '' for row in rows])
 
     if not episode_ids:
         return []
