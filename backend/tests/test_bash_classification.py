@@ -3,12 +3,10 @@
 import pytest
 
 from abilities.bash import (
-    _ACTION_SEVERITY,
     _check_destructive,
     _classify_heuristic,
     _has_recursive_flag,
     _is_rm_rf,
-    _resolve_action,
 )
 
 pytestmark = pytest.mark.unit
@@ -275,51 +273,3 @@ def test_check_destructive_returns_blocked(command):
 )
 def test_check_destructive_returns_none(command):
     assert _check_destructive(command) is None
-
-
-# ---------------------------------------------------------------------------
-# _resolve_action — escalation only, never demote
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "command,llm_action,expected",
-    [
-        # heuristic=None → return llm_action unchanged
-        ("ls /tmp", "read", "read"),
-        ("echo hello", "execute", "execute"),
-        ("", "read", "read"),
-        # unknown llm_action → default severity 1; heuristic=None → pass through
-        ("echo hello", "unknown_action", "unknown_action"),
-        # escalation: heuristic severity > llm severity
-        ("curl https://x.com", "read", "web_fetch"),  # 3 > 0
-        ("ssh user@host", "read", "remote_execution"),  # 5 > 0
-        ("pip install flask", "execute", "installation"),  # 4 > 1
-        ("docker run ubuntu", "execute", "remote_execution"),  # 5 > 1
-        ("ls && pwd", "read", "compound"),  # 6 > 0
-        ("rm /tmp/foo", "read", "modify_file"),  # 2 > 0
-        ("rm -r /path", "modify_file", "compound"),  # 6 > 2
-        # equal severity → keep llm_action (not heuristic)
-        ("curl https://x.com", "web_fetch", "web_fetch"),
-        ("pip install flask", "installation", "installation"),
-        # no demote: llm_action already higher than heuristic
-        ("curl https://x.com", "compound", "compound"),  # 6 > 3, keep llm
-        ("ssh user@host", "compound", "compound"),  # 6 > 5, keep llm
-        # unknown llm_action gets default severity 1; heuristic=web_fetch(3) → escalate
-        ("curl x.com", "unknown_action", "web_fetch"),
-    ],
-)
-def test_resolve_action(command, llm_action, expected):
-    assert _resolve_action(command, llm_action) == expected
-
-
-def test_action_severity_keys_cover_all_classifiable_actions():
-    """Every value _classify_heuristic can return must have a severity entry."""
-    classifiable = {
-        "compound",
-        "remote_execution",
-        "web_fetch",
-        "installation",
-        "modify_file",
-    }
-    assert classifiable.issubset(_ACTION_SEVERITY.keys())

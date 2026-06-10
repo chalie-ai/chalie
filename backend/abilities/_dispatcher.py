@@ -81,7 +81,13 @@ class ToolDispatcher:
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
         else:
-            action = params.get("action")
+            # The risk class the gate keys on is derived from the inputs via the
+            # ability's classify_action hook (default None), NOT trusted from a
+            # model-supplied 'action' — a self-declared action is prompt-injectable
+            # and must never decide the permission. Fall back to the action param
+            # only when the tool offers no classification.
+            classified = ability.classify_action(params)
+            action = classified if classified is not None else params.get("action")
             permission = f"{tool_name}.{action}" if action else tool_name
             result_text = PolicyManager.wrap(
                 channel=getattr(config, "policy_channel", None),

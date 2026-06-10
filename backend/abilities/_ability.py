@@ -298,6 +298,23 @@ class Ability(ABC):
 
         return value
 
+    def classify_action(self, params: dict) -> "str | None":
+        """Derive the risk class the policy gate keys on, from the inputs alone.
+
+        The dispatcher calls this ONCE, BEFORE ``PolicyManager.wrap``, and prefers
+        its return value over a model-supplied ``action`` param when building the
+        ``<tool>.<action>`` permission. This is the framework seam that lets a
+        tool's permission be computed from what the call WOULD DO (e.g. bash
+        inspecting the command string) instead of from a self-declared, and thus
+        prompt-injectable, ``action`` field.
+
+        The default returns ``None`` — "no opinion, use the ``action`` param (or
+        the bare tool name when there is none)". Override on a tool whose risk
+        class must be inferred rather than trusted; the override OWNS the
+        classification (the model never self-declares risk for such a tool).
+        """
+        return None
+
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
         """Resolve a rich-media payload's runtime state at parse time.

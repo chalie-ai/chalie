@@ -1,6 +1,5 @@
 [
   {"channel": "chat", "permission": "bash.compound", "setting": "ask"},
-  {"channel": "chat", "permission": "bash.execute", "setting": "ask"},
   {"channel": "chat", "permission": "bash.installation", "setting": "ask"},
   {"channel": "chat", "permission": "bash.modify_file", "setting": "ask"},
   {"channel": "chat", "permission": "bash.read", "setting": "allow"},
@@ -78,7 +77,6 @@
   {"channel": "chat", "permission": "web_browse", "setting": "allow"},
   {"channel": "chat", "permission": "web_search", "setting": "allow"},
   {"channel": "external_agent", "permission": "bash.compound", "setting": "deny"},
-  {"channel": "external_agent", "permission": "bash.execute", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.installation", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.modify_file", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.read", "setting": "deny"},
@@ -156,7 +154,6 @@
   {"channel": "external_agent", "permission": "web_browse", "setting": "deny"},
   {"channel": "external_agent", "permission": "web_search", "setting": "deny"},
   {"channel": "subconscious", "permission": "bash.compound", "setting": "deny"},
-  {"channel": "subconscious", "permission": "bash.execute", "setting": "deny"},
   {"channel": "subconscious", "permission": "bash.installation", "setting": "deny"},
   {"channel": "subconscious", "permission": "bash.modify_file", "setting": "deny"},
   {"channel": "subconscious", "permission": "bash.read", "setting": "deny"},
