@@ -1,20 +1,83 @@
-"""HomeAbility -- control smart home devices and automations via Home Assistant.
+"""HomeAbility — control smart home devices and automations via Home Assistant.
 
-Delegates to HomeCapability's tool handlers. Uses skill tag wrapper like
-email.py (no rich-media rendering).
+Delegates to ``HomeCapability``'s tool handlers through the shared
+:class:`CapabilityAbility` base, which owns capability loading, the
+not-connected / unknown-action / handler-unavailable errors, handler dispatch,
+and result wrapping. This ability supplies its metadata, the flat-action wiring,
+the ``ACTION_REQUIRED`` pre-gate map, and one safeguard the base cannot know
+about: an entity guardrail.
+
+**The entity guardrail is the point of this tool.** Home Assistant answers a
+service call with HTTP 200 and the *list of states it changed*; for a
+nonexistent ``entity_id`` that list is empty and the call changes nothing — so a
+guessed-wrong entity used to report success while doing nothing (the REST
+handler ignores the response body and returns ``{"status": "ok"}``
+unconditionally). A weak local model that guesses ``light.ofice`` instead of
+``light.office`` would be told the light turned off when it did not.
+
+So before delegating an entity-bearing action (``get_state`` / ``control`` /
+``subscribe_events``) to the base, :meth:`run` resolves the ``entity_id`` against
+the live ``/api/states`` list (one read through the capability's own
+``list_devices`` handler, so credentials stay encapsulated). An unknown entity
+returns ``code=unknown-entity`` with the closest real entity ids as candidates —
+the model self-corrects from one error instead of silently no-op'ing. The same
+guard protects ``trigger_automation``'s ``automation_id`` (``code=unknown-
+automation``). When the entity exists the call delegates to ``super().run()`` and
+the base performs the dispatch.
+
+Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``; the
+dispatcher renders the wire envelope. This ability never formats an envelope and
+never imports the skill-tag formatter, and there is no rich-media card.
 """
 
-import json
-import logging
+from __future__ import annotations
+
 from typing import ClassVar
 
-from abilities._ability import Ability
+from abilities._capability import CapabilityAbility
 from abilities._result import ToolResult
 
-logger = logging.getLogger(__name__)
+# Actions whose ``entity_id`` must name a real entity. ``control`` is the silent-
+# false-success case the guardrail kills; ``get_state`` would otherwise raise an
+# opaque 404; ``subscribe_events`` would silently subscribe to nothing.
+_ENTITY_ACTIONS = ("get_state", "control", "subscribe_events")
+
+# Number of closest-match candidates surfaced in an unknown-entity / unknown-
+# automation error so a weak model can re-issue with the right id.
+_MAX_CANDIDATES = 5
 
 
-class HomeAbility(Ability):
+class HomeAbility(CapabilityAbility):
+    CAPABILITY_KEY: ClassVar[str] = "home"
+    DEFAULT_ACTION: ClassVar[str] = "list_devices"
+    NOT_CONNECTED_HINT: ClassVar[str] = (
+        "Configure the Home Assistant integration in the Brain dashboard."
+    )
+
+    # The model-facing action maps 1:1 onto the capability's handler name. The
+    # base uses this to look up the handler and to build the valid= ladder for
+    # unknown-action errors, so the enum below is derived from it.
+    ACTION_HANDLERS: ClassVar[dict[str, str]] = {
+        "list_devices": "list_devices",
+        "get_state": "get_state",
+        "control": "control",
+        "list_automations": "list_automations",
+        "trigger_automation": "trigger_automation",
+        "subscribe_events": "subscribe_events",
+    }
+
+    # Pre-gated by the dispatcher BEFORE run() (and before the policy gate): a
+    # known action missing a required param yields one code=missing-params error
+    # naming all missing params. Read/list actions have no hard requirement.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
+        "list_devices": (),
+        "get_state": ("entity_id",),
+        "control": ("entity_id", "service"),
+        "list_automations": (),
+        "trigger_automation": ("automation_id",),
+        "subscribe_events": ("entity_id",),
+    }
+
     def get_name(self) -> str:
         return "home"
 
@@ -40,6 +103,9 @@ class HomeAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "smart home control"
 
+    def get_parameters(self) -> dict:
+        return self._PARAMETERS
+
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -64,7 +130,10 @@ class HomeAbility(Ability):
             },
             "entity_id": {
                 "type": "string",
-                "description": "HA entity ID, e.g. 'light.living_room'.",
+                "description": (
+                    "HA entity ID, e.g. 'light.living_room'. Must name a real "
+                    "entity — call list_devices first if unsure."
+                ),
             },
             "domain": {
                 "type": "string",
@@ -84,35 +153,126 @@ class HomeAbility(Ability):
             },
             "automation_id": {
                 "type": "string",
-                "description": "trigger_automation: automation entity_id.",
+                "description": (
+                    "trigger_automation: automation entity_id (e.g. "
+                    "'automation.good_morning'). Must name a real automation — call "
+                    "list_automations first if unsure."
+                ),
             },
         },
         "required": ["action"],
     }
 
-    def get_parameters(self) -> dict:
-        return self._PARAMETERS
+    # ── Entry point — entity guardrail, then delegate to the base ──────────────
 
     def run(self, params: dict) -> ToolResult:
-        action = params.get("action", "list_devices").lower()
+        action = str(params.get("action", self.DEFAULT_ACTION)).lower()
+        params["action"] = action
 
+        cap = self._connected_capability()
+        if cap is not None:
+            if action in _ENTITY_ACTIONS:
+                guard = self._guard_entity(cap, action, str(params.get("entity_id", "")))
+                if guard is not None:
+                    return guard
+            elif action == "trigger_automation":
+                guard = self._guard_automation(
+                    cap, action, str(params.get("automation_id", ""))
+                )
+                if guard is not None:
+                    return guard
+
+        # Connected + entity verified (or a non-addressed action, or not connected
+        # — the base emits the canonical not-connected error in that case): the
+        # base owns dispatch and result wrapping.
+        return super().run(params)
+
+    # ── Guardrails ─────────────────────────────────────────────────────────────
+
+    def _guard_entity(self, cap, action: str, entity_id: str) -> "ToolResult | None":
+        """Return an ``unknown-entity`` error when *entity_id* is not in the live
+        states list, else ``None`` (the entity exists — proceed to the base)."""
+        entities = self._live_entities(cap, prefix=None)
+        if entity_id in entities:
+            return None
+        return ToolResult.err(
+            f"No Home Assistant entity matches {entity_id!r}.",
+            code="unknown-entity",
+            hint=self._closest_hint(entity_id, entities, "list_devices"),
+            valid=self._closest(entity_id, entities),
+            action=action,
+        )
+
+    def _guard_automation(self, cap, action: str, automation_id: str) -> "ToolResult | None":
+        """Return an ``unknown-automation`` error when *automation_id* is not a real
+        automation entity, else ``None``."""
+        automations = self._live_entities(cap, prefix="automation.")
+        if automation_id in automations:
+            return None
+        return ToolResult.err(
+            f"No Home Assistant automation matches {automation_id!r}.",
+            code="unknown-automation",
+            hint=self._closest_hint(automation_id, automations, "list_automations"),
+            valid=self._closest(automation_id, automations),
+            action=action,
+        )
+
+    # ── Live-state lookup + closest-match helpers ──────────────────────────────
+
+    def _connected_capability(self):
+        """Return the connected home capability, or ``None`` when absent / not
+        connected (the base then surfaces the canonical not-connected error)."""
         from capabilities import load_capabilities
-        cap = load_capabilities().get("home")
 
+        cap = load_capabilities().get(self.CAPABILITY_KEY)
         if cap is None or not cap.is_connected():
-            result = {
-                "status": "error",
-                "error": "Home capability not connected. Configure it in the Brain dashboard.",
-            }
-            return ToolResult.ok(json.dumps(result), action=action)
+            return None
+        return cap
+
+    @staticmethod
+    def _live_entities(cap, *, prefix: str | None) -> list[str]:
+        """The live entity ids from the capability's own ``list_devices`` handler,
+        optionally restricted to a domain *prefix* (e.g. ``"automation."``).
+
+        Going through the capability handler keeps credentials encapsulated and
+        reuses the one connection the capability owns. ``limit`` is raised so the
+        guardrail sees the full universe, not just the first page."""
+        from services.innate_skills._capability import dispatch_capability_handler
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
-        handler = tool_map.get(action)
-        if handler is None:
-            result = {"status": "error", "error": f"Unknown home action: {action}"}
-            return ToolResult.ok(json.dumps(result), action=action)
+        handler = tool_map["list_devices"]
+        result = dispatch_capability_handler(handler, {"limit": 1000}, None)
+        devices = result.get("devices", []) if isinstance(result, dict) else []
+        ids = [d.get("entity_id", "") for d in devices if d.get("entity_id")]
+        if prefix is not None:
+            ids = [eid for eid in ids if eid.startswith(prefix)]
+        return ids
 
-        from services.innate_skills._capability import dispatch_capability_handler
-        result = dispatch_capability_handler(handler, params, self.telemetry)
+    @staticmethod
+    def _closest(needle: str, candidates: list[str]) -> tuple[str, ...]:
+        """The closest real entity ids to *needle*, ranked by a ci substring /
+        edit-distance proximity, capped at :data:`_MAX_CANDIDATES`.
 
-        return ToolResult.ok(json.dumps(result), action=action)
+        Substring hits (either direction) come first; the remainder is ordered by
+        ``difflib`` similarity so a transposed/typo'd id (``light.ofice``) still
+        surfaces ``light.office`` as the top candidate."""
+        import difflib
+
+        needle_l = needle.lower()
+        substring = [c for c in candidates if needle_l in c.lower() or c.lower() in needle_l]
+        rest = [c for c in candidates if c not in substring]
+        rest_ranked = sorted(
+            rest,
+            key=lambda c: difflib.SequenceMatcher(None, needle_l, c.lower()).ratio(),
+            reverse=True,
+        )
+        return tuple((substring + rest_ranked)[:_MAX_CANDIDATES])
+
+    @classmethod
+    def _closest_hint(cls, needle: str, candidates: list[str], list_action: str) -> str:
+        """A one-line recovery hint naming the closest real ids, or directing the
+        model to the matching list action when there is nothing close."""
+        closest = cls._closest(needle, candidates)
+        if closest:
+            return f"closest matches: {', '.join(closest)} — re-issue with an exact id."
+        return f"call home with action={list_action} to see the real ids."
