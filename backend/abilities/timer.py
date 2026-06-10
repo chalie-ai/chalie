@@ -14,14 +14,14 @@ iterations cannot misinterpret a literal timestamp as something they
 need to reason about, and the model never has to fill it.
 
 Rich-media rendering:
-  When an ordinal is supplied (``params['_rich_media_ordinal']``) the
-  return value is a string ``<JSON>\\n\\n<rich-media instruction trailer>``.
-  Without an ordinal — subagent calls, action-button calls, direct test
-  calls — the raw dict is returned and no trailer is appended.
+  A successful timer returns ``ToolResult.ok(payload, rich=payload)`` — the
+  ``{title, duration_seconds}`` dict is both the structured body the model
+  reads AND the card payload. The dispatcher (``ToolDispatcher._render``) owns
+  ordinal assignment + the span-tag instruction and injects the card ONLY when
+  the invoking channel broadcasts to the user. ``started_at`` is grafted onto
+  the card payload later, at parse time, by ``enrich_rich_payload``.
 """
 
-import json
-import logging
 from datetime import datetime, timezone
 from typing import ClassVar
 
@@ -29,16 +29,7 @@ from abilities._ability import Ability
 from abilities._result import ToolResult
 from services.time_utils import parse_utc
 
-logger = logging.getLogger(__name__)
-
 _PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
-
-_RICH_MEDIA_INSTRUCTION = (
-    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "The span will render as a live countdown card; without it, the user "
-    "sees only plain text. Write a brief acknowledgement. Example: "
-    "\"<span id='{tag}'>Started a 25-minute focus timer.</span>\""
-)
 
 _MAX_DURATION_SECONDS = 24 * 60 * 60  # 24 hours
 _MIN_DURATION_SECONDS = 1
@@ -46,6 +37,12 @@ _MIN_DURATION_SECONDS = 1
 
 class TimerAbility(Ability):
     SYSTEM = True
+
+    # title + duration_seconds are both required; presence is enforced by the
+    # dispatcher pre-gate (ACTION_REQUIRED) BEFORE run(). Key "" — action-less.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
+        "": ("title", "duration_seconds"),
+    }
 
     def get_name(self) -> str:
         return "timer"
@@ -87,16 +84,17 @@ class TimerAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        ordinal = params.get("_rich_media_ordinal")
         title = (params.get("title") or "").strip()
         duration_seconds = params.get("duration_seconds")
 
-        if not title:
-            return ToolResult.err("title is required", code="error")
-        if not isinstance(duration_seconds, int) or duration_seconds < _MIN_DURATION_SECONDS or duration_seconds > _MAX_DURATION_SECONDS:
+        # bool is an int subclass — exclude it so a literal True/False is rejected
+        # rather than coerced into a 1-second / 0-second timer.
+        if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int) \
+                or duration_seconds < _MIN_DURATION_SECONDS or duration_seconds > _MAX_DURATION_SECONDS:
             return ToolResult.err(
                 f"duration_seconds must be an integer between {_MIN_DURATION_SECONDS} and {_MAX_DURATION_SECONDS}",
-                code="error",
+                code="invalid-duration",
+                hint=f"pass an integer number of seconds from {_MIN_DURATION_SECONDS} to {_MAX_DURATION_SECONDS}.",
             )
 
         if len(title) > 80:
@@ -106,13 +104,10 @@ class TimerAbility(Ability):
             "title": title,
             "duration_seconds": duration_seconds,
         }
-
-        if ordinal is None:
-            return ToolResult.ok(payload)
-
-        tag = f"timer_{ordinal}"
-        instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-        return ToolResult.ok(f"{json.dumps(payload)}\n\n{instruction}")
+        # body == rich: the model reads the same dict the FE card renders. The
+        # dispatcher injects the ordinal + span instruction only on a
+        # user-broadcast turn; started_at is grafted later by enrich_rich_payload.
+        return ToolResult.ok(payload, rich=payload)
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
