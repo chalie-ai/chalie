@@ -1,32 +1,41 @@
 """Feature tests: the rebuilt 9-verb browser ability.
 
-Drives the REAL ``BrowserAbility.run`` entry point — the same call
-``ToolDispatcher._execute`` makes — with zero mocks. The SSRF guard blocks every
-local/private address (security.py:21-29), so anything requiring real navigation
-lives in tests/e2e/test_browser_live.py (marker: e2e) and the end-to-end scenarios;
-these tests cover the full no-network surface: schema, validation, the SSRF
-guard itself, the no-open-page guard, and the uniform error envelope.
-"""
+Drives the REAL production hot path — ``ToolDispatcher.dispatch()`` on a real
+``MessageProcessor`` bound to ``WebBrowseConfig`` (where ``browser`` is
+always-available; ``browser`` is in ``PolicyManager.INTERNAL`` so no policy rows
+are needed) — with zero mocks. The SSRF guard blocks every local/private address
+(security.py) WITHOUT a network call, so anything requiring real navigation
+lives in tests/e2e/test_browser_live.py (marker: e2e) and the end-to-end
+scenarios; these tests cover the full no-network surface: schema, the SSRF guard
+itself, and the no-open-page guard, all asserted on the dispatcher WIRE envelope.
 
-import json
+The canonical-result-code contract (kebab codes + hint + the unknown-action /
+missing-params pre-gate) is locked in tests/test_ability_browser_tool_result.py.
+"""
 
 import pytest
 
+from abilities._dispatcher import ToolDispatcher
 from abilities.browser import BrowserAbility
+from configs.channels.web_browse import WebBrowseConfig
+from services.message_processor import MessageProcessor
+from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
 _VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot"]
 
 
-def _envelope(out) -> dict:
-    """``run()`` returns a ``ToolResult`` whose ``body`` is the JSON envelope
-    string (the dispatcher wraps it in the ``[browser(...)]`` tag); parse it
-    and assert the envelope shape."""
-    env = json.loads(out.body)
-    assert set(env) == {"page", "data", "changed", "error"}, env
-    assert set(env["changed"]) == {"navigated", "dialog", "popup", "summary"}, env
-    return env
+def _browse_mp() -> MessageProcessor:
+    mp = MessageProcessor("drive a web page")
+    mp.config = WebBrowseConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.active_tools = list(mp.config.always_available or [])
+    return mp
+
+
+def _dispatch(params: dict) -> str:
+    """The exact rendered string the ACT loop consumes for one browser call."""
+    return ToolDispatcher(_browse_mp()).dispatch("browser", params)
 
 
 def test_schema_is_nine_flat_verbs():
@@ -40,34 +49,15 @@ def test_schema_is_nine_flat_verbs():
     assert params["required"] == ["action", "act_summary"]
 
 
-def test_unknown_action_is_an_error_envelope():
-    env = _envelope(BrowserAbility(mp=None).run({"action": "render"}))
-    assert "Unknown action" in env["error"]
-    assert "open" in env["error"]  # the error teaches the verb list
-
-
-@pytest.mark.parametrize("params,needs", [
-    ({"action": "open"}, "url"),
-    ({"action": "find"}, "query"),
-    ({"action": "click"}, "target"),
-    ({"action": "fill", "target": "Email"}, "value"),
-    ({"action": "select", "value": "Malta"}, "target"),
-    ({"action": "scroll"}, "direction"),
-])
-def test_missing_required_param_is_an_error_envelope(params, needs):
-    env = _envelope(BrowserAbility(mp=None).run(params))
-    assert needs in env["error"]
-
-
 def test_ssrf_guard_blocks_private_urls_before_any_browser_work():
-    env = _envelope(BrowserAbility(mp=None).run(
-        {"action": "open", "url": "http://127.0.0.1:9/admin"}
-    ))
-    assert "URL blocked" in env["error"]
+    rendered = _dispatch({"action": "open", "url": "http://127.0.0.1:9/admin"})
+    assert rendered.startswith("[browser(status=error, code=url-blocked"), rendered
+    assert "URL blocked" in rendered, rendered
 
 
 def test_verbs_demand_an_open_page_first():
     """No session for this key → mechanical guidance, no browser launch."""
-    env = _envelope(BrowserAbility(mp=None).run({"action": "click", "target": "Sign in"}))
-    assert "No page is open" in env["error"]
-    assert "open" in env["error"]
+    rendered = _dispatch({"action": "click", "target": "Sign in"})
+    assert "status=error" in rendered.splitlines()[0], rendered
+    assert "code=no-open-page" in rendered.splitlines()[0], rendered
+    assert "No page is open" in rendered, rendered
