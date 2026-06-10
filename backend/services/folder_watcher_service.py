@@ -654,7 +654,7 @@ class FolderWatcherService:
         def _run():
             try:
                 from services.text_extractor import extract_text
-                from abilities.document import create_document_artifacts
+                from services.document_chunking import create_document_artifacts
                 from services.document_service import DocumentService
                 from services.database_service import get_shared_db_service
 

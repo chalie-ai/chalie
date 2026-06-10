@@ -151,7 +151,7 @@ def _run_upload_extraction(doc_id: str):
     from services.document_service import DocumentService
     from services.database_service import get_shared_db_service
     from services.text_extractor import extract_text
-    from abilities.document import create_document_artifacts
+    from services.document_chunking import create_document_artifacts
 
     svc = DocumentService(get_shared_db_service())
     doc = svc.get_document(doc_id)
