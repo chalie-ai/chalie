@@ -182,7 +182,7 @@ The **delegate tools** replace the former `subagent` ability and its `SubagentPr
 | Tool | `always_available` surface | Goal param |
 |------|----------------------------|------------|
 | `web_search` | `search`, `read`, `web_download`, `memory` | `query` |
-| `web_browse` | `browser`, `read`, `memory` | `goal` |
+| `web_browse` | `browser`, `read`, `vision`, `memory` | `goal` |
 | `vision` | (none — single-shot `max_iterations=1` on the Vision Provider) | `image` + `query` |
 
 Every delegate carries `memory` (an INTERNAL tool) so it can recall while it works.
