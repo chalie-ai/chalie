@@ -31,6 +31,7 @@ from RestrictedPython import compile_restricted, safe_builtins, safe_globals
 from RestrictedPython.PrintCollector import PrintCollector
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class CodeEvalAbility(Ability):
         "collections": collections,
     }
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         """Run the supplied Python under a hard 10-minute cap, returning its
         printed output or an actionable error — never a silent empty success
         that the LLM would misread as 'done' and retry."""
@@ -134,7 +135,7 @@ class CodeEvalAbility(Ability):
             return self._error(self._ERR_NO_CODE)
         return self._execute_with_cap(code)
 
-    def _execute_with_cap(self, code: str) -> dict:
+    def _execute_with_cap(self, code: str) -> ToolResult:
         """Run the sandboxed code in a separate process with a hard wall-clock
         cap. A subprocess is the only way to force-kill arbitrary CPU-bound code
         (e.g. ``while True``) — a thread cannot be interrupted. On timeout the
@@ -172,7 +173,7 @@ class CodeEvalAbility(Ability):
         proc.join()
         return self._error(self._ERR_CRASHED)
 
-    def _compile_and_run(self, code: str) -> dict:
+    def _compile_and_run(self, code: str) -> ToolResult:
         """Compile and execute *code* in fresh restricted globals. Runs inside
         the sandbox subprocess; returns printed output, a full stack trace on
         failure, or a no-output error — never a silent empty success."""
@@ -182,7 +183,7 @@ class CodeEvalAbility(Ability):
             return self._error(traceback.format_exc())
         return self._run(byte_code)
 
-    def _run(self, byte_code) -> dict:
+    def _run(self, byte_code) -> ToolResult:
         """Execute compiled bytecode in fresh restricted globals, returning its
         printed output, a full stack trace on failure, or a no-output error."""
         # Fresh globals copy per call so state never leaks between executions.
@@ -199,7 +200,7 @@ class CodeEvalAbility(Ability):
         captured = self._captured(exec_locals)
         if not captured:
             return self._error(self._ERR_NO_OUTPUT)
-        return {"text": captured, "error": ""}
+        return ToolResult.ok(captured)
 
     def _captured(self, exec_locals: dict) -> str:
         """Return text accumulated by the sandbox PrintCollector, or '' if the
@@ -207,10 +208,11 @@ class CodeEvalAbility(Ability):
         collector = exec_locals.get(self._PRINT_VAR)
         return collector() if collector is not None else ""
 
-    def _error(self, message: str, captured: str = "") -> dict:
-        """Build an error result, preserving any partial print output as text so
-        the LLM keeps context alongside the failure."""
-        return {"text": captured, "error": message}
+    def _error(self, message: str, captured: str = "") -> ToolResult:
+        """Build an error result, preserving any partial print output alongside
+        the failure so the LLM keeps context."""
+        body = f"{captured}\n{message}" if captured else message
+        return ToolResult.err(body, code="error")
 
 
 def _sandbox_worker(code: str, result_queue) -> None:

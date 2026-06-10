@@ -11,7 +11,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CONTACTS ABILITY]"
@@ -79,7 +79,7 @@ class ContactsAbility(Ability):
         "required": ["action"],
     }
 
-    def run(self, params: dict) -> dict | str:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "list").lower()
         ordinal = params.get("_rich_media_ordinal")
 
@@ -92,7 +92,7 @@ class ContactsAbility(Ability):
                 "status": "error",
                 "error": "Contacts capability not connected. Configure the mail integration in the Brain dashboard.",
             }
-            return {"text": _skill_tag("contacts", json.dumps(result), action=action)}
+            return ToolResult.ok(json.dumps(result), action=action)
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
 
@@ -104,7 +104,7 @@ class ContactsAbility(Ability):
         handler_name = _ACTION_TO_HANDLER.get(action)
         if handler_name is None:
             result = {"status": "error", "error": f"Unknown contacts action: {action}"}
-            return {"text": _skill_tag("contacts", json.dumps(result), action=action)}
+            return ToolResult.ok(json.dumps(result), action=action)
 
         handler = tool_map.get(handler_name)
         if handler is None:
@@ -115,14 +115,14 @@ class ContactsAbility(Ability):
                     "CardDAV may not be connected for this mail account."
                 ),
             }
-            return {"text": _skill_tag("contacts", json.dumps(result), action=action)}
+            return ToolResult.ok(json.dumps(result), action=action)
 
         from services.innate_skills._capability import dispatch_capability_handler
         result = dispatch_capability_handler(handler, params, self.telemetry)
 
         if ordinal is not None and "error" not in result:
-            return _serialise_rich(result, action, ordinal)
-        return {"text": _skill_tag("contacts", json.dumps(result), action=action)}
+            return ToolResult.ok(_serialise_rich(result, action, ordinal), action=action)
+        return ToolResult.ok(json.dumps(result), action=action)
 
 
 def _serialise_rich(result: dict, action: str, ordinal: int) -> str:

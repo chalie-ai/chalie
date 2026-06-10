@@ -29,6 +29,7 @@ from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._delegate import delegate_goal
+from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
 
 
@@ -74,14 +75,14 @@ class WebBrowseAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         result = MessageProcessor.process(
             delegate_goal(params),
             WebBrowseConfig(self.mp.config.policy_channel),
         )
-        return {"status": "success", "result": self._final_text(result)}
+        return ToolResult.ok(self._final_text(result))
 
     @staticmethod
     def _final_text(result: str) -> str:

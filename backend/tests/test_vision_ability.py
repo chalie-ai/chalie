@@ -136,8 +136,8 @@ def test_vision_run_provider_error_returns_visible_error(db):
     ability = VisionAbility(mp=_make_user_mp())
     result = ability.run({"image": doc_id, "query": "what is this"})
 
-    assert result["status"] == "error"
-    assert result["result"]  # non-empty: the failure is visible, not swallowed
+    assert result.status == "error"
+    assert result.body  # non-empty: the failure is visible, not swallowed
 
 
 def test_vision_run_unknown_doc_id_is_error(db):
@@ -146,8 +146,8 @@ def test_vision_run_unknown_doc_id_is_error(db):
     ability = VisionAbility(mp=_make_user_mp())
     result = ability.run({"image": "deadbeef", "query": "x"})
 
-    assert result["status"] == "error"
-    assert "deadbeef" in result["result"]
+    assert result.status == "error"
+    assert "deadbeef" in result.body
 
 
 def test_rich_index_prompt_mentions_searchable():

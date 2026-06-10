@@ -16,6 +16,7 @@ from html.parser import HTMLParser
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 
 # ---------------------------------------------------------------------------
 # Content extraction constants
@@ -850,17 +851,22 @@ def resolve_source(language):
     return _ALIAS_MAP.get(language.strip().lower())
 
 
-def lookup(language, query):
+def lookup(language, query) -> ToolResult:
     source = resolve_source(language)
     if source is None:
         langs = ", ".join(s.id for s in _ALL_SOURCES)
-        return {"error": f"Unknown language/framework: {language}. Supported: {langs}"}
+        return ToolResult.err(f"Unknown language/framework: {language}. Supported: {langs}", code="error")
     results = source.search(query)
     if not results:
-        return {"error": f"No results found for '{query}' in {source.name} docs.", "source": source.name, "url": source.base_url}
+        return ToolResult.err(
+            f"No results found for '{query}' in {source.name} docs.",
+            code="error",
+            source=source.name,
+            url=source.base_url,
+        )
     top = results[0]
     text = _fetch_and_extract(top["url"])
-    return {"text": text, "url": top["url"], "source": source.name}
+    return ToolResult.ok(text, url=top["url"], source=source.name)
 
 
 # ---------------------------------------------------------------------------
@@ -913,11 +919,11 @@ class ProgrammingDocsSearchAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         language = (params.get("language") or "").strip()
         query = (params.get("query") or "").strip()
         if not language:
-            return {"text": "", "error": "Missing required parameter: language"}
+            return ToolResult.err("Missing required parameter: language", code="error")
         if not query:
-            return {"text": "", "error": "Missing required parameter: query"}
+            return ToolResult.err("Missing required parameter: query", code="error")
         return lookup(language, query)

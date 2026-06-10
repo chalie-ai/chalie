@@ -46,14 +46,13 @@ def _exec_rich(ability, params, ordinal=1):
 
 
 def _payload(result):
-    """Extract the JSON body from a non-rich result wrapped in skill tags.
+    """Extract the JSON body from a ``ToolResult``.
 
-    Format: ``[list(action=X)]\\n{json}\\n[end:list]``
+    ``run()`` returns ``ToolResult.ok(body, action=X)`` where ``body`` is the
+    JSON string for non-rich calls; the dispatcher (not the ability) formats the
+    ``[list(...)]`` envelope, so the ability-level result carries the raw body.
     """
-    text = result['text']
-    start = text.index('\n') + 1
-    end = text.rindex('\n[end:')
-    return json.loads(text[start:end])
+    return json.loads(result.body)
 
 
 # ─── action: list_all ──────────────────────────────────────────────────────
@@ -200,17 +199,14 @@ class TestDelete:
 # ─── rich-media envelope ───────────────────────────────────────────────────
 
 def _unwrap_rich(result, action):
-    """Extract (payload, instruction) from a rich-media result.
+    """Extract (payload, instruction) from a rich-media ``ToolResult``.
 
-    Wire format: ``[list(action=X)]\\n{json}\\n\\n{instruction}\\n[end:list]``
+    When an ordinal is present, ``run()`` returns ``ToolResult.ok(body, …)`` whose
+    body is ``{json}\\n\\n{instruction}`` (the envelope itself is added later by
+    the dispatcher).
     """
-    assert isinstance(result, str)
-    opener = f"[list(action={action})]\n"
-    closer = "\n[end:list]"
-    assert result.startswith(opener), f"missing opener: {result[:60]!r}"
-    assert result.endswith(closer), f"missing closer: {result[-60:]!r}"
-    inner = result[len(opener):-len(closer)]
-    data_json, instruction = inner.split('\n\n', 1)
+    assert result.meta.get("action") == action
+    data_json, instruction = result.body.split('\n\n', 1)
     return json.loads(data_json), instruction
 
 

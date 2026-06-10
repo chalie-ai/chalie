@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import requests
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from abilities._ssrf import is_private_url
 
 logger = logging.getLogger(__name__)
@@ -57,14 +58,14 @@ class WebDownloadAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> str:
+    def run(self, params: dict) -> ToolResult:
         url = params.get("url", "").strip()
         if not url:
-            return "url parameter is required"
+            return ToolResult.ok("url parameter is required")
 
         error = _validate_url(url)
         if error:
-            return error
+            return ToolResult.ok(error)
 
         timeout_min = params.get("timeout", _DEFAULT_TIMEOUT_MIN)
         try:
@@ -78,9 +79,9 @@ class WebDownloadAbility(Ability):
             _download(url, dest_path, timeout_sec)
         except Exception as e:
             logger.exception("[WEB_DOWNLOAD] url=%r: %s", url, e)
-            return str(e)
+            return ToolResult.ok(str(e))
 
-        return dest_path
+        return ToolResult.ok(dest_path)
 
 
 def _validate_url(url: str) -> str | None:

@@ -19,6 +19,14 @@ from __future__ import annotations
 import copy
 import typing
 from abc import ABC, abstractmethod
+from typing import ClassVar
+
+from abilities._result import ToolParamError, ToolResult
+
+# Sentinel distinguishing "no default supplied" from an explicit default of None
+# in Ability.param(): a required param with no value raises; an optional one with
+# default=None returns None.
+_MISSING = object()
 
 # The framework fields injected into EVERY tool descriptor by get_input_schema —
 # the one place either is declared. act_summary is the per-call act-trail tooltip
@@ -63,6 +71,13 @@ class Ability(ABC):
     # .config.policy_channel, ._uid, etc. This is the traceability spine: every
     # hop holds a real reference to its parent instead of reaching into a hidden
     # global. None only on a synthetic / introspection / build-time instance.
+    # Maps action → required param names (key ``""`` for action-less tools). The
+    # dispatcher validates this BEFORE run(): an unknown action → one error with
+    # ``valid=`` the action keys; a known action missing params → one
+    # ``missing-params`` error naming ALL of them. The default empty dict means
+    # "no pre-validation" so unmigrated tools are untouched by the contract.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {}
+
     def __init__(self, mp: "object | None" = None) -> None:
         self.mp = mp
         # Set by ToolDispatcher._run() immediately before run(): the flattened
@@ -77,7 +92,7 @@ class Ability(ABC):
         # (e.g. to "also enrich the schema") would silently fork the async /
         # act_summary contract, so it is rejected at import. Subclasses enrich via
         # get_parameters() / get_summary() instead.
-        for sealed in ("get_input_schema", "_inject_framework_fields"):
+        for sealed in ("get_input_schema", "_inject_framework_fields", "param"):
             if sealed in cls.__dict__:
                 raise TypeError(
                     f"{cls.__name__} must not override Ability.{sealed} — "
@@ -154,17 +169,27 @@ class Ability(ABC):
     # ── Instance method — the actual tool logic ───────────────────────────────
 
     @abstractmethod
-    def run(self, params: dict) -> "dict | str":
+    def run(self, params: dict) -> "ToolResult":
         """Execute the ability. Called by ToolDispatcher._run().
 
         The invoking MessageProcessor is available as ``self.mp`` (read
         ``self.mp.config.channel`` where the old signature passed ``channel``),
         and the flattened client telemetry as ``self.telemetry`` (or None).
 
-        Must return either:
-        - A dict with 'status' and 'result' keys (canonical form).
-        - A dict without 'status' (legacy — treated as success).
-        - A plain string (treated as success result text).
+        MUST return an :class:`abilities._result.ToolResult`, built ONLY via
+        ``ToolResult.ok(body, *, rich=None, **meta)`` /
+        ``ToolResult.err(message, *, code, hint=None, valid=(), **meta)``:
+        - ``ok`` body is prose (``str``, shown verbatim) or structured data
+          (``dict``/``list``, rendered as compact JSON); ``rich=`` is an optional
+          card payload; ``**meta`` is the flat tag map.
+        - ``err`` carries a stable kebab-case ``code``, a one-line ``hint``, and
+          a ``valid`` tuple of acceptable actions/values.
+
+        The ability NEVER formats the ``[tool(...)]`` wire envelope — the
+        dispatcher (``ToolDispatcher._render``) owns it. Returning anything that
+        is not a ``ToolResult`` HARD-FAILS as ``code=non-canonical-result``.
+        Raise ``ToolParamError`` (via ``self.param``) for bad inputs; the
+        dispatcher renders it canonically.
 
         Args:
             params: Input parameters from the LLM, framework keys stripped.
@@ -207,6 +232,71 @@ class Ability(ABC):
             properties["async"] = dict(_ASYNC_PROPERTY)
 
         return schema
+
+    # ── The one sanctioned param-handling path ─────────────────────────────────
+
+    @typing.final
+    def param(
+        self,
+        params: dict,
+        name: str,
+        *,
+        aliases: tuple[str, ...] = (),
+        default: object = _MISSING,
+        choices: "tuple | None" = None,
+        clamp: "tuple | None" = None,
+        required: bool = False,
+    ) -> object:
+        """Resolve one input the model passed, with self-correcting failures.
+
+        Resolution order: the canonical ``name`` first, then each alias in turn
+        (the TKT-834 ``read`` alias-ladder generalised) — the first key present
+        with a non-None value wins. Missing → *default* (or a ``ToolParamError``
+        when *required* / no default). ``choices`` validates membership; ``clamp``
+        ``(lo, hi)`` bounds a numeric. All failures raise ``ToolParamError`` —
+        the dispatcher catches it and renders ``code=invalid-param`` with a
+        ``hint`` and ``valid=`` so the model fixes the call without re-reading the
+        schema. ``final`` — sealed at import by ``__init_subclass__``.
+        """
+        value = _MISSING
+        for key in (name, *aliases):
+            if key in params and params[key] is not None:
+                value = params[key]
+                break
+
+        if value is _MISSING:
+            if required:
+                tried = ", ".join((name, *aliases))
+                raise ToolParamError(
+                    f"Required parameter '{name}' is missing.",
+                    code="invalid-param",
+                    hint=f"pass one of: {tried}.",
+                )
+            if default is _MISSING:
+                return None
+            return default
+
+        if choices is not None and value not in choices:
+            raise ToolParamError(
+                f"'{value}' is not a valid value for '{name}'.",
+                code="invalid-param",
+                hint=f"choose one of: {', '.join(str(c) for c in choices)}.",
+                valid=tuple(str(c) for c in choices),
+            )
+
+        if clamp is not None:
+            lo, hi = clamp
+            try:
+                numeric = type(lo)(value)
+            except (TypeError, ValueError):
+                raise ToolParamError(
+                    f"'{name}' must be a number.",
+                    code="invalid-param",
+                    hint=f"pass a number between {lo} and {hi}.",
+                ) from None
+            value = max(lo, min(hi, numeric))
+
+        return value
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:

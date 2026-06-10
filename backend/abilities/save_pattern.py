@@ -15,6 +15,7 @@ import re
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.database_service import get_shared_db_service
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
@@ -84,15 +85,15 @@ class SavePattern(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         proc = self.mp
         count = getattr(proc, "_save_pattern_calls", 0) if proc is not None else 0
         if count >= _BUDGET_CAP:
-            return {"budget_exceeded": True, "tool": "save_pattern"}
+            return ToolResult.ok({"budget_exceeded": True, "tool": "save_pattern"})
 
         validated = _validate_pattern_params(params)
         if "error" in validated:
-            return validated
+            return ToolResult.ok(validated)
 
         row_id, confidence_out = _upsert_pattern(validated)
 
@@ -102,7 +103,9 @@ class SavePattern(Ability):
             if touched is not None:
                 touched.add(row_id)
 
-        return {"ok": True, "name": validated["name"], "confidence": confidence_out, "row_id": row_id}
+        return ToolResult.ok(
+            {"ok": True, "name": validated["name"], "confidence": confidence_out, "row_id": row_id}
+        )
 
 
 def _validate_pattern_params(params: dict) -> dict:

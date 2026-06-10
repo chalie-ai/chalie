@@ -9,7 +9,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ class UbiquitiAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict | str:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "list_devices").lower()
 
         from capabilities import load_capabilities
@@ -145,22 +145,22 @@ class UbiquitiAbility(Ability):
                 "status": "error",
                 "error": "Ubiquiti capability not found. Configure it in the Brain dashboard.",
             }
-            return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
+            return ToolResult.ok(json.dumps(result), action=action)
 
         if not cap.is_connected():
             result = {
                 "status": "error",
                 "error": "Ubiquiti capability not connected. Check your UniFi controller settings in the Brain dashboard.",
             }
-            return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
+            return ToolResult.ok(json.dumps(result), action=action)
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
         handler = tool_map.get(action)
         if handler is None:
             result = {"status": "error", "error": f"Unknown ubiquiti action: {action}"}
-            return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
+            return ToolResult.ok(json.dumps(result), action=action)
 
         from services.innate_skills._capability import dispatch_capability_handler
         result = dispatch_capability_handler(handler, params, self.telemetry)
 
-        return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
+        return ToolResult.ok(json.dumps(result), action=action)

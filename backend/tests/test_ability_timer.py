@@ -2,74 +2,91 @@
 
 Real production object end-to-end. The ability is pure (no I/O collaborators),
 so these are deterministic feature tests asserting the dispatch contract:
-payload shape, ordinal-driven trailer behaviour, input validation, and the
+``ToolResult`` shape, ordinal-driven trailer behaviour, input validation, and the
 explicit non-leak rule that ``started_at`` must NEVER appear in any LLM-visible
 surface (the wall-clock anchor is injected server-side at parse time from the
 tool_calls row's created_at — see services/rich_media_parser.py).
+
+The parser tests feed the value production actually persists in
+``tool_calls.result``: the dispatcher-rendered envelope string produced by the
+ONE production formatter (``ToolDispatcher._render``). Rendering the real
+ability's ``ToolResult`` through that formatter keeps the chain
+ability → renderer → parser entirely on the production hot path.
 """
 
 import json
 
 import pytest
 
+from abilities._dispatcher import ToolDispatcher
 from abilities.timer import TimerAbility
 
 pytestmark = pytest.mark.unit
 
 
-def test_no_ordinal_returns_dict_without_trailer():
-    """When ordinal is absent the ability returns a plain dict — required by
-    the subagent / action-button / direct-call paths that must not embed a
-    rich-media instruction trailer. ``started_at`` is intentionally absent
-    from this dict too — only the rich-media render path needs a wall-clock
-    anchor and that is injected by the parser."""
+def _render(result):
+    """Render a timer ``ToolResult`` exactly as the dispatcher does before it is
+    persisted to ``tool_calls.result``. Timer keeps its rich trailer inside the
+    body string (legacy ``_rich_media_ordinal`` path, ``rich`` is None), so the
+    dispatcher renders with ordinal=None and the parser unwraps the envelope."""
+    return ToolDispatcher._render("timer", result, None)
+
+
+def test_no_ordinal_returns_dict_body_without_trailer():
+    """When ordinal is absent the ability returns a ``ToolResult`` whose body is
+    the plain payload dict — required by the subagent / action-button / direct-call
+    paths that must not embed a rich-media instruction trailer. ``started_at`` is
+    intentionally absent from this dict too — only the rich-media render path needs
+    a wall-clock anchor and that is injected by the parser."""
     ability = TimerAbility()
     result = ability.run({"title": "Focus block", "duration_seconds": 1500})
-    assert isinstance(result, dict)
-    assert result["title"] == "Focus block"
-    assert result["duration_seconds"] == 1500
-    assert "started_at" not in result
+    assert result.status == "success"
+    assert isinstance(result.body, dict)
+    assert result.body["title"] == "Focus block"
+    assert result.body["duration_seconds"] == 1500
+    assert "started_at" not in result.body
 
 
-def test_ordinal_returns_string_with_trailer():
-    """When ordinal is supplied (user-channel dispatch) the return is a
+def test_ordinal_returns_string_body_with_trailer():
+    """When ordinal is supplied (user-channel dispatch) the body is a
     `<JSON>\\n\\n<instruction>` string. The instruction must reference the
     correct ordinal-derived span tag. The JSON body must NOT contain
     ``started_at`` — keeping the LLM ignorant of the wall-clock is a hard
     invariant of the timer contract."""
     ability = TimerAbility()
     result = ability.run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 2})
-    assert isinstance(result, str)
-    body, _, instruction = result.partition("\n\n")
+    assert result.status == "success"
+    assert isinstance(result.body, str)
+    body, _, instruction = result.body.partition("\n\n")
     payload = json.loads(body)
     assert payload["title"] == "Pasta"
     assert payload["duration_seconds"] == 600
     assert "started_at" not in payload, "started_at must never be exposed to the LLM"
-    assert "started_at" not in result, "started_at must not appear anywhere in tool result"
+    assert "started_at" not in result.body, "started_at must not appear anywhere in tool result"
     assert "timer_2" in instruction
     assert "<span id='timer_2'>" in instruction
 
 
-def test_missing_title_returns_error_dict():
+def test_missing_title_returns_error():
     ability = TimerAbility()
     result = ability.run({"duration_seconds": 60, "_rich_media_ordinal": 1})
-    assert isinstance(result, dict)
-    assert "error" in result
+    assert result.status == "error"
+    assert "title" in result.body
 
 
-def test_invalid_duration_returns_error_dict():
+def test_invalid_duration_returns_error():
     ability = TimerAbility()
     for bad in (0, -5, 86401, "30", None):
         result = ability.run({"title": "Bad", "duration_seconds": bad, "_rich_media_ordinal": 1})
-        assert isinstance(result, dict), f"expected error dict for {bad!r}"
-        assert "error" in result, f"expected error key for {bad!r}"
+        assert result.status == "error", f"expected error for {bad!r}"
+        assert "duration_seconds" in result.body, f"expected duration message for {bad!r}"
 
 
 def test_long_title_truncated_to_80_chars():
     ability = TimerAbility()
     long_title = "x" * 200
     result = ability.run({"title": long_title, "duration_seconds": 60})
-    assert len(result["title"]) == 80
+    assert len(result.body["title"]) == 80
 
 
 def test_parser_skips_injection_when_created_at_missing():
@@ -79,7 +96,7 @@ def test_parser_skips_injection_when_created_at_missing():
     """
     from services.rich_media_parser import parse
 
-    raw = TimerAbility().run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1})
+    raw = _render(TimerAbility().run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1}))
     tool_calls = [{
         "tool_name": "timer",
         "params": "{}",
@@ -100,7 +117,7 @@ def test_parser_rejects_unparseable_created_at_sentinel():
     """
     from services.rich_media_parser import parse
 
-    raw = TimerAbility().run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1})
+    raw = _render(TimerAbility().run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1}))
     tool_calls = [{
         "tool_name": "timer",
         "params": "{}",
@@ -141,7 +158,7 @@ def test_parser_injects_started_at_from_tool_calls_created_at():
     from services.rich_media_parser import parse
 
     ability = TimerAbility()
-    raw = ability.run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1})
+    raw = _render(ability.run({"title": "Pasta", "duration_seconds": 600, "_rich_media_ordinal": 1}))
     assert "started_at" not in raw
 
     tool_calls = [{
@@ -168,7 +185,7 @@ def test_max_duration_accepted():
     """24-hour upper bound is the documented edge — exercise it explicitly."""
     ability = TimerAbility()
     result = ability.run({"title": "Long", "duration_seconds": 86400})
-    assert result["duration_seconds"] == 86400
+    assert result.body["duration_seconds"] == 86400
 
 
 def test_registered_in_ability_registry():

@@ -23,6 +23,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class McpManagerAbility(Ability):
     # user-data writes — no per-action policy gate is appropriate.
     SYSTEM = True
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         """Dispatch to the appropriate sub-action handler."""
         action = params.get("action", "").strip()
         dispatch = {
@@ -118,34 +119,36 @@ class McpManagerAbility(Ability):
         }
         handler = dispatch.get(action)
         if handler is None:
-            return {"text": f"Unknown action: {action!r}. Must be one of: list, add, enable, disable."}
+            return ToolResult.ok(
+                f"Unknown action: {action!r}. Must be one of: list, add, enable, disable."
+            )
         return handler(params)
 
     # ── Sub-action handlers ───────────────────────────────────────────────────
 
-    def _do_list(self, params: dict) -> dict:
+    def _do_list(self, params: dict) -> ToolResult:
         """List all configured servers with their current status."""
         from services.mcp_client_service import McpClientService
         servers = McpClientService().list_servers()
         if not servers:
-            return {"text": "No MCP servers configured. Use action=add to register one."}
+            return ToolResult.ok("No MCP servers configured. Use action=add to register one.")
         lines = []
         for s in servers:
             state = "enabled" if s["enabled"] else "disabled"
             lines.append(
                 f"• {s['name']} ({s['host']}) — {s['status']}, {state} [id={s['id']}]"
             )
-        return {"text": "Configured MCP servers:\n" + "\n".join(lines)}
+        return ToolResult.ok("Configured MCP servers:\n" + "\n".join(lines))
 
-    def _do_add(self, params: dict) -> dict:
+    def _do_add(self, params: dict) -> ToolResult:
         """Register a new server and immediately ping it."""
         from services.mcp_client_service import McpClientService
         name = (params.get("name") or "").strip()
         host = (params.get("host") or "").strip()
         if not name:
-            return {"text": "Error: name is required to add a server."}
+            return ToolResult.ok("Error: name is required to add a server.")
         if not host:
-            return {"text": "Error: host is required to add a server."}
+            return ToolResult.ok("Error: host is required to add a server.")
         headers = params.get("headers") or {}
         enabled = True  # new servers are enabled by default
 
@@ -174,39 +177,37 @@ class McpManagerAbility(Ability):
                 "Tools will be indexed when the server comes online."
             )
         logger.info("%s Added server %r — status=%s tools=%d", _LOG_PREFIX, name, status, tool_count)
-        return {"text": msg}
+        return ToolResult.ok(msg)
 
-    def _do_enable(self, params: dict) -> dict:
+    def _do_enable(self, params: dict) -> ToolResult:
         """Enable a previously disabled server and re-sync its tools."""
         from services.mcp_client_service import McpClientService
         server_id = self._resolve_server_id(params)
         if server_id is None:
-            return {"text": "Error: provide server_id (from list) or name to enable."}
+            return ToolResult.ok("Error: provide server_id (from list) or name to enable.")
         svc = McpClientService()
         try:
             svc.update_server(server_id, {"enabled": True})
         except LookupError:
-            return {"text": f"No server found with id={server_id!r}."}
+            return ToolResult.ok(f"No server found with id={server_id!r}.")
         sync = svc.ping_and_sync(server_id)
-        return {
-            "text": (
-                f"Server enabled and synced — "
-                f"status={sync['status']}, tools={sync['tool_count']}."
-            )
-        }
+        return ToolResult.ok(
+            f"Server enabled and synced — "
+            f"status={sync['status']}, tools={sync['tool_count']}."
+        )
 
-    def _do_disable(self, params: dict) -> dict:
+    def _do_disable(self, params: dict) -> ToolResult:
         """Disable a server so its tools disappear from discovery."""
         from services.mcp_client_service import McpClientService
         server_id = self._resolve_server_id(params)
         if server_id is None:
-            return {"text": "Error: provide server_id (from list) or name to disable."}
+            return ToolResult.ok("Error: provide server_id (from list) or name to disable.")
         svc = McpClientService()
         try:
             server = svc.update_server(server_id, {"enabled": False})
         except LookupError:
-            return {"text": f"No server found with id={server_id!r}."}
-        return {"text": f"Server {server['name']!r} disabled. Its tools are no longer discoverable."}
+            return ToolResult.ok(f"No server found with id={server_id!r}.")
+        return ToolResult.ok(f"Server {server['name']!r} disabled. Its tools are no longer discoverable.")
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -415,11 +415,14 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
             {"kind": "behavioral_pattern", "key": "x", "value": "y"},
         )
 
-        assert isinstance(result, dict), f"SaveGraph.run returned non-dict: {result!r}"
-        assert result.get("error") == "invalid_kind", (
-            f"Expected error='invalid_kind', got: {result}"
+        # run() returns ToolResult.ok(<dict>); the rejection payload is the body.
+        assert result.status == "success", f"SaveGraph.run errored: {result!r}"
+        body = result.body
+        assert isinstance(body, dict), f"SaveGraph.run body non-dict: {body!r}"
+        assert body.get("error") == "invalid_kind", (
+            f"Expected error='invalid_kind', got: {body}"
         )
-        assert result.get("kind") == "behavioral_pattern"
+        assert body.get("kind") == "behavioral_pattern"
 
         # No row should have been written to data_graph.
         row = db.execute(

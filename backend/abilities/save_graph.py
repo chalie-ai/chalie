@@ -12,6 +12,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
 
 logger = logging.getLogger(__name__)
@@ -63,26 +64,26 @@ class SaveGraph(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         proc = self.mp
         count = getattr(proc, "_save_graph_calls", 0) if proc is not None else 0
         if count >= _BUDGET_CAP:
-            return {"budget_exceeded": True, "tool": "save_graph"}
+            return ToolResult.ok({"budget_exceeded": True, "tool": "save_graph"})
 
         kind = params.get("kind", "")
         if kind not in ALLOWED_KINDS:
-            return {"error": "invalid_kind", "kind": kind}
+            return ToolResult.ok({"error": "invalid_kind", "kind": kind})
         key = params.get("key", "")
         value = params.get("value", "")
         if not key:
-            return {"error": "empty_key"}
+            return ToolResult.ok({"error": "empty_key"})
         if not value:
-            return {"error": "empty_value"}
+            return ToolResult.ok({"error": "empty_value"})
 
         dedup_key = (kind, key.lower().strip(), value.lower().strip())
         seen: set | None = getattr(proc, "_save_graph_seen", None) if proc else None
         if seen is not None and dedup_key in seen:
-            return {"already_stored": True, "key": key}
+            return ToolResult.ok({"already_stored": True, "key": key})
 
         try:
             result = get_data_graph_service().store(
@@ -92,7 +93,7 @@ class SaveGraph(Ability):
                 source="pattern_match",
             )
         except Exception as exc:
-            return {"error": "store_failed", "message": str(exc)}
+            return ToolResult.ok({"error": "store_failed", "message": str(exc)})
 
         if proc is not None:
             proc._save_graph_calls = count + 1
@@ -101,6 +102,6 @@ class SaveGraph(Ability):
             proc._save_graph_seen.add(dedup_key)
 
         if result and result.get("status") == "reinforced":
-            return {"already_stored": True, "key": key}
+            return ToolResult.ok({"already_stored": True, "key": key})
 
-        return {"ok": True}
+        return ToolResult.ok({"ok": True})

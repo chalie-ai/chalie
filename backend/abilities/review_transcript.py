@@ -15,7 +15,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -82,10 +82,10 @@ class ReviewTranscriptAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         date_time = (params.get("date_time") or "").strip()
         if not date_time:
-            return {"text": _skill_tag("review_transcript", error="date-time-required")}
+            return ToolResult.err("date-time-required", code="error")
 
         buffer = min(
             int(params.get("buffer_minutes", _DEFAULT_BUFFER_MINUTES)),
@@ -100,29 +100,21 @@ class ReviewTranscriptAbility(Ability):
                 "[REVIEW TRANSCRIPT] Query failed for date_time=%r: %s",
                 date_time, exc, exc_info=True,
             )
-            return {"text": _skill_tag("review_transcript", error=f"query-failed:{str(exc)[:150]}")}
+            return ToolResult.err(f"query-failed:{str(exc)[:150]}", code="error")
 
         if not rows:
-            return {
-                "text": _skill_tag(
-                    "review_transcript",
-                    f"No transcript rows found within ±{buffer} minutes of {date_time}",
-                    anchor=date_time,
-                    buffer=buffer,
-                ),
-            }
+            return ToolResult.ok(
+                f"No transcript rows found within ±{buffer} minutes of {date_time}",
+                anchor=date_time,
+                buffer=buffer,
+            )
 
         lines = [f"{len(rows)} message(s) within ±{buffer} min of {date_time}:\n"]
         for row in rows:
             lines.append(_format_row(row))
 
         body = "\n".join(lines)
-        return {
-            "text": _skill_tag(
-                "review_transcript", body,
-                anchor=date_time, buffer=buffer, count=len(rows),
-            ),
-        }
+        return ToolResult.ok(body, anchor=date_time, buffer=buffer, count=len(rows))
 
 
 def _query_transcript_window(

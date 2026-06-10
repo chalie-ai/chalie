@@ -11,10 +11,10 @@ import sqlite3
 from pathlib import Path
 from typing import ClassVar
 
+from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
-from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +65,15 @@ class FindSkillsAbility(SearchableAbility):
     _DB_PATH: ClassVar[Path] = FileMapperService.get_skills_db_path()
     _LOG_PREFIX = "[FIND_SKILLS]"
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         query = params.get("query", "").strip()
         logger.info(f"{self._LOG_PREFIX} query='{query}' limit={params.get('limit', 3)}")
         if not query:
-            return {"text": _skill_tag("find_skills", error="query-required")}
+            return ToolResult.err("query-required", code="error")
 
         if not self._DB_PATH.exists():
             logger.warning(f"{self._LOG_PREFIX} skills.sqlite not found at {self._DB_PATH}")
-            return {"text": _skill_tag("find_skills", error="skill-db-unavailable")}
+            return ToolResult.err("skill-db-unavailable", code="error")
 
         limit = min(params.get("limit", 3), 5)
 
@@ -88,17 +88,14 @@ class FindSkillsAbility(SearchableAbility):
         rows = self._query(query, blob, limit)
 
         if not rows:
-            return {
-                "text": _skill_tag(
-                    "find_skills",
-                    f'No skill playbooks found for "{query}".',
-                    query=query,
-                    found=0,
-                )
-            }
+            return ToolResult.ok(
+                f'No skill playbooks found for "{query}".',
+                query=query,
+                found=0,
+            )
 
         content = self._format(rows)
-        return {"text": _skill_tag("find_skills", content, query=query, found=len(rows), content_type="playbook")}
+        return ToolResult.ok(content, query=query, found=len(rows), content_type="playbook")
 
     def _query(self, query: str, blob: bytes, limit: int) -> list:
         return self._hybrid_search(
@@ -155,7 +152,7 @@ class FindSkillsAbility(SearchableAbility):
 
         return "\n\n---\n\n".join(parts)
 
-    def _fallback(self, query: str, limit: int) -> dict:
+    def _fallback(self, query: str, limit: int) -> ToolResult:
         rows = self._fts_only_search(
             fts_sql="""
                 SELECT s.id, s.title
@@ -172,15 +169,12 @@ class FindSkillsAbility(SearchableAbility):
         )
 
         if not rows:
-            return {
-                "text": _skill_tag(
-                    "find_skills",
-                    f'No skill playbooks found for "{query}".',
-                    query=query,
-                    found=0,
-                )
-            }
+            return ToolResult.ok(
+                f'No skill playbooks found for "{query}".',
+                query=query,
+                found=0,
+            )
 
         matched = [{"key": r[0], "label": r[1], "score": 0.5} for r in rows]
         content = self._format(matched)
-        return {"text": _skill_tag("find_skills", content, query=query, found=len(matched), content_type="playbook")}
+        return ToolResult.ok(content, query=query, found=len(matched), content_type="playbook")

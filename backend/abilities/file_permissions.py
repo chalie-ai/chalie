@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -61,24 +62,24 @@ class FilePermissionsAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         path_str = (params.get("path") or "").strip()
         perm_str = (params.get("permissions") or "").strip()
 
         if not path_str:
-            return {"text": json.dumps({"error": "path-required"})}
+            return ToolResult.ok(json.dumps({"error": "path-required"}))
         if not perm_str:
-            return {"text": json.dumps({"error": "permissions-required"})}
+            return ToolResult.ok(json.dumps({"error": "permissions-required"}))
 
         mode = _parse_octal(perm_str)
         if mode is None:
-            return {"text": json.dumps({"error": "invalid-permissions", "permissions": perm_str})}
+            return ToolResult.ok(json.dumps({"error": "invalid-permissions", "permissions": perm_str}))
 
         target = Path(os.path.expanduser(path_str)).resolve()
         target_str = str(target)
 
         if not target.exists():
-            return {"text": json.dumps({"error": "path-not-found", "path": path_str})}
+            return ToolResult.ok(json.dumps({"error": "path-not-found", "path": path_str}))
 
         try:
             before = _format_octal(target.stat().st_mode)
@@ -86,14 +87,14 @@ class FilePermissionsAbility(Ability):
             after = _format_octal(target.stat().st_mode)
         except OSError as exc:
             logger.exception("[FILE_PERMISSIONS] chmod failed for path=%r: %s", target_str, exc)
-            return {"text": json.dumps({"error": "chmod-failed", "detail": str(exc)})}
+            return ToolResult.ok(json.dumps({"error": "chmod-failed", "detail": str(exc)}))
 
-        return {"text": json.dumps({
+        return ToolResult.ok(json.dumps({
             "status": "success",
             "path": target_str,
             "permissions_before": before,
             "permissions_after": after,
-        })}
+        }))
 
 
 def _parse_octal(text: str) -> int | None:

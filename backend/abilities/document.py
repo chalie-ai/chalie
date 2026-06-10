@@ -21,7 +21,7 @@ import shutil as _shutil
 from typing import ClassVar, Optional
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class DocumentAbility(Ability):
         "required": ["action"],
     }
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "search")
 
         try:
@@ -97,10 +97,9 @@ class DocumentAbility(Ability):
             body = _dispatch(service, action, params)
         except Exception as e:
             logger.exception(f"[DOCUMENT SKILL] Error: {e}")
-            body = str(e)
-            return {"text": _skill_tag("document", action=action, error=body[:200])}
+            return ToolResult.err(str(e)[:200], code="error", action=action)
 
-        return {"text": _skill_tag("document", body, action=action)}
+        return ToolResult.ok(body, action=action)
 
 
 def _parse_extracted_metadata(raw) -> dict:

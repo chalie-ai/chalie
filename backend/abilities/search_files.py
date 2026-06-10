@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -107,15 +108,15 @@ class SearchFilesAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "")
         query = (params.get("query") or "").strip()
         directory = (params.get("directory") or "").strip()
 
         if action not in ("glob", "grep"):
-            return {"text": f"Invalid action '{action}'. Must be 'glob' or 'grep'."}
+            return ToolResult.ok(f"Invalid action '{action}'. Must be 'glob' or 'grep'.")
         if not query:
-            return {"text": "query is required and must not be empty."}
+            return ToolResult.ok("query is required and must not be empty.")
 
         default_max = _GREP_DEFAULT_MAX_FILES if action == "grep" else _GLOB_DEFAULT_MAX_FILES
         max_files_raw = params.get("max_files")
@@ -123,9 +124,9 @@ class SearchFilesAbility(Ability):
             try:
                 max_files = int(max_files_raw)
             except (TypeError, ValueError):
-                return {"text": f"max_files must be an integer, got '{max_files_raw}'."}
+                return ToolResult.ok(f"max_files must be an integer, got '{max_files_raw}'.")
             if max_files < 1 or max_files > _MAX_MAX_FILES:
-                return {"text": f"max_files must be between 1 and {_MAX_MAX_FILES}, got {max_files}."}
+                return ToolResult.ok(f"max_files must be between 1 and {_MAX_MAX_FILES}, got {max_files}.")
         else:
             max_files = default_max
 
@@ -136,20 +137,20 @@ class SearchFilesAbility(Ability):
                 try:
                     context_lines = int(cl_raw)
                 except (TypeError, ValueError):
-                    return {"text": f"context_lines must be an integer, got '{cl_raw}'."}
+                    return ToolResult.ok(f"context_lines must be an integer, got '{cl_raw}'.")
                 if context_lines < 0 or context_lines > _MAX_CONTEXT_LINES:
-                    return {"text": f"context_lines must be between 0 and {_MAX_CONTEXT_LINES}, got {context_lines}."}
+                    return ToolResult.ok(f"context_lines must be between 0 and {_MAX_CONTEXT_LINES}, got {context_lines}.")
 
         root_str = directory or "/"
         try:
             root = Path(os.path.expanduser(root_str)).resolve()
         except (OSError, RuntimeError) as exc:
-            return {"text": f"Invalid directory '{root_str}': {str(exc)[:120]}"}
+            return ToolResult.ok(f"Invalid directory '{root_str}': {str(exc)[:120]}")
 
         if not root.exists():
-            return {"text": f"Directory not found: {root}"}
+            return ToolResult.ok(f"Directory not found: {root}")
         if not root.is_dir():
-            return {"text": f"Not a directory: {root}"}
+            return ToolResult.ok(f"Not a directory: {root}")
 
         budget = _WALK_BUDGET_S * _BUDGET_RATIO
         deadline = time.monotonic() + budget
@@ -163,7 +164,7 @@ class SearchFilesAbility(Ability):
                         f"\n\n(search stopped after {budget:.0f}s — "
                         "try narrowing the directory for complete results)"
                     )
-                return {"text": text}
+                return ToolResult.ok(text)
             else:
                 text, exhausted = _do_grep(root, query, max_files, context_lines, deadline)
                 if not text:
@@ -173,12 +174,12 @@ class SearchFilesAbility(Ability):
                         f"\n\n(search stopped after {budget:.0f}s — "
                         "try narrowing the directory for complete results)"
                     )
-                return {"text": text}
+                return ToolResult.ok(text)
         except re.error as exc:
-            return {"text": f"Invalid regex '{query}': {str(exc)[:120]}"}
+            return ToolResult.ok(f"Invalid regex '{query}': {str(exc)[:120]}")
         except Exception as exc:
             logger.exception("[SEARCH_FILES] Unexpected error action=%s query=%r: %s", action, query, exc)
-            return {"text": f"Search failed: {str(exc)[:120]}"}
+            return ToolResult.ok(f"Search failed: {str(exc)[:120]}")
 
 
 def _iter_files(root: Path, deadline: float):

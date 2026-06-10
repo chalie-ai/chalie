@@ -19,8 +19,8 @@ from urllib.parse import urlparse
 import requests
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from abilities._ssrf import is_private_url
-from services.innate_skills._tag import tag as _skill_tag
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -95,19 +95,19 @@ class ReadAbility(Ability):
 
     _BLOCKED_PATH_PREFIXES: ClassVar[tuple] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         source = _first_source(params)
         if not source:
             # No usable target under any accepted key. Echo what the model DID
             # send so it self-corrects instead of looping on the same opaque
             # error (models pass url=/path= and never learn why).
             received = "|".join(params.keys()) or "none"
-            return {"text": _skill_tag(
-                "read",
-                error="source-required",
-                received_keys=received,
+            return ToolResult.err(
+                "source-required",
+                code="source-required",
                 hint="pass the URL or file path as 'source'",
-            )}
+                received_keys=received,
+            )
 
         max_chars = params.get("max_chars", 20000)
         try:
@@ -119,12 +119,11 @@ class ReadAbility(Ability):
 
         try:
             if source_type == "url":
-                return {"text": _read_url(source, max_chars)}
-            else:
-                return {"text": _read_file(source, max_chars)}
+                return _read_url(source, max_chars)
+            return _read_file(source, max_chars)
         except Exception as e:
             logger.exception(f"[READ SKILL] Unexpected error for source={source!r}: {e}")
-            return {"text": _skill_tag("read", source=source, error=str(e)[:200])}
+            return ToolResult.err(str(e)[:200], code="error", source=source)
 
 
 #: The canonical key plus the keys a model naturally emits for the read target.
@@ -153,9 +152,11 @@ def _classify_source(source: str) -> str:
     return "file"
 
 
-def _read_url(url: str, max_chars: int) -> str:
+def _read_url(url: str, max_chars: int) -> ToolResult:
     if is_private_url(url):
-        return _skill_tag("read", source=url, error="private-or-internal-url-blocked")
+        return ToolResult.err(
+            "private-or-internal-url-blocked", code="private-or-internal-url-blocked", source=url
+        )
 
     try:
         with requests.Session() as session:
@@ -169,25 +170,25 @@ def _read_url(url: str, max_chars: int) -> str:
             response.raise_for_status()
             html = response.text
     except requests.RequestException as e:
-        return _skill_tag("read", source=url, error=f"fetch-failed:{str(e)[:150]}")
+        return ToolResult.err(f"fetch-failed:{str(e)[:150]}", code="fetch-failed", source=url)
 
     from services.text_extractor import extract_html
     content = extract_html(html, url=url)
 
     if not content:
-        return _skill_tag("read", source=url, error="no-readable-content")
+        return ToolResult.err("no-readable-content", code="no-readable-content", source=url)
 
     truncated = len(content) > max_chars
     if truncated:
         content = content[:max_chars]
 
-    kwargs: dict = {"source": url, "max_chars": max_chars}
+    meta: dict = {"source": url, "max_chars": max_chars}
     if truncated:
-        kwargs["truncated"] = "true"
-    return _skill_tag("read", content, **kwargs)
+        meta["truncated"] = "true"
+    return ToolResult.ok(content, **meta)
 
 
-def _read_file(file_path: str, max_chars: int) -> str:
+def _read_file(file_path: str, max_chars: int) -> ToolResult:
     expanded = os.path.expanduser(file_path)
     resolved = os.path.realpath(expanded)
 
@@ -198,16 +199,16 @@ def _read_file(file_path: str, max_chars: int) -> str:
         )
 
     if _is_blocked(expanded) or _is_blocked(resolved):
-        return _skill_tag("read", source=file_path, error="system-path-blocked")
+        return ToolResult.err("system-path-blocked", code="system-path-blocked", source=file_path)
 
     if not os.path.exists(resolved):
-        return _skill_tag("read", source=file_path, error="file-not-found")
+        return ToolResult.err("file-not-found", code="file-not-found", source=file_path)
 
     if not os.path.isfile(resolved):
-        return _skill_tag("read", source=file_path, error="not-a-file")
+        return ToolResult.err("not-a-file", code="not-a-file", source=file_path)
 
     if not os.access(resolved, os.R_OK):
-        return _skill_tag("read", source=file_path, error="no-read-permission")
+        return ToolResult.err("no-read-permission", code="no-read-permission", source=file_path)
 
     from services.text_extractor import detect_mime_type, extract_text, normalize_text
 
@@ -215,7 +216,7 @@ def _read_file(file_path: str, max_chars: int) -> str:
     content = extract_text(resolved, mime_type)
 
     if not content or not content.strip():
-        return _skill_tag("read", source=file_path, error="no-text-content")
+        return ToolResult.err("no-text-content", code="no-text-content", source=file_path)
 
     content = normalize_text(content)
 
@@ -223,7 +224,7 @@ def _read_file(file_path: str, max_chars: int) -> str:
     if truncated:
         content = content[:max_chars]
 
-    kwargs: dict = {"source": file_path, "max_chars": max_chars, "mime": mime_type}
+    meta: dict = {"source": file_path, "max_chars": max_chars, "mime": mime_type}
     if truncated:
-        kwargs["truncated"] = "true"
-    return _skill_tag("read", content, **kwargs)
+        meta["truncated"] = "true"
+    return ToolResult.ok(content, **meta)

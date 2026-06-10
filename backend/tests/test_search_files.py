@@ -11,11 +11,15 @@ pytestmark = pytest.mark.unit
 
 
 def _run(action: str, query: str, directory: str | None = None, **extra) -> str:
-    """Execute SearchFilesAbility and return the plain-text result."""
+    """Execute SearchFilesAbility and return the plain-text result body.
+
+    ``run()`` returns a ``ToolResult`` whose ``body`` is the plain-text payload;
+    the dispatcher (not the ability) formats the ``[search_files(...)]`` envelope.
+    """
     params: dict = {"action": action, "query": query, **extra}
     if directory is not None:
         params["directory"] = directory
-    return SearchFilesAbility().run(params)["text"]
+    return SearchFilesAbility().run(params).body
 
 
 # ── validation ────────────────────────────────────────────────────

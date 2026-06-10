@@ -1,6 +1,7 @@
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.file_mapper_service import FileMapperService
 
 _VERSION_FILE = FileMapperService.get_version_path()
@@ -69,11 +70,16 @@ class ChalieDocsAbility(Ability):
         "required": ["query"],
     }
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         query = params.get("query", "").strip().lower()
         urls = _QUERY_URLS.get(query)
         if not urls:
-            return {"error": f"Unknown query '{query}'. Use one of: {', '.join(_QUERY_URLS)}"}
+            return ToolResult.err(
+                f"Unknown query '{query}'. Use one of: {', '.join(_QUERY_URLS)}",
+                code="error",
+            )
         version = _read_version()
         joined = " & ".join(urls)
-        return {"text": f"To learn about Chalie ({version}) {query} use the read tool and visit: {joined}"}
+        return ToolResult.ok(
+            f"To learn about Chalie ({version}) {query} use the read tool and visit: {joined}"
+        )

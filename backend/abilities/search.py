@@ -20,6 +20,7 @@ import time
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.file_mapper_service import FileMapperService
 from tools.search.fetcher import fetch_providers, fetch_ddg_fallback
 
@@ -98,10 +99,10 @@ class SearchAbility(Ability):
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
     _providers: ClassVar[dict | None] = None
 
-    def run(self, params: dict) -> dict | str:
+    def run(self, params: dict) -> ToolResult:
         query = (params.get("query") or "").strip()
         if not query:
-            return {"text": "EMPTY: no query supplied. Tell the user no search was performed."}
+            return ToolResult.ok("EMPTY: no query supplied. Tell the user no search was performed.")
 
         ordinal = params.get("_rich_media_ordinal")
         limit = max(1, min(10, int(params["limit"]) if params.get("limit") is not None else 5))
@@ -125,11 +126,11 @@ class SearchAbility(Ability):
         logger.info("[SEARCH] query=%r providers=%s count=%d", query, used, len(results))
 
         if not results:
-            return {"text": (
+            return ToolResult.ok(
                 f'EMPTY: zero results for query "{query}". '
                 "Do NOT fabricate results, URLs, titles, or categories. "
                 "Tell the user honestly that nothing was found and offer to refine the query."
-            )}
+            )
 
         structured = [
             {"title": r.get("title", ""), "desc": r.get("snippet", ""), "url": r.get("url", "")}
@@ -137,7 +138,7 @@ class SearchAbility(Ability):
         ]
 
         if ordinal is None:
-            return {"text": json.dumps({"results": structured})}
+            return ToolResult.ok(json.dumps({"results": structured}))
 
         image_items: list[tuple[str, str]] = []
         og_targets: list[tuple[str, str]] = []
@@ -149,7 +150,7 @@ class SearchAbility(Ability):
                 image_items.append((img, title))
             elif url:
                 og_targets.append((url, title))
-        return _serialise_rich(structured, ordinal, image_items, og_targets)
+        return ToolResult.ok(_serialise_rich(structured, ordinal, image_items, og_targets))
 
     @classmethod
     def _load_providers(cls) -> dict:

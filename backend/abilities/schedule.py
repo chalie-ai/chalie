@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import ClassVar
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._result import ToolResult
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -226,7 +226,7 @@ class ScheduleAbility(Ability):
 
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
-    def run(self, params: dict) -> dict | str:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "list").lower()
         ordinal = params.get("_rich_media_ordinal")
 
@@ -244,10 +244,10 @@ class ScheduleAbility(Ability):
 
         if ordinal is not None and action == "create" and result.get("status") == "success":
             same_day = _fetch_same_day_items(result.get("record", {}))
-            return _serialise_rich(result, action, ordinal, same_day)
+            return ToolResult.ok(_serialise_rich(result, action, ordinal, same_day), action=action)
 
         body = json.dumps(result)
-        return {"text": _skill_tag("schedule", body, action=action)}
+        return ToolResult.ok(body, action=action)
 
 
 

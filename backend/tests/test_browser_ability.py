@@ -19,10 +19,11 @@ pytestmark = pytest.mark.unit
 _VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot"]
 
 
-def _envelope(out: dict) -> dict:
-    """Every result is {'status', 'result'} with result = the JSON envelope."""
-    assert set(out) == {"status", "result"}, out
-    env = json.loads(out["result"])
+def _envelope(out) -> dict:
+    """``run()`` returns a ``ToolResult`` whose ``body`` is the JSON envelope
+    string (the dispatcher wraps it in the ``[browser(...)]`` tag); parse it
+    and assert the envelope shape."""
+    env = json.loads(out.body)
     assert set(env) == {"page", "data", "changed", "error"}, env
     assert set(env["changed"]) == {"navigated", "dialog", "popup", "summary"}, env
     return env

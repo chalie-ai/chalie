@@ -16,6 +16,7 @@ the trail is empty the ability silently returns nothing (no boundary, no LLM cal
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.processor_config import ProcessorConfig
 
 
@@ -77,21 +78,21 @@ class ToolChainCompactor(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         parent = self.mp
         if not parent._has_trail():
             # No non-compactor trail since the last boundary — nothing to do.
-            return {"status": "success", "result": ""}
+            return ToolResult.ok("")
 
         trail_text = parent._render_act_trail(for_compaction=True)
         if not trail_text.strip():
-            return {"status": "success", "result": ""}
+            return ToolResult.ok("")
 
         handover = (MessageProcessor.process(trail_text, ToolChainCompactionConfig()) or "").strip()
         # The dispatch chain records this result as the tool_chain_compactor row;
         # a non-empty result becomes the new trail boundary (see
         # _from_last_compaction). An empty result records a no-op row that is
         # neither a boundary nor rendered.
-        return {"status": "success", "result": handover}
+        return ToolResult.ok(handover)

@@ -75,10 +75,12 @@ def _blank_png_path() -> str:
 
 
 def _result_text(out):
-    """DocumentAbility.run returns {'text': <tagged body>}; unwrap to the body."""
-    if isinstance(out, dict):
-        return out.get("text") or out.get("result") or ""
-    return out
+    """DocumentAbility.run returns a ``ToolResult``; the body is the text the
+    model sees (the dispatcher adds the ``[document(...)]`` envelope)."""
+    body = out.body
+    if isinstance(body, dict):
+        return body.get("text") or body.get("result") or ""
+    return body
 
 
 def test_uploaded_image_is_findable_via_document_search(db):

@@ -75,8 +75,10 @@ def test_format_octal_preserves_special_bits():
 # ---------------------------------------------------------------------------
 
 
-def _result_payload(result: dict) -> dict:
-    return json.loads(result["text"])
+def _result_payload(result) -> dict:
+    """``run()`` returns a ``ToolResult`` whose ``body`` is the JSON payload
+    string; the dispatcher adds the ``[file_permissions(...)]`` envelope."""
+    return json.loads(result.body)
 
 
 def test_execute_changes_permissions_and_reports_before_after(tmp_path):

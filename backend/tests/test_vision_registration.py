@@ -57,10 +57,13 @@ def _mp_for(config) -> MessageProcessor:
 
 
 def _find_tools_on(mp: MessageProcessor, params: dict) -> str:
-    """Drive the real find_tools dispatch path: bind the invoking mp and run."""
+    """Drive the real find_tools dispatch path: bind the invoking mp and run.
+
+    ``run()`` returns a ``ToolResult``; its ``body`` is the human-readable
+    select-result text the model sees (the dispatcher adds the envelope)."""
     ability = FindToolsAbility()
     ability.mp = mp
-    return ability.run(params)
+    return ability.run(params).body
 
 
 def _seeded_policy_db(tmp_path) -> PolicyManager:

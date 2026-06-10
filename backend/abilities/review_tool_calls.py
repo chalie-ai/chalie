@@ -11,7 +11,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -58,26 +58,23 @@ class ReviewToolCallsAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         date_time = (params.get("date_time") or "").strip()
         if not date_time:
-            return {"text": _skill_tag("review_tool_calls", error="date-time-required")}
+            return ToolResult.err("date-time-required", code="error")
 
         try:
             from services.tool_call_service import ToolCallService
             records = ToolCallService().get_by_timerange(date_time, buffer_minutes=5)
         except Exception as e:
             logger.exception(f"[REVIEW TOOL CALLS] Query failed for date_time={date_time!r}: {e}")
-            return {"text": _skill_tag("review_tool_calls", error=f"query-failed:{str(e)[:150]}")}
+            return ToolResult.err(f"query-failed:{str(e)[:150]}", code="error")
 
         if not records:
-            return {
-                "text": _skill_tag(
-                    "review_tool_calls",
-                    f"No tool calls found within ±5 minutes of {date_time}",
-                    anchor=date_time,
-                )
-            }
+            return ToolResult.ok(
+                f"No tool calls found within ±5 minutes of {date_time}",
+                anchor=date_time,
+            )
 
         lines = [f"{len(records)} record(s) within ±5 min of {date_time}:\n"]
         for rec in records:
@@ -91,4 +88,4 @@ class ReviewToolCallsAbility(Ability):
             lines.append(f"  [{created}] {tool_name} params={params_str} → {result} ({status_hint})")
 
         body = "\n".join(lines)
-        return {"text": _skill_tag("review_tool_calls", body, anchor=date_time, count=len(records))}
+        return ToolResult.ok(body, anchor=date_time, count=len(records))

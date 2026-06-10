@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +54,14 @@ class FileWriteAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         path_str = params.get("path", "")
         contents = params.get("contents", "")
 
         if not path_str:
-            return {"text": "Error: 'path' is required."}
+            return ToolResult.ok("Error: 'path' is required.")
         if not contents:
-            return {"text": "Error: 'contents' is required."}
+            return ToolResult.ok("Error: 'contents' is required.")
 
         target = Path(path_str).resolve()
 
@@ -68,19 +69,19 @@ class FileWriteAbility(Ability):
             from services.database_service import get_shared_db_service
             guard_error = self._check_read_guard(get_shared_db_service(), target)
             if guard_error:
-                return {"text": guard_error}
+                return ToolResult.ok(guard_error)
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(contents)
-            return {"text": json.dumps({
+            return ToolResult.ok(json.dumps({
                 "success": True,
                 "path": str(target),
                 "file_size": target.stat().st_size,
-            })}
+            }))
         except OSError as exc:
-            return {"text": f"Error writing to {target}: {exc}"}
+            return ToolResult.ok(f"Error writing to {target}: {exc}")
 
     def _check_read_guard(self, db, target: Path) -> str | None:
         """Return an error message if ``read`` was not called on this path first."""

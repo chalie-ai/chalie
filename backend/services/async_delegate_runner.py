@@ -100,7 +100,7 @@ class AsyncDelegateRunner:
         try:
             try:
                 result = ToolDispatcher._run(ability, params)
-                result_text = str(result.get("result", ""))
+                result_text = ToolDispatcher._render(ability.get_name(), result)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "[AsyncDelegateRunner] execution failed for %s: %s",

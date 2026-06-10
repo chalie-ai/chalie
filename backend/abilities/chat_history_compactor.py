@@ -17,6 +17,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ class ChatHistoryCompactor(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
         from services import compaction_persistence, transcript_service  # noqa: PLC0415
 
@@ -97,7 +98,7 @@ class ChatHistoryCompactor(Ability):
         if combined is None:
             # Nothing to compact — suppress_history channel or no rows past the
             # watermark. Do NOT write a watermark (there is no backlog to fold).
-            return {"status": "success", "result": ""}
+            return ToolResult.ok("")
 
         summary = (MessageProcessor.process(combined, ChatHistoryCompactionConfig()) or "").strip()
         if not summary:
@@ -110,7 +111,7 @@ class ChatHistoryCompactor(Ability):
         # transcript row's own id becomes the watermark (advances unconditionally
         # on a non-empty backlog → no silent no-write, no infinite loop).
         transcript_service.write_input_row(channel, "compaction", summary)
-        return {"status": "success", "result": "Chat history compacted."}
+        return ToolResult.ok("Chat history compacted.")
 
     @staticmethod
     def _fit_compaction_input(parent, prior: str):

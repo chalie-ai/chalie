@@ -4,10 +4,10 @@ import logging
 from pathlib import Path
 from typing import ClassVar
 
+from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
-from services.innate_skills._tag import tag as _skill_tag
 
 logger = logging.getLogger(__name__)
 
@@ -171,14 +171,14 @@ class FindToolsAbility(SearchableAbility):
             )
         return params
 
-    def run(self, params: dict) -> str:
-        """Dispatch to the select or query path and return a tagged result string."""
+    def run(self, params: dict) -> ToolResult:
+        """Dispatch to the select or query path and return a ToolResult."""
         select_names = params.get("select")
         query = params.get("query", "").strip()
 
         # Require at least one param.
         if not select_names and not query:
-            return _skill_tag("find_tools", error="params-required")
+            return ToolResult.err("params-required", code="error")
 
         proc = self.mp
         discoverable, blocked = self._config_scope(proc)
@@ -190,7 +190,8 @@ class FindToolsAbility(SearchableAbility):
         effective_allow = set(allow) | set(mcp_names)
 
         if not effective_allow:
-            return _skill_tag("find_tools", self._no_results_text(query or ""), query=query or None)
+            meta = {"query": query} if query else {}
+            return ToolResult.ok(self._no_results_text(query or ""), **meta)
 
         # select wins over query when both are provided.
         if select_names:
@@ -199,7 +200,7 @@ class FindToolsAbility(SearchableAbility):
         logger.info("%s query='%s'", self._LOG_PREFIX, query)
         return self._run_query(query, list(allow), list(mcp_names))
 
-    def _run_select(self, requested: list[str], effective_allow: set[str]) -> str:
+    def _run_select(self, requested: list[str], effective_allow: set[str]) -> ToolResult:
         """Exact case-insensitive match against effective_allow; append matched names.
 
         Builds a display.lower()→call_name alias map from get_online_mcp_tools_index()
@@ -252,9 +253,9 @@ class FindToolsAbility(SearchableAbility):
         if not_found:
             parts.append(f"Tools not found or unavailable: {', '.join(not_found)}")
 
-        return _skill_tag("find_tools", "\n".join(parts), found=len(matched))
+        return ToolResult.ok("\n".join(parts), found=len(matched))
 
-    def _run_query(self, query: str, allow: list[str], mcp_names: list[str]) -> str:
+    def _run_query(self, query: str, allow: list[str], mcp_names: list[str]) -> ToolResult:
         """Hybrid vec+FTS RRF search with relevance floor and top-N cap."""
         effective_allow = list(set(allow) | set(mcp_names))
 
@@ -277,12 +278,12 @@ class FindToolsAbility(SearchableAbility):
             logger.info("%s RRF: %s score=%.4f", self._LOG_PREFIX, row["key"], row["score"])
 
         if not rows:
-            return _skill_tag("find_tools", "No tools match the query specified", query=query)
+            return ToolResult.ok("No tools match the query specified", query=query)
 
         names = [r["key"] for r in rows]
         self._append_active(names)
         raw_text = self._format_universal(names, f'Query "{query}" matched and added the following tools')
-        return _skill_tag("find_tools", raw_text, query=query, found=len(names))
+        return ToolResult.ok(raw_text, query=query, found=len(names))
 
     def _append_active(self, names: list[str]) -> None:
         """Append newly-discovered tool names to the live processor's active_tools.
@@ -419,14 +420,14 @@ class FindToolsAbility(SearchableAbility):
     def _no_results_text(query: str) -> str:
         return f'INFO: The best tools for "{query}" are already available.'
 
-    def _fallback(self, query: str, allow: list[str]) -> str:
+    def _fallback(self, query: str, allow: list[str]) -> ToolResult:
         """FTS-only fallback for abilities.sqlite when embedding fails.
 
         No relevance floor applied (single-signal by nature); adapts to the
         v2 universal result format.
         """
         if not allow:
-            return _skill_tag("find_tools", self._no_results_text(query), query=query)
+            return ToolResult.ok(self._no_results_text(query), query=query)
 
         mcp_names = [n for n in allow if n.startswith("_mcp_")]
         ability_names = [n for n in allow if not n.startswith("_mcp_")]
@@ -458,8 +459,8 @@ class FindToolsAbility(SearchableAbility):
         discovered = discovered[:self.MAX_QUERY_RESULTS]
 
         if not discovered:
-            return _skill_tag("find_tools", self._no_results_text(query), query=query)
+            return ToolResult.ok(self._no_results_text(query), query=query)
 
         self._append_active(discovered)
         raw_text = self._format_universal(discovered, f'Query "{query}" matched and added the following tools')
-        return _skill_tag("find_tools", raw_text, query=query, found=len(discovered))
+        return ToolResult.ok(raw_text, query=query, found=len(discovered))

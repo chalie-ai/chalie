@@ -17,6 +17,7 @@ from typing import ClassVar
 from urllib.parse import urlparse
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from tools.browser.session import error_envelope, record_screenshot, run_verb
 
 logger = logging.getLogger(__name__)
@@ -113,7 +114,7 @@ class BrowserAbility(Ability):
         "screenshot": ((), ()),
     }
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         action = (params.get("action") or "").strip().lower()
         if action not in self._VERBS:
             return self._reply(error_envelope(
@@ -148,7 +149,7 @@ class BrowserAbility(Ability):
             logger.exception("[BROWSER] %s failed", verb)
             return error_envelope(f"Browser error: {str(e)[:300]}")
 
-    def _screenshot(self) -> dict:
+    def _screenshot(self) -> ToolResult:
         grabbed = self._run_verb("grab", {})
         if grabbed.get("error"):
             return self._reply(grabbed)
@@ -194,8 +195,8 @@ class BrowserAbility(Ability):
         return getattr(self.mp, "uid", None) or 0
 
     @staticmethod
-    def _reply(envelope: dict) -> dict:
-        return {
-            "status": "error" if envelope.get("error") else "success",
-            "result": json.dumps(envelope, ensure_ascii=False),
-        }
+    def _reply(envelope: dict) -> ToolResult:
+        body = json.dumps(envelope, ensure_ascii=False)
+        if envelope.get("error"):
+            return ToolResult.err(body, code="error")
+        return ToolResult.ok(body)

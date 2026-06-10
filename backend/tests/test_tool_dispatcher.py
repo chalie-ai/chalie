@@ -67,17 +67,19 @@ def test_dispatch_runs_real_registered_tool_through_gate_and_records(db):
 
     result = ToolDispatcher(mp).dispatch("find_tools", {"query": ""})
 
-    # Real find_tools output: the deterministic empty-query tag.
+    # Real find_tools output: the deterministic no-params error, rendered in the
+    # canonical envelope by the dispatcher.
     assert isinstance(result, str)
-    assert "find_tools" in result
-    assert "query-required" in result
+    assert result.startswith("[find_tools(status=error, code=error)]")
+    assert "params-required" in result
+    assert result.endswith("[end:find_tools]")
 
     # The dispatch recorded exactly one outcome against the transcript anchor,
     # rendered in the invariant trail shape.
     rows = ActTrail().fetch_by_transcript_id(transcript_id)
     assert [r["tool_name"] for r in rows] == ["find_tools"]
     assert ActTrail.render(rows[0]).startswith("[find_tools]")
-    assert "query-required" in rows[0]["result"]
+    assert "params-required" in rows[0]["result"]
 
 
 def test_dispatch_records_unknown_tool_outcome(db):

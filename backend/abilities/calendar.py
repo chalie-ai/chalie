@@ -14,7 +14,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._result import ToolResult
 from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class CalendarAbility(Ability):
         "required": ["action"],
     }
 
-    def run(self, params: dict) -> dict | str:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "list_events").lower()
         ordinal = params.get("_rich_media_ordinal")
 
@@ -125,8 +125,8 @@ class CalendarAbility(Ability):
                 logger.exception(f"{LOG_PREFIX} action={action} failed: {exc}")
                 result = {"status": "error", "error": str(exc)}
             if ordinal is not None and "error" not in result:
-                return _serialise_rich(result, action, ordinal)
-            return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
+                return ToolResult.ok(_serialise_rich(result, action, ordinal), action=action)
+            return ToolResult.ok(_json.dumps(result), action=action)
 
         # --- Write operations: delegate to capability's CalDAV handler ---
         from capabilities import load_capabilities
@@ -137,20 +137,20 @@ class CalendarAbility(Ability):
                 "status": "error",
                 "error": "Calendar capability not connected. Configure the mail integration in the Brain dashboard.",
             }
-            return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
+            return ToolResult.ok(_json.dumps(result), action=action)
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
         handler = tool_map.get(action)
         if handler is None:
             result = {"status": "error", "error": f"Unknown calendar action: {action}"}
-            return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
+            return ToolResult.ok(_json.dumps(result), action=action)
 
         from services.innate_skills._capability import dispatch_capability_handler
         result = dispatch_capability_handler(handler, params, self.telemetry)
 
         if ordinal is not None and "error" not in result:
-            return _serialise_rich(result, action, ordinal)
-        return {"text": _skill_tag("calendar", _json.dumps(result), action=action)}
+            return ToolResult.ok(_serialise_rich(result, action, ordinal), action=action)
+        return ToolResult.ok(_json.dumps(result), action=action)
 
 
 # ---------------------------------------------------------------------------

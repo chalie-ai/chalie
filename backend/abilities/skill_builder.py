@@ -12,8 +12,8 @@ import sqlite3
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.file_mapper_service import FileMapperService
-from services.innate_skills._tag import tag as _skill_tag
 from utils.skills_io import (
     DEFAULT_VERSION,
     SKILLS_DB_PATH,
@@ -129,30 +129,27 @@ class SkillBuilderAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "list")
         logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, self.mp.config.channel)
 
         try:
             if action == "create":
-                text = _handle_create(params)
-            elif action == "edit":
-                text = _handle_edit(params)
-            elif action == "delete":
-                text = _handle_delete(params)
-            elif action == "list":
-                text = _handle_list(params)
-            else:
-                text = _skill_tag(
-                    "skill_builder",
-                    error=f"unknown-action:{action}",
-                    valid="create,edit,delete,list",
-                )
+                return _handle_create(params)
+            if action == "edit":
+                return _handle_edit(params)
+            if action == "delete":
+                return _handle_delete(params)
+            if action == "list":
+                return _handle_list(params)
+            return ToolResult.err(
+                f"unknown-action:{action}",
+                code="error",
+                valid=("create", "edit", "delete", "list"),
+            )
         except Exception as exc:
             logger.exception("%s Error in %s: %s", _LOG_PREFIX, action, exc)
-            text = _skill_tag("skill_builder", action=action, error=str(exc)[:200])
-
-        return {"text": text}
+            return ToolResult.err(str(exc)[:200], code="error", action=action)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -180,30 +177,30 @@ def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | No
 # ── Action handlers ────────────────────────────────────────────────────────────
 
 
-def _handle_create(params: dict) -> str:
+def _handle_create(params: dict) -> ToolResult:
     title = (params.get("title") or "").strip()
     use_for = (params.get("use_for") or "").strip()
     content = (params.get("content") or "").strip()
 
     if not title:
-        return _skill_tag("skill_builder", action="create", error="title-required")
+        return ToolResult.err("title-required", code="error", action="create")
     if not use_for:
-        return _skill_tag("skill_builder", action="create", error="use_for-required")
+        return ToolResult.err("use_for-required", code="error", action="create")
     if not content:
-        return _skill_tag("skill_builder", action="create", error="content-required")
+        return ToolResult.err("content-required", code="error", action="create")
 
     if not SKILLS_DB_PATH.exists():
-        return _skill_tag("skill_builder", action="create", error="skill-db-unavailable")
+        return ToolResult.err("skill-db-unavailable", code="error", action="create")
 
     conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is not None:
-            return _skill_tag(
-                "skill_builder",
-                action="create",
-                error=f"skill-already-exists:{title}",
+            return ToolResult.err(
+                f"skill-already-exists:{title}",
+                code="error",
                 hint="Use action=edit to update an existing skill",
+                action="create",
             )
 
         tags = (params.get("tags") or "").strip()
@@ -234,34 +231,32 @@ def _handle_create(params: dict) -> str:
         write_skill_file(path, meta)
 
         logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
-        return _skill_tag(
-            "skill_builder",
+        return ToolResult.ok(
             f'Skill "{title}" created and indexed.',
             action="create",
-            status="ok",
             skill_id=skill_id,
         )
     finally:
         conn.close()
 
 
-def _handle_edit(params: dict) -> str:
+def _handle_edit(params: dict) -> ToolResult:
     title = (params.get("title") or "").strip()
     if not title:
-        return _skill_tag("skill_builder", action="edit", error="title-required")
+        return ToolResult.err("title-required", code="error", action="edit")
 
     if not SKILLS_DB_PATH.exists():
-        return _skill_tag("skill_builder", action="edit", error="skill-db-unavailable")
+        return ToolResult.err("skill-db-unavailable", code="error", action="edit")
 
     conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is None:
-            return _skill_tag(
-                "skill_builder",
-                action="edit",
-                error=f"skill-not-found:{title}",
+            return ToolResult.err(
+                f"skill-not-found:{title}",
+                code="error",
                 hint="Only user-created skills can be edited",
+                action="edit",
             )
 
         skill_id = existing["id"]
@@ -298,34 +293,32 @@ def _handle_edit(params: dict) -> str:
         write_skill_file(skill_yaml_path(title), updated_meta)
 
         logger.info("%s Updated skill '%s' (id=%d, version=%d)", _LOG_PREFIX, title, skill_id, updated_meta["version"])
-        return _skill_tag(
-            "skill_builder",
+        return ToolResult.ok(
             f'Skill "{title}" updated to version {updated_meta["version"]}.',
             action="edit",
-            status="ok",
             skill_id=skill_id,
         )
     finally:
         conn.close()
 
 
-def _handle_delete(params: dict) -> str:
+def _handle_delete(params: dict) -> ToolResult:
     title = (params.get("title") or "").strip()
     if not title:
-        return _skill_tag("skill_builder", action="delete", error="title-required")
+        return ToolResult.err("title-required", code="error", action="delete")
 
     if not SKILLS_DB_PATH.exists():
-        return _skill_tag("skill_builder", action="delete", error="skill-db-unavailable")
+        return ToolResult.err("skill-db-unavailable", code="error", action="delete")
 
     conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is None:
-            return _skill_tag(
-                "skill_builder",
-                action="delete",
-                error=f"skill-not-found:{title}",
+            return ToolResult.err(
+                f"skill-not-found:{title}",
+                code="error",
                 hint="Only user-created skills can be deleted",
+                action="delete",
             )
 
         skill_id = existing["id"]
@@ -339,19 +332,17 @@ def _handle_delete(params: dict) -> str:
             path.unlink()
 
         logger.info("%s Deleted skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
-        return _skill_tag(
-            "skill_builder",
+        return ToolResult.ok(
             f'Skill "{title}" deleted.',
             action="delete",
-            status="ok",
         )
     finally:
         conn.close()
 
 
-def _handle_list(params: dict) -> str:  # noqa: ARG001
+def _handle_list(params: dict) -> ToolResult:  # noqa: ARG001
     if not SKILLS_DB_PATH.exists():
-        return _skill_tag("skill_builder", action="list", error="skill-db-unavailable")
+        return ToolResult.err("skill-db-unavailable", code="error", action="list")
 
     conn = sqlite3.connect(str(SKILLS_DB_PATH))
     try:
@@ -363,7 +354,7 @@ def _handle_list(params: dict) -> str:  # noqa: ARG001
         conn.close()
 
     if not rows:
-        return _skill_tag("skill_builder", "No skills found.", action="list", found=0)
+        return ToolResult.ok("No skills found.", action="list", found=0)
 
     lines = []
     for row in rows:
@@ -374,4 +365,4 @@ def _handle_list(params: dict) -> str:  # noqa: ARG001
         lines.append(f"  {use_for}")
 
     body = "\n".join(lines)
-    return _skill_tag("skill_builder", body, action="list", found=len(rows))
+    return ToolResult.ok(body, action="list", found=len(rows))

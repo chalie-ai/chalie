@@ -17,7 +17,7 @@ import logging
 from typing import ClassVar, Optional
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class ListAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict | str:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "list_all")
         ordinal = params.get("_rich_media_ordinal")
 
@@ -115,11 +115,11 @@ class ListAbility(Ability):
             body = _fail(str(e))
 
         if ordinal is not None and action in ("create", "add", "check", "view"):
-            rich = _try_serialise_rich(body, ordinal, action)
+            rich = _try_serialise_rich(body, ordinal)
             if rich is not None:
-                return rich
+                return ToolResult.ok(rich, action=action)
 
-        return {"text": _skill_tag("list", body, action=action)}
+        return ToolResult.ok(body, action=action)
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
@@ -405,7 +405,7 @@ def _handle_delete(service, params: dict) -> str:
     return _success_message(f"List with id: {list_id} was deleted successfully")
 
 
-def _try_serialise_rich(body: str, ordinal: int, action: str) -> str | None:
+def _try_serialise_rich(body: str, ordinal: int) -> str | None:
     try:
         parsed = json.loads(body)
     except (ValueError, TypeError):
@@ -416,4 +416,4 @@ def _try_serialise_rich(body: str, ordinal: int, action: str) -> str | None:
     tag = f"list_{ordinal}"
     data_json = json.dumps(payload)
     instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-    return _skill_tag("list", f"{data_json}\n\n{instruction}", action=action)
+    return f"{data_json}\n\n{instruction}"

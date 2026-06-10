@@ -2,9 +2,16 @@
 
 Every tool call from the ACT loop enters through ``ToolDispatcher(mp).dispatch()``:
 match the handler → bind a fresh per-call instance to the invoking ``mp`` →
-gate it through ``PolicyManager.wrap`` → run it via ``_execute`` → record the
-outcome on the act-trail → return a STRING. This is the ONLY path from
-``MessageProcessor._loop()`` to ability execution.
+gate it through ``PolicyManager.wrap`` → run it via ``_execute`` → render the
+sealed wire envelope → record the outcome on the act-trail → return a STRING.
+This is the ONLY path from ``MessageProcessor._loop()`` to ability execution,
+and the ONLY place the ``[<tool>(status=…)]\n…\n[end:<tool>]`` envelope is
+formatted (``_render``).
+
+``run()`` MUST return an :class:`abilities._result.ToolResult`.  Anything else is
+a hard error: the dispatcher renders ``status=error, code=non-canonical-result``
+naming the ability and the offending type, and logs at ERROR.  There is no
+legacy-dict / plain-str compatibility shim — divergence fails loudly.
 
 The dispatcher is bound to the invoking MessageProcessor (``self._mp``) — it
 imports ``AbilityRegistry`` / ``PolicyManager`` normally (neither imports it
@@ -16,6 +23,7 @@ deferred to break the import cycle.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -25,6 +33,7 @@ from uuid import uuid4
 from abilities._event_emitter import ActEventEmitter
 from abilities._mcp_ability import _MCPAbility
 from abilities._registry import AbilityRegistry
+from abilities._result import ToolParamError, ToolResult
 # ClientContext owns the per-request client-telemetry snapshot that _run()
 # flattens onto ability.telemetry before run().
 from services.client_context import ClientContext
@@ -42,8 +51,8 @@ class ToolDispatcher:
     """Dispatches one tool call on behalf of the invoking MessageProcessor.
 
     ``dispatch()`` is the single chokepoint: match → bind → gate
-    (PolicyManager.wrap) → execute → record. The gated work runs in
-    ``_execute()`` (emit → async-decision → run → emit).
+    (PolicyManager.wrap) → execute → render → record. The gated work runs in
+    ``_execute()`` (emit → async-decision → run → render → emit).
 
     Spec §5 / AC-4.
     """
@@ -115,12 +124,13 @@ class ToolDispatcher:
     # ── Self-scaffolding executor — the allow-path callback dispatch() hands to wrap ──
 
     def _execute(self, ability: "Ability", params: dict, act_summary: "str | None" = None) -> str:
-        """Emit → (async-decision) → run → emit. Called ONLY on the allow path
-        (dispatch() passes this as wrap's callback). The per-call ``async`` flag —
-        popped here, a framework key never passed to run() — decides whether the
-        real work blocks this ACT iteration or runs on a background thread; run()
-        is identical either way. Returns the result text STRING. Recording is
-        dispatch()'s job, not ours.
+        """Emit → (action pre-validation) → (async-decision) → run → render →
+        emit. Called ONLY on the allow path (dispatch() passes this as wrap's
+        callback). The per-call ``async`` flag — popped here, a framework key
+        never passed to run() — decides whether the real work blocks this ACT
+        iteration or runs on a background thread; run() is identical either way.
+        Returns the rendered envelope STRING. Recording is dispatch()'s job, not
+        ours.
 
         Reads the bound parent off ``ability.mp`` (set by _bind()). act_summary
         (popped from params by dispatch()) is the WS tooltip; it is NOT a run()
@@ -130,32 +140,86 @@ class ToolDispatcher:
         config = getattr(self._mp, "config", None)
         emitter = ActEventEmitter(config)
         call_id = uuid4().hex[:12]
+        tool_name = ability.get_name()
         emitter.emit({
             "type": "act_tool_start",
-            "name": ability.get_name(),
+            "name": tool_name,
             "id": call_id,
             "summary": act_summary,
         })
 
-        if run_async:
+        # ACTION_REQUIRED pre-gate: unknown action / missing params are reported
+        # in ONE error BEFORE run() ever sees malformed input.
+        pre = self._prevalidate(ability, params)
+        if pre is not None:
+            tr = pre
+        elif run_async:
             # AsyncDelegateRunner owns the daemon-thread lifecycle + the captured
             # mp it delivers through; it returns the placeholder immediately so
-            # this ACT iteration is never blocked (spec §4.0 / §4.4).
+            # this ACT iteration is never blocked (spec §4.0 / §4.4). The
+            # placeholder is prose the model reads while the real work runs.
             from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
             placeholder = async_delegate_runner.spawn(ability, params, self._mp)
-            result = {"status": "success", "result": placeholder}
+            tr = ToolResult.ok(str(placeholder))
         else:
-            result = self._run(ability, params)
+            tr = self._run(ability, params)
 
-        ok = result.get("status") != "error"
-        emitter.emit({"type": "act_tool_end", "name": ability.get_name(), "id": call_id, "ok": ok})
-        return str(result.get("result", ""))
+        # Rich-media ordinal is assigned ONLY when the invoking mp broadcasts to
+        # the user. Subagents / background channels never get a card: their
+        # natural-language synthesis is consumed by the parent, so a span emitted
+        # at that hop has no tool_calls row paired to it. This is the single
+        # physical chokepoint that gates the entire card path.
+        ordinal = None
+        if tr.rich is not None and getattr(config, "broadcast_to", None) == "user":
+            ordinal = self._next_ordinal(tool_name)
+
+        rendered = self._render(tool_name, tr, ordinal)
+        emitter.emit({"type": "act_tool_end", "name": tool_name, "id": call_id, "ok": tr.status == "success"})
+        return rendered
+
+    # ── Action pre-validation (ACTION_REQUIRED) ────────────────────────────────
+
+    @staticmethod
+    def _prevalidate(ability: "Ability", params: dict) -> "ToolResult | None":
+        """Validate the ability's ACTION_REQUIRED map BEFORE run().
+
+        An empty map (the default) means no pre-validation — unmigrated tools are
+        untouched. Otherwise: an unknown action → ``code=unknown-action`` with
+        ``valid=`` the action-map keys; a known action missing required params →
+        a SINGLE ``code=missing-params`` error naming ALL missing params.
+
+        The map key ``""`` covers action-less tools.
+        """
+        action_map = getattr(ability, "ACTION_REQUIRED", None) or {}
+        if not action_map:
+            return None
+
+        action = params.get("action")
+        key = action if action is not None else ""
+        if key not in action_map:
+            return ToolResult.err(
+                f"Unknown action {action!r}." if action is not None
+                else "This tool requires an 'action'.",
+                code="unknown-action",
+                valid=tuple(k for k in action_map if k),
+            )
+
+        missing = [p for p in action_map[key] if not params.get(p)]
+        if missing:
+            named = ", ".join(missing)
+            return ToolResult.err(
+                f"Missing required parameter(s) for action {key!r}: {named}."
+                if key else f"Missing required parameter(s): {named}.",
+                code="missing-params",
+                valid=tuple(action_map[key]),
+            )
+        return None
 
     # ── Synchronous run primitive (shared by inline dispatch + AsyncDelegateRunner) ──
 
     @staticmethod
-    def _run(ability: "Ability", params: dict) -> dict:
-        """Execute ability.run() synchronously and normalise the result.
+    def _run(ability: "Ability", params: dict) -> ToolResult:
+        """Execute ability.run() synchronously and enforce the ToolResult contract.
 
         Loads the flattened client telemetry onto ``ability.telemetry`` just
         before run(); the ability reads its parent off ``self.mp``.
@@ -165,7 +229,10 @@ class ToolDispatcher:
         tool are cooperative cancellation (cancel_event) and the network-level
         I/O timeouts inside individual abilities.
 
-        Returns a result dict with 'status' and 'result' keys.
+        Returns a :class:`ToolResult`. A ``ToolParamError`` raised from run() is
+        rendered canonically with its code/hint/valid. A raised exception becomes
+        ``code=unhandled-exception`` (with the VaultLockedError friendly message).
+        A non-ToolResult return value HARD-FAILS as ``code=non-canonical-result``.
 
         Spec §4.2 / I13.
         """
@@ -177,36 +244,120 @@ class ToolDispatcher:
 
         try:
             raw = ability.run(params)
+        except ToolParamError as exc:
+            return ToolResult.err(exc.message, code=exc.code, hint=exc.hint, valid=exc.valid)
         except Exception as exc:  # noqa: BLE001
             # VaultLockedError gets a friendlier message.
             try:
                 from services.vault_service import VaultLockedError  # noqa: PLC0415
                 if isinstance(exc, VaultLockedError):
-                    return {
-                        "status": "error",
-                        "result": (
-                            "This function is currently unavailable. "
-                            "The vault is locked. "
-                            "Notify the user that you could not complete this action "
-                            "because they were logged out"
-                        ),
-                    }
+                    return ToolResult.err(
+                        "This function is currently unavailable. "
+                        "The vault is locked. "
+                        "Notify the user that you could not complete this action "
+                        "because they were logged out",
+                        code="vault-locked",
+                    )
             except ImportError:
                 pass
-            return {"status": "error", "result": f"Error: {exc}"}
+            return ToolResult.err(f"Error: {exc}", code="unhandled-exception")
 
-        return ToolDispatcher._normalise(raw)
+        if not isinstance(raw, ToolResult):
+            offending = type(raw).__name__
+            logger.error(
+                "[ToolDispatcher] %s.run() returned a non-ToolResult (%s) — every "
+                "ability must return abilities._result.ToolResult via ok()/err().",
+                ability.get_name(), offending,
+            )
+            return ToolResult.err(
+                f"{ability.get_name()} returned a non-canonical result of type "
+                f"{offending}; abilities must return a ToolResult.",
+                code="non-canonical-result",
+            )
+        return raw
+
+    # ── The single wire-envelope renderer ──────────────────────────────────────
+
+    def _next_ordinal(self, tool_name: str) -> int:
+        """Per-turn, per-tool ordinal counter held on the invoking mp.
+
+        Keyed by tool name and scoped to the mp (one ACT turn), so two weather
+        calls in the same turn get ordinals 1 and 2 — exactly what the rich-media
+        parser needs to pair each card to its tool_calls row.
+        """
+        counters = getattr(self._mp, "_rich_media_ordinals", None)
+        if counters is None:
+            counters = {}
+            setattr(self._mp, "_rich_media_ordinals", counters)
+        counters[tool_name] = counters.get(tool_name, 0) + 1
+        return counters[tool_name]
 
     @staticmethod
-    def _normalise(raw: object) -> dict:
-        """Coerce the raw return value of ability.run() into a {'status','result'} dict."""
-        if isinstance(raw, dict):
-            if "status" in raw:
-                # Already in canonical form.
-                result_val = raw.get("result", "")
-                return {"status": raw["status"], "result": str(result_val) if result_val is not None else ""}
-            # Legacy dict without status — treat as success.
-            return {"status": "success", "result": raw}
-        if isinstance(raw, str):
-            return {"status": "success", "result": raw}
-        return {"status": "success", "result": str(raw) if raw is not None else ""}
+    def _render(tool_name: str, tr: ToolResult, ordinal: "int | None" = None) -> str:
+        """Render the sealed wire envelope for *tr* — the ONLY envelope formatter.
+
+        success: ``[<tool>(status=success, <meta>)]\\n<body>\\n[end:<tool>]`` —
+        dict/list body as compact JSON, str body verbatim. When *ordinal* is set
+        (rich card on a user-broadcast turn) the rich block (``\\n\\n`` +
+        instruction with the ordinal-keyed span tag) is appended to the body so
+        the rich-media parser can pair the card.
+
+        error: ``[<tool>(status=error, code=<code>, <meta>)]\\n<message>`` plus a
+        ``hint:`` line and a ``valid:`` line when those are set, then
+        ``[end:<tool>]``.
+        """
+        if tr.status == "error":
+            head_parts = ["status=error", f"code={tr.code}"]
+            head_parts.extend(f"{k}={_meta_val(v)}" for k, v in tr.meta.items())
+            lines = [f"[{tool_name}({', '.join(head_parts)})]", str(tr.body)]
+            if tr.hint:
+                lines.append(f"hint: {tr.hint}")
+            if tr.valid:
+                lines.append(f"valid: {' | '.join(tr.valid)}")
+            lines.append(f"[end:{tool_name}]")
+            return "\n".join(lines)
+
+        head_parts = ["status=success"]
+        head_parts.extend(f"{k}={_meta_val(v)}" for k, v in tr.meta.items())
+        if isinstance(tr.body, (dict, list)):
+            body_str = json.dumps(tr.body, ensure_ascii=False, separators=(",", ":"))
+        else:
+            body_str = str(tr.body)
+
+        if ordinal is not None and tr.rich is not None:
+            body_str = ToolDispatcher._render_rich(tool_name, tr, ordinal, body_str)
+
+        return f"[{tool_name}({', '.join(head_parts)})]\n{body_str}\n[end:{tool_name}]"
+
+    @staticmethod
+    def _render_rich(tool_name: str, tr: ToolResult, ordinal: int, body_str: str) -> str:
+        """Append the rich-media block: ``<body>\\n\\n<card instruction>``.
+
+        The instruction carries the ``<span id='<tool>_<ordinal>'>`` tag the
+        rich-media parser anchors on (``rich_media_parser._find_payload`` splits
+        the envelope body on the first blank line — head = card payload JSON,
+        trailer = this instruction). The card payload JSON is *tr.rich* serialised
+        compactly; the model is told to wrap its synthesis in the span.
+        """
+        tag = f"{tool_name}_{ordinal}"
+        payload_json = json.dumps(tr.rich, ensure_ascii=False, separators=(",", ":"))
+        instruction = _RICH_INSTRUCTION.format(tag=tag)
+        return f"{payload_json}\n\n{instruction}"
+
+
+# Body shown to the model when a card is paired: the structured tool body is the
+# card payload (parsed by rich_media_parser), and the model MUST wrap its
+# synthesis in the span tag or the user sees only plain text.
+_RICH_INSTRUCTION = (
+    "You MUST present this result by wrapping your synthesis in "
+    "<span id='{tag}'>your synthesis here</span>. The span renders as a card; "
+    "without it the user sees only plain text."
+)
+
+
+def _meta_val(v: object) -> str:
+    """Render a scalar meta value: booleans lower-cased (``true``/``false``),
+    everything else via ``str``."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)

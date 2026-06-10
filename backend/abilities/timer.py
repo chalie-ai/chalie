@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
@@ -85,15 +86,18 @@ class TimerAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict | str:
+    def run(self, params: dict) -> ToolResult:
         ordinal = params.get("_rich_media_ordinal")
         title = (params.get("title") or "").strip()
         duration_seconds = params.get("duration_seconds")
 
         if not title:
-            return {"error": "title is required"}
+            return ToolResult.err("title is required", code="error")
         if not isinstance(duration_seconds, int) or duration_seconds < _MIN_DURATION_SECONDS or duration_seconds > _MAX_DURATION_SECONDS:
-            return {"error": f"duration_seconds must be an integer between {_MIN_DURATION_SECONDS} and {_MAX_DURATION_SECONDS}"}
+            return ToolResult.err(
+                f"duration_seconds must be an integer between {_MIN_DURATION_SECONDS} and {_MAX_DURATION_SECONDS}",
+                code="error",
+            )
 
         if len(title) > 80:
             title = title[:80]
@@ -104,11 +108,11 @@ class TimerAbility(Ability):
         }
 
         if ordinal is None:
-            return payload
+            return ToolResult.ok(payload)
 
         tag = f"timer_{ordinal}"
         instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-        return f"{json.dumps(payload)}\n\n{instruction}"
+        return ToolResult.ok(f"{json.dumps(payload)}\n\n{instruction}")
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:

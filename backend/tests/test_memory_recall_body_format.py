@@ -16,16 +16,20 @@ pytestmark = pytest.mark.unit
 
 
 def _handle_memory(topic: str, params: dict) -> str:
-    """Thin shim: call MemoryAbility.run and return the text string.
+    """Thin shim: call MemoryAbility.run and render the dispatcher envelope.
 
     No processor is bound — recall reads its channel from the (absent)
     MessageProcessor and falls back to "", which the data-graph recall path
-    does not depend on.
+    does not depend on. ``run()`` returns a ``ToolResult``; the dispatcher's
+    single envelope formatter (``ToolDispatcher._render``) wraps it in the
+    ``[memory(...)]`` / ``[end:memory]`` block that production persists and the
+    TranscriptService back-reference regex parses.
     """
+    from abilities._dispatcher import ToolDispatcher
     from abilities.memory import MemoryAbility
     result = MemoryAbility().run(params)
     assert result is not None, "MemoryAbility.run() returned None"
-    return result["text"]
+    return ToolDispatcher._render("memory", result, None)
 
 
 class TestMemoryRecallBodyFormat:

@@ -12,6 +12,7 @@ import logging
 from typing import ClassVar, Optional
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services import news_sources
 from services.news_service import NewsService
 from services.time_formatter_service import TimeFormatterService
@@ -93,10 +94,10 @@ class NewsAbility(Ability):
         "united arab emirates": "AE", "saudi arabia": "SA",
     }
 
-    def run(self, params: dict) -> dict | str:
+    def run(self, params: dict) -> ToolResult:
         query = (params.get("query") or "").strip()
         if not query:
-            return {"text": "", "error": "A 'query' parameter is required."}
+            return ToolResult.err("A 'query' parameter is required.", code="error")
 
         ordinal = params.get("_rich_media_ordinal")
         category = params.get("category")
@@ -116,17 +117,17 @@ class NewsAbility(Ability):
                 articles = svc.fetch_google_news(query, country_code=country_code)
 
             if not articles:
-                return {"text": f"No news found for \"{query}\".", "title": f"News: \"{query}\""}
+                return ToolResult.ok(f"No news found for \"{query}\".", title=f"News: \"{query}\"")
 
             top = articles[:10]
 
             if ordinal is None:
-                return {"text": _format_articles(top), "title": f"News: \"{query}\""}
+                return ToolResult.ok(_format_articles(top), title=f"News: \"{query}\"")
 
-            return _serialise_rich(top, ordinal)
+            return ToolResult.ok(_serialise_rich(top, ordinal))
         except Exception as e:
             logger.exception(f"[news-tool] failed: {e}")
-            return {"text": "", "error": str(e)}
+            return ToolResult.err(str(e), code="error")
 
     @classmethod
     def _get_service(cls):

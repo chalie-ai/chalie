@@ -28,6 +28,7 @@ into active_tools. The floor eviction test catches this regression.
 
 import pytest
 
+from abilities._dispatcher import ToolDispatcher
 from abilities.find_tools import FindToolsAbility
 from services.message_processor import MessageProcessor
 from tests.helpers import make_stub_config
@@ -51,9 +52,14 @@ def _stub_proc(discoverable: list[str]) -> MessageProcessor:
 
 
 def _run(ability: FindToolsAbility, proc: MessageProcessor, params: dict) -> str:
-    """Bind proc to ability and call run(); return the result string."""
+    """Bind proc to ability, call run(), and render the dispatcher envelope.
+
+    ``run()`` returns a ``ToolResult``; the single production formatter
+    (``ToolDispatcher._render``) wraps it in the wire string the model actually
+    receives — success bodies and the ``code=error`` error envelope alike — so
+    these assertions check the real model-facing surface."""
     ability.mp = proc
-    return ability.run(params)
+    return ToolDispatcher._render("find_tools", ability.run(params))
 
 
 # ---------------------------------------------------------------------------

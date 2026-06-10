@@ -15,8 +15,8 @@ Real hot path, zero mocks:
     channel (DmnConfig) and never when there is no live processor.  This is the
     schema-exposure gate, not a routing gate (§4.8d).
   * A real ability dispatched WITHOUT ``async`` runs inline through the real
-    ``ToolDispatcher._execute`` → ``_run`` → ``run`` → ``_normalise`` chain
-    and returns its actual result.
+    ``ToolDispatcher._execute`` → ``_run`` → ``run`` → ``_render`` chain and
+    returns the rendered ``[tool(...)]`` envelope of its actual result.
   * The same ability dispatched WITH ``async: true`` returns the
     ``dispatched (id: …)`` placeholder immediately (non-blocking — the real
     ``run`` is still in flight) and registers exactly one active delegate.
@@ -36,6 +36,7 @@ import pytest
 from abilities._ability import Ability
 from abilities._dispatcher import ToolDispatcher
 from abilities._registry import AbilityRegistry
+from abilities._result import ToolResult
 from configs.channels import DmnConfig, UserConfig
 from services.async_delegate_runner import async_delegate_runner
 
@@ -129,9 +130,9 @@ class _EchoAbility(Ability):
             "required": ["text"],
         }
 
-    def run(self, params: dict) -> str:
+    def run(self, params: dict) -> ToolResult:
         self.ran_with = dict(params)
-        return f"echoed: {params.get('text', '')}"
+        return ToolResult.ok(f"echoed: {params.get('text', '')}")
 
 
 def test_dispatch_without_async_runs_inline():
@@ -143,7 +144,12 @@ def test_dispatch_without_async_runs_inline():
 
     result = ToolDispatcher(ctx)._execute(ability, {"text": "hi"}, None)
 
-    assert result == "echoed: hi"
+    # _execute renders the ToolResult through the single envelope formatter.
+    assert result == (
+        "[test_per_call_echo(status=success)]\n"
+        "echoed: hi\n"
+        "[end:test_per_call_echo]"
+    )
     # The framework popped the async flag before handing params to run().
     assert ability.ran_with == {"text": "hi"}
 
@@ -182,11 +188,11 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
         def get_parameters(self) -> dict:
             return {"type": "object", "properties": {}, "required": []}
 
-        def run(self, params: dict) -> str:
+        def run(self, params: dict) -> ToolResult:
             started.set()
             release.wait(timeout=5)
             finished.append(True)
-            return "done"
+            return ToolResult.ok("done")
 
     ctx = _Ctx(DmnConfig())
     ability = _BlockingAbility(mp=ctx)

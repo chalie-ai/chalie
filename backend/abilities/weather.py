@@ -11,19 +11,13 @@ Routing:
 Class-level cache per location key, 10-min TTL.
 
 Rich-media rendering:
-  When an ordinal is supplied (``params['_rich_media_ordinal']``), the return
-  value is a string: ``<JSON payload>\\n\\n<rich-media instruction trailer>``.
-  The instruction trailer tells the LLM to wrap its synthesis in a span tag
-  so the RichMediaParser can pair the card with this payload at WS-send time.
-
-  Error payloads do NOT include an instruction trailer — the LLM should not
-  attempt to render a card for an error response.
-
-  The first JSON segment (before the first blank line) is parsed by
-  RichMediaParser._extract_data() and becomes the card payload.
+  A successful weather lookup returns ``ToolResult.ok(payload, rich=payload)`` —
+  the weather dict is both the structured body the model reads AND the card
+  payload. The dispatcher (``ToolDispatcher._render``) owns ordinal assignment +
+  the span-tag instruction, and injects the card ONLY when the invoking channel
+  broadcasts to the user. Error lookups return ``ToolResult.err`` with no card.
 """
 
-import json
 import logging
 import time
 from typing import ClassVar
@@ -31,6 +25,7 @@ from typing import ClassVar
 import requests
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -94,71 +89,38 @@ class WeatherAbility(Ability):
     _cache: ClassVar[dict] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
-    def run(self, params: dict) -> dict | str:
-        """
-        Get current weather for a location.
+    def run(self, params: dict) -> ToolResult:
+        """Get current weather for a location.
 
-        Args:
-            channel: Conversation channel (passed by framework)
-            params: {"location": str (optional city name; omit to use client coordinates),
-                     "_rich_media_ordinal": int (injected by ActDispatcherService)}
-            telemetry: Client telemetry with location coords and resolved name
-
-        Returns:
-            A string of the form ``<JSON payload>\\n\\n<rich-media instruction>``
-            so the LLM can pair its synthesis with this structured data via a
-            span tag.  Error payloads omit the instruction trailer.
+        Reads the optional ``location`` param (omit → client coordinates from
+        ``self.telemetry``). Returns ``ToolResult.ok(payload, rich=payload)`` on
+        success — the dispatcher pairs the weather card when this turn broadcasts
+        to the user — or ``ToolResult.err`` when every source is unavailable.
         """
-        ordinal = params.get("_rich_media_ordinal")
         location_param = params.get("location", "").strip()
         lat, lon, location_name = _extract_location(self.telemetry)
         cache_key = _build_cache_key(location_param, lat, lon, location_name)
 
         cached = _get_fresh_cache(cache_key)
         if cached is not None:
-            return _serialise(cached, ordinal)
+            return ToolResult.ok(cached, rich=cached)
 
         result, open_meteo_err, wttr_err = _fetch_with_fallback(location_param, lat, lon, location_name, cache_key)
 
         if result is not None:
             WeatherAbility._cache[cache_key] = (result, time.time())
-            return _serialise(result, ordinal)
+            return ToolResult.ok(result, rich=result)
 
-        return _serialise(_stale_or_error(cache_key, open_meteo_err, wttr_err), ordinal)
-
-
-_RICH_MEDIA_INSTRUCTION = (
-    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "The span will render as a weather card; without it, the user sees only "
-    "plain text. Example output: \"Current conditions in "
-    "<span id='{tag}'>Paris is 14°C with light rain — bring an umbrella.</span>\" "
-    "You may include multiple weather spans (one per location) and prose between them."
-)
-
-
-def _serialise(payload: dict, ordinal: int | None) -> dict | str:
-    """Serialise a weather payload dict to the tool result string or dict.
-
-    When an ordinal is provided (normal ACT dispatch path), the instruction
-    trailer is appended so the LLM knows to emit a span tag.  Error payloads
-    (``'error'`` key present) never get the instruction trailer because a card
-    should not be rendered for error data.  When ordinal is None (direct call,
-    tests, action-button path) the original dict is returned unchanged for
-    backward compatibility.
-
-    Args:
-        payload: Weather data dict (or error dict with ``error``/``details``).
-        ordinal: Per-turn call counter for this tool; None returns the raw dict.
-
-    Returns:
-        ``dict`` when ordinal is None or payload is an error; ``str`` otherwise.
-    """
-    if ordinal is None or "error" in payload:
-        return payload
-    tag = f"weather_{ordinal}"
-    data_json = json.dumps(payload)
-    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-    return f"{data_json}\n\n{instruction}"
+        payload = _stale_or_error(cache_key, open_meteo_err, wttr_err)
+        if "error" in payload:
+            return ToolResult.err(
+                payload["error"],
+                code="provider-unreachable",
+                hint="try again shortly or name a specific city.",
+                details=payload.get("details", ""),
+            )
+        # Stale-but-real cached data — still a usable card.
+        return ToolResult.ok(payload, rich=payload)
 
 
 def _extract_location(telemetry: dict | None) -> tuple:

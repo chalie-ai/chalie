@@ -27,17 +27,14 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def _extract_json(result: dict) -> dict:
-    """Parse the JSON payload out of a tagged text result dict.
+def _extract_json(result) -> dict:
+    """Parse the JSON payload out of a ``ToolResult``.
 
-    The abilities return ``{"text": "[name(...)]\n<json>\n[end:name]"}``.
-    This helper extracts and parses the JSON body.
+    The abilities return a ``ToolResult`` whose ``body`` is the JSON payload
+    string (the dispatcher wraps it in the ``[name(...)]`` envelope at render
+    time). This helper parses that body.
     """
-    text = result["text"]
-    lines = text.split("\n")
-    # First line is the tag opener, last is [end:name], middle is JSON.
-    body = "\n".join(lines[1:-1])
-    return json.loads(body)
+    return json.loads(result.body)
 
 
 # ---------------------------------------------------------------------------
@@ -77,8 +74,6 @@ def test_email_not_connected_returns_structured_error():
     from abilities.email import EmailAbility
 
     result = EmailAbility().run({"action": "search"})
-    assert isinstance(result, dict), "execute() must return a dict"
-    assert "text" in result
     payload = _extract_json(result)
     assert payload["status"] == "error"
     assert "not connected" in payload["error"].lower()
@@ -95,8 +90,6 @@ def test_calendar_read_returns_structured_error_without_db():
     from abilities.calendar import CalendarAbility
 
     result = CalendarAbility().run({"action": "list_events"})
-    assert isinstance(result, dict)
-    assert "text" in result
     payload = _extract_json(result)
     assert payload.get("status") == "error" or "error" in payload
 
@@ -106,8 +99,6 @@ def test_calendar_write_not_connected_returns_structured_error():
     from abilities.calendar import CalendarAbility
 
     result = CalendarAbility().run({"action": "update_event", "uid": "test-123", "summary": "New title"})
-    assert isinstance(result, dict)
-    assert "text" in result
     payload = _extract_json(result)
     assert payload["status"] == "error"
     assert "not connected" in payload["error"].lower()
@@ -118,8 +109,6 @@ def test_contacts_not_connected_returns_structured_error():
     from abilities.contacts import ContactsAbility
 
     result = ContactsAbility().run({"action": "list"})
-    assert isinstance(result, dict)
-    assert "text" in result
     payload = _extract_json(result)
     assert payload["status"] == "error"
     assert "not connected" in payload["error"].lower()

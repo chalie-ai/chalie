@@ -7,23 +7,15 @@ class SkillManagerAbility(SkillBuilderAbility):
     """SYSTEM variant of SkillBuilderAbility that bypasses policy enforcement.
 
     Used exclusively by SkillSuggestionMessageProcessor. Inherits all handlers
-    from SkillBuilderAbility — only get_name() and SYSTEM are overridden.
+    — and ``run()`` — from SkillBuilderAbility; only get_name() and SYSTEM are
+    overridden.
 
-    ``run()`` post-processes the result to replace the parent's hardcoded
-    ``skill_builder`` tag name with ``skill_manager`` so the ACT trail shows
-    a consistent tool identity.
+    The ACT trail shows a consistent ``skill_manager`` identity because the
+    dispatcher renders the result envelope under ``get_name()``, not a tag name
+    baked into the ability body.
     """
 
     SYSTEM = True
 
     def get_name(self) -> str:
         return "skill_manager"
-
-    def run(self, params: dict) -> dict:
-        """Run inherited handler, then fix tag name in result text."""
-        result = super().run(params)
-        if 'text' in result:
-            result['text'] = result['text'].replace(
-                'skill_builder', self.get_name(),
-            )
-        return result

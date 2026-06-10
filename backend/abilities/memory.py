@@ -12,7 +12,7 @@ import math
 from typing import ClassVar, Dict, List, Optional, Tuple
 
 from abilities._ability import Ability
-from services.innate_skills._tag import tag as _tag
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
@@ -142,45 +142,42 @@ class MemoryAbility(Ability):
     EXPAND_MAX_DIST: ClassVar[float] = 0.55
     EXPAND_FACTOR_CEILING: ClassVar[float] = 2.2
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         action = params.get("action", "recall")
         mp = self.mp
         channel = getattr(getattr(mp, "config", None), "channel", "") or ""
 
         try:
             if action == "store":
-                text = _handle_store(channel, params)
-            elif action == "recall":
-                text = _handle_recall(mp, channel, params)
-            elif action == "reflect":
-                text = _handle_reflect(mp, channel, params)
-            elif action == "forget":
-                text = _handle_forget(params)
-            else:
-                text = _tag(
-                    "memory",
-                    error=f"unknown-action:{action}",
-                    valid="store,recall,reflect,forget",
-                )
+                return _handle_store(channel, params)
+            if action == "recall":
+                return _handle_recall(mp, channel, params)
+            if action == "reflect":
+                return _handle_reflect(mp, channel, params)
+            if action == "forget":
+                return _handle_forget(params)
+            return ToolResult.err(
+                f"unknown-action:{action}",
+                code="error",
+                valid=("store", "recall", "reflect", "forget"),
+            )
         except Exception as e:
             logger.exception(f"{LOG_PREFIX} Error in {action}: {e}")
-            text = _tag("memory", action=action, error=str(e)[:200])
-
-        return {"text": text}
+            return ToolResult.err(str(e)[:200], code="error", action=action)
 
 
 # ── Store ────────────────────────────────────────────────────────────
 
 
-def _handle_store(channel: str, params: dict) -> str:
+def _handle_store(channel: str, params: dict) -> ToolResult:
     key = params.get("key")
     value = params.get("value")
     kind = params.get("kind", "user_specific")
 
     if not key:
-        return _tag("memory", action="store", error="key-required")
+        return ToolResult.err("key-required", code="error", action="store")
     if value is None:
-        return _tag("memory", action="store", error="value-required")
+        return ToolResult.err("value-required", code="error", action="store")
 
     from services.data_graph_service import get_data_graph_service
 
@@ -188,10 +185,12 @@ def _handle_store(channel: str, params: dict) -> str:
     result = dgs.store(kind=kind, key=key, value=str(value), source=f"skill:memory:store:{channel}")
 
     if result is None:
-        return _tag("memory", action="store", key=key, error=f"store-failed-invalid-kind:{kind}")
+        return ToolResult.err(
+            f"store-failed-invalid-kind:{kind}", code="error", action="store", key=key
+        )
 
     body = _format_store_response(result)
-    return _tag("memory", body, action="store", key=key)
+    return ToolResult.ok(body, action="store", key=key)
 
 
 def _format_store_response(result: dict) -> str:
@@ -248,13 +247,13 @@ def _format_store_response(result: dict) -> str:
 # ── Forget ───────────────────────────────────────────────────────────
 
 
-def _handle_forget(params: dict) -> str:
+def _handle_forget(params: dict) -> ToolResult:
     key = params.get("key")
     value = params.get("value")
     kind = params.get("kind", "user_specific")
 
     if not key:
-        return _tag("memory", action="forget", error="key-required")
+        return ToolResult.err("key-required", code="error", action="forget")
 
     from services.data_graph_service import get_data_graph_service
 
@@ -262,10 +261,12 @@ def _handle_forget(params: dict) -> str:
     result = dgs.forget(kind=kind, key=key, value=value)
 
     if result is None:
-        return _tag("memory", action="forget", key=key, error="forget-failed-invalid-kind")
+        return ToolResult.err(
+            "forget-failed-invalid-kind", code="error", action="forget", key=key
+        )
 
     body = _format_forget_response(result)
-    return _tag("memory", body, action="forget", key=key)
+    return ToolResult.ok(body, action="forget", key=key)
 
 
 def _format_forget_response(result: dict) -> str:
@@ -323,11 +324,11 @@ _RECALL_FALLBACK_HINT = (
 )
 
 
-def _handle_recall(mp, channel: str, params: dict) -> str:
+def _handle_recall(mp, channel: str, params: dict) -> ToolResult:
     query = params.get("query", "")
     location = params.get("location", "")
     if not query and not location:
-        return _tag("memory", action="recall", error="no-query-or-location")
+        return ToolResult.err("no-query-or-location", code="error", action="recall")
 
     # The turn-0 background seed (_auto=True) retrieves at the tighter
     # SEED_RADIUS_BASELINE; an explicit model-invoked recall uses the wider
@@ -376,21 +377,21 @@ def _handle_recall(mp, channel: str, params: dict) -> str:
     hint = "" if caller == "seed" else _RECALL_FALLBACK_HINT
 
     if not results:
-        return _tag("memory", hint, query=query or location, results=0)
+        return ToolResult.ok(hint, query=query or location, results=0)
 
     body = _format_results(results)
     if hint:
         body = f"{body}\n{hint}"
-    return _tag("memory", body, query=query or location, results=len(results))
+    return ToolResult.ok(body, query=query or location, results=len(results))
 
 
 # ── Reflect ──────────────────────────────────────────────────────────
 
 
-def _handle_reflect(mp, channel: str, params: dict) -> str:
+def _handle_reflect(mp, channel: str, params: dict) -> ToolResult:
     query = params.get("query", "")
     if not query:
-        return _tag("memory", action="reflect", error="no-query")
+        return ToolResult.err("no-query", code="error", action="reflect")
 
     raw_episodes, _ = recall_episodes(
         mp,
@@ -404,9 +405,9 @@ def _handle_reflect(mp, channel: str, params: dict) -> str:
     if not raw_episodes:
         dg_hits, _ = _search_data_graph(query, 2)
         if not dg_hits:
-            return _tag("memory", action="reflect", query=query, results=0)
+            return ToolResult.ok("", action="reflect", query=query, results=0)
         body = _format_reflect(query, None, [], dg_hits)
-        return _tag("memory", body, action="reflect", query=query)
+        return ToolResult.ok(body, action="reflect", query=query)
 
     top = raw_episodes[0]
 
@@ -415,7 +416,7 @@ def _handle_reflect(mp, channel: str, params: dict) -> str:
     dg_hits, _ = _search_data_graph(query, 2)
 
     body = _format_reflect(query, top, supporting, dg_hits)
-    return _tag("memory", body, action="reflect", query=query)
+    return ToolResult.ok(body, action="reflect", query=query)
 
 
 def _expand_episode_layers(episode: Dict) -> List[Dict]:

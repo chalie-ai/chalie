@@ -23,6 +23,7 @@ reference to a specific config class."""
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.processor_config import ProcessorConfig
 
 # The deliberation overlay — the SOLE thing the thinking pass changes about the
@@ -113,7 +114,7 @@ class ThinkingAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
         parent = self.mp
         # Mirror the parent's about-to-be-sent request EXACTLY: its rendered user
@@ -132,5 +133,5 @@ class ThinkingAbility(Ability):
         )
         text = (result or "").strip()
         if text.upper() == "NOTHING":
-            return {"status": "success", "result": ""}
-        return {"status": "success", "result": text}
+            return ToolResult.ok("")
+        return ToolResult.ok(text)

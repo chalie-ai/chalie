@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -198,10 +199,10 @@ class BashAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         command = (params.get("command") or "").strip()
         if not command:
-            return {"text": "Error: command is required."}
+            return ToolResult.ok("Error: command is required.")
 
         # Escalate the LLM's self-classification via heuristic inspection so a
         # destructive command can never be demoted to a benign action class.
@@ -210,7 +211,7 @@ class BashAbility(Ability):
 
         destructive_error = _check_destructive(command)
         if destructive_error:
-            return {"text": destructive_error}
+            return ToolResult.ok(destructive_error)
 
         timeout_s = _resolve_timeout(params.get("timeout_s"))
         safe_env = _build_safe_env()
@@ -327,7 +328,7 @@ def _resolve_timeout(timeout_param: int | None) -> int:
 # ── Subprocess execution ──────────────────────────────────────────────────
 
 
-def _run_command(command: str, timeout_s: int, env: dict) -> dict:
+def _run_command(command: str, timeout_s: int, env: dict) -> ToolResult:
     try:
         proc = subprocess.run(
             ["bash", "-c", command],
@@ -337,27 +338,27 @@ def _run_command(command: str, timeout_s: int, env: dict) -> dict:
             env=env,
         )
     except subprocess.TimeoutExpired:
-        return {"text": json.dumps({
+        return ToolResult.ok(json.dumps({
             "error": f"Command timed out after {timeout_s}s and was killed.",
             "returncode": -1,
             "truncated": False,
-        })}
+        }))
     except OSError as exc:
-        return {"text": f"Error: failed to execute command: {exc}"}
+        return ToolResult.ok(f"Error: failed to execute command: {exc}")
 
     stdout_raw = proc.stdout or b""
     stderr_raw = proc.stderr or b""
 
     if _is_binary(stdout_raw) or _is_binary(stderr_raw):
         total = len(stdout_raw) + len(stderr_raw)
-        return {"text": json.dumps({
+        return ToolResult.ok(json.dumps({
             "stdout": f"(binary output, {len(stdout_raw)} bytes)",
             "stderr": f"(binary output, {len(stderr_raw)} bytes)" if stderr_raw else "",
             "returncode": proc.returncode,
             "truncated": False,
             "binary": True,
             "total_bytes": total,
-        })}
+        }))
 
     truncated = False
     combined_len = len(stdout_raw) + len(stderr_raw)
@@ -381,12 +382,12 @@ def _run_command(command: str, timeout_s: int, env: dict) -> dict:
     if not stdout_str and not stderr_str and proc.returncode == 0:
         stdout_str = _EMPTY_SUCCESS_MSG
 
-    return {"text": json.dumps({
+    return ToolResult.ok(json.dumps({
         "stdout": stdout_str,
         "stderr": stderr_str,
         "returncode": proc.returncode,
         "truncated": truncated,
-    })}
+    }))
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

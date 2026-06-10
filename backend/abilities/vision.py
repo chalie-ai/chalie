@@ -25,6 +25,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from configs.channels.vision import VisionConfig
 
 logger = logging.getLogger(__name__)
@@ -123,11 +124,11 @@ class VisionAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> dict:
+    def run(self, params: dict) -> ToolResult:
         doc_id = (params.get("image") or "").strip()
         query = params.get("query") or ""
         if not doc_id:
-            return {"status": "error", "result": "vision requires an 'image' (document id)."}
+            return ToolResult.err("vision requires an 'image' (document id).", code="error")
 
         from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.document_service import DocumentService  # noqa: PLC0415
@@ -135,9 +136,9 @@ class VisionAbility(Ability):
 
         doc = DocumentService(get_shared_db_service()).get_document(doc_id)
         if not doc:
-            return {"status": "error", "result": f"No document found for id={doc_id}."}
+            return ToolResult.err(f"No document found for id={doc_id}.", code="error")
         if not doc.get("file_path"):
-            return {"status": "error", "result": f"Document {doc_id} has no file on disk."}
+            return ToolResult.err(f"Document {doc_id} has no file on disk.", code="error")
 
         abs_path = str(FileMapperService.get_documents_path(doc["file_path"]))
         mime_type = doc.get("mime_type") or "image/png"
@@ -147,9 +148,9 @@ class VisionAbility(Ability):
             )
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")
-            return {"status": "error", "result": f"Vision is currently experiencing issues; {exc}"}
+            return ToolResult.err(f"Vision is currently experiencing issues; {exc}", code="error")
 
         body = out["description"]
         if out["note"]:
             body = f"{body}\n\n{out['note']}" if body else out["note"]
-        return {"status": "success", "result": body}
+        return ToolResult.ok(body)

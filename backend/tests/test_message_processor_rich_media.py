@@ -47,35 +47,56 @@ _MOCK_WEATHER_DICT = {
 
 
 class TestWeatherSerialise:
-    """WeatherAbility._serialise produces the expected string shape."""
+    """The weather rich-media envelope is produced by the single production
+    formatter ``ToolDispatcher._render`` from the ``ToolResult`` weather returns.
 
-    def test_serialise_with_ordinal_produces_json_and_trailer(self):
-        from abilities.weather import _serialise
-        result = _serialise({"temperature_c": 12}, ordinal=1)
-        assert isinstance(result, str)
-        parts = result.split("\n\n", 1)
-        assert len(parts) == 2
-        payload_str, trailer = parts
+    Weather returns ``ToolResult.ok(payload, rich=payload)`` on success and
+    ``ToolResult.err(...)`` on failure; the dispatcher assigns the ordinal (only
+    on a user-broadcast turn) and appends the single rich-media instruction
+    trailer carrying ``<span id='weather_N'>``. These drive that real formatter
+    rather than a now-removed ability-local serialise helper."""
+
+    def test_render_with_ordinal_produces_json_and_trailer(self):
+        from abilities._dispatcher import ToolDispatcher
+        from abilities._result import ToolResult
+
+        tr = ToolResult.ok({"temperature_c": 12}, rich={"temperature_c": 12})
+        rendered = ToolDispatcher._render("weather", tr, 1)
+        # Strip the [weather(...)]\n…\n[end:weather] envelope to the inner body.
+        inner = rendered.split("\n", 1)[1].rsplit("\n", 1)[0]
+        payload_str, trailer = inner.split("\n\n", 1)
         assert json.loads(payload_str) == {"temperature_c": 12}
         assert "<span id='weather_1'>" in trailer
 
-    def test_serialise_without_ordinal_returns_dict(self):
-        from abilities.weather import _serialise
-        result = _serialise({"temperature_c": 12}, ordinal=None)
-        assert isinstance(result, dict)
-        assert result["temperature_c"] == 12
+    def test_render_without_ordinal_has_no_trailer(self):
+        from abilities._dispatcher import ToolDispatcher
+        from abilities._result import ToolResult
 
-    def test_serialise_error_payload_no_trailer(self):
-        from abilities.weather import _serialise
-        result = _serialise({"error": "unavailable", "details": "timeout"}, ordinal=1)
-        # Error payloads must not include an instruction trailer
-        assert isinstance(result, dict)
-        assert result["error"] == "unavailable"
+        tr = ToolResult.ok({"temperature_c": 12}, rich={"temperature_c": 12})
+        rendered = ToolDispatcher._render("weather", tr, None)
+        inner = rendered.split("\n", 1)[1].rsplit("\n", 1)[0]
+        # No ordinal → body is the bare payload JSON, no instruction trailer.
+        assert json.loads(inner) == {"temperature_c": 12}
+        assert "<span" not in rendered
 
-    def test_serialise_ordinal_2_uses_correct_tag(self):
-        from abilities.weather import _serialise
-        result = _serialise({"temperature_c": 20}, ordinal=2)
-        assert "<span id='weather_2'>" in result
+    def test_render_error_payload_no_trailer(self):
+        from abilities._dispatcher import ToolDispatcher
+        from abilities._result import ToolResult
+
+        tr = ToolResult.err("unavailable", code="provider-unreachable", details="timeout")
+        rendered = ToolDispatcher._render("weather", tr, 1)
+        # Error envelopes never carry a rich-media instruction trailer.
+        assert "status=error" in rendered
+        assert "unavailable" in rendered
+        assert "<span" not in rendered
+
+    def test_render_ordinal_2_uses_correct_tag(self):
+        from abilities._dispatcher import ToolDispatcher
+        from abilities._result import ToolResult
+
+        tr = ToolResult.ok({"temperature_c": 20}, rich={"temperature_c": 20})
+        rendered = ToolDispatcher._render("weather", tr, 2)
+        assert "<span id='weather_2'>" in rendered
 
 
 class TestRichMediaParserIntegration:
