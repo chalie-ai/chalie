@@ -129,8 +129,11 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     "schedule",
     "search",
     "search_files",
+    # skill_builder hosts BOTH the user-facing SkillBuilderAbility and its SYSTEM
+    # variant SkillManagerAbility in ONE module (TKT-896 merged the twins —
+    # skill_manager.py was deleted). Both tool NAMES stay registered via
+    # __subclasses__(), but there is only one module stem on disk now.
     "skill_builder",
-    "skill_manager",
     # thinking: internal never-discoverable ability dispatched at turn 0
     # (added by the compaction redesign, Task 4.1 / commit eaaaf29a, which
     # replaced the old exploration hack with abilities/thinking.py). It lives

@@ -1,10 +1,20 @@
-"""
-SkillBuilderAbility — create, edit, delete, and list user-defined skill playbooks.
+"""Skill playbook CRUD — the merged ``skill_builder`` / ``skill_manager`` pair.
 
 User skills are stored as .yaml files in data/skills/user/ with the same
 frontmatter format as curated skills in backend/abilities/skills/. On
 create/edit they are also indexed into skills.sqlite for find_skills routing.
 Only user-created skills (source='user') can be edited or deleted.
+
+ONE module, ONE behaviour: :class:`SkillBuilderAbility` owns every handler and
+``run()``. :class:`SkillManagerAbility` is the SYSTEM-policy variant used by the
+background ``SkillSuggestionMessageProcessor`` — it differs ONLY in its name
+(``skill_manager``) and ``SYSTEM = True``; it shares the parent's handlers
+verbatim. There is NO per-name content rewriting: the dispatcher renders the
+wire envelope under ``get_name()``, so the ACT trail already shows the right
+identity. A skill whose body legitimately contains the substring
+``skill_builder`` is therefore stored and returned byte-identical under either
+tool — the old blanket ``content.replace('skill_builder', 'skill_manager')``
+that corrupted such bodies is gone.
 """
 
 import logging
@@ -47,6 +57,22 @@ def _discover_tool_names() -> str:
 
 
 class SkillBuilderAbility(Ability):
+    # The ACTION_REQUIRED pre-gate (consulted by the dispatcher BEFORE the policy
+    # gate and BEFORE run()): an unknown action → one unknown-action error whose
+    # valid= names all four real actions; a known action missing required params →
+    # one missing-params error naming ALL of them. edit/delete need only a title
+    # (the existence/ownership checks live in run()); list needs nothing.
+    ACTION_REQUIRED: ClassVar[dict] = {
+        "create": ("title", "use_for", "content"),
+        "edit": ("title",),
+        "delete": ("title",),
+        "list": (),
+    }
+
+    # SYSTEM=False on the user-facing tool; the SYSTEM variant flips this. Declared
+    # here so both names carry a deterministic, introspectable policy identity.
+    SYSTEM: ClassVar[bool] = False
+
     def get_name(self) -> str:
         return "skill_builder"
 
@@ -130,26 +156,23 @@ class SkillBuilderAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
+        # The ACTION_REQUIRED pre-gate has already rejected an unknown action and
+        # any missing required params before this point, so action is one of the
+        # four real actions and its required params are present. No try/except
+        # swallow: an unexpected failure bubbles to the dispatcher's _run, which
+        # renders it as code=unhandled-exception (errors must surface).
         action = params.get("action", "list")
-        logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, self.mp.config.channel)
+        config = getattr(self.mp, "config", None)
+        channel = getattr(config, "channel", None)
+        logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
 
-        try:
-            if action == "create":
-                return _handle_create(params)
-            if action == "edit":
-                return _handle_edit(params)
-            if action == "delete":
-                return _handle_delete(params)
-            if action == "list":
-                return _handle_list(params)
-            return ToolResult.err(
-                f"unknown-action:{action}",
-                code="error",
-                valid=("create", "edit", "delete", "list"),
-            )
-        except Exception as exc:
-            logger.exception("%s Error in %s: %s", _LOG_PREFIX, action, exc)
-            return ToolResult.err(str(exc)[:200], code="error", action=action)
+        if action == "create":
+            return _handle_create(params)
+        if action == "edit":
+            return _handle_edit(params)
+        if action == "delete":
+            return _handle_delete(params)
+        return _handle_list(params)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -178,27 +201,26 @@ def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | No
 
 
 def _handle_create(params: dict) -> ToolResult:
+    # title / use_for / content presence is guaranteed by the ACTION_REQUIRED
+    # pre-gate; here we only normalise.
     title = (params.get("title") or "").strip()
     use_for = (params.get("use_for") or "").strip()
     content = (params.get("content") or "").strip()
 
-    if not title:
-        return ToolResult.err("title-required", code="error", action="create")
-    if not use_for:
-        return ToolResult.err("use_for-required", code="error", action="create")
-    if not content:
-        return ToolResult.err("content-required", code="error", action="create")
-
     if not SKILLS_DB_PATH.exists():
-        return ToolResult.err("skill-db-unavailable", code="error", action="create")
+        return ToolResult.err(
+            "The skill store is unavailable.",
+            code="skill-db-unavailable",
+            action="create",
+        )
 
     conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is not None:
             return ToolResult.err(
-                f"skill-already-exists:{title}",
-                code="error",
+                f'A skill titled "{title}" already exists.',
+                code="skill-already-exists",
                 hint="Use action=edit to update an existing skill",
                 action="create",
             )
@@ -241,20 +263,22 @@ def _handle_create(params: dict) -> ToolResult:
 
 
 def _handle_edit(params: dict) -> ToolResult:
-    title = (params.get("title") or "").strip()
-    if not title:
-        return ToolResult.err("title-required", code="error", action="edit")
+    title = (params.get("title") or "").strip()  # presence guaranteed by pre-gate
 
     if not SKILLS_DB_PATH.exists():
-        return ToolResult.err("skill-db-unavailable", code="error", action="edit")
+        return ToolResult.err(
+            "The skill store is unavailable.",
+            code="skill-db-unavailable",
+            action="edit",
+        )
 
     conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is None:
             return ToolResult.err(
-                f"skill-not-found:{title}",
-                code="error",
+                f'No user skill titled "{title}" was found.',
+                code="skill-not-found",
                 hint="Only user-created skills can be edited",
                 action="edit",
             )
@@ -303,20 +327,22 @@ def _handle_edit(params: dict) -> ToolResult:
 
 
 def _handle_delete(params: dict) -> ToolResult:
-    title = (params.get("title") or "").strip()
-    if not title:
-        return ToolResult.err("title-required", code="error", action="delete")
+    title = (params.get("title") or "").strip()  # presence guaranteed by pre-gate
 
     if not SKILLS_DB_PATH.exists():
-        return ToolResult.err("skill-db-unavailable", code="error", action="delete")
+        return ToolResult.err(
+            "The skill store is unavailable.",
+            code="skill-db-unavailable",
+            action="delete",
+        )
 
     conn = open_skills_db()
     try:
         existing = _find_user_skill_by_title(conn, title)
         if existing is None:
             return ToolResult.err(
-                f"skill-not-found:{title}",
-                code="error",
+                f'No user skill titled "{title}" was found.',
+                code="skill-not-found",
                 hint="Only user-created skills can be deleted",
                 action="delete",
             )
@@ -342,7 +368,11 @@ def _handle_delete(params: dict) -> ToolResult:
 
 def _handle_list(params: dict) -> ToolResult:  # noqa: ARG001
     if not SKILLS_DB_PATH.exists():
-        return ToolResult.err("skill-db-unavailable", code="error", action="list")
+        return ToolResult.err(
+            "The skill store is unavailable.",
+            code="skill-db-unavailable",
+            action="list",
+        )
 
     conn = sqlite3.connect(str(SKILLS_DB_PATH))
     try:
@@ -353,16 +383,40 @@ def _handle_list(params: dict) -> ToolResult:  # noqa: ARG001
     finally:
         conn.close()
 
-    if not rows:
-        return ToolResult.ok("No skills found.", action="list", found=0)
+    # Structured rows (JSON), not prose: a weak model can read each skill's
+    # fields directly. count meta mirrors len(body) so the model sees the total
+    # without parsing.
+    skills = [
+        {
+            "id": skill_id,
+            "title": title,
+            "use_for": use_for,
+            "tags": tags or "",
+            "version": version,
+            "source": source,
+            "enabled": bool(enabled),
+        }
+        for skill_id, title, use_for, tags, version, source, enabled in rows
+    ]
+    return ToolResult.ok(skills, action="list", count=len(skills))
 
-    lines = []
-    for row in rows:
-        skill_id, title, use_for, tags, version, source, enabled = row
-        status = "enabled" if enabled else "disabled"
-        tags_display = f" [{tags}]" if tags else ""
-        lines.append(f"- [{source}] {title} (v{version}, {status}){tags_display}")
-        lines.append(f"  {use_for}")
 
-    body = "\n".join(lines)
-    return ToolResult.ok(body, action="list", found=len(rows))
+class SkillManagerAbility(SkillBuilderAbility):
+    """SYSTEM-policy variant of :class:`SkillBuilderAbility`.
+
+    Used exclusively by ``SkillSuggestionMessageProcessor`` (the background
+    skill-creation loop). It inherits EVERYTHING — handlers, ``run()``, all five
+    metadata getters, ``ACTION_REQUIRED`` — from the parent unchanged; it differs
+    ONLY in ``get_name()`` (so the ACT trail and the policy gate see
+    ``skill_manager``) and ``SYSTEM = True`` (the tool is in
+    ``PolicyManager.INTERNAL`` and bypasses the gate).
+
+    There is NO per-name content rewriting: the dispatcher renders the envelope
+    under ``get_name()`` already, so a skill body containing the literal string
+    ``skill_builder`` survives a ``skill_manager`` operation byte-identical.
+    """
+
+    SYSTEM: ClassVar[bool] = True
+
+    def get_name(self) -> str:
+        return "skill_manager"

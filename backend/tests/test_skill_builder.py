@@ -167,29 +167,27 @@ class TestSkillYamlPath:
 class TestSkillBuilderCreateValidation:
     """create action returns error tags when required fields are missing."""
 
-    def test_missing_title_returns_error_tag(self, skill_env):
+    def test_create_existing_db_succeeds(self, skill_env):
+        """create with all required fields returns a success ToolResult.
+
+        Missing-param rejection now lives in the dispatcher's ACTION_REQUIRED
+        pre-gate (covered end-to-end in test_ability_skills_tool_result.py), so
+        run() is only reached with the required params present.
+        """
+        from abilities._result import ToolResult
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        result = ability.run({"action": "create"})
+        result = ability.run({
+            "action": "create",
+            "title": "My Skill",
+            "use_for": "tracking things",
+            "content": "1. Use `memory` to recall context.",
+        })
 
-        assert "error=title-required" in result["text"]
-
-    def test_missing_use_for_returns_error_tag(self, skill_env):
-        from abilities.skill_builder import SkillBuilderAbility
-
-        ability = SkillBuilderAbility()
-        result = ability.run({"action": "create", "title": "My Skill"})
-
-        assert "error=use_for-required" in result["text"]
-
-    def test_missing_content_returns_error_tag(self, skill_env):
-        from abilities.skill_builder import SkillBuilderAbility
-
-        ability = SkillBuilderAbility()
-        result = ability.run({"action": "create", "title": "My Skill", "use_for": "tracking things"})
-
-        assert "error=content-required" in result["text"]
+        assert isinstance(result, ToolResult)
+        assert result.status == "success"
+        assert result.meta["action"] == "create"
 
 
 @pytest.mark.integration
@@ -217,8 +215,8 @@ class TestSkillBuilderLifecycle:
                 "tags": "productivity, planning",
             })
 
-        assert "status=ok" in result["text"]
-        assert "action=create" in result["text"]
+        assert result.status == "success"
+        assert result.meta["action"] == "create"
         assert _skill_count(db_path) == before + 1
 
         row = _get_skill_row(db_path, self._TITLE)
@@ -247,7 +245,8 @@ class TestSkillBuilderLifecycle:
         ability.run(params)
         result = ability.run(params)
 
-        assert "skill-already-exists" in result["text"]
+        assert result.status == "error"
+        assert result.code == "skill-already-exists"
 
     def test_edit_increments_version_and_updates_content(self, skill_env):
         """edit action: version increments and new content is stored in DB and YAML."""
@@ -264,8 +263,8 @@ class TestSkillBuilderLifecycle:
         new_content = "1. Summarise tasks.\n2. Review blockers.\n3. Plan next week."
         result = ability.run({"action": "edit", "title": self._TITLE, "content": new_content})
 
-        assert "status=ok" in result["text"]
-        assert "action=edit" in result["text"]
+        assert result.status == "success"
+        assert result.meta["action"] == "edit"
 
         row = _get_skill_row(skill_env["db_path"], self._TITLE)
         assert row["version"] == 2
@@ -287,8 +286,8 @@ class TestSkillBuilderLifecycle:
         before = _skill_count(db_path)
         result = ability.run({"action": "delete", "title": self._TITLE})
 
-        assert "status=ok" in result["text"]
-        assert "action=delete" in result["text"]
+        assert result.status == "success"
+        assert result.meta["action"] == "delete"
         assert _skill_count(db_path) == before - 1
         assert _get_skill_row(db_path, self._TITLE) is None
 
@@ -309,6 +308,10 @@ class TestSkillBuilderLifecycle:
 
         result = ability.run({"action": "list"})
 
-        assert "action=list" in result["text"]
-        assert self._TITLE in result["text"]
-        assert "user" in result["text"]
+        assert result.status == "success"
+        assert result.meta["action"] == "list"
+        # list now returns structured JSON rows, not prose.
+        titles = [row["title"] for row in result.body]
+        assert self._TITLE in titles
+        mine = next(row for row in result.body if row["title"] == self._TITLE)
+        assert mine["source"] == "user"
