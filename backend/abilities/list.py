@@ -1,15 +1,29 @@
 """
 ListAbility — Manage deterministic lists via the ACT loop.
 
-Strict CRUD interface. Existing lists are addressed by ``id``; ``name`` is
-used only for ``create`` and ``rename``. ``list_all`` returns ids to reuse.
+Lists and their items are addressed by NAME or id. ``add item="milk"
+list="shopping"`` resolves the target by name; ``check items=["milk"]`` resolves
+each item against the list's live contents. Resolution is consent-safe: an exact
+id, an exact (case-insensitive) name, or a single substring match proceeds, but
+when a partial name/term matches MORE than one candidate the call returns
+``code=ambiguous-match`` listing every candidate and mutates nothing — it never
+silently picks one. ``name`` is the NEW name for ``create`` and ``rename``.
 
 Actions: list_all, create, view, add, check, remove, clear, rename, delete
 
+Result contract: every action returns a :class:`abilities._result.ToolResult`
+built only via ``ok()`` / ``err()``; the dispatcher renders the wire envelope.
+List-returning actions emit rows ``{id, text, done, position}`` (``count`` =
+item count); errors carry a stable kebab-case ``code`` (never the ``code="error"``
+placeholder) so a weak model can self-correct without re-reading the schema.
+
 Rich-media rendering:
-  When ``_rich_media_ordinal`` is present (user channel only), actions that
-  return a list (create, add, check, view) emit a structured JSON payload +
-  instruction trailer so the frontend renders a checklist card.
+  create/add/check/view return ``ToolResult.ok(body, rich=<fe_payload>)`` — the
+  dispatcher (``ToolDispatcher._render``) owns ordinal assignment + the span-tag
+  instruction and injects the card ONLY when the invoking channel broadcasts to
+  the user. The rich payload keeps the LEGACY frontend shape (``{id, name,
+  items:[{content, checked}]}``) the list card and ``enrich_rich_payload``
+  depend on — distinct from the model-facing rows in the body, by design.
 """
 
 import json
@@ -21,28 +35,45 @@ from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 
-_RICH_MEDIA_INSTRUCTION = (
-    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "The span will render as a checklist card; without it, the user sees only "
-    "plain text. Write a brief acknowledgement. Example: "
-    "\"<span id='{tag}'>Added milk and eggs to your grocery list.</span>\""
+_VALID_ACTIONS = (
+    "list_all", "create", "view",
+    "add", "check", "remove",
+    "clear", "rename", "delete",
 )
 
 
 class ListAbility(Ability):
+    # Required params per action, validated by the dispatcher's ACTION_REQUIRED
+    # pre-gate BEFORE the policy gate or run(). The target list is NOT pre-gated:
+    # it is resolved ability-side (by name or the ``id`` alias) so the frontend
+    # silent-action and old id-addressed transcripts survive the pre-gate. The
+    # handlers raise the precise missing-target error.
+    ACTION_REQUIRED: ClassVar[dict] = {
+        "list_all": (),
+        "create": ("name",),
+        "view": (),
+        "add": ("items",),
+        "check": ("items",),
+        "remove": ("items",),
+        "clear": (),
+        "rename": ("name",),
+        "delete": (),
+    }
+
     def get_name(self) -> str:
         return "list"
 
     def get_summary(self) -> str:
-        return "Create and manage named lists — shopping, to-do, chores — addressed by id."
+        return "Create and manage named lists — shopping, to-do, chores — addressed by name or id."
 
     def get_examples(self) -> list[str]:
         return [
             "create a grocery list and add milk, eggs, and bread",
             "show me all my lists",
-            "add bananas to list abc12345",
-            "check off milk on list abc12345",
-            "rename list abc12345 to weekend chores",
+            "add bananas to the shopping list",
+            "check off milk on the groceries list",
+            "remove eggs from the shopping list",
+            "rename my chores list to weekend chores",
             "delete list abc12345",
         ]
 
@@ -54,11 +85,7 @@ class ListAbility(Ability):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": [
-                    "list_all", "create", "view",
-                    "add", "check", "remove",
-                    "clear", "rename", "delete",
-                ],
+                "enum": list(_VALID_ACTIONS),
                 "description": (
                     "list_all: return all lists. "
                     "create: make a new list. "
@@ -71,16 +98,17 @@ class ListAbility(Ability):
                     "delete: delete a list entirely."
                 ),
             },
-            "id": {
+            "list": {
                 "type": "string",
                 "description": (
-                    "List id (8-char hex). Required for view/add/check/remove/clear/rename/delete. "
-                    "Reuse the id returned by create or list_all."
+                    "List name or id; addresses an existing list for "
+                    "view/add/check/remove/clear/rename/delete. A partial name that "
+                    "matches more than one list returns the candidates to pick from by id."
                 ),
             },
             "name": {
                 "type": "string",
-                "description": "List name. Required for create and rename.",
+                "description": "New list name; used for create and rename only.",
             },
             "items": {
                 "type": "array",
@@ -88,8 +116,9 @@ class ListAbility(Ability):
                 "description": (
                     "create/add/remove: string array, e.g. [\"milk\",\"eggs\"]. "
                     "check: object array, e.g. [{\"content\":\"milk\",\"checked\":true}]. "
-                    "Always a real JSON array, never a serialised string. "
-                    "Optional for create."
+                    "Item text may be a partial name; an ambiguous term returns the "
+                    "matching items to pick from. Always a real JSON array, never a "
+                    "serialised string. Optional for create."
                 ),
             },
         },
@@ -100,26 +129,13 @@ class ListAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        action = params.get("action", "list_all")
-        ordinal = params.get("_rich_media_ordinal")
+        action = self.param(params, "action", default="list_all")
 
-        try:
-            from services.list_service import ListService
-            from services.database_service import get_shared_db_service
+        from services.database_service import get_shared_db_service
+        from services.list_service import ListService
 
-            db = get_shared_db_service()
-            service = ListService(db)
-            body = _dispatch(service, action, params)
-        except Exception as e:
-            logger.exception(f"[LIST SKILL] Error: {e}")
-            body = _fail(str(e))
-
-        if ordinal is not None and action in ("create", "add", "check", "view"):
-            rich = _try_serialise_rich(body, ordinal)
-            if rich is not None:
-                return ToolResult.ok(rich, action=action)
-
-        return ToolResult.ok(body, action=action)
+        service = ListService(get_shared_db_service())
+        return _dispatch(self, service, action, params)
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
@@ -129,64 +145,167 @@ class ListAbility(Ability):
         ``tool_calls.result`` is a frozen snapshot from the LLM-call moment; the
         FE check-action writes directly to the ``lists`` table via
         ``ListService.check_items``. Without this hook, refresh would replay the
-        stale snapshot and visually un-tick boxes the user already ticked.
-        Single read path: both the live action handler and the refresh path go
-        through ``ListService.get_list``.
+        stale snapshot and visually un-tick boxes the user already ticked. Single
+        read path: both the live action handler and the refresh path go through
+        ``ListService.get_list`` (operating on the legacy FE payload shape).
         """
         list_id = payload.get("id") if isinstance(payload, dict) else None
         if not list_id:
             return payload
-        try:
-            from services.database_service import get_shared_db_service
-            from services.list_service import ListService
+        from services.database_service import get_shared_db_service
+        from services.list_service import ListService
 
-            service = ListService(get_shared_db_service())
-            fresh = _list_json(service, list_id)
-        except Exception as exc:
-            logger.warning("list.enrich_rich_payload: live re-fetch failed for %r: %s", list_id, exc)
-            return payload
+        service = ListService(get_shared_db_service())
+        fresh = _fe_payload(service, list_id)
         return fresh if fresh else payload
 
 
-def _dispatch(service, action: str, params: dict) -> str:
+def _dispatch(ability: "ListAbility", service, action: str, params: dict) -> ToolResult:
     if action == "list_all":
         return _handle_list_all(service)
     if action == "create":
-        return _handle_create(service, params)
+        return _handle_create(ability, service, params)
     if action == "view":
-        return _handle_view(service, params)
+        return _handle_view(ability, service, params)
     if action == "add":
-        return _handle_add(service, params)
+        return _handle_add(ability, service, params)
     if action == "check":
-        return _handle_check(service, params)
+        return _handle_check(ability, service, params)
     if action == "remove":
-        return _handle_remove(service, params)
+        return _handle_remove(ability, service, params)
     if action == "clear":
-        return _handle_clear(service, params)
+        return _handle_clear(ability, service, params)
     if action == "rename":
-        return _handle_rename(service, params)
+        return _handle_rename(ability, service, params)
     if action == "delete":
-        return _handle_delete(service, params)
-    valid = "list_all, create, view, add, check, remove, clear, rename, delete"
-    return _fail(f"Unknown action '{action}'. Use: {valid}")
+        return _handle_delete(ability, service, params)
+    return ToolResult.err(
+        f"Unknown action {action!r}.",
+        code="unknown-action",
+        valid=_VALID_ACTIONS,
+    )
 
 
-def _success(list_data: Optional[dict]) -> str:
-    return json.dumps({"status": "success", "list": list_data})
+# ── Target resolution (by name or id) ───────────────────────────────────────────
 
 
-def _success_message(message: str) -> str:
-    return json.dumps({"status": "success", "message": message})
+def _resolve_list(ability: "ListAbility", service, params: dict) -> "dict | ToolResult":
+    """Resolve the addressed list for view/add/check/remove/clear/rename/delete.
+
+    Returns the service list row dict on an unambiguous resolution, or an error
+    ``ToolResult`` (``missing-target`` / ``list-not-found`` / ``ambiguous-match``).
+    Resolution order: exact id → exact (case-insensitive) name → single
+    case-insensitive substring match. More than one substring match returns
+    ``ambiguous-match`` with the candidate rows rather than silently picking one.
+    The ``id`` alias keeps the frontend silent-action and old transcripts working.
+    """
+    target = ability.param(params, "list", aliases=("id",), default="")
+    target = str(target).strip()
+    if not target:
+        return ToolResult.err(
+            "No list specified.",
+            code="missing-target",
+            hint="pass the list name or id as 'list'.",
+        )
+
+    # Exact id wins (8-char hex addressing path, incl. the FE silent-action).
+    by_id = service.get_list(target)
+    if by_id is not None:
+        return by_id
+
+    lists = service.get_all_lists()
+    lowered = target.lower()
+    exact = [lst for lst in lists if lst["name"].lower() == lowered]
+    if len(exact) == 1:
+        return service.get_list(exact[0]["id"])
+
+    substring = [lst for lst in lists if lowered in lst["name"].lower()]
+    if len(substring) == 1:
+        return service.get_list(substring[0]["id"])
+    if len(substring) > 1:
+        return ToolResult.err(
+            f"{target!r} matches {len(substring)} list(s); re-call with the exact id. "
+            f"Candidates: {_candidate_json(substring)}",
+            code="ambiguous-match",
+            hint="re-issue the action with 'list' set to the chosen candidate id.",
+            count=len(substring),
+        )
+    return ToolResult.err(
+        f"No list matching {target!r} was found.",
+        code="list-not-found",
+        hint="use action=list_all to see available lists.",
+    )
 
 
-def _fail(message: str) -> str:
-    return json.dumps({"status": "fail", "message": message})
+def _candidate_json(lists: list) -> str:
+    rows = [{"id": lst["id"], "name": lst["name"]} for lst in lists]
+    return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
 
-def _list_json(service, list_id: str) -> Optional[dict]:
-    lst = service.get_list(list_id)
-    if not lst:
-        return None
+# ── Item resolution (check / remove) ────────────────────────────────────────────
+
+
+def _resolve_items(lst: dict, terms: list) -> "list | ToolResult":
+    """Resolve each requested item *term* against the list's active contents.
+
+    For each term: exact (case-insensitive) match → kept as-is; else a single
+    case-insensitive substring match → substituted with the full content; more
+    than one substring match → ``ambiguous-match`` (nothing is mutated, the whole
+    call aborts); zero → ``item-not-found``. Returns the resolved exact contents
+    in request order, or an error ``ToolResult``.
+    """
+    contents = [item["content"] for item in lst.get("items", [])]
+    resolved = []
+    for term in terms:
+        lowered = term.strip().lower()
+        exact = [c for c in contents if c.lower() == lowered]
+        if exact:
+            resolved.append(exact[0])
+            continue
+        substring = [c for c in contents if lowered in c.lower()]
+        if len(substring) == 1:
+            resolved.append(substring[0])
+            continue
+        if len(substring) > 1:
+            rows = json.dumps(substring, ensure_ascii=False, separators=(",", ":"))
+            return ToolResult.err(
+                f"{term!r} matches {len(substring)} item(s) in {lst['name']!r}; "
+                f"re-call with the exact text. Candidates: {rows}",
+                code="ambiguous-match",
+                hint="re-issue the action with the exact item text.",
+                count=len(substring),
+            )
+        return ToolResult.err(
+            f"No item matching {term!r} in {lst['name']!r}.",
+            code="item-not-found",
+            hint="use action=view to see the list's items.",
+        )
+    return resolved
+
+
+# ── Body / rich shaping ─────────────────────────────────────────────────────────
+
+
+def _rows(lst: dict) -> list:
+    """Model-facing item rows: id/text/done/position (content→text, checked→done)."""
+    return [
+        {
+            "id": item["id"],
+            "text": item["content"],
+            "done": bool(item["checked"]),
+            "position": item["position"],
+        }
+        for item in lst.get("items", [])
+    ]
+
+
+def _body(lst: dict) -> dict:
+    """The structured body for a list-returning action: id, name, and rows."""
+    return {"id": lst["id"], "name": lst["name"], "items": _rows(lst)}
+
+
+def _fe_card(lst: dict) -> dict:
+    """The LEGACY frontend card payload: id, name, items with content/checked."""
     return {
         "id": lst["id"],
         "name": lst["name"],
@@ -195,6 +314,24 @@ def _list_json(service, list_id: str) -> Optional[dict]:
             for item in lst.get("items", [])
         ],
     }
+
+
+def _fe_payload(service, list_id: str) -> Optional[dict]:
+    """Re-fetch a list and shape it as the FE card payload (refresh-hook path)."""
+    lst = service.get_list(list_id)
+    return _fe_card(lst) if lst else None
+
+
+def _ok_list(service, list_id: str) -> ToolResult:
+    """Fetch the live list and return a success result with rows + the FE card."""
+    lst = service.get_list(list_id)
+    if lst is None:
+        return ToolResult.err(
+            f"No list with id {list_id!r}.",
+            code="list-not-found",
+            hint="use action=list_all to see available lists.",
+        )
+    return ToolResult.ok(_body(lst), rich=_fe_card(lst), count=len(lst.get("items", [])))
 
 
 def _normalize_string_items(params: dict) -> list:
@@ -206,125 +343,6 @@ def _normalize_string_items(params: dict) -> list:
         except ValueError:
             items = [items]
     return [i.strip() for i in items if isinstance(i, str) and i.strip()]
-
-
-def _require_id(params: dict) -> tuple[Optional[str], Optional[str]]:
-    list_id = (params.get("id") or "").strip()
-    if not list_id:
-        return None, _fail("'id' is required. Use the id returned by create or list_all.")
-    return list_id, None
-
-
-def _require_name(params: dict) -> tuple[Optional[str], Optional[str]]:
-    name = (params.get("name") or "").strip()
-    if not name:
-        return None, _fail("'name' is required.")
-    return name, None
-
-
-def _require_items(params: dict) -> tuple[Optional[list], Optional[str]]:
-    raw = params.get("items")
-    if not isinstance(raw, list) or not raw:
-        return None, _fail("'items' must be a non-empty array.")
-    return raw, None
-
-
-def _handle_list_all(service) -> str:
-    lists = service.get_all_lists()
-    payload = [
-        {
-            "id": lst["id"],
-            "name": lst["name"],
-            "item_count": lst["item_count"],
-            "checked_count": lst["checked_count"],
-        }
-        for lst in lists
-    ]
-    return json.dumps({"status": "success", "lists": payload})
-
-
-def _handle_create(service, params: dict) -> str:
-    name, err = _require_name(params)
-    if err:
-        return err
-
-    items = _normalize_string_items(params)
-
-    try:
-        list_id = service.create_list(name)
-    except ValueError as e:
-        return _fail(str(e))
-
-    if items:
-        added = service.add_items(list_id, items)
-        if added < len(items):
-            logger.info(
-                "[LIST SKILL] create: added %d/%d items to list '%s' (id=%s) — some skipped (dedupe or empty)",
-                added, len(items), name, list_id,
-            )
-
-    return _success(_list_json(service, list_id))
-
-
-def _handle_view(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
-
-    lst_data = _list_json(service, list_id)
-    if lst_data is None:
-        return _fail(f"List with id: {list_id} not found.")
-
-    return _success(lst_data)
-
-
-def _handle_add(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
-
-    _, err = _require_items(params)
-    if err:
-        return err
-
-    if service.get_list(list_id) is None:
-        return _fail(f"List with id: {list_id} not found.")
-
-    cleaned = _normalize_string_items(params)
-    if not cleaned:
-        return _fail("'items' must contain at least one non-empty string.")
-
-    added = service.add_items(list_id, cleaned)
-    if added == 0:
-        return _fail("No items added (all duplicates or empty).")
-
-    return _success(_list_json(service, list_id))
-
-
-def _handle_check(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
-
-    items, err = _require_items(params)
-    if err:
-        return err
-
-    lst = service.get_list(list_id)
-    if lst is None:
-        return _fail(f"List with id: {list_id} not found.")
-
-    to_check, to_uncheck = _split_check_items(items)
-    if not to_check and not to_uncheck:
-        return _fail("Each item must have 'content' (string) and 'checked' (bool).")
-
-    checked_count = service.check_items(list_id, to_check) if to_check else 0
-    unchecked_count = service.uncheck_items(list_id, to_uncheck) if to_uncheck else 0
-
-    if checked_count == 0 and unchecked_count == 0:
-        return _fail(f"No matching items found in list '{lst['name']}'.")
-
-    return _success(_list_json(service, list_id))
 
 
 def _split_check_items(raw_items: list) -> tuple[list, list]:
@@ -341,79 +359,163 @@ def _split_check_items(raw_items: list) -> tuple[list, list]:
     return to_check, to_uncheck
 
 
-def _handle_remove(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
+# ── Handlers ─────────────────────────────────────────────────────────────────────
 
-    _, err = _require_items(params)
-    if err:
-        return err
 
-    lst = service.get_list(list_id)
-    if lst is None:
-        return _fail(f"List with id: {list_id} not found.")
+def _handle_list_all(service) -> ToolResult:
+    rows = [
+        {
+            "id": lst["id"],
+            "name": lst["name"],
+            "item_count": lst["item_count"],
+            "checked_count": lst["checked_count"],
+        }
+        for lst in service.get_all_lists()
+    ]
+    return ToolResult.ok(rows, count=len(rows))
+
+
+def _handle_create(ability: "ListAbility", service, params: dict) -> ToolResult:
+    name = str(ability.param(params, "name", default="")).strip()
+    if not name:
+        return ToolResult.err("'name' is required.", code="missing-name")
+
+    items = _normalize_string_items(params)
+    try:
+        list_id = service.create_list(name)
+    except ValueError as e:
+        return ToolResult.err(str(e), code="duplicate-name", hint="choose a different name.")
+
+    if items:
+        added = service.add_items(list_id, items)
+        if added < len(items):
+            logger.info(
+                "[LIST SKILL] create: added %d/%d items to list '%s' (id=%s) — some skipped (dedupe or empty)",
+                added, len(items), name, list_id,
+            )
+    return _ok_list(service, list_id)
+
+
+def _handle_view(ability: "ListAbility", service, params: dict) -> ToolResult:
+    lst = _resolve_list(ability, service, params)
+    if isinstance(lst, ToolResult):
+        return lst
+    return _ok_list(service, lst["id"])
+
+
+def _handle_add(ability: "ListAbility", service, params: dict) -> ToolResult:
+    lst = _resolve_list(ability, service, params)
+    if isinstance(lst, ToolResult):
+        return lst
 
     cleaned = _normalize_string_items(params)
     if not cleaned:
-        return _fail("'items' must contain at least one non-empty string.")
+        return ToolResult.err(
+            "'items' must contain at least one non-empty string.",
+            code="invalid-items",
+            hint="pass a JSON array of item strings, e.g. [\"milk\",\"eggs\"].",
+        )
 
-    removed = service.remove_items(list_id, cleaned)
-    if removed == 0:
-        return _fail(f"No matching items found in list '{lst['name']}'.")
-
-    return _success(_list_json(service, list_id))
-
-
-def _handle_clear(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
-
-    count = service.clear_list(list_id)
-    if count == -1:
-        return _fail(f"List with id: {list_id} not found.")
-
-    return _success(_list_json(service, list_id))
+    added = service.add_items(lst["id"], cleaned)
+    if added == 0:
+        return ToolResult.err(
+            "No items added (all duplicates or empty).",
+            code="no-items-added",
+            hint="the items are already on the list.",
+        )
+    return _ok_list(service, lst["id"])
 
 
-def _handle_rename(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
+def _handle_check(ability: "ListAbility", service, params: dict) -> ToolResult:
+    lst = _resolve_list(ability, service, params)
+    if isinstance(lst, ToolResult):
+        return lst
 
-    new_name, err = _require_name(params)
-    if err:
-        return err
+    raw = params.get("items")
+    if not isinstance(raw, list) or not raw:
+        return ToolResult.err(
+            "'items' must be a non-empty array.",
+            code="invalid-items",
+            hint="each item needs 'content' and 'checked', e.g. [{\"content\":\"milk\",\"checked\":true}].",
+        )
 
-    success = service.rename_list(list_id, new_name)
-    if not success:
-        return _fail(f"Rename failed — list with id: {list_id} not found, or name '{new_name}' is already in use.")
+    to_check, to_uncheck = _split_check_items(raw)
+    if not to_check and not to_uncheck:
+        return ToolResult.err(
+            "Each item must have 'content' (string) and 'checked' (bool).",
+            code="invalid-items",
+            hint="e.g. [{\"content\":\"milk\",\"checked\":true}].",
+        )
 
-    return _success(_list_json(service, list_id))
+    resolved_check = _resolve_items(lst, to_check)
+    if isinstance(resolved_check, ToolResult):
+        return resolved_check
+    resolved_uncheck = _resolve_items(lst, to_uncheck)
+    if isinstance(resolved_uncheck, ToolResult):
+        return resolved_uncheck
+
+    if resolved_check:
+        service.check_items(lst["id"], resolved_check)
+    if resolved_uncheck:
+        service.uncheck_items(lst["id"], resolved_uncheck)
+    return _ok_list(service, lst["id"])
 
 
-def _handle_delete(service, params: dict) -> str:
-    list_id, err = _require_id(params)
-    if err:
-        return err
+def _handle_remove(ability: "ListAbility", service, params: dict) -> ToolResult:
+    lst = _resolve_list(ability, service, params)
+    if isinstance(lst, ToolResult):
+        return lst
 
-    success = service.delete_list(list_id)
-    if not success:
-        return _fail(f"List with id: {list_id} not found.")
+    cleaned = _normalize_string_items(params)
+    if not cleaned:
+        return ToolResult.err(
+            "'items' must contain at least one non-empty string.",
+            code="invalid-items",
+            hint="pass a JSON array of item strings to remove.",
+        )
 
-    return _success_message(f"List with id: {list_id} was deleted successfully")
+    resolved = _resolve_items(lst, cleaned)
+    if isinstance(resolved, ToolResult):
+        return resolved
+
+    service.remove_items(lst["id"], resolved)
+    return _ok_list(service, lst["id"])
 
 
-def _try_serialise_rich(body: str, ordinal: int) -> str | None:
-    try:
-        parsed = json.loads(body)
-    except (ValueError, TypeError):
-        return None
-    if parsed.get("status") != "success" or parsed.get("list") is None:
-        return None
-    payload = parsed["list"]
-    tag = f"list_{ordinal}"
-    data_json = json.dumps(payload)
-    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-    return f"{data_json}\n\n{instruction}"
+def _handle_clear(ability: "ListAbility", service, params: dict) -> ToolResult:
+    lst = _resolve_list(ability, service, params)
+    if isinstance(lst, ToolResult):
+        return lst
+    service.clear_list(lst["id"])
+    return _ok_list(service, lst["id"])
+
+
+def _handle_rename(ability: "ListAbility", service, params: dict) -> ToolResult:
+    lst = _resolve_list(ability, service, params)
+    if isinstance(lst, ToolResult):
+        return lst
+
+    new_name = str(ability.param(params, "name", default="")).strip()
+    if not new_name:
+        return ToolResult.err("'name' is required.", code="missing-name")
+
+    if not service.rename_list(lst["id"], new_name):
+        return ToolResult.err(
+            f"Rename failed — name {new_name!r} is already in use.",
+            code="duplicate-name",
+            hint="choose a different name.",
+        )
+    return _ok_list(service, lst["id"])
+
+
+def _handle_delete(ability: "ListAbility", service, params: dict) -> ToolResult:
+    lst = _resolve_list(ability, service, params)
+    if isinstance(lst, ToolResult):
+        return lst
+
+    if not service.delete_list(lst["id"]):
+        return ToolResult.err(
+            f"Failed to delete {lst['name']!r}.",
+            code="delete-failed",
+        )
+    return ToolResult.ok({"id": lst["id"], "name": lst["name"], "deleted": True})
