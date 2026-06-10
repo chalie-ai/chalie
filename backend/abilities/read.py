@@ -30,6 +30,8 @@ import os
 from typing import ClassVar
 from urllib.parse import urlparse
 
+import requests
+
 from abilities._ability import Ability
 from abilities._result import ToolResult, truncate
 from services.web_fetch import BROWSER, FetchBlocked, fetch_page
@@ -149,7 +151,7 @@ class ReadAbility(Ability):
                 code="private-or-internal-url-blocked",
                 source=url,
             )
-        except Exception as e:  # noqa: BLE001 — surface the fetch failure as a coded result
+        except requests.RequestException as e:
             return ToolResult.err(
                 f"Could not fetch the URL: {str(e)[:150]}",
                 code="fetch-failed",

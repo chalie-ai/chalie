@@ -44,11 +44,19 @@ def test_browser_security_resolve_is_the_single_implementation():
 
 
 def test_read_and_download_share_the_single_guard():
-    """The read + web_download abilities use services.ssrf.is_private_url itself."""
-    from abilities import read, web_download
-    from services import ssrf
+    """read reaches the guard through web_fetch; web_download imports it directly.
 
-    assert read.is_private_url is ssrf.is_private_url
+    TKT-899 removed read's direct ``is_private_url`` import — it now fetches
+    exclusively through ``services.web_fetch``, whose ``_guard`` holds the
+    identity. The invariant is unchanged: no second copy anywhere on read's path.
+    """
+    from abilities import read, web_download
+    from services import ssrf, web_fetch
+
+    assert web_fetch.is_private_url is ssrf.is_private_url
+    assert not hasattr(read, "is_private_url"), (
+        "read must not re-import the guard; it fetches through web_fetch"
+    )
     assert web_download.is_private_url is ssrf.is_private_url
 
 
