@@ -404,12 +404,20 @@ class McpClientService:
     def ping_and_sync(self, server_id: str) -> dict:
         """Connect to the server, sync its tool list, and update status.
 
-        Returns {status, tool_count, reachable}.  Never raises — errors are
-        caught and reflected as status='offline'.
+        Returns ``{status, tool_count, reachable, error}``.  Never raises —
+        connect/transport failures are caught and reflected as status='offline'.
+        ``error`` is ``None`` on success and the stringified exception on failure,
+        so callers can classify the failure (e.g. a 401/403 auth rejection vs a
+        plain unreachable host) instead of losing the detail.
         """
         server = self.get_server(server_id)
         if server is None:
-            return {"status": _STATUS_OFFLINE, "tool_count": 0, "reachable": False}
+            return {
+                "status": _STATUS_OFFLINE,
+                "tool_count": 0,
+                "reachable": False,
+                "error": "server not found",
+            }
 
         host = server["host"]
         headers = server.get("headers") or {}
@@ -424,13 +432,23 @@ class McpClientService:
                 "%s Server %r online — %d tools synced",
                 _LOG_PREFIX, server["name"], len(tools),
             )
-            return {"status": _STATUS_ONLINE, "tool_count": len(tools), "reachable": True}
+            return {
+                "status": _STATUS_ONLINE,
+                "tool_count": len(tools),
+                "reachable": True,
+                "error": None,
+            }
         except Exception as exc:
             logger.warning(
                 "%s Server %r unreachable: %s", _LOG_PREFIX, server["name"], exc
             )
             self._update_status(server_id, _STATUS_OFFLINE)
-            return {"status": _STATUS_OFFLINE, "tool_count": 0, "reachable": False}
+            return {
+                "status": _STATUS_OFFLINE,
+                "tool_count": 0,
+                "reachable": False,
+                "error": str(exc),
+            }
 
     def get_server_tools(self, server_id: str) -> list[dict]:
         """Return the raw synced tool inventory for a single server."""

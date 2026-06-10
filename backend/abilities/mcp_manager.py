@@ -17,6 +17,24 @@ Why a separate MCP manager ability instead of a REST-only workflow:
 the LLM needs to be able to set up an MCP connection when a user asks
 conversationally ("connect to the taskie MCP server at …"), without the
 user having to open the Brain UI.  This ability handles that path.
+
+Result contract (TKT-882 / TKT-910):
+  ``run()`` returns ONLY ``ToolResult.ok``/``ToolResult.err`` — the dispatcher
+  renders the wire envelope.  Every failure carries a stable kebab-case code so
+  a weak model can self-correct without re-reading the schema:
+
+    * unknown action / missing add params → handled by the dispatcher's
+      ACTION_REQUIRED pre-gate (``unknown-action`` / ``missing-params``).
+    * an unreachable host on add/enable → ``code=mcp-unreachable`` — the row IS
+      registered (existing service behaviour); the error is the failed connect
+      test, surfaced loudly so the model never treats a dead server as connected.
+    * an auth rejection (401/403) on add/enable → ``code=auth-failed``.
+    * an unknown server_id/name on enable/disable → ``code=not-found``.
+
+  The error vocabulary (``mcp-unreachable``) is shared verbatim with the
+  ``_mcp_*`` passthrough proxy (``abilities/_mcp_ability.py``) so one failure has
+  one spelling across the whole MCP surface.  ``list``/``add`` success bodies are
+  structured JSON rows, never prose.  This tool has no rich-media card.
 """
 
 import logging
@@ -28,6 +46,26 @@ from abilities._result import ToolResult
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[MCP MANAGER]"
+
+# Substrings (case-insensitive) in a sync error that mark an auth rejection
+# rather than a plain unreachable host — a 401/403 means the endpoint answered
+# but refused the credentials, which is a different fix (the token) than a dead
+# host (wait for it to come online).
+_AUTH_MARKERS = ("401", "403", "unauthorized", "forbidden")
+
+
+def _classify_sync_error(error: str) -> str:
+    """Map a ``ping_and_sync`` error string onto a stable ToolResult code.
+
+    Returns ``"auth-failed"`` when the error looks like an HTTP 401/403/auth
+    rejection (the endpoint answered but refused the credentials) and
+    ``"mcp-unreachable"`` for every other connect/transport failure.  Pure and
+    side-effect-free so it is directly unit-testable.
+    """
+    lowered = (error or "").lower()
+    if any(marker in lowered for marker in _AUTH_MARKERS):
+        return "auth-failed"
+    return "mcp-unreachable"
 
 
 class McpManagerAbility(Ability):
@@ -65,23 +103,25 @@ class McpManagerAbility(Ability):
                 "enum": ["list", "add", "enable", "disable"],
                 "description": (
                     "list: show all configured MCP servers and their status. "
-                    "add: register a new remote MCP server. "
-                    "enable: re-enable a previously disabled server. "
-                    "disable: temporarily disable a server (keeps the row, "
-                    "hides its tools from discovery)."
+                    "add: register a new remote MCP server (requires name + host). "
+                    "enable: re-enable a previously disabled server (by name or "
+                    "server_id). "
+                    "disable: temporarily disable a server (keeps the row, hides "
+                    "its tools from discovery; by name or server_id)."
                 ),
             },
             "name": {
                 "type": "string",
                 "description": (
-                    "For add/enable/disable: human-readable server label "
-                    "(e.g. 'taskie', 'home-assistant')."
+                    "For add: required human-readable server label "
+                    "(e.g. 'taskie', 'home-assistant'). For enable/disable: the "
+                    "label to resolve the server by when no server_id is given."
                 ),
             },
             "host": {
                 "type": "string",
                 "description": (
-                    "For add: full URL including port, e.g. "
+                    "For add: required full URL including port, e.g. "
                     "'https://mcp.example.com/mcp'."
                 ),
             },
@@ -94,7 +134,10 @@ class McpManagerAbility(Ability):
             },
             "server_id": {
                 "type": "string",
-                "description": "For enable/disable: the server UUID from list.",
+                "description": (
+                    "For enable/disable: the server UUID from list (takes "
+                    "precedence over name)."
+                ),
             },
         },
         "required": ["action"],
@@ -108,9 +151,24 @@ class McpManagerAbility(Ability):
     # user-data writes — no per-action policy gate is appropriate.
     SYSTEM = True
 
+    # ACTION_REQUIRED drives the dispatcher's pre-gate (BEFORE run()): an unknown
+    # action → code=unknown-action with valid=<these keys>; a known action whose
+    # required params are missing/blank → ONE code=missing-params naming them all.
+    # ALL four actions are keyed — a non-empty map must cover every action or a
+    # known action falls through the unknown-action branch (TKT-902 lesson).  The
+    # pre-gate is truthiness-based, which is correct for add: name/host are blank-
+    # invalid strings.  run() still guards whitespace-only residue ("  " is truthy)
+    # under the same missing-params code.
+    ACTION_REQUIRED: ClassVar[dict] = {
+        "list": (),
+        "add": ("name", "host"),
+        "enable": (),
+        "disable": (),
+    }
+
     def run(self, params: dict) -> ToolResult:
         """Dispatch to the appropriate sub-action handler."""
-        action = params.get("action", "").strip()
+        action = (params.get("action") or "").strip()
         dispatch = {
             "list": self._do_list,
             "add": self._do_add,
@@ -119,110 +177,202 @@ class McpManagerAbility(Ability):
         }
         handler = dispatch.get(action)
         if handler is None:
-            return ToolResult.ok(
-                f"Unknown action: {action!r}. Must be one of: list, add, enable, disable."
+            # The dispatcher pre-gate normally catches an unknown action; this is
+            # the defence-in-depth path (e.g. run() invoked outside dispatch).
+            return ToolResult.err(
+                f"Unknown action {action!r}.",
+                code="unknown-action",
+                valid=("list", "add", "enable", "disable"),
             )
         return handler(params)
 
     # ── Sub-action handlers ───────────────────────────────────────────────────
 
     def _do_list(self, params: dict) -> ToolResult:
-        """List all configured servers with their current status."""
-        from services.mcp_client_service import McpClientService
-        servers = McpClientService().list_servers()
-        if not servers:
-            return ToolResult.ok("No MCP servers configured. Use action=add to register one.")
-        lines = []
-        for s in servers:
-            state = "enabled" if s["enabled"] else "disabled"
-            lines.append(
-                f"• {s['name']} ({s['host']}) — {s['status']}, {state} [id={s['id']}]"
-            )
-        return ToolResult.ok("Configured MCP servers:\n" + "\n".join(lines))
+        """List all configured servers as structured rows.
+
+        Empty inventory is SUCCESS (``[]``, ``count=0``) — never an error and
+        never prose; an empty list is a valid state, not a failure.
+        """
+        from services.mcp_client_service import McpClientService  # noqa: PLC0415
+        svc = McpClientService()
+        rows = [self._server_row(svc, s) for s in svc.list_servers()]
+        return ToolResult.ok(rows, count=len(rows))
 
     def _do_add(self, params: dict) -> ToolResult:
-        """Register a new server and immediately ping it."""
-        from services.mcp_client_service import McpClientService
+        """Register a new server and immediately ping it.
+
+        The pre-gate guarantees name/host are present and truthy; this guards the
+        whitespace-only residue ("  ") the truthiness pre-gate lets through.  The
+        row is registered BEFORE the connect test, so an unreachable host still
+        persists the connection (existing idempotent-upsert behaviour) — but a
+        failed ping is surfaced as an ERROR, never dressed up as a connection.
+        """
+        from services.mcp_client_service import McpClientService  # noqa: PLC0415
         name = (params.get("name") or "").strip()
         host = (params.get("host") or "").strip()
-        if not name:
-            return ToolResult.ok("Error: name is required to add a server.")
-        if not host:
-            return ToolResult.ok("Error: host is required to add a server.")
+        if not name or not host:
+            return ToolResult.err(
+                "Both 'name' and 'host' are required to add a server.",
+                code="missing-params",
+                valid=("name", "host"),
+            )
         headers = params.get("headers") or {}
-        enabled = True  # new servers are enabled by default
 
         svc = McpClientService()
-        server = svc.add_server(name=name, host=host, headers=headers, enabled=enabled)
+        server = svc.add_server(name=name, host=host, headers=headers, enabled=True)
         server_id = server["id"]
 
-        # Trigger immediate sync so tools are discoverable in this turn.
-        sync_result = svc.ping_and_sync(server_id)
-        status = sync_result["status"]
-        tool_count = sync_result["tool_count"]
-
-        if sync_result["reachable"]:
+        # Trigger an immediate sync so tools are discoverable in this turn.
+        sync = svc.ping_and_sync(server_id)
+        if sync["reachable"]:
             # Build vector embeddings for the newly-synced tools so semantic
             # queries can reach them immediately.  Add-only — never called on
             # heartbeat or enable so the 15-min sync path stays zero-cost.
             svc.embed_server_tools(server_id)
-            msg = (
-                f"Connected to MCP server {name!r} at {host}. "
-                f"Synced {tool_count} tool(s). Server is now online."
+            logger.info(
+                "%s Added server %r — online, %d tools",
+                _LOG_PREFIX, name, sync["tool_count"],
             )
-        else:
-            msg = (
-                f"Registered MCP server {name!r} at {host} (id={server_id}). "
-                f"Server is currently unreachable (status={status}). "
-                "Tools will be indexed when the server comes online."
+            return ToolResult.ok(
+                {
+                    "id": server_id,
+                    "name": name,
+                    "url": host,
+                    "status": "online",
+                    "tool_count": sync["tool_count"],
+                },
+                count=sync["tool_count"],
             )
-        logger.info("%s Added server %r — status=%s tools=%d", _LOG_PREFIX, name, status, tool_count)
-        return ToolResult.ok(msg)
+
+        code = _classify_sync_error(sync.get("error") or "")
+        logger.info(
+            "%s Added server %r — registered but %s (%s)",
+            _LOG_PREFIX, name, code, sync.get("error"),
+        )
+        return self._unreachable_error(code, name)
 
     def _do_enable(self, params: dict) -> ToolResult:
-        """Enable a previously disabled server and re-sync its tools."""
-        from services.mcp_client_service import McpClientService
-        server_id = self._resolve_server_id(params)
-        if server_id is None:
-            return ToolResult.ok("Error: provide server_id (from list) or name to enable.")
+        """Enable a previously disabled server and re-sync its tools.
+
+        Enabling a dead server is reported as an error (mcp-unreachable /
+        auth-failed): the row IS enabled, but the model must know the tools are
+        not yet available so it never assumes a live connection.
+        """
+        from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
-        try:
-            svc.update_server(server_id, {"enabled": True})
-        except LookupError:
-            return ToolResult.ok(f"No server found with id={server_id!r}.")
+        resolved = self._resolve(svc, params)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        server_id, name = resolved
+
+        svc.update_server(server_id, {"enabled": True})
         sync = svc.ping_and_sync(server_id)
-        return ToolResult.ok(
-            f"Server enabled and synced — "
-            f"status={sync['status']}, tools={sync['tool_count']}."
-        )
+        if sync["reachable"]:
+            logger.info("%s Enabled server %r — online, %d tools",
+                        _LOG_PREFIX, name, sync["tool_count"])
+            return ToolResult.ok({
+                "id": server_id,
+                "name": name,
+                "status": "online",
+                "tool_count": sync["tool_count"],
+            })
+
+        code = _classify_sync_error(sync.get("error") or "")
+        logger.info("%s Enabled server %r — %s (%s)",
+                    _LOG_PREFIX, name, code, sync.get("error"))
+        return self._unreachable_error(code, name, enabled=True)
 
     def _do_disable(self, params: dict) -> ToolResult:
         """Disable a server so its tools disappear from discovery."""
-        from services.mcp_client_service import McpClientService
-        server_id = self._resolve_server_id(params)
-        if server_id is None:
-            return ToolResult.ok("Error: provide server_id (from list) or name to disable.")
+        from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
-        try:
-            server = svc.update_server(server_id, {"enabled": False})
-        except LookupError:
-            return ToolResult.ok(f"No server found with id={server_id!r}.")
-        return ToolResult.ok(f"Server {server['name']!r} disabled. Its tools are no longer discoverable.")
+        resolved = self._resolve(svc, params)
+        if isinstance(resolved, ToolResult):
+            return resolved
+        server_id, name = resolved
+
+        svc.update_server(server_id, {"enabled": False})
+        logger.info("%s Disabled server %r", _LOG_PREFIX, name)
+        return ToolResult.ok({"id": server_id, "name": name, "enabled": False})
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _resolve_server_id(params: dict) -> str | None:
-        """Return a server_id from params, resolving by name if needed."""
+    def _server_row(svc, server: dict) -> dict:
+        """Project a server dict into the structured list/row shape."""
+        return {
+            "id": server["id"],
+            "name": server["name"],
+            "url": server["host"],
+            "status": server["status"],
+            "enabled": server["enabled"],
+            "tool_count": len(svc.get_server_tools(server["id"])),
+        }
+
+    @staticmethod
+    def _resolve(svc, params: dict) -> "tuple[str, str] | ToolResult":
+        """Resolve enable/disable target to ``(server_id, name)``.
+
+        Returns an error ToolResult instead when no target was given
+        (``missing-params``) or the target does not exist (``not-found``), so the
+        caller only proceeds on a real server.
+        """
         server_id = (params.get("server_id") or "").strip()
-        if server_id:
-            return server_id
         name = (params.get("name") or "").strip()
-        if not name:
-            return None
-        from services.mcp_client_service import McpClientService
-        servers = McpClientService().list_servers()
-        for s in servers:
+        if not server_id and not name:
+            return ToolResult.err(
+                "Provide a server to act on.",
+                code="missing-params",
+                hint="provide server_id (from list) or name",
+            )
+
+        if server_id:
+            server = svc.get_server(server_id)
+            if server is not None:
+                return server["id"], server["name"]
+            return ToolResult.err(
+                f"No MCP server with id {server_id!r}.",
+                code="not-found",
+                hint="use action=list to see configured servers",
+            )
+
+        for s in svc.list_servers():
             if s["name"].lower() == name.lower():
-                return s["id"]
-        return None
+                return s["id"], s["name"]
+        return ToolResult.err(
+            f"No MCP server named {name!r}.",
+            code="not-found",
+            hint="use action=list to see configured servers",
+        )
+
+    @staticmethod
+    def _unreachable_error(code: str, name: str, *, enabled: bool = False) -> ToolResult:
+        """Build the shared connect-failure error for add/enable.
+
+        The hint names the server and states the row WAS persisted (and, for
+        enable, that it IS enabled) so the model knows the connection exists and
+        the tools will sync once the server is reachable — the loud part is that
+        the connect test failed right now.
+        """
+        registered_note = (
+            f"the connection to {name!r} is "
+            f"{'registered and enabled' if enabled else 'registered'}; "
+            "tools will sync when it comes online"
+        )
+        if code == "auth-failed":
+            hint = (
+                f"check the headers/Authorization token for server {name!r} — "
+                f"{registered_note}"
+            )
+            message = (
+                f"MCP server {name!r} rejected the connection (authentication "
+                f"failed). {registered_note.capitalize()}."
+            )
+        else:
+            hint = f"the MCP server {name!r} did not respond; {registered_note}"
+            message = (
+                f"MCP server {name!r} is unreachable; the connect test failed. "
+                f"{registered_note.capitalize()}."
+            )
+        return ToolResult.err(message, code=code, hint=hint, server=name)
