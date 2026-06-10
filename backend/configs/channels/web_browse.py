@@ -43,11 +43,19 @@ _WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read", "vision")
 
 
 class _CloseBrowserSession(PostTurnHook):
-    """End-of-run cleanup: close the delegate's browser tab + screenshot ledger."""
+    """End-of-run cleanup: close the delegate's browser tab + screenshot ledger.
+
+    Stashes the ledger on itself first — ``close_session`` pops it, but the
+    outer ``WebBrowseAbility`` still needs the doc_ids after ``process()``
+    returns, to hand them to the caller alongside the delegate's answer."""
+
+    def __init__(self) -> None:
+        self.final_ledger: list[tuple[str, str]] = []
 
     def run(self, mp, result_text: str) -> None:  # noqa: ARG002 — hook signature
         uid = getattr(mp, "uid", None)
         if uid:
+            self.final_ledger = screenshot_ledger(uid)
             close_session(uid)
 
 
@@ -72,6 +80,13 @@ class WebBrowseConfig(ProcessorConfig):
             memory_seed=False,
             post_turn_hooks=(_CloseBrowserSession(),),
         )
+
+    def final_screenshots(self) -> list[tuple[str, str]]:
+        """The ``(doc_id, url)`` pairs captured by the finished run.
+
+        Populated by the post-turn hook just before it closes the session;
+        empty until the run ends (or when no screenshots were taken)."""
+        return self.post_turn_hooks[0].final_ledger
 
     def get_user_definition(self, mp) -> str:
         return ""

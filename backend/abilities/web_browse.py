@@ -66,7 +66,11 @@ class WebBrowseAbility(Ability):
         "properties": {
             "goal": {
                 "type": "string",
-                "description": "What to accomplish in the browser.",
+                "description": (
+                    "What to accomplish in the browser. Include everything the "
+                    "answer needs — e.g. 'take a screenshot of the page and "
+                    "describe what it shows', not just 'screenshot the page'."
+                ),
             },
         },
         "required": ["goal"],
@@ -84,10 +88,26 @@ class WebBrowseAbility(Ability):
     def run(self, params: dict) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        result = MessageProcessor.process(
-            delegate_goal(params),
-            WebBrowseConfig(self.mp.config.policy_channel),
-        )
-        return delegate_result(
+        cfg = WebBrowseConfig(self.mp.config.policy_channel)
+        result = MessageProcessor.process(delegate_goal(params), cfg)
+        tr = delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."
+        )
+        return self._with_screenshots(tr, cfg.final_screenshots())
+
+    @staticmethod
+    def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
+        """Append the run's screenshot doc_ids to a successful answer.
+
+        Mechanical, not prompt-dependent: even when the delegate forgets to
+        mention its screenshots, the caller still receives every doc_id and the
+        tool that views one — so a follow-up "what does it show?" can be
+        answered with vision instead of a re-browse."""
+        if tr.status != "success" or not shots:
+            return tr
+        lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
+        return ToolResult.ok(
+            f"{tr.body}\n\nScreenshots saved as documents "
+            f"(view one with vision(image=<doc_id>)):\n{lines}",
+            screenshots=len(shots),
         )

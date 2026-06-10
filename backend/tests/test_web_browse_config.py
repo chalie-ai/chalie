@@ -64,3 +64,39 @@ def test_post_turn_hook_clears_the_ledger(db):
     hook = mp.config.post_turn_hooks[0]
     hook.run(mp, "final answer")
     assert "ff00ff00" not in mp.config.get_user_prompt(mp)
+
+
+def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db):
+    """The mechanical handoff: the hook stashes the ledger before close_session
+    pops it, and the ability appends every doc_id (+ the vision affordance) to
+    the delegate's answer — even when the delegate never mentioned them."""
+    from abilities._delegate import delegate_result
+    from abilities.web_browse import WebBrowseAbility
+
+    mp = _mp()
+    record_screenshot(mp.uid, "ab12cd34", "https://example.com")
+    mp.config.post_turn_hooks[0].run(mp, "final answer")
+
+    # Stash survives the pop; the live ledger is gone.
+    assert mp.config.final_screenshots() == [("ab12cd34", "https://example.com")]
+    assert "ab12cd34" not in mp.config.get_user_prompt(mp)
+
+    # The exact result the outer model receives from run().
+    tr = WebBrowseAbility._with_screenshots(
+        delegate_result("The page shows Example Domain.", hint="retry"),
+        mp.config.final_screenshots(),
+    )
+    assert tr.status == "success"
+    assert "The page shows Example Domain." in tr.body
+    assert "doc_id=ab12cd34" in tr.body
+    assert "vision" in tr.body
+    assert tr.meta == {"screenshots": 1}
+
+    # A delegate that died without an answer keeps its canonical error shape —
+    # no ledger lines grafted onto an err body.
+    dead = WebBrowseAbility._with_screenshots(
+        delegate_result("", hint="retry"), mp.config.final_screenshots()
+    )
+    assert dead.status == "error"
+    assert dead.code == "delegate-no-answer"
+    assert "ab12cd34" not in dead.body
