@@ -105,13 +105,21 @@ def test_calendar_write_not_connected_returns_structured_error():
 
 
 def test_contacts_not_connected_returns_structured_error():
-    """ContactsAbility.execute returns {status: error} when mail is not connected."""
+    """ContactsAbility returns a structured ToolResult error when mail is not connected.
+
+    contacts is the TKT-883 exemplar migrated onto CapabilityAbility, so its
+    not-connected surface is now a first-class ``ToolResult.err`` (status=error,
+    code=not-connected, hint naming the integration) rather than a JSON body —
+    the canonical contract form. email/calendar keep the legacy JSON body until
+    their own migration tickets.
+    """
     from abilities.contacts import ContactsAbility
 
     result = ContactsAbility().run({"action": "list"})
-    payload = _extract_json(result)
-    assert payload["status"] == "error"
-    assert "not connected" in payload["error"].lower()
+    assert result.status == "error"
+    assert result.code == "not-connected"
+    assert "not connected" in result.body.lower()
+    assert "mail integration" in (result.hint or "").lower()
 
 
 # ---------------------------------------------------------------------------

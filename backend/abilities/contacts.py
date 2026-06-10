@@ -1,30 +1,32 @@
 """
 ContactsAbility — Search and look up contacts from the connected address book (CardDAV).
 
-Delegates to MailCapability's CardDAV handler. The capability is lazy-loaded
-inside execute() to avoid circular imports and to handle the case where the
-capability is not yet connected.
+Delegates to MailCapability's CardDAV handler via the shared
+``CapabilityAbility`` base, which owns capability loading, the not-connected /
+unknown-action errors, handler dispatch, and result wrapping. This ability
+supplies only its metadata and the capability/action wiring.
 """
 
-import json
 import logging
 from typing import ClassVar
 
-from abilities._ability import Ability
-from abilities._result import ToolResult
+from abilities._capability import CapabilityAbility
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CONTACTS ABILITY]"
 
-_RICH_MEDIA_INSTRUCTION = (
-    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "The span will render as a contact card; without it, the user sees only "
-    "plain text. Write a brief summary. Example: "
-    "\"<span id='{tag}'>Here's John's contact info.</span>\""
-)
 
+class ContactsAbility(CapabilityAbility):
+    CAPABILITY_KEY: ClassVar[str] = "mail"
+    DEFAULT_ACTION: ClassVar[str] = "list"
+    NOT_CONNECTED_HINT: ClassVar[str] = (
+        "Configure the mail integration in the Brain dashboard."
+    )
+    ACTION_HANDLERS: ClassVar[dict[str, str]] = {
+        "list": "list_contacts",
+        "get": "get_contact",
+    }
 
-class ContactsAbility(Ability):
     def get_name(self) -> str:
         return "contacts"
 
@@ -78,62 +80,3 @@ class ContactsAbility(Ability):
         },
         "required": ["action"],
     }
-
-    def run(self, params: dict) -> ToolResult:
-        action = params.get("action", "list").lower()
-        ordinal = params.get("_rich_media_ordinal")
-
-        from capabilities import load_capabilities
-        caps = load_capabilities()
-        cap = caps.get("mail")
-
-        if cap is None or not cap.is_connected():
-            result = {
-                "status": "error",
-                "error": "Contacts capability not connected. Configure the mail integration in the Brain dashboard.",
-            }
-            return ToolResult.ok(json.dumps(result), action=action)
-
-        tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
-
-        _ACTION_TO_HANDLER = {
-            "list": "list_contacts",
-            "get": "get_contact",
-        }
-
-        handler_name = _ACTION_TO_HANDLER.get(action)
-        if handler_name is None:
-            result = {"status": "error", "error": f"Unknown contacts action: {action}"}
-            return ToolResult.ok(json.dumps(result), action=action)
-
-        handler = tool_map.get(handler_name)
-        if handler is None:
-            result = {
-                "status": "error",
-                "error": (
-                    f"Handler '{handler_name}' not available. "
-                    "CardDAV may not be connected for this mail account."
-                ),
-            }
-            return ToolResult.ok(json.dumps(result), action=action)
-
-        from services.innate_skills._capability import dispatch_capability_handler
-        result = dispatch_capability_handler(handler, params, self.telemetry)
-
-        if ordinal is not None and "error" not in result:
-            return ToolResult.ok(_serialise_rich(result, action, ordinal), action=action)
-        return ToolResult.ok(json.dumps(result), action=action)
-
-
-def _serialise_rich(result: dict, action: str, ordinal: int) -> str:
-    tag = f"contacts_{ordinal}"
-    payload = {"action_performed": action}
-    if "contacts" in result:
-        payload["contacts"] = result["contacts"]
-        payload["count"] = result.get("count", len(result["contacts"]))
-    elif "contact" in result:
-        payload["contact"] = result["contact"]
-    else:
-        payload.update({k: v for k, v in result.items() if k != "status"})
-    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-    return f"{json.dumps(payload)}\n\n{instruction}"
