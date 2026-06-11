@@ -1,12 +1,11 @@
 """Tests for ToolCallService — unified API for tool_calls audit entries.
 
-Covers store, get_by_transcript, and get_by_timerange.
+Covers store and get_by_transcript.
 """
 
 import pytest
 
 from services.tool_call_service import ToolCallService
-from services.time_utils import utc_now
 
 pytestmark = pytest.mark.unit
 
@@ -77,22 +76,4 @@ class TestGetByTranscript:
         rows = svc.get_by_transcript(transcript_id)
         assert len(rows) == 1
         assert rows[0]['result'] == 'mine'
-
-
-class TestGetByTimerange:
-    def test_get_by_timerange_returns_records_within_window(self, svc, db, transcript_id):
-        center = utc_now()
-        center_iso = center.isoformat()
-
-        svc.store(transcript_id, 'memory', {}, 'in range')
-        db.execute(
-            "UPDATE tool_calls SET created_at = ? WHERE tool_name = 'memory'",
-            (center_iso,),
-        )
-
-        rows = svc.get_by_timerange(center_iso)
-        assert len(rows) == 1
-        assert rows[0]['tool_name'] == 'memory'
-
-
 

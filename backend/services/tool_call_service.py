@@ -68,35 +68,6 @@ class ToolCallService:
             logger.exception(f"{LOG_PREFIX} Failed to fetch tool calls for transcript={transcript_id}")
             return []
 
-    def get_by_timerange(self, center_dt, buffer_minutes=5):
-        """Get tool calls within ±buffer_minutes of center_dt.
-
-        Args:
-            center_dt: ISO datetime string at the centre of the window.
-            buffer_minutes: Half-width of the window in minutes.
-
-        Returns:
-            List of dicts with all tool_calls columns (including ephemeral).
-        """
-        from services.time_utils import parse_utc
-        from datetime import timedelta
-
-        center = parse_utc(center_dt)
-        lo = (center - timedelta(minutes=buffer_minutes)).isoformat()
-        hi = (center + timedelta(minutes=buffer_minutes)).isoformat()
-
-        db = get_shared_db_service()
-        sql = (
-            "SELECT * FROM tool_calls "
-            "WHERE created_at >= ? AND created_at <= ? "
-            "ORDER BY created_at"
-        )
-        try:
-            return db.fetch_all(sql, (lo, hi))
-        except Exception:
-            logger.exception(f"{LOG_PREFIX} Failed to fetch tool calls for timerange center={center_dt}")
-            return []
-
     def get_by_transcript_ids(self, transcript_ids: list, include_ephemeral=True) -> dict:
         """Get tool calls grouped by transcript_id for a list of IDs.
 

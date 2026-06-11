@@ -5,18 +5,21 @@ Lets the LLM re-read raw tool call records from earlier in the conversation when
 the compact synthesis in Previous Turns doesn't include a specific detail it needs.
 Returns all tool calls (including ephemeral records) within ±5 minutes of a given
 timestamp.
+
+All retrieval/formatting/error logic lives in ``ReviewWindowAbility``; this class
+declares only the windowed ``tool_calls`` SELECT and the structured row shape.
 """
 
-import logging
 from typing import ClassVar
 
-from abilities._ability import Ability
-from abilities._result import ToolResult
+from abilities._review_window import ReviewWindowAbility
 
-logger = logging.getLogger(__name__)
+# Tool-call params summaries can be large; clip so one row stays a single readable
+# line of structured JSON.
+_PARAMS_SUMMARY_CHARS = 120
 
 
-class ReviewToolCallsAbility(Ability):
+class ReviewToolCallsAbility(ReviewWindowAbility):
     SYSTEM = True
 
     def get_name(self) -> str:
@@ -58,34 +61,53 @@ class ReviewToolCallsAbility(Ability):
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
-        date_time = (params.get("date_time") or "").strip()
-        if not date_time:
-            return ToolResult.err("date-time-required", code="error")
+    # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
-        try:
-            from services.tool_call_service import ToolCallService
-            records = ToolCallService().get_by_timerange(date_time, buffer_minutes=5)
-        except Exception as e:
-            logger.exception(f"[REVIEW TOOL CALLS] Query failed for date_time={date_time!r}: {e}")
-            return ToolResult.err(f"query-failed:{str(e)[:150]}", code="error")
+    def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
+        """All tool_calls (incl. ephemeral) whose created_at is in the window,
+        oldest first — created_at then id so ties are deterministic."""
+        from services.database_service import get_shared_db_service
 
-        if not records:
-            return ToolResult.ok(
-                f"No tool calls found within ±5 minutes of {date_time}",
-                anchor=date_time,
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT tool_name, params, result, created_at
+                FROM tool_calls
+                WHERE created_at BETWEEN ? AND ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (lo, hi),
             )
+            columns = ("tool_name", "params", "result", "created_at")
+            rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
+            cursor.close()
+        return rows
 
-        lines = [f"{len(records)} record(s) within ±5 min of {date_time}:\n"]
-        for rec in records:
-            tool_name = rec.get("tool_name", "unknown")
-            params_str = rec.get("params", "{}")
-            result = str(rec.get("result") or "")
-            status_hint = "error" if result.lower().startswith("error") else "ok"
-            from services.time_formatter_service import TimeFormatterService
-            created = TimeFormatterService.local(rec.get("created_at"), fmt="%Y-%m-%d %H:%M:%S") \
-                or str(rec.get("created_at", ""))[:19]
-            lines.append(f"  [{created}] {tool_name} params={params_str} → {result} ({status_hint})")
+    def _row(self, rec: dict, ordinal: int) -> dict:
+        params_str = str(rec.get("params") or "{}")
+        if len(params_str) > _PARAMS_SUMMARY_CHARS:
+            params_str = params_str[:_PARAMS_SUMMARY_CHARS]
+        return {
+            "iter": ordinal,
+            "ts": self._ts(rec.get("created_at")),
+            "tool": rec.get("tool_name") or "unknown",
+            "params_summary": params_str,
+            "ok": _result_ok(rec.get("result")),
+        }
 
-        body = "\n".join(lines)
-        return ToolResult.ok(body, anchor=date_time, count=len(records))
+    def _empty_hint(self, date_time: str, buffer: int) -> str:
+        return (
+            f"No tool calls found within ±{buffer} minutes of {date_time}. "
+            "Try a different timestamp."
+        )
+
+
+def _result_ok(result: object) -> bool:
+    """Envelope-aware status read: a recorded result is now a dispatcher envelope
+    whose first line is ``[<tool>(status=…)]`` (TKT-882). The call failed iff that
+    first line carries ``status=error``; the stale ``startswith('error')``
+    heuristic predated the envelope and is gone."""
+    first_line = str(result or "").splitlines()[0] if result else ""
+    return "status=error" not in first_line
