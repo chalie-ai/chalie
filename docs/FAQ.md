@@ -31,7 +31,7 @@ There is no telemetry, no analytics, no cloud sync.
 
 ## What does "memory decays" mean?
 
-Chalie does not store everything forever. Episodic memories (specific conversation events) decay faster; semantic concepts (distilled knowledge) decay slower. Memories that are reinforced through repeated relevance survive longer. Memories that are never accessed fade and are eventually deleted.
+Chalie does not store everything forever. Episodic memories (specific conversation events) decay faster; semantic concepts (distilled knowledge) decay slower. Memories that are reinforced through repeated relevance survive longer. Memories that never become relevant again fade and are eventually deleted — merely reading a memory does not refresh it.
 
 This mirrors how human memory works — and it serves a practical purpose: it prevents Chalie from accumulating an ever-growing pile of outdated, contradictory noise. What persists is what matters.
 
