@@ -103,6 +103,12 @@ class VisionAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "read & see image contents"
 
+    # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
+    # or empty image/query as code=missing-params before run() is reached
+    # (precedent: save_graph.py, save_pattern.py, file_permissions.py). The
+    # pre-gate is truthiness-based, so whitespace-only residue still reaches run().
+    ACTION_REQUIRED: ClassVar[dict] = {"": ("image", "query")}
+
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -125,10 +131,20 @@ class VisionAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
+        # The dispatcher pre-gate is truthiness-based, so a non-empty but
+        # whitespace-only image/query slips past it and must be rejected here
+        # (precedent: save_graph.py, file_permissions.py).
         doc_id = (params.get("image") or "").strip()
-        query = params.get("query") or ""
-        if not doc_id:
-            return ToolResult.err("vision requires an 'image' (document id).", code="error")
+        query = (params.get("query") or "").strip()
+        if not doc_id or not query:
+            missing = ", ".join(
+                name for name, val in (("image", doc_id), ("query", query)) if not val
+            )
+            return ToolResult.err(
+                f"Missing required parameter(s): {missing}.",
+                code="missing-params",
+                valid=("image", "query"),
+            )
 
         from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.document_service import DocumentService  # noqa: PLC0415
@@ -136,9 +152,17 @@ class VisionAbility(Ability):
 
         doc = DocumentService(get_shared_db_service()).get_document(doc_id)
         if not doc:
-            return ToolResult.err(f"No document found for id={doc_id}.", code="error")
+            return ToolResult.err(
+                f"No document found for id={doc_id}.",
+                code="not-found",
+                hint="use document.search to look up the document id",
+            )
         if not doc.get("file_path"):
-            return ToolResult.err(f"Document {doc_id} has no file on disk.", code="error")
+            return ToolResult.err(
+                f"Document {doc_id} has no file on disk.",
+                code="no-file-on-disk",
+                hint="the document has no stored file; re-upload the image",
+            )
 
         abs_path = str(FileMapperService.get_documents_path(doc["file_path"]))
         mime_type = doc.get("mime_type") or "image/png"
@@ -148,9 +172,18 @@ class VisionAbility(Ability):
             )
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")
-            return ToolResult.err(f"Vision is currently experiencing issues; {exc}", code="error")
+            return ToolResult.err(
+                f"Vision is currently experiencing issues; {exc}",
+                code="vision-failed",
+                hint="check the vision provider in the brain interface or try again",
+            )
 
         body = out["description"]
         if out["note"]:
             body = f"{body}\n\n{out['note']}" if body else out["note"]
+        # The OCR fallback (no vision provider configured) is a downgraded read —
+        # mark it degraded so the model can tell it from a real vision read
+        # (loudness precedent: find_skills FTS fallback, programming_docs_search).
+        if not out["vision_used"]:
+            return ToolResult.ok(body, degraded=True)
         return ToolResult.ok(body)
