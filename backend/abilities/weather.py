@@ -47,6 +47,13 @@ _WMO = {
 _RAIN_WORDS = ("rain", "drizzle", "shower")
 _CLEAR_WORDS = ("clear", "sunny", "mainly clear")
 
+# Provider base URLs as module constants (not hardcoded inside the fetchers) so
+# the request endpoints are a single, overridable point of configuration. Offline
+# tests neutralise the module's OWN config by pointing these at a dead host —
+# forcing deterministic provider failure without mocking the requests collaborator.
+_OPEN_METEO_BASE = "https://api.open-meteo.com"
+_WTTR_BASE = "https://wttr.in"
+
 
 class WeatherAbility(Ability):
     def get_name(self) -> str:
@@ -99,6 +106,18 @@ class WeatherAbility(Ability):
         """
         location_param = params.get("location", "").strip()
         lat, lon, location_name = _extract_location(self.telemetry)
+
+        # Guardrail: with no device coordinates AND no location param there is no
+        # place to look up. The fallback chain would contact NO provider yet still
+        # report code=provider-unreachable — a lie. Reject loudly before any cache
+        # lookup or fetch so the model names a city instead of retrying a dead end.
+        if not location_param and (lat is None or lon is None):
+            return ToolResult.err(
+                "No location available: no device coordinates and no location parameter.",
+                code="missing-location",
+                hint="name a city, e.g. location=London",
+            )
+
         cache_key = _build_cache_key(location_param, lat, lon, location_name)
 
         cached = _get_fresh_cache(cache_key)
@@ -119,8 +138,11 @@ class WeatherAbility(Ability):
                 hint="try again shortly or name a specific city.",
                 details=payload.get("details", ""),
             )
-        # Stale-but-real cached data — still a usable card.
-        return ToolResult.ok(payload, rich=payload)
+        # Stale-but-real cached data — still a usable card, but mark it loudly so
+        # the model can distinguish degraded data from a fresh observation
+        # (loudness precedent: search fallback=ddg, programming_docs_search
+        # degraded=true). The fresh-cache hit above is NOT a degradation — unmarked.
+        return ToolResult.ok(payload, rich=payload, stale=True)
 
 
 def _extract_location(telemetry: dict | None) -> tuple:
@@ -230,7 +252,7 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
     """Fetch current weather from Open-Meteo. Returns (result, error_str)."""
     try:
         url = (
-            "https://api.open-meteo.com/v1/forecast"
+            f"{_OPEN_METEO_BASE}/v1/forecast"
             f"?latitude={lat}&longitude={lon}"
             "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
             "precipitation,weather_code,wind_speed_10m,wind_direction_10m,is_day"
@@ -308,7 +330,12 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
             "sunset": sunset,
             "hourly": hourly_strip,
         }, ""
-    except Exception as e:
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+        # The degradation set: transport failures (RequestException) and parse /
+        # shape surprises (ValueError covers JSON decode + float/int casts;
+        # KeyError/IndexError/TypeError cover unexpected provider-JSON shapes).
+        # These route to the fallback chain; a real bug (e.g. AttributeError) is
+        # NOT caught here and propagates so it is never misreported as a provider error.
         logger.warning(f"[WEATHER] Open-Meteo failed for ({lat},{lon}): {e}")
         return None, str(e)
 
@@ -316,7 +343,7 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
 def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
     """Fetch current weather from wttr.in j1. Returns (result, error_str)."""
     try:
-        url = f"https://wttr.in/{location}?format=j1"
+        url = f"{_WTTR_BASE}/{location}?format=j1"
         resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Chalie/1.0 cognitive-agent"})
         resp.raise_for_status()
         # wttr.in serves JSON without a charset header; requests guesses Latin-1
@@ -394,7 +421,10 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
             "sunset": None,
             "hourly": [],
         }, ""
-    except Exception as e:
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+        # Same degradation set as Open-Meteo: transport + parse/shape failures route
+        # to the fallback; programming bugs propagate rather than masquerade as a
+        # provider outage.
         logger.warning(f"[WEATHER] wttr.in failed for '{location}': {e}")
         return None, str(e)
 
@@ -464,6 +494,8 @@ def _estimate_daylight(obs_time: str) -> bool:
                     elif parts[2].upper() == "AM" and hour == 12:
                         hour = 0
                 return 6 <= hour <= 20
-    except Exception:
+    except (ValueError, IndexError):
+        # Unparseable time string → fall through to the UTC-hour heuristic; a real
+        # bug is not swallowed.
         pass
     return 6 <= utc_now().hour <= 20
