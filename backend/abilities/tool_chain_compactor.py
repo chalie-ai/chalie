@@ -69,5 +69,10 @@ class ToolChainCompactor(Ability):
         # The dispatch chain records this result as the tool_chain_compactor row;
         # a non-empty result becomes the new trail boundary (see
         # _from_last_compaction). An empty result records a no-op row that is
-        # neither a boundary nor rendered.
-        return ToolResult.ok(handover)
+        # neither a boundary nor rendered — keep it byte-identical (no meta) so
+        # the boundary classifier's emptiness check is unaffected.
+        if not handover:
+            return ToolResult.ok("")
+        # Honest scalar already in hand (no extra provider call): how large the
+        # raw trail was before it was folded into the handover.
+        return ToolResult.ok(handover, trail_chars=len(trail_text))

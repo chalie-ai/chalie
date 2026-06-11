@@ -75,6 +75,11 @@ class ChatHistoryCompactor(Ability):
             # watermark. Do NOT write a watermark (there is no backlog to fold).
             return ToolResult.ok("")
 
+        # _fit_compaction_input surfaced the count of transcript rows actually
+        # folded into the checkpoint (kept after the rare drop-oldest fallback) —
+        # an honest scalar already computed there, no extra provider call.
+        rows_compacted = int(getattr(parent, "_compaction_kept_rows", 0))
+
         summary = (MessageProcessor.process(combined, ChatHistoryCompactionConfig()) or "").strip()
         if not summary:
             logger.warning(
@@ -86,7 +91,7 @@ class ChatHistoryCompactor(Ability):
         # transcript row's own id becomes the watermark (advances unconditionally
         # on a non-empty backlog → no silent no-write, no infinite loop).
         transcript_service.write_input_row(channel, "compaction", summary)
-        return ToolResult.ok("Chat history compacted.")
+        return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod
     def _fit_compaction_input(parent, prior: str):
@@ -102,6 +107,12 @@ class ChatHistoryCompactor(Ability):
         summarise, or None when there is nothing left to compact.
 
         Uses parent.providers.measure(dto) for sizing — no raw provider object.
+
+        Surfaces the count of transcript rows actually folded — ``total - drop``,
+        the kept count after the rare drop-oldest fallback — onto
+        ``parent._compaction_kept_rows`` so ``run()`` can attach an honest
+        ``rows_compacted`` to the success result without recomputing or paying a
+        second provider call. It is 0 when there is nothing to compact.
         """
         from services.provider_api import ProviderApiRequest, ThinkingLevel  # noqa: PLC0415
 
@@ -114,9 +125,11 @@ class ChatHistoryCompactor(Ability):
         while True:
             prev = parent.get_previous_messages(drop_oldest=drop)
             if not prev.strip():
+                parent._compaction_kept_rows = 0
                 return None
             combined = prev if not prior else f"## Previous Summary\n\n{prior}\n\n## New Turns\n\n{prev}"
             if cap <= 0 or drop >= total - 1:
+                parent._compaction_kept_rows = max(total - drop, 0)
                 return combined   # cannot shrink further (no window, or one row left)
             candidate_dto = ProviderApiRequest(
                 system=system,
@@ -126,5 +139,6 @@ class ChatHistoryCompactor(Ability):
                 cache_prefix=False,
             )
             if parent.providers.measure(candidate_dto) <= cap:
+                parent._compaction_kept_rows = max(total - drop, 0)
                 return combined
             drop += 1
