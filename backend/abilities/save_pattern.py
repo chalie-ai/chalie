@@ -9,7 +9,6 @@ Budget + decay-tracking state lives on the calling processor (read via
 defaults so it remains usable from any processor that opts it in.
 """
 import json
-import logging
 import math
 import re
 from typing import ClassVar
@@ -20,10 +19,15 @@ from services.database_service import get_shared_db_service
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
 
-logger = logging.getLogger(__name__)
-
 _NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 _VALID_FREQUENCIES = frozenset({"daily", "weekly", "weekday", "weekend", "ad-hoc"})
+
+# One-line recovery hint carrying a minimal, fully-valid example so a weak model
+# can self-correct without re-reading the schema (parity with save_graph).
+_EXAMPLE_HINT = (
+    "use a snake_case name, e.g. name=morning_run frequency=weekday "
+    "summary=user runs on weekdays evidence_transcript_ids=[12, 18]"
+)
 
 
 class SavePattern(BudgetCappedAbility):
@@ -31,6 +35,16 @@ class SavePattern(BudgetCappedAbility):
 
     BUDGET_COUNTER_ATTR: ClassVar[str] = "_save_pattern_calls"
     BUDGET_CAP: ClassVar[int] = 20
+
+    # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
+    # or empty name/frequency/summary/evidence_transcript_ids as
+    # code=missing-params before run() is reached (precedent: save_graph.py,
+    # file_permissions.py). The pre-gate is truthiness-based, so an empty
+    # evidence list is rejected there too, while whitespace-only name/summary
+    # residue still reaches run().
+    ACTION_REQUIRED: ClassVar[dict] = {
+        "": ("name", "frequency", "summary", "evidence_transcript_ids")
+    }
 
     def get_name(self) -> str:
         return "save_pattern"
@@ -91,11 +105,60 @@ class SavePattern(BudgetCappedAbility):
         if capped is not None:
             return capped
 
-        validated = _validate_pattern_params(params)
-        if "error" in validated:
-            return ToolResult.ok(validated)
+        # The validation ORDER and rules are frozen (regex → frequency set →
+        # min-2 evidence); only the failure shape changes from a phantom-success
+        # dict to a loud ToolResult error, in parity with save_graph.
+        name = (params.get("name") or "").strip()
+        # The dispatcher pre-gate is truthiness-based, so a whitespace-only name
+        # slips past it as a non-empty string and must be rejected here
+        # (precedent: save_graph.py, file_permissions.py).
+        if not name:
+            return ToolResult.err(
+                "Missing required parameter(s): name.",
+                code="missing-params",
+                valid=("name", "frequency", "summary", "evidence_transcript_ids"),
+            )
+        if not _NAME_PATTERN.fullmatch(name):
+            return ToolResult.err(
+                f"Invalid pattern name {name!r}; must be snake_case.",
+                code="invalid-param",
+                hint=_EXAMPLE_HINT,
+            )
 
-        row_id, confidence_out = _upsert_pattern(validated)
+        frequency = params.get("frequency", "")
+        if frequency not in _VALID_FREQUENCIES:
+            return ToolResult.err(
+                f"Unknown frequency {frequency!r}; not a recognised cadence.",
+                code="invalid-param",
+                valid=tuple(sorted(_VALID_FREQUENCIES)),
+                hint=_EXAMPLE_HINT,
+            )
+
+        summary = (params.get("summary") or "").strip()
+        if not summary:
+            return ToolResult.err(
+                "Missing required parameter(s): summary.",
+                code="missing-params",
+                valid=("name", "frequency", "summary", "evidence_transcript_ids"),
+            )
+
+        evidence = params.get("evidence_transcript_ids")
+        n_evidence = len(evidence) if isinstance(evidence, list) else 0
+        if n_evidence < 2:
+            return ToolResult.err(
+                f"At least 2 evidence transcript ids are required; got {n_evidence}.",
+                code="invalid-param",
+                hint="provide at least 2 evidence_transcript_ids from the transcript window",
+            )
+
+        validated = {
+            "name": name,
+            "frequency": frequency,
+            "summary": summary,
+            "evidence": evidence,
+            "time_anchor": params.get("time_anchor", "") or "",
+        }
+        row_id, confidence_out, reinforced = _upsert_pattern(validated)
 
         self.bump_budget()
         proc = self.mp
@@ -104,40 +167,21 @@ class SavePattern(BudgetCappedAbility):
             if touched is not None:
                 touched.add(row_id)
 
-        return ToolResult.ok(
-            {"ok": True, "name": validated["name"], "confidence": confidence_out, "row_id": row_id}
-        )
+        body = {"saved": 1}
+        if reinforced:
+            body["reinforced"] = 1
+        body["name"] = validated["name"]
+        body["confidence"] = confidence_out
+        body["row_id"] = row_id
+        return ToolResult.ok(body)
 
 
-def _validate_pattern_params(params: dict) -> dict:
-    """Validate a save_pattern request. Returns the normalized fields, or an error dict."""
-    name = params.get("name", "")
-    if not name or not _NAME_PATTERN.fullmatch(name):
-        return {"error": "invalid_name", "name": name}
-    frequency = params.get("frequency", "")
-    if frequency not in _VALID_FREQUENCIES:
-        return {"error": "invalid_frequency", "frequency": frequency}
-    summary = (params.get("summary") or "").strip()
-    if not summary:
-        return {"error": "empty_summary"}
-    evidence = params.get("evidence_transcript_ids") or []
-    if not isinstance(evidence, list) or len(evidence) < 2:
-        return {
-            "error": "insufficient_evidence",
-            "required_min": 2,
-            "got": len(evidence) if isinstance(evidence, list) else 0,
-        }
-    return {
-        "name": name,
-        "frequency": frequency,
-        "summary": summary,
-        "evidence": evidence,
-        "time_anchor": params.get("time_anchor", "") or "",
-    }
+def _upsert_pattern(validated: dict) -> tuple[int, float, bool]:
+    """Insert or merge a behavioral_pattern row in data_graph.
 
-
-def _upsert_pattern(validated: dict) -> tuple[int, float]:
-    """Insert or merge a behavioral_pattern row in data_graph. Returns (row_id, confidence)."""
+    Returns ``(row_id, confidence, reinforced)`` — ``reinforced`` is True when an
+    existing pattern was merged, False when a fresh row was inserted.
+    """
     now_iso = utc_now().isoformat()
     db = get_shared_db_service()
 
@@ -150,8 +194,10 @@ def _upsert_pattern(validated: dict) -> tuple[int, float]:
         ).fetchone()
 
         if existing:
-            return _update_existing_pattern(conn, existing, validated, now_iso)
-        return _insert_new_pattern(conn, validated, now_iso)
+            row_id, conf = _update_existing_pattern(conn, existing, validated, now_iso)
+            return row_id, conf, True
+        row_id, conf = _insert_new_pattern(conn, validated, now_iso)
+        return row_id, conf, False
 
 
 def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> tuple[int, float]:
