@@ -162,6 +162,9 @@ def _init_database():
 
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
+    # Separate deterministic value backfill — convergence applies only static
+    # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
+    convergence.backfill_redesign_columns()
 
     # Policy: apply the declarative seed (idempotent) AFTER convergence has created
     # the policy table.  INSERT OR IGNORE preserves any copied/user rows.

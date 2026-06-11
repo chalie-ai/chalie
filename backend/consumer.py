@@ -194,6 +194,9 @@ if __name__ == "__main__":
     database_service = get_shared_db_service()
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
+    # Separate deterministic value backfill — convergence applies only static
+    # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
+    convergence.backfill_redesign_columns()
 
     # Initialize API key
     try:

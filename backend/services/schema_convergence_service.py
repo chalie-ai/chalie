@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 
 _RE_SQL_COMMENTS = r"--[^\n]*"
 
+# Episodic-memory redesign backfill constants.
+_SUPERSEDED_BY_EDGE = "superseded_by"  # data_graph_edges.edge_type linking old → superseding fact
+
 # Tables whose names we never touch even if they appear stale.  SQLite system
 # tables, FTS5/vec0 shadow tables, and our own bookkeeping live here.  Shadow
 # tables are usually filtered out by ``_introspect_tables`` via virtual-table
@@ -159,6 +162,64 @@ class SchemaConvergenceService:
             f"+{indexes_synced} indexes / -{indexes_dropped}, "
             f"+{virtual_tables_created} virtual tables / -{virtual_tables_dropped}, "
             f"+{triggers_synced} triggers / -{triggers_dropped}"
+        )
+
+    def backfill_redesign_columns(self) -> None:
+        """Populate the episodic-memory redesign columns added by ``converge()``.
+
+        Convergence applies only static column DEFAULTs, never COALESCE-style
+        value backfills, so this separate deterministic step fills the new
+        columns with derived values on every boot. It is pure O(n) SQL with no
+        LLM calls and is idempotent — every statement only touches rows whose
+        target column is still NULL, so a second boot no-ops. Must run AFTER
+        ``converge()`` so the columns exist.
+        """
+        with self.db_service.connection() as conn:
+            self._backfill_episode_columns(conn)
+            self._backfill_data_graph_columns(conn)
+            conn.commit()
+        logger.info("[convergence] Redesign-column backfill complete")
+
+    def _backfill_episode_columns(self, conn: sqlite3.Connection) -> None:
+        """Backfill episodes.last_relevant_at.
+
+        ``last_relevant_at`` seeds the absolute-decay clock from the most recent
+        write-relevant timestamp the row already carries. ``episodes.level``
+        needs no statement here: ``ADD COLUMN ... DEFAULT 0`` materialises the
+        leaf level into every existing row, so it is never NULL.
+        """
+        conn.execute(
+            "UPDATE episodes SET last_relevant_at = COALESCE(last_accessed_at, created_at) "
+            "WHERE last_relevant_at IS NULL"
+        )
+
+    def _backfill_data_graph_columns(self, conn: sqlite3.Connection) -> None:
+        """Backfill data_graph bi-temporal columns.
+
+        ``valid_from`` mirrors the row's first-seen timestamp. Superseded rows
+        (``active=0``) get ``valid_to`` from the superseding row's first-seen
+        timestamp, reached through the ``superseded_by`` edge, so the invariant
+        ``old.valid_to == new.valid_from`` holds for already-superseded facts.
+        Live rows keep ``valid_to`` NULL.
+        """
+        conn.execute(
+            "UPDATE data_graph SET valid_from = first_seen_at WHERE valid_from IS NULL"
+        )
+        conn.execute(
+            "UPDATE data_graph AS old SET valid_to = ("
+            "    SELECT new.first_seen_at FROM data_graph_edges AS e "
+            "    JOIN data_graph AS new ON new.id = e.to_id "
+            # Earliest superseder = the moment the fact stopped being true.
+            # The supersession writer demotes a row to active=0 and never
+            # re-matches it, so at most one superseded_by edge exists per row
+            # today — ASC makes the choice explicit if that ever changes.
+            f"    WHERE e.from_id = old.id AND e.edge_type = '{_SUPERSEDED_BY_EDGE}' "
+            "    ORDER BY new.first_seen_at ASC LIMIT 1"
+            ") "
+            "WHERE old.valid_to IS NULL AND old.active = 0 AND EXISTS ("
+            "    SELECT 1 FROM data_graph_edges AS e2 "
+            f"    WHERE e2.from_id = old.id AND e2.edge_type = '{_SUPERSEDED_BY_EDGE}'"
+            ")"
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -780,6 +841,12 @@ class SchemaConvergenceService:
 
         Python validates kind via VALID_KINDS in data_graph_service.py.
         To be removed when SchemaConvergence handles constraint changes fully.
+
+        The embedded ``data_graph_new`` DDL below must stay in lockstep with the
+        ``data_graph`` table in schema.sql. The copy matches columns BY NAME
+        (shared columns only), so a legacy table that predates newer columns
+        (e.g. valid_from/valid_to) survives the rebuild: missing columns are
+        NULL-filled and populated later by ``backfill_redesign_columns()``.
         """
         row = live_conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='data_graph'"
@@ -805,10 +872,20 @@ class SchemaConvergenceService:
                     source            TEXT,
                     deleted_at        TEXT,
                     active            INTEGER NOT NULL DEFAULT 1,
-                    search_queries    TEXT DEFAULT NULL
+                    search_queries    TEXT DEFAULT NULL,
+                    valid_from        TEXT,
+                    valid_to          TEXT
                 )
             """)
-            live_conn.execute("INSERT INTO data_graph_new SELECT * FROM data_graph")
+            # Copy by explicit shared column names — positional SELECT * corrupts
+            # the copy whenever the legacy table's column count drifts from the
+            # DDL above (e.g. a pre-redesign table without valid_from/valid_to).
+            live_cols = [r[1] for r in live_conn.execute("PRAGMA table_info(data_graph)")]
+            new_cols = {r[1] for r in live_conn.execute("PRAGMA table_info(data_graph_new)")}
+            shared = ", ".join(c for c in live_cols if c in new_cols)
+            live_conn.execute(
+                f"INSERT INTO data_graph_new ({shared}) SELECT {shared} FROM data_graph"
+            )
             live_conn.execute("DROP TABLE data_graph")
             live_conn.execute("ALTER TABLE data_graph_new RENAME TO data_graph")
             live_conn.execute("INSERT INTO data_graph_fts(data_graph_fts) VALUES('rebuild')")
@@ -819,6 +896,7 @@ class SchemaConvergenceService:
                 "CREATE INDEX IF NOT EXISTS idx_data_graph_retrieval ON data_graph(retrieval_weight DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_data_graph_active    ON data_graph(kind, active) WHERE deleted_at IS NULL",
                 "CREATE INDEX IF NOT EXISTS idx_data_graph_confirmed ON data_graph(last_confirmed_at)",
+                "CREATE INDEX IF NOT EXISTS idx_data_graph_live      ON data_graph(kind) WHERE active = 1 AND valid_to IS NULL AND deleted_at IS NULL",
             ]:
                 live_conn.execute(idx_sql)
             logger.info("[convergence] Stripped CHECK constraint from data_graph.kind")

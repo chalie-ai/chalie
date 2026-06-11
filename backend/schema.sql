@@ -33,7 +33,11 @@ CREATE TABLE IF NOT EXISTS episodes (
     retrieval_weight REAL DEFAULT 1.0,        -- current retrieval priority weight
     location_lat  REAL,
     location_lon  REAL,
-    location_name TEXT
+    location_name TEXT,
+    level INTEGER DEFAULT 0,                   -- hierarchy depth: 0=leaf, 1=super-episode, 2+=era digest
+    last_relevant_at TEXT,                     -- timestamp of the last write-relevant event; drives absolute decay (backfilled on boot)
+    tombstoned_at TEXT,                        -- set when an episode is tombstoned ahead of hard deletion (NULL = live)
+    facts_extracted_at TEXT                    -- fact-extraction backlog cursor; NULL = not yet processed by the worker
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
@@ -430,11 +434,10 @@ CREATE INDEX IF NOT EXISTS idx_llm_call_log_usage_class
     ON llm_call_log (usage_class, created_at);
 
 -- ────────────────────────────────────────────────────────────────
--- MEMORY RECALL LOG — telemetry for dynamic memory radius tuning
--- One row per memory recall call (seed or llm-driven). Written by
--- memory_skill after EpisodicService.retrieve_episodes returns.
--- Consumed offline to tune the 8 radius constants in
--- memory_skill.py.
+-- MEMORY RECALL LOG — telemetry for the per-lane retrieval pipeline
+-- One row per memory recall call (seed or llm-driven). Written after
+-- episode recall returns. The legacy radius-tuning columns were removed
+-- in favour of the per-lane relative-floor telemetry below.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS memory_recall_log (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -445,16 +448,9 @@ CREATE TABLE IF NOT EXISTS memory_recall_log (
     caller                   TEXT NOT NULL CHECK(caller IN ('seed', 'llm_recall')),
     query                    TEXT NOT NULL,
     query_embedding_hash     TEXT NOT NULL,
-    input_radius             REAL NOT NULL,
-    narrow_factor            REAL NOT NULL DEFAULT 1.0,
-    expand_factor            REAL NOT NULL DEFAULT 1.0,
-    adaptive_shrink_divisor  REAL NOT NULL DEFAULT 1.0,
-    effective_radius         REAL NOT NULL,
     episode_count            INTEGER NOT NULL DEFAULT 0,
-    vector_candidates        INTEGER NOT NULL DEFAULT 0,
-    fts_candidates           INTEGER NOT NULL DEFAULT 0,
-    survivors_after_radius   INTEGER NOT NULL DEFAULT 0,
-    final_rrf_count          INTEGER NOT NULL DEFAULT 0,
+    floor_cut_count          INTEGER NOT NULL DEFAULT 0,  -- candidates dropped by the per-lane relative score floor
+    final_rrf_count          INTEGER NOT NULL DEFAULT 0,  -- results surfaced after composite rerank
     top_distances            TEXT
 );
 
@@ -566,7 +562,9 @@ CREATE TABLE IF NOT EXISTS data_graph (
     source            TEXT,
     deleted_at        TEXT,
     active            INTEGER NOT NULL DEFAULT 1,
-    search_queries    TEXT DEFAULT NULL
+    search_queries    TEXT DEFAULT NULL,
+    valid_from        TEXT,                    -- bi-temporal start: when the fact became true (backfilled on boot)
+    valid_to          TEXT                     -- bi-temporal end: when the fact was superseded (NULL = live fact)
 );
 
 CREATE INDEX IF NOT EXISTS idx_data_graph_kind         ON data_graph(kind);
@@ -574,6 +572,7 @@ CREATE INDEX IF NOT EXISTS idx_data_graph_key          ON data_graph(key);
 CREATE INDEX IF NOT EXISTS idx_data_graph_retrieval    ON data_graph(retrieval_weight DESC);
 CREATE INDEX IF NOT EXISTS idx_data_graph_active       ON data_graph(kind, active) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_data_graph_confirmed    ON data_graph(last_confirmed_at);
+CREATE INDEX IF NOT EXISTS idx_data_graph_live         ON data_graph(kind) WHERE active = 1 AND valid_to IS NULL AND deleted_at IS NULL;
 
 -- FTS5 for data_graph search. tokenize='porter unicode61' enables stemming for
 -- better recall on natural-language queries. content_rowid='rowid' is
