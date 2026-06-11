@@ -31,9 +31,18 @@ from RestrictedPython import compile_restricted, safe_builtins, safe_globals
 from RestrictedPython.PrintCollector import PrintCollector
 
 from abilities._ability import Ability
-from abilities._result import ToolResult
+from abilities._result import ToolResult, truncate
 
 logger = logging.getLogger(__name__)
+
+# Clip each stream to the same budget bash uses, reporting clipping uniformly via
+# ``meta truncated=true`` instead of silently dropping output.
+_MAX_OUTPUT_CHARS = 100 * 1024
+
+# Sandbox identity. Module-level so the picklable worker (``spawn``) and its
+# helpers reference them without carrying a class instance across the boundary.
+_FILENAME = "<scratchpad>"
+_PRINT_VAR = "_print"
 
 
 def _guarded_getattr(obj, name):
@@ -44,6 +53,11 @@ def _guarded_getattr(obj, name):
 
 
 class CodeEvalAbility(Ability):
+    # Action-less tool: the dispatcher's ACTION_REQUIRED pre-gate rejects a
+    # missing/empty ``code`` as ``code=missing-params`` BEFORE the policy gate or
+    # run(). The ``""`` key covers action-less tools (precedent: vision).
+    ACTION_REQUIRED: ClassVar[dict] = {"": ("code",)}
+
     def get_name(self) -> str:
         return "code_eval"
 
@@ -79,11 +93,9 @@ class CodeEvalAbility(Ability):
         "required": ["code"],
     }
 
-    # Sandbox identity + result-contract messages. The error strings are the
-    # actionable signals the LLM receives in place of a silent empty success,
-    # which previously caused it to retry the same call until the iteration wall.
-    _FILENAME = "<scratchpad>"
-    _PRINT_VAR = "_print"
+    # Result-contract messages. The error strings are the actionable signals the
+    # LLM receives in place of a silent empty success, which previously caused it
+    # to retry the same call until the iteration wall.
     _ERR_NO_CODE = (
         "You need to provide python code to be executed. "
         "Pass the Python you want to run in the `code` parameter."
@@ -127,28 +139,44 @@ class CodeEvalAbility(Ability):
     }
 
     def run(self, params: dict) -> ToolResult:
-        """Run the supplied Python under a hard 10-minute cap, returning its
-        printed output or an actionable error — never a silent empty success
-        that the LLM would misread as 'done' and retry."""
+        """Run the supplied Python under a hard 10-minute cap and return a
+        CPython-faithful run result: anything that RAN comes back as ``ok`` with a
+        branchable ``exit_code`` (exactly how ``python script.py`` behaves), so the
+        model can branch on it rather than parse prose. Errors are reserved for
+        harness failures (missing code, no output, timeout, sandbox crash) — never
+        a silent empty success the LLM would misread as 'done' and retry.
+
+        Dispatched calls never reach the residue guard below: argument
+        sanitisation strips a whitespace-only ``code`` to ``""`` before the
+        ACTION_REQUIRED pre-gate, which rejects it. The guard covers direct
+        callers the same way the pre-gate would have.
+        """
         code = (params.get("code") or "").strip()
         if not code:
-            return self._error(self._ERR_NO_CODE)
+            return ToolResult.err(
+                self._ERR_NO_CODE,
+                code="missing-params",
+                hint="pass the Python you want to run in the `code` parameter.",
+            )
         return self._execute_with_cap(code)
 
     def _execute_with_cap(self, code: str) -> ToolResult:
-        """Run the sandboxed code in a separate process with a hard wall-clock
-        cap. A subprocess is the only way to force-kill arbitrary CPU-bound code
-        (e.g. ``while True``) — a thread cannot be interrupted. On timeout the
-        process is terminated and an actionable error is returned so the LLM can
-        correct course instead of the ACT loop hanging forever."""
+        """Run the sandboxed code in a separate process with a hard wall-clock cap,
+        then assemble the ToolResult in THIS (parent) process. A subprocess is the
+        only way to force-kill arbitrary CPU-bound code (e.g. ``while True``) — a
+        thread cannot be interrupted. On timeout the process is terminated and an
+        actionable error is returned so the LLM can correct course instead of the
+        ACT loop hanging forever. The worker only computes the raw streams; the
+        parent owns ``duration_ms``, truncation, and the no-output guardrail."""
         ctx = multiprocessing.get_context("spawn")
         result_queue = ctx.Queue()
         proc = ctx.Process(
             target=_sandbox_worker, args=(code, result_queue), daemon=True,
         )
+        started = time.monotonic()
         proc.start()
 
-        deadline = time.monotonic() + self._EXEC_TIMEOUT_S
+        deadline = started + self._EXEC_TIMEOUT_S
         result = None
         while True:
             remaining = deadline - time.monotonic()
@@ -165,59 +193,97 @@ class CodeEvalAbility(Ability):
 
         if result is not None:
             proc.join()
-            return result
+            duration_ms = int((time.monotonic() - started) * 1000)
+            return self._assemble(result, duration_ms)
         if proc.is_alive():
             proc.terminate()
             proc.join()
-            return self._error(self._ERR_TIMEOUT)
+            return ToolResult.err(
+                self._ERR_TIMEOUT,
+                code="timeout",
+                hint="reduce the amount of work or run on a smaller input.",
+            )
         proc.join()
-        return self._error(self._ERR_CRASHED)
+        return ToolResult.err(
+            self._ERR_CRASHED,
+            code="sandbox-crashed",
+            hint="retry, or simplify the code so it runs within the sandbox.",
+        )
 
-    def _compile_and_run(self, code: str) -> ToolResult:
-        """Compile and execute *code* in fresh restricted globals. Runs inside
-        the sandbox subprocess; returns printed output, a full stack trace on
-        failure, or a no-output error — never a silent empty success."""
-        try:
-            byte_code = compile_restricted(code, filename=self._FILENAME, mode="exec")
-        except SyntaxError:
-            return self._error(traceback.format_exc())
-        return self._run(byte_code)
+    def _assemble(self, raw: dict, duration_ms: int) -> ToolResult:
+        """Turn the worker's raw ``{stdout, stderr, exit_code}`` dict into the
+        sealed ToolResult: clip each stream via the shared truncate primitive
+        (``meta truncated=true`` when either was clipped), enforce the no-output
+        guardrail (ran cleanly but printed nothing → an actionable error, not a
+        silent empty success), and otherwise return a branchable run result."""
+        stdout, clipped_out = truncate(raw["stdout"], _MAX_OUTPUT_CHARS)
+        stderr, clipped_err = truncate(raw["stderr"], _MAX_OUTPUT_CHARS)
+        exit_code = raw["exit_code"]
 
-    def _run(self, byte_code) -> ToolResult:
-        """Execute compiled bytecode in fresh restricted globals, returning its
-        printed output, a full stack trace on failure, or a no-output error."""
-        # Fresh globals copy per call so state never leaks between executions.
-        exec_globals = dict(self._RESTRICTED_GLOBALS)
-        exec_locals: dict = {}
+        # Ran to completion with a clean exit but emitted nothing: the model would
+        # read empty success as 'done' and retry the identical call until the
+        # iteration wall. Surface it as an explicit, actionable error instead.
+        if exit_code == 0 and not stdout:
+            return ToolResult.err(
+                self._ERR_NO_OUTPUT,
+                code="no-output",
+                hint="use print() on whatever you want returned.",
+            )
 
-        try:
-            exec(byte_code, exec_globals, exec_locals)
-        except Exception:
-            # Sandbox boundary: surface the full trace (and any partial output)
-            # to the LLM. The dispatcher logs the error key, so it is not swallowed.
-            return self._error(traceback.format_exc(), self._captured(exec_locals))
+        meta = {"truncated": True} if (clipped_out or clipped_err) else {}
+        return ToolResult.ok(
+            {
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+            },
+            **meta,
+        )
 
-        captured = self._captured(exec_locals)
-        if not captured:
-            return self._error(self._ERR_NO_OUTPUT)
-        return ToolResult.ok(captured)
 
-    def _captured(self, exec_locals: dict) -> str:
-        """Return text accumulated by the sandbox PrintCollector, or '' if the
-        code never called print()."""
-        collector = exec_locals.get(self._PRINT_VAR)
-        return collector() if collector is not None else ""
+def _compile_and_run(code: str) -> dict:
+    """Compile and execute *code* in fresh restricted globals, returning a raw
+    ``{stdout, stderr, exit_code}`` dict (no ToolResult — the parent assembles
+    that). A syntax error or a runtime exception is a CPython-faithful
+    ``exit_code`` 1 with the full traceback on ``stderr`` and any partial prints
+    preserved on ``stdout``; a clean run is ``exit_code`` 0."""
+    try:
+        byte_code = compile_restricted(code, filename=_FILENAME, mode="exec")
+    except SyntaxError:
+        return {"stdout": "", "stderr": traceback.format_exc(), "exit_code": 1}
 
-    def _error(self, message: str, captured: str = "") -> ToolResult:
-        """Build an error result, preserving any partial print output alongside
-        the failure so the LLM keeps context."""
-        body = f"{captured}\n{message}" if captured else message
-        return ToolResult.err(body, code="error")
+    # Fresh globals copy per call so state never leaks between executions.
+    exec_globals = dict(CodeEvalAbility._RESTRICTED_GLOBALS)
+    exec_locals: dict = {}
+
+    try:
+        exec(byte_code, exec_globals, exec_locals)
+    except Exception:
+        # Sandbox boundary: surface the full trace AND any partial print output
+        # (stdout) separately so the model branches on exit_code rather than
+        # parsing a single blob. The dispatcher logs the outcome; nothing swallowed.
+        return {
+            "stdout": _captured(exec_locals),
+            "stderr": traceback.format_exc(),
+            "exit_code": 1,
+        }
+
+    return {"stdout": _captured(exec_locals), "stderr": "", "exit_code": 0}
+
+
+def _captured(exec_locals: dict) -> str:
+    """Return text accumulated by the sandbox PrintCollector, or '' if the code
+    never called print()."""
+    collector = exec_locals.get(_PRINT_VAR)
+    return collector() if collector is not None else ""
 
 
 def _sandbox_worker(code: str, result_queue) -> None:
     """Entry point for the sandbox subprocess: compile and execute *code*, then
-    put the result dict on *result_queue*. Module-level so it is picklable under
-    the ``spawn`` start method. Runs in its own process so a runaway loop can be
-    force-terminated by the parent — a thread cannot be killed."""
-    result_queue.put(CodeEvalAbility()._compile_and_run(code))
+    put the raw ``{stdout, stderr, exit_code}`` dict on *result_queue*. Module-level
+    so it is picklable under the ``spawn`` start method, and a plain dict (not a
+    ToolResult) so the parent owns duration/truncation/guardrail assembly. Runs in
+    its own process so a runaway loop can be force-terminated by the parent — a
+    thread cannot be killed."""
+    result_queue.put(_compile_and_run(code))
