@@ -8,7 +8,7 @@ const PanelPolicies = (() => {
   let _loaded = false;
   let _blockedOpen = false;
 
-  const CONTEXT_MAP = { chat: 'chat', subagent: 'subagent', background: 'subconscious', external: 'external_agent' };
+  const CONTEXT_MAP = { chat: 'chat', background: 'subconscious', external: 'external_agent' };
 
   function mount(root, sub) { _root = root; _sub = sub || 'chat'; _render(); }
   function unmount() { _root = null; }

@@ -33,7 +33,6 @@ const BrainSidebar = (() => {
     { id: 'policies', label: 'Policies', icon: 'Policy', group: 'system',
       sub: [
         { id: 'chat', label: 'Chat' },
-        { id: 'subagent', label: 'Subagent' },
         { id: 'background', label: 'Background' },
         { id: 'external', label: 'External agent' },
       ]},

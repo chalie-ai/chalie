@@ -18,7 +18,7 @@ const BrainApp = (() => {
     lists: null,
     documents: ['active', 'processing', 'uploads', 'deleted'],
     capabilities: null,
-    policies: ['chat', 'subagent', 'background', 'external'],
+    policies: ['chat', 'background', 'external'],
     skills: null,
     mcp: null,
   };
@@ -33,7 +33,7 @@ const BrainApp = (() => {
     compaction: 'Compacted Summary',
     all: 'All', pending: 'Pending', fired: 'Fired', failed: 'Failed', cancelled: 'Cancelled',
     active: 'Active', processing: 'Processing', uploads: 'Uploads', deleted: 'Deleted',
-    chat: 'Chat', subagent: 'Subagent', background: 'Background', external: 'External agent',
+    chat: 'Chat', background: 'Background', external: 'External agent',
   };
 
   const PANELS = {
