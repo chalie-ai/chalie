@@ -5,8 +5,10 @@ import re
 import sqlite3
 import threading
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Optional
 
+from services._fts_delete import fts5_external_delete
 from services.database_service import get_shared_db_service
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
@@ -37,6 +39,15 @@ _ORDER_FIRST_SEEN_DESC = 'first_seen_at DESC'
 _SQL_DELETE_DG_ROW = "DELETE FROM data_graph WHERE rowid=?"
 _SQL_DELETE_DG_KEY_VEC = "DELETE FROM data_graph_key_vec WHERE rowid=?"
 _SQL_DELETE_DG_VALUE_VEC = "DELETE FROM data_graph_value_vec WHERE rowid=?"
+
+# Superseded facts (valid_to set / active=0) decay fast and are then hard-deleted
+# once they have been invalid this long, so an obsolete fact never resurfaces and
+# does not accumulate indefinitely.
+_SUPERSEDED_DECAY_WEIGHT = 0.01
+_SUPERSEDED_DELETE_AFTER_DAYS = 90
+# Below this absolute weight delta a recomputed live-fact weight is left as-is,
+# so a settled graph produces zero UPDATEs on a repeat tick.
+_RW_DECAY_EPSILON = 0.0001
 
 
 @dataclass
@@ -274,23 +285,18 @@ class DataGraphService:
 
     def _delete_fts(self, conn, rowid: int, key: str, value: str, kind: str,
                     search_queries: str = ''):
-        """Remove a row from the FTS index.
+        """Remove a row from the data_graph_fts external-content index.
 
-        Tries the FTS5 'delete' command first (required for external content
-        tables in production). Falls back to regular DELETE for standalone FTS
-        tables (used in tests).
+        Delegates to the shared FTS5 external-delete idiom in services._fts_delete
+        (the single home for this production-safe pattern; episodes_fts uses it
+        too). Column order must match the data_graph_fts schema.
         """
-        try:
-            conn.execute(
-                "INSERT INTO data_graph_fts(data_graph_fts, rowid, key, value, kind, search_queries) "
-                "VALUES('delete', ?, ?, ?, ?, ?)",
-                (rowid, key, value or '', kind, search_queries or '')
-            )
-        except Exception:
-            try:
-                conn.execute("DELETE FROM data_graph_fts WHERE rowid = ?", (rowid,))
-            except Exception as e:
-                logger.warning("[DATA GRAPH] FTS delete failed for rowid=%s: %s", rowid, e)
+        fts5_external_delete(conn, "data_graph_fts", rowid, {
+            "key": key,
+            "value": value,
+            "kind": kind,
+            "search_queries": search_queries,
+        })
 
     def _remove_fts(self, conn, rowid: int):
         """Remove a row from the FTS index. Must be called BEFORE deleting from data_graph."""
@@ -1039,20 +1045,6 @@ class DataGraphService:
             or sigs['fts_bonus'] > 0
         }
 
-    @staticmethod
-    def _touch_accessed(cursor, top_k: list) -> None:
-        """Increment retrieval_weight and set last_accessed_at for returned rows."""
-        now_iso = utc_now().isoformat()
-        for d in top_k:
-            rid = d.get('id')
-            if rid:
-                new_rw = min(1.0, d.get('retrieval_weight', 1.0) + 0.1)
-                cursor.execute(
-                    "UPDATE data_graph SET last_accessed_at=?, retrieval_weight=? WHERE rowid=?",
-                    (now_iso, new_rw, rid),
-                )
-                d['retrieval_weight'] = new_rw
-
     def recall(self, query: str, *, kinds=None, limit: int = 10, expand_graph: bool = True) -> list:
         try:
             self._backfill_missing_embeddings()
@@ -1082,8 +1074,9 @@ class DataGraphService:
                 if expand_graph and top_k:
                     top_k = self._recall_expand_graph(cursor, top_k, filter_clause, filter_params, limit)
 
-                if top_k:
-                    self._touch_accessed(cursor, top_k)
+                # Recall is a pure read: relevance advances only on
+                # write-relevant events (store / confirm / supersede), never on
+                # access, so the read no longer bumps retrieval_weight.
 
                 cursor.close()
 
@@ -1365,74 +1358,25 @@ class DataGraphService:
     # ── Decay cycle ───────────────────────────────────────────────────
 
     def decay_cycle(self) -> int:
+        """Run one decay/deletion pass over the data graph.
+
+        Three branches: power-law decay of live facts (per-kind ``d_base``),
+        fast-decay-then-delete of superseded facts (``valid_to`` set / inactive),
+        and the short fixed-TTL purge of misc scratch rows.
+        """
         total_updated = 0
         try:
-            from datetime import timedelta
             now = utc_now()
             one_hour_ago = (now - timedelta(hours=1)).isoformat()
-            two_days_ago = (now - timedelta(days=2)).isoformat()
 
             with self.db.connection() as conn:
                 cursor = conn.cursor()
-
-                for kind, policy in _KIND_POLICY.items():
-                    if policy['ttl_days'] is None:
-                        continue
-
-                    d_base = policy['d_base']
-                    salience_floor = policy['salience_floor']
-
-                    cursor.execute("""
-                        SELECT rowid, retrieval_weight, last_confirmed_at
-                        FROM data_graph
-                        WHERE kind=?
-                          AND deleted_at IS NULL
-                          AND active=1
-                          AND last_confirmed_at < ?
-                    """, (kind, one_hour_ago))
-                    rows = cursor.fetchall()
-
-                    for rowid, rw, confirmed_at_str in rows:
-                        if confirmed_at_str:
-                            try:
-                                confirmed_ts = parse_utc(confirmed_at_str).timestamp()
-                            except Exception:
-                                continue
-                        else:
-                            continue
-
-                        age_days = (now.timestamp() - confirmed_ts) / 86400.0
-                        if age_days <= 0:
-                            continue
-
-                        # Power-law absolute level: rw = max(1, age)^(-d_base)
-                        # Not a multiplier — directly sets the retrieval_weight
-                        # based on how old the fact is since last confirmation.
-                        new_rw = max(salience_floor, max(1.0, age_days) ** (-d_base))
-
-                        if abs(new_rw - rw) > 0.0001:
-                            cursor.execute(
-                                "UPDATE data_graph SET retrieval_weight=? WHERE rowid=?",
-                                (new_rw, rowid)
-                            )
-                            total_updated += 1
-
-                # Hard-delete expired misc rows past TTL (2 days)
-                cursor.execute("""
-                    SELECT rowid FROM data_graph
-                    WHERE kind='misc'
-                      AND deleted_at IS NULL
-                      AND last_confirmed_at < ?
-                """, (two_days_ago,))
-                expired_misc = [r[0] for r in cursor.fetchall()]
+                total_updated += self._decay_live_facts(cursor, now, one_hour_ago)
+                total_updated += self._decay_superseded_facts(cursor, now)
                 cursor.close()
 
-                for rowid in expired_misc:
-                    self._remove_fts(conn, rowid)
-                    conn.execute(_SQL_DELETE_DG_ROW, (rowid,))
-                    conn.execute(_SQL_DELETE_DG_KEY_VEC, (rowid,))
-                    conn.execute(_SQL_DELETE_DG_VALUE_VEC, (rowid,))
-                    total_updated += 1
+                total_updated += self._delete_superseded_facts(conn, now)
+                total_updated += self._delete_expired_misc(conn, now)
 
             if total_updated > 0:
                 logger.info("[DATA GRAPH] Decay cycle updated %d rows", total_updated)
@@ -1441,3 +1385,118 @@ class DataGraphService:
         except Exception as e:
             logger.error("[DATA GRAPH] decay_cycle failed: %s", e)
             return 0
+
+    def _decay_live_facts(self, cursor, now, one_hour_ago: str) -> int:
+        """Absolute power-law decay of live (active) facts with a TTL policy."""
+        updated = 0
+        for kind, policy in _KIND_POLICY.items():
+            if policy['ttl_days'] is None:
+                continue
+            d_base = policy['d_base']
+            salience_floor = policy['salience_floor']
+
+            cursor.execute("""
+                SELECT rowid, retrieval_weight, last_confirmed_at
+                FROM data_graph
+                WHERE kind=?
+                  AND deleted_at IS NULL
+                  AND active=1
+                  AND last_confirmed_at < ?
+            """, (kind, one_hour_ago))
+            rows = cursor.fetchall()
+
+            for rowid, rw, confirmed_at_str in rows:
+                if not confirmed_at_str:
+                    continue
+                try:
+                    confirmed_ts = parse_utc(confirmed_at_str).timestamp()
+                except Exception:
+                    continue
+
+                age_days = (now.timestamp() - confirmed_ts) / 86400.0
+                if age_days <= 0:
+                    continue
+
+                # Power-law absolute level: rw = max(1, age)^(-d_base) — not a
+                # multiplier; it directly sets the weight from how old the fact
+                # is since last confirmation, so the cycle is idempotent.
+                new_rw = max(salience_floor, max(1.0, age_days) ** (-d_base))
+                if abs(new_rw - rw) > _RW_DECAY_EPSILON:
+                    cursor.execute(
+                        "UPDATE data_graph SET retrieval_weight=? WHERE rowid=?",
+                        (new_rw, rowid),
+                    )
+                    updated += 1
+        return updated
+
+    def _decay_superseded_facts(self, cursor, now) -> int:
+        """Drop superseded facts to a near-zero weight so they stop resurfacing.
+
+        A superseded fact has been invalidated by a newer one (``valid_to`` set
+        or ``active=0``); it is kept briefly for bi-temporal history but must not
+        compete with live facts in recall.
+        """
+        cursor.execute(
+            """
+            SELECT rowid FROM data_graph
+            WHERE deleted_at IS NULL
+              AND (active=0 OR valid_to IS NOT NULL)
+              AND retrieval_weight > ?
+            """,
+            (_SUPERSEDED_DECAY_WEIGHT,),
+        )
+        rows = [r[0] for r in cursor.fetchall()]
+        for rowid in rows:
+            cursor.execute(
+                "UPDATE data_graph SET retrieval_weight=? WHERE rowid=?",
+                (_SUPERSEDED_DECAY_WEIGHT, rowid),
+            )
+        return len(rows)
+
+    def _delete_superseded_facts(self, conn, now) -> int:
+        """Hard-delete superseded facts that have been invalid past the window.
+
+        The invalidation clock is ``valid_to`` when present, falling back to
+        ``last_confirmed_at`` for rows superseded before the bi-temporal columns
+        existed.  Vec/FTS shadow rows are cleared alongside the base row.
+        """
+        cutoff = (now - timedelta(days=_SUPERSEDED_DELETE_AFTER_DAYS)).isoformat()
+        rows = conn.execute(
+            """
+            SELECT rowid FROM data_graph
+            WHERE deleted_at IS NULL
+              AND (active=0 OR valid_to IS NOT NULL)
+              AND julianday(COALESCE(valid_to, last_confirmed_at)) < julianday(?)
+            """,
+            (cutoff,),
+        ).fetchall()
+        for (rowid,) in rows:
+            self._purge_dg_row(conn, rowid)
+        return len(rows)
+
+    def _delete_expired_misc(self, conn, now) -> int:
+        """Hard-delete misc scratch rows older than their short fixed TTL.
+
+        The TTL is sourced from the single ``_KIND_POLICY`` table so the misc
+        expiry window has one home and cannot drift from the decay policy.
+        """
+        cutoff = (now - timedelta(days=_KIND_POLICY[KIND_MISC]['ttl_days'])).isoformat()
+        rows = conn.execute(
+            """
+            SELECT rowid FROM data_graph
+            WHERE kind=?
+              AND deleted_at IS NULL
+              AND julianday(last_confirmed_at) < julianday(?)
+            """,
+            (KIND_MISC, cutoff),
+        ).fetchall()
+        for (rowid,) in rows:
+            self._purge_dg_row(conn, rowid)
+        return len(rows)
+
+    def _purge_dg_row(self, conn, rowid: int) -> None:
+        """Hard-delete one data_graph row and its FTS / vector shadow rows."""
+        self._remove_fts(conn, rowid)
+        conn.execute(_SQL_DELETE_DG_ROW, (rowid,))
+        conn.execute(_SQL_DELETE_DG_KEY_VEC, (rowid,))
+        conn.execute(_SQL_DELETE_DG_VALUE_VEC, (rowid,))

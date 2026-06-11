@@ -24,6 +24,7 @@ from typing import Optional
 
 from services.database_service import DatabaseService
 from services.embedding_utils import pack_embedding
+from services.time_utils import utc_now
 
 
 class EpisodicService:
@@ -79,15 +80,19 @@ class EpisodicService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
+                # Creation is a write-relevant event: seed the relevance clock
+                # (last_relevant_at) so absolute decay measures Δt from now.
+                now_iso = utc_now().isoformat()
                 cursor.execute("""
                     INSERT INTO episodes (
                         id, gist, salience, channel,
                         transcript_ids, transcript_id_start, transcript_id_end,
                         emotional_valence, emotional_arousal,
                         consolidated_from, storage_strength, retrieval_weight,
-                        location_lat, location_lon, location_name
+                        location_lat, location_lon, location_name,
+                        last_relevant_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     episode_id,
                     episode_data['gist'],
@@ -104,6 +109,7 @@ class EpisodicService:
                     episode_data.get('location_lat'),
                     episode_data.get('location_lon'),
                     episode_data.get('location_name'),
+                    now_iso,
                 ))
 
                 # Insert embedding into vec table if available
@@ -191,6 +197,9 @@ class EpisodicService:
     def set_consolidated_into(self, leaf_id: str, super_id: str) -> None:
         """Set the consolidated_into back-pointer on a leaf episode.
 
+        Consolidation is a write-relevant event for the leaf — its content has
+        just been rolled into a parent — so the relevance clock advances too.
+
         Args:
             leaf_id: UUID of the leaf episode to update.
             super_id: UUID of the super-episode (episodes.id TEXT).
@@ -198,16 +207,18 @@ class EpisodicService:
         Raises:
             Exception: Propagates any database error to the caller.
         """
+        now_iso = utc_now().isoformat()
         with self.db_service.connection() as conn:
             conn.execute(
-                "UPDATE episodes SET consolidated_into = ? WHERE id = ?",
-                (super_id, leaf_id),
+                "UPDATE episodes SET consolidated_into = ?, last_relevant_at = ? WHERE id = ?",
+                (super_id, now_iso, leaf_id),
             )
 
     def get_episode_by_id(self, episode_id: str) -> Optional[dict]:
         """Retrieve a single non-deleted episode by its UUID.
 
-        Also triggers an access count + storage strength boost.
+        Pure read — fetching an episode never mutates it.  Relevance advances
+        only on write-relevant events (creation, consolidation), not on access.
         """
         try:
             with self.db_service.connection() as conn:
@@ -230,9 +241,6 @@ class EpisodicService:
 
                 if not row:
                     return None
-
-                # Update access tracking
-                self._update_activation_score(episode_id)
 
                 episode = {
                     'id': str(row[0]),
@@ -262,27 +270,6 @@ class EpisodicService:
         except Exception as e:
             logging.error(f"Failed to get episode by ID: {e}")
             return None
-
-    def _update_activation_score(self, episode_id: str):
-        """Boost storage_strength and reset retrieval_weight on access."""
-        try:
-            with self.db_service.connection() as conn:
-                cursor = conn.cursor()
-
-                cursor.execute("""
-                    UPDATE episodes
-                    SET access_count = access_count + 1,
-                        last_accessed_at = datetime('now'),
-                        storage_strength = MIN(storage_strength + 0.1, 10.0),
-                        retrieval_weight = MIN(retrieval_weight + 0.3, 1.0)
-                    WHERE id = ?
-                """, (episode_id,))
-
-                cursor.close()
-
-        except Exception as e:
-            logging.error(f"Failed to update activation score: {e}")
-
 
 # ── Module-level novelty helpers ─────────────────────────────────────────────
 

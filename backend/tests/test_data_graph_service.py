@@ -50,7 +50,9 @@ DATA_GRAPH_DDL = [
         source            TEXT,
         deleted_at        TEXT,
         active            INTEGER NOT NULL DEFAULT 1,
-        search_queries    TEXT DEFAULT NULL
+        search_queries    TEXT DEFAULT NULL,
+        valid_from        TEXT,
+        valid_to          TEXT
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_data_graph_kind ON data_graph(kind)",
@@ -222,7 +224,8 @@ def _raw_fts(db_service, query: str) -> list:
 def _insert_row(db_service, *, kind='user_specific', key='test_key',
                 value='test_value', active=1, deleted_at=None,
                 retrieval_weight=1.0, storage_strength=0.5,
-                evidence_count=1, last_confirmed_at=None, source=None) -> int:
+                evidence_count=1, last_confirmed_at=None, source=None,
+                valid_to=None) -> int:
     """Insert a raw data_graph row and sync FTS; returns the rowid."""
     now = utc_now().isoformat()
     lc = last_confirmed_at or now
@@ -231,10 +234,10 @@ def _insert_row(db_service, *, kind='user_specific', key='test_key',
             INSERT INTO data_graph
                 (kind, key, value, active, deleted_at, retrieval_weight,
                  storage_strength, evidence_count, first_seen_at,
-                 last_confirmed_at, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 last_confirmed_at, source, valid_to)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (kind, key, value, active, deleted_at, retrieval_weight,
-              storage_strength, evidence_count, now, lc, source))
+              storage_strength, evidence_count, now, lc, source, valid_to))
         rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
             "INSERT INTO data_graph_fts(rowid, key, value, kind, search_queries) VALUES (?, ?, ?, ?, ?)",
@@ -457,19 +460,29 @@ class TestRecall:
         kinds_returned = {r['kind'] for r in results}
         assert kinds_returned == {KIND_SYSTEM}
 
-    def test_recall_touch_accessed_sets_last_accessed_at(self, svc, db_service):
-        """After recall, last_accessed_at is populated on returned rows."""
-        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
-                            key='birthplace', value='Malta')
+    def test_recall_is_a_pure_read(self, svc, db_service):
+        """recall() mutates ZERO rows — relevance advances only on writes.
 
-        raw_before = _raw_row(db_service, rowid)
-        assert raw_before['last_accessed_at'] is None
+        The redesign deleted ``_touch_accessed`` (the rw+0.1 / last_accessed_at
+        ratchet on returned rows). A recall must now leave retrieval_weight and
+        last_accessed_at exactly as they were — the entire data_graph table is
+        byte-identical before and after the read.
+        """
+        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
+                            key='birthplace', value='Malta',
+                            retrieval_weight=0.55)
+
+        before = _raw_row(db_service, rowid)
+        assert before['last_accessed_at'] is None
+        assert before['retrieval_weight'] == pytest.approx(0.55)
 
         results = svc.recall("Malta birthplace")
         assert len(results) == 1
 
-        raw_after = _raw_row(db_service, rowid)
-        assert raw_after['last_accessed_at'] is not None
+        after = _raw_row(db_service, rowid)
+        assert after['last_accessed_at'] is None, "read must not set last_accessed_at"
+        assert after['retrieval_weight'] == pytest.approx(0.55), \
+            "read must not bump retrieval_weight"
 
     def test_recall_graph_expansion_includes_neighbours(self, svc, db_service):
         """Rows connected by edges are included in the result set via 1-hop expansion."""
@@ -591,6 +604,55 @@ class TestDecayCycle:
 
         raw = _raw_row(db_service, rowid)
         assert raw is None, "Expired misc row should have been hard-deleted by decay_cycle"
+
+    def test_decay_fast_decays_superseded_fact_recently_invalidated(self, svc, db_service):
+        """A just-superseded fact is dropped to near-zero weight but kept for history.
+
+        valid_to set (recently) → inside the 90-day delete window, so the row
+        survives but its retrieval_weight is slammed to ~0.01 so it stops
+        competing with the live fact in recall.
+        """
+        recent_invalidation = utc_now().isoformat()
+        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='residence',
+                            value='Valletta', active=0, retrieval_weight=0.9,
+                            valid_to=recent_invalidation)
+
+        svc.decay_cycle()
+
+        raw = _raw_row(db_service, rowid)
+        assert raw is not None, "recently-superseded fact is kept for bi-temporal history"
+        assert raw['retrieval_weight'] == pytest.approx(0.01, abs=1e-6)
+
+    def test_decay_hard_deletes_superseded_fact_past_window(self, svc, db_service):
+        """A fact superseded > 90 days ago is hard-deleted (clock = valid_to)."""
+        old_invalidation = '2020-01-01T00:00:00+00:00'
+        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='residence',
+                            value='Valletta', active=0, retrieval_weight=0.01,
+                            valid_to=old_invalidation)
+
+        svc.decay_cycle()
+
+        raw = _raw_row(db_service, rowid)
+        assert raw is None, "superseded fact past the 90-day window must be hard-deleted"
+
+    def test_decay_leaves_live_fact_untouched_by_superseded_branch(self, svc, db_service):
+        """A live fact (active=1, valid_to NULL) is never touched by the supersession path.
+
+        Confirmed recently so the live-fact power-law branch is a no-op too, the
+        row must come out of decay_cycle byte-identical — no fast-decay, no delete.
+        """
+        rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='residence',
+                            value='Swieqi', active=1, retrieval_weight=1.0,
+                            last_confirmed_at=utc_now().isoformat())
+
+        before = _raw_row(db_service, rowid)
+        svc.decay_cycle()
+        after = _raw_row(db_service, rowid)
+
+        assert after is not None
+        assert after['retrieval_weight'] == pytest.approx(before['retrieval_weight'])
+        assert after['valid_to'] is None
+        assert after['active'] == 1
 
 
 

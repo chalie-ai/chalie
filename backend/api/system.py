@@ -231,12 +231,13 @@ def observability_records():
 
         if source == 'episodes':
             rows = db.fetch_all(
-                "SELECT created_at AS created, last_accessed_at AS last_accessed, "
+                "SELECT created_at AS created, "
+                "COALESCE(last_relevant_at, created_at) AS last_accessed, "
                 "gist AS value, location_name "
                 "FROM episodes "
                 "WHERE deleted_at IS NULL "
                 "AND (? = '' OR gist LIKE ?) "
-                "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, created_at DESC "
+                "ORDER BY COALESCE(last_relevant_at, created_at) DESC, created_at DESC "
                 "LIMIT ? OFFSET ?",
                 (q, f"%{q}%", _RECORDS_LIMIT, offset),
             )

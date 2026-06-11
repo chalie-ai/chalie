@@ -78,18 +78,28 @@ class TestSystemAPI:
     # GET /system/observability/records
 
     def test_records_episodes_source_returns_gist_and_location(self, client, db):
-        """Episodes source returns value=gist + location, ordered by last_accessed DESC (NULLs last)."""
+        """Episodes source returns value=gist + location, ordered by COALESCE(last_relevant_at, created_at) DESC.
+
+        TKT-921: last_accessed_at is write-dead; the endpoint now projects and orders by
+        COALESCE(last_relevant_at, created_at). A row with NULL last_relevant_at sorts by
+        its created_at — there is no NULLs-last behaviour anymore.
+
+        Seed:
+          ep-a: created=Jan-01, last_relevant_at=Jan-03  → sort key Jan-03 (third)
+          ep-b: created=Jan-02, last_relevant_at=Jan-04  → sort key Jan-04 (first)
+          ep-c: created=Jan-05, last_relevant_at=NULL     → sort key Jan-05 via COALESCE (second)
+        """
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at, location_name) "
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_relevant_at, location_name) "
             "VALUES ('ep-a', 'first gist', 5, 'user', '2026-01-01T00:00:00', '2026-01-03T00:00:00', 'Valletta, Malta')"
         )
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at, location_name) "
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_relevant_at, location_name) "
             "VALUES ('ep-b', 'second gist', 5, 'user', '2026-01-02T00:00:00', '2026-01-04T00:00:00', NULL)"
         )
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at) "
-            "VALUES ('ep-c', 'null access', 5, 'user', '2026-01-03T00:00:00', NULL)"
+            "INSERT INTO episodes (id, gist, salience, channel, created_at) "
+            "VALUES ('ep-c', 'null relevant', 5, 'user', '2026-01-05T00:00:00')"
         )
         db.commit()
 
@@ -100,13 +110,18 @@ class TestSystemAPI:
         assert data['source'] == 'episodes'
         assert data['returned'] == 3
         values = [r['value'] for r in data['rows']]
-        assert values[-1] == 'null access'
-        assert values.index('second gist') < values.index('first gist')
+        # ep-c (sort key Jan-05 via COALESCE) first; ep-b (sort key Jan-04) second; ep-a (Jan-03) third
+        assert values[0] == 'null relevant'
+        assert values[1] == 'second gist'
+        assert values[2] == 'first gist'
+        # NULL last_relevant_at row sorts by its created_at (Jan-05) — ends up FIRST, not last
+        assert values.index('null relevant') == 0
+        # location passthrough
         row = next(r for r in data['rows'] if r['value'] == 'first gist')
         assert row['location'] == 'Valletta, Malta'
         assert 'key' not in row
-        row_null = next(r for r in data['rows'] if r['value'] == 'second gist')
-        assert row_null['location'] == ''
+        row_null_loc = next(r for r in data['rows'] if r['value'] == 'second gist')
+        assert row_null_loc['location'] == ''
 
     def test_records_search_filters_by_like(self, client, db):
         """Search param filters gist (episodes) and key/value (data_graph)."""

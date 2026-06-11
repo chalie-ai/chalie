@@ -11,7 +11,11 @@ Retrieval pipeline:
   5. Composite rerank — vector-sim + FTS-rank + arousal_salience + recency
      + salience + retrieval_weight.  Entity/goal/outcome/emotional_congruence
      components are intentionally absent (dropped in episodic simplification).
-  6. Reconsolidation bump on the returned episodes (salience + activation).
+
+Retrieval is a pure read: it never mutates the episodes it returns.  Relevance
+(``last_relevant_at``, which anchors both the recency rerank term and the
+decay engine) advances only on write-relevant events such as episode creation
+and consolidation — never on access.
 
 Single production entry point: ``retrieve()``.  No class — this is a module-
 level function API so there is no per-call EpisodicService construction cost.
@@ -32,21 +36,16 @@ logger = logging.getLogger(__name__)
 
 _MAX_TRAVERSAL_DEPTH = APEX_TRAVERSAL_MAX_DEPTH
 
-# Reconsolidation debounce window — skip activation bump if the episode
-# was touched more recently than this.
-_RECONSOLIDATION_DEBOUNCE_SECONDS = 10 * 60  # 10 minutes
-_RECONSOLIDATION_SALIENCE_BOOST = 2  # 0.2 × 10 — matches legacy default
-
 
 # ── Apex traversal ────────────────────────────────────────────────────────────
 
 
 def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
-    """Fetch a single episode row WITHOUT bumping its activation score.
+    """Fetch a single episode row as a pure read (no side-effects).
 
-    Used for apex traversal so intermediate hops don't accidentally boost
-    leaves that the caller will never see.  The final apex gets its bump
-    via the normal reconsolidation pass in ``retrieve``.
+    Used for apex traversal and final-apex surfacing alike: retrieval is a pure
+    read, so no row is mutated here.  ``last_relevant_at`` is carried so the
+    composite rerank can use the relevance anchor as its recency clock.
 
     Args:
         episode_id: The episode UUID.
@@ -70,7 +69,8 @@ def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
                        emotional_valence, emotional_arousal,
                        consolidated_from, consolidated_into,
                        storage_strength, retrieval_weight,
-                       location_lat, location_lon, location_name
+                       location_lat, location_lon, location_name,
+                       last_relevant_at
                 FROM episodes
                 WHERE id = ? AND deleted_at IS NULL
                 """,
@@ -101,6 +101,7 @@ def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
             'location_lat': row[17],
             'location_lon': row[18],
             'location_name': row[19],
+            'last_relevant_at': row[20],
         }
     except Exception as exc:
         logger.warning(f"[RETRIEVAL] _get_episode_raw failed for id={episode_id}: {exc}")
@@ -113,9 +114,7 @@ def walk_up_to_apex(episode_id: str, db=None) -> Optional[dict]:
     Returns the apex episode dict.  If the episode has no consolidated_into,
     it is its own apex and is returned directly.
 
-    Does NOT bump activation on intermediate hops — see ``_get_episode_raw``.
-    The caller (``retrieve``) is responsible for activating the final apex
-    it actually surfaces to the user.
+    Pure read — no episode is mutated on any hop (see ``_get_episode_raw``).
 
     Cycle-safe: tracks visited IDs in a ``seen`` set and logs an error if a
     cycle is detected, returning the current episode rather than looping.
@@ -434,7 +433,9 @@ def _rerank_composite(episodes: list[dict]) -> list[dict]:
 
         created_str = ep.get('created_at')
         try:
-            ref_time = parse_utc(ep.get('last_accessed_at') or created_str)
+            # Recency clock is the relevance anchor (last write-relevant event),
+            # falling back to creation time — reads never advance it.
+            ref_time = parse_utc(ep.get('last_relevant_at') or created_str)
             hours = (now - ref_time).total_seconds() / 3600.0
             recency = math.exp(-0.002 * hours)  # half-life ≈ 14 days
         except Exception:
@@ -457,103 +458,6 @@ def _rerank_composite(episodes: list[dict]) -> list[dict]:
 
     episodes.sort(key=lambda e: e.get('composite_score', 0.0), reverse=True)
     return episodes
-
-
-# ── Reconsolidation ───────────────────────────────────────────────────────────
-
-
-def _is_debounced(ep: dict, store, now) -> bool:
-    """Return True if this episode should be skipped (debounce window active).
-
-    When a MemoryStore connection is available the debounce key is set on the
-    store; otherwise ``last_accessed_at`` is used as a fallback clock.
-    Side-effect: sets the debounce key in *store* when the episode is NOT
-    debounced and *store* is available.
-    """
-    eid = ep.get('id')
-    if store is not None:
-        key = f"reconsolidation:{eid}"
-        if store.get(key):
-            return True
-        store.set(key, "1", ex=_RECONSOLIDATION_DEBOUNCE_SECONDS)
-        return False
-
-    last = ep.get('last_accessed_at')
-    if not last:
-        return False
-    try:
-        last_dt = parse_utc(last)
-        return (now - last_dt).total_seconds() < _RECONSOLIDATION_DEBOUNCE_SECONDS
-    except Exception:
-        return False
-
-
-def _write_reconsolidation(ep: dict, db, now) -> None:
-    """Persist activation bump for one episode and update the dict in place."""
-    new_salience = min(10, int(ep.get('salience') or 5) + _RECONSOLIDATION_SALIENCE_BOOST)
-    new_access_count = int(ep.get('access_count') or 0) + 1
-    iso_now = now.isoformat()
-
-    with db.connection() as conn:
-        conn.execute(
-            """
-            UPDATE episodes
-            SET salience = ?,
-                last_accessed_at = ?,
-                access_count = ?,
-                storage_strength = MIN(COALESCE(storage_strength, 1.0) + 0.1, 10.0),
-                retrieval_weight = MIN(COALESCE(retrieval_weight, 1.0) + 0.3, 1.0),
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (new_salience, iso_now, new_access_count, ep['id']),
-        )
-
-    ep['salience'] = new_salience
-    ep['last_accessed_at'] = iso_now
-    ep['access_count'] = new_access_count
-
-
-def _apply_reconsolidation(episodes: list[dict]) -> None:
-    """Bump activation_score + salience for retrieved episodes.
-
-    Debounced to avoid runaway boosts on rapid re-queries: an episode is
-    only reconsolidated once per ``_RECONSOLIDATION_DEBOUNCE_SECONDS`` window.
-    Falls back to ``last_accessed_at`` as the debounce clock.
-
-    Mutates the episode dicts in place — ``salience`` and
-    ``last_accessed_at`` reflect the new values on return.
-    """
-    if not episodes:
-        return
-
-    from services.database_service import get_shared_db_service
-
-    store = None
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-    except Exception:
-        store = None
-
-    now = utc_now()
-
-    try:
-        db = get_shared_db_service()
-    except Exception as exc:
-        logger.warning(f"[RETRIEVAL] _apply_reconsolidation db resolve failed: {exc}")
-        return
-
-    for ep in episodes:
-        eid = ep.get('id')
-        if not eid:
-            continue
-        try:
-            if _is_debounced(ep, store, now):
-                continue
-            _write_reconsolidation(ep, db, now)
-        except Exception as exc:
-            logger.warning(f"[RETRIEVAL] reconsolidation failed for id={eid}: {exc}")
 
 
 def _promote_to_apex(union: list) -> list:
@@ -670,7 +574,9 @@ def retrieve(
             return []
 
         ranked = _rerank_composite(_promote_to_apex(union))[:k]
-        _apply_reconsolidation(ranked)
+        # Retrieval is a pure read: relevance advances only on write-relevant
+        # events (episode creation / consolidation), never on access, so no
+        # weight or salience bump is applied to the returned episodes here.
 
         telemetry['final_rrf_count'] = len(ranked)
         telemetry['top_distances'] = _collect_top_distances(ranked)
