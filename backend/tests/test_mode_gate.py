@@ -332,3 +332,30 @@ class TestTick:
         active = svc.tick("anything", turn_id="t-fail")
 
         assert active == set()
+
+    def test_log_line_fires_per_tick_bootstrap_true_then_false(self, db, store, caplog):
+        """Every tick emits exactly one [MODE-GATE] log line; the cold-start
+        tick warms state from the last user transcript row (bootstrap=true)
+        and the bootstrap never fires again (bootstrap=false thereafter)."""
+        import logging
+
+        from services import transcript_service
+
+        # Prior user turn the cold-start bootstrap replays (real prod writer).
+        transcript_service.write_input_row('user', 'user', 'plan my trip to Tokyo')
+
+        svc = _fresh_service()
+        svc._fire_thresholds = dict.fromkeys(svc.MODES, 0.05)
+        svc._classify = lambda _text: dict.fromkeys(svc.MODES, 0.85)
+
+        with caplog.at_level(logging.INFO, logger='services.mode_gate_service'):
+            svc.tick("first turn", turn_id="t-1")
+            lines = [r.getMessage() for r in caplog.records if '[MODE-GATE]' in r.getMessage()]
+            assert len(lines) == 1, lines
+            assert 'bootstrap=true' in lines[0], lines[0]
+
+            caplog.clear()
+            svc.tick("second turn", turn_id="t-2")
+            lines = [r.getMessage() for r in caplog.records if '[MODE-GATE]' in r.getMessage()]
+            assert len(lines) == 1, lines
+            assert 'bootstrap=false' in lines[0], lines[0]
