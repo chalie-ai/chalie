@@ -202,6 +202,8 @@ Every delegate carries `memory` (an INTERNAL tool) so it can recall while it wor
 
 `web_browse` replaces the former `web_surfer` subagent type.
 
+**Vision result contract.** `vision` declares an action-less `ACTION_REQUIRED` map (`{"": ("image", "query")}`), so an absent/empty param is pre-gated as `code=missing-params`; whitespace residue is rejected in `run()` under the same code. The remaining errors carry stable kebab codes + hints: unknown doc id → `not-found` (id visible, `document.search` hint), a document row with no stored file → `no-file-on-disk`, a configured-but-failing vision provider → `vision-failed` with the raw error visible (the single styled-error surface — provider failures are surfaced, never swallowed). Success is a prose body; when no vision provider is configured the OCR-fallback success carries `degraded=true` meta so a downgraded read is distinguishable from a real vision read. `describe_image()`'s `{"description", "vision_used", "note"}` dict contract is shared with `text_extractor._extract_image` and unchanged.
+
 ---
 
 ## ONNX Runtime Selection
