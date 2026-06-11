@@ -319,15 +319,26 @@ class TestFindSuperCandidates:
         assert sorted(clusters[0]) == sorted([a, b, c])
 
 
-# ── Retrieval apex-promotion — real FTS lane, no mocks ─────────────────────────
+# ── Collapsed-tree retrieval — consolidated leaf still surfaces as itself ──────
 
 
-class TestRetrievalApexPromotion:
-    """Feature tests for episodic_retrieval_service.retrieve() apex-promotion.
+class TestConsolidatedLeafSurfacesAsItself:
+    """Feature tests for episodic_retrieval_service.retrieve() under the
+    collapsed-tree contract (TKT-923).
 
     Episodes are stored via EpisodicService.store_episode() (which syncs FTS)
     and then retrieved via the real retrieve() function.  The FTS lane finds
-    the leaf; apex promotion returns the super.  No mocks.
+    the matching row, and retrieval hydrates that row AS-IS at its own level —
+    the old apex-promotion that replaced a leaf hit with its super is gone.
+    No mocks.
+
+    Scope note: the general collapsed-tree behaviours (a leaf and its super
+    *both* surfacing when both match; a higher-importance super outranking a
+    weak leaf) are pinned in test_episodic_retrieval_service.py and are not
+    re-tested here.  This class pins what is unique to the super-episode
+    pipeline: a leaf that already carries a consolidated_into back-pointer is
+    no longer swallowed by its apex — when the query matches only the leaf, the
+    leaf surfaces and the unrelated super does not.
     """
 
     @pytest.fixture
@@ -336,68 +347,71 @@ class TestRetrievalApexPromotion:
         from services.episodic_service import EpisodicService
         return EpisodicService(get_shared_db_service())
 
-    def test_leaf_hit_promoted_to_super(self, db, episodic_svc):
-        """FTS hit on a leaf episode → retrieve() returns its super, not the leaf."""
+    def test_consolidated_leaf_surfaces_at_its_own_level(self, db, episodic_svc):
+        """A leaf with consolidated_into set still surfaces as ITSELF when the
+        query matches the leaf and NOT its super.
+
+        Under the old apex-promotion contract the leaf hit was discarded and
+        replaced by its super; the super here has an unrelated gist, so a
+        promote-to-apex would have returned an episode that does not match the
+        query at all.  Collapsed-tree retrieval surfaces the leaf at its own
+        level and leaves the non-matching super out of the pool."""
         from services.episodic_retrieval_service import retrieve
 
-        # Store leaf and super via the real service (syncs FTS)
+        # Leaf and super stored via the real service (syncs FTS). Their gists
+        # are deliberately disjoint so only the leaf can match the query.
         leaf_id = episodic_svc.store_episode({
             'gist': 'watering the garden on a sunny afternoon',
             'salience': 5,
-            'channel': 'ch-apex',
+            'channel': 'ch-collapsed',
         })
         super_id = episodic_svc.store_episode({
-            'gist': 'outdoor activities super episode',
+            'gist': 'quarterly budget spreadsheet review meeting',
             'salience': 7,
-            'channel': 'ch-apex',
+            'channel': 'ch-collapsed',
         })
 
-        # Wire leaf → super
-        db.execute(
-            "UPDATE episodes SET consolidated_into = ? WHERE id = ?",
-            (super_id, leaf_id),
-        )
-        db.commit()
+        # Consolidate the leaf into the (semantically unrelated) super.
+        episodic_svc.set_consolidated_into(leaf_id, super_id)
 
-        results = retrieve('watering garden', channel='ch-apex', k=10)
+        results = retrieve('watering garden', channel='ch-collapsed', k=10)
         returned_ids = [r['id'] for r in results]
 
-        assert super_id in returned_ids, (
-            f"Expected super_id={super_id!r} in results. "
-            f"Apex promotion should replace the leaf hit with its super. "
-            f"Got: {returned_ids!r}"
+        assert leaf_id in returned_ids, (
+            f"Consolidated leaf was swallowed by its apex. Under collapsed-tree "
+            f"retrieval a leaf surfaces at its own level even when "
+            f"consolidated_into is set. Got: {returned_ids!r}"
         )
-        assert leaf_id not in returned_ids, "Leaf should be replaced by its apex"
+        assert super_id not in returned_ids, (
+            f"The unrelated super was promoted in despite not matching the query "
+            f"— apex-promotion should be gone. Got: {returned_ids!r}"
+        )
 
-    def test_apex_deduplication(self, db, episodic_svc):
-        """Two leaves from the same super emit the super only once."""
+    def test_consolidated_leaf_appears_once(self, db, episodic_svc):
+        """A single matching consolidated leaf is returned exactly once — the
+        collapsed-tree hydration de-duplicates by id across the FTS and vector
+        lanes."""
         from services.episodic_retrieval_service import retrieve
 
-        leaf1_id = episodic_svc.store_episode({
+        leaf_id = episodic_svc.store_episode({
             'gist': 'reading fiction novels late at night',
             'salience': 5,
-            'channel': 'ch-dedup',
-        })
-        leaf2_id = episodic_svc.store_episode({
-            'gist': 'reading science books at night',
-            'salience': 5,
-            'channel': 'ch-dedup',
+            'channel': 'ch-collapsed-dedup',
         })
         super_id = episodic_svc.store_episode({
             'gist': 'reading habit super episode',
             'salience': 7,
-            'channel': 'ch-dedup',
+            'channel': 'ch-collapsed-dedup',
         })
 
-        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf1_id))
-        db.execute("UPDATE episodes SET consolidated_into = ? WHERE id = ?", (super_id, leaf2_id))
-        db.commit()
+        episodic_svc.set_consolidated_into(leaf_id, super_id)
 
-        results = retrieve('reading at night', channel='ch-dedup', k=10)
+        results = retrieve('reading fiction at night', channel='ch-collapsed-dedup', k=10)
         returned_ids = [r['id'] for r in results]
 
-        assert returned_ids.count(super_id) == 1, (
-            f"Super should appear exactly once; got count={returned_ids.count(super_id)!r}"
+        assert returned_ids.count(leaf_id) == 1, (
+            f"Matching leaf should appear exactly once; "
+            f"got count={returned_ids.count(leaf_id)!r} in {returned_ids!r}"
         )
 
 

@@ -172,7 +172,7 @@ def _slice_memory(query: str, _k: int) -> dict:
 
     try:
         episodes = _get_retrieval_module().retrieve(
-            query_text=query, channel=None, radius=0.5
+            query_text=query, channel=None
         )
 
         results = []

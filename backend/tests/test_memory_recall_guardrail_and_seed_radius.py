@@ -1,33 +1,31 @@
-"""Feature test: memory.recall guardrail + the 30%-narrower turn-0 seed radius.
+"""Feature test: memory.recall guardrail + silent turn-0 seed + the per-lane
+relative-floor telemetry that replaced the deleted radius columns (TKT-923).
 
-Two behaviour changes are proven here against the REAL production chokepoint —
-``ToolDispatcher(mp).dispatch("memory", …)`` — the single path BOTH the model's
-explicit recall and the turn-0 auto-seed take in production:
+Driven through the REAL production chokepoint — ``ToolDispatcher(mp).dispatch(
+"memory", …)`` — the single path BOTH the model's explicit recall and the turn-0
+auto-seed take in production. Zero mocks: real ``UserConfig`` MessageProcessor,
+real ``ToolDispatcher``, real embedding model, real DataGraph, real SQLite.
 
-1. **Fan-out removed → guardrail in.** ``memory.recall`` no longer silently
-   dispatches ``document.search`` / ``schedule.search`` behind the model's back.
-   An EXPLICIT recall instead carries a guardrail line steering the model to
-   those stores ON ITS OWN judgement, naming the exact tools (``document`` /
-   ``schedule``, action ``search``). The silent turn-0 seed (``_auto=True``)
-   carries NO hint and fires NO fan-out. We assert the fan-out is gone by proving
-   no ``document`` / ``schedule`` rows were recorded on the act-trail — the
-   removed code dispatched those tools through a ``ToolDispatcher``, which records
-   one ``tool_calls`` row per dispatch.
+Behaviours pinned (all survive the radius-apparatus deletion):
 
-2. **Seed radius cut 30%.** The turn-0 seed retrieves at
-   ``SEED_RADIUS_BASELINE = 0.35`` (``RECALL_RADIUS_BASELINE 0.5 − 30%``); an
-   explicit recall stays at ``0.5``. We read this back from the real
-   ``memory_recall_log`` telemetry the recall writes.
+1. **Fan-out removed → guardrail in.** An EXPLICIT recall carries the fallback
+   guardrail naming the real fallback tools (``document`` / ``schedule``, action
+   ``search``) and fires NO silent ``document.search`` / ``schedule.search``
+   fan-out — proven by the absence of those tool_calls rows on the act-trail.
 
-Zero mocks: real ``UserConfig`` MessageProcessor, real ``ToolDispatcher``, real
-embedding model, real DataGraph, real SQLite. The only thing asserted is what the
-production code actually wrote to the db and returned to the loop.
+2. **The turn-0 auto-seed (``_auto=True``) is silent** — no guardrail hint, no
+   fan-out.
+
+3. **Recall-log telemetry is the NEW per-lane shape.** The deleted
+   ``input_radius`` / ``narrow_factor`` / ``effective_radius`` columns are gone;
+   the recall now logs ``floor_cut_count`` (candidates dropped by the relative
+   score floor) and ``final_rrf_count`` (results surfaced) under the right
+   ``caller``. We read these back from the row the recall actually wrote.
 """
 
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
-from abilities.memory import MemoryAbility
 from configs.channels import UserConfig
 from services.message_processor import MessageProcessor
 from services.transcript_service import write_input_row
@@ -40,7 +38,7 @@ _HINT_LEAD = "If you cannot find the information in memory"
 def _build_user_mp(text: str) -> MessageProcessor:
     """A real UserConfig MessageProcessor in the state a recall dispatches from:
     an input row written (so ``uid`` anchors the act-trail FK) and ``active_tools``
-    seeded — the exact shape ``_seed_turn_zero`` and the ACT loop fire from."""
+    seeded — the exact shape the ACT loop and the turn-0 seed fire from."""
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, text, {})
     parent.config = UserConfig()
@@ -57,10 +55,35 @@ def _tool_names_recorded(db, transcript_id: int) -> list:
     return [r[0] for r in rows]
 
 
+def _last_recall_log(db, caller: str = None) -> dict:
+    """Read the newest memory_recall_log row as a dict, optionally by caller."""
+    if caller is None:
+        row = db.execute(
+            "SELECT caller, query, episode_count, floor_cut_count, final_rrf_count "
+            "FROM memory_recall_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    else:
+        row = db.execute(
+            "SELECT caller, query, episode_count, floor_cut_count, final_rrf_count "
+            "FROM memory_recall_log WHERE caller = ? ORDER BY id DESC LIMIT 1",
+            (caller,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "caller": row[0],
+        "query": row[1],
+        "episode_count": row[2],
+        "floor_cut_count": row[3],
+        "final_rrf_count": row[4],
+    }
+
+
 def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db):
     """An explicit (model-invoked) recall returns the fallback guardrail naming
     the real tools, records its own ``memory`` call but NO ``document`` /
-    ``schedule`` fan-out, and logs the wide ``0.5`` radius."""
+    ``schedule`` fan-out, and writes a per-lane telemetry row under
+    ``caller='llm_recall'`` with the new floor/result fields."""
     mp = _build_user_mp("what is my home wifi password")
 
     out = ToolDispatcher(mp).dispatch(
@@ -79,18 +102,20 @@ def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db):
     assert "document" not in names, f"document.search fan-out still firing: {names!r}"
     assert "schedule" not in names, f"schedule.search fan-out still firing: {names!r}"
 
-    # Explicit recall retrieves at the WIDE baseline — untouched by the seed cut.
-    tel = db.execute(
-        "SELECT caller, input_radius FROM memory_recall_log ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    # The recall wrote the NEW per-lane telemetry (radius columns are gone).
+    tel = _last_recall_log(db, caller="llm_recall")
     assert tel is not None, "explicit recall wrote no telemetry row"
-    assert tel[0] == "llm_recall"
-    assert abs(tel[1] - 0.5) < 1e-9, f"explicit radius drifted from 0.5: {tel[1]}"
+    assert tel["caller"] == "llm_recall"
+    assert tel["query"] == "what is my home wifi password"
+    # New floor/result counters exist and are sane (non-negative ints).
+    assert tel["floor_cut_count"] >= 0
+    assert tel["final_rrf_count"] >= 0
 
 
-def test_turn0_seed_recall_is_silent_and_30pct_narrower(db):
+def test_turn0_seed_recall_is_silent_and_logs_seed_telemetry(db):
     """The turn-0 auto-seed (``_auto=True``) carries NO guardrail, fires no
-    fan-out, and retrieves at the 30%-narrower ``0.35`` seed radius."""
+    fan-out, and writes its telemetry row under ``caller='seed'`` with the new
+    per-lane floor/result fields."""
     mp = _build_user_mp("what did we talk about at home last week")
 
     out = ToolDispatcher(mp).dispatch(
@@ -106,20 +131,51 @@ def test_turn0_seed_recall_is_silent_and_30pct_narrower(db):
         f"seed recall fanned out to other stores: {names!r}"
     )
 
-    # The seed retrieves at SEED_RADIUS_BASELINE = 0.35.
-    tel = db.execute(
-        "SELECT caller, input_radius FROM memory_recall_log WHERE caller = 'seed' "
-        "ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    # The seed wrote a telemetry row under caller='seed' with the new fields.
+    tel = _last_recall_log(db, caller="seed")
     assert tel is not None, "seed recall wrote no telemetry row"
-    assert tel[0] == "seed"
-    assert abs(tel[1] - 0.35) < 1e-9, f"seed radius is not 0.35: {tel[1]}"
+    assert tel["caller"] == "seed"
+    assert tel["floor_cut_count"] >= 0
+    assert tel["final_rrf_count"] >= 0
 
-    # Lock the exact 30% relationship so a future baseline edit can't silently
-    # break the cut without tripping this test.
-    assert abs(
-        MemoryAbility.SEED_RADIUS_BASELINE - MemoryAbility.RECALL_RADIUS_BASELINE * 0.7
-    ) < 1e-9, (
-        f"seed baseline {MemoryAbility.SEED_RADIUS_BASELINE} is not 30% below "
-        f"recall baseline {MemoryAbility.RECALL_RADIUS_BASELINE}"
+
+def test_invalidated_fact_never_surfaces_in_recall(db):
+    """A data_graph fact whose ``valid_to`` is set (bi-temporally superseded) is
+    invalidated and must NEVER surface in recall — the data_graph lane reads live
+    rows only (``active=1 AND valid_to IS NULL``).
+
+    Producer → reader end-to-end: a REAL fact is stored (surfaces while live),
+    then bi-temporally closed by setting ``valid_to``, and the REAL recall
+    chokepoint is asked again. The invalidated fact must be gone from the body."""
+    import json
+
+    from services.data_graph_service import get_data_graph_service
+
+    get_data_graph_service().store(
+        kind="user_specific", key="residence", value="Valletta", source="test:seed",
+    )
+
+    def _recall_residence_rows() -> list:
+        out = ToolDispatcher(_build_user_mp("where do I live")).dispatch(
+            "memory", {"action": "recall", "query": "residence city Valletta"}
+        )
+        head = out.index("]\n") + 2
+        tail = out.index("\n[end:memory]")
+        return json.loads(out[head:tail])["results"]
+
+    # While live, the fact surfaces.
+    live_rows = _recall_residence_rows()
+    assert any(r.get("id") == "residence" for r in live_rows), (
+        f"live fact did not surface before invalidation: {live_rows!r}"
+    )
+
+    # Bi-temporally close the fact — the exact data state ticket-F supersession
+    # produces (valid_to set on the row).
+    db.execute("UPDATE data_graph SET valid_to = datetime('now') WHERE key = 'residence'")
+    db.commit()
+
+    # The invalidated fact must be gone — never resurface a superseded value.
+    after_rows = _recall_residence_rows()
+    assert not any(r.get("id") == "residence" for r in after_rows), (
+        f"invalidated (valid_to-set) fact still surfaced in recall: {after_rows!r}"
     )

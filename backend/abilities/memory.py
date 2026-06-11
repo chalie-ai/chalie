@@ -4,17 +4,15 @@ MemoryAbility — Store, recall, and forget first-party facts about the user.
 Covers all actions: store, recall, reflect, forget. This module is a **thin
 adapter**: it owns only the tool's metadata (name, summary, examples, parameter
 schema) and the action dispatch in ``run()`` — ``params → service handler →
-ToolResult``. Every retrieval/mutation handler, the episode recall engine with
-its dynamic radius, data-graph search, reflection layer expansion, response
-formatting and recall telemetry live in ``services.memory_retrieval`` so the same
-engine is reachable from non-ability callers (e.g. the ``/api/updates/memory``
-REST endpoint) without importing an ability.
+ToolResult``. Every retrieval/mutation handler, the episode recall engine,
+data-graph search, reflection layer expansion, response formatting and recall
+telemetry live in ``services.memory_retrieval`` so the same engine is reachable
+from non-ability callers (e.g. the ``/api/updates/memory`` REST endpoint)
+without importing an ability.
 
-The dynamic-radius tuning constants are the service's source of truth; they are
-re-exposed here as ``MemoryAbility`` ClassVars so they remain mechanically
-tunable and inspectable via the ability surface. The engine functions live ONLY
-in the service module — there are no re-exports from here: callers and tests
-import them from ``services.memory_retrieval`` directly.
+The engine functions live ONLY in the service module — there are no re-exports
+from here: callers and tests import them from ``services.memory_retrieval``
+directly.
 """
 
 import logging
@@ -138,20 +136,6 @@ class MemoryAbility(Ability):
         "reflect": ("query",),
         "forget": ("key",),
     }
-
-    # Dynamic-radius tuning constants — the service holds the source of truth;
-    # these ClassVars re-expose them on the ability surface so they stay
-    # inspectable and mechanically tunable. (TKT-878: RECALL=0.5, SEED=0.35.)
-    RECALL_RADIUS_BASELINE: ClassVar[float] = memory_retrieval.RECALL_RADIUS_BASELINE
-    SEED_RADIUS_BASELINE: ClassVar[float] = memory_retrieval.SEED_RADIUS_BASELINE
-
-    NARROW_MIN_DIST: ClassVar[float] = memory_retrieval.NARROW_MIN_DIST
-    NARROW_MAX_DIST: ClassVar[float] = memory_retrieval.NARROW_MAX_DIST
-    NARROW_FACTOR_FLOOR: ClassVar[float] = memory_retrieval.NARROW_FACTOR_FLOOR
-
-    EXPAND_MIN_DIST: ClassVar[float] = memory_retrieval.EXPAND_MIN_DIST
-    EXPAND_MAX_DIST: ClassVar[float] = memory_retrieval.EXPAND_MAX_DIST
-    EXPAND_FACTOR_CEILING: ClassVar[float] = memory_retrieval.EXPAND_FACTOR_CEILING
 
     def run(self, params: dict) -> ToolResult:
         action = params.get("action", "recall")

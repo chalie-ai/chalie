@@ -3,10 +3,10 @@
 The `memory` tool (``abilities/memory.py``) is a thin adapter: its ``run()`` reads
 the action and the bound channel, then delegates to the handlers here. This module
 owns everything non-ability — the store/recall/reflect/forget handlers, the
-episode recall engine with its dynamic radius, the data-graph search, the
-reflection layer expansion, response formatting, and recall telemetry — so the
-same engine is reachable from non-ability callers (e.g. the ``/api/updates/memory``
-REST endpoint) without importing an ability.
+episode recall engine, the data-graph search, the reflection layer expansion,
+response formatting, and recall telemetry — so the same engine is reachable from
+non-ability callers (e.g. the ``/api/updates/memory`` REST endpoint) without
+importing an ability.
 
 Every handler returns an ``abilities._result.ToolResult`` — never a string and
 never a legacy dict. ``recall`` returns a STRUCTURED body
@@ -17,49 +17,28 @@ rather than a silent ``results=0`` — the model must never be told "nothing is
 stored" when the store simply failed. When some (not all) backend lanes error,
 recall succeeds with ``meta degraded=true`` so the partial result is honest.
 
-Dynamic memory radius — tuning constants
------------------------------------------
-Composition: ``effective_input = BASELINE × narrow_factor × expand_factor``.
-``episodic_retrieval_service.retrieve`` then applies its own population-aware
-adaptive shrink on top. All eight constants are tuned offline against a
-context-recall evaluation suite. They are literal module-level floats (not read
-from config/env at import time) so they can be diff-patched mechanically.
+Retrieval ranking lives entirely in ``episodic_retrieval_service.retrieve``:
+per-lane min-max normalisation plus a relative score floor (no radius / shrink
+apparatus). This module no longer computes any radius; it only routes queries
+and projects results.
 
-TKT-878 invariants preserved EXACTLY:
-  * ``RECALL_RADIUS_BASELINE = 0.5`` (explicit, model-invoked recall)
-  * ``SEED_RADIUS_BASELINE = 0.35`` (= 0.5 − 30%; tighter turn-0 auto-seed)
-  * The turn-0 auto-seed recall (``caller='seed'``) stays silent — no fallback
-    hint, no fan-out to document/schedule searches.
-  * An explicit recall appends ``_RECALL_FALLBACK_HINT`` naming the exact
-    ``document`` (action: search) and ``schedule`` (action: search) tools.
+The two recall callers stay distinct only in their side-effects:
+  * ``caller='seed'`` — the silent turn-0 auto-seed: no fallback hint, no
+    fan-out to document/schedule searches.
+  * ``caller='llm_recall'`` — the explicit recall: appends
+    ``_RECALL_FALLBACK_HINT`` naming the exact ``document`` (action: search)
+    and ``schedule`` (action: search) tools.
 """
 
 import hashlib
 import json
 import logging
-import math
 from typing import Dict, List, Optional, Tuple
 
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
-
-
-# ── Dynamic memory radius — tuning constants ────────────────────────────────
-RECALL_RADIUS_BASELINE: float = 0.5
-# Turn-0 auto-seed recall (caller="seed"). 0.35 = RECALL_RADIUS_BASELINE − 30%
-# so the background seed retrieves a tighter, higher-precision set than an
-# explicit model-invoked recall, which stays at 0.5.
-SEED_RADIUS_BASELINE: float = 0.35
-
-NARROW_MIN_DIST: float = 0.25
-NARROW_MAX_DIST: float = 0.05
-NARROW_FACTOR_FLOOR: float = 0.35
-
-EXPAND_MIN_DIST: float = 0.30
-EXPAND_MAX_DIST: float = 0.55
-EXPAND_FACTOR_CEILING: float = 2.2
 
 
 # ── Store ────────────────────────────────────────────────────────────
@@ -275,9 +254,9 @@ def handle_recall(mp, channel: str, params: dict) -> ToolResult:
             hint="pass a 'query' (a topic) and/or a 'location'.",
         )
 
-    # The turn-0 background seed (_auto=True) retrieves at the tighter
-    # SEED_RADIUS_BASELINE; an explicit model-invoked recall uses the wider
-    # RECALL_RADIUS_BASELINE.
+    # The turn-0 background seed (_auto=True) stays silent (no fallback hint);
+    # an explicit model-invoked recall carries the fallback guardrail. Both run
+    # the identical ranked retrieval — the radius split is gone.
     caller = "seed" if params.get("_auto") else "llm_recall"
 
     limit = 10
@@ -567,13 +546,15 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
             KIND_USER_SPECIFIC,
             KIND_SYSTEM,
             KIND_MISC,
-            KIND_MOMENT,
         )
 
+        # KIND_MOMENT is intentionally excluded: labeled moments are a separate
+        # user-curated lane (a later ticket), not part of generic data-graph
+        # recall.
         dgs = get_data_graph_service()
         rows = dgs.recall(
             query=query,
-            kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC, KIND_MOMENT,
+            kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
                    KIND_BEHAVIORAL_PATTERN, KIND_PLACE],
             limit=limit,
         )
@@ -604,84 +585,6 @@ def _search_data_graph(query: str, limit: int) -> Tuple[List[Dict], str]:
         return [], f"error: {e}"
 
 
-def _cosine_distance(a: List[float], b: List[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 1.0
-    dot = 0.0
-    na = 0.0
-    nb = 0.0
-    for x, y in zip(a, b):
-        dot += x * y
-        na += x * x
-        nb += y * y
-    if na <= 0 or nb <= 0:
-        return 1.0
-    sim = max(-1.0, min(1.0, dot / math.sqrt(na * nb)))
-    return 1.0 - sim
-
-
-def _scan_history_distances(
-    q_embedding: List[float], history: List[Dict]
-) -> Tuple[float, float]:
-    """Return (min_dist, max_drift) over all history embeddings."""
-    min_dist = float("inf")
-    max_drift = 0.0
-    for entry in history:
-        emb = entry.get("embedding")
-        if not emb:
-            continue
-        d = _cosine_distance(q_embedding, emb)
-        if d < min_dist:
-            min_dist = d
-        if d > max_drift:
-            max_drift = d
-    return min_dist, max_drift
-
-
-def _compute_narrow_factor(min_dist: float) -> float:
-    """Derive the narrow factor from the minimum history distance."""
-    if min_dist == float("inf") or min_dist >= NARROW_MIN_DIST:
-        return 1.0
-    if min_dist <= NARROW_MAX_DIST:
-        return NARROW_FACTOR_FLOOR
-    span = NARROW_MIN_DIST - NARROW_MAX_DIST
-    if span <= 0:
-        return NARROW_FACTOR_FLOOR
-    t = (NARROW_MIN_DIST - min_dist) / span
-    f = 1.0 - t * (1.0 - NARROW_FACTOR_FLOOR)
-    return max(NARROW_FACTOR_FLOOR, min(1.0, f))
-
-
-def _compute_expand_factor(max_drift: float) -> float:
-    """Derive the expand factor from the maximum history drift."""
-    if max_drift <= EXPAND_MIN_DIST:
-        return 1.0
-    if max_drift >= EXPAND_MAX_DIST:
-        return EXPAND_FACTOR_CEILING
-    span = EXPAND_MAX_DIST - EXPAND_MIN_DIST
-    if span <= 0:
-        return EXPAND_FACTOR_CEILING
-    t = (max_drift - EXPAND_MIN_DIST) / span
-    f = 1.0 + t * (EXPAND_FACTOR_CEILING - 1.0)
-    return min(EXPAND_FACTOR_CEILING, max(1.0, f))
-
-
-def _compute_radius_factors(
-    q_embedding: List[float], history: List[Dict]
-) -> Tuple[float, float, float, float]:
-    """Single-pass narrow + expand factor computation.
-
-    Returns: (narrow_factor, expand_factor, min_dist, max_drift)
-    """
-    if not history:
-        return 1.0, 1.0, float("inf"), 0.0
-
-    min_dist, max_drift = _scan_history_distances(q_embedding, history)
-    narrow_factor = _compute_narrow_factor(min_dist)
-    expand_factor = _compute_expand_factor(max_drift)
-    return narrow_factor, expand_factor, min_dist, max_drift
-
-
 def _embedding_hash(embedding: List[float]) -> str:
     if not embedding:
         return "empty"
@@ -703,22 +606,24 @@ def _write_recall_telemetry(
     caller: str,
     query: str,
     embedding_hash: str,
-    input_radius: float,
-    narrow_factor: float,
-    expand_factor: float,
     telemetry: Dict,
 ) -> None:
+    """Persist one recall observation into ``memory_recall_log``.
+
+    The schema dropped the radius columns (TKT-920): the row now records the
+    new normalised-ranking signals — corpus size, per-lane candidate counts,
+    how many candidates the relative score floor dropped, the final surfaced
+    count, and the top vector distances.
+    """
     try:
         with db_service.connection() as conn:
             conn.execute(
                 """
                 INSERT INTO memory_recall_log (
                     turn_uid, transcript_id, channel, caller, query,
-                    query_embedding_hash, input_radius, narrow_factor,
-                    expand_factor, adaptive_shrink_divisor, effective_radius,
-                    episode_count, vector_candidates, fts_candidates,
-                    survivors_after_radius, final_rrf_count, top_distances
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    query_embedding_hash, episode_count, floor_cut_count,
+                    final_rrf_count, top_distances
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     turn_uid,
@@ -727,15 +632,8 @@ def _write_recall_telemetry(
                     caller,
                     query,
                     embedding_hash,
-                    input_radius,
-                    narrow_factor,
-                    expand_factor,
-                    telemetry.get("adaptive_shrink_divisor", 1.0),
-                    telemetry.get("effective_radius", input_radius),
                     telemetry.get("episode_count", 0),
-                    telemetry.get("vector_candidates", 0),
-                    telemetry.get("fts_candidates", 0),
-                    telemetry.get("survivors_after_radius", 0),
+                    telemetry.get("floor_cut_count", 0),
                     telemetry.get("final_rrf_count", 0),
                     json.dumps(telemetry.get("top_distances", [])),
                 ),
@@ -745,34 +643,20 @@ def _write_recall_telemetry(
         logger.warning(f"{LOG_PREFIX} Failed to write memory_recall_log row: {e}")
 
 
-def _gather_query_history(proc, emb_svc, mp=None) -> tuple[list, str, object]:
-    """Build (history, turn_uid, transcript_id) from the bound processor, if any.
+def _turn_context(proc) -> Tuple[str, object]:
+    """Resolve (turn_uid, transcript_id) from the bound processor, if any.
 
-    Inserts the seed-query record at the head of history when the processor has a
-    pending seed that hasn't been recorded yet. Returns ephemeral defaults if no
-    processor is bound.
+    The radius drift-history apparatus is gone; only the telemetry-keying
+    identifiers are still needed. Returns ephemeral defaults when no processor
+    is bound (e.g. the REST recall path).
     """
     if proc is None:
-        return [], "ephemeral", None
-
-    history: List[Dict] = list(proc._memory_query_history or [])
-    seed_query = getattr(proc, "_memory_seed_query", None) or None
-    if seed_query and not any(h.get("caller") == "seed" for h in history):
-        try:
-            seed_emb = emb_svc.generate_embedding(seed_query, mp=mp)
-            history.insert(0, {
-                "query": seed_query,
-                "embedding": seed_emb,
-                "caller": "seed",
-                "effective_radius": SEED_RADIUS_BASELINE,
-            })
-        except Exception as _seed_exc:
-            logger.debug(f"{LOG_PREFIX} Could not embed seed for drift calc: {_seed_exc}")
+        return "ephemeral", None
     _cfg = getattr(proc, "config", None)
     _channel = getattr(_cfg, "channel", None)
     turn_uid = str(getattr(proc, "_uid", None) or _channel or "unbound")
     transcript_id = getattr(proc, "_uid", None)
-    return history, turn_uid, transcript_id
+    return turn_uid, transcript_id
 
 
 def recall_episodes(
@@ -781,14 +665,15 @@ def recall_episodes(
     query: str,
     *,
     caller: str = "llm_recall",
-    baseline_radius: Optional[float] = None,
     limit: int = 10,
     return_raw: bool = False,
 ):
-    """Public entry point for episode recall with dynamic radius.
+    """Public entry point for episode recall.
 
     Used by both the `memory` skill's recall action (``caller='llm_recall'``)
-    and the pre-turn seed path (``caller='seed'``).
+    and the pre-turn seed path (``caller='seed'``). Ranking and the relative
+    score floor live in ``episodic_retrieval_service.retrieve``; this function
+    only embeds the query, routes it, records telemetry, and projects results.
     """
     try:
         from services import episodic_retrieval_service
@@ -798,40 +683,20 @@ def recall_episodes(
         logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
         return [], f"error: {exc}"
 
-    if baseline_radius is None:
-        baseline_radius = (
-            SEED_RADIUS_BASELINE if caller == "seed" else RECALL_RADIUS_BASELINE
-        )
-
     try:
         db = get_shared_db_service()
         emb_svc = get_embedding_service()
 
         q_embedding = emb_svc.generate_embedding(query, mp=mp)
-        proc = mp
-        history, turn_uid, transcript_id = _gather_query_history(proc, emb_svc, mp)
-
-        narrow_factor, expand_factor, _min_dist, _max_drift = _compute_radius_factors(q_embedding, history)
-        input_radius = baseline_radius * narrow_factor * expand_factor
+        turn_uid, transcript_id = _turn_context(mp)
 
         episodes, telemetry = episodic_retrieval_service.retrieve(
             query_text=query,
             query_embedding=q_embedding,
             channel=channel,
-            radius=input_radius,
             k=limit,
             return_telemetry=True,
         )
-
-        if proc is not None:
-            proc._memory_query_history.append(
-                {
-                    "query": query,
-                    "embedding": q_embedding,
-                    "caller": caller,
-                    "effective_radius": telemetry.get("effective_radius", input_radius),
-                }
-            )
 
         _write_recall_telemetry(
             db,
@@ -841,9 +706,6 @@ def recall_episodes(
             caller=caller,
             query=query,
             embedding_hash=_embedding_hash(q_embedding),
-            input_radius=input_radius,
-            narrow_factor=narrow_factor,
-            expand_factor=expand_factor,
             telemetry=telemetry,
         )
 

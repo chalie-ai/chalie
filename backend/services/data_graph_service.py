@@ -93,9 +93,6 @@ _LUT_K = 1
 # KNN depth for system key cosine deduplication.
 _SYSTEM_KEY_K = 3
 
-# Minimum cosine score for a recall candidate to pass the relevance floor.
-_RECALL_COSINE_FLOOR = 0.42
-
 # Module-level LUT connection, loaded once on first use.
 _lut_conn: Optional[sqlite3.Connection] = None
 _lut_lock = threading.Lock()
@@ -1025,25 +1022,19 @@ class DataGraphService:
 
     @staticmethod
     def _build_kind_filter(kinds) -> tuple[str, list]:
-        """Return (filter_clause, params) for an optional kind restriction."""
-        filters = ["deleted_at IS NULL", "active=1"]
+        """Return (filter_clause, params) for recall over LIVE rows only.
+
+        Live = ``deleted_at IS NULL AND active=1 AND valid_to IS NULL``: an
+        invalidated (superseded / bi-temporally closed) fact must never surface
+        in recall, even while it lingers for its fast-decay deletion window.
+        """
+        filters = ["deleted_at IS NULL", "active=1", "valid_to IS NULL"]
         params: list = []
         if kinds:
             placeholders = ','.join('?' for _ in kinds)
             filters.append(f"kind IN ({placeholders})")
             params.extend(kinds)
         return " AND ".join(filters), params
-
-    @staticmethod
-    def _apply_relevance_floor(candidates: dict) -> dict:
-        """Drop candidates that have no strong signal above the cosine floor."""
-        return {
-            rid: sigs for rid, sigs in candidates.items()
-            if sigs['key_cos'] >= _RECALL_COSINE_FLOOR
-            or sigs['value_cos'] >= _RECALL_COSINE_FLOOR
-            or sigs.get('variant_cos', 0.0) >= _RECALL_COSINE_FLOOR
-            or sigs['fts_bonus'] > 0
-        }
 
     def recall(self, query: str, *, kinds=None, limit: int = 10, expand_graph: bool = True) -> list:
         try:
@@ -1066,8 +1057,10 @@ class DataGraphService:
                 for sigs in candidates.values():
                     sigs.setdefault('variant_cos', 0.0)
 
-                candidates = self._apply_relevance_floor(candidates)
-
+                # No absolute cosine floor / FTS floor-bypass: a hard threshold
+                # on gte-modernbert muted relevant rows and the FTS-bypass let
+                # keyword-only noise win. Ranking + the limit truncation govern;
+                # the relative score floor lives in the episodic lane.
                 scored = self._recall_score_candidates(cursor, candidates, filter_clause, filter_params)
                 top_k = scored[:limit]
 

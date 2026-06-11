@@ -31,7 +31,6 @@ def memory_search():
             episodes = episodic_retrieval_service.retrieve(
                 query_text=query,
                 channel=None,
-                radius=0.5,
             )
             for ep in episodes:
                 results.append({
