@@ -36,12 +36,26 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now, parse_utc
 from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
 _SECTION_HEADER = "### Background Telemetry,Processes & Signals"
+
+# Key for the last user-message timestamp. The in-memory ``_store`` dict and the
+# durable MemoryStore deliberately share this key — both are the fast in-process
+# read path for the same value.
+_STORE_KEY_LAST_USER_MESSAGE = "world_state:last_user_message_at"
+
+# Durable dual-write clock so the subconscious user-active gate survives a
+# process/container restart (TKT-922). Without it the gate starves: the value
+# lives only in the in-memory store and is wiped on every restart.
+# Bidirectional dependency: services/durable_timestamp.py owns the persist/
+# hydrate mechanism; this module supplies the key pair + provenance.
+_DG_KEY_LAST_USER_MESSAGE = "world_state_last_user_message_at"
+_SOURCE_LAST_USER_MESSAGE = "world_state"
 
 # Schedule query — pending items due in ≤7 days, or fired in last 24 hours, not hidden
 _SCHEDULE_SQL = """
@@ -253,8 +267,21 @@ class WorldState:
     """
 
     def __init__(self):
+        """Build a WorldState and hydrate the restart-durable fields.
+
+        ``last_user_message_at`` is loaded from the dual-write store at
+        construction so the first read after a process/container restart sees
+        the persisted value (mirrors ``SubconsciousWorker.__init__``). Hydrate
+        failure is non-fatal — the field simply starts unset.
+        """
         self._store: dict = {}           # arbitrary type → dict fragments
         self._lock = threading.Lock()
+        self._user_msg_clock = DurableTimestamp(
+            memory_key=_STORE_KEY_LAST_USER_MESSAGE,
+            data_graph_key=_DG_KEY_LAST_USER_MESSAGE,
+            source=_SOURCE_LAST_USER_MESSAGE,
+        )
+        self._hydrate_last_user_message_at()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
@@ -315,9 +342,11 @@ class WorldState:
 
         Unknown kinds are silently ignored (forward-compatibility).
         """
+        persist_user_message: datetime | None = None
         with self._lock:
             if signal.kind == "user_message":
-                self._store["world_state:last_user_message_at"] = signal.received_at.isoformat()
+                self._store[_STORE_KEY_LAST_USER_MESSAGE] = signal.received_at.isoformat()
+                persist_user_message = signal.received_at
             elif signal.kind == "heartbeat":
                 self._store["world_state:last_heartbeat_at"] = signal.received_at.isoformat()
             elif signal.kind == "device":
@@ -331,14 +360,39 @@ class WorldState:
                         lt if isinstance(lt, str) else lt.isoformat()
                     )
 
+        # Durable write happens outside the lock — the dual-write touches
+        # MemoryStore + data_graph and must not block other absorb/snapshot
+        # callers. The in-memory store is already updated above; persistence is
+        # the restart-survival copy the subconscious user-active gate reads.
+        if persist_user_message is not None:
+            self._user_msg_clock.persist(persist_user_message)
+
+    def _hydrate_last_user_message_at(self) -> None:
+        """Load the durable last-user-message timestamp into the in-memory store.
+
+        Called once from ``__init__`` so a restarted process sees the persisted
+        value on its first read. The durable read happens outside the snapshot
+        hot path; failure is non-fatal (the field starts unset).
+        """
+        try:
+            hydrated = self._user_msg_clock.load()
+        except Exception as exc:
+            logger.warning("[WorldState] hydrate last_user_message_at failed: %s", exc)
+            return
+        if hydrated is not None:
+            with self._lock:
+                self._store[_STORE_KEY_LAST_USER_MESSAGE] = hydrated.isoformat()
+
     def snapshot(self) -> dict[str, Any]:
         """Read-only snapshot of the four typed ambient fields. Caller treats as immutable.
 
         Datetime fields are ``None`` when not yet set; once set they return a
-        timezone-aware UTC ``datetime``.
+        timezone-aware UTC ``datetime``. ``last_user_message_at`` is hydrated
+        from durable storage at construction, so the in-memory store is the
+        single read source here even after a restart.
         """
         with self._lock:
-            raw_msg = self._store.get("world_state:last_user_message_at")
+            raw_msg = self._store.get(_STORE_KEY_LAST_USER_MESSAGE)
             raw_hb = self._store.get("world_state:last_heartbeat_at")
             raw_lt = self._store.get("world_state:current_local_time")
             return {

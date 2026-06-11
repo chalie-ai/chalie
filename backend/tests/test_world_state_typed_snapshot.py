@@ -5,6 +5,7 @@ Uses real MemoryStore (the in-process dict-backed store).  No mocks.
 
 import pytest
 from datetime import datetime
+from unittest.mock import patch
 
 from services.world_state import WorldState, Signal
 
@@ -12,14 +13,33 @@ from services.world_state import WorldState, Signal
 @pytest.mark.unit
 class TestWorldStateTypedSnapshot:
     @pytest.fixture
-    def ws(self):
-        """Fresh WorldState backed by a real in-process MemoryStore."""
-        state = WorldState()
-        # Replace the internal _store dict with a real MemoryStore so
-        # the full set/get path is exercised without any DB dependency.
-        # WorldState._store is a plain dict; we keep it as-is — absorb/snapshot
-        # use self._store directly (dict keys), not MemoryStore API.
-        return state
+    def ws(self, db):
+        """Fresh WorldState booted against an empty, isolated MemoryStore.
+
+        WorldState now hydrates ``last_user_message_at`` from the process-shared
+        durable store on construction (TKT-922). Pointing the volatile fast-cache
+        at a brand-new empty MemoryStore for the lifetime of each test gives every
+        WorldState built inside the test a genuinely cold boot — the literal
+        effect of a process restart — so each test's absorb→snapshot round-trip is
+        isolated and a fresh, never-written instance honestly snapshots all-None.
+        This is the durability suite's sanctioned isolation pattern: a real, fresh
+        MemoryStore, not a mock of production logic.
+
+        Depends on the per-test ``db`` conftest fixture (TKT-922 critic must-fix):
+        ``absorb`` dual-writes its durable leg via ``DurableTimestamp`` into a
+        ``data_graph kind='system'`` row through ``get_shared_db_service()``.
+        Without ``db``, that write would land in the real production database; the
+        ``db`` fixture rebinds the shared DB singleton to an isolated per-test
+        SQLite copy so the durable leg is captured in the test DB and the
+        production database is never touched.
+        """
+        from services.memory_store import MemoryStore
+
+        cold_cache = MemoryStore()
+        with patch('services.memory_store.get_shared_store', return_value=cold_cache), \
+             patch('services.memory_client.MemoryClientService.create_connection',
+                   return_value=cold_cache):
+            yield WorldState()
 
     # ── absorb: user_message ──────────────────────────────────────────────
 
@@ -85,7 +105,8 @@ class TestWorldStateTypedSnapshot:
     # ── snapshot: unset fields return None ───────────────────────────────
 
     def test_snapshot_returns_none_for_unset_fields(self, ws):
-        """Fresh WorldState snapshot has all four typed fields as None."""
+        """A cold-booted WorldState with no prior persisted state snapshots all
+        four typed fields as None (nothing in the durable store to hydrate)."""
         snap = ws.snapshot()
         assert snap["last_user_message_at"] is None
         assert snap["last_heartbeat_at"] is None

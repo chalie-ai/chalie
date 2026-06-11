@@ -34,7 +34,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional
 
-from services.time_utils import utc_now, parse_utc
+from services.durable_timestamp import DurableTimestamp
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,16 @@ DEFAULT_IDLE_WINDOW_SEC = 1800      # 30 minutes — spec §5.2 user-active gate
 
 _MEMORY_KEY_LAST_FIRED = "subconscious:last_fired_at"
 _DG_KEY_LAST_FIRED = "subconscious_last_fired_at"
+_SOURCE_LAST_FIRED = "subconscious_worker"
+
+# Durable dual-write clock for the already-fired gate (MemoryStore + data_graph).
+# Bidirectional dependency: services/durable_timestamp.py owns the persist/hydrate
+# mechanism; this module supplies the key pair + provenance.
+_LAST_FIRED_TIMESTAMP = DurableTimestamp(
+    memory_key=_MEMORY_KEY_LAST_FIRED,
+    data_graph_key=_DG_KEY_LAST_FIRED,
+    source=_SOURCE_LAST_FIRED,
+)
 
 # Keys checked to determine whether DMN has a synthesis to work from.
 # SubconsciousWorker._step_dmn() skips when neither row is present.
@@ -620,39 +631,12 @@ class SubconsciousWorker:
     # ── State persistence ───────────────────────────────────────────────────
 
     def _load_last_fired_from_storage(self) -> Optional[datetime]:
-        """Read last_fired_at from MemoryStore first, fall back to data_graph.
+        """Hydrate last_fired_at from the durable dual-write store.
 
-        MemoryStore is the fast path; data_graph survives MemoryStore eviction
-        and process restarts.
+        Returns ``None`` when never persisted; the shared store handles the
+        MemoryStore-then-data_graph fallback and corruption guard.
         """
-        # Fast path — MemoryStore.
-        try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            raw = store.get(_MEMORY_KEY_LAST_FIRED)
-            if raw:
-                if isinstance(raw, bytes):
-                    raw = raw.decode("utf-8")
-                return parse_utc(raw)
-        except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} memory hydrate skipped: {exc}")
-
-        # Durable fallback — data_graph kind='system'.
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT value FROM data_graph "
-                    "WHERE kind='system' AND key=? AND active=1 AND deleted_at IS NULL "
-                    "LIMIT 1",
-                    (_DG_KEY_LAST_FIRED,),
-                ).fetchone()
-            if row and row[0]:
-                return parse_utc(row[0])
-        except Exception as exc:
-            logger.debug(f"{LOG_PREFIX} data_graph hydrate skipped: {exc}")
-        return None
+        return _LAST_FIRED_TIMESTAMP.load()
 
     def _persist_last_fired(self, when: datetime) -> None:
         """Write last_fired_at to MemoryStore + data_graph.
@@ -660,29 +644,8 @@ class SubconsciousWorker:
         Best-effort across both stores; either failure is logged but does not
         abort the tick. The next tick's gate logic still sees the cached
         in-process value via ``self._cached_last_fired``.
-
-        Both write paths log at WARNING — split-brain (one written, one not)
-        is real state divergence we want operators to see. DEBUG would have
-        made it silent.
         """
-        iso = when.isoformat()
-        try:
-            from services.memory_client import MemoryClientService
-            store = MemoryClientService.create_connection()
-            store.set(_MEMORY_KEY_LAST_FIRED, iso)
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} memory persist skipped: {exc}")
-
-        try:
-            from services.data_graph_service import get_data_graph_service, KIND_SYSTEM
-            get_data_graph_service().store(
-                kind=KIND_SYSTEM,
-                key=_DG_KEY_LAST_FIRED,
-                value=iso,
-                source="subconscious_worker",
-            )
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} data_graph persist skipped: {exc}")
+        _LAST_FIRED_TIMESTAMP.persist(when)
 
 
 # ── Module-level worker entry (registered in run.py) ─────────────────────────
