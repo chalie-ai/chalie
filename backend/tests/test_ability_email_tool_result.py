@@ -49,16 +49,9 @@ from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
 
+from tests._tool_result_harness import MP, allow_policy, seed_transcript
+
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "check my email"),
-    )
-    db.commit()
-    return cur.lastrowid
 
 
 def _allow_email_actions(db, channel: str = "chat") -> None:
@@ -71,24 +64,11 @@ def _allow_email_actions(db, channel: str = "chat") -> None:
     what a user does when they pick "always allow") lets the gate pass through to
     the production ``run()`` so its recipient validation and the base's
     not-connected path actually execute. No mock — this is the production policy
-    table driving the production gate."""
+    table driving the production gate. This loops EVERY email action (the harness
+    ``allow_policy`` flips a single permission); that per-action breadth is why the
+    local helper is kept."""
     for action in ("search", "read", "draft", "manage", "send", "reply", "forward"):
-        db.execute(
-            "INSERT OR REPLACE INTO policy (channel, permission, setting) "
-            "VALUES (?, ?, 'allow')",
-            (channel, f"email.{action}"),
-        )
-    db.commit()
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
+        allow_policy(db, f"email.{action}", channel)
 
 
 @pytest.fixture
@@ -97,7 +77,7 @@ def chat_mp(db):
     anchor for the act-trail write and every email action flipped to ``allow`` in
     the real policy table so the gate passes through to the production run()."""
     _allow_email_actions(db)
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(seed_transcript(db, "chat", "check my email"), UserConfig({}))
 
 
 # ── Foundation: EmailAbility is a CapabilityAbility ─────────────────────────────

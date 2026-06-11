@@ -45,24 +45,19 @@ refused with not-connected even when the local index had data; no rich card ever
 travelled. These tests fail against the pre-TKT-905 ability.
 """
 
-import json
-
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import DmnConfig, UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP as _MP
+from tests._tool_result_harness import parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
 
 def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "find John's number"),
-    )
-    db.commit()
-    return cur.lastrowid
+    return seed_transcript(db, channel=channel, content="find John's number")
 
 
 def _seed_contact(
@@ -93,16 +88,6 @@ def _seed_contact(
     return profile
 
 
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the policy channel + broadcast_to) and ``uid`` (the
-    transcript anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
 @pytest.fixture
 def dmn_mp(db):
     """A real non-user-broadcast mp (``broadcast_to is None``): contacts.list /
@@ -120,18 +105,9 @@ def user_mp(db):
     return _MP(_seed_transcript(db, "chat"), UserConfig({}))
 
 
-def _body_text(rendered: str, tool: str = "contacts") -> str:
-    """Return the text between the open tag and ``[end:<tool>]``."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return rendered[head:tail]
-
-
 def _parse_body(rendered: str, tool: str = "contacts") -> object:
     """Extract and JSON-parse the body (the JSON head before any card trailer)."""
-    body = _body_text(rendered, tool)
-    json_head = body.split("\n\n", 1)[0]
-    return json.loads(json_head)
+    return parse_body(rendered, tool, rich=True)
 
 
 # ── Foundation ──────────────────────────────────────────────────────────────────

@@ -56,6 +56,7 @@ from abilities._registry import AbilityRegistry
 from abilities.weather import WeatherAbility
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP, body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -92,47 +93,24 @@ def no_telemetry(monkeypatch):
     )
 
 
-def _seed_transcript(db) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        ("chat", "user", "what's the weather"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel + user broadcast) and ``uid``
-    (the transcript anchor the act-trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor. Weather seeds ``allow`` on chat in the db template, so the real gate
     passes through to the production run()."""
-    return _MP(_seed_transcript(db), UserConfig({}))
+    return MP(seed_transcript(db, "chat", "what's the weather"), UserConfig({}))
 
 
 def _head(rendered: str) -> str:
-    line = rendered.splitlines()[0]
-    assert line.startswith("[weather(")
-    return line
+    return head(rendered, "weather")
 
 
 def _body(rendered: str) -> str:
     """Extract the body between the open tag and ``[end:weather]``. On a
     user-broadcasting channel a rich card is paired (``<json>\\n\\n<span ...>``);
-    split on the blank line and return the JSON head."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:weather]")
-    body = rendered[head:tail]
-    return body.split("\n\n", 1)[0]
+    the ``rich=True`` harness extractor splits on the blank line and returns the
+    JSON head."""
+    return body(rendered, "weather", rich=True)
 
 
 def _sample_payload(location: str = "Valletta, Malta") -> dict:

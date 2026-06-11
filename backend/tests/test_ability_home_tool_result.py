@@ -58,6 +58,7 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import DmnConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP, allow_policy, body, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -206,15 +207,6 @@ def _reset_home_connection():
         cap._token = ""
 
 
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "turn off the office light"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
 def _allow(db, action: str, channel: str = "subconscious") -> None:
     """Seed an ``allow`` policy row so the real gate reaches run().
 
@@ -223,22 +215,7 @@ def _allow(db, action: str, channel: str = "subconscious") -> None:
     pick "always allow") lets the production gate pass so run() — and its entity
     guardrail — actually executes. The production policy table drives the
     production gate; no monkeypatch."""
-    db.execute(
-        "INSERT OR REPLACE INTO policy (channel, permission, setting) "
-        "VALUES (?, ?, 'allow')",
-        (channel, f"home.{action}"),
-    )
-    db.commit()
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the policy channel + broadcast_to) and ``uid`` (the
-    transcript anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
+    allow_policy(db, f"home.{action}", channel)
 
 
 @pytest.fixture
@@ -246,17 +223,15 @@ def dmn_mp(db):
     """A real non-user-broadcast mp on the subconscious channel: the home read
     actions are seeded ``allow`` there, and write actions are flipped to ``allow``
     per-test via ``_allow`` so the real gate reaches run() without a WS ask-hang."""
-    return _MP(_seed_transcript(db, "subconscious"), DmnConfig())
+    return MP(seed_transcript(db, "subconscious", "turn off the office light"), DmnConfig())
 
 
 def _body_text(rendered: str, tool: str = "home") -> str:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return rendered[head:tail]
+    return body(rendered, tool)
 
 
 def _parse_body(rendered: str, tool: str = "home") -> object:
-    return json.loads(_body_text(rendered, tool))
+    return parse_body(rendered, tool)
 
 
 # ── Foundation ───────────────────────────────────────────────────────────────

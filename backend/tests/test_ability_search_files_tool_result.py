@@ -43,34 +43,14 @@ were newline-joined prose, not JSON rows; and a capped result carried no
 ``truncated`` meta. These tests fail against that ability.
 """
 
-import json
-
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP, body, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "find the config file"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the policy channel) and ``uid`` (the transcript anchor
-    the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
 
 
 @pytest.fixture
@@ -78,17 +58,15 @@ def chat_mp(db):
     """A real chat mp: ``search_files.glob`` / ``search_files.grep`` are seeded
     ``allow`` on the chat channel ``UserConfig`` routes through, so the real
     policy gate passes and run() executes without a WebSocket ask-hang."""
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(seed_transcript(db, "chat", "find the config file"), UserConfig({}))
 
 
 def _body_text(rendered: str) -> str:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:search_files]")
-    return rendered[head:tail]
+    return body(rendered, "search_files")
 
 
 def _parse_body(rendered: str) -> object:
-    return json.loads(_body_text(rendered))
+    return parse_body(rendered, "search_files")
 
 
 # ── 1. unknown action → code=unknown-action + valid ladder ──────────────────────

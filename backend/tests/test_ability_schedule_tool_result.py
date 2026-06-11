@@ -48,19 +48,11 @@ from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
 from services.time_utils import utc_now
+from tests._tool_result_harness import MP, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
 _TZ = "Europe/Malta"
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "remind me to do a thing"),
-    )
-    db.commit()
-    return cur.lastrowid
 
 
 def _seed_timezone(db, tz_name: str = _TZ) -> None:
@@ -78,22 +70,12 @@ def _seed_timezone(db, tz_name: str = _TZ) -> None:
     heartbeat_service._ctx = None
 
 
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor for the act-trail write and a seeded user timezone."""
     _seed_timezone(db)
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(seed_transcript(db, "chat", "remind me to do a thing"), UserConfig({}))
 
 
 def _parse_body(rendered: str, tool: str = "schedule") -> object:
@@ -102,11 +84,7 @@ def _parse_body(rendered: str, tool: str = "schedule") -> object:
     On a user-broadcasting channel the dispatcher pairs a rich card: the body is
     ``<card_json>\\n\\n<span instruction>``. Split on the blank line and parse the
     JSON head so the same helper works for both plain and card-paired bodies."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    body = rendered[head:tail]
-    json_head = body.split("\n\n", 1)[0]
-    return json.loads(json_head)
+    return parse_body(rendered, tool, rich=True)
 
 
 def _row(db, item_id: str) -> dict | None:
@@ -401,8 +379,8 @@ def test_no_rich_card_on_non_broadcast_channel(db):
     from configs.channels import DmnConfig
 
     _seed_timezone(db)
-    uid = _seed_transcript(db, "subconscious")
-    mp = _MP(uid, DmnConfig())
+    uid = seed_transcript(db, "subconscious", "remind me to do a thing")
+    mp = MP(uid, DmnConfig())
     assert getattr(mp.config, "broadcast_to", None) != "user"
 
     # schedule.create is denied on subconscious by seed; use a channel-allowed

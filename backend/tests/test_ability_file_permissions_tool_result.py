@@ -43,7 +43,6 @@ keys and no ``previous`` meta; and the error paths all render
 ``status=success``. These tests fail against that ability.
 """
 
-import json
 import os
 import stat
 
@@ -53,39 +52,20 @@ from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
 
+from tests._tool_result_harness import allow_policy, parse_body, seed_transcript
+
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "make this script executable"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-def _allow_chmod(db, channel: str = "chat") -> None:
-    """Flip the REAL ``policy`` table so ``file_permissions`` is ``allow`` on the
-    channel — the same row the real ``PolicyManager`` gate reads.
-    ``file_permissions`` ships as ``ask`` by seed; on a headless test channel an
-    ``ask`` would block waiting for a human POST. Flipping the real row to
-    ``allow`` (exactly what a user does when they pick "always allow") lets the
-    gate pass through to the production ``run()``. No mock — this is the
-    production policy store."""
-    db.execute(
-        "INSERT OR REPLACE INTO policy (channel, permission, setting) "
-        "VALUES (?, ?, 'allow')",
-        (channel, "file_permissions"),
-    )
-    db.commit()
 
 
 class _MP:
     """Minimal real MP-shaped context — exactly what dispatch reads off the live
     processor: ``config`` (the chat policy channel) and ``uid`` (the act-trail
     write anchor). Production binds both to the same transcript id; the fixture
-    mirrors that."""
+    mirrors that.
+
+    Kept local (not the harness ``MP``) because the read-guard reads ``_uid`` as
+    its transcript anchor — the harness ``MP`` is the minimal ``config``+``uid``
+    form only."""
 
     def __init__(self, uid: int, config) -> None:
         self.config = config
@@ -98,18 +78,14 @@ def chat_mp(db):
     """A real chat mp bound to the test database: a seeded transcript anchor for
     the act-trail, and ``file_permissions`` flipped to ``allow`` in the real
     policy table so the gate passes through to the production run()."""
-    _allow_chmod(db)
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
-
-
-def _body_text(rendered: str) -> str:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:file_permissions]")
-    return rendered[head:tail]
+    allow_policy(db, "file_permissions")
+    return _MP(
+        seed_transcript(db, "chat", "make this script executable"), UserConfig({})
+    )
 
 
 def _parse_body(rendered: str) -> object:
-    return json.loads(_body_text(rendered))
+    return parse_body(rendered, "file_permissions")
 
 
 def _mode(path) -> int:

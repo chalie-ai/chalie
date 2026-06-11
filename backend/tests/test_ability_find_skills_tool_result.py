@@ -43,6 +43,10 @@ from services.act_trail import ActTrail
 from services.file_mapper_service import FileMapperService
 from services.message_processor import MessageProcessor
 
+from tests._tool_result_harness import body as _harness_body
+from tests._tool_result_harness import head as _harness_head
+from tests._tool_result_harness import seed_transcript
+
 pytestmark = pytest.mark.unit
 
 _REAL_SKILLS_DB = FileMapperService.get_skills_db_path()
@@ -59,35 +63,27 @@ def skills_db(tmp_path, monkeypatch):
     return dest
 
 
-def _seed_transcript(db) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        ("chat", "user", "find me a skill"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
 def _mp(db) -> MessageProcessor:
     """A real MessageProcessor bound to a real transcript anchor so the
-    dispatcher's act-trail write lands on a real row."""
+    dispatcher's act-trail write lands on a real row.
+
+    Kept local (not the harness ``MP``) because this drives the genuine
+    ``MessageProcessor`` carrying ``active_tools`` — the discovery/select surface
+    find_skills exercises — which the minimal ``config``+``uid`` harness ``MP``
+    does not model."""
     mp = MessageProcessor("find me a skill")
     mp.config = UserConfig({})
     mp.active_tools = list(mp.config.always_available or [])
-    mp.uid = _seed_transcript(db)
+    mp.uid = seed_transcript(db, "chat", "find me a skill")
     return mp
 
 
 def _head(rendered: str) -> str:
-    line = rendered.splitlines()[0]
-    assert line.startswith("[find_skills(")
-    return line
+    return _harness_head(rendered, "find_skills")
 
 
 def _body(rendered: str) -> str:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:find_skills]")
-    return rendered[head:tail]
+    return _harness_body(rendered, "find_skills")
 
 
 def _pick_known_title(db_path: Path) -> tuple[int, str, str]:

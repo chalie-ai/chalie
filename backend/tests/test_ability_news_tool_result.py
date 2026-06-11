@@ -60,34 +60,16 @@ from services import news_service
 from services.act_trail import ActTrail
 from services.memory_client import MemoryClientService
 from services.news_service import NewsArticle, NewsService
+from tests._tool_result_harness import MP, body as _harness_body, seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "what's in the news"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the policy channel + broadcast_to) and ``uid`` (the
-    transcript anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
 
 
 @pytest.fixture
 def user_mp(db):
     """A real user-broadcast mp (``broadcast_to == 'user'``). On this channel the
     dispatcher assigns a rich-media ordinal and renders the news card trailer."""
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(seed_transcript(db, "chat", "what's in the news"), UserConfig({}))
 
 
 @pytest.fixture
@@ -95,7 +77,7 @@ def dmn_mp(db):
     """A real non-user-broadcast mp (``broadcast_to is None``). On this channel the
     dispatcher drops the rich card, so the rendered body is the raw model-facing
     rows with no span/instruction trailer."""
-    return _MP(_seed_transcript(db, "subconscious"), DmnConfig())
+    return MP(seed_transcript(db, "subconscious", "what's in the news"), DmnConfig())
 
 
 @pytest.fixture(autouse=True)
@@ -109,10 +91,9 @@ def _reset_news_service():
 
 
 def _body(rendered: str, tool: str = "news") -> str:
-    """Return the text between the open tag and ``[end:<tool>]``."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return rendered[head:tail]
+    """Return the text between the open tag and ``[end:<tool>]`` (verbatim, no
+    rich-card split — the news tests own the ``partition`` themselves)."""
+    return _harness_body(rendered, tool)
 
 
 def _cache_key(query: str, country_code: str = "US") -> str:

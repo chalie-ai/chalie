@@ -42,8 +42,6 @@ respx/responses precedent in this suite, so it is documented as a network
 coverage gap in the ticket report rather than mocked.
 """
 
-import json
-
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -53,34 +51,19 @@ from abilities.programming_docs_search import (
 )
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "look up something in the docs"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
 
 
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor for the act-trail write."""
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(
+        seed_transcript(db, content="look up something in the docs"),
+        UserConfig({}),
+    )
 
 
 def _table_ids() -> set[str]:
@@ -90,10 +73,7 @@ def _table_ids() -> set[str]:
 
 
 def _parse_body(rendered: str, tool: str = "programming_docs_search") -> object:
-    """Extract and JSON-parse the body between the open tag and ``[end:<tool>]``."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return json.loads(rendered[head:tail])
+    return parse_body(rendered, tool)
 
 
 # ── Unknown source: errors loudly with the real-source ladder ──────────────────

@@ -48,6 +48,7 @@ import abilities.web_download
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import DmnConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -55,12 +56,7 @@ pytestmark = pytest.mark.unit
 def _seed_transcript(db) -> int:
     """Insert the transcript anchor (tool_calls.transcript_id FK) the trail hangs
     its recorded rows off, and return its id."""
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        ("dmn", "user", "download this file for me"),
-    )
-    db.commit()
-    return cur.lastrowid
+    return seed_transcript(db, channel="dmn", content="download this file for me")
 
 
 class _MP:

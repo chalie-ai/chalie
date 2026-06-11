@@ -36,41 +36,16 @@ import pytest
 from abilities._delegate import delegate_result
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
+from tests._tool_result_harness import MP, body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-class _MP:
-    """Minimal real MP-shaped context dispatch reads off the live processor:
-    ``config`` (the chat policy channel) and ``uid`` (the act-trail anchor)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
-def _seed_transcript(db, channel: str = "chat") -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "research something"),
-    )
-    db.commit()
-    return cur.lastrowid
 
 
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test db, with a seeded transcript anchor
     so the dispatcher's act-trail record has a uid to key against."""
-    return _MP(_seed_transcript(db), UserConfig({}))
-
-
-def _render_envelope(rendered: str, tool: str) -> tuple[str, str]:
-    """Split a rendered envelope into (open-tag-line, body+trailer)."""
-    head_end = rendered.index("]\n") + 1
-    open_tag = rendered[:head_end]
-    body = rendered[head_end + 1 : rendered.index(f"\n[end:{tool}]")]
-    return open_tag, body
+    return MP(seed_transcript(db, content="research something"), UserConfig({}))
 
 
 # ── Param gate: missing query/goal is rejected BEFORE a delegate spawns ─────────
@@ -93,10 +68,10 @@ def test_missing_param_blocked_before_delegate(db, chat_mp, tool, param, params)
     the empty param flowed into run() and spawned a real delegate loop."""
     rendered = ToolDispatcher(chat_mp).dispatch(tool, dict(params))
 
-    open_tag, body = _render_envelope(rendered, tool)
+    open_tag = head(rendered, tool)
     assert "status=error" in open_tag
     assert "code=missing-params" in open_tag
-    assert param in body
+    assert param in body(rendered, tool)
     assert f"valid: {param}" in rendered
 
 

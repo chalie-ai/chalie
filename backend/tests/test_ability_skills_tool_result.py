@@ -46,6 +46,7 @@ from configs.channels import SkillSuggestionConfig, UserConfig
 from services.act_trail import ActTrail
 from services.file_mapper_service import FileMapperService
 from services.message_processor import MessageProcessor
+from tests._tool_result_harness import body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -76,15 +77,6 @@ def skills_db(tmp_path, monkeypatch):
     return {"db_path": dest, "yaml_dir": yaml_dir}
 
 
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "manage my skills"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
 def _mp_for(config, db) -> MessageProcessor:
     """A real MessageProcessor bound to a real channel config and a real
     transcript anchor (so the dispatcher's act-trail write lands on a real row),
@@ -93,19 +85,16 @@ def _mp_for(config, db) -> MessageProcessor:
     mp.config = config
     mp.active_tools = list(config.always_available or [])
     pc = getattr(config, "policy_channel", None)
-    mp.uid = _seed_transcript(db, pc.value if pc else "chat")
+    mp.uid = seed_transcript(db, pc.value if pc else "chat", "manage my skills")
     return mp
 
 
 def _head(rendered: str, tool: str) -> str:
-    assert rendered.splitlines()[0].startswith(f"[{tool}(")
-    return rendered.splitlines()[0]
+    return head(rendered, tool)
 
 
 def _body(rendered: str, tool: str) -> object:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return rendered[head:tail]
+    return body(rendered, tool)
 
 
 def _fetch_content(db_path: Path, title: str) -> str | None:

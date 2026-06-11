@@ -32,7 +32,6 @@ transcript-doc link, stable kebab-case error codes (NOT the ``code="error"``
 placeholder), and the ACTION_REQUIRED missing-param pre-gate.
 """
 
-import json
 import os
 
 import pytest
@@ -40,17 +39,14 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP as _MP
+from tests._tool_result_harness import allow_policy, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
 
 def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "manage my documents"),
-    )
-    db.commit()
-    return cur.lastrowid
+    return seed_transcript(db, channel=channel, content="manage my documents")
 
 
 def _allow_delete(db, channel: str = "chat") -> None:
@@ -61,22 +57,7 @@ def _allow_delete(db, channel: str = "chat") -> None:
     when they pick "always allow") lets the gate pass through to the production
     ``run()`` so the disambiguation guardrail itself can be exercised. No mock —
     this is the production policy store."""
-    db.execute(
-        "INSERT OR REPLACE INTO policy (channel, permission, setting) "
-        "VALUES (?, ?, 'allow')",
-        (channel, "document.delete"),
-    )
-    db.commit()
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
+    allow_policy(db, "document.delete", channel=channel)
 
 
 @pytest.fixture
@@ -114,9 +95,7 @@ def _ingest(db, tmp_path, name: str, content: str) -> str:
 def _parse_body(rendered: str, tool: str = "document") -> object:
     """Extract and JSON-parse the body between the open tag and ``[end:<tool>]`` —
     proves the envelope the model receives is structured and machine-parseable."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return json.loads(rendered[head:tail])
+    return parse_body(rendered, tool)
 
 
 # ── The heart: fuzzy delete must disambiguate, never silently first-hit ────────

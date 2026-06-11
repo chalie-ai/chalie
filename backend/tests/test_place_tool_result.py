@@ -34,17 +34,9 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "save this place"),
-    )
-    db.commit()
-    return cur.lastrowid
 
 
 def _seed_gps(db, *, lat: float, lon: float, location_name: str) -> None:
@@ -77,29 +69,15 @@ def _clear_gps(db) -> None:
     heartbeat_service._ctx = None
 
 
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor for the act-trail write."""
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(seed_transcript(db, content="save this place"), UserConfig({}))
 
 
 def _parse_body(rendered: str, tool: str = "place") -> object:
-    """Extract and JSON-parse the body between the open tag and ``[end:<tool>]`` —
-    proves the envelope the model receives is structured and machine-parseable."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return json.loads(rendered[head:tail])
+    return parse_body(rendered, tool)
 
 
 # ── Happy paths: every action renders a non-empty, parseable success body ──────

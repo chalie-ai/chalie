@@ -51,17 +51,14 @@ from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
 from services.time_utils import utc_now
+from tests._tool_result_harness import MP as _MP
+from tests._tool_result_harness import allow_policy, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
 
 def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "what's on my calendar"),
-    )
-    db.commit()
-    return cur.lastrowid
+    return seed_transcript(db, channel=channel, content="what's on my calendar")
 
 
 def _allow_calendar_writes(db, channel: str = "chat") -> None:
@@ -75,12 +72,7 @@ def _allow_calendar_writes(db, channel: str = "chat") -> None:
     validation / fuzzy-match / not-connected paths — actually executes. No mock:
     this is the production policy table driving the production gate."""
     for action in ("create_event", "update_event", "delete_event"):
-        db.execute(
-            "INSERT OR REPLACE INTO policy (channel, permission, setting) "
-            "VALUES (?, ?, 'allow')",
-            (channel, f"calendar.{action}"),
-        )
-    db.commit()
+        allow_policy(db, f"calendar.{action}", channel=channel)
 
 
 def _seed_event(
@@ -124,16 +116,6 @@ def _seed_event(
     db.commit()
 
 
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
@@ -144,16 +126,9 @@ def chat_mp(db):
 
 
 def _parse_body(rendered: str, tool: str = "calendar") -> object:
-    """Extract and JSON-parse the body between the open tag and ``[end:<tool>]``.
-
-    On a user-broadcasting channel the dispatcher pairs a rich card: the body is
-    ``<card_json>\\n\\n<span instruction>``. Split on the blank line and parse the
-    JSON head so the same helper works for both plain and card-paired bodies."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    body = rendered[head:tail]
-    json_head = body.split("\n\n", 1)[0]
-    return json.loads(json_head)
+    """Extract and JSON-parse the rich-card head between the open tag and
+    ``[end:<tool>]`` (the JSON before the blank-line span trailer)."""
+    return parse_body(rendered, tool, rich=True)
 
 
 # ── Foundation: CalendarAbility is a CapabilityAbility ──────────────────────────

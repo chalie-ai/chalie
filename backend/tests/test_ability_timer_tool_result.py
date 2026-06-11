@@ -43,34 +43,16 @@ from abilities._dispatcher import ToolDispatcher
 from abilities.timer import TimerAbility
 from configs.channels import DmnConfig, UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP, body, seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "start a timer"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the policy channel + broadcast_to) and ``uid`` (the
-    transcript anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
 
 
 @pytest.fixture
 def user_mp(db):
     """A real user-broadcast mp (``broadcast_to == 'user'``). On this channel the
     dispatcher assigns a rich-media ordinal and renders the timer card trailer."""
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(seed_transcript(db, "chat", "start a timer"), UserConfig({}))
 
 
 @pytest.fixture
@@ -78,14 +60,12 @@ def dmn_mp(db):
     """A real non-user-broadcast mp (``broadcast_to is None``). On this channel the
     dispatcher drops the rich card, so the rendered body is the raw model-facing
     payload dict with no span/instruction trailer."""
-    return _MP(_seed_transcript(db, "subconscious"), DmnConfig())
+    return MP(seed_transcript(db, "subconscious", "start a timer"), DmnConfig())
 
 
 def _body(rendered: str, tool: str = "timer") -> str:
     """Return the text between the open tag and ``[end:<tool>]``."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return rendered[head:tail]
+    return body(rendered, tool)
 
 
 # ── Contract: happy path, no card on a non-broadcast turn ────────────────────────

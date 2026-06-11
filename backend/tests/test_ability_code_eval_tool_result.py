@@ -47,8 +47,6 @@ success/exception/syntax/no-output/truncation bodies are compact JSON; errors ar
 prose with a kebab code in the head. ``code=error`` appears nowhere.
 """
 
-import json
-
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -56,6 +54,7 @@ from abilities._registry import AbilityRegistry
 from abilities.code_eval import CodeEvalAbility
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP, body, head, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -63,49 +62,26 @@ pytestmark = pytest.mark.unit
 # ── Fixtures / helpers ──────────────────────────────────────────────────────────
 
 
-def _seed_transcript(db) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        ("chat", "user", "run some python"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel + user broadcast) and ``uid``
-    (the transcript anchor the act-trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor. code_eval seeds ``allow`` on chat in the db template, so the real gate
     passes through to the production run()."""
-    return _MP(_seed_transcript(db), UserConfig({}))
+    return MP(seed_transcript(db, "chat", "run some python"), UserConfig({}))
 
 
 def _head(rendered: str) -> str:
-    line = rendered.splitlines()[0]
-    assert line.startswith("[code_eval(")
-    return line
+    return head(rendered, "code_eval")
 
 
 def _body(rendered: str) -> str:
     """Extract the body between the open tag and the ``[end:code_eval]`` close."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:code_eval]")
-    return rendered[head:tail]
+    return body(rendered, "code_eval")
 
 
 def _body_json(rendered: str) -> dict:
     """Parse a success body (compact JSON) into a dict."""
-    return json.loads(_body(rendered))
+    return parse_body(rendered, "code_eval")
 
 
 # ── 1. success envelope: ran, printed, exit 0, branchable structured body ───────

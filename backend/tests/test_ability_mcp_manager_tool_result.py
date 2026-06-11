@@ -43,8 +43,6 @@ enable/disable target renders ``status=success`` "No server found …" prose;
 tests fail against that ability.
 """
 
-import json
-
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -52,6 +50,9 @@ from abilities.mcp_manager import _classify_sync_error
 from configs.channels import UserConfig
 from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService
+
+from tests._tool_result_harness import head as _harness_head
+from tests._tool_result_harness import parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -63,21 +64,16 @@ class _MP:
     """Minimal real MP-shaped context — exactly what dispatch reads off the live
     processor: ``config`` (the policy channel), ``uid`` and ``_uid`` (the
     act-trail / read-guard anchors). Production binds all three to the same
-    transcript id; the fixture mirrors that."""
+    transcript id; the fixture mirrors that.
+
+    Kept local (not the harness ``MP``) because the read-guard reads ``_uid`` as
+    its transcript anchor — the harness ``MP`` is the minimal ``config``+``uid``
+    form only."""
 
     def __init__(self, uid: int, config) -> None:
         self.config = config
         self.uid = uid
         self._uid = uid
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "connect to an mcp server"),
-    )
-    db.commit()
-    return cur.lastrowid
 
 
 @pytest.fixture
@@ -86,21 +82,15 @@ def chat_mp(db, tmp_path, monkeypatch):
     runtime DB isolated under ``tmp_path`` so ``list``/``add`` tool-count reads
     and tool writes never touch the developer's real data dir."""
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return _MP(seed_transcript(db, "chat", "connect to an mcp server"), UserConfig({}))
 
 
 def _head(rendered: str) -> str:
-    return rendered.splitlines()[0]
-
-
-def _body(rendered: str) -> str:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:mcp_manager]")
-    return rendered[head:tail]
+    return _harness_head(rendered, "mcp_manager")
 
 
 def _parse_body(rendered: str) -> object:
-    return json.loads(_body(rendered))
+    return parse_body(rendered, "mcp_manager")
 
 
 # ── 1. THE KILL SHOT: unreachable add → mcp-unreachable, but row IS registered ──

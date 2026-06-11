@@ -58,6 +58,7 @@ from services.act_trail import ActTrail
 from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService
 from services.message_processor import MessageProcessor
+from tests._tool_result_harness import allow_policy, body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -75,12 +76,7 @@ def _free_port() -> int:
 
 
 def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "call an mcp tool"),
-    )
-    db.commit()
-    return cur.lastrowid
+    return seed_transcript(db, channel=channel, content="call an mcp tool")
 
 
 def _mp_for(config, db) -> MessageProcessor:
@@ -102,11 +98,7 @@ def _allow(db, permission: str) -> None:
     lazy-'ask' default (which on chat would freeze on a human prompt), NOT a
     monkeypatch of the gate.
     """
-    db.execute(
-        "INSERT OR REPLACE INTO policy (channel, permission, setting) VALUES (?, ?, 'allow')",
-        ("chat", permission),
-    )
-    db.commit()
+    allow_policy(db, permission, channel="chat")
 
 
 def _head(rendered: str) -> str:
@@ -114,9 +106,7 @@ def _head(rendered: str) -> str:
 
 
 def _body(rendered: str, tool_name: str) -> str:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool_name}]")
-    return rendered[head:tail]
+    return body(rendered, tool_name)
 
 
 # ── UNREACHABLE: real outbound connection failure → code=mcp-unreachable ─────────

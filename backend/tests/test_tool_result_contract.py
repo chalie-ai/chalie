@@ -37,17 +37,9 @@ from abilities._dispatcher import ToolDispatcher
 from abilities._result import ToolResult
 from configs.channels import DmnConfig, UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import seed_transcript as _seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "do a thing"),
-    )
-    db.commit()
-    return cur.lastrowid
 
 
 class _MP:

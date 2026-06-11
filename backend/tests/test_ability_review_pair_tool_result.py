@@ -25,12 +25,17 @@ hint (never an error), a LOUD narrow ``query-failed`` on a corrupt read, and
 window arithmetic is exercised for real, fully offline.
 """
 
-import json
-
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
+from tests._tool_result_harness import (
+    MP,
+    body,
+    head,
+    parse_body,
+    seed_transcript,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -44,15 +49,6 @@ _INSIDE_B = "2026-04-07T14:31:00+00:00"   # +1 min
 _OUTSIDE = "2026-04-07T14:50:00+00:00"    # +20 min (outside ±5)
 _PLUS_20 = "2026-04-07T14:50:00+00:00"    # +20 min
 _PLUS_40 = "2026-04-07T15:10:00+00:00"    # +40 min
-
-
-def _seed_transcript_anchor(db) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        ("chat", "user", "review the history"),
-    )
-    db.commit()
-    return cur.lastrowid
 
 
 def _seed_tool_call(db, *, transcript_id, tool_name, params, result, created_at, ephemeral=0):
@@ -74,37 +70,23 @@ def _seed_transcript_row(db, *, channel, role, content, created_at):
     db.commit()
 
 
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel + user broadcast) and ``uid``
-    (the transcript anchor the act-trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database. Both review tools are in
     ``PolicyManager.INTERNAL`` so the gate short-circuits straight to run()."""
-    return _MP(_seed_transcript_anchor(db), UserConfig({}))
+    return MP(seed_transcript(db, content="review the history"), UserConfig({}))
 
 
 def _head(rendered: str, tool: str) -> str:
-    line = rendered.splitlines()[0]
-    assert line.startswith(f"[{tool}(")
-    return line
+    return head(rendered, tool)
 
 
 def _body(rendered: str, tool: str) -> str:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return rendered[head:tail]
+    return body(rendered, tool)
 
 
 def _body_json(rendered: str, tool: str):
-    return json.loads(_body(rendered, tool))
+    return parse_body(rendered, tool)
 
 
 # ── 1. review_tool_calls happy path: windowed rows, iter ordinals, ok flag ──────

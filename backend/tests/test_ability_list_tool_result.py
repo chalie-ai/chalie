@@ -36,42 +36,9 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP, allow_policy, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "manage my lists"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-def _allow_delete(db, channel: str = "chat") -> None:
-    """Flip the REAL ``policy`` table so ``list.delete`` is ``allow`` on the
-    channel — the same row the real ``PolicyManager`` gate reads. ``delete`` ships
-    as ``ask`` by seed; on a headless test channel an ``ask`` would block waiting
-    for a human POST. Flipping the real row to ``allow`` (exactly what a user does
-    when they pick "always allow") lets the gate pass through to the production
-    ``run()``. No mock — this is the production policy store."""
-    db.execute(
-        "INSERT OR REPLACE INTO policy (channel, permission, setting) "
-        "VALUES (?, ?, 'allow')",
-        (channel, "list.delete"),
-    )
-    db.commit()
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
 
 
 @pytest.fixture
@@ -79,8 +46,8 @@ def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor for the act-trail write and ``list.delete`` flipped to ``allow`` in the
     real policy table so the destructive gate passes through to run()."""
-    _allow_delete(db)
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    allow_policy(db, "list.delete", "chat")
+    return MP(seed_transcript(db, "chat", "manage my lists"), UserConfig({}))
 
 
 @pytest.fixture
@@ -91,7 +58,7 @@ def dmn_mp(db):
     instead of the frontend card payload. The subconscious policy channel ships
     list.add/list_all as ``allow``."""
     from configs.channels import DmnConfig
-    return _MP(_seed_transcript(db, "subconscious"), DmnConfig())
+    return MP(seed_transcript(db, "subconscious", "manage my lists"), DmnConfig())
 
 
 def _service():
@@ -109,14 +76,10 @@ def _parse_body(rendered: str, tool: str = "list") -> object:
     proves the envelope the model receives is structured and machine-parseable.
 
     For a rich card on a user-broadcast turn the body is ``<card_json>\\n\\n
-    <instruction>``; this returns the card payload (the JSON head before the
-    blank line)."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    body = rendered[head:tail]
-    if "\n\n" in body:
-        body = body.split("\n\n", 1)[0]
-    return json.loads(body)
+    <instruction>``; the ``rich=True`` harness extractor returns the card payload
+    (the JSON head before the blank line). On a non-broadcast turn the body is a
+    single JSON block with no blank line, so the split is a no-op."""
+    return parse_body(rendered, tool, rich=True)
 
 
 # ── Automation: name addressing ────────────────────────────────────────────────

@@ -51,6 +51,7 @@ from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
 from services.file_mapper_service import FileMapperService
+from tests._tool_result_harness import MP, allow_policy, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -85,33 +86,9 @@ _ALLOW_ACTIONS = (
 )
 
 
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "is the office AP up?"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
 def _allow_ubiquiti_actions(db, channel: str = "chat") -> None:
     for action in (*_ALLOW_ACTIONS, *_ASK_ACTIONS):
-        db.execute(
-            "INSERT OR REPLACE INTO policy (channel, permission, setting) "
-            "VALUES (?, ?, 'allow')",
-            (channel, f"ubiquiti.{action}"),
-        )
-    db.commit()
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
+        allow_policy(db, f"ubiquiti.{action}", channel=channel)
 
 
 @pytest.fixture
@@ -120,7 +97,7 @@ def chat_mp(db):
     anchor for the act-trail write and every ubiquiti action flipped to ``allow``
     in the real policy table so the gate passes through to the production run()."""
     _allow_ubiquiti_actions(db)
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(seed_transcript(db, content="is the office AP up?"), UserConfig({}))
 
 
 # ── Foundation: UbiquitiAbility is a CapabilityAbility ──────────────────────────

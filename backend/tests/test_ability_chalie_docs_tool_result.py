@@ -45,6 +45,8 @@ import abilities.chalie_docs
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
+from tests._tool_result_harness import MP as _MP
+from tests._tool_result_harness import seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -52,22 +54,7 @@ pytestmark = pytest.mark.unit
 def _seed_transcript(db, channel: str) -> int:
     """Insert the transcript anchor (tool_calls.transcript_id FK) the trail hangs
     its recorded rows off, and return its id."""
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "tell me about chalie"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
+    return seed_transcript(db, channel=channel, content="tell me about chalie")
 
 
 @pytest.fixture

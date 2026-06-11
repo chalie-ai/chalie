@@ -38,8 +38,6 @@ touch no network. The query path runs the real EmbeddingService + the real
 abilities.sqlite vec/FTS search locally — no engine call.
 """
 
-import json
-
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -47,18 +45,9 @@ from configs.channels import DmnConfig, UserConfig
 from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
 
+from tests._tool_result_harness import parse_body, seed_transcript
+
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    """Seed a real transcript anchor so the act-trail write has a row to attach to
-    (the same anchor the production loop records every tool call against)."""
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "find a tool for me"),
-    )
-    db.commit()
-    return cur.lastrowid
 
 
 def _mp_for(config, db=None) -> MessageProcessor:
@@ -66,26 +55,37 @@ def _mp_for(config, db=None) -> MessageProcessor:
     ``_setup`` seeds it (active_tools = config.always_available). This is the same
     construction the channel-isolation feature suite drives. When *db* is given,
     a real transcript anchor is seeded and bound to ``mp.uid`` so the act-trail
-    write the dispatcher performs lands against a real row."""
+    write the dispatcher performs lands against a real row.
+
+    Kept local (not the harness ``MP``) because this drives the genuine
+    ``MessageProcessor`` carrying ``active_tools`` (the live mutation find_tools
+    asserts) and a real production channel config — beyond the minimal
+    ``config``+``uid`` harness ``MP``."""
     mp = MessageProcessor("find a tool for me")
     mp.config = config
     mp.active_tools = list(config.always_available or [])
     if db is not None:
-        mp.uid = _seed_transcript(db, getattr(config, "policy_channel", None).value
-                                  if getattr(config, "policy_channel", None) else "chat")
+        channel = (
+            getattr(config, "policy_channel", None).value
+            if getattr(config, "policy_channel", None)
+            else "chat"
+        )
+        mp.uid = seed_transcript(db, channel, "find a tool for me")
     return mp
 
 
 def _head(rendered: str) -> str:
-    """The open-tag line ``[find_tools(status=…, …)]`` the model reads first."""
+    """The open-tag line ``[find_tools(status=…, …)]`` the model reads first.
+
+    Kept local (not the harness ``head``): call sites compare it with ``==`` /
+    ``.startswith`` / ``in`` and need the raw first line, not the harness opener
+    assertion."""
     return rendered.splitlines()[0]
 
 
 def _body(rendered: str) -> object:
     """Extract and JSON-parse the body between the open tag and ``[end:find_tools]``."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:find_tools]")
-    return json.loads(rendered[head:tail])
+    return parse_body(rendered, "find_tools")
 
 
 # ── select a known tool: success envelope + real active_tools mutation ─────────

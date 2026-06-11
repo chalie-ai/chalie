@@ -35,7 +35,6 @@ covered against the real registry only at the rejection boundary and documented 
 a network-coverage gap in the ticket report rather than mocked.
 """
 
-import json
 import sqlite3
 
 import pytest
@@ -45,34 +44,16 @@ from abilities.search import SearchAbility
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
 from services.file_mapper_service import FileMapperService
+from tests._tool_result_harness import MP, seed_transcript
 
 pytestmark = pytest.mark.unit
-
-
-def _seed_transcript(db, channel: str) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, "user", "search for something"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
-    anchor the trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
 
 
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor for the act-trail write."""
-    return _MP(_seed_transcript(db, "chat"), UserConfig({}))
+    return MP(seed_transcript(db, "chat", "search for something"), UserConfig({}))
 
 
 def _configured_providers() -> set[str]:
@@ -83,18 +64,6 @@ def _configured_providers() -> set[str]:
     rows = conn.execute("SELECT name FROM providers WHERE enabled = 1").fetchall()
     conn.close()
     return {r["name"] for r in rows}
-
-
-def _meta_head(rendered: str, tool: str = "search") -> str:
-    """The open-tag line ``[search(status=…, …)]`` the model reads first."""
-    return rendered.splitlines()[0]
-
-
-def _parse_body(rendered: str, tool: str = "search") -> object:
-    """Extract and JSON-parse the body between the open tag and ``[end:<tool>]``."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index(f"\n[end:{tool}]")
-    return json.loads(rendered[head:tail])
 
 
 # ── The heart: a forced UNKNOWN provider errors loudly, never DDG-masked ───────

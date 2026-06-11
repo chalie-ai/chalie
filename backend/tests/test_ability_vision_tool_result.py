@@ -54,6 +54,7 @@ from services.database_service import get_shared_db_service
 from services.document_service import DocumentService
 from services.file_mapper_service import FileMapperService
 from services.provider_db_service import ProviderDbService
+from tests._tool_result_harness import MP, body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -67,46 +68,20 @@ def _png_bytes() -> bytes:
     )
 
 
-def _seed_transcript(db) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        ("chat", "user", "what is in this image"),
-    )
-    db.commit()
-    return cur.lastrowid
-
-
-class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel + user broadcast) and ``uid``
-    (the transcript anchor the act-trail records against)."""
-
-    def __init__(self, uid: int, config) -> None:
-        self.config = config
-        self.uid = uid
-
-
 @pytest.fixture
 def chat_mp(db):
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor. Vision seeds ``allow`` on chat in the db template, so the real gate
     passes through to the production run()."""
-    return _MP(_seed_transcript(db), UserConfig({}))
+    return MP(seed_transcript(db, content="what is in this image"), UserConfig({}))
 
 
 def _head(rendered: str) -> str:
-    line = rendered.splitlines()[0]
-    assert line.startswith("[vision(")
-    return line
+    return head(rendered, "vision")
 
 
 def _body(rendered: str) -> str:
-    """Extract the body (prose, verbatim) between the open tag and the
-    ``[end:vision]`` close — vision bodies are prose, not JSON, so no rich-card
-    blank-line split is needed."""
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:vision]")
-    return rendered[head:tail]
+    return body(rendered, "vision")
 
 
 def _force_vision_provider(db) -> int:

@@ -37,6 +37,7 @@ from abilities.save_graph import ALLOWED_KINDS, SaveGraph
 from configs.channels.pattern import PatternConfig, _pattern_init_instance_state
 from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
+from tests._tool_result_harness import body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -45,12 +46,7 @@ pytestmark = pytest.mark.unit
 
 
 def _seed_transcript(db) -> int:
-    cur = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        ("pattern_match", "user", "remember a fact"),
-    )
-    db.commit()
-    return cur.lastrowid
+    return seed_transcript(db, channel="pattern_match", content="remember a fact")
 
 
 def _mp(db) -> MessageProcessor:
@@ -67,15 +63,11 @@ def _mp(db) -> MessageProcessor:
 
 
 def _head(rendered: str) -> str:
-    line = rendered.splitlines()[0]
-    assert line.startswith("[save_graph(")
-    return line
+    return head(rendered, "save_graph")
 
 
 def _body(rendered: str) -> str:
-    head = rendered.index("]\n") + 2
-    tail = rendered.index("\n[end:save_graph]")
-    return rendered[head:tail]
+    return body(rendered, "save_graph")
 
 
 def _rows(db, *, kind=None, key=None) -> list:
