@@ -2,8 +2,8 @@
 /chat/stop, /action.
 
 Drives the real Flask app (create_app via authed_client) against a real
-SQLite database. Pins the synchronous endpoint contracts: the async
-full-turn path (real UMP + LLM) is exercised by the nightly scenarios.
+SQLite database. Pins the synchronous endpoint contracts; the async
+full-turn path (real UMP + LLM) is out of scope here.
 """
 
 import pytest
