@@ -15,8 +15,19 @@ const PanelPolicies = (() => {
 
   function _render() {
     if (!_root) return;
-    _root.innerHTML = `<div class="panel-header"><h2>Policies</h2></div>
+    _root.innerHTML = `<div class="panel-header">
+      <h2>Policies</h2>
+      <div class="panel-header-actions">
+        <div class="segmented policy-bulk" title="Set every permission in this channel">
+          ${['allow', 'ask', 'deny'].map(v => `<button class="seg-btn" data-bulk="${v}">${v.charAt(0).toUpperCase() + v.slice(1)}</button>`).join('')}
+        </div>
+      </div>
+    </div>
     <div id="policiesContent"><div class="loading">Loading…</div></div>`;
+    _root.querySelector('.policy-bulk')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.seg-btn');
+      if (btn) _setAll(btn.dataset.bulk);
+    });
     if (!_loaded) _load(); else _renderPolicies();
   }
 
@@ -109,6 +120,25 @@ const PanelPolicies = (() => {
         BrainApp.showToast(`${permission} → ${setting}`, 'success');
       } else BrainApp.showToast('Failed to update policy', 'error');
     } catch { BrainApp.showToast('Network error', 'error'); }
+  }
+
+  // Bulk-set every permission in the currently-selected channel to one setting.
+  // Fans out one single-cell PUT per row that actually changes, then re-renders.
+  async function _setAll(setting) {
+    const channel = CONTEXT_MAP[_sub] || 'chat';
+    const targets = _rows.filter(r => r.channel === channel && r.setting !== setting);
+    if (targets.length === 0) { BrainApp.showToast(`All already ${setting}`, 'success'); return; }
+    const results = await Promise.all(targets.map(r =>
+      BrainApp.apiFetch('/api/policies', {
+        method: 'PUT',
+        body: JSON.stringify({ channel, permission: r.permission, setting }),
+      }).then(res => res.ok).catch(() => false)
+    ));
+    targets.forEach((r, i) => { if (results[i]) r.setting = setting; });
+    const ok = results.filter(Boolean).length;
+    if (ok === targets.length) BrainApp.showToast(`All ${channel} → ${setting} (${ok})`, 'success');
+    else BrainApp.showToast(`Updated ${ok}/${targets.length} — some failed`, 'error');
+    _renderPolicies();
   }
 
   return { mount, unmount };

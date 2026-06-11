@@ -509,6 +509,10 @@ input[type="checkbox"]:checked::after {
 .seg-btn.active[data-val="allow"] { color: var(--success); }
 .seg-btn.active[data-val="deny"] { color: var(--error); }
 .seg-btn.active[data-val="ask"] { color: var(--violet); }
+.policy-bulk .seg-btn[data-bulk="allow"] { color: var(--success); }
+.policy-bulk .seg-btn[data-bulk="ask"] { color: var(--violet); }
+.policy-bulk .seg-btn[data-bulk="deny"] { color: var(--error); }
+.policy-bulk .seg-btn:hover { background: var(--bg-surface-2); }
 
 /* ── Status dots ──────────────────────────────────────────────── */
 .status-dot {
