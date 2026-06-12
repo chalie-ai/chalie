@@ -6,6 +6,8 @@ const PanelProviders = (() => {
   let _editPlatform = 'ollama';
   let _editingId = null;
   let _editModel = '';
+  let _editCatalogId = '';
+  let _catalogData = null;
   let _modelsFetchInFlight = false;
   let _modelFetchTimer = null;
   const _MODEL_FETCH_DEBOUNCE_MS = 600;
@@ -16,6 +18,7 @@ const PanelProviders = (() => {
     openai: { desc: 'API key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. gpt-4o', models: ['gpt-4o', 'gpt-4.1', 'o3', 'o4-mini'] },
     gemini: { desc: 'API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. gemini-2.5-flash', models: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
     openai_compatible: { desc: 'Any OpenAI-compatible API (Groq, DeepSeek, Together, etc.)', hasHost: true, hasApiKey: true, placeholder: 'e.g. MiniMax-M2', models: [] },
+    popular_providers: { desc: 'Choose from a curated list of popular AI providers', hasHost: false, hasApiKey: true, isCatalog: true, placeholder: 'Select model', models: [] },
   };
 
   async function mount(root) {
@@ -61,7 +64,7 @@ const PanelProviders = (() => {
         <div class="provider-info">
           <div class="provider-name">${BrainApp.escapeHtml(p.name)}${warn}</div>
           <div class="provider-meta">
-            <span class="badge badge-${p.platform}">${BrainApp.escapeHtml(p.platform)}</span>
+            <span class="badge badge-${_badgeClass(p.platform)}">${BrainApp.escapeHtml(p.platform)}</span>
             <span>${BrainApp.escapeHtml(p.model || 'no model')}</span>
             ${p.host ? `<span>· ${BrainApp.escapeHtml(p.host)}</span>` : ''}
           </div>
@@ -96,8 +99,18 @@ const PanelProviders = (() => {
     _editingId = id;
     _editPlatform = 'ollama';
     _editModel = '';
+    _editCatalogId = '';
     const p = id ? _providers.find(x => x.id === id) : null;
-    if (p) { _editPlatform = p.platform; _editModel = p.model || ''; }
+    if (p) {
+      _editPlatform = p.platform;
+      _editModel = p.model || '';
+      if (PLATFORM_CONFIG[_editPlatform]?.isCatalog) {
+        _editCatalogId = _editPlatform;
+      } else if (!PLATFORM_CONFIG[_editPlatform] && _catalogData?.[_editPlatform]) {
+        _editCatalogId = _editPlatform;
+        _editPlatform = 'popular_providers';
+      }
+    }
 
     const cfg = PLATFORM_CONFIG[_editPlatform];
     const platforms = Object.keys(PLATFORM_CONFIG);
@@ -110,7 +123,7 @@ const PanelProviders = (() => {
         <h3>${id ? 'Edit Provider' : 'Add Provider'}</h3>
       </div>
       <div class="platform-tabs" id="platTabs">
-        ${platforms.map(k => `<button class="platform-tab${k === _editPlatform ? ' active' : ''}" data-plat="${k}">${k === 'openai_compatible' ? 'OpenAI-Compat' : k.charAt(0).toUpperCase() + k.slice(1)}</button>`).join('')}
+        ${platforms.map(k => `<button class="platform-tab${k === _editPlatform ? ' active' : ''}" data-plat="${k}">${_tabLabel(k)}</button>`).join('')}
       </div>
       <p class="platform-desc" id="platDesc">${cfg.desc}</p>
       <form id="providerForm">
@@ -118,11 +131,15 @@ const PanelProviders = (() => {
           <label for="pName">Provider Name</label>
           <input type="text" id="pName" placeholder="e.g. My Ollama" required value="${BrainApp.escapeHtml(p?.name || '')}">
         </div>
+        <div class="form-group" id="catalogGroup" style="display:${cfg.isCatalog ? '' : 'none'}">
+          <label for="pCatalogProvider">Provider</label>
+          <select id="pCatalogProvider"><option value="">Select a provider…</option></select>
+        </div>
         <div class="form-group" id="hostGroup" style="display:${cfg.hasHost ? '' : 'none'}">
           <label for="pHost">Host</label>
           <input type="text" id="pHost" value="${BrainApp.escapeHtml(p?.host || 'http://localhost:11434')}">
         </div>
-        <div class="form-group" id="keyGroup" style="display:${cfg.hasApiKey ? '' : 'none'}">
+        <div class="form-group" id="keyGroup" style="display:${(cfg.hasApiKey || cfg.isCatalog) ? '' : 'none'}">
           <label for="pKey">API Key</label>
           <input type="password" id="pKey" placeholder="${id ? 'Leave blank to keep existing' : 'Enter API key'}">
         </div>
@@ -151,19 +168,31 @@ const PanelProviders = (() => {
       document.querySelectorAll('#platTabs .platform-tab').forEach(t => t.classList.toggle('active', t === tab));
       const c = PLATFORM_CONFIG[_editPlatform];
       document.getElementById('platDesc').innerHTML = c.desc;
+      document.getElementById('catalogGroup').style.display = c.isCatalog ? '' : 'none';
       document.getElementById('hostGroup').style.display = c.hasHost ? '' : 'none';
-      document.getElementById('keyGroup').style.display = c.hasApiKey ? '' : 'none';
-      _populateModels();
-      if (_canFetchModels()) _fetchModels();
+      document.getElementById('keyGroup').style.display = (c.hasApiKey || c.isCatalog) ? '' : 'none';
+      if (c.isCatalog) {
+        _loadCatalogDropdown();
+        document.getElementById('pModel').innerHTML = '<option value="">Select model…</option>';
+        document.getElementById('modelStatus').textContent = '';
+      } else {
+        _populateModels();
+        if (_canFetchModels()) _fetchModels();
+      }
     });
 
+    document.getElementById('pCatalogProvider')?.addEventListener('change', _onCatalogProviderChange);
     document.getElementById('pHost')?.addEventListener('input', _debouncedFetchModels);
     document.getElementById('pKey')?.addEventListener('input', _debouncedFetchModels);
 
     document.getElementById('testProvBtn').addEventListener('click', _testConnection);
     document.getElementById('providerForm').addEventListener('submit', (e) => { e.preventDefault(); _saveProvider(); });
 
-    if (_canFetchModels()) _fetchModels();
+    if (PLATFORM_CONFIG[_editPlatform]?.isCatalog) {
+      _loadCatalogDropdown();
+    } else if (_canFetchModels()) {
+      _fetchModels();
+    }
   }
 
   function _populateModels() {
@@ -184,8 +213,90 @@ const PanelProviders = (() => {
     }
   }
 
+  function _badgeClass(platform) {
+    if (PLATFORM_CONFIG[platform]?.isCatalog) return 'catalog';
+    if (_catalogData?.[platform]) return 'catalog';
+    return platform;
+  }
+
+  function _tabLabel(key) {
+    const labels = {
+      openai_compatible: 'OpenAI-Compat',
+      popular_providers: 'Popular Providers',
+    };
+    return labels[key] || key.charAt(0).toUpperCase() + key.slice(1);
+  }
+
+  async function _loadCatalogDropdown() {
+    const sel = document.getElementById('pCatalogProvider');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">Loading providers…</option>';
+    sel.disabled = true;
+    try {
+      if (!_catalogData) {
+        const res = await BrainApp.apiFetch('/providers/catalog');
+        if (!res.ok) throw new Error('Failed to load catalog');
+        const data = await res.json();
+        _catalogData = data.catalog || {};
+      }
+      sel.innerHTML = '<option value="">Select a provider…</option>';
+      const sorted = Object.entries(_catalogData)
+        .map(([id, info]) => ({ id, name: info.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      for (const p of sorted) {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.name;
+        if (p.id === _editCatalogId) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      if (_editCatalogId) {
+        _onCatalogProviderChange();
+        if (_editModel) {
+          const modelSel = document.getElementById('pModel');
+          if (modelSel) {
+            const opt = modelSel.querySelector(`option[value="${CSS.escape(_editModel)}"]`);
+            if (opt) opt.selected = true;
+          }
+        }
+      }
+    } catch (e) {
+      sel.innerHTML = '<option value="">Failed to load providers</option>';
+    }
+    sel.disabled = false;
+  }
+
+  function _onCatalogProviderChange() {
+    const sel = document.getElementById('pCatalogProvider');
+    const modelSel = document.getElementById('pModel');
+    const status = document.getElementById('modelStatus');
+    if (!sel || !modelSel) return;
+    const id = sel.value;
+    if (!id || !_catalogData || !_catalogData[id]) {
+      modelSel.innerHTML = '<option value="">Select model…</option>';
+      if (status) status.textContent = '';
+      return;
+    }
+    const provider = _catalogData[id];
+    const models = provider.models || [];
+    modelSel.innerHTML = '<option value="">Select model…</option>';
+    if (models.length === 0) {
+      modelSel.innerHTML = '<option value="">(type in a model name)</option>';
+      if (status) status.textContent = '';
+      return;
+    }
+    for (const m of models) {
+      const opt = document.createElement('option');
+      opt.value = m;
+      opt.textContent = m;
+      modelSel.appendChild(opt);
+    }
+    if (status) status.textContent = `${models.length} models available`;
+  }
+
   function _canFetchModels() {
     const cfg = PLATFORM_CONFIG[_editPlatform];
+    if (cfg.isCatalog) return false;
     if (cfg.hasApiKey && !document.getElementById('pKey')?.value?.trim()) return false;
     return true;
   }
@@ -223,9 +334,20 @@ const PanelProviders = (() => {
     const btn = document.getElementById('testProvBtn');
     btn.disabled = true; btn.textContent = 'Testing…';
     try {
-      const body = { platform: _editPlatform, name: document.getElementById('pName').value.trim(), model: document.getElementById('pModel').value };
-      if (PLATFORM_CONFIG[_editPlatform].hasHost) body.host = document.getElementById('pHost').value.trim();
-      if (PLATFORM_CONFIG[_editPlatform].hasApiKey) body.api_key = document.getElementById('pKey').value.trim();
+      const cfg = PLATFORM_CONFIG[_editPlatform];
+      const body = { model: document.getElementById('pModel').value };
+      if (cfg.isCatalog) {
+        const catId = document.getElementById('pCatalogProvider')?.value;
+        const catApi = catId && _catalogData?.[catId]?.api;
+        body.platform = catId || _editPlatform;
+        body.name = document.getElementById('pName').value.trim();
+        if (catApi) body.host = catApi;
+      } else {
+        body.platform = _editPlatform;
+        body.name = document.getElementById('pName').value.trim();
+      }
+      if (cfg.hasHost) body.host = document.getElementById('pHost').value.trim();
+      if (cfg.hasApiKey || cfg.isCatalog) body.api_key = document.getElementById('pKey').value.trim();
       const res = await BrainApp.apiFetch('/providers/test', { method: 'POST', body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
       if (res.ok) BrainApp.showToast('Connection successful', 'success');
@@ -235,9 +357,14 @@ const PanelProviders = (() => {
   }
 
   async function _saveProvider() {
-    const body = { platform: _editPlatform, name: document.getElementById('pName').value.trim(), model: document.getElementById('pModel').value };
-    if (PLATFORM_CONFIG[_editPlatform].hasHost) body.host = document.getElementById('pHost').value.trim();
-    if (PLATFORM_CONFIG[_editPlatform].hasApiKey) { const k = document.getElementById('pKey').value.trim(); if (k) body.api_key = k; }
+    const cfg = PLATFORM_CONFIG[_editPlatform];
+    let platform = _editPlatform;
+    if (cfg.isCatalog) {
+      platform = document.getElementById('pCatalogProvider')?.value || platform;
+    }
+    const body = { platform, name: document.getElementById('pName').value.trim(), model: document.getElementById('pModel').value };
+    if (cfg.hasHost) body.host = document.getElementById('pHost').value.trim();
+    if (cfg.hasApiKey || cfg.isCatalog) { const k = document.getElementById('pKey').value.trim(); if (k) body.api_key = k; }
 
     try {
       const method = _editingId ? 'PUT' : 'POST';

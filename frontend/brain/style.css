@@ -379,6 +379,7 @@ body::before {
 .badge-openai, .badge-cyan { background: rgba(0,240,255,0.10); color: var(--cyan); }
 .badge-gemini { background: rgba(52,211,153,0.12); color: var(--success); }
 .badge-openai_compatible { background: rgba(251,191,36,0.12); color: var(--warning); }
+.badge-catalog { background: rgba(147,51,234,0.12); color: var(--violet); }
 .badge-success { background: rgba(52,211,153,0.12); color: var(--success); }
 .badge-warning { background: rgba(251,191,36,0.12); color: var(--warning); }
 .badge-danger { background: rgba(251,113,133,0.12); color: var(--error); }

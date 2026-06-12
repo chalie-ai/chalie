@@ -327,6 +327,10 @@ def _build_service(config: dict):
                 "(base URL, e.g. 'https://api.minimax.io/v1')"
             )
         return OpenAIService(config)
+    # Catalog provider — any platform ID that exists in models.dev catalog
+    from services.provider_catalog_service import is_catalog_provider
+    if is_catalog_provider(platform):
+        return OpenAIService(config)
     raise ValueError(f"Unknown platform: {platform}")
 
 

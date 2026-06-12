@@ -17,7 +17,8 @@ def _infer_vision_support(platform: str, model: str) -> bool:
         return True  # All Gemini models support vision
     elif platform == 'ollama':
         return any(x in model_lower for x in ('llava', 'vision', 'bakllava'))
-    return False
+    # Catalog / OpenAI-compatible: check for vision indicators in model name
+    return any(x in model_lower for x in ('vision', 'vl-', 'omni', 'image'))
 
 
 class ProviderDbService:
@@ -205,6 +206,16 @@ class ProviderDbService:
             raise ValueError("'model' is required")
 
         platform = data.get("platform", "")
+
+        # Catalog provider — auto-inject host from models.dev data
+        from services.provider_catalog_service import is_catalog_provider, get_catalog_provider
+        if is_catalog_provider(platform):
+            entry = get_catalog_provider(platform)
+            if entry and not data.get("host"):
+                data["host"] = entry.get("api", "")
+            if not data.get("api_key"):
+                raise ValueError("Catalog provider requires 'api_key' field")
+
         if platform == "openai_compatible":
             if not data.get("host"):
                 raise ValueError(
