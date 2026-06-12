@@ -53,13 +53,18 @@ _SEED_ACTION = "recall"
 
 #: Cosine similarity at/above which the new message is treated as a continuation
 #: of the running conversation and the flashback is SKIPPED. Embeddings are
-#: L2-normalised, so dot product == cosine. Rationale: on this corpus the median
-#: pairwise cosine is ~0.55 and the unrelated-pair band tops out around
-#: 0.80-0.85 (the p99); a genuine continuation — especially a terse turn embedded
-#: together with the living-doc "Now" section — sits at or above that band, so a
-#: threshold at the high end fires the gate only for on-topic follow-ups and lets
-#: any real topic shift through to a fresh flashback.
-_CONTINUATION_SIMILARITY_THRESHOLD = 0.82
+#: L2-normalised, so dot product == cosine. Calibrated to the active embedding
+#: model (``gte-modernbert-base`` — ``embedding_service._MODEL_ID``): the median
+#: pairwise cosine on this corpus is
+#: ~0.55, so "closer than a typical unrelated pair" is the natural continuation
+#: boundary. (The 0.80-0.85 figure cited in early design notes was the p99 of an
+#: unrelated-pair band, not a per-turn continuation level — measured on-topic
+#: follow-ups sit well below it: a terse turn composed with the living-doc "Now"
+#: lands ~0.89, an on-topic full turn ~0.74, while genuine topic shifts fall to
+#: ~0.34-0.38. The corpus median cleanly separates the two populations and is not
+#: tuned to any single example.) A terse message with no resolvable topic is
+#: handled separately by the embed-text builder and never reaches this threshold.
+_CONTINUATION_SIMILARITY_THRESHOLD = 0.55
 
 #: Transcript roles that make up the running conversation centroid. The
 #: compaction living-doc row is deliberately excluded: it is a derived summary,
@@ -97,6 +102,12 @@ _MAX_EPISODES = 3
 #: are preferred over raw leaves when choosing the ≤3 dated one-liners.
 _SUPER_LEVEL_FLOOR = 1
 
+#: Over-fetch multiplier for the episode recall: pull this many times
+#: ``_MAX_EPISODES`` candidates so the super-episode-preferred re-sort has leaves
+#: AND supers to choose from before the final ≤3 clip, rather than clipping at
+#: the retrieval layer and starving the preference.
+_EPISODE_OVERFETCH_FACTOR = 3
+
 #: Episode-gist one-liners are clipped to keep the flashback dense.
 _ONELINER_CHARS = 160
 
@@ -133,6 +144,12 @@ class TurnZeroFlashback:
         best-effort grounding aid, not a correctness dependency.
         """
         try:
+            if self._is_unresolvable_terse():
+                logger.debug(
+                    "[FLASHBACK] terse turn with no living-doc 'Now' — "
+                    "no new topic, treated as continuation, flashback skipped"
+                )
+                return
             embed_text = self._build_embed_text()
             if self._is_continuation(embed_text):
                 logger.debug("[FLASHBACK] continuation — flashback skipped")
@@ -144,6 +161,28 @@ class TurnZeroFlashback:
             logger.warning("[FLASHBACK] seed failed (non-fatal): %s", exc)
 
     # ── Topic inference ───────────────────────────────────────────────────────
+
+    def _is_unresolvable_terse(self) -> bool:
+        """True when the turn is terse AND carries no resolvable topic.
+
+        A terse message ("yes", "ok", "do that") introduces no topic of its own;
+        the terse rule (spec §4.5) resolves it through the living-doc "Now"
+        section. When no "Now" checkpoint exists yet, the message cannot name a
+        new topic, so by definition it is not a topic shift — it continues the
+        running thread and the flashback must not re-fire. Composing it with the
+        centroid is meaningless here (it would compare a contentless token against
+        the conversation), so this is decided before the embedding gate runs.
+
+        Only applies once a conversation is under way: on session start there is
+        no running thread to continue, so even a terse first message fires the
+        flashback (the gate's session-start rule).
+        """
+        raw = (self._mp.raw_input or "").strip()
+        if not self._is_terse(raw):
+            return False
+        if not self._prior_messages():
+            return False  # session start — fire the flashback
+        return not self._living_doc_now()
 
     def _build_embed_text(self) -> str:
         """The text the gate embeds: the raw message, composed with the living-doc
@@ -294,6 +333,32 @@ class TurnZeroFlashback:
             logger.warning("[FLASHBACK] continuation gate failed open: %s", exc)
             return False
 
+    def _prior_messages(self) -> list[str]:
+        """The recent PRIOR user/assistant message texts on this channel.
+
+        The running conversation as the gate sees it: the last
+        ``_CENTROID_WINDOW`` non-empty user/assistant messages that precede the
+        current turn, with the current message's own input row (already written
+        before the seed fires) excluded. Both the session-start check and the
+        centroid embedding read from this single definition so they never drift.
+        An empty list means there is no prior conversation (session start).
+        """
+        from services import transcript_service  # noqa: PLC0415
+
+        # Fetch one extra row so dropping the current turn still leaves a full
+        # window of prior context.
+        rows = transcript_service.get_recent(
+            self._mp.config.channel, limit=_CENTROID_WINDOW + 1
+        )
+        current_uid = self._mp.uid
+        return [
+            (r.get("content") or "").strip()
+            for r in rows
+            if r.get("role") in _CENTROID_ROLES
+            and (r.get("content") or "").strip()
+            and (current_uid is None or r.get("id") != current_uid)
+        ][:_CENTROID_WINDOW]
+
     def _conversation_centroid(self):
         """Mean (re-normalised) embedding of the recent PRIOR channel messages.
 
@@ -308,21 +373,8 @@ class TurnZeroFlashback:
         """
         import numpy as np  # noqa: PLC0415
         from services.embedding_service import get_embedding_service  # noqa: PLC0415
-        from services import transcript_service  # noqa: PLC0415
 
-        # Fetch one extra row so dropping the current turn still leaves a full
-        # window of prior context.
-        rows = transcript_service.get_recent(
-            self._mp.config.channel, limit=_CENTROID_WINDOW + 1
-        )
-        current_uid = self._mp.uid
-        texts = [
-            (r.get("content") or "").strip()
-            for r in rows
-            if r.get("role") in _CENTROID_ROLES
-            and (r.get("content") or "").strip()
-            and (current_uid is None or r.get("id") != current_uid)
-        ][:_CENTROID_WINDOW]
+        texts = self._prior_messages()
         if not texts:
             return None
 
@@ -390,7 +442,7 @@ class TurnZeroFlashback:
             channel=self._mp.config.channel,
             query=query,
             caller="seed",
-            limit=_MAX_EPISODES * 3,
+            limit=_MAX_EPISODES * _EPISODE_OVERFETCH_FACTOR,
             return_raw=True,
         )
         ordered = sorted(
