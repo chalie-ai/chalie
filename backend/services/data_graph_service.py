@@ -45,6 +45,9 @@ _SQL_DELETE_DG_VALUE_VEC = "DELETE FROM data_graph_value_vec WHERE rowid=?"
 # does not accumulate indefinitely.
 _SUPERSEDED_DECAY_WEIGHT = 0.01
 _SUPERSEDED_DELETE_AFTER_DAYS = 90
+# Retrieval-weight haircut applied to a row at the moment it is superseded — it
+# is now historical, so it should rank below live facts even before decay runs.
+_SUPERSEDE_RW_FACTOR = 0.5
 # Below this absolute weight delta a recomputed live-fact weight is left as-is,
 # so a settled graph produces zero UPDATEs on a repeat tick.
 _RW_DECAY_EPSILON = 0.0001
@@ -400,18 +403,25 @@ class DataGraphService:
     def _apply_temporal_supersession(self, conn, existing_dict: dict, req: '_StoreRequest', now_iso: str) -> tuple[dict, Optional[tuple], Optional[tuple]]:
         """Demote old row, insert new, add supersedes/superseded_by edges.
 
+        Bi-temporal invalidation (Graphiti arXiv:2501.13956): the new fact's
+        event-time start (``valid_from = now_iso``) is also the moment the old
+        fact stopped being true, so the old row's ``valid_to`` is closed to the
+        same instant. Combined with ``active=0`` and the halved retrieval weight,
+        the superseded row drops out of every recall lane (all filter
+        ``valid_to IS NULL``) and enters the fast-decay tombstone regime.
+
         Returns (new_row_dict, schedule_emb_args, schedule_d2q_args).
         """
         row_id = existing_dict['id']
         old_rw = existing_dict.get('retrieval_weight', 1.0)
         conn.execute(
-            "UPDATE data_graph SET active=0, retrieval_weight=? WHERE rowid=?",
-            (old_rw * 0.5, row_id),
+            "UPDATE data_graph SET active=0, retrieval_weight=?, valid_to=? WHERE rowid=?",
+            (old_rw * _SUPERSEDE_RW_FACTOR, now_iso, row_id),
         )
         conn.execute(
-            "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (req.kind, req.key, req.value, req.source, now_iso, now_iso),
+            "INSERT INTO data_graph (kind, key, value, source, first_seen_at, last_confirmed_at, valid_from) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (req.kind, req.key, req.value, req.source, now_iso, now_iso, now_iso),
         )
         new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         self._add_edge_with_conn(conn, new_id, row_id, 'supersedes')
@@ -449,6 +459,74 @@ class DataGraphService:
             if row:
                 return self._row_to_dict(row)
         return None
+
+    # ── fact pipeline write path ──────────────────────────────────────
+
+    def upsert_fact(self, key: str, value: str, *, source=None) -> Optional[dict]:
+        """Exact-key ADD/UPDATE for the worker fact pipeline (TKT-925).
+
+        The ADD and UPDATE constrained ops both land here. The reconciliation
+        decision was already made by the LLM against the *actual* neighbour keys
+        the worker showed it, so this path writes the chosen key VERBATIM and
+        does NOT re-run concept-LUT canonicalization (which would fight the
+        model's choice and break exact-key supersession targeting). The chat
+        model's ``memory.store`` keeps the LUT path; this is the router's path.
+
+        Semantics on the ``user_specific`` kind, keyed exactly on ``key``:
+          * no live row            → insert new (status ``created``);
+          * same value             → reinforce (status ``reinforced``);
+          * contradicting value    → bi-temporal supersession (status
+            ``superseded``): old ``active=0`` + ``valid_to = now``, new row
+            ``valid_from = now``.
+
+        Returns the structured store result, or ``None`` on DB failure.
+        """
+        kind = KIND_USER_SPECIFIC
+        _schedule_emb_args = None
+        _schedule_d2q_args = None
+        result = None
+        try:
+            with self.db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(_SELECT_ACTIVE_BY_KIND_KEY_SQL, (kind, key))
+                existing = cursor.fetchone()
+                cursor.close()
+
+                now_iso = utc_now().isoformat()
+                req = _StoreRequest(kind, key, value, source)
+
+                if existing is None:
+                    row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
+                        conn, req, now_iso
+                    )
+                    result = self._make_store_result(
+                        "created", key, key, None, value, None, None, None, row,
+                    )
+                else:
+                    existing_dict = self._row_to_dict(existing)
+                    old_value = existing_dict.get('value') or ''
+                    existing_date = self._row_date(existing_dict)
+                    if (value or '').lower().strip() == old_value.lower().strip():
+                        self._reinforce_row(conn, existing_dict['id'], existing_dict, now_iso)
+                        row = self._fetch_row_by_id(conn, existing_dict['id'])
+                        result = self._make_store_result(
+                            "reinforced", key, key, None, value, None, None, existing_date, row,
+                        )
+                    else:
+                        row, _schedule_emb_args, _schedule_d2q_args = self._apply_temporal_supersession(
+                            conn, existing_dict, req, now_iso
+                        )
+                        result = self._make_store_result(
+                            "superseded", key, key, None, value, old_value, None, existing_date, row,
+                        )
+
+            if _schedule_emb_args or _schedule_d2q_args:
+                rowid = (_schedule_emb_args or _schedule_d2q_args)[0]
+                _ses.enqueue("data_graph", rowid)
+            return result
+        except Exception as e:
+            logger.error("[DATA GRAPH] upsert_fact failed for key='%s': %s", key, e)
+            return None
 
     # ── store() ───────────────────────────────────────────────────────
 
@@ -1347,6 +1425,45 @@ class DataGraphService:
         except Exception as e:
             logger.error("[DATA GRAPH] forget failed for kind=%s key='%s': %s", kind, key, e)
             return None
+
+    def invalidate(self, kind: str, key: str) -> int:
+        """Bi-temporally invalidate every live row for the EXACT ``(kind, key)``.
+
+        The DELETE op of the worker fact pipeline: a fact the user has revoked is
+        not erased (that would lose the audit trail and the bi-temporal history)
+        but closed — ``active=0``, ``valid_to`` set to now, retrieval weight
+        halved. Recall lanes filter ``valid_to IS NULL`` (TKT-923), so the row
+        vanishes from retrieval immediately, then the fast-decay tombstone regime
+        (TKT-921) hard-deletes it after the superseded window.
+
+        The key is matched VERBATIM (no concept-LUT canonicalization): the LLM
+        chose it from the neighbour facts the worker showed it, so re-mapping it
+        would target the wrong row. Mirrors ``upsert_fact``'s exact-key contract.
+
+        Returns the number of rows invalidated (0 when no live row matches).
+        Pure-failure: a DB error bubbles up to the caller, which counts it.
+        """
+        if kind not in VALID_KINDS:
+            logger.warning("[DATA GRAPH] invalidate: invalid kind '%s'", kind)
+            return 0
+
+        now_iso = utc_now().isoformat()
+        with self.db.connection() as conn:
+            cursor = conn.execute(
+                "UPDATE data_graph "
+                "SET active=0, valid_to=?, "
+                "    retrieval_weight=retrieval_weight*? "
+                "WHERE kind=? AND key=? AND active=1 "
+                "  AND deleted_at IS NULL AND valid_to IS NULL",
+                (now_iso, _SUPERSEDE_RW_FACTOR, kind, key),
+            )
+            count = cursor.rowcount
+        if count:
+            logger.info(
+                "[DATA GRAPH] invalidated %d row(s) for kind=%s key='%s'",
+                count, kind, key,
+            )
+        return count
 
     # ── Decay cycle ───────────────────────────────────────────────────
 

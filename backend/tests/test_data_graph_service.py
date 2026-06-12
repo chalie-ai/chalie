@@ -336,6 +336,25 @@ class TestStore:
         assert old['active'] == 0
         assert old['retrieval_weight'] < 1.0
 
+        # TKT-925 (ticket-sanctioned spec change): bi-temporal invalidation now
+        # closes the old fact's validity interval. Graphiti event-time model —
+        # the superseded row's valid_to is set to the new row's valid_from, so
+        # the old fact reads as "true from first_seen until the new fact arrived".
+        # Before TKT-925 valid_to was left NULL on supersession; this assertion
+        # is RED until _apply_temporal_supersession sets it.
+        new = _raw_row(db_service, _rid(r2))
+        assert new['valid_from'] is not None, (
+            "new superseding row must carry a valid_from (its event-time start)"
+        )
+        assert old['valid_to'] is not None, (
+            "superseded row's validity interval must be closed (valid_to set)"
+        )
+        assert old['valid_to'] == new['valid_from'], (
+            "old.valid_to must equal new.valid_from — the moment the old fact "
+            f"stopped being true. old.valid_to={old['valid_to']!r} "
+            f"new.valid_from={new['valid_from']!r}"
+        )
+
         # supersedes/superseded_by edges present
         with db_service.connection() as conn:
             edges = conn.execute("SELECT from_id, to_id, edge_type FROM data_graph_edges").fetchall()

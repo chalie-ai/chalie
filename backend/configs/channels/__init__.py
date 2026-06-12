@@ -34,6 +34,7 @@ from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.dmn import DmnConfig
 from configs.channels.episode_encoder import EpisodeEncoderConfig
 from configs.channels.external_agent import EAMPConfig
+from configs.channels.fact_extraction import FactExtractionConfig, parse_fact_ops
 from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig, _pattern_existing_patterns_block
 from configs.channels.skill_suggestion import SkillSuggestionConfig
@@ -54,6 +55,7 @@ __all__ = [
     "DmnConfig",
     "EAMPConfig",
     "EpisodeEncoderConfig",
+    "FactExtractionConfig",
     "GeoConfig",
     "PatternConfig",
     "ProcessorConfig",
@@ -66,4 +68,5 @@ __all__ = [
     "_pattern_existing_patterns_block",
     "_safe_json_load_object",
     "_should_synthesise",
+    "parse_fact_ops",
 ]

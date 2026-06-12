@@ -214,6 +214,47 @@ class EpisodicService:
                 (super_id, now_iso, leaf_id),
             )
 
+    def fetch_fact_extraction_backlog(self, limit: int) -> list:
+        """Return up to ``limit`` episodes awaiting fact extraction, oldest-first.
+
+        The backlog is every non-deleted episode whose ``facts_extracted_at`` is
+        still NULL — both fresh episodes and the pre-feature fossils that drain on
+        the per-tick budget (self-healing convergence, no migration script).
+        Oldest-first (``created_at ASC``) gives the cheapest clean supersession
+        chains; bi-temporal invalidation keeps correctness order-independent.
+
+        Returns a list of ``{id, gist, created_at, channel}`` dicts.
+        """
+        with self.db_service.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, gist, created_at, channel FROM episodes "
+                "WHERE facts_extracted_at IS NULL AND deleted_at IS NULL "
+                "ORDER BY created_at ASC, id ASC "
+                "LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {'id': str(r[0]), 'gist': r[1], 'created_at': r[2], 'channel': r[3]}
+            for r in rows
+        ]
+
+    def set_facts_extracted_at(self, episode_id: str) -> None:
+        """Mark an episode as processed by the fact-extraction step.
+
+        Stamping ``facts_extracted_at`` removes the episode from the backlog so
+        the next tick advances. This is a durable progress marker — a tick
+        interrupted mid-budget re-processes at most the un-stamped remainder.
+
+        Raises:
+            Exception: Propagates any database error to the caller.
+        """
+        now_iso = utc_now().isoformat()
+        with self.db_service.connection() as conn:
+            conn.execute(
+                "UPDATE episodes SET facts_extracted_at = ? WHERE id = ?",
+                (now_iso, episode_id),
+            )
+
     def get_episode_by_id(self, episode_id: str) -> Optional[dict]:
         """Retrieve a single non-deleted episode by its UUID.
 

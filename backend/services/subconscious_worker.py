@@ -7,19 +7,22 @@ Fires only when the user is not active.
 
 Tick body (sequential, per §5.3):
     1. Consolidate episodes → super-episodes  (channel='user' only — §B masterplan).
-    2. Run decay engine.
-    3. Run pattern match.
-    4. Run user synthesis.
-    5. Run DMN reflection (skipped when no user_summary row exists).
-    6. Capability sync (IMAP/CalDAV/CardDAV via MailCapability._do_monitor).
-    7. Geo-spatial pattern extraction from location-tagged transcripts.
+    2. Fact extraction — route hard facts from new episodes into data_graph
+       via constrained ADD/UPDATE/DELETE/NOOP ops (Mem0 pattern); drains the
+       facts_extracted_at backlog at a per-tick LLM-call budget.
+    3. Run decay engine.
+    4. Run pattern match.
+    5. Run user synthesis.
+    6. Run DMN reflection (skipped when no user_summary row exists).
+    7. Capability sync (IMAP/CalDAV/CardDAV via MailCapability._do_monitor).
+    8. Geo-spatial pattern extraction from location-tagged transcripts.
 
 Gates (both must pass — §5.2):
     - User-active: ``last_user_message_at`` is older than 30 minutes.
     - Already-fired: ``subconscious_last_fired_at > last_user_message_at``.
 
 Each step is wrapped in ``try/except``; one bad step does not skip the rest.
-Step 5 (DMN) self-gates when ``user_summary`` is absent in data_graph.
+The DMN step self-gates when ``user_summary`` is absent in data_graph.
 
 State persistence — ``subconscious_last_fired_at``:
     - MemoryStore key ``subconscious:last_fired_at`` (fast read).
@@ -62,6 +65,27 @@ _LAST_FIRED_TIMESTAMP = DurableTimestamp(
 # Keys checked to determine whether DMN has a synthesis to work from.
 # SubconsciousWorker._step_dmn() skips when neither row is present.
 _DMN_SYNTHESIS_KEYS = ('user_summary', 'user_summary_long')
+
+# Fact-extraction step budget (§F / spec §4.6 mechanism 3). The backlog of
+# episodes WHERE facts_extracted_at IS NULL drains at a fixed per-tick budget,
+# measured in LLM calls so the tick stays bounded regardless of backlog size:
+# one extraction call per episode, capped here. A fresh instance processes
+# yesterday's episodes; a 30k-episode instance converges over weeks at the same
+# rate, never blocking a tick.
+_FACT_EXTRACTION_CALL_BUDGET = 20
+# Similar data_graph rows shown to the model per episode for reconciliation.
+_FACT_NEIGHBOUR_LIMIT = 10
+# Provenance stamped on every data_graph row the fact pipeline writes.
+_FACT_SOURCE = "fact_extraction"
+# Maps a data_graph upsert_fact() status to the fact-extraction telemetry
+# counter. A new row (created) counts as an ADD; a contradicting value
+# (superseded) counts as an UPDATE; an unchanged write (reinforced) is a NOOP.
+# Unlisted statuses default to ADD at the call site.
+_FACT_STATUS_COUNTER = {
+    "created": "add",
+    "superseded": "update",
+    "reinforced": "noop",
+}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -141,12 +165,12 @@ class SubconsciousWorker:
         """Body of one tick after gates have been cleared.
 
         Steps are strictly sequential — each step completes before the next
-        begins. Step 4 (synthesis) writes the user_summary row that step 5
-        (DMN) reads; the sequential contract ensures step 5 always sees the
-        latest synthesis output.
+        begins. Synthesis writes the user_summary row that DMN reads; the
+        sequential contract ensures DMN always sees the latest synthesis output.
         """
         steps: dict = {}
         steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
+        steps["fact_extraction"] = self._safe_step("fact_extraction", self._step_fact_extraction)
         steps["decay"] = self._safe_step("decay", self._step_decay)
         steps["pattern_match"] = self._safe_step("pattern_match", self._step_pattern_match)
         steps["synthesis"] = self._safe_step("synthesis", self._step_synthesis)
@@ -166,6 +190,7 @@ class SubconsciousWorker:
         logger.info(
             f"{LOG_PREFIX} tick complete: "
             f"consolidate={steps['consolidate']['status']} "
+            f"fact_extraction={steps['fact_extraction']['status']} "
             f"decay={steps['decay']['status']} "
             f"pattern_match={steps['pattern_match']['status']} "
             f"synthesis={steps['synthesis']['status']} "
@@ -345,8 +370,121 @@ class SubconsciousWorker:
             return f"checked channel=user, {len(clusters)} cluster(s) found, 0 written"
         return f"consolidated {len(clusters)} cluster(s), {supers_written} super-ep(s) written"
 
+    def _step_fact_extraction(self) -> str:
+        """Step 2 — route hard facts from new episodes into data_graph.
+
+        Drains the ``facts_extracted_at IS NULL`` backlog oldest-first under a
+        per-tick LLM-call budget (spec §4.6 mechanism 3). For each episode: one
+        tool-free constrained LLM call (``FactExtractionConfig``) over the gist
+        plus the top-N most-similar existing facts, parsed into ADD/UPDATE/
+        DELETE/NOOP ops (Mem0 arXiv:2504.19413). The chat model never has to call
+        memory.store on a user turn — this step is the router.
+
+        Safety contract (spec §4.6.2/.3): unparseable model output is a NOOP plus
+        a WARN plus a counter increment — never a write. Every processed episode
+        is stamped so the backlog advances even when extraction yielded nothing,
+        and a per-episode failure never aborts the rest of the budget.
+        """
+        from configs.channels import FactExtractionConfig, parse_fact_ops  # noqa: PLC0415
+        from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        from services.episodic_service import EpisodicService  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+
+        episodic_svc = EpisodicService(get_shared_db_service())
+        backlog = episodic_svc.fetch_fact_extraction_backlog(_FACT_EXTRACTION_CALL_BUDGET)
+        if not backlog:
+            return "no backlog"
+
+        dg = get_data_graph_service()
+        counters = {
+            "episodes": 0, "add": 0, "update": 0, "delete": 0,
+            "noop": 0, "unparseable": 0, "failed": 0,
+        }
+
+        for episode in backlog:
+            try:
+                self._extract_facts_for_episode(
+                    episode, episodic_svc, dg, counters,
+                    FactExtractionConfig, parse_fact_ops, MessageProcessor,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"{LOG_PREFIX} fact_extraction failed for episode "
+                    f"{episode.get('id')}: {exc}"
+                )
+
+        return (
+            f"episodes={counters['episodes']} add={counters['add']} "
+            f"update={counters['update']} delete={counters['delete']} "
+            f"noop={counters['noop']} unparseable={counters['unparseable']} "
+            f"failed={counters['failed']}"
+        )
+
+    def _extract_facts_for_episode(
+        self, episode, episodic_svc, dg, counters,
+        config_cls, parse_ops, processor_cls,
+    ) -> None:
+        """Run the constrained-op pipeline for a single episode and stamp it.
+
+        Retrieves neighbours, fires the one constrained call, parses, applies the
+        ops, then stamps ``facts_extracted_at``. Parse failure degrades to NOOP
+        (counted) so a confused model never corrupts the graph; the episode is
+        still stamped so the backlog drains.
+        """
+        gist = episode.get("gist") or ""
+        neighbours = dg.recall(gist, limit=_FACT_NEIGHBOUR_LIMIT) if gist else []
+
+        config = config_cls(gist, neighbours)
+        response = processor_cls.process("", config)
+
+        try:
+            ops = parse_ops(response)
+        except ValueError as exc:
+            counters["unparseable"] += 1
+            logger.warning(
+                f"{LOG_PREFIX} fact_extraction unparseable output for episode "
+                f"{episode.get('id')} — NOOP: {exc}"
+            )
+            ops = []
+
+        for op in ops:
+            self._apply_fact_op(op, dg, counters)
+
+        episodic_svc.set_facts_extracted_at(episode["id"])
+        counters["episodes"] += 1
+
+    def _apply_fact_op(self, op, dg, counters) -> None:
+        """Apply one validated constrained op to data_graph and count it.
+
+        ADD/UPDATE go through ``upsert_fact`` (exact-key; a contradicting value
+        triggers bi-temporal supersession); DELETE goes through ``invalidate``
+        (active=0 + valid_to). A failed write is logged and counted as a
+        ``failed`` (distinct from a model-chosen NOOP) — never raised past here,
+        so one bad fact cannot abort the others.
+        """
+        from configs.channels.fact_extraction import OP_DELETE  # noqa: PLC0415
+
+        verb = op["op"]
+        try:
+            if verb == OP_DELETE:
+                dg.invalidate(op["kind"], op["key"])
+                counters["delete"] += 1
+                return
+            result = dg.upsert_fact(op["key"], op["value"], source=_FACT_SOURCE)
+            if result is None:
+                counters["noop"] += 1
+                return
+            counters[_FACT_STATUS_COUNTER.get(result.get("status"), "add")] += 1
+        except Exception as exc:
+            counters["failed"] += 1
+            logger.warning(
+                f"{LOG_PREFIX} fact_extraction op {verb} key='{op.get('key')}' "
+                f"failed: {exc}"
+            )
+
     def _step_decay(self) -> str:
-        """Step 2 — run the unified decay cycle.
+        """Step 3 — run the unified decay cycle.
 
         DecayEngineService owns episodic + data_graph + transcript cleanup +
         tool_calls purge + behavioural-pattern stale flips. Engine logic
@@ -361,7 +499,7 @@ class SubconsciousWorker:
         return "ok"
 
     def _step_pattern_match(self) -> str:
-        """Step 3 — single-pass LLM pattern matcher over a transcript-id window.
+        """Step 4 — single-pass LLM pattern matcher over a transcript-id window.
 
         Reads a cursor row from data_graph (kind='system'
         key='pattern_match_cursor'). If MAX(transcripts.id) - cursor < 50,
@@ -461,15 +599,15 @@ class SubconsciousWorker:
         return f"fired cursor={cursor}->{latest} delta={delta}"
 
     def _step_synthesis(self) -> str:
-        """Step 4 — refresh the user synopsis (short + long).
+        """Step 5 — refresh the user synopsis (short + long).
 
         §3c / O1: _should_synthesise() gate lives HERE, not inside the config.
         When no new traits or behavioural patterns have arrived since the last
         synthesis, skip.  Inputs are the union of Episodes + Data Graph + Patterns.
 
         The resulting ``user_summary`` / ``user_summary_long`` rows in
-        data_graph are the prerequisite for step 5 (DMN). Sequential execution
-        guarantees step 5 sees the freshest synthesis output.
+        data_graph are the prerequisite for the DMN step. Sequential execution
+        guarantees DMN sees the freshest synthesis output.
         """
         from configs.channels import UserSummaryConfig, _should_synthesise  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
@@ -483,7 +621,7 @@ class SubconsciousWorker:
         return "ok"
 
     def _step_dmn(self) -> str:
-        """Step 5 — background DMN reflection via DMNMessageProcessor.
+        """Step 6 — background DMN reflection via DMNMessageProcessor.
 
         Runs DMNMessageProcessor which reads user synthesis + recent episodes,
         acts on open threads using news/search/browser/memory tools, and saves
@@ -491,8 +629,8 @@ class SubconsciousWorker:
 
         Prerequisites (checked before constructing the processor):
             - ``user_summary`` or ``user_summary_long`` must exist in data_graph.
-              Step 4 (synthesis) runs in the same tick and may have just produced
-              this row; this check runs after step 4 completes.
+              The synthesis step runs earlier in the same tick and may have just
+              produced this row; this check runs after synthesis completes.
 
         Skips (returns early) when no synthesis row exists.
         DMN has nothing meaningful to reflect on without a user model.
@@ -508,7 +646,7 @@ class SubconsciousWorker:
         return "ok"
 
     def _step_capability_sync(self) -> str:
-        """Step 6 — IMAP / CalDAV / CardDAV server sync.
+        """Step 7 — IMAP / CalDAV / CardDAV server sync.
 
         Delegates to every connected capability's ``monitor()`` method.
         MailCapability._do_monitor() manages per-protocol cadence internally
@@ -524,7 +662,7 @@ class SubconsciousWorker:
         return f"synced: {', '.join(synced)}" if synced else "no connected capabilities"
 
     def _step_geo_patterns(self) -> str:
-        """Step 7 — single-pass LLM geo-spatial pattern extractor.
+        """Step 8 — single-pass LLM geo-spatial pattern extractor.
 
         Reads a cursor from data_graph (kind='system' key='geo_pattern_cursor').
         If the count of location-tagged transcripts beyond the cursor is below
