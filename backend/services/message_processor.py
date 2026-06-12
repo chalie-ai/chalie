@@ -51,6 +51,11 @@ _TRAIL_BOUNDARY_TOOL = "tool_chain_compactor"
 #: compacted output reaches the model through the checkpoint prepend instead).
 _COMPACTOR_TOOLS: "frozenset[str]" = frozenset({"chat_history_compactor", "tool_chain_compactor"})
 
+#: tool_name under which _record_narration persists mid-loop narration text.
+#: Imported by abilities/review_tool_calls.py to exclude these rows — keep the
+#: writer and that reader on the same name via this constant.
+NARRATION_TOOL = "narration"
+
 #: Parses the document id out of a rendered ``document.upload`` success envelope so
 #: the turn-0 attachment seed can build the transcript<->doc link. The upload body
 #: is the structured ToolResult JSON ``{"id":"<hex>",...}`` (TKT-893); ``id`` is a
@@ -857,7 +862,7 @@ class MessageProcessor:
         from abilities._event_emitter import ActEventEmitter  # noqa: PLC0415
         from services.act_trail import ActTrail  # noqa: PLC0415
         ActTrail().record(
-            tool_name="narration",
+            tool_name=NARRATION_TOOL,
             params={},
             result=text,
             transcript_id=self.uid,

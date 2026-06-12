@@ -71,6 +71,9 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
         are deterministic.
         """
         from services.database_service import get_shared_db_service
+        # Single source of the narration tool_name — the writer
+        # (MessageProcessor._record_narration) and this reader must agree.
+        from services.message_processor import NARRATION_TOOL
 
         db = get_shared_db_service()
         with db.connection() as conn:
@@ -80,10 +83,10 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
                 SELECT tool_name, params, result, created_at
                 FROM tool_calls
                 WHERE created_at BETWEEN ? AND ?
-                  AND tool_name != 'narration'
+                  AND tool_name != ?
                 ORDER BY created_at ASC, id ASC
                 """,
-                (lo, hi),
+                (lo, hi, NARRATION_TOOL),
             )
             columns = ("tool_name", "params", "result", "created_at")
             rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
