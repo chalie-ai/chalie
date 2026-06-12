@@ -108,7 +108,6 @@ class ToolDispatcher:
             params=params,
             result=result_text,
             transcript_id=getattr(self._mp, "uid", None),
-            ephemeral=True,
         )
         return result_text
 

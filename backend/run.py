@@ -220,6 +220,25 @@ def _run_startup_migrations(database_service) -> None:
     except Exception as _drop_err:
         logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
 
+    # Drop legacy ephemeral column — every tool call is now durable; rows older
+    # than 7 days are removed by DecayEngineService._purge_tool_calls() instead.
+    try:
+        _ephem_sentinel = _os.path.join(
+            _os.path.dirname(database_service.db_path),
+            '.tool-calls-drop-ephemeral-v1.done',
+        )
+        if not _os.path.exists(_ephem_sentinel):
+            with database_service.connection() as _conn:
+                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
+                if 'ephemeral' in _cols:
+                    _conn.execute("ALTER TABLE tool_calls DROP COLUMN ephemeral")
+                    _conn.commit()
+                    logger.info("[Startup] Dropped ephemeral column from tool_calls (durable retention)")
+            with open(_ephem_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _ephem_err:
+        logger.warning(f"[Startup] tool_calls ephemeral drop skipped: {_ephem_err}")
+
     # One-time episodes FTS rebuild
     try:
         _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')

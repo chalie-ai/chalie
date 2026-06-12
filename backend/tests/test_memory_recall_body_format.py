@@ -146,7 +146,7 @@ class TestEpisodeBackReferenceFromStructuredBody:
         # consumer reads back.
         ActTrail().record(
             tool_name="memory", params={"action": "recall"}, result=rendered,
-            transcript_id=transcript_id, ephemeral=True,
+            transcript_id=transcript_id,
         )
 
         entries = [{"id": transcript_id}]

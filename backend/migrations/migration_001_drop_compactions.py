@@ -10,9 +10,9 @@ for operators who want to apply the drop manually (e.g. in production before
 restarting with the new code).
 
 No backfill is needed — every historical compaction summary is already present
-in `tool_calls` as an ephemeral=0 audit row written by `_run_full_compaction`.
-The canonical lookup in `compaction_persistence.get_compaction()` now reads
-from that table.
+in `tool_calls` as a durable row (tool_name='compaction') written by
+`_run_full_compaction`. The canonical lookup in
+`compaction_persistence.get_compaction()` now reads from that table.
 
 Usage (manual, standalone):
     python backend/migrations/migration_001_drop_compactions.py [path/to/chalie.db]

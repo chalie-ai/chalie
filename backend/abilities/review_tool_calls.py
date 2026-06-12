@@ -3,8 +3,8 @@ ReviewToolCallsAbility — Drill back into raw tool call data from a previous tu
 
 Lets the LLM re-read raw tool call records from earlier in the conversation when
 the compact synthesis in Previous Turns doesn't include a specific detail it needs.
-Returns all tool calls (including ephemeral records) within ±5 minutes of a given
-timestamp.
+Returns all durable tool calls (excluding narration rows) within ±5 minutes of a
+given timestamp. Rows are retained for 7 days by the decay-engine janitor.
 
 All retrieval/formatting/error logic lives in ``ReviewWindowAbility``; this class
 declares only the windowed ``tool_calls`` SELECT and the structured row shape.
@@ -64,8 +64,12 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
     def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
-        """All tool_calls (incl. ephemeral) whose created_at is in the window,
-        oldest first — created_at then id so ties are deterministic."""
+        """All durable tool_calls in the window, excluding narration rows.
+
+        Narration rows (tool_name='narration') are mid-loop LLM text blobs not
+        meaningful as tool activity. Oldest first — created_at then id so ties
+        are deterministic.
+        """
         from services.database_service import get_shared_db_service
 
         db = get_shared_db_service()
@@ -76,6 +80,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
                 SELECT tool_name, params, result, created_at
                 FROM tool_calls
                 WHERE created_at BETWEEN ? AND ?
+                  AND tool_name != 'narration'
                 ORDER BY created_at ASC, id ASC
                 """,
                 (lo, hi),

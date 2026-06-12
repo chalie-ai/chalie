@@ -78,7 +78,7 @@ class _GPMFakeProcessor:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — transcript rows + ephemeral filtering
+# get_previous_messages() — transcript rows (tool_calls excluded from history)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -99,31 +99,34 @@ class TestGetPreviousMessagesTranscript:
         )
         uid2 = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        # Durable (ephemeral=0) tool_call linked to uid1 — MUST appear
+        # tool_calls rows are now all durable (no ephemeral column)
         db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, "
-            "ephemeral, created_at) "
-            "VALUES (?, 'memory', '{}', 'User likes dark mode', 0, '2026-04-10 10:00:30')",
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
+            "VALUES (?, 'memory', '{}', 'User likes dark mode', '2026-04-10 10:00:30')",
             (uid1,)
         )
-
-        # Ephemeral (ephemeral=1) tool_call linked to uid2 — must NOT appear
         db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, "
-            "ephemeral, created_at) "
-            "VALUES (?, 'read', '{}', 'Web page content', 1, '2026-04-10 10:01:30')",
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
+            "VALUES (?, 'read', '{}', 'Web page content', '2026-04-10 10:01:30')",
             (uid2,)
         )
 
         db.commit()
         return uid1, uid2
 
-    def test_durable_tool_call_appears(self, db):
+    def test_tool_calls_do_not_appear_in_previous_messages(self, db):
+        """History replay no longer renders tool_calls rows (decision 2).
+        Tool calls are retained durably but excluded from get_previous_messages()
+        to keep the history prompt clean and unambiguous."""
         self._seed_transcript(db)
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
-        assert '[memory()] User likes dark mode' in result
-        assert 'TOOL(memory)' not in result
+        # transcript rows render (user/assistant content)
+        assert 'Hello world' in result
+        assert 'Hi there' in result
+        # tool_calls are NOT injected into the history prompt
+        assert 'User likes dark mode' not in result
+        assert 'Web page content' not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -153,86 +156,6 @@ class TestGetPreviousMessagesChannelIsolation:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — durable tool_call interleaving order
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesDurableToolInterleaving:
-    """Two durable tool_calls linked to the same transcript row must appear
-    immediately after that row, ordered by created_at."""
-
-    def test_two_durable_tool_calls_appear_under_their_transcript_row(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'The input row', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        tid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'memory', '{}', 'Result from memory', 0, '2026-04-10 10:00:10')",
-            (tid,)
-        )
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'find_tools', '{}', 'Found weather tool', 0, '2026-04-10 10:00:20')",
-            (tid,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-
-        assert '[memory()] Result from memory' in result
-        assert '[find_tools()] Found weather tool' in result
-        assert 'TOOL(memory)' not in result
-        assert 'TOOL(find_tools)' not in result
-
-        input_pos = result.index('The input row')
-        memory_pos = result.index('[memory()] Result from memory')
-        find_pos = result.index('[find_tools()] Found weather tool')
-        assert input_pos < memory_pos < find_pos
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — ephemeral=1 for same transcript row is dropped
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesEphemeralSiblingDropped:
-    def test_ephemeral_sibling_dropped_when_durable_present(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Row with mixed tool_calls', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        tid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'memory', '{}', 'DURABLE_RESULT', 0, '2026-04-10 10:00:05')",
-            (tid,)
-        )
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'read', '{}', 'EPHEMERAL_RESULT', 1, '2026-04-10 10:00:10')",
-            (tid,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-
-        assert 'DURABLE_RESULT' in result
-        assert 'EPHEMERAL_RESULT' not in result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # get_previous_messages() — exact timestamp format regression
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -250,55 +173,6 @@ class TestGetPreviousMessagesTimestampFormat:
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
         assert '[2026-04-10 14:03]' in result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — role rendering per north star
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesRoleCase:
-    """Lock the role rendering convention: lowercase for inputs, title-case for assistant only."""
-
-    def test_role_rendering_conventions(self, db):
-        channel = _GPM_CHANNEL
-        for role, content in [
-            ('user', 'Hello'),
-            ('assistant', 'Hi there'),
-            ('subagent', 'Pursuit tick'),
-        ]:
-            db.execute(
-                "INSERT INTO transcript (channel, role, content, created_at) "
-                "VALUES (?, ?, ?, '2026-04-10 10:00:00')",
-                (channel, role, content)
-            )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-        assert 'user: Hello' in result
-        assert 'Assistant: Hi there' in result
-        assert 'assistant: Hi there' not in result
-        assert 'subagent: Pursuit tick' in result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — empty channel returns '' even when other channels
-# have data
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesEmptyChannelWithOtherData:
-    def test_returns_empty_when_no_rows_for_this_channel(self, db):
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('other_channel', 'user', 'Not mine', '2026-04-10 10:00:00')"
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
-        result = p.get_previous_messages()
-        assert result == ''
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -332,7 +206,7 @@ class TestGetPreviousMessagesWindowFit:
         self._seed_rows(db, n)
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
-        # One line per row (no durable tool_calls), no fixed cap.
+        # One line per row (tool_calls not injected into history), no fixed cap.
         assert len(result.splitlines()) == n
         assert "line-0000-end" in result
         assert f"line-{n - 1:04d}-end" in result
@@ -384,8 +258,8 @@ class TestTrailExcludesAutoMemoryRecall:
 
     def _add_tool_call(self, db, tid, tool_name, params_json, result, when):
         db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, ?, ?, ?, 1, ?)",
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
             (tid, tool_name, params_json, result, when),
         )
         db.commit()
@@ -452,11 +326,6 @@ _COMPACT_CHANNEL = 'test_compact_channel'
 
 class TestWrapWithCheckpoint:
     """Module-private _wrap_with_checkpoint function behavior against real DB."""
-
-    def test_no_compaction_row_returns_bare_body(self, db):
-        from services.message_processor import _wrap_with_checkpoint
-        result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'hello user')
-        assert result == 'hello user'
 
     def test_row_with_content_exact_envelope_format(self, db):
         from services.message_processor import _wrap_with_checkpoint

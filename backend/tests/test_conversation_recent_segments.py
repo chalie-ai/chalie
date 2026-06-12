@@ -9,6 +9,9 @@ get_recent_history() and asserts:
   data.
 - When no tool_calls exist the assistant row still gets a ``type=text``
   segment containing the content.
+
+All tool_calls rows are now durable (no ephemeral column); the retention janitor
+in DecayEngineService removes rows older than 7 days.
 """
 
 import json
@@ -73,9 +76,9 @@ class TestConversationRecentSegments:
 
         for tc in (tool_calls or []):
             conn.execute(
-                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-                "VALUES (?, ?, ?, ?, ?, datetime('now'))",
-                (user_tid, tc["tool_name"], tc.get("params", "{}"), tc["result"], tc.get("ephemeral", 1)),
+                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
+                "VALUES (?, ?, ?, ?, datetime('now'))",
+                (user_tid, tc["tool_name"], tc.get("params", "{}"), tc["result"]),
             )
         conn.commit()
         return user_tid, asst_tid
@@ -108,7 +111,7 @@ class TestConversationRecentSegments:
             "What's the weather in London?",
             assistant_content,
             tool_calls=[
-                {"tool_name": "weather", "params": '{"location":"London"}', "result": _TOOL_RESULT, "ephemeral": 1},
+                {"tool_name": "weather", "params": '{"location":"London"}', "result": _TOOL_RESULT},
             ],
         )
 
@@ -125,16 +128,15 @@ class TestConversationRecentSegments:
         assert seg["payload"]["location"] == "London, GB"
         assert seg["payload"]["temperature_c"] == pytest.approx(12.4, abs=1e-9)
 
-    def test_ephemeral_tool_calls_included_in_pairing(self, db):
-        """ephemeral=1 rows (inline weather results) must be included."""
+    def test_tool_calls_included_in_pairing(self, db):
+        """Tool calls stored for a turn must be included in segment pairing."""
         assistant_content = "<span id='weather_1'>Sunny!</span>"
         self._seed_turn(
             db,
             "Weather?",
             assistant_content,
             tool_calls=[
-                # ephemeral=1 is how weather rows are stored
-                {"tool_name": "weather", "params": "{}", "result": _TOOL_RESULT, "ephemeral": 1},
+                {"tool_name": "weather", "params": "{}", "result": _TOOL_RESULT},
             ],
         )
 
@@ -162,8 +164,8 @@ class TestConversationRecentSegments:
             "Compare London and Tokyo weather",
             assistant_content,
             tool_calls=[
-                {"tool_name": "weather", "params": '{"location":"London"}', "result": _make_result("London, GB", 1), "ephemeral": 1},
-                {"tool_name": "weather", "params": '{"location":"Tokyo"}', "result": _make_result("Tokyo, JP", 2), "ephemeral": 1},
+                {"tool_name": "weather", "params": '{"location":"London"}', "result": _make_result("London, GB", 1)},
+                {"tool_name": "weather", "params": '{"location":"Tokyo"}', "result": _make_result("Tokyo, JP", 2)},
             ],
         )
 
@@ -198,7 +200,7 @@ class TestConversationRecentSegments:
             db, "London weather?",
             "<span id='weather_1'>Cloudy.</span>",
             tool_calls=[
-                {"tool_name": "weather", "params": "{}", "result": _make_result("London, GB", 1), "ephemeral": 1},
+                {"tool_name": "weather", "params": "{}", "result": _make_result("London, GB", 1)},
             ],
         )
         # Turn 2: no tool used

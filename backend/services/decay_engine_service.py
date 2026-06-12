@@ -54,6 +54,11 @@ _LEAF_DELETE_SALIENCE_MAX = 3
 _JANITOR_FOSSIL_AGE_DAYS = 7
 _USER_CHANNEL = "user"
 
+# ── Tool-call retention ───────────────────────────────────────────────────────
+# Durable tool_calls rows are time-capped: rows older than this are purged each
+# decay cycle, replacing the old count-based (25 k) cap.
+_TOOL_CALLS_RETENTION_DAYS = 7
+
 # Below this absolute delta a recomputed weight is treated as unchanged, so an
 # already-settled corpus produces zero UPDATEs on a repeat tick.
 _RW_EPSILON = 0.0001
@@ -109,7 +114,7 @@ class DecayEngineService:
            rows with vec/fts cleanup.
         4. ``_decay_data_graph()`` — ``DataGraphService.decay_cycle()``.
         5. ``_cleanup_transcript()`` — old transcript row cleanup.
-        6. ``_purge_tool_calls()`` — old tool-call row purge.
+        6. ``_purge_tool_calls()`` — 7-day durable retention janitor.
         """
         fossils_tombstoned = self._janitor_fossil_episodes()
         episodic_count = self._decay_episodic()
@@ -373,24 +378,28 @@ class DecayEngineService:
             logger.debug(f"[DECAY ENGINE] Transcript cleanup non-fatal: {e}")
             return 0
 
-    def _purge_tool_calls(self, max_rows: int = 25000) -> int:
-        """Purge tool_calls rows beyond the newest max_rows entries."""
+    def _purge_tool_calls(self) -> int:
+        """Delete tool_calls rows older than 7 days (durable-retention janitor).
+
+        All tool_calls rows are now durable; this time-based purge replaces the
+        old count-based (25 k) cap. The 7-day window matches the fossil-episode
+        janitor cadence. Compaction watermarks live in the transcript table, so
+        deleting any tool_name here is safe.
+        """
+        cutoff = (utc_now() - timedelta(days=_TOOL_CALLS_RETENTION_DAYS)).isoformat()
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
             with db.connection() as conn:
-                total = conn.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
-                if total <= max_rows:
-                    return 0
-                excess = total - max_rows
-                conn.execute("""
-                    DELETE FROM tool_calls WHERE rowid IN (
-                        SELECT rowid FROM tool_calls ORDER BY created_at ASC LIMIT ?
-                    )
-                """, (excess,))
-                logger.info(f"[DECAY ENGINE] Purged {excess} tool_calls rows (kept {max_rows})")
-                return excess
+                result = conn.execute(
+                    "DELETE FROM tool_calls WHERE julianday(created_at) < julianday(?)",
+                    (cutoff,),
+                )
+                deleted = result.rowcount
+            if deleted:
+                logger.info(f"[DECAY ENGINE] Purged {deleted} tool_calls rows older than 7d")
+            return deleted
         except Exception as e:
-            logger.debug(f"[DECAY ENGINE] Tool calls purge non-fatal: {e}")
+            logger.debug(f"[DECAY ENGINE] Tool calls retention purge non-fatal: {e}")
             return 0
 

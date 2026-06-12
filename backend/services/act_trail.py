@@ -55,7 +55,6 @@ class ActTrail:
         params: dict,
         result: str,
         transcript_id: "int | None",
-        ephemeral: bool = True,
     ) -> None:
         """The ONLY write path. One INSERT, raw params/result, no render.
 
@@ -63,7 +62,8 @@ class ActTrail:
         have no anchor row; the FK column is NOT NULL so we never attempt the
         insert). A write failure logs and is non-fatal — the turn continues.
 
-        Spec §4c / F2 / AC-24.
+        All rows are durable; the retention janitor in DecayEngineService removes
+        rows older than 7 days.
         """
         if transcript_id is None:
             logger.debug(
@@ -77,10 +77,9 @@ class ActTrail:
             with self._db.connection() as conn:
                 conn.execute(
                     "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, ephemeral, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (transcript_id, tool_name, params_json, result,
-                     1 if ephemeral else 0, now),
+                    "(transcript_id, tool_name, params, result, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (transcript_id, tool_name, params_json, result, now),
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -98,7 +97,7 @@ class ActTrail:
         """
         try:
             return self._db.fetch_all(
-                "SELECT id, tool_name, params, result, created_at, ephemeral "
+                "SELECT id, tool_name, params, result, created_at "
                 "FROM tool_calls WHERE transcript_id = ? ORDER BY id",
                 (transcript_id,),
             )

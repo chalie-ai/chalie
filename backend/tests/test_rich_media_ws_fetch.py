@@ -11,8 +11,8 @@ This replaces the original recency-based lookup that had two known bugs:
      wrong turn.
 
 These regression-sentinel tests assert that the function pairs tool_calls
-to *exact* transcript IDs regardless of channel/role, includes ephemeral=1
-rows, and doesn't drift across other concurrent transcript writes.
+to *exact* transcript IDs regardless of channel/role, and doesn't drift
+across other concurrent transcript writes.
 
 Additionally tested:
 - SegmentService.build() empty/missing transcript_ids fall-through path.
@@ -68,8 +68,8 @@ def _seed_transcript(db, channel: str, role: str, content: str = "x") -> int:
 
 def _seed_tool_call(db, transcript_id: int, ordinal: int, location: str = "London, GB") -> None:
     db.execute(
-        "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-        "VALUES (?, 'weather', '{}', ?, 1, datetime('now'))",
+        "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
+        "VALUES (?, 'weather', '{}', ?, datetime('now'))",
         (transcript_id, _make_tool_result(ordinal, location)),
     )
 

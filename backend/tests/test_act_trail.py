@@ -41,14 +41,12 @@ def test_round_trips_a_real_tool_calls_row(db):
         params={"location": "Malta"},
         result="sunny, 27°C",
         transcript_id=transcript_id,
-        ephemeral=True,
     )
     trail.record(
         tool_name="tool_chain_compactor",
         params={},
         result="summarised the trail",
         transcript_id=transcript_id,
-        ephemeral=False,
     )
 
     rows = trail.fetch_by_transcript_id(transcript_id)
@@ -56,8 +54,6 @@ def test_round_trips_a_real_tool_calls_row(db):
     # Oldest→newest by autoincrement id, raw params/result preserved.
     assert [r["tool_name"] for r in rows] == ["weather", "tool_chain_compactor"]
     assert rows[0]["result"] == "sunny, 27°C"
-    assert rows[0]["ephemeral"] == 1
-    assert rows[1]["ephemeral"] == 0
 
     # render() emits the invariant "[tool_name] params → result" shape.
     assert ActTrail.render(rows[0]) == '[weather] {"location": "Malta"} → sunny, 27°C'

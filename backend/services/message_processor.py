@@ -139,22 +139,9 @@ class MessageProcessor:
         # Per-turn config — a plain attribute set by `mp.config = X` in
         # process() / the background workers.  None until attached.
         self.config: "ProcessorConfig | None" = None
-        self._memory_seed: str | None = None
-        # Raw recall query used by pre_act(); kept separate from _memory_seed
-        # (which is the formatted tag block) so recall_episodes() can embed
-        # the original query for drift computation rather than the block string.
-        self._memory_seed_query: str | None = None
         # Tracks the current ACT loop iteration for tool-event emission
         # without thread-local indirection.
         self._current_iteration: int = 0
-        # Per-turn log of memory recall queries (seed + llm_recall).
-        # Populated by the memory skill recall path; consumed by the next
-        # recall call for redundancy-narrow and drift-expand computation.
-        # Entries: {'query': str, 'embedding': list[float],
-        #           'caller': 'seed'|'llm_recall', 'effective_radius': float}.
-        # Never persisted — cleared when the instance is discarded.
-        self._memory_query_history: list[dict] = []
-        self._act_trail: list[str] = []
         self._loop_exited_cleanly: bool = False
         self._active_tools: list[str] = []
         self._uid: int | None = None
@@ -187,6 +174,15 @@ class MessageProcessor:
     # The flat process() lifecycle reads/writes mp.uid / mp.cancel_event /
     # mp.active_tools; these properties bridge to the private backing fields
     # set up in __init__.
+
+    @property
+    def raw_input(self) -> str:
+        """Public, read-only alias for the turn's raw input text.
+
+        Read by the turn-0 flashback (continuation gate + topic inference) so the
+        seed never reaches into the private backing field across class lines.
+        """
+        return self._raw_input
 
     @property
     def uid(self) -> 'int | None':
@@ -381,12 +377,16 @@ class MessageProcessor:
 
         dispatcher = ToolDispatcher(self)
 
-        # a. Memory auto-seed — fire once when the declarative flag is set.
-        #    _auto=True marks this as the background seed recall so memory's
-        #    recall handler does NOT fan out to document.search + schedule.search
-        #    (that delegation is reserved for explicit, model-invoked recalls).
+        # a. Memory flashback — fire once when the declarative flag is set, and
+        #    only when the continuation gate decides this is a session start or a
+        #    topic shift (a continuation like "yes, do that" re-fires nothing).
+        #    The flashback runs the seed recall (caller='seed'), renders a curated
+        #    block (≤5 facts + ≤3 dated one-liners, supers preferred) instead of
+        #    raw recall JSON, and records its own _auto memory(recall) trail row.
+        #    The explicit, model-invoked memory.recall keeps its JSON contract.
         if self.config.memory_seed:
-            dispatcher.dispatch("memory", {"action": "recall", "query": self._raw_input, "_auto": True})
+            from services.turn_zero_flashback import TurnZeroFlashback  # noqa: PLC0415
+            TurnZeroFlashback(self).seed()
 
         # b. Attachment uploads — presence-gated.  Each file's upload IS the
         #    ingest (no second auto document.view).  Every upload internally runs
@@ -637,8 +637,8 @@ class MessageProcessor:
     def _record(self, response_text: str) -> None:
         """Post-loop.  Persist turn + fan-out side-effects.
 
-        Ephemeral trail rows are purged once here at turn end (spec §4c / F11).
-        Durable rows (ephemeral=0) survive for audit / previous-messages replay.
+        All tool_calls rows are durable; the 7-day retention janitor in
+        DecayEngineService handles cleanup. No per-turn purge.
 
         Spec §4 / M4-M5 / C3-C4.
         """
@@ -647,9 +647,6 @@ class MessageProcessor:
         if self.cancel_event.is_set():
             self._cleanup_cancelled()
             return
-
-        # Purge ephemeral trail rows once at turn end (§4c / F11).
-        self._purge_ephemeral_tool_calls()
 
         if not self.config.skip_transcript:
             write_assistant_row(self.config.channel, response_text)
@@ -718,17 +715,18 @@ class MessageProcessor:
         oldest N rows — used ONLY by ChatHistoryCompactor's rare bare-request
         fallback (canonical design step 4.2) when even the tool-free compaction
         request overflows; _previous_rows() is id-ASC, so the first ``drop_oldest``
-        entries are the OLDEST messages."""
+        entries are the OLDEST messages.
+
+        Tool calls are NOT rendered in the previous messages block — the act-trail
+        is provided to the model separately for the current turn only.
+        """
         if self.config.suppress_history:
             return ""
-        from services.tool_call_service import ToolCallService  # noqa: PLC0415
         entries = self._previous_rows()
         if drop_oldest:
             entries = entries[drop_oldest:]
         if not entries:
             return ""
-        all_ids = [e["id"] for e in entries if e.get("id")]
-        durable_by_id = ToolCallService().get_by_transcript_ids(all_ids, include_ephemeral=False) if all_ids else {}
         lines: list[str] = []
         for entry in entries:
             ts = _format_ts(entry.get("created_at"), row_kind="transcript", row_id=entry.get("id"))
@@ -736,41 +734,9 @@ class MessageProcessor:
             role_label = "Assistant" if raw_role == "assistant" else raw_role
             content = (entry.get("content") or "").replace("\n", " ").strip()
             lines.append(f"[{ts}] {role_label}: {content}")
-            for tc in durable_by_id.get(entry.get("id"), []):
-                tc_name = tc.get("tool_name") or tc.get("name") or "tool"
-                if tc_name in _NEVER_RENDER_IN_PREVIOUS:
-                    continue
-                tc_params = _parse_tc_params(tc.get("params"))
-                tc_result = tc.get("result") or ""
-                lines.append(_render_tool_call_for_previous(tc_name, tc_params, tc_result))
         return "\n".join(lines)
 
     # ── Trail API (T4: act-trail-as-a-query) ─────────────────────────────────
-
-    def _purge_ephemeral_tool_calls(self) -> None:
-        """Delete all ephemeral=1 tool_calls rows for the current turn's uid.
-
-        Called once at turn end (_record) and on cancel (_cleanup_cancelled).
-        Durable rows (ephemeral=0, e.g. 'thinking', 'compaction') survive.
-        No-op when uid is None.
-
-        Spec §4c / F11.
-        """
-        if self.uid is None:
-            return
-        try:
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                conn.execute(
-                    "DELETE FROM tool_calls WHERE transcript_id = ? AND ephemeral = 1",
-                    (self.uid,),
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[MessageProcessor] %s: failed to purge ephemeral tool_calls (uid=%s): %s",
-                self.config.channel, self.uid, exc,
-            )
 
     def _has_trail(self) -> bool:
         """True when real (non-internal) tool activity exists since the last
@@ -877,9 +843,9 @@ class MessageProcessor:
         return trail_collapsed or after_id > before_id
 
     def _record_narration(self, response: "object") -> None:  # type: ignore[override]
-        """Mid-loop: persist LLM text between iterations as an ephemeral trail row.
+        """Mid-loop: persist LLM text between iterations as a durable trail row.
 
-        Records a tool_calls row with tool_name='narration', ephemeral=True.
+        Records a tool_calls row with tool_name='narration'.
         Emits an act_narration WS event gated on config.broadcast_to.
         No-op when response.text is falsy.
 
@@ -895,7 +861,6 @@ class MessageProcessor:
             params={},
             result=text,
             transcript_id=self.uid,
-            ephemeral=True,
         )
         # The emitter owns the broadcast_to gate — background loops
         # (broadcast_to=None) never emit (N1/N5).
@@ -959,54 +924,6 @@ def _from_last_compaction(rows: "list[dict]") -> "list[dict]":
         if r.get("tool_name") == _TRAIL_BOUNDARY_TOOL and (r.get("result") or "").strip():
             last = i
     return rows if last is None else rows[last:]
-
-
-#: Durable tool_call names that must never surface in the ## Previous Messages
-#: block.  The history ``compaction`` row is stored ``ephemeral=0`` for audit,
-#: but its content is already replayed through the checkpoint prepend at the top
-#: of the block — rendering it again would double-inject the summary on every
-#: subsequent turn (Decision 4B).
-_NEVER_RENDER_IN_PREVIOUS: frozenset[str] = frozenset({'compaction'})
-
-
-def _render_tool_call_for_previous(tool_name: str, params: dict, result: str) -> str:
-    """Render one durable tool_call row for the ## Previous Messages block.
-
-    Bare format (no timestamp prefix, no ``TOOL()`` wrapper) — the row inherits
-    its owning transcript row's timestamp implicitly by positional placement.
-
-    Format: '[tool_name(k="v",…)] result'
-    """
-    parts = []
-    for k, v in params.items():
-        if isinstance(v, str):
-            parts.append(f'{k}="{v}"')
-        else:
-            parts.append(f'{k}={v}')
-    param_str = ','.join(parts)
-    return f'[{tool_name}({param_str})] {result}'
-
-
-def _parse_tc_params(raw: object) -> dict:
-    """Parse the ``tool_calls.params`` column into a dict for rendering.
-
-    The DB stores params as a JSON-encoded string. Callers may also pass a
-    pre-parsed dict (tests mocking the service). This helper normalises both
-    paths and returns ``{}`` on any parse failure — the rendered line becomes
-    ``[tool_name()] result`` which is still valid per the north star format.
-    """
-    if raw is None or raw == '':
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        import json
-        try:
-            parsed = json.loads(raw)
-        except (ValueError, TypeError):
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
 
 
 def _format_ts(

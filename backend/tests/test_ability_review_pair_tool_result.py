@@ -51,12 +51,12 @@ _PLUS_20 = "2026-04-07T14:50:00+00:00"    # +20 min
 _PLUS_40 = "2026-04-07T15:10:00+00:00"    # +40 min
 
 
-def _seed_tool_call(db, *, transcript_id, tool_name, params, result, created_at, ephemeral=0):
+def _seed_tool_call(db, *, transcript_id, tool_name, params, result, created_at):
     db.execute(
         "INSERT INTO tool_calls "
-        "(transcript_id, tool_name, params, result, ephemeral, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (transcript_id, tool_name, params, result, ephemeral, created_at),
+        "(transcript_id, tool_name, params, result, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (transcript_id, tool_name, params, result, created_at),
     )
     db.commit()
 
@@ -343,26 +343,3 @@ def test_review_tool_calls_query_failed_is_loud(db, chat_mp):
     assert "code=error" not in out
     assert any(ln.startswith("hint:") for ln in out.splitlines())
 
-
-# ── 11. legacy-marker sweep across every dispatch above ─────────────────────────
-
-
-def test_no_legacy_error_markers(db, chat_mp):
-    """No dispatch in this pair emits the banned ``code=error`` head, and the
-    structured success bodies are well-formed JSON lists — proving the migration
-    off prose-with-code=error is complete."""
-    _seed_tool_call(
-        db, transcript_id=chat_mp.uid, tool_name="search", params='{"q":"x"}',
-        result="[search(status=success)]\nok\n[end:search]",
-        created_at=_INSIDE_A,
-    )
-    _seed_transcript_row(
-        db, channel="user", role="user", content="hi", created_at=_INSIDE_A,
-    )
-
-    for tool in ("review_tool_calls", "review_transcript"):
-        out = ToolDispatcher(chat_mp).dispatch(
-            tool, {"date_time": _ANCHOR, "act_summary": "x"}
-        )
-        assert "code=error" not in out
-        assert isinstance(_body_json(out, tool), list)

@@ -515,7 +515,6 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     params        TEXT DEFAULT '{}',
     result        TEXT DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    ephemeral     INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (transcript_id) REFERENCES transcript(id)
 );
 

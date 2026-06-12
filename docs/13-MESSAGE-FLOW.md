@@ -109,7 +109,7 @@ Every turn runs the same ACT loop through the one flat `MessageProcessor`; behav
 
 Tool errors are returned to the model as structured result strings. They are never raised to the caller or surfaced to the user directly.
 
-Each tool call is written to `tool_calls` by `ToolDispatcher.dispatch()` via `ActTrail().record()` — the trail is the table, not an in-memory list. Ephemeral rows are purged at turn end (`_purge_ephemeral_tool_calls`); durable rows (compaction, thinking, memory seed, document uploads) persist across turns.
+Each tool call is written to `tool_calls` by `ToolDispatcher.dispatch()` via `ActTrail().record()` — the trail is the table, not an in-memory list. Every row is durable; there is no per-turn purge. `DecayEngineService._purge_tool_calls()` deletes rows older than 7 days on each subconscious worker tick. History replay (`get_previous_messages()`) does not render tool calls — only `transcript` rows appear in the `## Previous Messages` block. Cancelled turns still delete their `tool_calls` rows explicitly before the `transcript` row is removed (the FK has no `ON DELETE CASCADE`).
 
 ---
 

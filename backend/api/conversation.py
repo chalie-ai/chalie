@@ -12,14 +12,13 @@ conversation_bp = Blueprint('conversation', __name__)
 
 
 def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
-    """Fetch all tool_calls rows for a transcript, including ephemeral=1 rows.
+    """Fetch all tool_calls rows for a transcript for page-refresh card reconstruction.
 
-    Ephemeral rows carry the rich-media instruction trailer that the parser
-    uses to pair span tags with their payloads.  Filtering them out would
-    break card reconstruction on page refresh.
+    All rows are durable; rows within the 7-day retention window carry the
+    rich-media payloads the parser uses to pair span tags with cards.
     """
     tc_rows = conn.execute(
-        "SELECT tool_name, params, result, ephemeral, created_at FROM tool_calls "
+        "SELECT tool_name, params, result, created_at FROM tool_calls "
         "WHERE transcript_id = ? ORDER BY created_at",
         (transcript_id,),
     ).fetchall()
@@ -28,8 +27,7 @@ def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
             "tool_name": r[0],
             "params": r[1],
             "result": r[2] or "",
-            "ephemeral": r[3],
-            "created_at": r[4],
+            "created_at": r[3],
         }
         for r in tc_rows
     ]

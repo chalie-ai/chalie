@@ -45,10 +45,11 @@ class SegmentService:
 
     @staticmethod
     def _fetch_tool_calls(transcript_ids: list) -> list:
-        """Fetch all tool_calls rows (including ephemeral=1) for a list of transcript IDs.
+        """Fetch all tool_calls rows for a list of transcript IDs.
 
-        Replaces the old recency-based lookup that filtered WHERE channel='user'
-        AND role='user', silently missing subagent rows and racing DMN writes.
+        All rows are durable; the rich-media parser receives the full set so
+        span tags can be paired with their payloads on both the live broadcast
+        and page-refresh paths.
 
         Args:
             transcript_ids: List of transcript.id values from the turn that
@@ -65,7 +66,7 @@ class SegmentService:
             placeholders = ','.join('?' * len(transcript_ids))
             with db.connection() as conn:
                 tc_rows = conn.execute(
-                    f"SELECT tool_name, params, result, ephemeral, created_at "
+                    f"SELECT tool_name, params, result, created_at "
                     f"FROM tool_calls "
                     f"WHERE transcript_id IN ({placeholders}) "
                     f"ORDER BY created_at, id",
@@ -76,8 +77,7 @@ class SegmentService:
                     "tool_name": r[0],
                     "params": r[1],
                     "result": r[2] or "",
-                    "ephemeral": r[3],
-                    "created_at": r[4],
+                    "created_at": r[3],
                 }
                 for r in tc_rows
             ]

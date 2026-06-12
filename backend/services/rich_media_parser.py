@@ -113,10 +113,9 @@ def parse(content: str, tool_calls: list[dict]) -> list[dict[str, Any]]:
     Args:
         content: Post-sanitisation LLM response (``transcript.content``).
                  May contain ``<span id='tool_N'>…</span>`` tags.
-        tool_calls: List of tool_call row dicts for this turn.  Must include
-                    rows where ``ephemeral = 1`` so inline weather results
-                    are visible.  Each dict should carry at least ``result``
-                    (the full tool return string).
+        tool_calls: List of tool_call row dicts for this turn.  All rows are
+                    durable so the full set is always available.  Each dict
+                    should carry at least ``result`` (the full tool return string).
 
     Returns:
         Ordered list of segment dicts.  Never raises — edge cases produce
