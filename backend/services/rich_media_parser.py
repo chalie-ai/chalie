@@ -37,8 +37,8 @@ def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn) -> list
     recent row with ``id < assistant_transcript_id`` that shares the same
     ``channel`` and has ``role = 'user'`` or ``role = 'subagent_return'``.
 
-    Both the WS-send path (``api/websocket.py``) and the
-    ``/conversation/recent`` refresh path (``api/conversation.py``) use this
+    Both the live broadcast path (``api/chat.py::_broadcast_turn_result``) and
+    the ``/conversation/recent`` refresh path (``api/conversation.py``) use this
     function so they are guaranteed to resolve the same transcript IDs.  If the
     storage rule ever changes (e.g. tool_calls keyed to the assistant row
     instead), updating this single function is sufficient — neither call site

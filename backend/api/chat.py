@@ -160,17 +160,25 @@ def _broadcast_turn_result(response: str, request_id: str, turn_start: float) ->
     """
     broker = WebSocketBroker()
 
-    # Resolve the transcript id written during this turn for segment enrichment.
-    # User-channel turns are serialized, so the most recent user input row is
-    # this turn's row.
+    # Resolve the transcript id this turn's tool_calls are keyed to (the
+    # user-input row, not the assistant row). By broadcast time the assistant
+    # reply is already persisted, so the newest channel row is the assistant's —
+    # resolve backwards from it via the same shared function the
+    # /conversation/recent refresh path uses, so both paths pair span tags
+    # with tool_calls identically.
     transcript_ids: list[int] = []
     try:
         from services.transcript_service import get_recent  # noqa: PLC0415
         rows = get_recent("user", limit=1)
         if rows:
-            uid = rows[-1].get("id")
-            if uid is not None:
-                transcript_ids = [uid]
+            last = rows[-1]
+            if last.get("role") in ("user", "subagent_return"):
+                transcript_ids = [last["id"]]
+            else:
+                from services.database_service import get_shared_db_service  # noqa: PLC0415
+                from services.rich_media_parser import resolve_tool_call_transcript_ids  # noqa: PLC0415
+                with get_shared_db_service().connection() as conn:
+                    transcript_ids = resolve_tool_call_transcript_ids(last["id"], conn)
     except Exception as exc:
         logger.debug("[Chat API] transcript_id lookup failed: %s", exc)
 
