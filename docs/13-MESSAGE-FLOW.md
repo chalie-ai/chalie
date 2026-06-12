@@ -44,8 +44,10 @@ User (WebSocket)
   │      (if thinking_level=    │
   │       'high'; ThinkingAbil- │
   │       ity via ToolDispatch) │
-  │    - memory recall dispatch │
-  │      (if memory_seed=True)  │
+  │    - turn-zero flashback    │
+  │      (if memory_seed=True;  │
+  │       continuation gate may │
+  │       skip it)              │
   │    - document.upload per    │
   │      attachment, uploaded   │
   │      in parallel at a       │
