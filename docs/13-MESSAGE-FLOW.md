@@ -9,7 +9,7 @@ Chalie handles five distinct message paths. All of them share the same **ACT loo
 | Path | Trigger | Result |
 |---|---|---|
 | **User** | WebSocket message from the user | Response delivered on the same socket |
-| **DMN** | Step 5 of the subconscious worker tick (no own trigger) | Saves findings via memory tool; no chat-UI push |
+| **DMN** | Step 6 of the subconscious worker tick (no own trigger) | Saves findings via memory tool; no chat-UI push |
 | **Goal pursuit** | Background daemon spawned per active goal | Proactive push when goal resolves |
 | **Scheduled** | Timer fires on a due prompt | Proactive push to client |
 | **Episode encoder** | Internal, runs when the transcript tail grows long enough | No user-visible output; consolidates memory |
@@ -150,7 +150,7 @@ After the turn is stored, `_record()` iterates `config.post_turn_hooks` — a `t
 
 Metrics (token counts, request counters) are recorded inside the provider send gateway (`Providers._log_after_call`) — not in post-turn hooks and not in the loop. Token totals are accumulated per-send so delegate/sub-processor attribution is correct automatically.
 
-Background paths (DMN, pattern match, episode encoder, etc.) have `post_turn_hooks=()` and emit nothing to the chat UI (`broadcast_to=None`). (DMN no longer has an idle-timer — it runs as Step 5 of the subconscious worker tick.)
+Background paths (DMN, pattern match, episode encoder, etc.) have `post_turn_hooks=()` and emit nothing to the chat UI (`broadcast_to=None`). (DMN no longer has an idle-timer — it runs as Step 6 of the subconscious worker tick.)
 
 Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory ability directly. Contradiction detection happens at storage time.
 
@@ -158,12 +158,12 @@ Personal facts are handled inline during the ACT loop: when the model decides to
 
 ## Background Paths
 
-### DMN (Reflective Pass — Subconscious Step 5)
+### DMN (Reflective Pass — Subconscious Step 6)
 
-DMN no longer has its own daemon, idle trigger, or proactive output channel (v0.6.0). It runs as **Step 5 of the subconscious worker tick** — see `04-ARCHITECTURE.md` for the full five-step ordering. The processor reflects on the user picture and persists findings to `data_graph` via the `memory` tool; nothing is pushed to chat.
+DMN no longer has its own daemon, idle trigger, or proactive output channel (v0.6.0). It runs as **Step 6 of the subconscious worker tick** — see `04-ARCHITECTURE.md` for the full eight-step ordering. The processor reflects on the user picture and persists findings to `data_graph` via the `memory` tool; nothing is pushed to chat.
 
 ```
-  Subconscious tick (Step 5)
+  Subconscious tick (Step 6)
       │
       ├── load user_summary_long (fallback user_summary, else skip)
       ├── load channel='user' episodes (retrieval_weight ≥ 0.3, 30d window, LIMIT 50)
