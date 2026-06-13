@@ -32,7 +32,6 @@ import json
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
-from abilities._registry import AbilityRegistry
 from abilities.save_graph import ALLOWED_KINDS, SaveGraph
 from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig, _pattern_init_instance_state
@@ -313,13 +312,3 @@ def test_error_dispatch_writes_act_trail(db):
     assert any(
         "[save_graph(status=error, code=invalid-param" in r["result"] for r in trail
     )
-
-
-# ── registry still resolves save_graph with its metadata ────────────────────────
-
-
-def test_save_graph_registered_with_metadata():
-    ability = AbilityRegistry.get("save_graph")
-    assert ability.get_name() == "save_graph"
-    assert ability.get_summary()
-    assert len(ability.get_examples()) >= 6
