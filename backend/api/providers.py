@@ -289,7 +289,7 @@ def list_catalog_providers():
         catalog = get_catalog_providers()
         return jsonify({"catalog": catalog}), 200
     except Exception as e:
-        logger.error(f"[REST API] Failed to load provider catalog: {e}")
+        logger.exception(f"[REST API] Failed to load provider catalog: {e}")
         return jsonify({"error": "Failed to load provider catalog"}), 500
 
 
