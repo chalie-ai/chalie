@@ -38,6 +38,7 @@ const BrainSidebar = (() => {
       ]},
     { id: 'skills', label: 'Skills', icon: 'Skill', group: 'system' },
     { id: 'mcp', label: 'MCP', icon: 'Server', group: 'system' },
+    { id: 'brain', label: 'Brain', icon: 'Brain', group: 'system' },
   ];
 
   let _el = null;

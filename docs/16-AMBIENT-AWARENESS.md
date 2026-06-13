@@ -1,88 +1,76 @@
-# WorldState — Ambient Signal Snapshot
+# Signals & Ambient Awareness
 
-## Overview
+Chalie keeps a lightweight, in-process picture of "what's going on right now" in **WorldState** (`backend/services/world_state.py`). It feeds two things: the `### Background Telemetry, Processes & Signals` block rendered into every system prompt, and the idle gate that decides when background cognition may run.
 
-Chalie maintains a lightweight, in-process ambient snapshot that tracks four typed facts about the current session without any LLM calls, without any database writes, and without holding locks longer than a dict lookup.
+There are two ways information enters WorldState.
 
-The snapshot is populated by `world_state.absorb(signal)` whenever a typed `Signal` arrives from an interface. The result is available to any turn via `world_state.snapshot()`.
+## 1. The Typed Snapshot — `absorb(Signal)`
 
----
-
-## Signal Types
-
-| `kind` | Source | What it captures |
-|--------|--------|-----------------|
-| `user_message` | WebSocket `_handle_chat` | Timestamp of the most recent user turn |
-| `heartbeat` | POST `/health` | Timestamp of the most recent client heartbeat |
-| `device` | POST `/health` | Current device class (e.g. `phone`, `desktop`, `tablet`) |
-| `local_time` | POST `/health` | Client-reported local time as an ISO string |
-
-Unknown `kind` values are silently ignored — the system is forward-compatible with new signal types without any code change.
-
----
-
-## Signal Dataclass
+Four typed facts about the current session, updated by internal code:
 
 ```python
-@dataclass(frozen=True)
-class Signal:
-    """Typed event pushed by an interface. Short-lived, absorbed and discarded."""
-    source: str
-    kind: str
-    payload: dict[str, Any] = field(default_factory=dict)
-    received_at: datetime = field(default_factory=utc_now)
-```
+from services.world_state import world_state, Signal
 
-Signals are immutable and carry a `received_at` timestamp automatically set to `utc_now()` at construction time. Interfaces that need to override the timestamp (e.g. for replayed events) can pass `received_at` explicitly.
+world_state.absorb(Signal(source="api", kind="device", payload={"device_class": "phone"}))
 
----
-
-## WorldState API
-
-```python
-# Push an event — modifies the in-process snapshot
-world_state.absorb(Signal(source='ws', kind='user_message', payload={'text': text[:200]}))
-
-# Read the snapshot — safe to call from any thread
 snap = world_state.snapshot()
-# snap['last_user_message_at']  → datetime (UTC) or None
-# snap['last_heartbeat_at']     → datetime (UTC) or None
-# snap['current_device_class']  → str or None
-# snap['current_local_time']    → datetime (UTC) or None
+# snap["last_user_message_at"]   → datetime (UTC) or None
+# snap["last_heartbeat_at"]      → datetime (UTC) or None
+# snap["current_device_class"]   → str or None
+# snap["current_local_time"]     → datetime (UTC) or None
 ```
 
-All four snapshot fields are `None` when no signal of that kind has been absorbed since boot. Callers must treat `None` as "not yet known" rather than any sentinel datetime.
+| `kind` | Written by | Captures |
+|---|---|---|
+| `user_message` | The chat turn pipeline | When the user last spoke — **persisted durably** (MemoryStore + data graph) so it survives restarts |
+| `heartbeat` | `POST /health` (client heartbeat, ~every 5 min) | Last contact from the client |
+| `device` | `POST /health` | Current device class (`phone`, `desktop`, …) |
+| `local_time` | `POST /health` | Client-reported local time |
 
----
+Unknown kinds are ignored, so the snapshot is forward-compatible. The subconscious worker reads `last_user_message_at` to enforce its 30-minute idle gate.
 
-## Where absorb() is Called
+## 2. Freeform Signals — `push_signal()`
 
-| Call site | Signal kind | Trigger |
-|-----------|-------------|---------|
-| `backend/api/websocket.py` `_handle_chat()` | `user_message` | User sends a chat message |
-| `backend/api/system.py` POST `/health` | `heartbeat` | Any heartbeat from the client |
-| `backend/api/system.py` POST `/health` | `device` | Heartbeat payload includes `device_class` |
-| `backend/api/system.py` POST `/health` | `local_time` | Heartbeat payload includes `local_time` |
+Short text signals that appear in the system prompt as `[signal:<source>] <label>` lines:
 
-Each call is wrapped in `try/except` so a WorldState error never surfaces to the interface layer.
+```python
+world_state.push_signal("news", "Tech: new EU AI rules announced", ttl=3600)
+```
 
----
+- **One slot per source** — a new signal from the same source replaces the previous one.
+- **TTL** defaults to 1 hour; expired signals are pruned lazily on read.
+- Used internally by the hourly news scan and the mail monitor; available to any service.
 
-## Design Constraints
+### External signal API
 
-- **Zero DB.** `absorb()` and `snapshot()` operate entirely on `world_state._store` (an in-process dict). No SQLite writes. No MemoryStore writes.
-- **Thread-safe.** Both methods acquire `world_state._lock` for the duration of the operation. Lock is never held across I/O.
-- **Immutable signals.** `Signal` is `frozen=True`. The payload dict is shallow-copied by reference; do not mutate it after construction.
-- **No inference.** The snapshot records what interfaces reported. No place inference, attention scoring, or energy estimation. Classification of what these facts mean is done at turn-assembly time by the caller of `snapshot()`.
+Outside processes can push signals over HTTP:
 
----
+```
+POST /api/signals
+{
+  "signal_type": "ambient_context",      // advisory label — does not affect routing
+  "source": "my_service",                // becomes the signal slot key
+  "content": "Build #4812 failed on main" // becomes the rendered label
+}
+```
 
-## What Was Removed (v0.5.0)
+- Auth: session cookie, or a bearer token whose wrapper grants the `signal_type` (or `*`) under `capabilities.signals`.
+- Rate limit: 100 signals/min per wrapper. Batch endpoint: `POST /api/signals/batch` (max 50 per request).
+- Every accepted signal resolves to `push_signal(source, content, ttl=3600)` — there is no queue, no routing by type, and no per-type consumer. The signal simply becomes ambient context the next time a prompt is assembled.
 
-Prior to v0.5.0, three services powered a more complex ambient layer:
+## What Runs in the Background
 
-- **`AmbientInferenceService`** — rule-based classifier that inferred place, attention, energy, mobility, and tempo from telemetry signals.
-- **`SituationModelService`** — assembled inferences into a structured situation snapshot and persisted it to MemoryStore.
-- **`PlaceLearningService`** — accumulated place fingerprints in SQLite (`place_fingerprints` table, now auto-dropped by SchemaConvergenceService).
+| Service | Cadence | What it does |
+|---|---|---|
+| **Subconscious worker** | Every 5 min, fires only after 30+ min of user idleness | The seven-step cognition tick — consolidation, decay, pattern matching, user-summary synthesis, DMN reflection, capability sync, geo patterns (see [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition)) |
+| **World awareness** | Hourly | Derives up to 8 interests from the user's strongest traits and recent topics, fetches matching headlines, pushes a `news` signal — zero LLM calls |
+| **Moment context** | Every 6 h | Distils recent assistant turns into `moment` rows in the data graph |
+| **Decay engine** | Inside each subconscious tick | Recomputes episode retrieval weights, applies per-kind data-graph decay, deletes expired rows, prunes old transcripts and tool-call records |
 
-These three services were removed entirely. Their replacement is `Signal` + `absorb()` + `snapshot()`: four typed fields, zero inference at ingest time, zero DB overhead.
+All background work degrades gracefully: every step is wrapped at its boundary, a failed step is logged and skipped, and a missing signal means "nothing interesting happened", never an error.
+
+## Hooking In
+
+- **Make ambient context visible to the model** — `push_signal()` (or `POST /api/signals` from outside the process). It will appear in the next assembled prompt for up to its TTL.
+- **Read session state** — `world_state.snapshot()` from any thread.
+- **Influence the idle gate** — the subconscious worker fires only when `last_user_message_at` is older than 30 minutes; user activity automatically suppresses it.

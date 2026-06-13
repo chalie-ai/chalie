@@ -8,6 +8,8 @@ curl -fsSL https://chalie.ai/install | bash
 
 Checks for Python 3.11+, downloads the latest release, and opens Chalie at **http://localhost:31025**. No root access required. Everything lives in `~/.chalie/`.
 
+The installer supports **macOS and Linux** only. On Windows, run from source (below) or use the Docker image.
+
 ---
 
 ## CLI

@@ -380,6 +380,7 @@ body::before {
 .badge-openai, .badge-cyan { background: rgba(0,240,255,0.10); color: var(--cyan); }
 .badge-gemini { background: rgba(52,211,153,0.12); color: var(--success); }
 .badge-openai_compatible { background: rgba(251,191,36,0.12); color: var(--warning); }
+.badge-catalog { background: rgba(147,51,234,0.12); color: var(--violet); }
 .badge-success { background: rgba(52,211,153,0.12); color: var(--success); }
 .badge-warning { background: rgba(251,191,36,0.12); color: var(--warning); }
 .badge-danger { background: rgba(251,113,133,0.12); color: var(--error); }
@@ -1088,4 +1089,100 @@ input[type="checkbox"]:checked::after {
 @media (max-width: 900px) {
   .skill-card-header { flex-direction: column; align-items: flex-start; }
   .skill-card-actions { width: 100%; justify-content: flex-end; }
+}
+
+.brain-overview {
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.brain-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.export-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  text-align: center;
+}
+
+.export-card-icon {
+  color: var(--violet);
+  margin-bottom: 8px;
+}
+
+.export-card-label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.export-card-value {
+  font-size: 1.3rem;
+  font-weight: 600;
+}
+
+.brain-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.brain-section {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+}
+
+.brain-section-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+}
+
+.brain-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.brain-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.form-hint {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.form-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.form-input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--violet);
 }

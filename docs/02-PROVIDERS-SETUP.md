@@ -68,9 +68,22 @@ curl -X DELETE http://localhost:31025/providers/{id} \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
-**Assign provider to a job**
+**Test a provider's connection**
 ```bash
-curl -X PUT http://localhost:31025/providers/jobs/frontal-cortex \
+curl -X POST http://localhost:31025/providers/test \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{"platform": "anthropic", "model": "claude-haiku-4-5-20251001", "api_key": "sk-ant-..."}'
+```
+
+**Select the active chat provider**
+```bash
+curl -X PUT http://localhost:31025/providers/selected \
+  -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{"provider_id": 1}'
 ```
+
+Chalie uses **one globally selected provider** for all chat/reasoning turns, plus an optional dedicated **vision provider** (`GET/PUT /providers/vision`) for image understanding. `POST /providers/list-models` refreshes the model picker for Ollama hosts.
+
+API keys are encrypted at rest (AES-256-GCM) in the local SQLite database and never leave your machine.

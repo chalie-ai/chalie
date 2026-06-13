@@ -1,177 +1,53 @@
-# Chalie Web Interface
+# Web Interface
 
-Chalie's frontend is four independent single-page applications — chat, brain, onboarding, and login — all built on the **Radiant design system**: a cinematic dark UI where light is used with restraint, so when something glows, it matters.
+The frontend is four independent single-page apps under `frontend/` — plain HTML/CSS/JS served directly by Flask, no build step, no bundler. They share the **Radiant** design language: a near-black canvas, drifting atmospheric orbs, and three accent colors (violet for primary actions, magenta for presence, cyan for processing).
 
-## Auth + Provider Gate
-
-Every page loads a shared auth gate before its own bootstrap. The gate calls `/auth/status` once and redirects as needed:
-
-| Page | No account | No session | No providers | All good |
-|---|---|---|---|---|
-| chat (`/`) | → onboarding | → login | → brain | enter chat |
-| brain (`/brain/`) | → onboarding | → login | providers tab only | full dashboard |
-| onboarding (`/on-boarding/`) | stay | — | — | — |
-| onboarding (account exists) | — | → login | → login | → login |
-| login (`/login/`) | stay | stay | — | → chat |
-
-When brain enters **providers-only mode**, all navigation is locked to `#/providers` — sidebar items are greyed out, the command palette is disabled, and manual hash changes redirect back. A warning banner in the sidebar prompts setup. The lock lifts automatically when the first provider is saved. All app code waits for the gate to complete before booting.
-
-## Radiant Design System
-
-The canvas is near-black — darker than a typical dark mode. Color enters the UI in two forms only: atmospheric orbs drifting in the background canvas, and precision accents on interactive elements. Surfaces carry no tint; they are almost-transparent glass over the dark floor.
-
-Three accent colors do all expressive work: **violet** (primary, buttons and active states), **magenta** (presence and indicators), and **cyan** (processing states). Each element carries one glow, one thin edge highlight. No stacked shadows, no multi-color gradients on small elements. When nothing is active, the newest Chalie message draws the eye with a single thin violet top edge.
-
-**Atmospheric depth** comes from a background canvas rendering four low-alpha orbs — two warm (violet, magenta), two cool (cyan, indigo) — drifting on slow 25–35 second cycles. They provide color temperature without competing with the UI.
-
-Transitions are uniform and quick. Buttons use a solid accent fill and glow only on hover. The restraint is deliberate: luxury is making the user notice the one thing that changed.
-
-## Layout
-
-The chat interface uses three fixed regions:
-
-- **Title bar** (top, fixed) — app name, status indicators, optional media controls during voice playback, navigation
-- **Chat area** (scrollable middle) — messages in chronological order; Chalie messages sit left with a thin violet top-edge gradient, user messages right; depth fades at scroll boundaries
-- **Prompt box** (bottom, fixed) — full-width text input; mic button on the left, send on the right
-
-## ACT Cycle UI
-
-When the user sends a message, Chalie immediately renders a **chrome-less ACT cycle** — no bubble, no border, no background. Just a small blinking violet logo that signals "Chalie is working". Narrations and tool calls accumulate beside and below the logo until the ACT loop completes; on completion, the entire ACT UI vanishes and is replaced by a normal Chalie speech-form bubble carrying the final response.
-
-The shape:
-
-```
-While the ACT loop runs:                    Final:
-●  Got it — checking the weather…           ┌──────────────┐
-   Search          1.5s                     │ <response>   │
-   Read            2.2s                     │              │
-   weather         error                    └──────────────┘
-   find_tools      2.4s
-   Read            ⟳
-```
-
-- **Logo** (`act-logo`) — 12 px violet disc, 1.4 s sine pulse. It IS the placeholder; there is no "Working on it…" text.
-- **Narrative** (`act-narrative`) — italic text at 75 % opacity sitting on the same row as the logo. **Each new narration replaces the previous one** — narratives do not stack.
-- **Tool list** (`act-tools`) — cumulative across the entire ACT loop (NOT per-iteration). Indented 24 px under the logo so it visually belongs to the row.
-- **Final response**: `replaceActWithResponse` removes the `act-cycle` node and appends a fresh `.speech-form--chalie` bubble in its place.
-
-Tool rows are minimal monospace lines — name LEFT, optional summary, state RIGHT — with no chrome. When the LLM provides an `act_summary` (a ~3-10 word description the framework injects as a required field into every tool's input schema at request time, via the single `Ability.get_input_schema()` assembler), the row displays `tool_name — summary` (e.g. `search — Searching for laptops in Malta`). The summary uses `var(--text-secondary)` at `font-weight: 400` and truncates with ellipsis when space is constrained. When `act_summary` is absent the row falls back to showing only the tool name.
-
-| State | Class | Color | Status slot |
-|---|---|---|---|
-| Running | `act-tool--running` | white @ 75 % | small white spinner |
-| Done | `act-tool--done` | `var(--success)` (#34d399) @ 90 % | duration in seconds (e.g. `1.5s`) |
-| Error | `act-tool--error` | `var(--error)` (#fb7185) @ 50 % | literal `error` (the actual error string is not surfaced) |
-
-Sub-100 ms tools enforce a 150 ms minimum visible duration so the spinner-to-state transition is always perceptible. Rows are display-only — no click-to-expand, no tooltips.
-
-**CSS classes:** `act-cycle` (chrome-less host), `act-row` (logo + narrative line), `act-logo` (blinking disc), `act-narrative` (italic text), `act-tools` (cumulative list), `act-tool` + `act-tool--running` / `--done` / `--error`, `act-tool__name`, `act-tool__label` (name + summary wrapper), `act-tool__summary`, `act-tool__status`, `act-spinner`. Animations: `@keyframes act-logo-pulse` (1.4 s opacity + box-shadow), `@keyframes act-spinner-spin` (0.9 s linear).
-
-**Frontend wiring:** `renderer.js` exposes `createActCycle()`, `setActNarrative(actEl, text, step)`, `appendToolPill(actEl, callId, name, summary)`, `resolveToolPill(callId, ms, ok)`, `replaceActWithResponse(actEl, blocks, meta)`, `replaceActWithError(actEl, message)`. `chat.js` calls `createActCycle()` once on send and stores the element for the whole turn — `onNarration` calls `setActNarrative` (which mutates the single text slot in-place), `onToolStart` calls `appendToolPill(actEl, …)` (single flat list, no nesting under narrations), `onDone` calls `replaceActWithResponse` to swap the ACT UI for the final bubble. The `act_tool_start` WebSocket event includes an optional `act_summary` field (omitted when the LLM does not provide one). The action flow in `app.js` (deterministic skill invocation) shares the same primitives.
-
-## Presence Dot
-
-A small dot beneath the chat input communicates what Chalie is doing:
-
-| State | Color | Animation |
+| App | URL | Purpose |
 |---|---|---|
-| Resting | Magenta | Slow breathing pulse |
-| Processing | Cyan | Faster pulse |
-| Thinking | Violet | Variable-intensity glow |
-| Retrieving memory | Cyan | Expanding ripple |
-| Planning | Violet → cyan | Cycling shimmer |
-| Responding | Amber | Waveform bars |
+| **Chat** | `/` | The conversation: messages, live tool activity, rich cards, voice, attachments |
+| **Brain** | `/brain/` | The dashboard: providers, memory, cognition, policies, skills, MCP, scheduler, documents, vision |
+| **Onboarding** | `/on-boarding/` | One-time account creation |
+| **Login** | `/login/` | Session login (supports `?next=` redirect) |
 
-## Cards System
+## Auth & Provider Gate
 
-Structured responses render as typed cards rather than prose. All cards share the same dark surface and violet accent language.
+Every page calls `/auth/status` before booting and redirects as needed: no account → onboarding, no session → login, no providers → Brain (locked to the Providers tab until the first provider is saved).
 
-- **Scheduled item** — title, time, recurrence, status (pending/completed), edit/delete actions
-- **List** — name, type, item count, recent items preview, add/manage actions
-- **Goal** — title, progress bar, target date, status (active/completed/abandoned), update actions
-- **Knowledge** — concept name and strength, related concepts, last accessed
+## The Chat Surface
 
-## Rich-Media Cards
+**ACT cycle.** While a turn runs, the UI shows a chrome-less working state — a pulsing violet logo, a one-line narration that updates in place, and a cumulative list of tool calls (name, optional `act_summary`, then duration or error). When the turn finishes, the whole ACT UI is replaced by the final reply bubble. The data comes from WebSocket events: `act_tool_start`, `act_tool_end`, `act_narration`, then `message` + `done`.
 
-Rich-media cards are tool-driven structured renders that appear inline with text bubbles in the chat surface. They follow the same Radiant conventions (near-black surface, 1 px violet/cyan accent edge, hover glow) and are the only component class that may use entrance animation.
+**Rich-media cards.** Tools can return a structured payload that renders as an inline card instead of prose. The registry (`frontend/interface/rich_media/registry.js`) maps tag prefixes to card modules:
 
-**Segment iteration.** `appendChalieForm(content, meta, opts)` and `prependChalieForm(content, meta, opts)` in `frontend/interface/renderer.js` iterate `meta.segments` when present. Each segment is either `{type:"text"}` — rendered as a normal text bubble via `_appendTextBubble` — or `{type:"rich", tag, payload, synthesis}` — rendered via `_appendRichCard`. When `segments` is absent the renderer falls back to a single text bubble using `content`, keeping the change backward-compatible.
+| Card | Source tools |
+|---|---|
+| `weather` | weather — ambient sky scene with hourly rail |
+| `article` | search + news — shared article layout with thumbnails |
+| `schedule` | schedule — date block + same-day list |
+| `list` | list — checklist with click-to-toggle persistence |
+| `timer` | timer — live countdown with alarm (purely client-side) |
+| `calendar` | calendar — event card |
+| `contacts` | contacts — contact card |
 
-**Module registry.** `frontend/interface/rich_media/registry.js` maps tag prefixes to card modules:
+Interactive cards (e.g. checking a list item) post silent actions back to the server without rendering a chat bubble — the card owns its own feedback.
 
-```
-frontend/interface/rich_media/
-  registry.js        — tag-prefix → module map
-  weather.js / .css  — ambient-sky weather card
-  article.js / .css  — news + search (shared layout)
-  scheduler.js / .css — schedule card (date block + same-day list)
-  list.js / .css     — checklist with click-to-toggle persistence
-  timer.js / .css    — live countdown card (pause/stop, Web-Audio alarm)
-  base_card.css      — shared Radiant card chrome (border, padding, entrance keyframes)
-  icons/weather/     — semantic SVGs (clear-day, clear-night, partly-cloudy-*, rain, snow, fog, thunderstorm, cloudy)
-```
+**Attachments.** Up to 3 images per message via file picker, drag-and-drop, or paste. Thumbnails show an analyzing state while the backend runs vision/OCR; sending is never blocked on analysis. Non-image files route to document upload.
 
-`registry.js` extracts the prefix from the tag (e.g. `weather` from `weather_1`) and delegates to the matching module's `render(payload, synthesis, root)`. Unknown prefixes fall back silently to a text bubble using the synthesis string.
+**Voice.** Optional and off by default (see [01-QUICK-START.md](01-QUICK-START.md)). When enabled: the mic button transcribes speech into the prompt box (Moonshine STT), and a speaker icon under each reply opens an overlay player (Kokoro TTS, single WAV per message). If voice dependencies aren't installed, all voice controls hide automatically.
 
-**Animation scope.** Entrance: card fades in and lifts 8 px on mount (200 ms ease-out). The weather card additionally runs ambient loops on the hero canvas — sun bob (12 s), cloud drift (26–38 s) — because the canvas *is* the answer ("vibe, not data"). All other cards stay still. No live ticking, no parallax. Animation lives entirely inside the card module; the framework imposes nothing.
+## The Brain Dashboard
 
-**Weather payload (ambient-sky variant).** Beyond the original fields, `WeatherAbility` (Open-Meteo path) now emits:
+| Tab | What it does |
+|---|---|
+| **Providers** | Add/test/select LLM providers |
+| **Vision** | Vision-provider configuration |
+| **Cognition** | Subtabs: Memory, Tools, World state, Personality, Errors, Usage, Compacted Summary |
+| **Scheduler** | Reminders and scheduled tasks (All / Pending / Fired / Failed / Cancelled) |
+| **Lists** | The user's persistent checklists |
+| **Documents** | Ingested documents and watched folders (Active / Processing / Uploads / Deleted) |
+| **Capabilities** | Connect external services (mail, Home Assistant, UniFi) |
+| **Policies** | Per-action permission control — allow / ask / deny across Chat, Background, and External Agent contexts, plus a blocked-actions log |
+| **Skills** | Curated and user-created playbooks, skill associations |
+| **MCP** | External MCP tool-server connections |
 
-- `sunrise`, `sunset` — local ISO timestamps from the Open-Meteo `daily` block, used by the FE to pick a phase (`dawn` / `day` / `sunset` / `night`).
-- `hourly` — array of 8 `{hour, temp_c, code}` entries starting from the slot containing the current observation. Drives the bottom rail. wttr.in fallback returns `[]`; the rail simply hides.
-
-The card renders a gradient sky tinted by phase, drifting cloud blobs, a sun (day/dawn/sunset) or moon (night), a low skyline silhouette, and an overlay with the big top-left temperature, location + day/time top-right, and a narrative caption (the LLM synthesis or a phase-aware fallback). The hour rail highlights the current hour (violet) and the daily peak (amber).
-
-**Timer card.** `TimerAbility` returns `{title, duration_seconds}` to the LLM — the wall-clock anchor is deliberately hidden so the model can't fill, edit, or reason about it. `RichMediaParser` calls `TimerAbility.enrich_rich_payload(payload, row)` (the generic per-ability hook on `Ability`), which grafts `started_at` from `row.created_at` (normalised to ISO 8601 UTC) before the segment reaches the FE. `timer.js` then computes `remaining = duration_seconds − (now − started_at)` on every 1-second tick, so a page reload resumes the countdown from real elapsed (no DB, no worker — purely ephemeral, in contrast to `schedule` which persists in `scheduled_items`). Pause is in-memory only; reloading while paused resumes the timer. When `remaining ≤ 0` the ring switches to amber and a Web-Audio oscillator (3 × 880 Hz beeps every 1.4 s) plays until the user clicks Stop.
-
-**Interactive cards — silent action channel.** Cards that mutate server state (currently the list card's check toggles) dispatch a `chalie:silent-action` `CustomEvent` on `document` with `detail = { payload, onMessage, onError, onDone }`. `app.js` listens and forwards `payload` to `ws.sendAction(...)` without rendering an ACT cycle or chat bubble — the card already owns the visual feedback (optimistic UI, revert on error). The matching backend path is unchanged: `WS message {type:'action'} → _handle_action → ActDispatcherService.dispatch_action('action_button', …)`. Channel `'action_button'` is **not** `'user'`, so no rich-media ordinal is injected and the response is a plain dict, never a card.
-
-The action handler writes to the canonical `lists`/`list_items` tables, but the LLM-channel rich-media result is a snapshot frozen in `tool_calls.result`. So on conversation refresh, `ListAbility.enrich_rich_payload` re-fetches the live list via `ListService.get_list(id)` and overrides the snapshot — both render paths converge on the same data, no duplicate read paths. (Lists are addressed by 8-char hex `id` end-to-end: `_list_json` includes it, the FE card stamps it, and silent-action toggles round-trip the same `id`.) The same `Ability.enrich_rich_payload` hook services the timer's `started_at` injection; cards that need no live state simply inherit the identity default.
-
-**Lazy-load conventions.** Media inside cards that should load asynchronously uses the standard data-attributes: `[data-lazy-embed]` for embeds, `[data-lazy-thumb]` for thumbnails, `[data-lazy-src]` for media URLs. The existing lazy-load observer in the chat surface handles these without card-specific wiring.
-
-**Article thumbnails (search + news cards).** The search and news abilities surface up to three candidate images alongside their results — each result's per-provider image (GitHub avatar, Reddit `preview.images[0].source.url`, Open Library cover, RSS `media:thumbnail`/`enclosure`, etc.) is shortlisted by `services.image_candidate_service.build_image_candidates` and validated in parallel by a single-chunk reachability + `Content-Type` probe (3 s timeout, body never stored). Each candidate is `{url, source_title, caption}`: `source_title` is the article title so the LLM can match thumbnail → article, and `caption` is taken from the article's `og:description` (≥ 20 chars) when available or otherwise derived from the URL filename (Wikipedia descriptive filenames decode to readable phrases; opaque CDN hashes return an empty caption). When fewer than three native thumbnails are present (Google News RSS strips them, for example), `services.og_image_service.resolve_og_images` fills the gap by fetching the top result URLs in parallel and scraping `og:image` / `twitter:image` / relative paths (resolved against the post-redirect page URL); Google's SOCS cookie is sent so EU/UK requests bypass the consent gate, and the head is streamed until `</head>` (no byte cap — Google News article heads exceed 575 KB before reaching the og:image meta tag). The instruction trailer asks the LLM to add `data-image='<that url>'` to the rich-media span if a candidate's source matches its synthesis. `RichMediaParser._apply_image_choice` then validates the chosen URL against the candidate list (rejects anything not shortlisted — closes the prompt-injection path) and promotes it to `payload.image_url` while always stripping `image_candidates` from the FE payload. `<span ... data-image="...">` is the only LLM-controlled thumbnail signal; the regex permits the attribute optionally so older spans without it continue to work unchanged.
-
-## Voice I/O
-
-Voice is optional. If the voice service is unavailable, the mic button and all speaker icons are hidden automatically.
-
-**Microphone (speech-to-text)** — the mic button sits left of the prompt box. Click to record, click again to stop. The transcript is pasted into the prompt box; the user reviews it and sends. The mic track is released immediately after each recording.
-
-**Speaker (text-to-speech)** — a speaker icon appears below each Chalie message. Clicking it opens a centered overlay player with play/pause, seek ±10 s, a progress bar, and a close button. Only one message plays at a time; opening a new one cancels the previous. `/voice/synthesize` returns a single `audio/wav` blob — one complete waveform, no streaming, no NDJSON. The stack uses `kokoro-onnx` (Kokoro v1.0 ONNX) with `phonemizer-fork` + `espeakng-loader` under the hood; espeak-ng preserves commas, periods, and other punctuation as IPA pause tokens, so prosody is produced correctly. Kokoro ONNX has a hard 510-phoneme limit, so long text is split into sentence-level chunks (≤320 chars each) before synthesis; chunks are concatenated with 0.15 s silence pads and encoded as a single waveform. Ordinal expansion (`1st`, `21st`), number handling (`v0.8` → "vee zero point eight"), and short acronyms are handled natively by the espeak-ng phonemiser. STT uses `moonshine-onnx` (imported as `moonshine_onnx`), Moonshine base model. Transcribed text is post-processed by `_dedup_repetitions` to collapse consecutive repeated 2–6 word phrases beyond two occurrences — a known Moonshine/Whisper hallucination pattern on silence or noise. The ONNX model files are downloaded on demand, not bundled with the install — turning voice on in Settings (`PUT /api/voice-settings`) calls `RuntimeDepsService.enable_voice()`, which downloads them into `resources/voice-models/{kokoro,moonshine/base}/`, intentionally outside the `data/` bind mount so the files survive `chalie update` on native installs. Voice: `af_heart`. Text preprocessing before synthesis: HTML pre-pass via `extract_plaintext`, then `markdown-it-py` render → `extract_plaintext` again, bare URLs rewritten to their spoken host (`http://google.com/123` → `google dot com`), whitespace collapse. Synthesis runs under a single TTS lock so the shared Kokoro ONNX session never sees concurrent inference. VoicePlayer fetches the response as a single `ArrayBuffer`, decodes it into an `AudioBuffer` via the Web Audio API, and plays it via `AudioBufferSourceNode`. `AudioContext.resume()` runs synchronously inside the click handler, satisfying iOS Safari's autoplay policy.
-
-## File Attachments
-
-Images (max 3 per message) attach via three equivalent paths: the `+` menu file picker, **drag-and-drop** onto the input dock or anywhere on the viewport (a full-page overlay lights up on `dragenter`), or **paste** from the clipboard into the prompt box. Non-image files dropped anywhere fall through to the document upload endpoint.
-
-Each attached image renders as a thumbnail in a strip above the prompt box with a cyan spinner and `analyzing` class while the backend runs OCR and scene analysis. The send button unblocks as soon as the upload returns an `image_id` — the user is never made to wait for analysis. A WebSocket `image_ready` event clears the spinner; a 90-second safety timeout replaces it with a warning badge if analysis never completes (the image stays attached, context may be incomplete). Analysis failure surfaces as a red badge.
-
-The global drop overlay uses a refcount on `dragenter` / `dragleave` with `dragend` and `window.blur` fallbacks, so it always clears — even if the browser swallows the `drop` event.
-
-## Applications
-
-### Chat (`/`)
-
-The primary interface. Title bar + scrollable chat + prompt box. Presence dot indicates cognitive state. Canvas atmosphere renders behind everything. Home view shows recent conversations. Supports all card types and optional voice I/O.
-
-### Brain (`/brain/`)
-
-The cognitive dashboard. Tabs expose episodic memory with decay visualization, semantic concepts, routing audit trails, tool history, settings, and tool management.
-
-The **Personality** subtab (under Cognition) exposes five sliders — warmth, mood, expressiveness, curiosity, humor — each ranging from −2 to +2. The selected combination maps to a voice paragraph prepended to the system prompt for user-facing conversations. Background processors (memory encoding, goal pursuit, scheduled tasks) are unaffected.
-
-The **Errors** subtab (under Cognition) shows the most recent ERROR and CRITICAL log entries from `/tmp/chalie.log`, newest first, capped at 200 entries. Served by `GET /system/observability/errors` (`@require_session`). Reads only the last ~256 KB of the log file. Returns an empty list on a missing file rather than a 500.
-
-The **Compacted Summary** subtab (under Cognition) is a read-only view of the continuity summary the chat (`'user'` channel) carries forward after its context window overflows and is compacted — the same text the ACT loop prepends in place of the older turns. Served by `GET /system/observability/compaction` (`@require_session`). When no compaction has run yet it shows an empty-state card; once one exists it shows two stat cards (**Last Compacted** — a backend-formatted timestamp via `locale_service`, never a raw ISO string — and **Compacted Up To** — the transcript watermark id) above a monospaced block holding the verbatim synthesis. Returns `{"compaction": null}` when none exists.
-
-The **Policies** tab provides per-action permission control (allow / ask / deny) across three independent contexts: Chat, Background (subconscious), and External Agent. Each action has a three-state segmented toggle (Allow / Ask / Deny). The tab header carries a channel-wide Allow / Ask / Deny control that sets every action in the currently-selected context to one setting in a single click (one `PUT /api/policies` per changed action). Action labels and grouping categories are derived server-side from `POLICY_CATEGORY` / `POLICY_LABELS` on each Ability class and served via the `meta` key of `GET /api/policies` — no hardcoded label lists exist in the frontend. A collapsible Blocked Actions Log section shows recent policy denials (fields: `action_id`, `context`, `created_at`). Served by `GET/PUT /api/policies`, `POST /api/policies/reset`, `GET/DELETE /api/policies/blocked`.
-
-The **Skills** tab manages curated and user-created skill playbooks. Three sections: My Skills (full CRUD with inline editor, enable/disable toggle), Curated Skills (read-only with toggle and Copy & Customise), and Skill Associations (read-only table of behavioural pattern links). Served by `GET/POST /api/skills`, `PUT/DELETE /api/skills/<id>`, `PUT /api/skills/<id>/toggle`, `POST /api/skills/<id>/copy`.
-
-### Onboarding (`/on-boarding/`)
-
-Account creation only — username and password. If an account already exists, the page bounces to login. After creating an account it redirects to Brain so the user can add a provider.
-
-### Login (`/login/`)
-
-A dedicated form so browser autofill and OS credential managers (macOS Keychain, etc.) can offer stored credentials. Accepts a `?next=` parameter to resume the original destination after sign-in. Bounces to chat when a session is already active.
+The **Personality** sliders (warmth, mood, expressiveness, curiosity, humor; −2 to +2) map to a voice paragraph prepended to the system prompt for user-facing conversations only — background processing is unaffected.

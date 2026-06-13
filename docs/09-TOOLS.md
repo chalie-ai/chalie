@@ -1,115 +1,110 @@
 # Tools System
 
-Every dispatchable capability in Chalie is an `Ability` subclass under `backend/abilities/`. Tool scope — which abilities are pre-injected and which are discoverable — is carried per-turn on the `ProcessorConfig` (`always_available`, `discoverable`, `blocked`). There are no `MessageProcessor` subclasses: each channel supplies a config built from the shared defaults in `backend/configs/channels.py` (`DEFAULT_ALWAYS_AVAILABLE`, `DEFAULT_DISCOVERABLE`).
+Every tool the LLM can call is an **Ability** — a Python class under `backend/abilities/`. The full catalogue is in [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md).
 
-**Innate abilities (`always_available`)** are pre-injected on every ACT iteration for the current turn. The shared default is `["find_skills", "find_tools", "memory"]`. Most configs use this directly — the user, DMN, and external-agent channels all use the default. The pattern-match configs override to `["save_pattern", "save_graph"]`. `find_skills` is innate (not discoverable) because returning procedural playbooks is infrastructure — the same rationale that makes `find_tools` and `memory` innate.
+## Three Tiers
 
-**Discoverable abilities (`discoverable`)** are never pre-injected. `DEFAULT_DISCOVERABLE` lists the first-party abilities surfaceable at runtime: `bash`, `browser`, `calendar`, `chalie_docs`, `code_eval`, `contacts`, `document`, `email`, `file_permissions`, `file_write`, `home`, `list`, `mcp_manager`, `news`, `place`, `programming_docs_search`, `read`, `review_tool_calls`, `review_transcript`, `schedule`, `search`, `search_files`, `skill_builder`, `timer`, `ubiquiti`, `vision`, `weather`, `web_browse`, `web_download`, `web_search`. The `find_tools` ability activates tools into the running ACT turn. It supports two input modes — `select` (array of tool names) and `query` (natural-language hybrid vec+FTS RRF semantic search). Both are optional; at least one must be supplied. When both are given, `select` wins and `query` is ignored. The `query` path applies a `MIN_RRF_SCORE = 0.075` relevance floor (scores below are single-signal rank artifacts) and caps results at 5; names that pass the floor are appended to `active_tools`. The `select` path appends all matched names immediately, and reports any unresolved names as `Tools not found or unavailable: <names>`. Both paths return the same result format: a lead phrase containing `added the following tools` followed by a JSON array of `{"name": <tool>, "input_schema": <schema>}` entries. When the LLM invokes `find_tools`, the matched abilities become available for the remainder of that ACT loop. All first-party and MCP abilities are reachable exclusively through this path — pre-injecting them would bloat context, create staleness bugs, and break tool-agnostic routing.
+Which tools a turn can see is carried on its channel config (`always_available`, `discoverable`, `blocked` — defaults in `backend/configs/channels/_common.py`):
 
-**`select` name matching:** each name is matched case-insensitively against the effective allow-list using two passes: (a) exact match against the call name (e.g. `_mcp_taskie_list_tickets`), and (b) if no call-name match, resolved against the advertised display name (e.g. `list_tickets`) via a `display.lower() → call_name` alias map built from the online MCP tools index. Ambiguity rule: if a bare display name maps to the same-named tool on more than one server, the alias is **dropped** — the caller must use the full prefixed form. Duplicate aliases (bare + prefixed resolving to the same tool) are de-duplicated so a tool is never double-reported.
+- **Always available** — pre-injected on every iteration. The default is just three meta-tools: `find_skills`, `find_tools`, `memory`.
+- **Discoverable** — everything else. Never pre-injected; the model activates them mid-turn by calling `find_tools` (by name, or by natural-language search). This keeps the request small and works with any number of installed tools.
+- **Blocked** — a per-channel exclusion set. For example, background channels block the delegate tools so a reflection pass can never spawn web research, and the raw `browser`/`search` tools are blocked everywhere except inside their delegate agents.
 
-**MCP tool embeddings:** when an MCP server is first added (via `mcp_manager add` or the REST `add_server` endpoint), `McpClientService.embed_server_tools()` generates vector embeddings for every tool in that server using the same offline ONNX encoder (gte-modernbert-base, 768-dim) as first-party abilities. Embed text = de-slugged display name + summary (e.g. `"list tickets. List tickets in a project…"`). Embeddings are keyed by the stable `tool_name` (not `mcp_tools.id`, which is reassigned on every 15-min heartbeat sync), stored in `mcp_tool_vectors` + `mcp_tools_vec` tables inside `mcp_tools.sqlite`. This gives the `query` path a dual-signal (vec + FTS) match for MCP tools — the same RRF fusion path and `MIN_RRF_SCORE = 0.075` floor that governs first-party abilities. Embeddings are generated on `add` only; the heartbeat/sync/enable path is zero-cost. Backfill for pre-existing servers: manually re-add the server.
+`find_tools` returns a structured result the model can act on:
 
-**Blocked abilities (`blocked`)** is a per-config `frozenset` (empty by default). A config narrows the discoverable scope by listing tool names to exclude from both `discoverable` and the `find_tools` index. The three discovery-capable loops — user, DMN, and external-agent — each carry a `blocked` set built from shared constants in `configs/channels/_common.py`: all three block `PATTERN_WRITE_TOOLS` (`save_pattern`/`save_graph`, exclusive to the pattern passes) and `DELEGATE_INTERNAL_TOOLS` (`browser`/`search`, the raw web tools reachable only via the `web_search`/`web_browse` delegates); `DMN_CONFIG` additionally blocks `DELEGATE_TOOLS` (`web_search`/`web_browse`/`vision`), preventing the background reflection loop from spawning delegate work (the delegate tools replaced the retired single `subagent` tool). The `vision` delegate — an image-reading subagent on the brain's vision provider — follows the same rule: surfaceable on the user-facing loops (UserConfig, external-agent) but blocked on background loops; its policy defaults are `allow` on chat and external_agent, `deny` on subconscious.
+```
+[find_tools(status=success, injected=2, query=email)]
+{"injected": [{"name": "email", "summary": "search, send and manage emails"},
+              {"name": "contacts", "summary": "look up contacts"}],
+ "not_found": []}
+[end:find_tools]
+```
 
-**`get_search_tooltip()`** is a required zero-arg getter (`@abstractmethod`) on every non-INTERNAL `Ability` subclass, returning a non-empty 2–5 word description used to build the `find_tools` index — enforced at import time by `__init_subclass__` (which probes a throwaway `mp=None` instance). It is one of the five metadata getters every concrete ability implements: `get_name`, `get_summary`, `get_examples`, `get_search_tooltip`, `get_parameters` (see "Adding a first-party ability" below).
+Search is hybrid (vector KNN + FTS5, reciprocal-rank fusion) over a pre-built index — `backend/abilities/assets/abilities.sqlite` for first-party tools, `data/mcp_tools.sqlite` for connected MCP servers — with a relevance floor and a cap of 5 results per query.
 
-## How tools are loaded on a turn
-
-Two loading tiers stack on each ACT iteration and are de-duplicated first-seen:
-
-1. **Unconditional** — every ability in the processor's `ALWAYS_AVAILABLE` list. Always present.
-2. **Dynamic (discoverable)** — abilities surfaced this turn via the `find_tools` ability's semantic search, gated to the processor's `DISCOVERABLE` list. Every non-innate first-party ability is reachable exclusively through this path.
-
-`ModeGateService` is a built-but-currently-dormant prompt-steering layer; it **does not gate tool availability**. The design: it classifies the turn along eight independent cognitive intents (`research`, `coding`, `brainstorm`, `analyze`, `plan`, `write`, `math`, `converse`) using a small ONNX multi-label head; per-mode state follows an asymmetric EMA (fire snaps up, miss decays by 0.75 per turn), persists across turns in MemoryStore under `mode_gate:state` (cleared by `/privacy/delete-all`), and once a mode's EMA crosses `STEER_THRESHOLD = 0.6` its steering directives (long-summary swap on `converse`; brainstorm/research/analyze suffixes) are appended to the system prompt. The user config reads this via `get_system_prompt_additions()` when `mp._mode_gate_cached` is set — but the flat ACT-loop refactor dropped the wiring that ran the gate per turn (the old `UserMessageProcessor._get_mode_state()`), so `_mode_gate_cached` is never assigned, the classifier never runs on a real turn, and no steering ever fires (pending a decision to re-wire it in `MessageProcessor._setup()` or remove the layer).
-
-Observability: when live, the gate emits one `[MODE-GATE]` INFO log line per user turn with the full probability vector, state before/after, and the active mode set — the grep-friendly anchor for system-level scenario tests. While dormant (see above) this line is never emitted.
-
-## Tool status
-
-Three status values appear in the tools list:
-
-| Status | Meaning |
-|---|---|
-| `system` | Built-in, no configuration required |
-| `available` | Discovered but not yet configured (missing required secrets) |
-| `connected` | Fully configured and ready to use |
-
-## Adding a first-party ability
-
-A first-party ability is a Python module under `backend/abilities/` that subclasses `Ability`, implements the five zero-arg metadata getters, and a single dispatch method `run(self, params)`:
+## Anatomy of an Ability
 
 ```python
 from abilities._ability import Ability
+from abilities._result import ToolResult
 
 class WeatherAbility(Ability):
-    def get_name(self) -> str:
+    def get_name(self) -> str:          # the string the LLM calls
         return "weather"
 
-    def get_summary(self) -> str:
+    def get_summary(self) -> str:       # model-facing description AND search text
         return "Live weather lookup by coordinates or city name."
 
-    def get_examples(self) -> list[str]:
-        return [
-            "what is the weather in Valletta",
-            "is it raining in San Francisco",
-            # 6 to 8 entries total — enforced by __init_subclass__
-        ]
+    def get_examples(self) -> list[str]:    # 6-8 phrases; drives semantic search
+        return ["what is the weather in Valletta", "is it raining in San Francisco", ...]
 
-    def get_search_tooltip(self) -> str:
+    def get_search_tooltip(self) -> str:    # short label in find_tools results
         return "weather lookup"
 
-    def get_parameters(self) -> dict:
-        return {"type": "object", "properties": {...}}
+    def get_parameters(self) -> dict:       # plain JSON Schema for run()'s params
+        return {"type": "object", "properties": {...}, "required": [...]}
 
-    def run(self, params):
+    def run(self, params: dict) -> ToolResult:
         ...
+        return ToolResult.ok(result_dict)
 ```
 
-The metadata getters replaced the old `NAME` / `SUMMARY` / `EXAMPLES` / `SEARCH_TOOLTIP` / `INPUT_SCHEMA` ClassVars. They are zero-arg and read `self.mp` (the invoking MessageProcessor, constructor-injected) when a value depends on the live request; at `self.mp is None` (introspection / `build_ability_db`) they MUST return deterministic base text so the embedded index stays machine-independent. The full LLM-facing descriptor — `{name, description, input_schema}` plus the framework fields `act_summary` (always, required) and `async` (iff `config.SUPPORTS_ASYNC`) — is assembled in ONE place, the `@typing.final Ability.get_input_schema()`; overriding it (or `_inject_framework_fields`) is an import-time error. There is no `description` field — `get_summary()` is both the model-facing description and the search-corpus base text.
+- **Registration is automatic.** The registry imports every non-underscore module in `backend/abilities/` and collects `Ability` subclasses — there is no decorator, manifest, or registration call.
+- `self.mp` is the invoking MessageProcessor (channel, config); `self.telemetry` carries client context (location, time, locale) and is set just before `run()`.
+- Optionally declare `ACTION_REQUIRED: ClassVar[dict]` mapping actions to their required params — the dispatcher rejects incomplete calls *before* the permission gate, with a `missing-params` error the model can self-correct from.
+- Metadata getters must return deterministic text when `self.mp is None` (that's how the search index is built offline).
 
-`params` are the LLM-extracted arguments validated against `get_parameters()` (the framework `act_summary` / `async` keys are stripped before `run()` sees them). The conversation channel and flattened client telemetry (location, time, locale — fields may be null) are reached via `self.mp.config.channel` and `self.telemetry` (set by the dispatch spine immediately before `run()`). Abilities run to completion — there is no framework execution timeout. The return value is recorded on the act-trail via `ActTrail().record(...)` (`services/act_trail.py`) and tag-formatted by `services/innate_skills/_tag.py`. `get_summary()` + `get_examples()` drive the semantic search row that `find_tools` matches on; `get_summary()` is the most important — it determines whether `find_tools` surfaces this ability. `get_search_tooltip()` provides a compact label for the `find_tools` index. Both `find_tools` and `find_skills` inherit from `SearchableAbility` (`abilities/_search.py`) which provides the shared vec+FTS5 RRF fusion search infrastructure.
+## The Result Contract
 
-After registering the ability, wire it into the appropriate config(s). For a discoverable ability, add its name (the string `get_name()` returns) to `DEFAULT_DISCOVERABLE` in `backend/configs/channels.py`. For an always-available ability, add it to `DEFAULT_ALWAYS_AVAILABLE` instead. If a specific channel should not see the ability, add the name to that config's `blocked` frozenset. Then regenerate `abilities.sqlite` via `python -m utils.build_ability_db` so the embedded index is up to date; CI's drift check fails the build if `abilities_sha.json` does not match.
+`run()` returns a `ToolResult`, built only via two constructors:
 
-## Configuration
+```python
+ToolResult.ok(body, *, rich=None, **meta)
+# body: str (shown verbatim) or dict/list (rendered as compact JSON)
+# rich: optional payload for a rich-media card in the chat UI
+# meta: flat scalars shown in the envelope's opening tag
 
-Tools that require API keys or custom endpoints declare their required config keys in their metadata. Configure them through the Brain UI (Settings > Tools) or via the REST API — see the API reference for endpoints. Stored secrets are masked in all API responses.
+ToolResult.err(message, *, code, hint=None, valid=(), **meta)
+# code:  stable kebab-case machine code (required)
+# hint:  one-line recovery step for the model
+# valid: acceptable values, when the model passed an invalid one
+```
 
-## Ability output format
-
-Every ability returns its result as a canonical tag block defined in `backend/services/innate_skills/_tag.py`. `_tag.py` is the single source of truth — no ability constructs its own format string. (The `services/innate_skills/` directory holds only this formatter after the Phase 4 cutover; every dispatchable ability lives under `backend/abilities/`.)
+The ability never formats output — the dispatcher renders the single wire envelope the model sees:
 
 ```
-[<ability_name>(k1=v1, k2=v2)]
-<body>
-[end:<ability_name>]
-```
+[weather(status=success)]
+{"location": "Valletta, MT", "condition": "Clear", "temperature_c": 24.1, ...}
+[end:weather]
 
-If the body is empty (error path with no content), the body line is omitted:
-
-```
-[memory(action=recall, error=no-query)]
+[memory(status=error, code=no-query-or-location, action=recall)]
+recall requires either a query or a location.
+hint: pass query= to search by topic, or location= to filter by place.
 [end:memory]
 ```
 
-Errors are just arguments — `error=<slug>` in the opener, not a separate response format. Multi-line bodies (e.g. memory recall results, rich render reference) appear verbatim between opener and terminator.
+Errors are data for the model, not exceptions: they are returned into the loop so the model can correct itself, and they never crash the turn.
 
-The `memory` ability preserves its inner per-row marker format inside the body so downstream services that parse `[id:X,relevance:Y]` continue to work:
+## Dispatch & Permissions
 
-```
-[memory(query=Malta, results=3)]
-[id:residence,relevance:high] Valletta
-[id:partner,relevance:medium] Sarah
-[id:food_and_drink,relevance:low] pastizzi
-[end:memory]
-```
+Every call — model-issued, framework seed, or background pass — goes through `ToolDispatcher(mp).dispatch(name, params)`:
 
-`find_tools` returns a plain string (the lead phrase + JSON array described above). The `_discovered_tools` side-channel dict shape was removed in v2 — `find_tools` has no dict return path.
+1. resolve the ability (an `_mcp_`-prefixed name resolves to the MCP proxy),
+2. pre-validate required params (`ACTION_REQUIRED`),
+3. classify the action's risk and check it against the **policy gate** — every action is allow / ask / deny per context (Chat, Background, External Agent), editable in Brain → Policies,
+4. execute (inline, or on a background thread when the model sets the `async` flag — user channel only),
+5. render the envelope and record the call in the `tool_calls` audit trail (7-day retention).
 
-## Safety constraints
+## Adding a Tool — Checklist
 
-- Tool invocations time out. Exceeded timeouts are logged as failures.
-- Output is sanitized before it enters LLM context: action-like patterns are stripped.
-- Every invocation is written to an audit trail with the topic, outcome, and execution time.
-- A global kill switch can disable all tools if needed.
+1. Create `backend/abilities/<name>.py` with an `Ability` subclass: five metadata getters + `run()` returning a `ToolResult`.
+2. Add the tool name to `DEFAULT_DISCOVERABLE` (or `DEFAULT_ALWAYS_AVAILABLE`) in `backend/configs/channels/_common.py`; add it to a channel's `blocked` set if that channel shouldn't see it.
+3. Rebuild the search index: `python -m utils.build_ability_db` (CI fails on a stale index).
+4. If the tool needs credentials, register its config keys with `ToolConfigService` so they're configurable from the Brain UI and stored encrypted.
+
+## MCP Tools
+
+Chalie is both an MCP server and an MCP client:
+
+- **Inbound** — `backend/mcp_server/` exposes a `talk_to_chalie` tool so external agents (Claude Code, Cursor, …) can converse with Chalie. See [for_agents/MCP_SETUP.md](for_agents/MCP_SETUP.md).
+- **Outbound** — connect remote MCP servers via the `mcp_manager` tool or Brain → MCP. Remote tools appear as `_mcp_<server>_<tool>`, are embedded into the same search index at add time, and dispatch through the exact same pipeline (policy gate, audit trail, result contract) as first-party tools. Connection failures surface as stable codes: `mcp-unreachable`, `mcp-unknown-tool`, `mcp-tool-error`.

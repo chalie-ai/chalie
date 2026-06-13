@@ -11,19 +11,19 @@
 
 ## For Developers
 
-1. [13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md) — How a message travels through the system
-2. [04-ARCHITECTURE.md](04-ARCHITECTURE.md) — Runtime shape, memory, background reasoning
-3. [09-TOOLS.md](09-TOOLS.md) — How tools work, how to add one
-4. [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) — Tools shipped with Chalie
-5. [12-TESTING.md](12-TESTING.md) — Test philosophy and discipline
+1. [04-ARCHITECTURE.md](04-ARCHITECTURE.md) — The runtime, `MessageProcessor`, memory, background cognition, and where to plug in
+2. [13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md) — How a message travels through the system
+3. [09-TOOLS.md](09-TOOLS.md) — How tools work and how to add one
+4. [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) — The 33 tools shipped with Chalie, with sample output
+5. [16-AMBIENT-AWARENESS.md](16-AMBIENT-AWARENESS.md) — Signals, WorldState, and the background workers
+6. [12-TESTING.md](12-TESTING.md) — Running and writing tests
 
 ## Specialized
 
 | Document | Contents |
 |---|---|
-| [03-WEB-INTERFACE.md](03-WEB-INTERFACE.md) | Radiant design system and the four SPAs |
-| [16-AMBIENT-AWARENESS.md](16-AMBIENT-AWARENESS.md) | WorldState Signal contract — typed snapshot of last user message, heartbeat, device, local time |
-| [18-SIGNAL-CONTRACT.md](18-SIGNAL-CONTRACT.md) | Signal-driven reasoning spine |
+| [03-WEB-INTERFACE.md](03-WEB-INTERFACE.md) | The four SPAs and the Radiant design language |
+| [for_agents/MCP_SETUP.md](for_agents/MCP_SETUP.md) | Talking to Chalie from external agents over MCP |
 
 ## Quick Reference
 
