@@ -754,10 +754,11 @@ class ChalieApp {
   _initVisibilityTracking() {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        // Reconnect WebSocket if it was closed (mobile sleep/resume)
-        if (!this.ws.isConnected) {
-          this.ws.connect();
-        }
+        // Heal the WebSocket on resume. ensureAlive() handles both a cleanly
+        // closed socket (mobile sleep) and a half-open one silently dropped by a
+        // reverse proxy — the latter still reports isConnected === true, so a
+        // bare isConnected check would miss it.
+        this.ws.ensureAlive();
         // Scroll to latest message so user sees current state
         this.renderer.forceScrollToBottom();
       }

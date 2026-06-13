@@ -12,7 +12,12 @@
  *     permission_request, intent, capability_alert
  *
  * The only client→server WS message is pong (keepalive response).
- * On disconnect, the page reloads to re-establish state.
+ *
+ * Reconnect strategy: a clean `onclose` triggers exponential-backoff
+ * reconnection. A reverse proxy can also idle-drop the socket at the TCP layer
+ * without sending a close frame (half-open) — `onclose` never fires — so a
+ * liveness watchdog force-reconnects when the backend's periodic pings stop
+ * arriving. `ensureAlive()` performs the same check on demand (e.g. tab refocus).
  */
 export class WSClient {
   /**
@@ -30,6 +35,14 @@ export class WSClient {
     this._disconnectHandler = null;
     this._connected = false;
     this._intentionallyClosed = false;
+    // Liveness watchdog (half-open detection). The backend pings every 60s of
+    // client silence (backend/api/websocket.py `_ws_handler`); if no frame
+    // arrives for longer than the stale threshold, the pipe is dead even though
+    // the browser still reports readyState === OPEN.
+    this._staleThresholdMs = 90000;  // 1.5× the 60s server ping — fire on full silence only
+    this._livenessCheckMs = 30000;   // how often the watchdog re-checks
+    this._lastInboundAt = 0;
+    this._livenessTimer = null;
   }
 
   _buildWsUrl() {
@@ -97,12 +110,28 @@ export class WSClient {
       return;
     }
 
+    // A backoff reconnect we scheduled earlier is now redundant — this connect()
+    // owns the new socket (e.g. a tab refocus called ensureAlive() while a
+    // _scheduleReconnect timer was still pending). Clear it so it cannot fire a
+    // second, no-op connect().
+    if (this._reconnectTimer) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
+
     this._ws.onopen = () => {
       this._connected = true;
       this._reconnectDelay = 1000;
+      // Count connect time as the last inbound so the first server ping (≤60s)
+      // has a full window to arrive before the watchdog can judge staleness.
+      this._lastInboundAt = Date.now();
+      this._startLivenessWatch();
     };
 
     this._ws.onmessage = (event) => {
+      // Any inbound frame proves the pipe is alive — stamp before parsing so a
+      // malformed frame still counts toward liveness.
+      this._lastInboundAt = Date.now();
       let data;
       try {
         data = JSON.parse(event.data);
@@ -114,6 +143,7 @@ export class WSClient {
 
     this._ws.onclose = () => {
       this._connected = false;
+      this._stopLivenessWatch();
       this._disconnectHandler?.();
       if (!this._intentionallyClosed) {
         this._scheduleReconnect();
@@ -127,6 +157,7 @@ export class WSClient {
 
   close() {
     this._intentionallyClosed = true;
+    this._stopLivenessWatch();
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
@@ -152,6 +183,70 @@ export class WSClient {
     }, this._reconnectDelay);
 
     this._reconnectDelay = Math.min(this._reconnectDelay * 1.5, this._maxReconnectDelay);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Liveness watchdog — detect a half-open socket (silent reverse-proxy idle
+  // drop) that never fires `onclose`, and force a reconnect. Without this, the
+  // socket reports readyState === OPEN forever, `isConnected` lies, and pushed
+  // replies vanish into the dead pipe while the user sees nothing.
+  // ---------------------------------------------------------------------------
+
+  _startLivenessWatch() {
+    this._stopLivenessWatch();
+    this._livenessTimer = setInterval(() => this._checkLiveness(), this._livenessCheckMs);
+  }
+
+  _stopLivenessWatch() {
+    if (this._livenessTimer) {
+      clearInterval(this._livenessTimer);
+      this._livenessTimer = null;
+    }
+  }
+
+  _checkLiveness() {
+    if (this._intentionallyClosed) return;
+    if (Date.now() - this._lastInboundAt > this._staleThresholdMs) {
+      this._forceReconnect();
+    }
+  }
+
+  /**
+   * Tear down a socket that is open at the browser level but has gone silent,
+   * then immediately reconnect. The stale socket's handlers are detached first
+   * so its delayed `onclose` (fired once the browser finally gives up) cannot
+   * trigger a second, competing reconnect.
+   */
+  _forceReconnect() {
+    this._stopLivenessWatch();
+    const stale = this._ws;
+    this._ws = null;
+    this._connected = false;
+    if (stale) {
+      stale.onopen = null;
+      stale.onmessage = null;
+      stale.onclose = null;
+      stale.onerror = null;
+      try { stale.close(); } catch { /* already dead — nothing to close */ }
+    }
+    this._disconnectHandler?.();
+    this.connect();
+  }
+
+  /**
+   * Verify the connection is genuinely alive and heal it if not. Used when the
+   * tab regains focus: `isConnected` alone is unreliable because a half-open
+   * socket still reports readyState === OPEN.
+   */
+  ensureAlive() {
+    if (this._intentionallyClosed) return;
+    if (!this.isConnected) {
+      this.connect();
+      return;
+    }
+    if (Date.now() - this._lastInboundAt > this._staleThresholdMs) {
+      this._forceReconnect();
+    }
   }
 
   abort() {
