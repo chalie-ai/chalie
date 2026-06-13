@@ -9,6 +9,10 @@ os.path.join outside of this module.
 
 from pathlib import Path
 
+# Dotted scratch directories under data/ used by the snapshot Time-Machine.
+_PENDING_RESTORE_DIR = ".pending-restore"
+_SNAPSHOT_STAGING_DIR = ".snapshot-staging"
+
 
 class FileMapperService:
     """Resolves all file-system paths used by Chalie.
@@ -156,6 +160,25 @@ class FileMapperService:
     def get_data_path(cls, *parts: str) -> Path:
         """Return data/ joined with any additional path parts."""
         return cls._DATA_DIR.joinpath(*parts) if parts else cls._DATA_DIR
+
+    @classmethod
+    def get_pending_restore_path(cls, *parts: str) -> Path:
+        """Return the staged-restore directory (``data/.pending-restore``).
+
+        Written by ``SnapshotService.stage_import`` and consumed at boot by
+        ``SnapshotService.apply_pending`` — the dotted-dir name lives here so it
+        is never scattered as a literal at call sites.
+        """
+        return cls.get_data_path(_PENDING_RESTORE_DIR, *parts)
+
+    @classmethod
+    def get_snapshot_staging_path(cls, *parts: str) -> Path:
+        """Return a scratch directory under data/ for assembling a snapshot.
+
+        Used by ``SnapshotService`` as the temp workspace while extracting and
+        verifying an import before it is atomically renamed into place.
+        """
+        return cls.get_data_path(_SNAPSHOT_STAGING_DIR, *parts)
 
     @classmethod
     def get_resources_path(cls, *parts: str) -> Path:

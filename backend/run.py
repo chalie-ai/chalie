@@ -400,6 +400,15 @@ def main():
     import runtime_config
     runtime_config.set({"port": port, "host": host})
 
+    # Apply any staged whole-instance restore BEFORE the DB is opened. The first
+    # chalie.db open happens inside _init_database() → converge() below, so the
+    # artifact swap must complete here or convergence would run against the old
+    # DB. SnapshotService.apply_pending owns its own try/except (boot safety):
+    # a failed restore is rolled back + logged and never aborts startup.
+    # Paired with services/snapshot_service.py (Phase B) and api/snapshot.py.
+    from services.snapshot_service import SnapshotService
+    SnapshotService.apply_pending()
+
     _start_model_preload()
 
     database_service = _init_database()

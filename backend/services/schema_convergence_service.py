@@ -297,6 +297,20 @@ class SchemaConvergenceService:
     # Introspection helpers
     # ──────────────────────────────────────────────────────────────────────────
 
+    def column_set(self, conn: sqlite3.Connection) -> dict:
+        """Return {table_name: {col_name, ...}} for every real (non-virtual,
+        non-shadow, non-system) table on *conn*.
+
+        Public projection of ``_introspect_tables`` that drops the column tuple
+        down to its name set, sharing the same virtual/FTS5/vec0 shadow-table
+        exclusion. Used both internally and by the snapshot schema-downgrade
+        guard so the guard's notion of "columns" is definitionally identical to
+        convergence's.
+        """
+        return {
+            table: set(cols) for table, cols in self._introspect_tables(conn).items()
+        }
+
     def _introspect_tables(self, conn: sqlite3.Connection) -> dict:
         """Return {table_name: {col_name: (cid, name, type, notnull, dflt_value, pk)}}
         for all non-virtual, non-shadow, non-system tables."""

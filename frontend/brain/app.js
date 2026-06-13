@@ -21,14 +21,14 @@ const BrainApp = (() => {
     policies: ['chat', 'background', 'external'],
     skills: null,
     mcp: null,
-    brain: null,
+    'import-export': null,
   };
 
   const LABELS = {
     providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
     lists: 'Lists', documents: 'Documents', capabilities: 'Capabilities',
     vision: 'Vision',
-    policies: 'Policies', skills: 'Skills', mcp: 'MCP', brain: 'Brain',
+    policies: 'Policies', skills: 'Skills', mcp: 'MCP', 'import-export': 'Import / Export',
     memory: 'Memory', tools: 'Tools', world: 'World state',
     personality: 'Personality', errors: 'Errors', usage: 'Usage',
     compaction: 'Compacted Summary',
@@ -48,7 +48,7 @@ const BrainApp = (() => {
     policies: typeof PanelPolicies !== 'undefined' ? PanelPolicies : null,
     skills: typeof PanelSkills !== 'undefined' ? PanelSkills : null,
     mcp: typeof PanelMcp !== 'undefined' ? PanelMcp : null,
-    brain: typeof PanelBrain !== 'undefined' ? PanelBrain : null,
+    'import-export': typeof PanelImportExport !== 'undefined' ? PanelImportExport : null,
   };
 
   // ── API ──
@@ -174,7 +174,7 @@ const BrainApp = (() => {
       { kind: 'Jump', label: 'Policies · Chat', icon: 'Policy', section: 'policies', sub: 'chat' },
       { kind: 'Jump', label: 'Skills', icon: 'Skill', section: 'skills' },
       { kind: 'Jump', label: 'MCP', icon: 'Server', section: 'mcp' },
-      { kind: 'Jump', label: 'Brain', icon: 'Brain', section: 'brain' },
+      { kind: 'Jump', label: 'Import / Export', icon: 'Brain', section: 'import-export' },
     ];
 
     const q = query.toLowerCase();
