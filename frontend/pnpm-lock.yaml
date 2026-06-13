@@ -82,6 +82,9 @@ importers:
         specifier: ^4.4.0
         version: 4.6.4(vue@3.5.38(typescript@5.9.3))
     devDependencies:
+      '@playwright/test':
+        specifier: ^1.60.0
+        version: 1.60.0
       '@vitejs/plugin-vue':
         specifier: ^5.1.0
         version: 5.2.4(vite@5.4.21(sass@1.101.0))(vue@3.5.38(typescript@5.9.3))
