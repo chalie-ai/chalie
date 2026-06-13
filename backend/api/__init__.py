@@ -287,6 +287,31 @@ def _register_static_routes(app: Flask) -> None:
         """Serve login page."""
         return _serve_versioned_html(_LOGIN_DIR)
 
+    # ── Vue build coexistence (P0 migration) ─────────────────────────
+    # Vite content-hashes its own assets, so this build is served verbatim —
+    # it deliberately bypasses the legacy regex version-injection. Old static
+    # apps keep serving from their existing routes until cutover (P3).
+    _NEXT_INTERFACE_DIR = FileMapperService.get_frontend_path("apps", "interface", "dist")
+
+    @app.route('/next', methods=["GET"])
+    def next_interface_index_no_slash():
+        """Canonicalize /next → /next/ so the bare path isn't swallowed by the
+        legacy catch-all (which would silently serve the old interface)."""
+        return redirect('/next/', code=301)
+
+    @app.route('/next/', methods=["GET"])
+    def next_interface_index():
+        """Serve the Vue interface build index."""
+        return send_from_directory(str(_NEXT_INTERFACE_DIR), 'index.html')
+
+    @app.route('/next/<path:filename>', methods=["GET"])
+    def next_interface_static(filename):
+        """Serve a Vue build asset, or fall back to index.html (SPA history mode)."""
+        candidate = _NEXT_INTERFACE_DIR / filename
+        if candidate.is_file():
+            return send_from_directory(str(_NEXT_INTERFACE_DIR), filename)
+        return send_from_directory(str(_NEXT_INTERFACE_DIR), 'index.html')
+
     # Main interface SPA — catch-all (must be last)
     @app.route('/<path:filename>', methods=["GET"])
     def interface_static(filename):
