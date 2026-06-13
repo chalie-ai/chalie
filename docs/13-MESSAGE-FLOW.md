@@ -8,7 +8,7 @@ Every message — whatever triggered it — runs the same **ACT loop** through t
  |---|---|---|
 | **User** | `POST /chat` from the web UI | Reply pushed to the browser over WebSocket |
 | **Subconscious** | 5-minute background tick (idle-gated) | Memory updates only — nothing pushed to chat |
-| **Scheduled** | A due reminder or scheduled prompt | Runs as a normal user-channel turn; reply pushed to the client |
+| **Scheduled** | A due reminder or scheduled prompt | Runs the task in the background, then relays the result through a user-channel turn pushed to the client |
 | **Delegate** | The model calls `web_search` / `web_browse` / `vision` mid-turn | A synthesized answer returned to the calling turn (async on the user channel) |
  
  ---
@@ -69,9 +69,9 @@ Because every iteration rebuilds the request from the database, advancing the wa
  
 **Subconscious tick** — every 5 minutes, gated on 30+ minutes of user idleness, the subconscious worker runs its seven steps (consolidate, decay, pattern match, synthesis, DMN reflection, capability sync, geo patterns). See [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition). These are normal `MessageProcessor` turns on their own channels; most write no transcript rows and none broadcast to chat.
  
-**Scheduled prompts** — the scheduler worker polls for due items and dispatches each as a user-channel turn with `hidden_input=True`, so the trigger text stays out of the visible conversation while the reply is delivered normally.
+**Scheduled prompts** — the scheduler worker polls for due items and fires each in two stages, modelled on the delegate tools. Stage one runs the instruction as an independent background turn on its own muted `scheduled` channel (full tool surface, no episodes or facts of its own), persisting the instruction so a fired task is recoverable. Stage two hands that result to an ordinary user-channel turn with `hidden_input=True`, which is what surfaces to the client and is episodically encoded — so the trigger text stays out of the visible conversation while the reply is delivered normally. The two stages run on a daemon thread so the poll never blocks on the LLM work.
  
-**Episode encoding** — after user-channel turns are stored, a rolling trigger (every ~20 new transcript rows) encodes the recent window into episodic memory. No user-visible output.
+**Episode encoding** — after turns are stored on an episode-producing channel (`user`, `dmn`, `external-agent:*` — see [04-ARCHITECTURE.md](04-ARCHITECTURE.md#per-source-memory-profiles)), a rolling trigger (every ~20 new transcript rows) encodes the recent window into episodic memory. No user-visible output.
  
  ---
  

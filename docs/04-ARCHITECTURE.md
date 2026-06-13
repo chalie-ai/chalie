@@ -111,24 +111,39 @@ Four layers, each on a different timescale:
 |---|---|---|
 | **Transcript** | Append-only record of every turn, channel-scoped, optionally GPS-tagged | Pruned after 90 days |
 | **Compaction** | LLM-written continuity summaries; the newest `role='compaction'` transcript row is the history watermark | No |
-| **Episodes** | Narrative snapshots extracted from transcript windows (user channel only), with salience and emotional scores; similar episodes consolidate into super-episodes | Yes — exponential decay on last relevance |
+| **Episodes** | Narrative snapshots extracted from transcript windows (see per-source profiles below), with salience and emotional scores; similar episodes consolidate into super-episodes | Yes — exponential decay on last relevance |
 | **Data graph** | Structured facts (`user_specific`, `behavioral_pattern`, `place`, `moment`, `document`, …) with per-kind decay and contradiction/canonicalisation rules | Yes — per-kind policy |
  
 Episode retrieval is hybrid: vector KNN + FTS5, reranked by relevance, recency, and salience, with a relative floor that drops weak candidates instead of padding results. Every data-graph write is also expanded asynchronously into paraphrase variants (doc2query) and embedded, so differently-worded questions still hit the right facts.
- 
+
+### Per-source memory profiles
+
+Not every channel contributes to memory the same way. A single **allowlist** (`backend/services/source_profiles.py`) declares, for each transcript source, five orthogonal switches: whether its rows become episodes, feed fact extraction, count as the user's own movement in the geo window, count as user behaviour in the pattern window, and back-fill the user's live location. A channel absent from the table resolves to a fully-muted default, so a new source produces no memory until it is explicitly opted in.
+
+| Source | Episodes | Facts | Geo / pattern = user activity | Notes |
+|---|---|---|---|---|
+| `user` | yes | yes | yes | The full pipeline. |
+| `dmn` | yes | yes | no | The proactive reflection voice — its own episodes and facts, but its loop is not the user moving through the world. |
+| `external-agent:*` | yes | yes | no | First-class memory, channel-tagged by agent. |
+| `delegate:*`, `skills_building`, `scheduled` | no | no | no | Background loops are muted — their value surfaces through the parent or user-facing turn, not as standalone memory. |
+
+Memory **reads cross channels.** Episode recall never filters by the caller's own channel, so a memory encoded by the proactive voice or an external agent surfaces in an ordinary user turn — exactly as structured facts already do. Because muted channels write no episodes, channel-agnostic recall naturally scopes to the sources that actually hold memory. The caller's channel is recorded only for recall-telemetry provenance.
+
+**Provenance** is stamped at write time, not declared in the profile: a fact records the channel of the episode it came from (`fact_extraction:<channel>`), and a behavioural pattern records which background pass produced it (`pattern_match` for the behavioural pass, `geo_pattern` for the location pass).
+
  ---
  
 ## Background Cognition
  
 The **subconscious worker** ticks every 5 minutes but only fires when the user has been idle for 30+ minutes and there is something new since the last run. Each tick runs seven steps, each isolated so one failure can't block the rest:
  
-1. **Consolidate** — cluster episodes into super-episodes
-2. **Decay** — run the decay engine over episodes, the data graph, old transcripts, and tool-call records (7-day retention)
-3. **Pattern match** — an LLM pass over new transcripts that records behavioural patterns and facts (`save_pattern` / `save_graph`), then maps patterns to skills
+1. **Consolidate** — cluster episodes into super-episodes, per episode-producing channel (`user`, `dmn`, each `external-agent:*`); clusters stay channel-scoped and are never pooled across sources
+2. **Decay** — run the decay engine over episodes, the data graph, old transcripts, and tool-call records (7-day retention). A fossil janitor tombstones stranded leaves on muted/legacy channels but protects episode-producing channels — the proactive voice never consolidates, so its leaves are permanently apex and must not be reaped
+3. **Pattern match** — an LLM pass over new user-behaviour transcripts that records behavioural patterns and facts (`save_pattern` / `save_graph`), then maps patterns to skills
 4. **Synthesis** — refresh the running user summary when new traits or patterns have appeared
 5. **DMN** — a reflective ACT pass over the user summary and recent episodes; findings are saved to memory, nothing is pushed to chat
 6. **Capability sync** — poll connected external services (mail, calendar, contacts)
-7. **Geo patterns** — extract location-tied behavioural patterns from GPS-tagged transcripts
+7. **Geo patterns** — extract location-tied behavioural patterns from GPS-tagged transcripts. The pattern and geo windows (and their cursors) read only the channels the source profiles mark as user activity, so background loops never masquerade as the user being somewhere
  
 All of these are ordinary `MessageProcessor.process()` calls with their own channel configs — there is no separate background engine.
  
