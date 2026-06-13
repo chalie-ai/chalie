@@ -65,3 +65,11 @@ backend/.simplify_test_results.xml*
 # Superpowers dev plans/specs — local planning notes, never committed
 docs/superpowers/
 backend/docs/superpowers/
+
+# Vue frontend workspace
+frontend/node_modules/
+frontend/**/node_modules/
+frontend/**/dist/
+frontend/apps/*/test-results/
+frontend/apps/*/playwright-report/
+frontend/.auth/

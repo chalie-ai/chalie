@@ -1,0 +1,27 @@
+{
+  "name": "chalie-frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev:interface": "pnpm --filter @chalie/interface dev",
+    "dev:brain": "pnpm --filter @chalie/brain dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test:interface": "pnpm --filter @chalie/interface test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@vue/eslint-config-typescript": "^14.1.0",
+    "eslint": "^9.13.0",
+    "eslint-plugin-vue": "^9.30.0",
+    "prettier": "^3.3.3",
+    "sass": "^1.80.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vue-tsc": "^2.1.0"
+  }
+}
