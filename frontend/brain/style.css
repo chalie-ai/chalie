@@ -380,7 +380,6 @@ body::before {
 .badge-openai, .badge-cyan { background: rgba(0,240,255,0.10); color: var(--cyan); }
 .badge-gemini { background: rgba(52,211,153,0.12); color: var(--success); }
 .badge-openai_compatible { background: rgba(251,191,36,0.12); color: var(--warning); }
-.badge-catalog { background: rgba(147,51,234,0.12); color: var(--violet); }
 .badge-success { background: rgba(52,211,153,0.12); color: var(--success); }
 .badge-warning { background: rgba(251,191,36,0.12); color: var(--warning); }
 .badge-danger { background: rgba(251,113,133,0.12); color: var(--error); }
@@ -675,16 +674,35 @@ input[type="checkbox"]:checked::after {
 .form-page-header .back-btn svg { transform: rotate(90deg); }
 .switch-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
 
-/* Platform tabs in provider modal */
-.platform-tabs { display: flex; gap: 4px; margin-bottom: 12px; flex-wrap: wrap; }
-.platform-tab {
-  padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
-  background: transparent; color: var(--text-secondary); font-size: 12px;
-  cursor: pointer; transition: 150ms;
+/* ── Provider setup wizard ───────────────────────────────────── */
+.provider-wizard { max-width: 640px; }
+.wizard-hint { font-size: 13px; color: var(--text-secondary); margin: 0 0 18px; line-height: 1.5; }
+
+.provider-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px;
 }
-.platform-tab:hover { border-color: rgba(138,92,255,0.3); }
-.platform-tab.active { background: rgba(138,92,255,0.12); color: var(--violet); border-color: rgba(138,92,255,0.3); }
-.platform-desc { font-size: 12px; color: var(--text-tertiary); margin: 0 0 12px; }
+.provider-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  padding: 14px; border-radius: 10px; border: 1px solid var(--border);
+  background: var(--bg-surface); cursor: pointer; text-align: left;
+  color: var(--text-primary); transition: 150ms;
+}
+.provider-tile:hover {
+  border-color: rgba(138,92,255,0.35); background: var(--bg-surface-2);
+  transform: translateY(-1px);
+}
+.provider-tile-avatar {
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; border-radius: 8px;
+  background: rgba(138,92,255,0.14); color: var(--violet);
+  font-size: 16px; font-weight: 700;
+}
+.provider-tile-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
+.provider-tile-platform { font-size: 11px; color: var(--text-tertiary); }
+
+/* Progressive reveal: each step is hidden until its prerequisite is met. */
+.wizard-form { max-width: 460px; }
+.wizard-step[hidden] { display: none; }
 
 .model-status { font-size: 11px; display: block; margin-top: 2px; }
 .model-status.loading { color: var(--text-secondary); }

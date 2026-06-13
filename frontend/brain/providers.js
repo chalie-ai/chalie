@@ -1,22 +1,33 @@
-// Providers panel — LLM provider CRUD + selection.
+// Providers panel — LLM provider CRUD with a reactive setup wizard.
+//
+// Add flow is progressive: pick a provider from the curated catalog → the host
+// is pre-filled (or skipped for native APIs) → the API key field appears → once
+// credentials are present, models are fetched live via POST /providers/list-models
+// and the model picker is revealed. Fields a provider doesn't need are skipped.
 const PanelProviders = (() => {
   let _root = null;
   let _providers = [];
   let _selectedId = null;
-  let _editPlatform = 'ollama';
+  let _catalog = [];
+  let _catalogLoaded = false;
+
+  // Wizard working state.
+  let _preset = null;          // the chosen catalog preset (or a synthetic one)
   let _editingId = null;
   let _editModel = '';
+  let _models = [];            // live-fetched model list for the current preset
   let _modelsFetchInFlight = false;
   let _modelFetchTimer = null;
+  let _lastFetchKey = '';      // dedupe identical credential fetches
   const _MODEL_FETCH_DEBOUNCE_MS = 600;
 
-  const PLATFORM_CONFIG = {
-    ollama: { desc: 'Run locally — no API key needed.', hasHost: true, hasApiKey: false, placeholder: 'e.g. gemma4:31b', models: [] },
-    anthropic: { desc: 'API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. claude-sonnet-4-6', models: [] },
-    openai: { desc: 'API key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">platform.openai.com</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. gpt-4o', models: ['gpt-4o', 'gpt-4.1', 'o3', 'o4-mini'] },
-    gemini: { desc: 'API key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a>', hasHost: false, hasApiKey: true, placeholder: 'e.g. gemini-2.5-flash', models: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro', 'gemini-2.5-flash'] },
-    openai_compatible: { desc: 'Any OpenAI-compatible API (Groq, DeepSeek, Together, etc.)', hasHost: true, hasApiKey: true, placeholder: 'e.g. MiniMax-M2', models: [] },
+  // A synthetic preset so users can still add any provider not in the catalog.
+  const _CUSTOM_PRESET = {
+    id: 'custom', name: 'Custom (OpenAI-compatible)',
+    platform: 'openai_compatible', host: '', needs_key: true,
   };
+
+  // ── Mount / list view ───────────────────────────────────────────────
 
   async function mount(root) {
     _root = root;
@@ -25,7 +36,7 @@ const PanelProviders = (() => {
       <button class="btn btn-primary" id="addProviderBtn">${Icons.Plus(14)} Add Provider</button>
     </div>
     <div id="providersList" class="providers-list"><div class="loading">Loading providers…</div></div>`;
-    document.getElementById('addProviderBtn').addEventListener('click', () => _openModal(null));
+    document.getElementById('addProviderBtn').addEventListener('click', () => _openWizard(null));
     await _load();
   }
 
@@ -78,7 +89,7 @@ const PanelProviders = (() => {
       r.addEventListener('change', () => _selectProvider(Number(r.value)));
     });
     el.querySelectorAll('[data-edit]').forEach(b => {
-      b.addEventListener('click', () => _openModal(Number(b.dataset.edit)));
+      b.addEventListener('click', () => _openWizard(Number(b.dataset.edit)));
     });
     el.querySelectorAll('[data-del]').forEach(b => {
       b.addEventListener('click', () => _confirmDelete(Number(b.dataset.del)));
@@ -93,41 +104,119 @@ const PanelProviders = (() => {
     } catch { BrainApp.showToast('Failed to select provider', 'error'); }
   }
 
-  function _openModal(id) {
+  // ── Catalog ─────────────────────────────────────────────────────────
+
+  async function _ensureCatalog() {
+    if (_catalogLoaded) return;
+    try {
+      const res = await BrainApp.apiFetch('/providers/catalog');
+      if (res.ok) { const d = await res.json(); _catalog = Array.isArray(d.catalog) ? d.catalog : []; }
+    } catch { _catalog = []; }
+    _catalogLoaded = true;
+  }
+
+  function _presetFor(provider) {
+    // Reconstruct a wizard preset for an existing provider being edited: prefer
+    // the catalog entry matching its platform + host, else synthesise one.
+    const match = _catalog.find(c => c.platform === provider.platform &&
+      (c.host || '') === (provider.host || ''));
+    if (match) return match;
+    return {
+      id: 'edit', name: provider.name, platform: provider.platform,
+      host: provider.host || '', needs_key: provider.platform !== 'ollama',
+    };
+  }
+
+  // ── Wizard ──────────────────────────────────────────────────────────
+
+  async function _openWizard(id) {
     _editingId = id;
-    _editPlatform = 'ollama';
     _editModel = '';
-    const p = id ? _providers.find(x => x.id === id) : null;
-    if (p) { _editPlatform = p.platform; _editModel = p.model || ''; }
+    _models = [];
+    _lastFetchKey = '';
+    await _ensureCatalog();
 
-    const cfg = PLATFORM_CONFIG[_editPlatform];
-    const platforms = Object.keys(PLATFORM_CONFIG);
+    if (id) {
+      const p = _providers.find(x => x.id === id);
+      if (!p) { _render(); return; }
+      _editModel = p.model || '';
+      _models = _editModel ? [_editModel] : [];
+      _preset = _presetFor(p);
+      _renderForm(p);
+    } else {
+      _preset = null;
+      _renderPicker();
+    }
+  }
 
+  function _renderPicker() {
     const root = document.getElementById('providersList');
     if (!root) return;
-    root.innerHTML = `<div class="provider-form-page">
+    const tiles = [..._catalog, _CUSTOM_PRESET];
+    root.innerHTML = `<div class="provider-wizard">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" id="backToProviders">${Icons.Chevron(14)} Back</button>
-        <h3>${id ? 'Edit Provider' : 'Add Provider'}</h3>
+        <h3>Choose a provider</h3>
       </div>
-      <div class="platform-tabs" id="platTabs">
-        ${platforms.map(k => `<button class="platform-tab${k === _editPlatform ? ' active' : ''}" data-plat="${k}">${k === 'openai_compatible' ? 'OpenAI-Compat' : k.charAt(0).toUpperCase() + k.slice(1)}</button>`).join('')}
+      <p class="wizard-hint">Pick your AI provider. We'll pre-fill the connection details and fetch its models for you.</p>
+      <div class="provider-grid" id="providerGrid">
+        ${tiles.map(t => `<button type="button" class="provider-tile" data-pid="${BrainApp.escapeHtml(t.id)}">
+          <span class="provider-tile-avatar">${BrainApp.escapeHtml(_avatar(t.name))}</span>
+          <span class="provider-tile-name">${BrainApp.escapeHtml(t.name)}</span>
+          <span class="provider-tile-platform">${BrainApp.escapeHtml(t.platform === 'openai_compatible' ? 'OpenAI-compatible' : t.platform)}</span>
+        </button>`).join('')}
       </div>
-      <p class="platform-desc" id="platDesc">${cfg.desc}</p>
-      <form id="providerForm">
+    </div>`;
+
+    document.getElementById('backToProviders').addEventListener('click', _render);
+    document.getElementById('providerGrid').addEventListener('click', (e) => {
+      const tile = e.target.closest('[data-pid]');
+      if (!tile) return;
+      const pid = tile.dataset.pid;
+      const preset = pid === 'custom' ? { ..._CUSTOM_PRESET } : _catalog.find(c => c.id === pid);
+      if (!preset) return;
+      _preset = preset;
+      _editModel = '';
+      _models = [];
+      _lastFetchKey = '';
+      _renderForm(null);
+    });
+  }
+
+  function _avatar(name) {
+    const s = (name || '').trim();
+    return s ? s[0].toUpperCase() : '?';
+  }
+
+  function _needsHost() { return _preset.platform === 'ollama' || _preset.platform === 'openai_compatible'; }
+  function _needsKey() { return !!_preset.needs_key; }
+
+  function _renderForm(provider) {
+    const root = document.getElementById('providersList');
+    if (!root) return;
+    const editing = !!provider;
+    const hostVal = provider ? (provider.host || '') : (_preset.host || '');
+    const nameVal = provider ? provider.name : _preset.name;
+
+    root.innerHTML = `<div class="provider-wizard">
+      <div class="form-page-header">
+        <button class="btn btn-secondary btn-sm back-btn" id="backStep">${Icons.Chevron(14)} ${editing ? 'Back' : 'Providers'}</button>
+        <h3>${editing ? 'Edit Provider' : `Set up ${BrainApp.escapeHtml(_preset.name)}`}</h3>
+      </div>
+      <form id="providerForm" class="wizard-form" autocomplete="off">
         <div class="form-group">
-          <label for="pName">Provider Name</label>
-          <input type="text" id="pName" placeholder="e.g. My Ollama" required value="${BrainApp.escapeHtml(p?.name || '')}">
+          <label for="pName">Name</label>
+          <input type="text" id="pName" required value="${BrainApp.escapeHtml(nameVal)}">
         </div>
-        <div class="form-group" id="hostGroup" style="display:${cfg.hasHost ? '' : 'none'}">
-          <label for="pHost">Host</label>
-          <input type="text" id="pHost" value="${BrainApp.escapeHtml(p?.host || 'http://localhost:11434')}">
+        <div class="form-group wizard-step" id="hostGroup" hidden>
+          <label for="pHost">Host / Base URL</label>
+          <input type="text" id="pHost" value="${BrainApp.escapeHtml(hostVal)}" placeholder="https://…">
         </div>
-        <div class="form-group" id="keyGroup" style="display:${cfg.hasApiKey ? '' : 'none'}">
+        <div class="form-group wizard-step" id="keyGroup" hidden>
           <label for="pKey">API Key</label>
-          <input type="password" id="pKey" placeholder="${id ? 'Leave blank to keep existing' : 'Enter API key'}">
+          <input type="password" id="pKey" autocomplete="new-password" placeholder="${editing ? 'Leave blank to keep existing' : 'Paste your API key'}">
         </div>
-        <div class="form-group">
+        <div class="form-group wizard-step" id="modelGroup" hidden>
           <label for="pModel">Model</label>
           <select id="pModel"><option value="">Select model…</option></select>
           <span class="model-status" id="modelStatus"></span>
@@ -135,110 +224,136 @@ const PanelProviders = (() => {
         <div class="form-actions">
           <button type="button" class="btn btn-secondary" id="cancelProvBtn">Cancel</button>
           <button type="button" class="btn btn-secondary" id="testProvBtn">Test</button>
-          <button type="submit" class="btn btn-primary">Save</button>
+          <button type="submit" class="btn btn-primary" id="saveProvBtn" disabled>Save</button>
         </div>
       </form>
     </div>`;
 
-    _populateModels();
-
-    document.getElementById('backToProviders').addEventListener('click', _render);
+    document.getElementById('backStep').addEventListener('click', () => editing ? _render() : _renderPicker());
     document.getElementById('cancelProvBtn').addEventListener('click', _render);
-
-    document.getElementById('platTabs').addEventListener('click', (e) => {
-      const tab = e.target.closest('[data-plat]');
-      if (!tab) return;
-      _editPlatform = tab.dataset.plat;
-      document.querySelectorAll('#platTabs .platform-tab').forEach(t => t.classList.toggle('active', t === tab));
-      const c = PLATFORM_CONFIG[_editPlatform];
-      document.getElementById('platDesc').innerHTML = c.desc;
-      document.getElementById('hostGroup').style.display = c.hasHost ? '' : 'none';
-      document.getElementById('keyGroup').style.display = c.hasApiKey ? '' : 'none';
-      _populateModels();
-      if (_canFetchModels()) _fetchModels();
-    });
-
-    document.getElementById('pHost')?.addEventListener('input', _debouncedFetchModels);
-    document.getElementById('pKey')?.addEventListener('input', _debouncedFetchModels);
-
     document.getElementById('testProvBtn').addEventListener('click', _testConnection);
+    document.getElementById('pHost')?.addEventListener('input', _onCredsInput);
+    document.getElementById('pKey')?.addEventListener('input', _onCredsInput);
+    document.getElementById('pModel').addEventListener('change', _refreshSaveState);
     document.getElementById('providerForm').addEventListener('submit', (e) => { e.preventDefault(); _saveProvider(); });
 
-    if (_canFetchModels()) _fetchModels();
+    _populateModels();
+    _refreshVisibility();
+    // Fetch immediately when credentials are already complete: a no-key local
+    // provider (Ollama), or an edit where the host is set and no key is needed.
+    if (_canFetch()) _fetchModels();
+  }
+
+  // ── Progressive reveal ──────────────────────────────────────────────
+
+  function _hostValue() { return document.getElementById('pHost')?.value?.trim() || ''; }
+  function _keyValue() { return document.getElementById('pKey')?.value?.trim() || ''; }
+  function _hostReady() { return !_needsHost() || _hostValue() !== ''; }
+  function _keyReady() { return !_needsKey() || _keyValue() !== ''; }
+  // Live fetch needs real credentials. Editing keeps the existing model visible
+  // without a fetch (blank key = keep current), so we never fire a doomed call.
+  function _canFetch() { return _hostReady() && _keyReady(); }
+
+  function _refreshVisibility() {
+    const hostG = document.getElementById('hostGroup');
+    const keyG = document.getElementById('keyGroup');
+    const modelG = document.getElementById('modelGroup');
+    if (!hostG) return;
+    hostG.hidden = !_needsHost();
+    keyG.hidden = !(_needsKey() && _hostReady());
+    modelG.hidden = !(_canFetch() || _models.length > 0);
+    _refreshSaveState();
+  }
+
+  function _refreshSaveState() {
+    const btn = document.getElementById('saveProvBtn');
+    if (btn) btn.disabled = !document.getElementById('pModel')?.value;
+  }
+
+  function _onCredsInput() {
+    _refreshVisibility();
+    _debouncedFetchModels();
   }
 
   function _populateModels() {
     const sel = document.getElementById('pModel');
     if (!sel) return;
     sel.innerHTML = '<option value="">Select model…</option>';
-    const models = PLATFORM_CONFIG[_editPlatform].models;
-    for (const m of models) {
+    for (const m of _models) {
       const opt = document.createElement('option');
       opt.value = m; opt.textContent = m;
       if (m === _editModel) opt.selected = true;
       sel.appendChild(opt);
     }
-    if (_editModel && !models.includes(_editModel)) {
+    if (_editModel && !_models.includes(_editModel)) {
       const opt = document.createElement('option');
       opt.value = _editModel; opt.textContent = _editModel; opt.selected = true;
       sel.appendChild(opt);
     }
-  }
-
-  function _canFetchModels() {
-    const cfg = PLATFORM_CONFIG[_editPlatform];
-    if (cfg.hasApiKey && !document.getElementById('pKey')?.value?.trim()) return false;
-    return true;
+    _refreshSaveState();
   }
 
   function _debouncedFetchModels() {
     clearTimeout(_modelFetchTimer);
-    _modelFetchTimer = setTimeout(() => { if (_canFetchModels()) _fetchModels(); }, _MODEL_FETCH_DEBOUNCE_MS);
+    _modelFetchTimer = setTimeout(() => { if (_canFetch()) _fetchModels(); }, _MODEL_FETCH_DEBOUNCE_MS);
   }
 
   async function _fetchModels() {
     if (_modelsFetchInFlight) return;
+    const creds = {};
+    if (_needsHost()) creds.host = _hostValue();
+    if (_needsKey()) creds.api_key = _keyValue();
+    const fetchKey = `${_preset.platform}|${creds.host || ''}|${creds.api_key ? 'k' : ''}`;
+    if (fetchKey === _lastFetchKey && _models.length) return;
+    _lastFetchKey = fetchKey;
+
     _modelsFetchInFlight = true;
     const status = document.getElementById('modelStatus');
     if (status) { status.textContent = 'Loading models…'; status.className = 'model-status loading'; }
     try {
-      const creds = {};
-      if (PLATFORM_CONFIG[_editPlatform].hasHost) creds.host = document.getElementById('pHost')?.value?.trim();
-      if (PLATFORM_CONFIG[_editPlatform].hasApiKey) creds.api_key = document.getElementById('pKey')?.value?.trim();
-      const res = await BrainApp.apiFetch('/providers/list-models', { method: 'POST', body: JSON.stringify({ platform: _editPlatform, ...creds }) });
+      const res = await BrainApp.apiFetch('/providers/list-models', {
+        method: 'POST', body: JSON.stringify({ platform: _preset.platform, ...creds }),
+      });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data.models) {
-        PLATFORM_CONFIG[_editPlatform].models = data.models.map(m => typeof m === 'string' ? m : m?.id || '').filter(Boolean);
+      if (res.ok && data.models && !data.error) {
+        _models = data.models.map(m => typeof m === 'string' ? m : m?.id || '').filter(Boolean);
         _populateModels();
-        if (status) { status.textContent = `${PLATFORM_CONFIG[_editPlatform].models.length} models`; status.className = 'model-status ok'; }
+        if (status) { status.textContent = `${_models.length} model${_models.length === 1 ? '' : 's'}`; status.className = 'model-status ok'; }
       } else {
-        if (status) { status.textContent = data.error || 'Failed'; status.className = 'model-status err'; }
+        if (status) { status.textContent = data.error || 'Failed to fetch models'; status.className = 'model-status err'; }
+        _lastFetchKey = '';  // allow retry after the user fixes credentials
       }
     } catch (e) {
       if (status) { status.textContent = 'Network error'; status.className = 'model-status err'; }
+      _lastFetchKey = '';
     }
     _modelsFetchInFlight = false;
   }
+
+  // ── Test / save ─────────────────────────────────────────────────────
 
   async function _testConnection() {
     const btn = document.getElementById('testProvBtn');
     btn.disabled = true; btn.textContent = 'Testing…';
     try {
-      const body = { platform: _editPlatform, name: document.getElementById('pName').value.trim(), model: document.getElementById('pModel').value };
-      if (PLATFORM_CONFIG[_editPlatform].hasHost) body.host = document.getElementById('pHost').value.trim();
-      if (PLATFORM_CONFIG[_editPlatform].hasApiKey) body.api_key = document.getElementById('pKey').value.trim();
+      const body = { platform: _preset.platform, name: document.getElementById('pName').value.trim(), model: document.getElementById('pModel').value };
+      if (_needsHost()) body.host = _hostValue();
+      if (_needsKey()) body.api_key = _keyValue();
+      if (_editingId) body.provider_id = _editingId;
       const res = await BrainApp.apiFetch('/providers/test', { method: 'POST', body: JSON.stringify(body) });
       const data = await res.json().catch(() => ({}));
-      if (res.ok) BrainApp.showToast('Connection successful', 'success');
+      if (res.ok && data.success) BrainApp.showToast(data.message || 'Connection successful', 'success');
       else BrainApp.showToast(data.error || 'Test failed', 'error');
     } catch { BrainApp.showToast('Network error', 'error'); }
     btn.disabled = false; btn.textContent = 'Test';
   }
 
   async function _saveProvider() {
-    const body = { platform: _editPlatform, name: document.getElementById('pName').value.trim(), model: document.getElementById('pModel').value };
-    if (PLATFORM_CONFIG[_editPlatform].hasHost) body.host = document.getElementById('pHost').value.trim();
-    if (PLATFORM_CONFIG[_editPlatform].hasApiKey) { const k = document.getElementById('pKey').value.trim(); if (k) body.api_key = k; }
+    const model = document.getElementById('pModel').value;
+    if (!model) { BrainApp.showToast('Select a model first', 'error'); return; }
+    const body = { platform: _preset.platform, name: document.getElementById('pName').value.trim(), model };
+    if (_needsHost()) body.host = _hostValue();
+    if (_needsKey()) { const k = _keyValue(); if (k) body.api_key = k; }
 
     try {
       const method = _editingId ? 'PUT' : 'POST';
@@ -262,6 +377,8 @@ const PanelProviders = (() => {
       }
     } catch { BrainApp.showToast('Network error', 'error'); }
   }
+
+  // ── Delete ──────────────────────────────────────────────────────────
 
   function _showConfirm({ title, desc, confirmLabel, confirmClass, onConfirm }) {
     const overlay = document.createElement('div');

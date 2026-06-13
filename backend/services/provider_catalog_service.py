@@ -1,69 +1,66 @@
-"""Provider catalog service — loads and serves provider presets from models.dev data."""
+"""Curated provider catalog — presets for the reactive provider-setup wizard.
 
-import json
-import logging
-from pathlib import Path
-from typing import Dict, Any, Optional, List
+Each preset maps a popular AI provider onto one of Chalie's five existing
+platforms (``ollama`` / ``openai`` / ``anthropic`` / ``gemini`` /
+``openai_compatible``) plus its base URL, so the wizard can pre-fill the host and
+reuse the live model-fetch path (``POST /providers/list-models``) unchanged.
 
-logger = logging.getLogger(__name__)
+A preset is NEVER a runtime platform of its own — ``platform`` is always a real
+Chalie platform, and the provider is created through the ordinary create path
+with no catalog special-casing. That is why this module is a plain in-process
+constant: no file I/O, no path resolution.
 
-_CATALOG: Dict[str, Any] = {}
+Preset fields:
+  - ``id``        stable slug, unique within the list
+  - ``name``      human label shown in the picker
+  - ``platform``  one of the five Chalie platforms
+  - ``host``      base URL to pre-fill; ``""`` means no host field (native APIs)
+  - ``needs_key`` ``False`` only for Ollama (local, unauthenticated)
 
+Base URLs are each provider's official OpenAI-compatible endpoint, sourced from
+the provider's own API docs and the models.dev catalog.
+"""
 
-def _load_catalog() -> Dict[str, Any]:
-    global _CATALOG
-    if _CATALOG:
-        return _CATALOG
-    path = Path(__file__).resolve().parent / "provider_catalog.json"
-    if not path.exists():
-        logger.warning("[ProviderCatalog] catalog file not found at %s", path)
-        return _CATALOG
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            _CATALOG = json.load(f)
-        logger.info("[ProviderCatalog] loaded %d providers", len(_CATALOG))
-    except Exception as e:
-        logger.error("[ProviderCatalog] failed to load catalog: %s", e)
-    return _CATALOG
+from __future__ import annotations
 
-
-def get_catalog_providers() -> Dict[str, Any]:
-    return _load_catalog()
-
-
-def get_catalog_provider(provider_id: str) -> Optional[Dict[str, Any]]:
-    return _load_catalog().get(provider_id)
-
-
-def is_catalog_provider(provider_id: str) -> bool:
-    return provider_id in _load_catalog()
-
-
-def get_catalog_summary() -> List[Dict[str, Any]]:
-    catalog = _load_catalog()
-    return [
-        {
-            "id": pid,
-            "name": info["name"],
-            "api": info.get("api", ""),
-            "model_count": len(info.get("models", [])),
-        }
-        for pid, info in sorted(catalog.items(), key=lambda x: x[1]["name"].lower())
-    ]
-
-
-def get_catalog_models(provider_id: str) -> List[str]:
-    provider = get_catalog_provider(provider_id)
-    if not provider:
-        return []
-    models = provider.get("models", [])
-    if isinstance(models, list):
-        return sorted(models)
-    if isinstance(models, str):
-        return [models]
-    return []
+CURATED_PROVIDERS: list[dict] = [
+    {"id": "ollama", "name": "Ollama (local)", "platform": "ollama",
+     "host": "http://localhost:11434", "needs_key": False},
+    {"id": "openai", "name": "OpenAI", "platform": "openai",
+     "host": "", "needs_key": True},
+    {"id": "anthropic", "name": "Anthropic", "platform": "anthropic",
+     "host": "", "needs_key": True},
+    {"id": "gemini", "name": "Google Gemini", "platform": "gemini",
+     "host": "", "needs_key": True},
+    {"id": "deepseek", "name": "DeepSeek", "platform": "openai_compatible",
+     "host": "https://api.deepseek.com", "needs_key": True},
+    {"id": "xai", "name": "xAI (Grok)", "platform": "openai_compatible",
+     "host": "https://api.x.ai/v1", "needs_key": True},
+    {"id": "mistral", "name": "Mistral", "platform": "openai_compatible",
+     "host": "https://api.mistral.ai/v1", "needs_key": True},
+    {"id": "groq", "name": "Groq", "platform": "openai_compatible",
+     "host": "https://api.groq.com/openai/v1", "needs_key": True},
+    {"id": "openrouter", "name": "OpenRouter", "platform": "openai_compatible",
+     "host": "https://openrouter.ai/api/v1", "needs_key": True},
+    {"id": "nvidia", "name": "NVIDIA", "platform": "openai_compatible",
+     "host": "https://integrate.api.nvidia.com/v1", "needs_key": True},
+    {"id": "minimax", "name": "MiniMax", "platform": "openai_compatible",
+     "host": "https://api.minimax.io/v1", "needs_key": True},
+    {"id": "moonshot", "name": "Moonshot (Kimi)", "platform": "openai_compatible",
+     "host": "https://api.moonshot.ai/v1", "needs_key": True},
+    {"id": "fireworks", "name": "Fireworks AI", "platform": "openai_compatible",
+     "host": "https://api.fireworks.ai/inference/v1", "needs_key": True},
+    {"id": "zhipu", "name": "Zhipu (GLM)", "platform": "openai_compatible",
+     "host": "https://open.bigmodel.cn/api/paas/v4", "needs_key": True},
+    {"id": "alibaba", "name": "Alibaba (Qwen)", "platform": "openai_compatible",
+     "host": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "needs_key": True},
+    {"id": "novita", "name": "Novita AI", "platform": "openai_compatible",
+     "host": "https://api.novita.ai/openai", "needs_key": True},
+    {"id": "baseten", "name": "Baseten", "platform": "openai_compatible",
+     "host": "https://inference.baseten.co/v1", "needs_key": True},
+]
 
 
-def invalidate_catalog():
-    global _CATALOG
-    _CATALOG.clear()
+def get_catalog() -> list[dict]:
+    """Return the curated provider presets, in display order."""
+    return CURATED_PROVIDERS

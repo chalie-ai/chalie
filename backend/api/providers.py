@@ -23,7 +23,6 @@ _SAFE_VALIDATION_MESSAGES = {
     "openai_compatible provider requires 'host' field "
     "(base URL, e.g. 'https://api.minimax.io/v1')",
     "openai_compatible provider requires 'api_key' field",
-    "Catalog provider requires 'api_key' field",
 }
 
 
@@ -311,12 +310,6 @@ def _fetch_openai_compatible_models(host: str, api_key: str):
         return None, "Failed to fetch models"
 
 
-def _is_catalog_platform(platform: str) -> bool:
-    """Check if a platform ID exists in the provider catalog."""
-    from services.provider_catalog_service import is_catalog_provider
-    return is_catalog_provider(platform)
-
-
 def get_provider_service():
     """Get ProviderDbService instance."""
     from services.database_service import get_shared_db_service
@@ -341,11 +334,14 @@ def list_providers():
 @providers_bp.route('/catalog', methods=['GET'])
 @require_session
 def list_catalog_providers():
-    """Return the provider catalog (curated list of popular OpenAI-compatible providers)."""
+    """Return the curated provider presets for the setup wizard.
+
+    Each preset maps a popular provider onto an existing Chalie platform plus a
+    pre-fillable base URL — see :mod:`services.provider_catalog_service`.
+    """
     try:
-        from services.provider_catalog_service import get_catalog_providers
-        catalog = get_catalog_providers()
-        return jsonify({"catalog": catalog}), 200
+        from services.provider_catalog_service import get_catalog
+        return jsonify({"catalog": get_catalog()}), 200
     except Exception as e:
         logger.exception(f"[REST API] Failed to load provider catalog: {e}")
         return jsonify({"error": "Failed to load provider catalog"}), 500
@@ -508,11 +504,6 @@ def list_models():
         models, err = _fetch_openai_compatible_models(
             body.get('host') or '', (body.get('api_key') or '').strip(),
         )
-    elif _is_catalog_platform(platform):
-        from services.provider_catalog_service import get_catalog_models
-        model_ids = get_catalog_models(platform)
-        models = [{"id": m, "display_name": None} for m in model_ids]
-        err = None
     else:
         return jsonify({"models": [], "error": f"Unsupported platform '{platform}'"}), 400
 
