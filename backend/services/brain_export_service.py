@@ -97,9 +97,10 @@ class BrainExportService:
             zip_path.unlink()
             return output_path
 
-        backup_path = zip_path.with_suffix(".chalie-backup")
-        zip_path.rename(backup_path)
-        return backup_path
+        output_path = Path(tmp_dir) / f"{archive_name}.chalie-backup"
+        self._write_unencrypted(zip_path, output_path)
+        zip_path.unlink()
+        return output_path
 
     def _snapshot_db(self, src: Path, dst: Path) -> None:
         """Create a consistent snapshot of the SQLite database using the backup API."""
@@ -166,6 +167,13 @@ class BrainExportService:
         )
 
         output_path.write_bytes(header + ciphertext_with_tag)
+
+    def _write_unencrypted(self, plaintext_path: Path, output_path: Path) -> None:
+        plaintext = plaintext_path.read_bytes()
+        header = _HEADER_STRUCT.pack(
+            _MAGIC, _FORMAT_VERSION, b"\x00" * _PBKDF2_SALT_SIZE, 0, b"\x00" * _NONCE_SIZE
+        )
+        output_path.write_bytes(header + plaintext)
 
     @staticmethod
     def _sha256(path: Path) -> str:

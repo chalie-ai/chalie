@@ -53,10 +53,12 @@ class BrainImportService:
 
         ciphertext_with_tag = raw[header_size:]
 
-        if not password:
+        if iterations == 0:
+            plaintext = ciphertext_with_tag
+        elif not password:
             raise ValueError("Password required (backup is encrypted)")
-
-        plaintext = self._decrypt(ciphertext_with_tag, password, salt, iterations, nonce)
+        else:
+            plaintext = self._decrypt(ciphertext_with_tag, password, salt, iterations, nonce)
 
         tmp_dir = tempfile.mkdtemp(prefix="chalie-import-")
         zip_path = Path(tmp_dir) / "archive.zip"
@@ -98,18 +100,20 @@ class BrainImportService:
             docs_dir.mkdir(parents=True, exist_ok=True)
             files_restored = self._restore_files(files_src, docs_dir)
 
-        try:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-        except Exception:
-            pass
-
-        return {
+        result = {
             "success": True,
             "exported_at": export_meta.get("exported_at"),
             "app_version": export_meta.get("app_version"),
             "db_size": db_snapshot.stat().st_size,
             "files_restored": files_restored,
         }
+
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+        return result
 
     def _decrypt(
         self,
