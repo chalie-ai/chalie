@@ -18,13 +18,14 @@ All provider setup is done in **Brain → Settings → Providers → Add Provide
 
 ## Adding a Provider
 
-Each provider needs a **name** (any label), a **platform**, a **model ID**, and for cloud providers an **API key**.
+**Add Provider** opens a short wizard that only ever asks for what the chosen provider actually needs:
 
-**Ollama:** set the host to `http://localhost:11434`. Chalie queries your Ollama instance and populates the model picker automatically. Hit **Refresh** after `ollama pull <model>`.
+1. **Pick a provider.** A grid of popular providers appears — Ollama, Anthropic, OpenAI, Google Gemini, DeepSeek, MiniMax, NVIDIA, Groq, Mistral, OpenRouter, and more. Pick the closest match, or choose **Custom (OpenAI-compatible)** for any endpoint not in the list.
+2. **Host auto-fills.** Selecting a provider pre-fills its base URL where one applies (e.g. MiniMax → `https://api.minimax.io/v1`, Ollama → `http://localhost:11434`). Native APIs (Anthropic, OpenAI, Gemini) need no host, so that field is skipped.
+3. **Enter your API key.** The key field appears only for providers that require one. Ollama runs locally and unauthenticated, so the key step is skipped entirely.
+4. **Pick a model.** As soon as the host and key (where required) are present, Chalie fetches the provider's live model list and fills the picker — for every platform, not just Ollama. Choose your model, give the provider a **name** (any label), and **Save**. Use **Test Connection** first if you want to verify the credentials.
 
-**Cloud providers:** paste your API key and enter the exact model ID from your provider's documentation. Click **Test Connection** to verify before saving.
-
-**OpenAI-Compatible:** set the base URL to your provider's endpoint, enter your API key and model ID. Use this for any provider not listed above.
+Each saved provider maps to one of the platforms above and stores the model you selected.
 
 ---
 
@@ -39,8 +40,8 @@ Each provider needs a **name** (any label), a **platform**, a **model ID**, and 
 - Verify the key has not expired or been revoked.
 
 **Model not found**
-- Ollama: run `ollama pull <model-name>` first, then Refresh in Brain.
-- Cloud: use the exact model ID from your provider's docs — names change.
+- Ollama: run `ollama pull <model-name>` first, then reopen the provider so the model list refetches.
+- Cloud: the picker is populated live from the provider — if a model is missing, confirm your key has access to it.
 
 ---
 
@@ -84,6 +85,6 @@ curl -X PUT http://localhost:31025/providers/selected \
   -d '{"provider_id": 1}'
 ```
 
-Chalie uses **one globally selected provider** for all chat/reasoning turns, plus an optional dedicated **vision provider** (`GET/PUT /providers/vision`) for image understanding. `POST /providers/list-models` refreshes the model picker for Ollama hosts.
+Chalie uses **one globally selected provider** for all chat/reasoning turns, plus an optional dedicated **vision provider** (`GET/PUT /providers/vision`) for image understanding. `POST /providers/list-models` fetches the live model list for a given platform and credentials, populating the wizard's model picker for every provider type. `GET /providers/catalog` returns the curated preset list the wizard's provider grid is built from.
 
 API keys are encrypted at rest (AES-256-GCM) in the local SQLite database and never leave your machine.
