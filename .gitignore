@@ -67,9 +67,7 @@ docs/superpowers/
 backend/docs/superpowers/
 
 # Vue frontend workspace
-frontend/node_modules/
-frontend/**/node_modules/
 frontend/**/dist/
 frontend/apps/*/test-results/
 frontend/apps/*/playwright-report/
-frontend/.auth/
+frontend/**/.auth/
