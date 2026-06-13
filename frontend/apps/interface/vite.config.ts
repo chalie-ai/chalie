@@ -16,6 +16,11 @@ export default defineConfig({
       '@chalie/shared': fileURLToPath(new URL('../../packages/shared/src', import.meta.url)),
     },
   },
+  css: {
+    // Modern Sass compiler API — silences the Dart Sass legacy-js-api deprecation
+    // (which becomes a hard error at Dart Sass 2.0).
+    preprocessorOptions: { scss: { api: 'modern-compiler' } },
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: true,
