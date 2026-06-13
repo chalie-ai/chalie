@@ -102,14 +102,21 @@ def _tool_call(tool_name, **kwargs):
 
 
 def _seed_transcripts(db, count):
-    """Seed `count` transcript rows and return the list of inserted IDs.
+    """Seed `count` user-channel transcript rows and return the inserted IDs.
+
+    The behavioural-pattern pass is user-activity-only (TKT-926): both the load
+    window (configs/channels/pattern.py) and the worker pattern cursor filter on
+    ``pattern_user_channels_sql()`` == ``(channel IN ('user'))`` AND
+    ``role != 'compaction'``. Rows must therefore be on channel='user' to count
+    under the cursor + load window and let the pattern step fire exactly as it
+    does in production on real user activity.
 
     SQLite auto-increments, so we rely on SELECT after INSERT to get IDs.
     """
     for i in range(count):
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('test', 'user', ?, datetime('now', ? || ' seconds'))",
+            "VALUES ('user', 'user', ?, datetime('now', ? || ' seconds'))",
             (f"msg {i}", str(i)),
         )
     db.commit()
@@ -612,3 +619,105 @@ class TestReinforcementDiminishingBoost:
         assert cols["storage_strength"] <= 1.0, (
             f"storage_strength must be capped at 1.0, got {cols['storage_strength']}"
         )
+
+
+def _seed_located_transcripts(db, count, *, channel):
+    """Seed `count` location-tagged transcripts on `channel`.
+
+    The geo step counts only rows whose source profile marks them as user
+    geo-activity (geo_user_channels_sql) — a located row on a muted/non-user
+    channel must NOT advance the geo cursor.
+    """
+    for i in range(count):
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at, "
+            "location_lat, location_lon, location_name) "
+            "VALUES (?, 'user', ?, datetime('now', ? || ' seconds'), "
+            "35.9, 14.5, 'Valletta')",
+            (channel, f"at the gym {i}", str(i)),
+        )
+    db.commit()
+
+
+class TestGeoPassProvenance:
+    """Test 13 — the GEO pass writes behavioural patterns with source='geo_pattern'.
+
+    Drives the REAL ``SubconsciousWorker._step_geo_patterns()`` over
+    location-tagged user-channel transcripts (the geo channel filter, anchor J,
+    is the firing precondition) through the real ACT loop. The pattern the geo
+    agent saves must carry provenance 'geo_pattern' — NOT the behavioural pass's
+    'pattern_match' — so a geo-derived routine is distinguishable downstream.
+    """
+
+    def test_geo_pass_writes_pattern_with_geo_provenance(self, db, store):
+        from services.subconscious_worker import SubconsciousWorker
+
+        # 35 located rows on the user channel — above the geo _MIN_DELTA (30).
+        _seed_located_transcripts(db, 35, channel="user")
+
+        tc = _tool_call(
+            "save_pattern",
+            name="harbour_gym",
+            frequency="daily",
+            time_anchor="18:00",
+            summary="user trains at the harbour gym daily",
+            evidence_transcript_ids=[1, 2, 3],
+        )
+        call_count = {"n": 0}
+
+        def _fake_send(*_a, **_kw):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return _make_llm_response(tool_calls=[tc])
+            return _make_llm_response(tool_calls=None)
+
+        with _inject_fake_client(_fake_send):
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
+            result = worker._step_geo_patterns()
+
+        assert "fired" in result, f"Expected the geo step to fire, got: {result!r}"
+
+        row = db.execute(
+            "SELECT source FROM data_graph "
+            "WHERE kind='behavioral_pattern' AND key='harbour_gym' AND active=1 "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None, "geo pass must write the behavioural_pattern row"
+        assert row[0] == "geo_pattern", (
+            f"geo-pass pattern must carry source='geo_pattern', got {row[0]!r} "
+            "(a 'pattern_match' tag here means the provenance fix regressed)"
+        )
+
+    def test_geo_pass_skips_when_located_rows_are_on_muted_channel(self, db, store):
+        """Channel filter (anchor J): location-tagged rows on a NON-user-activity
+        channel must NOT advance the geo cursor, so the step skips even when the
+        raw row count is far above the delta. Without the allowlist filter a
+        delegate's located rows would fire a spurious geo pass."""
+        from services.source_profiles import profile_for
+        from services.subconscious_worker import SubconsciousWorker
+
+        channel = "delegate:research"
+        assert not profile_for(channel).geo_is_user, (
+            "test premise: delegate:* must not count as user geo-activity"
+        )
+
+        # 50 located rows, all on a muted channel — well above _MIN_DELTA.
+        _seed_located_transcripts(db, 50, channel=channel)
+
+        def _fake_send(*_a, **_kw):
+            raise AssertionError(
+                "the geo step must NOT fire (and so never call the LLM) when the "
+                "only located rows are on a non-user-activity channel"
+            )
+
+        with _inject_fake_client(_fake_send):
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
+            result = worker._step_geo_patterns()
+
+        assert result.startswith("skip"), (
+            f"expected the geo step to skip on muted-channel geo rows, got: {result!r}"
+        )
+        # No behavioural pattern was written.
+        assert db.execute(
+            "SELECT COUNT(*) FROM data_graph WHERE kind='behavioral_pattern'"
+        ).fetchone()[0] == 0

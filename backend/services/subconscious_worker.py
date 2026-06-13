@@ -6,7 +6,8 @@ decay, pattern extraction, user synthesis, and background DMN reflection.
 Fires only when the user is not active.
 
 Tick body (sequential, per §5.3):
-    1. Consolidate episodes → super-episodes  (channel='user' only — §B masterplan).
+    1. Consolidate episodes → super-episodes  (per HEAVY channel: user, dmn,
+       external-agent:*; clusters stay channel-scoped).
     2. Fact extraction — route hard facts from new episodes into data_graph
        via constrained ADD/UPDATE/DELETE/NOOP ops (Mem0 pattern); drains the
        facts_extracted_at backlog at a per-tick LLM-call budget.
@@ -75,8 +76,18 @@ _DMN_SYNTHESIS_KEYS = ('user_summary', 'user_summary_long')
 _FACT_EXTRACTION_CALL_BUDGET = 20
 # Similar data_graph rows shown to the model per episode for reconciliation.
 _FACT_NEIGHBOUR_LIMIT = 10
-# Provenance stamped on every data_graph row the fact pipeline writes.
+# Provenance prefix stamped on every data_graph row the fact pipeline writes.
+# The episode's channel is appended (``fact_extraction:<channel>``) so a fact's
+# origin is recoverable; a channel-less episode degrades to the bare prefix.
 _FACT_SOURCE = "fact_extraction"
+
+
+def _fact_source_for(channel: Optional[str]) -> str:
+    """Return the channel-tagged fact-extraction provenance string.
+
+    ``fact_extraction:<channel>`` when a channel is known, else the bare prefix.
+    """
+    return f"{_FACT_SOURCE}:{channel}" if channel else _FACT_SOURCE
 # Maps a data_graph upsert_fact() status to the fact-extraction telemetry
 # counter. A new row (created) counts as an ADD; a contradicting value
 # (superseded) counts as an UPDATE; an unchanged write (reinforced) is a NOOP.
@@ -252,123 +263,206 @@ class SubconsciousWorker:
     # ── Steps ────────────────────────────────────────────────────────────────
 
     def _step_consolidate(self) -> str:
-        """Step 1 — consolidate apex episodes into super-episodes (channel='user' only).
+        """Step 1 — consolidate apex episodes into super-episodes, per channel.
 
-        §3c / O2: cluster loop lives here, not inside the processor.  One
+        §3c / O2: the cluster loop lives here, not inside the processor — one
         MessageProcessor.process() call per cluster.
 
-        Iterates only channel='user' episodes. This is both a performance
-        optimisation (the only channel that produces episodes post-masterplan,
-        since _maybe_trigger_extraction is gated to channel='user' upstream)
-        and a correctness guarantee: legacy pre-migration channels with residual
-        episodes are intentionally excluded.
+        Iterates every HEAVY (episode-producing) channel: user, dmn, and each
+        live external-agent channel. Clusters stay strictly channel-scoped —
+        find_super_candidates(channel) only joins episodes WHERE channel=? — so
+        memory from different sources is never pooled into one super-episode.
+        Channels that produce no episodes (delegate:*, skills_building,
+        scheduled) never appear and need no exclusion.
         """
-        from configs.channels import SuperEpisodeConfig  # noqa: PLC0415
         from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.embedding_service import get_embedding_service  # noqa: PLC0415
-        from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER  # noqa: PLC0415
+
+        db = get_shared_db_service()
+        emb_svc = get_embedding_service()
+
+        channels = self._consolidating_channels(db)
+        total_clusters = 0
+        supers_written = 0
+        for channel in channels:
+            found, written = self._consolidate_channel(channel, db, emb_svc)
+            total_clusters += found
+            supers_written += written
+
+        if total_clusters == 0:
+            return f"checked channels={channels}, no clusters formed"
+        if supers_written == 0:
+            return (
+                f"checked channels={channels}, {total_clusters} cluster(s) found, "
+                "0 written"
+            )
+        return (
+            f"consolidated {total_clusters} cluster(s) across {len(channels)} "
+            f"channel(s), {supers_written} super-ep(s) written"
+        )
+
+    @staticmethod
+    def _consolidating_channels(db) -> list[str]:
+        """Return the channels to consolidate: the HEAVY exact channels (user,
+        dmn) unioned with each live external-agent channel found in episodes.
+
+        External-agent channels are per-agent (``external-agent:<id>``), so they
+        cannot be enumerated statically; they are discovered from the episodes
+        table at tick time. Clusters never cross channels, so each is processed
+        independently.
+        """
+        from services.source_profiles import (  # noqa: PLC0415
+            LIKE_EXTERNAL_AGENT,
+            consolidating_exact_channels,
+        )
+
+        channels = list(consolidating_exact_channels())
+        try:
+            with db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT channel FROM episodes "
+                    "WHERE deleted_at IS NULL "
+                    "  AND consolidated_into IS NULL "
+                    "  AND channel LIKE ?",
+                    (LIKE_EXTERNAL_AGENT,),
+                ).fetchall()
+            channels.extend(r[0] for r in rows if r[0])
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} external-agent channel discovery failed: {exc}"
+            )
+        return channels
+
+    def _consolidate_channel(self, channel: str, db, emb_svc) -> tuple[int, int]:
+        """Consolidate one channel's apex clusters. Returns (clusters_found,
+        supers_written).
+
+        Mirrors the per-channel flow: find clusters, hoist the channel's novelty
+        comparison set once, then encode + store one super-episode per cluster.
+        A per-cluster failure is logged and skipped so one bad cluster never
+        aborts the channel; a find/novelty failure on one channel is contained
+        to that channel.
+        """
         from services.episodic_service import (  # noqa: PLC0415
             EpisodicService,
             find_super_candidates,
             _fetch_novelty_comparison_set,
-            compute_novelty,
-        )
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
-        from services.salience_service import compute_salience  # noqa: PLC0415
-        from configs.channels import (  # noqa: PLC0415
-            _safe_json_load_object,
-            _collect_transcript_ids,
-            _fetch_transcript_spans,
         )
 
         try:
-            clusters = find_super_candidates("user")
+            clusters = find_super_candidates(channel)
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} find_super_candidates failed: {exc}")
-            raise
+            logger.warning(
+                f"{LOG_PREFIX} find_super_candidates failed (channel={channel}): {exc}"
+            )
+            return 0, 0
 
         if not clusters:
-            return "checked channel=user, no clusters formed"
+            return 0, 0
 
-        db = get_shared_db_service()
         episodic_svc = EpisodicService(db)
-        emb_svc = get_embedding_service()
-
         try:
-            prior_embeddings = _fetch_novelty_comparison_set("user")
+            prior_embeddings = _fetch_novelty_comparison_set(channel)
         except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} _fetch_novelty_comparison_set failed: {exc}")
+            logger.warning(
+                f"{LOG_PREFIX} _fetch_novelty_comparison_set failed "
+                f"(channel={channel}): {exc}"
+            )
             prior_embeddings = []
 
-        supers_written = 0
-
+        written = 0
         for cluster_ids in clusters:
-            try:
-                sources = [
-                    ep for ep in (
-                        episodic_svc.get_episode_by_id(eid) for eid in cluster_ids
-                    )
-                    if ep
-                ]
-                if len(sources) < SUPER_EPISODE_MIN_CLUSTER:
-                    continue
+            if self._write_super_episode(
+                channel, cluster_ids, db, emb_svc, episodic_svc, prior_embeddings
+            ):
+                written += 1
+        return len(clusters), written
 
-                all_t_ids = _collect_transcript_ids(sources)
-                transcript_spans = _fetch_transcript_spans(all_t_ids, db)
+    @staticmethod
+    def _write_super_episode(
+        channel, cluster_ids, db, emb_svc, episodic_svc, prior_embeddings
+    ) -> bool:
+        """Encode + store one super-episode for a cluster. Returns True on write.
 
-                config = SuperEpisodeConfig("user", sources, transcript_spans)
-                response = MessageProcessor.process("", config)
+        The cluster's source channel is stamped onto the super-episode so the
+        hierarchy stays channel-scoped. Any failure is logged and returns False.
+        """
+        from configs.channels import (  # noqa: PLC0415
+            SuperEpisodeConfig,
+            _collect_transcript_ids,
+            _fetch_transcript_spans,
+            _safe_json_load_object,
+        )
+        from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER  # noqa: PLC0415
+        from services.episodic_service import compute_novelty  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from services.salience_service import compute_salience  # noqa: PLC0415
 
-                if not response:
-                    logger.warning(
-                        f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response "
-                        f"for cluster {cluster_ids}"
-                    )
-                    continue
-
-                super_ep = _safe_json_load_object(response)
-                if not super_ep or not super_ep.get("gist"):
-                    logger.warning(
-                        f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "
-                        f"gist for cluster {cluster_ids}"
-                    )
-                    continue
-
-                super_ep["channel"] = "user"
-                unique_t_ids = sorted(all_t_ids)
-                super_ep["transcript_ids"] = unique_t_ids
-                super_ep["transcript_id_start"] = min(unique_t_ids) if unique_t_ids else None
-                super_ep["transcript_id_end"] = max(unique_t_ids) if unique_t_ids else None
-                super_ep["consolidated_from"] = [ep["id"] for ep in sources]
-
-                gist = super_ep["gist"]
-                embedding = emb_svc.generate_embedding(gist)
-                novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
-                super_ep["salience"] = compute_salience(
-                    valence=float(super_ep.get("emotional_valence") or 0.0),
-                    arousal=float(super_ep.get("emotional_arousal") or 0.0),
-                    has_open_loop=bool(super_ep.get("has_open_loop", False)),
-                    novelty=novelty,
+        try:
+            sources = [
+                ep for ep in (
+                    episodic_svc.get_episode_by_id(eid) for eid in cluster_ids
                 )
-                super_ep.pop("has_open_loop", None)
+                if ep
+            ]
+            if len(sources) < SUPER_EPISODE_MIN_CLUSTER:
+                return False
 
-                new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
-                for src_id in cluster_ids:
-                    episodic_svc.set_consolidated_into(src_id, new_id)
+            all_t_ids = _collect_transcript_ids(sources)
+            transcript_spans = _fetch_transcript_spans(all_t_ids, db)
 
-                logger.info(
-                    f"{LOG_PREFIX} Super-episode {new_id} created from cluster {cluster_ids}"
-                )
-                supers_written += 1
+            config = SuperEpisodeConfig(channel, sources, transcript_spans)
+            response = MessageProcessor.process("", config)
 
-            except Exception as exc:
+            if not response:
                 logger.warning(
-                    f"{LOG_PREFIX} Super-episode creation failed for cluster {cluster_ids}: {exc}"
+                    f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response "
+                    f"for cluster {cluster_ids}"
                 )
+                return False
 
-        if supers_written == 0:
-            return f"checked channel=user, {len(clusters)} cluster(s) found, 0 written"
-        return f"consolidated {len(clusters)} cluster(s), {supers_written} super-ep(s) written"
+            super_ep = _safe_json_load_object(response)
+            if not super_ep or not super_ep.get("gist"):
+                logger.warning(
+                    f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "
+                    f"gist for cluster {cluster_ids}"
+                )
+                return False
+
+            super_ep["channel"] = channel
+            unique_t_ids = sorted(all_t_ids)
+            super_ep["transcript_ids"] = unique_t_ids
+            super_ep["transcript_id_start"] = min(unique_t_ids) if unique_t_ids else None
+            super_ep["transcript_id_end"] = max(unique_t_ids) if unique_t_ids else None
+            super_ep["consolidated_from"] = [ep["id"] for ep in sources]
+
+            gist = super_ep["gist"]
+            embedding = emb_svc.generate_embedding(gist)
+            novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+            super_ep["salience"] = compute_salience(
+                valence=float(super_ep.get("emotional_valence") or 0.0),
+                arousal=float(super_ep.get("emotional_arousal") or 0.0),
+                has_open_loop=bool(super_ep.get("has_open_loop", False)),
+                novelty=novelty,
+            )
+            super_ep.pop("has_open_loop", None)
+
+            new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
+            for src_id in cluster_ids:
+                episodic_svc.set_consolidated_into(src_id, new_id)
+
+            logger.info(
+                f"{LOG_PREFIX} Super-episode {new_id} created from cluster "
+                f"{cluster_ids} (channel={channel})"
+            )
+            return True
+
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} Super-episode creation failed for cluster "
+                f"{cluster_ids} (channel={channel}): {exc}"
+            )
+            return False
 
     def _step_fact_extraction(self) -> str:
         """Step 2 — route hard facts from new episodes into data_graph.
@@ -448,15 +542,21 @@ class SubconsciousWorker:
             )
             ops = []
 
+        # Provenance is channel-tagged so a fact's origin (user vs dmn vs a
+        # specific external agent) is recoverable from data_graph.source. dmn and
+        # external-agent facts are wanted, so there is no channel gate here — the
+        # backlog feeds every episode-producing channel.
+        source = _fact_source_for(episode.get("channel"))
         for op in ops:
-            self._apply_fact_op(op, dg, counters)
+            self._apply_fact_op(op, dg, counters, source)
 
         episodic_svc.set_facts_extracted_at(episode["id"])
         counters["episodes"] += 1
 
-    def _apply_fact_op(self, op, dg, counters) -> None:
+    def _apply_fact_op(self, op, dg, counters, source) -> None:
         """Apply one validated constrained op to data_graph and count it.
 
+        ``source`` is the channel-tagged provenance for this episode's facts.
         ADD/UPDATE go through ``upsert_fact`` (exact-key; a contradicting value
         triggers bi-temporal supersession); DELETE goes through ``invalidate``
         (active=0 + valid_to). A failed write is logged and counted as a
@@ -471,7 +571,7 @@ class SubconsciousWorker:
                 dg.invalidate(op["kind"], op["key"])
                 counters["delete"] += 1
                 return
-            result = dg.upsert_fact(op["key"], op["value"], source=_FACT_SOURCE)
+            result = dg.upsert_fact(op["key"], op["value"], source=source)
             if result is None:
                 counters["noop"] += 1
                 return
@@ -534,9 +634,21 @@ class SubconsciousWorker:
                 except (TypeError, ValueError):
                     cursor = 0
 
-        # 2. Read latest transcript id
+        # 2. Read latest transcript id.
+        # The cursor must count only rows the pattern LOAD window (pattern.py)
+        # actually reads — user-behaviour channels, no compaction rows. Counting
+        # background-loop rows (dmn writes many) would advance the delta past the
+        # _MIN_DELTA trigger and fire spurious pattern passes the load discards.
+        from services.source_profiles import (  # noqa: PLC0415
+            non_compaction_sql,
+            pattern_user_channels_sql,
+        )
         with db.connection() as conn:
-            latest_row = conn.execute("SELECT MAX(id) FROM transcript").fetchone()
+            latest_row = conn.execute(
+                "SELECT MAX(id) FROM transcript "
+                f"WHERE {pattern_user_channels_sql()} "
+                f"AND {non_compaction_sql()}"
+            ).fetchone()
         latest = (latest_row[0] if latest_row else None) or 0
 
         delta = latest - cursor
@@ -693,10 +805,19 @@ class SubconsciousWorker:
                     except (TypeError, ValueError):
                         cursor = 0
 
+            # Same allowlist as the geo-pattern window (geo_pattern.py): only
+            # user geo-activity channels advance the cursor, so a located row on
+            # a muted channel can never fire the geo pass.
+            from services.source_profiles import (  # noqa: PLC0415
+                geo_user_channels_sql,
+                non_compaction_sql,
+            )
             with db.connection() as conn:
                 latest_row = conn.execute(
                     "SELECT MAX(id) FROM transcript "
-                    "WHERE location_lat IS NOT NULL AND location_lon IS NOT NULL"
+                    "WHERE location_lat IS NOT NULL AND location_lon IS NOT NULL "
+                    f"AND {geo_user_channels_sql()} "
+                    f"AND {non_compaction_sql()}"
                 ).fetchone()
             latest = (latest_row[0] if latest_row else None) or 0
         except Exception as exc:

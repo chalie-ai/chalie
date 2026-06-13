@@ -10,6 +10,7 @@ Entry point: scheduler_worker() registered in run.py.
 """
 
 import logging
+import threading
 import time
 import uuid
 
@@ -21,6 +22,22 @@ logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SCHEDULER]"
 _POLL_INTERVAL = 60  # seconds
+
+# Stage-2 origin label for the return hop onto the user channel.
+_SCHEDULED_SOURCE = "scheduled"
+
+# Daemon-thread name prefix for the asynchronous two-stage fire. The poll loop
+# must never block on the LLM work, so a fired prompt runs on its own thread
+# named ``scheduled-work-<item_id>``.
+_SCHEDULED_WORK_THREAD_PREFIX = "scheduled-work"
+
+# How a fired scheduled prompt's worked result is framed when it is handed to
+# the user-facing turn that actually surfaces (Stage 2). The placeholder is
+# filled with the work loop's synthesis.
+_SCHEDULED_DELIVERY_TEMPLATE = (
+    "A scheduled task just ran in the background. Relay its result to me now, "
+    "in your own voice:\n\n{result}"
+)
 
 # System handler registry — capabilities register callbacks for item_type='system'
 _SYSTEM_HANDLERS: dict[str, callable] = {}
@@ -323,11 +340,18 @@ def _fire_item(item: dict):
         if not message or not message.strip():
             logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
             return
-
+        # Fire asynchronously: the two-stage work runs the full LLM ACT loop and
+        # must NOT execute on the scheduler poll thread, which is mid-transaction
+        # claiming/marking items. A nested write commit on the shared thread-local
+        # connection would flush the in-progress 'fired' UPDATE and break the
+        # claim atomicity, and the poll lock would be held for the whole loop.
         item_id = item.get('id', 'unknown')
-        from api.chat import dispatch_message
-        dispatch_message(message, source='scheduled', hidden_input=True)
-        logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
+        threading.Thread(
+            target=_fire_scheduled_prompt,
+            args=(item_id, message),
+            daemon=True,
+            name=f"{_SCHEDULED_WORK_THREAD_PREFIX}-{item_id}",
+        ).start()
     else:
         # Direct delivery — bypass LLM, broadcast straight to WebSocket
         from services.markup import sanitize
@@ -338,6 +362,67 @@ def _fire_item(item: dict):
             'content': sanitize(message),
         })
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
+
+
+def _run_scheduled_work_loop(message: str) -> str:
+    """Stage 1 — run the scheduled instruction on its own muted channel.
+
+    An independent ``MessageProcessor.process`` carries out the task with the
+    full tool surface on channel ``scheduled``. That channel resolves to the
+    MUTED source profile, so the work loop produces no episodes, facts, geo or
+    pattern signal — only the return hop (Stage 2) is encoded. Returns the work
+    loop's synthesis, or '' if it exhausted its budget without an answer.
+    """
+    from configs.channels import ScheduledConfig  # noqa: PLC0415
+    from services.message_processor import MessageProcessor  # noqa: PLC0415
+    from services.processor_config import ProcessorConfig  # noqa: PLC0415
+
+    config = ScheduledConfig(ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS)
+    return MessageProcessor.process(message, config)
+
+
+def _fire_scheduled_prompt(item_id: str, message: str) -> None:
+    """Fire a scheduled prompt in two stages (modelled on the web delegates).
+
+    Stage 1 runs the task on the muted ``scheduled`` channel and returns its
+    worked result. Stage 2 hands that result to an ordinary user-channel turn via
+    ``dispatch_message`` — that turn is what reaches the UI and is episodically
+    encoded as a normal user episode. If the work loop produced nothing usable,
+    the original instruction is delivered so the user is never left silent.
+
+    Runs on its own daemon thread (``scheduled-work-<item_id>``) so the scheduler
+    poll transaction is never held during the LLM loop. A Stage-1 failure is
+    logged with context and re-raised — Stage 2 is never fired with a fabricated
+    success — so the failure surfaces rather than masquerading as a delivered task.
+    """
+    from api.chat import dispatch_message  # noqa: PLC0415
+
+    try:
+        result = _run_scheduled_work_loop(message)
+    except Exception:
+        logger.exception(
+            f"{LOG_PREFIX} Scheduled work loop raised for '{item_id}' — "
+            f"not firing return hop"
+        )
+        raise
+
+    if result.strip():
+        delivery = _SCHEDULED_DELIVERY_TEMPLATE.format(result=result)
+        logger.info(
+            f"{LOG_PREFIX} Scheduled work loop produced result for '{item_id}': "
+            f"{result[:80]}"
+        )
+    else:
+        # Work loop exhausted its budget or was cancelled — fall back to the raw
+        # instruction so the scheduled prompt still surfaces to the user.
+        delivery = message
+        logger.warning(
+            f"{LOG_PREFIX} Scheduled work loop empty for '{item_id}' — "
+            f"delivering raw instruction"
+        )
+
+    dispatch_message(delivery, source=_SCHEDULED_SOURCE, hidden_input=True)
+    logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
 
 
 _RECURRENCE_MAP = {

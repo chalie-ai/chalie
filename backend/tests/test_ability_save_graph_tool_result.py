@@ -34,6 +34,7 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from abilities._registry import AbilityRegistry
 from abilities.save_graph import ALLOWED_KINDS, SaveGraph
+from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig, _pattern_init_instance_state
 from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
@@ -70,9 +71,9 @@ def _body(rendered: str) -> str:
     return body(rendered, "save_graph")
 
 
-def _rows(db, *, kind=None, key=None) -> list:
-    sql = "SELECT id, kind, key, value, source FROM data_graph WHERE source='pattern_match'"
-    params: list = []
+def _rows(db, *, kind=None, key=None, source="pattern_match") -> list:
+    sql = "SELECT id, kind, key, value, source FROM data_graph WHERE source=?"
+    params: list = [source]
     if kind is not None:
         sql += " AND kind=?"
         params.append(kind)
@@ -80,6 +81,19 @@ def _rows(db, *, kind=None, key=None) -> list:
         sql += " AND key=?"
         params.append(key)
     return db.execute(sql, params).fetchall()
+
+
+def _geo_mp(db) -> MessageProcessor:
+    """A real MessageProcessor on the GEO config — the other background pass that
+    reaches save_graph. GeoConfig.get_user_prompt lazily inits the same
+    per-instance budget/dedupe state PatternConfig does, so we drive it once to
+    initialise exactly as production does (no hand-set attrs)."""
+    mp = MessageProcessor("detect a geo fact")
+    mp.config = GeoConfig(0, 1)
+    mp.active_tools = list(mp.config.always_available or [])
+    mp.uid = seed_transcript(db, channel="geo_pattern", content="detect a geo fact")
+    mp.config.get_user_prompt(mp)  # production lazy-init of save_graph state
+    return mp
 
 
 # ── missing params (absent) → dispatcher pre-gate missing-params, no write ──────
@@ -179,6 +193,32 @@ def test_happy_path_stores_one_row(db):
     rows = _rows(db, kind="misc", key="fav_drink")
     assert len(rows) == 1
     assert rows[0][4] == "pattern_match"
+
+
+# ── geo pass → same row, provenance stamped 'geo_pattern' not 'pattern_match' ───
+
+
+def test_geo_pass_stamps_geo_pattern_provenance(db):
+    """When save_graph runs under the GEO pass (GeoConfig), the stored fact's
+    provenance must be 'geo_pattern', not the pattern pass's 'pattern_match'.
+
+    This is the per-source provenance fix: the two background passes build
+    separate MessageProcessors, and the row each writes must record WHICH pass
+    produced it so a downstream reader can tell a geo-derived fact from a
+    behavioural one. The pattern pass (above) stays 'pattern_match'."""
+    mp = _geo_mp(db)
+    out = ToolDispatcher(mp).dispatch(
+        "save_graph",
+        {"kind": "place", "key": "gym", "value": "Fortress Fitness", "act_summary": "x"},
+    )
+    assert "status=success" in _head(out)
+
+    geo_rows = _rows(db, kind="place", key="gym", source="geo_pattern")
+    assert len(geo_rows) == 1, (
+        "the geo pass must stamp source='geo_pattern' on the fact it writes"
+    )
+    # And it must NOT have been recorded under the pattern pass's provenance.
+    assert _rows(db, kind="place", key="gym", source="pattern_match") == []
 
 
 # ── same fact twice in one mp → second is deduped, exactly one row ──────────────

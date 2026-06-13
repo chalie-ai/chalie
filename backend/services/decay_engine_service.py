@@ -46,13 +46,14 @@ _LEAF_DELETE_AGE_DAYS = 90
 _LEAF_DELETE_SALIENCE_MAX = 3
 
 # ── Janitor ───────────────────────────────────────────────────────────────────
-# Non-user-channel leaf episodes are fossils: nothing produces them on the
-# current hot path, and they never get consolidated or re-confirmed.  The
+# Leaf episodes on MUTED/legacy channels are fossils: nothing produces them on
+# the current hot path, and they never get consolidated or re-confirmed.  The
 # janitor tombstones any older than this so they enter the normal deletion path.
+# HEAVY channels (user, dmn, external-agent:*) are protected via the shared
+# source-profile allowlist — see _janitor_fossil_episodes.
 # NOTE: the design plan leaves this threshold ("X") open; 7 days is chosen as a
 # conservative default pending calibration.
 _JANITOR_FOSSIL_AGE_DAYS = 7
-_USER_CHANNEL = "user"
 
 # ── Tool-call retention ───────────────────────────────────────────────────────
 # Durable tool_calls rows are time-capped: rows older than this are purged each
@@ -107,7 +108,7 @@ class DecayEngineService:
         """Run one full decay cycle across all memory types.
 
         Sub-cycles (run unconditionally, in order):
-        1. ``_janitor_fossil_episodes()`` — tombstone stranded non-user leaves.
+        1. ``_janitor_fossil_episodes()`` — tombstone stranded muted/legacy leaves.
         2. ``_decay_episodic()`` — absolute exponential decay on
            ``episodes.retrieval_weight`` anchored on ``last_relevant_at``.
         3. ``_delete_expired_episodes()`` — hard-delete tombstoned and weak-leaf
@@ -313,16 +314,23 @@ class DecayEngineService:
         conn.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
 
     def _janitor_fossil_episodes(self) -> int:
-        """Tombstone stranded non-user leaf episodes so they enter deletion.
+        """Tombstone stranded MUTED/legacy leaf episodes so they enter deletion.
 
-        Nothing on the current hot path produces non-user-channel episodes, yet
-        legacy channels left fossil leaves that never consolidate or re-confirm.
-        Tombstoning them (rather than deleting outright) routes them through the
-        normal fast-decay-then-delete path with full vec/fts cleanup.
+        Only leaves on channels that are NOT HEAVY (i.e. not episode-producing)
+        are fossils: muted/transient/legacy channels can strand leaves that never
+        consolidate or re-confirm. HEAVY channels (user, dmn, external-agent:*)
+        are protected — dmn in particular never consolidates, so its leaves are
+        permanently apex and would otherwise be reaped wholesale once past the
+        fossil cutoff. Tombstoning (rather than deleting outright) routes a fossil
+        through the normal fast-decay-then-delete path with full vec/fts cleanup.
 
         Returns:
             Number of fossil episodes tombstoned this tick.
         """
+        # Bidirectional dependency: the per-source allowlist lives in
+        # services/source_profiles.py; this is the janitor-protection consumer.
+        from .source_profiles import janitor_protected_sql
+
         try:
             from .database_service import get_shared_db_service
 
@@ -332,17 +340,17 @@ class DecayEngineService:
                     now = utc_now()
                     fossil_cutoff = (now - timedelta(days=_JANITOR_FOSSIL_AGE_DAYS)).isoformat()
                     cursor = conn.execute(
-                        """
+                        f"""
                         UPDATE episodes
                         SET tombstoned_at = ?
                         WHERE deleted_at IS NULL
                           AND tombstoned_at IS NULL
                           AND consolidated_into IS NULL
                           AND COALESCE(level, 0) = ?
-                          AND channel != ?
+                          AND NOT {janitor_protected_sql()}
                           AND julianday(COALESCE(last_relevant_at, created_at)) < julianday(?)
                         """,
-                        (now.isoformat(), _LEVEL_LEAF, _USER_CHANNEL, fossil_cutoff),
+                        (now.isoformat(), _LEVEL_LEAF, fossil_cutoff),
                     )
                     tombstoned = cursor.rowcount or 0
                     if tombstoned > 0:

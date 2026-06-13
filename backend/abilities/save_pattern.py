@@ -14,6 +14,7 @@ import re
 from typing import ClassVar
 
 from abilities._budget import BudgetCappedAbility
+from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
 from services.database_service import get_shared_db_service
 from services.time_utils import utc_now
@@ -158,10 +159,11 @@ class SavePattern(BudgetCappedAbility):
             "evidence": evidence,
             "time_anchor": params.get("time_anchor", "") or "",
         }
-        row_id, confidence_out, reinforced = _upsert_pattern(validated)
+        proc = self.mp
+        source = pattern_provenance(proc)
+        row_id, confidence_out, reinforced = _upsert_pattern(validated, source)
 
         self.bump_budget()
-        proc = self.mp
         if proc is not None:
             touched = getattr(proc, "_touched_pattern_ids", None)
             if touched is not None:
@@ -176,8 +178,11 @@ class SavePattern(BudgetCappedAbility):
         return ToolResult.ok(body)
 
 
-def _upsert_pattern(validated: dict) -> tuple[int, float, bool]:
+def _upsert_pattern(validated: dict, source: str) -> tuple[int, float, bool]:
     """Insert or merge a behavioral_pattern row in data_graph.
+
+    ``source`` is the provenance of the pass that produced this pattern
+    (``pattern_match`` or ``geo_pattern``).
 
     Returns ``(row_id, confidence, reinforced)`` — ``reinforced`` is True when an
     existing pattern was merged, False when a fresh row was inserted.
@@ -194,13 +199,15 @@ def _upsert_pattern(validated: dict) -> tuple[int, float, bool]:
         ).fetchone()
 
         if existing:
-            row_id, conf = _update_existing_pattern(conn, existing, validated, now_iso)
+            row_id, conf = _update_existing_pattern(conn, existing, validated, now_iso, source)
             return row_id, conf, True
-        row_id, conf = _insert_new_pattern(conn, validated, now_iso)
+        row_id, conf = _insert_new_pattern(conn, validated, now_iso, source)
         return row_id, conf, False
 
 
-def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> tuple[int, float]:
+def _update_existing_pattern(
+    conn, existing, validated: dict, now_iso: str, source: str
+) -> tuple[int, float]:
     existing_id, existing_value = existing[0], existing[1]
     old_strength = float(existing[2]) if existing[2] is not None else 0.5
     old_evidence = int(existing[3]) if existing[3] is not None else 1
@@ -225,12 +232,12 @@ def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> t
         "SET value=?, last_confirmed_at=?, last_accessed_at=?, source=?, "
         "    evidence_count=?, storage_strength=?, retrieval_weight=1.0 "
         "WHERE id=?",
-        (json.dumps(new_value), now_iso, now_iso, "pattern_match", new_evidence, new_strength, existing_id),
+        (json.dumps(new_value), now_iso, now_iso, source, new_evidence, new_strength, existing_id),
     )
     return existing_id, new_conf
 
 
-def _insert_new_pattern(conn, validated: dict, now_iso: str) -> tuple[int, float]:
+def _insert_new_pattern(conn, validated: dict, now_iso: str, source: str) -> tuple[int, float]:
     new_value = {
         "name": validated["name"],
         "frequency": validated["frequency"],
@@ -244,6 +251,6 @@ def _insert_new_pattern(conn, validated: dict, now_iso: str) -> tuple[int, float
         "INSERT INTO data_graph "
         "(kind, key, value, first_seen_at, last_confirmed_at, source, active) "
         "VALUES (?, ?, ?, ?, ?, ?, 1)",
-        ("behavioral_pattern", validated["name"], json.dumps(new_value), now_iso, now_iso, "pattern_match"),
+        ("behavioral_pattern", validated["name"], json.dumps(new_value), now_iso, now_iso, source),
     )
     return cur.lastrowid, 7.0

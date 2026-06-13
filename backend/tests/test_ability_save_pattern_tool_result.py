@@ -38,6 +38,7 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from abilities._registry import AbilityRegistry
 from abilities.save_pattern import SavePattern, _VALID_FREQUENCIES
+from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig, _pattern_init_instance_state
 from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
@@ -78,16 +79,31 @@ def _body(rendered: str) -> str:
     return body(rendered, "save_pattern")
 
 
-def _rows(db, *, name=None) -> list:
+def _rows(db, *, name=None, source="pattern_match") -> list:
     sql = (
         "SELECT id, kind, key, value, source FROM data_graph "
-        "WHERE kind='behavioral_pattern' AND source='pattern_match'"
+        "WHERE kind='behavioral_pattern' AND source=?"
     )
-    params: list = []
+    params: list = [source]
     if name is not None:
         sql += " AND key=?"
         params.append(name)
     return db.execute(sql, params).fetchall()
+
+
+def _geo_mp(db) -> MessageProcessor:
+    """A real MessageProcessor on the GEO config — the other background pass that
+    reaches save_pattern. GeoConfig.get_user_prompt lazily inits the same
+    per-instance budget state PatternConfig does, so we drive it once to
+    initialise exactly as production does (no hand-set attrs)."""
+    mp = MessageProcessor("look for geo patterns")
+    mp.config = GeoConfig(0, 1)
+    mp.active_tools = list(mp.config.always_available or [])
+    mp.uid = seed_transcript(
+        db, channel="geo_pattern", content="user goes to the gym at the harbour daily"
+    )
+    mp.config.get_user_prompt(mp)  # production lazy-init of save_pattern state
+    return mp
 
 
 def _valid_params(**overrides) -> dict:
@@ -224,6 +240,30 @@ def test_happy_path_stores_one_row(db):
     assert rows[0][4] == "pattern_match"
     stored = json.loads(rows[0][3])
     assert stored["confidence"] == 7.0
+
+
+# ── geo pass → behavioral_pattern row stamped 'geo_pattern' provenance ──────────
+
+
+def test_geo_pass_stamps_geo_pattern_provenance(db):
+    """When save_pattern runs under the GEO pass (GeoConfig), the behavioral
+    pattern row's provenance must be 'geo_pattern', not 'pattern_match'.
+
+    The two background passes build separate MessageProcessors; a geo-derived
+    routine must be distinguishable from a behavioural one in data_graph.source.
+    The pattern pass (above) stays 'pattern_match'."""
+    mp = _geo_mp(db)
+    out = ToolDispatcher(mp).dispatch(
+        "save_pattern",
+        _valid_params(name="harbour_gym", summary="user trains at the harbour gym daily"),
+    )
+    assert "status=success" in _head(out)
+
+    geo_rows = _rows(db, name="harbour_gym", source="geo_pattern")
+    assert len(geo_rows) == 1, (
+        "the geo pass must stamp source='geo_pattern' on the pattern it writes"
+    )
+    assert _rows(db, name="harbour_gym", source="pattern_match") == []
 
 
 # ── reinforce same name → success body carries reinforced:1, exactly one row ─────

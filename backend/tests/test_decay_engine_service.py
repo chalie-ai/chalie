@@ -276,46 +276,69 @@ class TestHardDeletion:
 
 
 class TestFossilJanitor:
-    """Non-user-channel stranded leaves get tombstoned to enter deletion."""
+    """Stranded apex leaves on NON-episode-producing channels get tombstoned to
+    enter deletion — but HEAVY (episode-producing) channels are protected.
 
-    def test_old_nonuser_leaf_is_tombstoned(self, db):
-        """A non-user leaf older than the fossil window gets tombstoned_at set."""
-        _insert_episode(db, "ep-fossil", salience=5, retrieval_weight=0.3,
-                        channel="dmn",
+    TKT-926 spec change: the janitor's protection moved from a single
+    ``channel != 'user'`` filter to the per-source allowlist
+    (``janitor_protected_sql()`` = every channel whose profile sets
+    ``extract_episodes``). dmn is HEAVY and never consolidates, so its leaves are
+    permanently apex; reaping them after the fossil window destroyed durable
+    background memory. The reaping behaviour itself is unchanged — it just now
+    targets the genuinely muted / absent-profile channels instead of dmn.
+    """
+
+    def test_old_muted_channel_leaf_is_tombstoned(self, db):
+        """An apex leaf older than the fossil window on a MUTED channel
+        (skills_building) and one on an ABSENT-profile channel (discord, defaults
+        to muted) both get tombstoned_at set. Replaces the old dmn fixture, which
+        TKT-926 now protects."""
+        _insert_episode(db, "ep-muted", salience=5, retrieval_weight=0.3,
+                        channel="skills_building",
+                        last_relevant_at=_iso_ago(days=_JANITOR_FOSSIL_AGE_DAYS + 3))
+        _insert_episode(db, "ep-legacy", salience=5, retrieval_weight=0.3,
+                        channel="discord",
                         last_relevant_at=_iso_ago(days=_JANITOR_FOSSIL_AGE_DAYS + 3))
 
         tombstoned = DecayEngineService()._janitor_fossil_episodes()
 
         conn = _fresh_conn()
-        row = conn.execute(
-            "SELECT tombstoned_at FROM episodes WHERE id = 'ep-fossil'"
-        ).fetchone()
-        assert tombstoned == 1
-        assert row[0] is not None
+        assert tombstoned == 2
+        assert conn.execute(
+            "SELECT tombstoned_at FROM episodes WHERE id = 'ep-muted'"
+        ).fetchone()[0] is not None
+        assert conn.execute(
+            "SELECT tombstoned_at FROM episodes WHERE id = 'ep-legacy'"
+        ).fetchone()[0] is not None
 
-    def test_user_channel_and_young_fossils_untouched(self, db):
-        """User-channel leaves and young non-user leaves are NOT tombstoned.
-
-        Pins the shouldn't-fire side: the janitor only targets old NON-user
-        leaves, so a user-channel old row and a young non-user row both stay live.
+    def test_heavy_channel_and_young_fossils_untouched(self, db):
+        """The shouldn't-fire side. The janitor leaves untouched:
+          * every HEAVY (episode-producing) channel's old apex leaf — user, dmn
+            AND external-agent:* — because TKT-926 protects the full allowlist
+            (dmn would otherwise be reaped wholesale: it never consolidates), and
+          * any young leaf regardless of channel.
         """
         _insert_episode(db, "ep-user-old", salience=5, retrieval_weight=0.3,
                         channel="user",
                         last_relevant_at=_iso_ago(days=_JANITOR_FOSSIL_AGE_DAYS + 3))
-        _insert_episode(db, "ep-dmn-young", salience=5, retrieval_weight=0.3,
+        _insert_episode(db, "ep-dmn-old", salience=5, retrieval_weight=0.3,
                         channel="dmn",
+                        last_relevant_at=_iso_ago(days=_JANITOR_FOSSIL_AGE_DAYS + 3))
+        _insert_episode(db, "ep-ext-old", salience=5, retrieval_weight=0.3,
+                        channel="external-agent:bob",
+                        last_relevant_at=_iso_ago(days=_JANITOR_FOSSIL_AGE_DAYS + 3))
+        _insert_episode(db, "ep-muted-young", salience=5, retrieval_weight=0.3,
+                        channel="skills_building",
                         last_relevant_at=_iso_ago(days=1))
 
         tombstoned = DecayEngineService()._janitor_fossil_episodes()
 
         conn = _fresh_conn()
         assert tombstoned == 0
-        assert conn.execute(
-            "SELECT tombstoned_at FROM episodes WHERE id = 'ep-user-old'"
-        ).fetchone()[0] is None
-        assert conn.execute(
-            "SELECT tombstoned_at FROM episodes WHERE id = 'ep-dmn-young'"
-        ).fetchone()[0] is None
+        for ep_id in ("ep-user-old", "ep-dmn-old", "ep-ext-old", "ep-muted-young"):
+            assert conn.execute(
+                "SELECT tombstoned_at FROM episodes WHERE id = ?", (ep_id,)
+            ).fetchone()[0] is None, f"{ep_id} must not be tombstoned"
 
 
 class TestPureRead:

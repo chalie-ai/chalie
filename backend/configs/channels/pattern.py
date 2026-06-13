@@ -156,6 +156,12 @@ class PatternConfig(ProcessorConfig):
         _pattern_init_instance_state(mp)
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
+        # Bidirectional dependency: the per-source allowlist lives in
+        # services/source_profiles.py; this is the pattern-window consumer.
+        from services.source_profiles import (  # noqa: PLC0415
+            pattern_user_channels_sql,
+            non_compaction_sql,
+        )
         try:
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             db = get_shared_db_service()
@@ -164,10 +170,12 @@ class PatternConfig(ProcessorConfig):
                     "SELECT id, role, content, created_at FROM transcript "
                     "WHERE id > ? AND id <= ? "
                     "AND content IS NOT NULL AND content != '' "
-                    # Delegate sub-turns (web_search/web_browse) now write their
-                    # own transcript rows; they are internal research
-                    # loops, not user behaviour — exclude them from pattern windows.
-                    "AND channel NOT LIKE 'delegate:%' "
+                    # Only user-behaviour channels feed the pattern window.
+                    # Background loops (dmn, delegate:*, external-agent:*,
+                    # skills_building) and compaction rows are internal, not
+                    # observed user behaviour — the allowlist excludes them.
+                    f"AND {pattern_user_channels_sql()} "
+                    f"AND {non_compaction_sql()} "
                     "ORDER BY id ASC",
                     (self._window_start, self._window_end),
                 ).fetchall()

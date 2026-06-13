@@ -11,6 +11,7 @@ from any processor that opts it in.
 from typing import ClassVar
 
 from abilities._budget import BudgetCappedAbility
+from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
 
@@ -115,7 +116,7 @@ class SaveGraph(BudgetCappedAbility):
             kind=kind,
             key=key,
             value=value,
-            source="pattern_match",
+            source=pattern_provenance(proc),
         )
         if result is None:
             return ToolResult.err(

@@ -25,6 +25,7 @@ Per-instance channels (§3b) — typed constructors:
   GeoConfig(window_start, window_end)
   UserSummaryConfig()
   SuperEpisodeConfig(channel, sources, spans)
+  ScheduledConfig(policy_channel)
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from configs.channels.external_agent import EAMPConfig
 from configs.channels.fact_extraction import FactExtractionConfig, parse_fact_ops
 from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig, _pattern_existing_patterns_block
+from configs.channels.scheduled import ScheduledConfig
 from configs.channels.skill_suggestion import SkillSuggestionConfig
 from configs.channels.super_episode import (
     SuperEpisodeConfig,
@@ -59,6 +61,7 @@ __all__ = [
     "GeoConfig",
     "PatternConfig",
     "ProcessorConfig",
+    "ScheduledConfig",
     "SkillSuggestionConfig",
     "SuperEpisodeConfig",
     "UserConfig",

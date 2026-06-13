@@ -153,7 +153,7 @@ class MemoryAbility(Ability):
             if action == "recall":
                 return memory_retrieval.handle_recall(mp, channel, params)
             if action == "reflect":
-                return memory_retrieval.handle_reflect(mp, channel, params)
+                return memory_retrieval.handle_reflect(mp, params)
             if action == "forget":
                 return memory_retrieval.handle_forget(params)
             return ToolResult.err(

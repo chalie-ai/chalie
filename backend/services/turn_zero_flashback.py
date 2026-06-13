@@ -431,15 +431,16 @@ class TurnZeroFlashback:
 
         Runs the shared episode recall with ``caller='seed'`` so the frozen
         ``memory_recall_log`` seed row + telemetry are written exactly as the
-        retrieval rework left them. Returns raw episode dicts (gist + created_at)
-        ordered so super-episodes / era digests precede leaves, then by the
-        retrieval composite score.
+        retrieval rework left them. Recall is cross-channel (TKT-926): a user
+        turn's flashback surfaces episodes from every episode-producing channel
+        (user, dmn, external-agent:*), not just the caller's own. Returns raw
+        episode dicts (gist + created_at) ordered so super-episodes / era digests
+        precede leaves, then by the retrieval composite score.
         """
         from services.memory_retrieval import recall_episodes  # noqa: PLC0415
 
         episodes, _status = recall_episodes(
             self._mp,
-            channel=self._mp.config.channel,
             query=query,
             caller="seed",
             limit=_MAX_EPISODES * _EPISODE_OVERFETCH_FACTOR,

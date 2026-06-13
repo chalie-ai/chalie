@@ -22,6 +22,15 @@ per-lane min-max normalisation plus a relative score floor (no radius / shrink
 apparatus). This module no longer computes any radius; it only routes queries
 and projects results.
 
+Episode recall is cross-channel (TKT-926, Decision 1): the read path never
+filters episodes by the caller's own channel, so a memory encoded on any
+episode-producing channel (user, dmn, external-agent:*) is recallable from any
+turn — exactly as facts already cross-pollinate via the channel-agnostic
+``data_graph.recall``. Muted channels write no episodes, so the channel-agnostic
+read naturally scopes to the set that actually holds memories. The caller's
+channel is recorded only for ``memory_recall_log`` provenance and the per-channel
+feeling-of-knowing signal, never as a recall scope.
+
 The two recall callers stay distinct only in their side-effects:
   * ``caller='seed'`` — the silent turn-0 auto-seed: no fallback hint, no
     fan-out to document/schedule searches.
@@ -268,11 +277,11 @@ def handle_recall(mp, channel: str, params: dict) -> ToolResult:
 
     if query and location:
         # AND gate: only episodes that satisfy both location AND semantic query.
-        loc_hits, loc_status = _search_episodes_by_location(channel, location, limit * 3)
+        loc_hits, loc_status = _search_episodes_by_location(location, limit * 3)
         loc_ids = {h["id"] for h in loc_hits}
         loc_by_id = {h["id"]: h for h in loc_hits}
 
-        sem_hits, sem_status = _search_episodes(mp, channel, query, limit * 3, caller=caller)
+        sem_hits, sem_status = _search_episodes(mp, query, limit * 3, caller=caller)
         sem_ids = {h["id"] for h in sem_hits}
         sem_by_id = {h["id"]: h for h in sem_hits}
 
@@ -289,7 +298,7 @@ def handle_recall(mp, channel: str, params: dict) -> ToolResult:
         statuses.extend([loc_status, sem_status, dg_status])
 
     elif location:
-        hits, loc_status = _search_episodes_by_location(channel, location, limit)
+        hits, loc_status = _search_episodes_by_location(location, limit)
         results.extend(hits)
         statuses.append(loc_status)
 
@@ -297,7 +306,7 @@ def handle_recall(mp, channel: str, params: dict) -> ToolResult:
         dg_hits, dg_status = _search_data_graph(query, limit)
         results.extend(dg_hits)
 
-        ep_hits, sem_status = _search_episodes(mp, channel, query, limit, caller=caller)
+        ep_hits, sem_status = _search_episodes(mp, query, limit, caller=caller)
         results.extend(ep_hits)
         statuses.extend([dg_status, sem_status])
 
@@ -343,7 +352,7 @@ def handle_recall(mp, channel: str, params: dict) -> ToolResult:
 # ── Reflect ──────────────────────────────────────────────────────────
 
 
-def handle_reflect(mp, channel: str, params: dict) -> ToolResult:
+def handle_reflect(mp, params: dict) -> ToolResult:
     query = params.get("query", "")
     if not query:
         return ToolResult.err(
@@ -355,7 +364,6 @@ def handle_reflect(mp, channel: str, params: dict) -> ToolResult:
 
     raw_episodes, _ = recall_episodes(
         mp,
-        channel=channel,
         query=query,
         caller="llm_recall",
         limit=1,
@@ -643,25 +651,26 @@ def _write_recall_telemetry(
         logger.warning(f"{LOG_PREFIX} Failed to write memory_recall_log row: {e}")
 
 
-def _turn_context(proc) -> Tuple[str, object]:
-    """Resolve (turn_uid, transcript_id) from the bound processor, if any.
+def _turn_context(proc) -> Tuple[str, object, Optional[str]]:
+    """Resolve (turn_uid, transcript_id, channel) from the bound processor.
 
     The radius drift-history apparatus is gone; only the telemetry-keying
-    identifiers are still needed. Returns ephemeral defaults when no processor
-    is bound (e.g. the REST recall path).
+    identifiers are still needed. The channel is the caller's own channel,
+    recorded purely for ``memory_recall_log`` provenance — episode recall reads
+    cross-channel regardless (TKT-926). Returns ephemeral defaults when no
+    processor is bound (e.g. the REST recall path).
     """
     if proc is None:
-        return "ephemeral", None
+        return "ephemeral", None, None
     _cfg = getattr(proc, "config", None)
     _channel = getattr(_cfg, "channel", None)
     turn_uid = str(getattr(proc, "_uid", None) or _channel or "unbound")
     transcript_id = getattr(proc, "_uid", None)
-    return turn_uid, transcript_id
+    return turn_uid, transcript_id, _channel
 
 
 def recall_episodes(
     mp,
-    channel: str,
     query: str,
     *,
     caller: str = "llm_recall",
@@ -674,6 +683,13 @@ def recall_episodes(
     and the pre-turn seed path (``caller='seed'``). Ranking and the relative
     score floor live in ``episodic_retrieval_service.retrieve``; this function
     only embeds the query, routes it, records telemetry, and projects results.
+
+    Episode recall is cross-channel by design (TKT-926, Decision 1): an episode
+    encoded on any episode-producing channel (user, dmn, external-agent:*) is
+    recallable from any turn, so the read path never filters by the caller's own
+    channel. Muted channels write no episodes, so the channel-agnostic read
+    naturally scopes to the set that actually has memories. The caller's channel
+    is still recorded in ``memory_recall_log`` for provenance via ``_turn_context``.
     """
     try:
         from services import episodic_retrieval_service
@@ -688,12 +704,12 @@ def recall_episodes(
         emb_svc = get_embedding_service()
 
         q_embedding = emb_svc.generate_embedding(query, mp=mp)
-        turn_uid, transcript_id = _turn_context(mp)
+        turn_uid, transcript_id, provenance_channel = _turn_context(mp)
 
         episodes, telemetry = episodic_retrieval_service.retrieve(
             query_text=query,
             query_embedding=q_embedding,
-            channel=channel,
+            channel=None,
             k=limit,
             return_telemetry=True,
         )
@@ -702,7 +718,7 @@ def recall_episodes(
             db,
             turn_uid=turn_uid,
             transcript_id=transcript_id,
-            channel=channel,
+            channel=provenance_channel,
             caller=caller,
             query=query,
             embedding_hash=_embedding_hash(q_embedding),
@@ -710,7 +726,7 @@ def recall_episodes(
         )
 
         if not episodes:
-            candidates = _count_episode_candidates(db, channel)
+            candidates = _count_episode_candidates(db)
             status = f"0 matches ({candidates} candidates evaluated)"
             return [], status
 
@@ -739,24 +755,28 @@ def recall_episodes(
 
 
 def _search_episodes(
-    mp, channel: str, query: str, limit: int, caller: str = "llm_recall"
+    mp, query: str, limit: int, caller: str = "llm_recall"
 ) -> Tuple[List[Dict], str]:
     return recall_episodes(
         mp,
-        channel=channel,
         query=query,
         caller=caller,
         limit=limit,
     )
 
 
-def _count_episode_candidates(db_service, channel: str) -> int:
+def _count_episode_candidates(db_service) -> int:
+    """Count recall-eligible episodes across every channel.
+
+    Episode recall is cross-channel (TKT-926), so the "0 matches (N candidates
+    evaluated)" status counts the whole episode corpus — not just one channel's
+    slice — to honestly report how many candidates the empty recall searched.
+    """
     try:
         with db_service.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL AND channel = ?",
-                (channel,),
+                "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL",
             )
             count = cursor.fetchone()[0]
             cursor.close()
@@ -797,12 +817,14 @@ _LOCATION_SEARCH_RELEVANCE = "high"
 
 
 def _search_episodes_by_location(
-    channel: str, location: str, limit: int
+    location: str, limit: int
 ) -> Tuple[List[Dict], str]:
     """Search episodes whose location_name contains the given text.
 
-    Also resolves saved place labels (e.g. 'home') via data_graph kind='place'
-    to pick up alternate location_name strings stored at save time.
+    Cross-channel by design (TKT-926): a location recall surfaces episodes from
+    every episode-producing channel, mirroring the channel-agnostic semantic
+    recall path. Also resolves saved place labels (e.g. 'home') via data_graph
+    kind='place' to pick up alternate location_name strings stored at save time.
     """
     try:
         from services.data_graph_service import KIND_PLACE, get_data_graph_service
@@ -832,11 +854,11 @@ def _search_episodes_by_location(
             sql = (
                 "SELECT e.id, e.gist, e.location_name, e.created_at "
                 "FROM episodes e "
-                f"WHERE e.deleted_at IS NULL AND e.channel = ? AND ({like_clauses}) "
+                f"WHERE e.deleted_at IS NULL AND ({like_clauses}) "
                 "AND e.location_name IS NOT NULL "
                 "ORDER BY e.created_at DESC LIMIT ?"
             )
-            db_params = [channel] + like_params + [limit]
+            db_params = like_params + [limit]
             rows = conn.execute(sql, db_params).fetchall()
 
         if not rows:

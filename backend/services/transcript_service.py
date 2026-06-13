@@ -32,14 +32,25 @@ _EXTRACTION_WINDOW = 25
 _EXTRACTION_OVERLAP = 5
 
 
-def _resolve_location(lat, lon, name):
-    """Return (lat, lon, name) for a transcript row.
+def _resolve_location(lat, lon, name, channel):
+    """Return (lat, lon, name) for a transcript row on ``channel``.
 
-    When all three arguments are None, reads the user's last known location
-    from locale_service. Returns (None, None, None) on any failure.
+    An explicit (non-None) coordinate is always honoured. When all three are
+    None, the user's live location is back-filled ONLY for channels whose source
+    profile permits it (``location_backfill`` — user activity). Muted /
+    non-user-activity channels store NULL location instead, so background work
+    (dmn reflection, delegate research, scheduled loops) never stamps a row with
+    the user's coordinates and corrupts the geo signal. Returns (None, None,
+    None) on any failure.
     """
     if lat is not None or lon is not None or name is not None:
         return lat, lon, name
+    # Bidirectional dependency: the per-source allowlist lives in
+    # services/source_profiles.py; this is the location-backfill consumer.
+    from services.source_profiles import profile_for
+
+    if not profile_for(channel).location_backfill:
+        return None, None, None
     try:
         from services.locale_service import get_location
         loc = get_location()
@@ -72,7 +83,9 @@ def append(
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
 
-        lat, lon, loc_name = _resolve_location(location_lat, location_lon, location_name)
+        lat, lon, loc_name = _resolve_location(
+            location_lat, location_lon, location_name, channel
+        )
 
         with db.connection() as conn:
             cursor = conn.cursor()
@@ -270,10 +283,12 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
     """Fire episode extraction when the channel has accumulated
     _EXTRACTION_THRESHOLD untriggered transcripts.
 
-    Gate: only channel='user' produces episodes. Non-user channels (dmn,
-    scheduled, subagent, self_reflection, etc.) are explicitly excluded —
-    this is the structural invariant that keeps the episodes table clean and
-    makes SubconsciousWorker._step_consolidate() iterate only one channel.
+    Gate: only channels whose source profile has ``extract_episodes`` produce
+    episodes (user, dmn, external-agent:*). Every other channel (delegate:*,
+    skills_building, scheduled, …) resolves to the muted default and returns
+    here before any DB work, keeping the episodes table free of housekeeping
+    noise and bounding which channels SubconsciousWorker._step_consolidate()
+    iterates.
 
     DB-state-driven: counts transcripts with id > MAX(episodes.transcript_id_end)
     for the channel. When count >= threshold, fire. No process-local state,
@@ -282,7 +297,11 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
 
     Never raises — failures logged and silently ignored.
     """
-    if channel != 'user':
+    # Bidirectional dependency: the per-source allowlist lives in
+    # services/source_profiles.py; this is the episode-gate consumer.
+    from services.source_profiles import profile_for
+
+    if not profile_for(channel).extract_episodes:
         return
 
     try:
@@ -692,7 +711,7 @@ def write_input_row(channel: str, role: str, content: str) -> int:
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
-    lat, lon, loc_name = _resolve_location(None, None, None)
+    lat, lon, loc_name = _resolve_location(None, None, None, channel)
     with db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -735,7 +754,7 @@ def write_assistant_row(channel: str, content: str) -> int:
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
-    lat, lon, loc_name = _resolve_location(None, None, None)
+    lat, lon, loc_name = _resolve_location(None, None, None, channel)
     with db.connection() as conn:
         cursor = conn.cursor()
         cursor.execute(

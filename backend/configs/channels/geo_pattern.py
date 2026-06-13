@@ -9,9 +9,19 @@ from configs.channels.pattern import _pattern_existing_patterns_block
 
 
 def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> str:
-    """Fetch location-tagged transcripts from the window and format them."""
+    """Fetch location-tagged transcripts from the window and format them.
+
+    Only channels whose source profile marks them as user geo-activity are
+    included, and compaction rows are excluded — background channels stamp NULL
+    location (transcript_service back-fill gate), but the allowlist filter is the
+    structural guard so a stray located row on a muted channel can never feed the
+    geo-pattern model.
+    """
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
+    # Bidirectional dependency: the per-source allowlist lives in
+    # services/source_profiles.py; this is the geo-window consumer.
+    from services.source_profiles import geo_user_channels_sql, non_compaction_sql  # noqa: PLC0415
     try:
         from services.database_service import get_shared_db_service  # noqa: PLC0415
         db = get_shared_db_service()
@@ -23,6 +33,8 @@ def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> st
                 "WHERE id > ? AND id <= ? "
                 "AND location_lat IS NOT NULL AND location_lon IS NOT NULL "
                 "AND content IS NOT NULL AND content != '' "
+                f"AND {geo_user_channels_sql()} "
+                f"AND {non_compaction_sql()} "
                 "ORDER BY id ASC",
                 (window_start, window_end),
             ).fetchall()

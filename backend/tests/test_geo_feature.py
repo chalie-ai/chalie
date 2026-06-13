@@ -126,39 +126,52 @@ class TestEstimateSpeedFromHistory:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: geo-pattern channel config (GeoConfig — flat path)
+# Test 4: geo-pattern window honours the per-source channel allowlist
 # ---------------------------------------------------------------------------
 
-class TestGeoPatternConfig:
-    """GeoConfig produces the expected channel config and prompt content."""
+def _seed_located_row(db, *, channel, role="user", content):
+    """Seed one location-tagged transcript row on `channel`."""
+    db.execute(
+        "INSERT INTO transcript (channel, role, content, created_at, "
+        "location_lat, location_lon, location_name) "
+        "VALUES (?, ?, ?, datetime('now'), 35.9, 14.5, 'Valletta')",
+        (channel, role, content),
+    )
+    db.commit()
 
-    def test_config_sets_expected_attributes(self, db):
-        """GeoConfig sets channel, role, skip_transcript, max_iterations,
-        always_available, and discoverable."""
-        from configs.channels import GeoConfig
 
-        config = GeoConfig(window_start=0, window_end=100)
+class TestGeoPatternWindowChannelFilter:
+    """The geo-pattern window feeds the model ONLY rows whose source profile
+    marks them as user geo-activity. A located row on a muted/non-user channel
+    (or a compaction row) must never reach the model — the prior behaviour fed
+    every located row regardless of channel, so a delegate's coordinates could
+    masquerade as the user being somewhere.
 
-        assert config.channel == "geo_pattern"
-        assert config.role == "geo_pattern"
-        assert config.skip_transcript is True
-        assert config.max_iterations == 30
-        assert "save_pattern" in config.always_available
-        assert "save_graph" in config.always_available
-        assert config.discoverable == []
+    Driven through the real ``_geo_pattern_load_transcript_block`` (the exact
+    builder GeoConfig.get_user_prompt calls) over mixed-channel fixtures.
+    """
 
-    def test_system_prompt_contains_geo_keywords(self, db):
-        """get_system_prompt() references location-tagging, save_pattern, save_graph,
-        and geo-spatial — the four pillars of the geo-pattern task description."""
-        from configs.channels import GeoConfig
+    def test_only_user_geoactivity_rows_enter_the_window(self, db):
+        from configs.channels.geo_pattern import _geo_pattern_load_transcript_block
 
-        config = GeoConfig(window_start=0, window_end=100)
-        prompt = config.get_system_prompt(None)
+        # One row per representative channel, all located, all in the window.
+        _seed_located_row(db, channel="user", content="USER at the gym")
+        _seed_located_row(db, channel="dmn", content="DMN reflection located")
+        _seed_located_row(db, channel="delegate:research", content="DELEGATE located")
+        _seed_located_row(db, channel="external-agent:bob", content="EXT located")
+        _seed_located_row(db, channel="user", role="compaction", content="COMPACTION located")
 
-        assert "location-tagged" in prompt, "System prompt must mention 'location-tagged'"
-        assert "save_pattern" in prompt, "System prompt must reference the save_pattern tool"
-        assert "save_graph" in prompt, "System prompt must reference the save_graph tool"
-        assert "geo" in prompt.lower(), "System prompt must reference geo-spatial context"
+        last_id = db.execute("SELECT MAX(id) FROM transcript").fetchone()[0]
+        block = _geo_pattern_load_transcript_block(0, last_id)
+
+        # Only the user geo-activity row is admitted.
+        assert "USER at the gym" in block
+        # dmn is HEAVY for episodes but NOT user geo-activity (geo_is_user=False).
+        assert "DMN reflection located" not in block
+        # Muted / non-user channels and compaction rows are excluded.
+        assert "DELEGATE located" not in block
+        assert "EXT located" not in block
+        assert "COMPACTION located" not in block
 
     def test_existing_patterns_block_empty_db_returns_none_yet(self, db):
         """_pattern_existing_patterns_block() with no behavioral_pattern rows returns '(none yet)'."""

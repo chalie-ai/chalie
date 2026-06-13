@@ -3,16 +3,29 @@
 Tests cover:
 - append()
 - get_recent() with and without since_id
-- TestDbStateExtractionTrigger: DB-state-driven extraction trigger
+- TestDbStateExtractionTrigger: DB-state-driven extraction trigger, gated by
+  the per-source profile (only extract_episodes channels reach the encoder).
 
 All tests use the real production stack against the shared `db` fixture
-(in-memory SQLite built from schema.sql).  No mocks except the single
-acceptable boundary: patch('_trigger_episode_extraction') in
-TestDbStateExtractionTrigger, which stubs the daemon-thread spawn only —
-the query logic itself is real.
+(in-memory SQLite built from schema.sql).
+
+The per-source gate test (``test_muted_channel_never_fires_even_above_threshold``)
+drives the REAL ``_maybe_trigger_extraction`` for a muted channel and asserts the
+real DB outcome (no episode row) — no production code is patched, because the
+profile gate returns BEFORE any thread is spawned, so the outcome is fully
+deterministic and observable in the episodes table.
+
+The six pre-existing ``TestDbStateExtractionTrigger`` count-path tests patch the
+daemon-thread spawn (``_trigger_episode_extraction``) to observe the
+fire/no-fire decision without running the encoder thread. They are pre-existing
+and out of scope for this ticket; a separate sweep will rework them onto a
+real-DB outcome assertion.
 """
 
+import pytest
 from unittest.mock import patch
+
+pytestmark = pytest.mark.unit
 
 
 class TestAppend:
@@ -115,8 +128,15 @@ class TestDbStateExtractionTrigger:
     reaches _EXTRACTION_THRESHOLD, extraction fires. No process-local
     state, so restarts cannot desync from accumulated history.
 
-    Only acceptable mock: patch.object(ts, '_trigger_episode_extraction') —
-    a fire-and-forget daemon-thread boundary spy. The query logic is real.
+    ``test_muted_channel_never_fires_even_above_threshold`` (the TKT-926
+    per-source gate invariant) drives the REAL trigger and asserts the real DB
+    outcome (no episode row) — no production code is patched.
+
+    The six count-path tests below patch the daemon-thread spawn
+    (``patch.object(ts, '_trigger_episode_extraction')``) to observe the
+    fire/no-fire decision without running the encoder thread. They are
+    pre-existing and out of scope for this ticket; the query logic and the
+    profile gate both run for real in every one.
     """
 
     def test_fires_when_untriggered_tail_crosses_threshold(self, db):
@@ -125,9 +145,10 @@ class TestDbStateExtractionTrigger:
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        # Episodes are only produced for the 'user' channel — the production gate
-        # in _maybe_trigger_extraction returns early for any other channel
-        # (transcript_service.py, commit cdc3c832). Seed the gated channel.
+        # Episodes are produced only for channels whose source profile has
+        # extract_episodes (user, dmn, external-agent:*). Any other channel
+        # resolves to the muted default and returns before the COUNT. Seed an
+        # extracting channel so this exercises the THRESHOLD path, not the gate.
         channel = 'user'
 
         for _ in range(threshold):
@@ -143,12 +164,15 @@ class TestDbStateExtractionTrigger:
 
         assert fired == [(channel, 999)]
 
-    def test_does_not_fire_below_threshold(self, db):
-        """Below threshold, no trigger."""
+    def test_does_not_fire_below_threshold_on_extracting_channel(self, db):
+        """On an EXTRACTING channel (user), one short of the threshold must not
+        fire. This pins the real count path: the gate is open, so only the
+        accumulated-tail count decides. (Previously this used a muted channel
+        and passed via the gate short-circuit, never exercising the threshold.)"""
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        channel = 'ch-quiet'
+        channel = 'user'
 
         for _ in range(threshold - 1):
             db.execute(
@@ -163,13 +187,58 @@ class TestDbStateExtractionTrigger:
 
         assert fired == []
 
+    def test_muted_channel_never_fires_even_above_threshold(self, db):
+        """Per-source gate (the headline invariant of TKT-926): a channel whose
+        profile is muted (no extract_episodes) produces NO episodes no matter how
+        much transcript it accumulates. Seed WELL ABOVE the threshold on a muted
+        delegate channel, drive the REAL ``_maybe_trigger_extraction``, and assert
+        the real DB outcome — zero episode rows for that channel.
+
+        No production code is patched. The profile gate returns BEFORE the encoder
+        thread is ever spawned, so there is no thread to join and no LLM call: the
+        outcome is fully deterministic. A revert of the gate (back to a bare
+        ``channel != 'user'`` short-circuit, or dropping the profile check) would
+        let the count path fire the encoder on a delegate channel and write an
+        episode row, reddening this assertion.
+        """
+        import services.transcript_service as ts
+        from services.source_profiles import profile_for
+
+        channel = 'delegate:research'
+        assert not profile_for(channel).extract_episodes, (
+            "test premise: delegate:* must be a muted source profile"
+        )
+
+        last_id = None
+        for _ in range(ts._EXTRACTION_THRESHOLD * 2):
+            cur = db.execute(
+                "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
+                (channel,),
+            )
+            last_id = cur.lastrowid
+        db.commit()
+
+        # Real production entry point — no mock. For a muted channel the gate
+        # returns before any DB read or thread spawn.
+        ts._maybe_trigger_extraction(channel, last_id)
+
+        episode_count = db.execute(
+            "SELECT COUNT(*) FROM episodes WHERE channel = ?", (channel,)
+        ).fetchone()[0]
+        assert episode_count == 0, (
+            "a muted-source channel must never produce an episode regardless of "
+            f"how much transcript it accumulates; found {episode_count} episode(s) "
+            f"for channel {channel!r}"
+        )
+
     def test_episodes_in_other_channels_do_not_mask(self, db):
         """Episodes in other channels must not suppress a stale channel."""
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        # 'user' is the only channel the production gate fires for; an episode in
-        # a different channel must still not mask the 'user' tail.
+        # 'user' is an episode-producing (extracting) channel; an episode in a
+        # DIFFERENT channel's watermark must not mask the 'user' tail (the
+        # COUNT watermark is per-channel: WHERE episodes.channel = ?).
         stale = 'user'
         other = 'ch-other'
 
@@ -199,7 +268,7 @@ class TestDbStateExtractionTrigger:
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        channel = 'user'  # production gate only fires for the 'user' channel
+        channel = 'user'  # an episode-producing channel (gate open; count decides)
 
         # Seed transcripts 1..threshold
         for _ in range(threshold):
@@ -243,7 +312,7 @@ class TestDbStateExtractionTrigger:
         import services.transcript_service as ts
 
         threshold = ts._EXTRACTION_THRESHOLD
-        channel = 'user'  # production gate only fires for the 'user' channel
+        channel = 'user'  # an episode-producing channel (gate open; count decides)
 
         for _ in range(threshold):
             db.execute(
