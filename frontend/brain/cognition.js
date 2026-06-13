@@ -283,13 +283,13 @@ const PanelCognition = (() => {
       { key: 'humor', left: 'Dry', right: 'Playful' },
     ];
     el.innerHTML = `<p class="panel-desc">Adjust how Chalie communicates. Changes take effect on the next message.</p>
-    <div class="personality-grid">${sliders.map(s => `<div class="personality-row">
-      <span class="pole pole-left">${s.left}</span>
-      <div class="personality-track">
-        <label class="personality-label">${s.key.charAt(0).toUpperCase() + s.key.slice(1)}</label>
+    <div class="personality-grid">${sliders.map(s => `<div class="personality-field">
+      <label class="personality-label">${s.key.charAt(0).toUpperCase() + s.key.slice(1)}</label>
+      <div class="personality-row">
+        <span class="pole pole-left">${s.left}</span>
         <input type="range" min="-2" max="2" step="1" value="${_personality[s.key] || 0}" data-key="${s.key}" class="personality-range">
+        <span class="pole pole-right">${s.right}</span>
       </div>
-      <span class="pole pole-right">${s.right}</span>
     </div>`).join('')}</div>
     <div class="personality-actions">
       <button class="btn btn-primary" id="savePersonalityBtn">Save</button>
