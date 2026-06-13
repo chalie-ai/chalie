@@ -78,7 +78,14 @@ LIMIT 200
 _TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale", "connection"}
 
 # Top-level dict groups that should not be rendered as their own bullet.
-_TELEMETRY_HIDDEN_GROUPS = {"behavioral"}
+# ``location`` carries the raw GPS dict (lat/lon) the frontend heartbeat sends;
+# it stays out of the chat/system prompt. Backend consumers read the coordinates
+# directly (departure advisory, weather, locale_service); the chat LLM only ever
+# sees the resolved ``location_name`` scalar, which renders under the synthetic
+# ``user`` group. (The background geo-pattern pass — configs/channels/geo_pattern.py
+# — is the one model-facing consumer still given coordinates, to cluster
+# location-tagged transcripts into place-based habits.)
+_TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
 
 # Strftime format for the synthesised local_time field — "Sat 02 May 2026 11:35".
 _LOCAL_TIME_FORMAT = "%a %d %b %Y %H:%M"

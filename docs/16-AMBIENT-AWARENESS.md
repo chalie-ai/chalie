@@ -2,6 +2,8 @@
 
 Chalie keeps a lightweight, in-process picture of "what's going on right now" in **WorldState** (`backend/services/world_state.py`). It feeds two things: the `### Background Telemetry, Processes & Signals` block rendered into every system prompt, and the idle gate that decides when background cognition may run.
 
+> **Location privacy.** The telemetry block rendered into every chat/system prompt surfaces the *resolved place name* (e.g. `location_name:Valletta, Malta`), never the raw GPS coordinates the client reports. The latitude/longitude pair the render hides stays backend-internal — consumed directly by the departure advisory, weather lookups, and `locale_service`. The one model-facing consumer of coordinates is the background **geo-pattern** pass, which runs only in the subconscious tick (never a user-facing turn) and is given them to cluster location-tagged transcripts into place-based habits.
+
 There are two ways information enters WorldState.
 
 ## 1. The Typed Snapshot — `absorb(Signal)`
