@@ -93,6 +93,7 @@ export class WebSocketService {
   private driftHandler: ((data: WsPushEvent) => void) | null = null;
   private anyHandler: ((data: WsInboundEvent) => void) | null = null;
   private disconnectHandler: (() => void) | null = null;
+  private connectHandler: (() => void) | null = null;
   private connected = false;
   private intentionallyClosed = false;
 
@@ -125,6 +126,9 @@ export class WebSocketService {
   onDisconnect(handler: () => void): void {
     this.disconnectHandler = handler;
   }
+  onConnect(handler: () => void): void {
+    this.connectHandler = handler;
+  }
 
   connect(): void {
     if (
@@ -155,6 +159,11 @@ export class WebSocketService {
       this.reconnectDelay = 1000;
       this.lastInboundAt = Date.now();
       this.startLivenessWatch();
+      try {
+        this.connectHandler?.();
+      } catch {
+        /* never break onopen */
+      }
     };
     ws.onmessage = (event: MessageEvent) => {
       this.lastInboundAt = Date.now();

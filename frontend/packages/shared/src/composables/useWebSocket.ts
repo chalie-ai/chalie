@@ -21,6 +21,7 @@ export function useWebSocket() {
   onMounted(() => {
     ws.onDisconnect(() => conn.setConnected(false));
     ws.onAny(() => conn.setConnected(ws.isConnected));
+    ws.onConnect(() => conn.setConnected(ws.isConnected));
     ws.connect();
     conn.setConnected(ws.isConnected);
     if (!focusBound) {
