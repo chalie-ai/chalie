@@ -65,7 +65,7 @@ class BrainImportService:
         zip_path.write_bytes(plaintext)
 
         with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(tmp_dir)
+            self._safe_extractall(zf, Path(tmp_dir))
 
         export_dirs = [p for p in Path(tmp_dir).iterdir() if p.is_dir() and p.name.startswith("brain-export-")]
         if not export_dirs:
@@ -114,6 +114,14 @@ class BrainImportService:
             pass
 
         return result
+
+    def _safe_extractall(self, zf: zipfile.ZipFile, dest: Path) -> None:
+        dest_resolved = dest.resolve()
+        for member in zf.infolist():
+            member_path = (dest / member.filename).resolve()
+            if not str(member_path).startswith(str(dest_resolved)):
+                raise ValueError(f"Unsafe zip entry: {member.filename}")
+            zf.extract(member, dest)
 
     def _decrypt(
         self,

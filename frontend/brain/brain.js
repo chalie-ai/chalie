@@ -83,7 +83,7 @@ const PanelBrain = (() => {
     document.getElementById("brainExportBtn").addEventListener("click", _showExportDialog);
     document.getElementById("brainImportBtn").addEventListener("click", _showImportDialog);
     document.getElementById("ghTestBtn").addEventListener("click", _testGitHub);
-    document.getElementById("ghUploadBtn").addEventListener("click", _uploadToGitHub);
+    document.getElementById("ghUploadBtn").addEventListener("click", _showGitHubUploadDialog);
   }
 
   function _showExportDialog() {
@@ -231,12 +231,28 @@ const PanelBrain = (() => {
     }
   }
 
-  async function _uploadToGitHub() {
+  function _showGitHubUploadDialog() {
+    _showModal({
+      title: "Upload Backup to GitHub",
+      body: `
+        <p class="modal-desc">The backup will be encrypted and stored as a file in the repo.</p>
+        <label class="form-label">Encryption passphrase (optional)
+          <input type="password" class="form-input" id="ghUploadPass" autocomplete="new-password">
+        </label>`,
+      confirmLabel: "Upload",
+      confirmClass: "btn btn-primary",
+      async onConfirm() {
+        await _doGitHubUpload();
+      },
+    });
+  }
+
+  async function _doGitHubUpload() {
     const repo = document.getElementById("ghRepo")?.value?.trim();
     const token = document.getElementById("ghToken")?.value?.trim();
     if (!repo || !token) { BrainApp.showToast("Enter repo and token", "error"); return; }
 
-    const password = prompt("Enter a passphrase to encrypt the backup (or leave empty for no encryption):") || "";
+    const password = document.getElementById("ghUploadPass")?.value || "";
     const encrypt = password.length >= 4;
     if (password && password.length < 4) {
       BrainApp.showToast("Passphrase must be at least 4 characters", "error");
@@ -259,7 +275,10 @@ const PanelBrain = (() => {
       if (!res.ok) throw new Error(data.error);
       BrainApp.showToast("Backup uploaded to GitHub!", "success", { duration: 5000 });
       const status = document.getElementById("ghStatus");
-      if (status) status.innerHTML = `<a href="${BrainApp.escapeHtml(data.release_url)}" target="_blank">View release</a>`;
+      if (status && data.commit_url) {
+        const safeUrl = data.commit_url.replace(/[^a-zA-Z0-9:\/_.\-]/g, "");
+        status.textContent = "Last upload: " + new Date().toISOString().slice(0, 10);
+      }
     } catch (e) {
       BrainApp.showToast(e.message || "Upload failed", "error");
     }

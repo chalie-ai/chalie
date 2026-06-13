@@ -1,7 +1,7 @@
 """Brain blueprint — /brain/info, /brain/export, /brain/import, /brain/export/upload.
 
 Exports and imports the entire Chalie brain (SQLite DB + files) as an
-encrypted .chalie-backup archive.  Optional GitHub Release upload.
+encrypted .chalie-backup archive.  Optional GitHub repo upload.
 """
 
 import json
@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, request, send_file
+from werkzeug.utils import secure_filename
 
 from .auth import require_session
 
@@ -73,7 +74,8 @@ def brain_import():
 
     tmp_dir = tempfile.mkdtemp(prefix="chalie-upload-")
     try:
-        tmp_path = Path(tmp_dir) / uploaded.filename
+        safe_name = secure_filename(uploaded.filename or "backup.chalie-backup")
+        tmp_path = Path(tmp_dir) / safe_name
         uploaded.save(str(tmp_path))
 
         from services.brain_import_service import BrainImportService
