@@ -304,7 +304,7 @@ const PanelSkills = (() => {
     el.innerHTML = `
       <div class="provider-form-page">
         <div class="form-page-header">
-          <button class="btn btn-secondary btn-sm" id="backToSkills">${Icons.Chevron(14)} Back</button>
+          <button class="btn btn-secondary btn-sm back-btn" id="backToSkills">${Icons.Chevron(14)} Back</button>
           <h3>New Skill</h3>
         </div>
         <form id="createSkillForm">
