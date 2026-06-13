@@ -37,6 +37,8 @@ POST /chat
  
 **Interrupt & cancel.** `POST /chat/interrupt` stops the active turn; a cancelled turn deletes its transcript and tool-call rows, leaving no trace. Sending a new message mid-turn cancels the active turn and starts a fresh one with the original + new text combined.
  
+**Connection resilience.** Because replies arrive only over the push channel, the client guards the socket on two fronts. A socket that closes cleanly (`onclose`) triggers exponential-backoff reconnection. A *half-open* socket — one a reverse proxy idle-drops at the TCP layer without sending a close frame, so `onclose` never fires and `readyState` stays `OPEN` — is caught by a liveness watchdog: the client stamps the arrival time of every inbound frame and, if none arrives for longer than 1.5× the server's keep-alive ping interval, tears the dead socket down and reconnects. A tab regaining focus re-runs the same staleness check on demand, so a backgrounded tab heals the moment the user returns instead of silently swallowing the next reply.
+ 
  ---
  
 ## The ACT Loop
