@@ -48,7 +48,7 @@ const BrainApp = (() => {
     policies: typeof PanelPolicies !== 'undefined' ? PanelPolicies : null,
     skills: typeof PanelSkills !== 'undefined' ? PanelSkills : null,
     mcp: typeof PanelMcp !== 'undefined' ? PanelMcp : null,
-    'import-export': typeof PanelImportExport !== 'undefined' ? PanelImportExport : null,
+    'import-export': typeof PanelImportExport === 'undefined' ? null : PanelImportExport,
   };
 
   // ── API ──

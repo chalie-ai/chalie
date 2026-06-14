@@ -61,7 +61,7 @@ from services.file_mapper_service import FileMapperService
 # one definition, shared by both files. Importing the fixture functions makes
 # them resolvable by pytest in this module's namespace (no re-implementation of
 # the relocated-instance setup, no alternative path).
-from tests.test_snapshot_service import (  # noqa: F401  (fixtures used by pytest)
+from tests.test_snapshot_service import (  # noqa: F401
     _pre_restore_asides,
     _recent_contents,
     _reset_vault_singletons,
@@ -79,7 +79,7 @@ def _quarantine_dirs() -> list:
 @pytest.mark.unit
 class TestSnapshotHttpExport:
 
-    def test_http_export_route_streams_a_real_zip(self, client):  # noqa: F811  (pytest fixture, imported)
+    def test_http_export_route_streams_a_real_zip(self, client):  # noqa: F811
         """The Brain 'Export' button calls ``POST /api/snapshot/export``. Driving
         the REAL route (not just the engine) must stream a genuine zip — an
         attachment with the zip mimetype whose bytes are a real zip carrying a
@@ -106,7 +106,7 @@ class TestSnapshotHttpExport:
 @pytest.mark.unit
 class TestSnapshotApplyNoop:
 
-    def test_apply_pending_is_a_noop_when_nothing_is_staged(self, instance):  # noqa: F811  (pytest fixture, imported)
+    def test_apply_pending_is_a_noop_when_nothing_is_staged(self, instance):  # noqa: F811
         """Every ordinary boot with no staged restore hits the early return in
         ``apply_pending``. It must be a clean no-op: the live DB is untouched and
         no aside / quarantine dirs are created."""
@@ -129,7 +129,7 @@ class TestSnapshotApplyNoop:
 @pytest.mark.unit
 class TestSnapshotMidSwapRollback:
 
-    def test_mid_swap_failure_rolls_back_and_quarantines_to_break_boot_loop(self, instance):  # noqa: F811  (pytest fixture, imported)
+    def test_mid_swap_failure_rolls_back_and_quarantines_to_break_boot_loop(self, instance):  # noqa: F811
         """A REAL mid-swap filesystem fault (after the pre-swap re-verify passes
         and after ``chalie.db`` is already swapped) must roll the live artifacts
         back, leave the live ``chalie.db`` intact and readable, clear the
@@ -180,7 +180,7 @@ class TestSnapshotMidSwapRollback:
 @pytest.mark.unit
 class TestSnapshotPlainCryptoAndManifest:
 
-    def test_plain_export_opens_without_password_and_missing_manifest_is_rejected(self, instance):  # noqa: F811  (pytest fixture, imported)
+    def test_plain_export_opens_without_password_and_missing_manifest_is_rejected(self, instance):  # noqa: F811
         """Two unguarded contracts in one real-stack scenario:
 
         (a) the no-password export is genuinely password-FREE — pyzipper can read
@@ -201,7 +201,7 @@ class TestSnapshotPlainCryptoAndManifest:
         with AESZipFile(str(zip_path), "r") as zf:
             member = next(n for n in zf.namelist() if not n.endswith("/"))
             data = zf.read(member)  # must NOT raise — no password required
-        assert data is not None and len(data) >= 0, \
+        assert data is not None and len(data) > 0, \
             "a no-password export must be readable without any password"
 
         # (b) A zip with NO manifest.json must be rejected loudly, staging nothing.
