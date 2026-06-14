@@ -48,12 +48,12 @@ async function setVision(id: number): Promise<void> {
     <h2>Vision Provider</h2>
   </div>
   <p class="panel-desc">
-    Choose which provider Chalie uses to understand images. Only providers that passed the vision
-    probe can be selected.
+    Pick the provider Chalie uses to understand images. Only providers that passed the vision probe
+    can be selected.
   </p>
 
   <template v-if="loading">
-    <div class="loading">Loading providers…</div>
+    <div class="loading">Loading…</div>
   </template>
 
   <template v-else-if="providerList.length === 0">
@@ -101,7 +101,6 @@ async function setVision(id: number): Promise<void> {
             <span
               v-if="p.supports_vision"
               class="badge badge-success"
-              title="Verified image understanding"
             >Vision</span>
             <span
               v-else

@@ -98,8 +98,11 @@ onUnmounted(() => {
   }
 });
 
+// `loading` is initialized true (initial-mount placeholder, matching the
+// legacy mount() innerHTML). Reloads after CRUD must NOT re-flash the
+// placeholder — legacy _load() re-rendered the list in place — so this
+// function never re-sets loading to true.
 async function load(): Promise<void> {
-  loading.value = true;
   try {
     const [provRes, selRes] = await Promise.all([
       providers.list(),
