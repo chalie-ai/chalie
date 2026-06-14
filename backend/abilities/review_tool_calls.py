@@ -12,6 +12,7 @@ declares only the windowed ``tool_calls`` SELECT and the structured row shape.
 
 from typing import ClassVar
 
+from abilities._params import Keys
 from abilities._review_window import ReviewWindowAbility
 
 # Tool-call params summaries can be large; clip so one row stays a single readable
@@ -46,7 +47,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "date_time": {
+            Keys.date_time: {
                 "type": "string",
                 "description": (
                     "ISO timestamp to anchor the search "
@@ -55,7 +56,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
                 ),
             },
         },
-        "required": ["date_time"],
+        "required": [Keys.date_time],
     }
 
     def get_parameters(self) -> dict:

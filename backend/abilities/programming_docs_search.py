@@ -30,6 +30,7 @@ from typing import ClassVar
 import requests
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult, truncate
 from services.text_extractor import extract_html
 from services.web_fetch import API, FetchBlocked, fetch_text
@@ -558,25 +559,25 @@ class ProgrammingDocsSearchAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "language": {
+            Keys.language: {
                 "type": "string",
                 "enum": _LANGUAGE_ENUM,
                 "description": "Programming language or framework to search documentation for.",
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "What to look up — function name, class, method, module, or concept in plain language.",
             },
         },
-        "required": ["language", "query"],
+        "required": [Keys.language, Keys.query],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        language = self.param(params, "language", required=True)
-        query = self.param(params, "query", required=True)
+        language = self.param(params, Keys.language, required=True)
+        query = self.param(params, Keys.query, required=True)
         language = str(language).strip()
         query = str(query).strip()
         if not language:

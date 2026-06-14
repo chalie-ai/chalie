@@ -32,6 +32,7 @@ import re
 from typing import ClassVar
 
 from abilities._capability import CapabilityAbility
+from abilities._params import Keys
 from abilities._result import ToolResult, truncate
 
 logger = logging.getLogger(__name__)
@@ -73,12 +74,12 @@ class EmailAbility(CapabilityAbility):
     # empty filter set lists the recent inbox).
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "search": (),
-        "read": ("uid",),
-        "draft": ("to", "subject", "body"),
-        "manage": ("uid", "operation"),
-        "send": ("to", "subject", "body"),
-        "reply": ("uid", "body"),
-        "forward": ("uid", "to"),
+        "read": (Keys.uid,),
+        "draft": (Keys.to, Keys.subject, Keys.body),
+        "manage": (Keys.uid, Keys.operation),
+        "send": (Keys.to, Keys.subject, Keys.body),
+        "reply": (Keys.uid, Keys.body),
+        "forward": (Keys.uid, Keys.to),
     }
 
     def get_name(self) -> str:
@@ -112,7 +113,7 @@ class EmailAbility(CapabilityAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": list(ACTION_HANDLERS),
                 "description": (
@@ -126,64 +127,64 @@ class EmailAbility(CapabilityAbility):
                     "forward — forward an email by uid to a new recipient (needs uid, to)."
                 ),
             },
-            "uid": {
+            Keys.uid: {
                 "type": "integer",
                 "description": "read / manage / reply / forward: IMAP uid of the target email.",
             },
-            "to": {
+            Keys.to: {
                 "type": "string",
                 "description": "send / draft / forward: recipient email address.",
             },
-            "subject": {
+            Keys.subject: {
                 "type": "string",
                 "description": "send / draft: subject line. search: filter by subject keyword.",
             },
-            "body": {
+            Keys.body: {
                 "type": "string",
                 "description": "send / draft / reply: plain-text email body.",
             },
-            "operation": {
+            Keys.operation: {
                 "type": "string",
                 "enum": ["delete", "mark_read", "mark_important", "move_to_spam"],
                 "description": "manage: the operation to perform on the email.",
             },
-            "sender": {
+            Keys.sender: {
                 "type": "string",
                 "description": "search: filter by sender email address or name.",
             },
-            "keyword": {
+            Keys.keyword: {
                 "type": "string",
                 "description": "search: full-text keyword across email body and subject.",
             },
-            "date_from": {
+            Keys.date_from: {
                 "type": "string",
                 "description": "search: ISO date lower bound (YYYY-MM-DD).",
             },
-            "date_to": {
+            Keys.date_to: {
                 "type": "string",
                 "description": "search: ISO date upper bound (YYYY-MM-DD).",
             },
-            "triage": {
+            Keys.triage: {
                 "type": "string",
                 "enum": ["actionable", "informational", "noise"],
                 "description": "search: filter by triage category.",
             },
-            "unanswered": {
+            Keys.unanswered: {
                 "type": "boolean",
                 "description": "search: when true, return only unanswered emails.",
             },
-            "cc": {
+            Keys.cc: {
                 "type": "string",
                 "description": "send: CC recipient email address.",
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     # ── Entry point — guardrail BEFORE the base's connected gate ────────────────
 
     def run(self, params: dict) -> ToolResult:
-        action = str(params.get("action", self.DEFAULT_ACTION)).lower()
+        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
 
         if action in _RECIPIENT_ACTIONS:
             err = _validate_recipient(params)
@@ -272,7 +273,7 @@ def _validate_recipient(params: dict) -> ToolResult | None:
     ACTION_REQUIRED pre-gate already reports a missing ``to`` as missing-params)
     or well-formed. Runs ahead of the base's connected gate so the error fires
     regardless of SMTP state."""
-    to = (params.get("to") or "").strip()
+    to = (params.get(Keys.to) or "").strip()
     if not to:
         return None
     if not re.match(_RECIPIENT_RE, to):

@@ -19,6 +19,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services import memory_retrieval
 
@@ -51,7 +52,7 @@ class MemoryAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": ["store", "recall", "reflect", "forget"],
                 "description": (
@@ -60,7 +61,7 @@ class MemoryAbility(Ability):
                     "forget: permanently remove a memory."
                 ),
             },
-            "kind": {
+            Keys.kind: {
                 "type": "string",
                 "enum": ["user_specific", "system", "misc"],
                 "description": (
@@ -73,7 +74,7 @@ class MemoryAbility(Ability):
                     "`document` tool for that)."
                 ),
             },
-            "key": {
+            Keys.key: {
                 "type": "string",
                 "description": (
                     "For store/forget: the canonical key from the list in the "
@@ -82,7 +83,7 @@ class MemoryAbility(Ability):
                     "fits one of the 27 concepts."
                 ),
             },
-            "value": {
+            Keys.value: {
                 "type": "string",
                 "description": (
                     "For store: the fact itself, atomic — a single value. "
@@ -92,7 +93,7 @@ class MemoryAbility(Ability):
                     "multi-value key."
                 ),
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": (
                     "For recall/reflect: what to search for. One topic per "
@@ -101,7 +102,7 @@ class MemoryAbility(Ability):
                     "sparse, try searching again with more narrow queries."
                 ),
             },
-            "location": {
+            Keys.location: {
                 "type": "string",
                 "description": (
                     "A location to filter memories by. Use a city, country, "
@@ -112,7 +113,7 @@ class MemoryAbility(Ability):
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     def get_parameters(self) -> dict:
@@ -131,14 +132,14 @@ class MemoryAbility(Ability):
     # ``query`` OR ``location`` (an OR the flat map cannot express), and the
     # handler validates that pair itself, returning ``code=no-query-or-location``.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "store": ("key", "value"),
+        "store": (Keys.key, Keys.value),
         "recall": (),
-        "reflect": ("query",),
-        "forget": ("key",),
+        "reflect": (Keys.query,),
+        "forget": (Keys.key,),
     }
 
     def run(self, params: dict) -> ToolResult:
-        action = params.get("action", "recall")
+        action = params.get(Keys.action, "recall")
         mp = self.mp
         channel = getattr(getattr(mp, "config", None), "channel", "") or ""
 

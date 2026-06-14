@@ -30,6 +30,7 @@ import logging
 from typing import ClassVar, NamedTuple
 
 from abilities._capability import CapabilityAbility
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -119,18 +120,18 @@ class UbiquitiAbility(CapabilityAbility):
         "list_wifi": (),
         "list_port_forwards": (),
         "list_traffic_rules": (),
-        "block_client": ("target",),
-        "unblock_client": ("target",),
-        "disconnect_client": ("target",),
-        "restart_device": ("target",),
-        "locate_device": ("target",),
-        "stop_locate_device": ("target",),
-        "power_cycle_port": ("target", "port_idx"),
-        "update_wifi": ("wlan_id", "updates"),
-        "create_port_forward": ("rule",),
-        "update_port_forward": ("rule_id", "updates"),
-        "update_traffic_rule": ("rule_id", "updates"),
-        "authorize_guest": ("target",),
+        "block_client": (Keys.target,),
+        "unblock_client": (Keys.target,),
+        "disconnect_client": (Keys.target,),
+        "restart_device": (Keys.target,),
+        "locate_device": (Keys.target,),
+        "stop_locate_device": (Keys.target,),
+        "power_cycle_port": (Keys.target, Keys.port_idx),
+        "update_wifi": (Keys.wlan_id, Keys.updates),
+        "create_port_forward": (Keys.rule,),
+        "update_port_forward": (Keys.rule_id, Keys.updates),
+        "update_traffic_rule": (Keys.rule_id, Keys.updates),
+        "authorize_guest": (Keys.target,),
     }
 
     def get_name(self) -> str:
@@ -166,7 +167,7 @@ class UbiquitiAbility(CapabilityAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": list(ACTION_HANDLERS),
                 "description": (
@@ -185,7 +186,7 @@ class UbiquitiAbility(CapabilityAbility):
                     "authorize_guest — authorize a guest device by target MAC."
                 ),
             },
-            "target": {
+            Keys.target: {
                 "type": "string",
                 "description": (
                     "MAC address of the device or client to act on, e.g. "
@@ -193,7 +194,7 @@ class UbiquitiAbility(CapabilityAbility):
                     "control, device control, and authorize_guest."
                 ),
             },
-            "active_only": {
+            Keys.active_only: {
                 "type": "boolean",
                 "description": (
                     "list_clients: when true (default) only currently connected "
@@ -201,22 +202,22 @@ class UbiquitiAbility(CapabilityAbility):
                 ),
                 "default": True,
             },
-            "port_idx": {
+            Keys.port_idx: {
                 "type": "integer",
                 "description": "power_cycle_port: the switch PoE port index to cycle.",
             },
-            "wlan_id": {
+            Keys.wlan_id: {
                 "type": "string",
                 "description": "update_wifi: id of the WiFi network to change (from list_wifi).",
             },
-            "rule_id": {
+            Keys.rule_id: {
                 "type": "string",
                 "description": (
                     "update_port_forward / update_traffic_rule: id of the rule to "
                     "change (from the matching list action)."
                 ),
             },
-            "updates": {
+            Keys.updates: {
                 "type": "object",
                 "description": (
                     "update_wifi / update_port_forward / update_traffic_rule: the "
@@ -224,36 +225,36 @@ class UbiquitiAbility(CapabilityAbility):
                     "{'x_passphrase': 'newpass'} to change a WiFi password."
                 ),
             },
-            "rule": {
+            Keys.rule: {
                 "type": "object",
                 "description": "create_port_forward: the full port-forward rule definition.",
             },
-            "minutes": {
+            Keys.minutes: {
                 "type": "integer",
                 "description": "authorize_guest: session duration in minutes (default 60).",
                 "default": 60,
             },
-            "up_kbps": {
+            Keys.up_kbps: {
                 "type": "integer",
                 "description": "authorize_guest: upload bandwidth cap in Kbps (optional).",
             },
-            "down_kbps": {
+            Keys.down_kbps: {
                 "type": "integer",
                 "description": "authorize_guest: download bandwidth cap in Kbps (optional).",
             },
-            "quota_mb": {
+            Keys.quota_mb: {
                 "type": "integer",
                 "description": "authorize_guest: total data quota in MB (optional).",
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     # ── Entry point — translate the flat action, then delegate to the base ─────
 
     def run(self, params: dict) -> ToolResult:
-        action = str(params.get("action", self.DEFAULT_ACTION)).lower()
-        params["action"] = action
+        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
+        params[Keys.action] = action
 
         spec = _ACTION_SPEC.get(action)
         if spec is not None:
@@ -264,10 +265,10 @@ class UbiquitiAbility(CapabilityAbility):
             # so it never leaks into a REST body; ``device_status`` keeps it because
             # its handler (get_info) reads ``target`` directly.
             if action in _TARGET_TO_MAC:
-                target = (params.get("target") or "").strip()
+                target = (params.get(Keys.target) or "").strip()
                 if target and action != "device_status":
                     params["mac"] = target
-                    params.pop("target", None)
+                    params.pop(Keys.target, None)
             for key, value in spec.inject.items():
                 params.setdefault(key, value)
 

@@ -28,6 +28,7 @@ from datetime import datetime, timezone, timedelta
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.time_utils import utc_now
 
@@ -124,9 +125,9 @@ class ScheduleAbility(Ability):
     # valid= names these keys; a known action missing a required param → one
     # missing-params error. run() never sees a malformed call.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "create": ("message",),
+        "create": (Keys.message,),
         "list": (),
-        "search": ("query",),
+        "search": (Keys.query,),
         "cancel": (),
     }
 
@@ -160,7 +161,7 @@ class ScheduleAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": ["create", "list", "search", "cancel"],
                 "description": (
@@ -171,14 +172,14 @@ class ScheduleAbility(Ability):
                     "reminders that persist across restarts."
                 ),
             },
-            "message": {
+            Keys.message: {
                 "type": "string",
                 "description": (
                     "Required for create: what to remind or prompt (max 1000 chars). "
                     "Optional for cancel: fuzzy content match when item_id is unknown."
                 ),
             },
-            "due_at": {
+            Keys.due_at: {
                 "type": "string",
                 "description": (
                     "Required for create UNLESS destination_location is provided "
@@ -191,7 +192,7 @@ class ScheduleAbility(Ability):
                     "Must resolve to a future instant."
                 ),
             },
-            "item_type": {
+            Keys.item_type: {
                 "type": "string",
                 "enum": ["notification", "prompt"],
                 "description": (
@@ -200,32 +201,32 @@ class ScheduleAbility(Ability):
                     "'prompt' = fed to Chalie as a conversational turn at the scheduled time."
                 ),
             },
-            "recurrence": {
+            Keys.recurrence: {
                 "type": "string",
                 "description": (
                     "Optional for create: 'daily', 'weekly', 'monthly', 'weekdays', "
                     "'hourly', or 'interval:N' (every N minutes, 1-1440). Omit for one-time."
                 ),
             },
-            "window_start": {
+            Keys.window_start: {
                 "type": "string",
                 "description": (
                     "Optional for create with recurrence='hourly': HH:MM start of active "
                     "window (e.g. '09:00'). Requires window_end."
                 ),
             },
-            "window_end": {
+            Keys.window_end: {
                 "type": "string",
                 "description": (
                     "Optional for create with recurrence='hourly': HH:MM end of active "
                     "window (e.g. '17:00'). Requires window_start."
                 ),
             },
-            "item_id": {
+            Keys.item_id: {
                 "type": "string",
                 "description": "Optional for cancel: exact ID returned at create time. Prefer this when known.",
             },
-            "time_range": {
+            Keys.time_range: {
                 "type": "string",
                 "enum": ["today", "tomorrow", "this_week", "next_hour", "soon", "all"],
                 "description": (
@@ -233,20 +234,20 @@ class ScheduleAbility(Ability):
                     "'soon' = next 6 hours. Default 'all'."
                 ),
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": (
                     "Required for search: semantic query to find matching scheduled items."
                 ),
             },
-            "limit": {
+            Keys.limit: {
                 "type": "integer",
                 "description": (
                     "Optional for search: maximum number of matching items to "
                     "return (default 5, clamped to 1–50)."
                 ),
             },
-            "destination_location": {
+            Keys.destination_location: {
                 "type": "string",
                 "description": (
                     "Name of a saved place or address for the destination. "
@@ -257,7 +258,7 @@ class ScheduleAbility(Ability):
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     def get_parameters(self) -> dict:
@@ -266,7 +267,7 @@ class ScheduleAbility(Ability):
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
     def run(self, params: dict) -> ToolResult:
-        action = (params.get("action") or "list").lower()
+        action = (params.get(Keys.action) or "list").lower()
 
         if action == "create":
             channel = getattr(getattr(self.mp, "config", None), "channel", "") or ""
@@ -328,7 +329,7 @@ def _build_destination_metadata(destination: str) -> dict:
 
 def _validate_message(params: dict) -> tuple[str, ToolResult | None]:
     """Validate the `message` field. Returns (message, error | None)."""
-    message = (params.get("message") or "").strip()
+    message = (params.get(Keys.message) or "").strip()
     if not message:
         return "", ToolResult.err(
             "message is required for create.",
@@ -392,9 +393,9 @@ def _normalise_due_at(text: str) -> str:
 
 def _resolve_due_at(params: dict, past_due_grace: int) -> tuple[datetime | None, ToolResult | None]:
     """Resolve due_at (NL or ISO), apply past-due grace, return (due_at, error | None)."""
-    due_at_str = (params.get("due_at") or "").strip()
+    due_at_str = (params.get(Keys.due_at) or "").strip()
     if not due_at_str:
-        if (params.get("destination_location") or "").strip():
+        if (params.get(Keys.destination_location) or "").strip():
             return utc_now() + timedelta(days=30), None
         return None, ToolResult.err(
             "due_at is required for create (unless a destination_location is given).",
@@ -436,7 +437,7 @@ _VALID_RECURRENCES = ("daily", "weekly", "monthly", "weekdays", "hourly")
 
 def _validate_recurrence(params: dict) -> tuple[str | None, ToolResult | None]:
     """Validate `recurrence`. Returns (normalized_recurrence | None, error | None)."""
-    recurrence = params.get("recurrence")
+    recurrence = params.get(Keys.recurrence)
     if not recurrence:
         return None, None
     recurrence = recurrence.lower()
@@ -470,8 +471,8 @@ def _validate_recurrence(params: dict) -> tuple[str | None, ToolResult | None]:
 
 def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None, str | None, ToolResult | None]:
     """Validate window_start/window_end pairing with hourly recurrence."""
-    window_start = params.get("window_start")
-    window_end = params.get("window_end")
+    window_start = params.get(Keys.window_start)
+    window_end = params.get(Keys.window_end)
 
     if not (window_start or window_end):
         return None, None, None
@@ -512,7 +513,7 @@ def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None,
 
 def _validate_item_type(params: dict) -> tuple[str, ToolResult | None]:
     """Validate the `item_type` field."""
-    item_type = (params.get("item_type") or "notification").lower()
+    item_type = (params.get(Keys.item_type) or "notification").lower()
     if item_type not in ("notification", "prompt"):
         return "", ToolResult.err(
             f"item_type must be 'notification' or 'prompt', got {item_type!r}.",
@@ -537,9 +538,9 @@ def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
         from services.database_service import get_shared_db_service
 
         logger.debug(
-            f"{LOG_PREFIX} _create called — message={params.get('message', '')!r:.80}, "
-            f"due_at={params.get('due_at', '')!r}, item_type={params.get('item_type', 'notification')!r}, "
-            f"recurrence={params.get('recurrence')!r}"
+            f"{LOG_PREFIX} _create called — message={params.get(Keys.message, '')!r:.80}, "
+            f"due_at={params.get(Keys.due_at, '')!r}, item_type={params.get(Keys.item_type, 'notification')!r}, "
+            f"recurrence={params.get(Keys.recurrence)!r}"
         )
 
         message, err = _validate_message(params)
@@ -611,7 +612,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
                 }
                 return _create_result(record)
 
-        destination = (params.get("destination_location") or "").strip()
+        destination = (params.get(Keys.destination_location) or "").strip()
         if destination:
             dest_meta = _build_destination_metadata(destination)
             try:
@@ -660,8 +661,8 @@ def _create_result(record: dict) -> ToolResult:
 
 
 def _search(ability: "ScheduleAbility", params: dict, mp=None) -> ToolResult:
-    query = (params.get("query") or "").strip()
-    limit = ability.param(params, "limit", default=5, clamp=(1, 50))
+    query = (params.get(Keys.query) or "").strip()
+    limit = ability.param(params, Keys.limit, default=5, clamp=(1, 50))
 
     try:
         from services.embedding_service import get_embedding_service
@@ -718,7 +719,7 @@ def _search(ability: "ScheduleAbility", params: dict, mp=None) -> ToolResult:
 
 def _list(params: dict) -> ToolResult:
     try:
-        time_range = (params.get("time_range") or "all").lower()
+        time_range = (params.get(Keys.time_range) or "all").lower()
         start_dt, end_dt, _ = _resolve_time_range(time_range)
 
         rows = query_items(
@@ -802,8 +803,8 @@ def _cancel(params: dict) -> ToolResult:
     try:
         from services.database_service import get_shared_db_service
 
-        item_id = (params.get("item_id") or "").strip()
-        message_query = (params.get("message") or "").strip()
+        item_id = (params.get(Keys.item_id) or "").strip()
+        message_query = (params.get(Keys.message) or "").strip()
 
         if not item_id and not message_query:
             return ToolResult.err(

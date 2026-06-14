@@ -36,6 +36,7 @@ import shutil as _shutil
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.document_chunking import create_document_artifacts
 
@@ -53,12 +54,12 @@ class DocumentAbility(Ability):
     # handlers raise the precise missing-target error. ``upload`` is mechanical
     # (not in INPUT_SCHEMA) and validated inside ingest_file.
     ACTION_REQUIRED: ClassVar[dict] = {
-        "search": ("query",),
+        "search": (Keys.query,),
         "list": (),
         "view": (),
         "delete": (),
         "restore": (),
-        "create": ("name", "content"),
+        "create": (Keys.name, Keys.content),
         "upload": (),
     }
 
@@ -89,7 +90,7 @@ class DocumentAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": ["search", "list", "view", "delete", "restore", "create"],
                 "description": (
@@ -97,18 +98,18 @@ class DocumentAbility(Ability):
                     "create, save, write, or store a note or document."
                 ),
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "Text to search across all documents. Required for search.",
             },
-            "id": {
+            Keys.id: {
                 "type": "string",
                 "description": (
                     "Exact document ID (view, delete, restore). Prefer this over `name`: "
                     "delete only proceeds on an exact id or a single exact-name match."
                 ),
             },
-            "name": {
+            Keys.name: {
                 "type": "string",
                 "description": (
                     "Required for `create`; use a filename like 'research-notes.md' "
@@ -116,16 +117,16 @@ class DocumentAbility(Ability):
                     "an inexact or non-unique name returns the candidate list to pick from by id."
                 ),
             },
-            "content": {
+            Keys.content: {
                 "type": "string",
                 "description": "The full text body to write. Required for `create`.",
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     def run(self, params: dict) -> ToolResult:
-        action = params.get("action", "search")
+        action = params.get(Keys.action, "search")
 
         from services.database_service import get_shared_db_service
         from services.document_service import DocumentService
@@ -205,7 +206,7 @@ def _resolve_unique(service, params: dict) -> "dict | ToolResult":
     single non-exact (substring) match, returns ``ambiguous-match`` with the
     candidate rows rather than silently picking the first hit.
     """
-    doc_id = (params.get("id") or "").strip()
+    doc_id = (params.get(Keys.id) or "").strip()
     if doc_id:
         doc = service.get_document(doc_id)
         if not doc:
@@ -216,7 +217,7 @@ def _resolve_unique(service, params: dict) -> "dict | ToolResult":
             )
         return doc
 
-    name = (params.get("name") or "").strip()
+    name = (params.get(Keys.name) or "").strip()
     if not name:
         return ToolResult.err(
             "id or name is required to address the document.",
@@ -263,7 +264,7 @@ def _group_results_by_doc(results: list) -> dict:
 
 
 def _handle_search(service, params: dict) -> ToolResult:
-    query = params.get("query", "").strip()
+    query = params.get(Keys.query, "").strip()
 
     from services.data_graph_service import KIND_DOCUMENT, get_data_graph_service
 
@@ -406,8 +407,8 @@ def _handle_delete(service, params: dict) -> ToolResult:
 
 
 def _handle_restore(service, params: dict) -> ToolResult:
-    doc_id = (params.get("id") or "").strip()
-    name = (params.get("name") or "").strip()
+    doc_id = (params.get(Keys.id) or "").strip()
+    name = (params.get(Keys.name) or "").strip()
 
     if doc_id:
         doc = service.get_document(doc_id)
@@ -566,8 +567,8 @@ def _handle_upload(service, params: dict) -> ToolResult:
     """
     result = ingest_file(
         service,
-        params.get("path"),
-        name=params.get("name"),
+        params.get(Keys.path),
+        name=params.get(Keys.name),
     )
     if result.get("error"):
         return ToolResult.err(result["error"], code="upload-failed", action="upload")
@@ -590,8 +591,8 @@ def _handle_upload(service, params: dict) -> ToolResult:
 
 
 def _handle_create(service, params: dict) -> ToolResult:
-    name = params.get("name", "").strip()
-    content = params.get("content", "").strip()
+    name = params.get(Keys.name, "").strip()
+    content = params.get(Keys.content, "").strip()
 
     if "." not in name:
         name = f"{name}.md"

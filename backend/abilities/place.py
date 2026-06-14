@@ -22,6 +22,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.data_graph_service import KIND_PLACE, get_data_graph_service
 
@@ -51,10 +52,10 @@ class PlaceAbility(Ability):
     # whose valid= names these keys; a known action missing 'name' → one
     # missing-params error. The ability's run() never sees a malformed call.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        _ACTION_SAVE: ("name",),
+        _ACTION_SAVE: (Keys.name,),
         _ACTION_LIST: (),
-        _ACTION_GET: ("name",),
-        _ACTION_DELETE: ("name",),
+        _ACTION_GET: (Keys.name,),
+        _ACTION_DELETE: (Keys.name,),
     }
 
     def get_name(self) -> str:
@@ -84,7 +85,7 @@ class PlaceAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": [_ACTION_SAVE, _ACTION_LIST, _ACTION_GET, _ACTION_DELETE],
                 "description": (
@@ -94,7 +95,7 @@ class PlaceAbility(Ability):
                     "delete — remove a saved place by name."
                 ),
             },
-            "name": {
+            Keys.name: {
                 "type": "string",
                 "description": (
                     "The label for the place (e.g. 'home', 'work', 'gym'). "
@@ -102,15 +103,15 @@ class PlaceAbility(Ability):
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        action = (params.get("action") or "").lower()
-        name = (params.get("name") or "").strip().lower()
+        action = (params.get(Keys.action) or "").lower()
+        name = (params.get(Keys.name) or "").strip().lower()
 
         if action == _ACTION_SAVE:
             return self._handle_save(name, self.telemetry)
