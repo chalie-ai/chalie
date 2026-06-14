@@ -77,8 +77,16 @@ def test_update_model_reprobes(db):
 def test_delete_is_permanent_and_frees_the_name(db):
     """Delete physically removes the row — no soft-delete flag survives — so the
     name is immediately reusable (regression: soft-deleted rows held the UNIQUE
-    name and caused 'A provider with that name already exists' on re-create)."""
+    name and caused 'A provider with that name already exists' on re-create).
+
+    TKT-960 spec change: a provider assigned as the main/vision/delegate provider
+    can no longer be deleted (the deletion guard). The FIRST provider created is
+    auto-selected as main, so an anchor main is created first to keep the
+    provider under test role-free and freely deletable — preserving this test's
+    original intent (permanent delete frees the unique name).
+    """
     svc = _svc(db)
+    _make(db, svc, name="anchor-main", vision=0)  # auto-selected as main
     p = _make(db, svc, name="reusable", vision=0)
     assert svc.delete_provider(p["id"]) is True
     # row is gone

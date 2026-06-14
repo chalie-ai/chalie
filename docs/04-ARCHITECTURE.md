@@ -94,7 +94,11 @@ To add a post-turn side-effect, subclass `PostTurnHook`, implement `run(mp, resu
  
 Every LLM call flows through one gateway: `Providers().send(dto)` (`backend/services/providers.py`). Callers build a provider-neutral `ProviderApiRequest` (system prompt, messages, tools, thinking level) and get back a normalized `ProviderApiResponse` (text, tool calls, token counts, latency).
  
-- **Routing** is by `ProviderType`: `CHAT` resolves to the globally selected provider, `VISION` to the configured vision provider. There is no per-job routing.
+- **Routing** is by `ProviderType` (precedence: `VISION` > `DELEGATE` > `CHAT`):
+  - `CHAT` — the globally selected provider (`selected_provider_id` in settings).
+  - `VISION` — the configured vision provider (`vision_provider_id`); falls back to the main provider when it supports vision; resolves to "Disabled" only when no vision-capable provider exists.
+  - `DELEGATE` — the provider used for subagent/delegate turns (`delegate_provider_id`), covering `web_search`, `web_browse`, and other delegated tool work; defaults to the main provider when no pin is set (there is no "Disabled" state for delegate).
+  - `VISUAL_OUTPUT` — reserved, currently unused.
 - **Pre-flight cap check**: if the measured request leaves less than `max(10% of window, 8k tokens)` of headroom, `send()` raises `RequestOverCapError` *before* calling the provider — the ACT loop catches it, compacts, and retries.
 - One thin client per platform lives in `services/llm_clients/` (`anthropic.py`, `openai.py`, `gemini.py`, `ollama.py`); `factory.py` picks the right one from the provider's `platform` string.
  

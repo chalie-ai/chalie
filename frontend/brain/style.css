@@ -304,6 +304,7 @@ body::before {
   border-color: rgba(251,113,133,0.3);
 }
 .btn-danger:hover { background: rgba(251,113,133,0.08); border-color: rgba(251,113,133,0.5); }
+.btn-danger-disabled, .btn-danger[disabled] { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 
 /* ── Filter tabs ──────────────────────────────────────────────── */
 /* NB: inside .records-controls this bottom margin is reset to 0 — see the scoped override below. */

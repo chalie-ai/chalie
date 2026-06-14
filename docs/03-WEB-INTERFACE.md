@@ -5,7 +5,7 @@ The frontend is four independent single-page apps under `frontend/` — plain HT
 | App | URL | Purpose |
 |---|---|---|
 | **Chat** | `/` | The conversation: messages, live tool activity, rich cards, voice, attachments |
-| **Brain** | `/brain/` | The dashboard: providers, memory, cognition, policies, skills, MCP, scheduler, documents, vision |
+| **Brain** | `/brain/` | The dashboard: providers, memory, cognition, policies, skills, MCP, scheduler, documents |
 | **Onboarding** | `/on-boarding/` | One-time account creation |
 | **Login** | `/login/` | Session login (supports `?next=` redirect) |
 
@@ -39,8 +39,7 @@ Interactive cards (e.g. checking a list item) post silent actions back to the se
 
 | Tab | What it does |
 |---|---|
-| **Providers** | Add/test/select LLM providers |
-| **Vision** | Vision-provider configuration |
+| **Providers** | Add/test/select LLM providers; also contains the Vision and Delegate provider selectors under the LLM Providers section |
 | **Cognition** | Subtabs: Memory, Tools, World state, Personality, Errors, Usage, Compacted Summary |
 | **Scheduler** | Reminders and scheduled tasks (All / Pending / Fired / Failed / Cancelled) |
 | **Lists** | The user's persistent checklists |

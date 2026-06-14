@@ -17,11 +17,15 @@ class ProviderType(Enum):
 
     CHAT resolves the globally selected provider (ProviderCacheService).
     VISION resolves the DB vision provider (ProviderDbService).
+    DELEGATE resolves the DB delegate provider (ProviderDbService); when none
+    is pinned it falls back to the selected (main) provider — the
+    "use main provider" default for subagent turns.
     VISUAL_OUTPUT is reserved for future rendering-model providers.
     """
 
     CHAT = "chat"
     VISION = "vision"
+    DELEGATE = "delegate"
     VISUAL_OUTPUT = "visual_output"  # reserved, not wired
 
 

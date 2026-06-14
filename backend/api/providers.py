@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 import requests as req
 from flask import Blueprint, jsonify, request
 
+from services.provider_db_service import PROVIDER_IN_USE_MSG
+
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ _SAFE_VALIDATION_MESSAGES = {
     "openai_compatible provider requires 'host' field "
     "(base URL, e.g. 'https://api.minimax.io/v1')",
     "openai_compatible provider requires 'api_key' field",
+    PROVIDER_IN_USE_MSG,
 }
 
 
@@ -755,3 +758,65 @@ def set_vision_provider():
     except Exception:
         logger.exception("[REST API] Failed to set vision provider")
         return jsonify({"error": "Failed to set vision provider"}), 500
+
+
+@providers_bp.route('/delegate', methods=['GET'])
+@require_session
+def get_delegate_provider():
+    """Return the configured delegate provider + how it was resolved.
+
+    Source 'auto' means no pin is set and the delegate defaults to the main
+    provider ("use main provider"); 'explicit' means a dedicated provider is
+    pinned; 'none' means no provider is configured at all.
+    """
+    try:
+        service = get_provider_service()
+        status = service.get_delegate_provider_status()
+        provider = status['provider']
+        if provider and provider.get('api_key'):
+            provider['api_key'] = '***'
+        return jsonify({'provider': provider, 'source': status['source']}), 200
+    except Exception:
+        logger.exception("[REST API] Failed to get delegate provider")
+        return jsonify({"error": "Failed to get delegate provider"}), 500
+
+
+@providers_bp.route('/delegate', methods=['PUT'])
+@require_session
+def set_delegate_provider():
+    """Set (or clear) the explicit delegate provider id.
+
+    Clearing (provider_id null) has NO 'Disabled' state — unlike vision it
+    falls back to the main provider, so the response returns the RESOLVED
+    status (typically source 'auto' pointing at the selected main provider),
+    never {provider: null, source: 'none'}.
+    """
+    try:
+        data = request.get_json() or {}
+        if 'provider_id' not in data:
+            return jsonify({"error": "Request body must contain 'provider_id'"}), 400
+
+        service = get_provider_service()
+        pid = data['provider_id']
+
+        if pid is None:
+            service.set_delegate_provider(None)
+            status = service.get_delegate_provider_status()
+            provider = status['provider']
+            if provider and provider.get('api_key'):
+                provider['api_key'] = '***'
+            return jsonify({'provider': provider, 'source': status['source']}), 200
+
+        provider = service.get_provider_by_id(int(pid))
+        if not provider:
+            return jsonify({"error": _ERR_PROVIDER_NOT_FOUND}), 404
+
+        service.set_delegate_provider(int(pid))
+        if provider.get('api_key'):
+            provider['api_key'] = '***'
+        return jsonify({'provider': provider, 'source': 'explicit'}), 200
+    except (ValueError, TypeError):
+        return jsonify({"error": "Invalid provider_id"}), 400
+    except Exception:
+        logger.exception("[REST API] Failed to set delegate provider")
+        return jsonify({"error": "Failed to set delegate provider"}), 500

@@ -7,6 +7,14 @@ from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 
+# User-facing 409 message when a provider still holds an assigned role.
+# Must stay byte-identical to the entry in api/providers._SAFE_VALIDATION_MESSAGES
+# (imported there) — it is the single source of truth surfaced to the admin.
+PROVIDER_IN_USE_MSG = (
+    "This provider is in use as the main, vision, or delegate provider and "
+    "cannot be deleted. Clear or reassign that role first."
+)
+
 
 class ProviderDbService:
     """Manages provider configuration in database."""
@@ -335,8 +343,58 @@ class ProviderDbService:
 
         return self.get_provider_by_id(provider_id)
 
+    def _provider_roles(self, provider_id: int) -> List[str]:
+        """Return which assigned roles reference this provider id.
+
+        A subset of ['main', 'vision', 'delegate'], built from the persisted
+        settings pins: selected_provider_id (main), vision_provider_id,
+        delegate_provider_id. Auto-fallbacks — vision/delegate defaulting to the
+        selected provider when unpinned — are covered transitively by the 'main'
+        role and are deliberately not counted here. An empty list means the
+        provider holds no role and is safe to delete.
+        """
+        role_by_key = {
+            'selected_provider_id': 'main',
+            'vision_provider_id': 'vision',
+            'delegate_provider_id': 'delegate',
+        }
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT key, value FROM settings WHERE key IN "
+                "('selected_provider_id', 'vision_provider_id', 'delegate_provider_id')"
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+        assigned = set()
+        for key, value in rows:
+            if not value:
+                continue
+            try:
+                if int(value) == provider_id:
+                    assigned.add(role_by_key[key])
+            except (ValueError, TypeError):
+                # A non-numeric settings value means a corrupted pin: surface it
+                # rather than silently treating the role as unassigned (which
+                # could let a functionally-pinned provider be deleted).
+                logger.warning(
+                    "Ignoring non-numeric %s settings value %s while resolving "
+                    "provider roles", key, safe(value)
+                )
+                continue
+        return [role for role in ('main', 'vision', 'delegate') if role in assigned]
+
     def delete_provider(self, provider_id: int) -> bool:
-        """Permanently delete a provider row."""
+        """Permanently delete a provider row.
+
+        A provider currently assigned as the main (selected), vision, or
+        delegate provider cannot be deleted: removing it would leave a dangling
+        reference the resolver can no longer satisfy. Raises ValueError
+        (surfaced as HTTP 409) when the provider still holds any of those roles —
+        the caller must clear or reassign the role first.
+        """
+        if self._provider_roles(provider_id):
+            raise ValueError(PROVIDER_IN_USE_MSG)
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -432,6 +490,73 @@ class ProviderDbService:
                 cursor.execute(
                     "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
                     "VALUES ('vision_provider_id', ?, 'int', 'ID of the provider used for image understanding', 0) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                    (str(provider_id),)
+                )
+            cursor.close()
+
+    # ── Delegate Provider ──────────────────────────────────────────
+    #
+    # The provider that subagent (delegate) turns — web_search, web_browse,
+    # and friends — run on, independent of the main chat provider. Unlike
+    # vision there is NO 'Disabled'/none clear state: clearing the pin falls
+    # back to the selected (main) provider, never the last-pinned one. There is
+    # also no supports_vision requirement — any active provider can be pinned.
+
+    def _resolve_delegate_provider(self):
+        """Resolve (provider_or_None, source) where source ∈ explicit|auto|none.
+
+        explicit — an active provider id is stored in settings.
+        auto     — no explicit id, but a selected (main) provider exists; the
+                   delegate defaults to it (NOT persisted; the "use main
+                   provider" default surfaced to the UI).
+        none     — no pin and no selected provider.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT value FROM settings WHERE key = 'delegate_provider_id'"
+            )
+            row = cursor.fetchone()
+            cursor.close()
+        if row and row[0]:
+            try:
+                pid = int(row[0])
+                provider = self.get_provider_by_id(pid)  # active-only
+                if provider:
+                    return provider, 'explicit'
+            except (ValueError, TypeError):
+                pass
+        selected = self.get_selected_provider()
+        if selected:
+            return selected, 'auto'
+        return None, 'none'
+
+    def get_delegate_provider(self) -> Optional[Dict[str, Any]]:
+        """Runtime resolver — the provider to use for delegate turns, or None."""
+        provider, _ = self._resolve_delegate_provider()
+        return provider
+
+    def get_delegate_provider_status(self) -> Dict[str, Any]:
+        """UI-facing — {'provider': dict|None, 'source': 'explicit'|'auto'|'none'}."""
+        provider, source = self._resolve_delegate_provider()
+        return {'provider': provider, 'source': source}
+
+    def set_delegate_provider(self, provider_id: Optional[int]) -> None:
+        """Persist the explicit delegate provider id, or clear it when None.
+
+        Clearing does NOT disable delegate turns — resolution then falls back
+        to the selected (main) provider (see _resolve_delegate_provider)."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            if provider_id is None:
+                cursor.execute(
+                    "DELETE FROM settings WHERE key = 'delegate_provider_id'"
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
+                    "VALUES ('delegate_provider_id', ?, 'int', 'ID of the provider used for subagent (delegate) turns', 0) "
                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
                     (str(provider_id),)
                 )

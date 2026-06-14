@@ -56,6 +56,8 @@ class Providers:
 
         CHAT → globally selected provider (ProviderCacheService).
         VISION → DB vision provider (ProviderDbService).
+        DELEGATE → DB delegate provider (ProviderDbService); falls back to the
+        selected (main) provider when none is pinned.
         Any other type (e.g. the reserved VISUAL_OUTPUT) raises ProviderError
         rather than silently resolving to the CHAT provider.
         """
@@ -71,6 +73,14 @@ class Providers:
             if not vp:
                 raise RuntimeError("VISION type requested but no vision provider configured")
             return build_client(dict(vp))
+
+        if pt == ProviderType.DELEGATE:
+            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            dp = ProviderDbService(get_shared_db_service()).get_delegate_provider()
+            if not dp:
+                raise RuntimeError("DELEGATE type requested but no delegate or selected provider configured")
+            return build_client(dict(dp))
 
         if pt != ProviderType.CHAT:
             raise ProviderError(f"Unsupported provider type for send: {pt}")

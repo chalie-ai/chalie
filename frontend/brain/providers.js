@@ -11,6 +11,12 @@ const PanelProviders = (() => {
   let _catalog = [];
   let _catalogLoaded = false;
 
+  // Vision / delegate provider selection state.
+  let _visionId = null;       // explicitly-pinned vision provider id, or null
+  let _visionSource = 'none'; // 'explicit' | 'auto' | 'none'
+  let _delegateId = null;     // explicitly-pinned delegate provider id, or null
+  let _delegateSource = 'none';
+
   // Wizard working state.
   let _preset = null;          // the chosen catalog preset (or a synthetic one)
   let _editingId = null;
@@ -35,7 +41,8 @@ const PanelProviders = (() => {
       <h2>LLM Providers</h2>
       <button class="btn btn-primary" id="addProviderBtn">${Icons.Plus(14)} Add Provider</button>
     </div>
-    <div id="providersList" class="providers-list"><div class="loading">Loading providers…</div></div>`;
+    <div id="providersList" class="providers-list"><div class="loading">Loading providers…</div></div>
+    <div id="roleSelectors"></div>`;
     document.getElementById('addProviderBtn').addEventListener('click', () => _openWizard(null));
     await _load();
   }
@@ -44,12 +51,16 @@ const PanelProviders = (() => {
 
   async function _load() {
     try {
-      const [provRes, selRes] = await Promise.all([
+      const [provRes, selRes, visRes, delRes] = await Promise.all([
         BrainApp.apiFetch('/providers'),
         BrainApp.apiFetch('/providers/selected'),
+        BrainApp.apiFetch('/providers/vision'),
+        BrainApp.apiFetch('/providers/delegate'),
       ]);
       if (provRes.ok) { const d = await provRes.json(); _providers = d.providers || []; }
       if (selRes.ok) { const d = await selRes.json(); _selectedId = d.provider ? d.provider.id : null; }
+      if (visRes.ok) { const d = await visRes.json(); _visionId = d.provider ? d.provider.id : null; _visionSource = d.source || 'none'; }
+      if (delRes.ok) { const d = await delRes.json(); _delegateId = d.provider ? d.provider.id : null; _delegateSource = d.source || 'none'; }
     } catch (e) { BrainApp.showToast('Failed to connect to backend', 'error'); }
     _render();
   }
@@ -57,6 +68,7 @@ const PanelProviders = (() => {
   function _render() {
     const el = document.getElementById('providersList');
     if (!el) return;
+    _renderRoleSelectors();
     if (_providers.length === 0) {
       el.innerHTML = `<div class="empty-state"><div class="empty-icon">${Icons.Providers(40)}</div><h3>No providers</h3><p>Add your first LLM provider to get started.</p></div>`;
       return;
@@ -80,7 +92,7 @@ const PanelProviders = (() => {
         </div>
         <div class="provider-actions">
           <button class="btn btn-sm btn-secondary" data-edit="${p.id}">Edit</button>
-          <button class="btn btn-sm btn-danger" data-del="${p.id}">Delete</button>
+          ${_deleteButton(p.id)}
         </div>
       </div>`;
     }).join('');
@@ -102,6 +114,113 @@ const PanelProviders = (() => {
       if (res.ok) { _selectedId = id; _render(); BrainApp.showToast('Provider selected', 'success'); }
       else { const e = await res.json(); BrainApp.showToast(e.error || 'Failed', 'error'); }
     } catch { BrainApp.showToast('Failed to select provider', 'error'); }
+  }
+
+  // ── Vision / Delegate role selectors ────────────────────────────────
+
+  function _clearRoleSelectors() {
+    const host = document.getElementById('roleSelectors');
+    if (host) host.innerHTML = '';
+  }
+
+  function _renderRoleSelectors() {
+    const host = document.getElementById('roleSelectors');
+    if (!host) return;
+    if (_providers.length === 0) { host.innerHTML = ''; return; }
+
+    host.innerHTML = `
+      <h4 class="section-head" style="margin-top:32px;">Vision</h4>
+      <p class="panel-desc">Choose which provider Chalie uses to understand images. Only providers that passed the vision probe can be selected.</p>
+      <div class="form-group">
+        <select id="visionSelect">${_visionOptions()}</select>
+      </div>
+      <h4 class="section-head" style="margin-top:32px;">Delegate</h4>
+      <p class="panel-desc">Subagent work (web_search, web_browse, …) runs on this provider. Defaults to your main provider.</p>
+      <div class="form-group">
+        <select id="delegateSelect">${_delegateOptions()}</select>
+      </div>`;
+
+    const visionSel = document.getElementById('visionSelect');
+    if (visionSel && !visionSel.disabled) {
+      visionSel.addEventListener('change', () => _setVision(visionSel.value));
+    }
+    const delegateSel = document.getElementById('delegateSelect');
+    if (delegateSel) {
+      delegateSel.addEventListener('change', () => _setDelegate(delegateSel.value));
+    }
+  }
+
+  function _visionOptions() {
+    const visionCapable = _providers.filter(p => p.supports_vision);
+    if (visionCapable.length === 0) {
+      return `<option value="" selected disabled>Disabled — no vision-capable providers</option>`;
+    }
+    // "Use main provider" only when the main provider itself supports vision —
+    // picking it clears the explicit pin (PUT provider_id: null → source 'auto').
+    const mainSupportsVision = _selectedId != null &&
+      visionCapable.some(p => p.id === _selectedId);
+    const useMainSelected = _visionSource === 'auto' || _visionSource === 'none';
+    let html = '';
+    if (mainSupportsVision) {
+      html += `<option value=""${useMainSelected ? ' selected' : ''}>Use main provider</option>`;
+    }
+    html += visionCapable.map(p => {
+      const sel = _visionSource === 'explicit' && p.id === _visionId;
+      return `<option value="${p.id}"${sel ? ' selected' : ''}>${BrainApp.escapeHtml(p.name)}</option>`;
+    }).join('');
+    return html;
+  }
+
+  function _delegateOptions() {
+    const useMainSelected = _delegateSource !== 'explicit';
+    let html = `<option value=""${useMainSelected ? ' selected' : ''}>Use main provider</option>`;
+    html += _providers.map(p => {
+      const sel = _delegateSource === 'explicit' && p.id === _delegateId;
+      return `<option value="${p.id}"${sel ? ' selected' : ''}>${BrainApp.escapeHtml(p.name)}</option>`;
+    }).join('');
+    return html;
+  }
+
+  async function _setVision(value) {
+    const pid = value === '' ? null : Number(value);
+    try {
+      const res = await BrainApp.apiFetch('/providers/vision', { method: 'PUT', body: JSON.stringify({ provider_id: pid }) });
+      if (res.ok) {
+        const d = await res.json().catch(() => ({}));
+        _visionId = d.provider ? d.provider.id : null;
+        _visionSource = d.source || (pid == null ? 'auto' : 'explicit');
+        _renderRoleSelectors();
+        BrainApp.showToast('Vision provider updated', 'success');
+      } else {
+        const e = await res.json().catch(() => ({}));
+        BrainApp.showToast(e.error || 'Failed', 'error');
+        _renderRoleSelectors();
+      }
+    } catch {
+      BrainApp.showToast('Failed to set vision provider', 'error');
+      _renderRoleSelectors();
+    }
+  }
+
+  async function _setDelegate(value) {
+    const pid = value === '' ? null : Number(value);
+    try {
+      const res = await BrainApp.apiFetch('/providers/delegate', { method: 'PUT', body: JSON.stringify({ provider_id: pid }) });
+      if (res.ok) {
+        const d = await res.json().catch(() => ({}));
+        _delegateId = d.provider ? d.provider.id : null;
+        _delegateSource = d.source || (pid == null ? 'auto' : 'explicit');
+        _renderRoleSelectors();
+        BrainApp.showToast('Delegate provider updated', 'success');
+      } else {
+        const e = await res.json().catch(() => ({}));
+        BrainApp.showToast(e.error || 'Failed', 'error');
+        _renderRoleSelectors();
+      }
+    } catch {
+      BrainApp.showToast('Failed to set delegate provider', 'error');
+      _renderRoleSelectors();
+    }
   }
 
   // ── Catalog ─────────────────────────────────────────────────────────
@@ -152,6 +271,7 @@ const PanelProviders = (() => {
   function _renderPicker() {
     const root = document.getElementById('providersList');
     if (!root) return;
+    _clearRoleSelectors();
     const tiles = [..._catalog, _CUSTOM_PRESET];
     root.innerHTML = `<div class="provider-wizard">
       <div class="form-page-header">
@@ -194,6 +314,7 @@ const PanelProviders = (() => {
   function _renderForm(provider) {
     const root = document.getElementById('providersList');
     if (!root) return;
+    _clearRoleSelectors();
     const editing = !!provider;
     const hostVal = provider ? (provider.host || '') : (_preset.host || '');
     const nameVal = provider ? provider.name : _preset.name;
@@ -380,6 +501,26 @@ const PanelProviders = (() => {
 
   // ── Delete ──────────────────────────────────────────────────────────
 
+  // Returns an array of role names that the given provider id currently holds.
+  function _providerRoles(id) {
+    const roles = [];
+    if (id === _selectedId) roles.push('main');
+    if (_visionSource === 'explicit' && id === _visionId) roles.push('vision');
+    if (_delegateSource === 'explicit' && id === _delegateId) roles.push('delegate');
+    return roles;
+  }
+
+  // Renders the Delete button for a provider card. Disabled + tooltip when in use.
+  function _deleteButton(id) {
+    const roles = _providerRoles(id);
+    if (roles.length === 0) {
+      return `<button class="btn btn-sm btn-danger" data-del="${id}">Delete</button>`;
+    }
+    const label = roles.join(', ');
+    const tip = `In use as the ${label} provider — clear or reassign this role before deleting`;
+    return `<button class="btn btn-sm btn-danger btn-danger-disabled" disabled title="${BrainApp.escapeHtml(tip)}" aria-disabled="true">Delete</button>`;
+  }
+
   function _showConfirm({ title, desc, confirmLabel, confirmClass, onConfirm }) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -406,7 +547,7 @@ const PanelProviders = (() => {
         try {
           const res = await BrainApp.apiFetch(`/providers/${id}`, { method: 'DELETE' });
           if (res.ok) { BrainApp.showToast('Provider deleted', 'success'); await _load(); }
-          else { BrainApp.showToast('Delete failed', 'error'); }
+          else { const e = await res.json().catch(() => ({})); BrainApp.showToast(e.error || 'Delete failed', 'error'); }
         } catch { BrainApp.showToast('Network error', 'error'); }
       }
     });
