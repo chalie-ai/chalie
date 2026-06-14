@@ -1,3 +1,7 @@
+<script setup lang="ts">
+import SchedulerPanel from './SchedulerPanel.vue';
+</script>
+
 <template>
-  <div class="panel-placeholder"><p>Scheduler Failed — implementation in P2c.</p></div>
+  <SchedulerPanel status-filter="failed" />
 </template>
