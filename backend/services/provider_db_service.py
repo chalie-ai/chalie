@@ -374,6 +374,13 @@ class ProviderDbService:
                 if int(value) == provider_id:
                     assigned.add(role_by_key[key])
             except (ValueError, TypeError):
+                # A non-numeric settings value means a corrupted pin: surface it
+                # rather than silently treating the role as unassigned (which
+                # could let a functionally-pinned provider be deleted).
+                logger.warning(
+                    "Ignoring non-numeric %s settings value %s while resolving "
+                    "provider roles", key, safe(value)
+                )
                 continue
         return [role for role in ('main', 'vision', 'delegate') if role in assigned]
 
