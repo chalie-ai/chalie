@@ -48,15 +48,21 @@ async function _onScrollPaginate(): Promise<void> {
 
   _paginating = true;
   try {
-    // Anchor-preserve: record scroll offset from bottom before prepend
+    // Anchor-preserve: capture height AND scroll position BEFORE the prepend
     // (chat.js lines 49-52: `anchor = body.scrollHeight - window.scrollY`
     // then after load: `scrollTo(0, body.scrollHeight - anchor)`).
+    // `prevScrollY` MUST be read before the await — Chromium scroll-anchoring
+    // (overflow-anchor, on by default) shifts scrollY once nodes land above the
+    // viewport, so reading it post-prepend would double-count the offset.
+    // Restoring to `prevScrollY + added` is algebraically identical to legacy:
+    //   newHeight - anchor = newHeight - (oldHeight - prevScrollY) = prevScrollY + added
     const prevHeight = document.body.scrollHeight;
+    const prevScrollY = window.scrollY;
     await session.loadRecentConversation();
     await nextTick();
     const added = document.body.scrollHeight - prevHeight;
     if (added > 0) {
-      window.scrollTo({ top: window.scrollY + added, behavior: 'instant' });
+      window.scrollTo({ top: prevScrollY + added, behavior: 'instant' });
     }
   } finally {
     _paginating = false;
