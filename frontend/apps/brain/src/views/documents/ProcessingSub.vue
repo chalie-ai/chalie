@@ -1,3 +1,4 @@
-<template>
-  <div class="panel-placeholder"><p>Documents Processing — implementation in P2c.</p></div>
-</template>
+<script setup lang="ts">
+import DocumentsPanel from './DocumentsPanel.vue';
+</script>
+<template><DocumentsPanel status-filter="processing" /></template>

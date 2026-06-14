@@ -4,7 +4,7 @@
  * GET    /documents                       → { items: Document[] }
  * GET    /documents?include_deleted=true  → include deleted docs
  * GET    /documents/watched-folders       → { items: WatchedFolder[] }
- * GET    /documents/:id                   → { document: Document }
+ * GET    /documents/:id                   → { item: Document }
  * DELETE /documents/:id                   → delete document
  * POST   /documents/upload                → multipart upload
  */
@@ -38,7 +38,7 @@ export const documents = {
     return withAuth(() => api.get('/documents/watched-folders'));
   },
 
-  get(id: string | number): Promise<{ document: Document }> {
+  get(id: string | number): Promise<{ item: Document }> {
     const api = useApiClient();
     return withAuth(() => api.get(`/documents/${id}`));
   },
