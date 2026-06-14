@@ -119,6 +119,46 @@ def test_resolve_delegate_raises_when_no_provider_configured(db):
         Providers()._resolve(ProviderType.DELEGATE)
 
 
+def test_send_routes_delegate_turn_through_delegate_client(db):
+    """End-to-end through the real send chokepoint: a web_search (delegate) turn's
+    DTO — built by the production _build_send_dto() — is resolved by
+    Providers().send() against the DELEGATE provider, never the chat provider.
+
+    With a delegate pinned distinct from the main provider, the pre-flight
+    over-cap guard inside send() fires and the RequestOverCapError carries the
+    DELEGATE provider's model ('llama3'), not the chat provider's ('qwen3'). Had
+    send() resolved the wrong pool, the error would name 'qwen3'. No LLM call is
+    made — the exception is raised at the measurement step before any network I/O.
+    """
+    from configs.channels.web_search import WebSearchConfig
+    from services.provider_api import RequestOverCapError
+    from services.provider_cache_service import ProviderCacheService
+
+    svc = _svc()
+    main = _mk(svc, "main-text", "qwen3", "http://127.0.0.1:2")
+    svc.set_selected_provider(main)
+    worker = _mk(svc, "delegate-worker", "llama3", "http://127.0.0.1:3")
+    svc.set_delegate_provider(worker)
+    ProviderCacheService.invalidate()
+
+    # A real delegate DTO, oversized so the pre-flight cap fires deterministically
+    # (offline ollama window 8192 → cap ≈ 192 tokens).
+    big_query = " ".join(f"w{j}" for j in range(2000))
+    mp = _delegate_mp(WebSearchConfig, big_query)
+    dto = mp._build_send_dto()
+    assert dto.type == ProviderType.DELEGATE
+
+    try:
+        with pytest.raises(RequestOverCapError) as exc_info:
+            Providers().send(dto)
+        assert exc_info.value.model == "llama3", (
+            "send() must resolve the DELEGATE provider (worker); got model %r"
+            % exc_info.value.model
+        )
+    finally:
+        ProviderCacheService.invalidate()
+
+
 # ── DB layer: ProviderDbService delegate status round-trip ─────────────────────
 
 
