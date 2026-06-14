@@ -27,13 +27,44 @@ export interface MemoryResponse {
   generated_at: string | null;
 }
 
+// Fields are derived from what the legacy cognition.js render code reads off each
+// response (production-proven); an index signature keeps each shape forward-compatible.
+
 export interface Tool {
-  name: string;
-  description?: string | null;
+  tool_name: string;
+  count?: number | null;
+  last_used_at?: string | null;
   [key: string]: unknown;
 }
 
+export interface WorldTelemetry {
+  device?: { class?: string; platform?: string; screen_w?: number; screen_h?: number } | null;
+  battery?: { level?: number; charging?: boolean } | null;
+  location_name?: string | null;
+  local_time?: string | null;
+  timezone?: string | null;
+  connection?: string | null;
+  preferences?: { color_scheme?: string; [k: string]: unknown } | null;
+  [k: string]: unknown;
+}
+
+export interface WorldSchedule {
+  status?: string;
+  message?: string;
+  due_at?: string | null;
+  recurrence?: string | null;
+  [k: string]: unknown;
+}
+
 export interface WorldState {
+  inputs?: {
+    telemetry?: WorldTelemetry | null;
+    schedule?: WorldSchedule[] | null;
+    signals?: Record<string, { label?: string; [k: string]: unknown }> | null;
+    bg_processes?: (string | Record<string, unknown>)[] | null;
+    [k: string]: unknown;
+  } | null;
+  rendered?: string | null;
   [key: string]: unknown;
 }
 
@@ -43,14 +74,39 @@ export interface Personality {
 }
 
 export interface ErrorEntry {
+  time?: string | null;
+  timestamp?: string | null;
+  message?: string;
+  [key: string]: unknown;
+}
+
+export interface UsageSummary {
+  total_tokens?: number;
+  cache_hit_pct?: number | null;
+  tokens_today?: number;
+  most_active_model?: string;
+  [key: string]: unknown;
+}
+
+export interface UsageEntry {
+  bucket: string;
+  tokens_input?: number;
+  tokens_cache_read?: number;
+  tokens_output?: number;
+  tokens_thinking?: number;
   [key: string]: unknown;
 }
 
 export interface UsageResponse {
+  summary?: UsageSummary | null;
+  entries?: UsageEntry[] | null;
   [key: string]: unknown;
 }
 
 export interface CompactionEntry {
+  compacted_at?: string | null;
+  compacted_up_to_id?: number | null;
+  summary: string;
   [key: string]: unknown;
 }
 
