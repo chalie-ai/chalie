@@ -312,6 +312,44 @@ def _register_static_routes(app: Flask) -> None:
             return send_from_directory(str(_NEXT_INTERFACE_DIR), filename)
         return send_from_directory(str(_NEXT_INTERFACE_DIR), 'index.html')
 
+    # ── Vue Brain build (P2 migration) ───────────────────────────
+    # Served verbatim (no legacy version-injection). Auth-gated like /brain/.
+    _NEXT_BRAIN_DIR = FileMapperService.get_frontend_path("apps", "brain", "dist")
+
+    @app.route('/brain-next', methods=["GET"])
+    def brain_next_index_no_slash():
+        """Canonicalize /brain-next → /brain-next/ so relative asset paths resolve."""
+        return redirect('/brain-next/', code=301)
+
+    @app.route('/brain-next/', methods=["GET"])
+    def brain_next_index():
+        """Serve Vue Brain SPA index. Redirects to login if unauthenticated."""
+        from services.auth_session_service import validate_session
+        from flask import request
+        if not validate_session(request):
+            return redirect('/login/?next=/brain-next/')
+        return send_from_directory(str(_NEXT_BRAIN_DIR), 'index.html')
+
+    @app.route('/brain-next/<path:filename>', methods=["GET"])
+    def brain_next_static(filename):
+        """Serve a Vue Brain asset, or SPA history-fallback to index.html.
+
+        Auth-gated: unauthenticated requests redirect to /login/.
+        Static assets (JS/CSS hashed by Vite) can be served without auth;
+        only deep-link / reload paths that map to index.html need the gate so the
+        SPA itself can run its own auth check. We gate all paths for consistency and
+        simplicity, matching the /brain/ pattern.
+        """
+        from services.auth_session_service import validate_session
+        from flask import request
+        if not validate_session(request):
+            next_path = f'/brain-next/{filename}'
+            return redirect(f'/login/?next={next_path}')
+        candidate = _NEXT_BRAIN_DIR / filename
+        if candidate.is_file():
+            return send_from_directory(str(_NEXT_BRAIN_DIR), filename)
+        return send_from_directory(str(_NEXT_BRAIN_DIR), 'index.html')
+
     # Main interface SPA — catch-all (must be last)
     @app.route('/<path:filename>', methods=["GET"])
     def interface_static(filename):

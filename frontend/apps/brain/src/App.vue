@@ -1,13 +1,64 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { onMounted, onBeforeUnmount } from 'vue';
+import { RouterView } from 'vue-router';
 import { useTheme } from '@chalie/shared';
-const { init } = useTheme();
-onMounted(() => init());
+import { useShellStore } from './stores/shell';
+import { useHeartbeat } from './composables/useHeartbeat';
+import BrainSidebar from './ui/BrainSidebar.vue';
+import BrainTopbar from './ui/BrainTopbar.vue';
+import CommandPalette from './ui/CommandPalette.vue';
+import ToastHost from './ui/ToastHost.vue';
+
+const { init: initTheme } = useTheme();
+const shell = useShellStore();
+const heartbeat = useHeartbeat();
+
+onMounted(() => {
+  initTheme();
+  heartbeat.start();
+});
+
+onBeforeUnmount(() => {
+  heartbeat.stop();
+});
+
+function closeMobileScrim(): void {
+  shell.mobileOpen = false;
+}
 </script>
 
 <template>
-  <main style="padding: 2rem">
-    <h1>Brain — Vue scaffold</h1>
-    <p>Panels migrate in P2 (TKT-954).</p>
-  </main>
+  <!-- Grain overlay (decorative, matches legacy .grain) -->
+  <div class="grain"></div>
+
+  <!-- Main app shell — grid: sidebar | topbar / main -->
+  <div
+    id="appShell"
+    class="app-shell"
+    :data-collapsed="shell.sidebarCollapsed || undefined"
+    :data-mobile-open="shell.mobileOpen || undefined"
+    :data-providers-only="shell.providersOnly || undefined"
+  >
+    <!-- Mobile scrim -->
+    <div class="scrim" id="mobileScrim" @click="closeMobileScrim"></div>
+
+    <!-- Sidebar -->
+    <BrainSidebar id="sidebar" />
+
+    <!-- Topbar -->
+    <BrainTopbar id="topbar" />
+
+    <!-- Main content with panel root -->
+    <main class="main">
+      <div class="main-inner" id="panelRoot">
+        <RouterView />
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast host (outside the grid, fixed-position) -->
+  <ToastHost id="toastHost" />
+
+  <!-- Command palette overlay -->
+  <CommandPalette id="cpOverlay" />
 </template>

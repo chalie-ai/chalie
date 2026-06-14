@@ -1,0 +1,89 @@
+<!--
+  BrainTopbar — port of legacy _renderTopbar() in app.js.
+  Shows hamburger (mobile), collapse toggle (desktop), breadcrumb, search button.
+-->
+<script setup lang="ts">
+import { computed, inject } from 'vue';
+import { useRoute } from 'vue-router';
+import { useShellStore } from '../stores/shell';
+import BrainIcon from './BrainIcon.vue';
+
+const shell = useShellStore();
+const route = useRoute();
+
+// Inject the openCommandPalette function provided by CommandPalette or App.vue.
+// Fallback is a no-op if not provided.
+const openCP = inject<() => void>('openCommandPalette', () => {});
+
+const LABELS: Record<string, string> = {
+  providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
+  lists: 'Lists', documents: 'Documents', capabilities: 'Capabilities',
+  vision: 'Vision', policies: 'Policies', skills: 'Skills', mcp: 'MCP', brain: 'Brain',
+  memory: 'Memory', tools: 'Tools', world: 'World state',
+  personality: 'Personality', errors: 'Errors', usage: 'Usage',
+  compaction: 'Compacted Summary',
+  all: 'All', pending: 'Pending', fired: 'Fired', failed: 'Failed', cancelled: 'Cancelled',
+  active: 'Active', processing: 'Processing', uploads: 'Uploads', deleted: 'Deleted',
+  chat: 'Chat', background: 'Background', external: 'External agent',
+};
+
+const segments = computed(() => route.path.split('/').filter(Boolean));
+const topLabel = computed(() => LABELS[segments.value[0]] ?? segments.value[0] ?? '');
+const subLabel = computed(() => LABELS[segments.value[1]] ?? segments.value[1] ?? '');
+
+function handleSearchKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    openCP();
+  }
+}
+</script>
+
+<template>
+  <header class="topbar">
+    <!-- Mobile hamburger -->
+    <button class="icon-btn hamburger" aria-label="Open menu" @click="shell.openMobileSidebar()">
+      <BrainIcon name="Menu" />
+    </button>
+
+    <!-- Desktop sidebar collapser -->
+    <button
+      class="icon-btn desktop-collapser"
+      aria-label="Toggle sidebar"
+      title="Toggle sidebar"
+      @click="shell.toggleSidebar()"
+    >
+      <BrainIcon name="Sidebar" />
+    </button>
+
+    <!-- Breadcrumb -->
+    <div class="crumb">
+      <span>Brain</span>
+      <span class="sep">/</span>
+      <span class="now">{{ topLabel }}</span>
+      <template v-if="subLabel">
+        <span class="sep">/</span>
+        <span class="now">{{ subLabel }}</span>
+      </template>
+    </div>
+
+    <!-- Search / command palette trigger -->
+    <div class="topbar-center">
+      <div
+        class="topbar-search"
+        role="button"
+        tabindex="0"
+        @click="openCP()"
+        @keydown="handleSearchKeydown"
+      >
+        <BrainIcon name="Search" :size="14" />
+        <span class="topbar-search-text">Search…</span>
+        <kbd>⌘K</kbd>
+      </div>
+    </div>
+
+    <div class="topbar-actions">
+      <slot />
+    </div>
+  </header>
+</template>
