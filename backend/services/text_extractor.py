@@ -264,5 +264,5 @@ def _extract_image(path: str) -> str:
 
     mime_type = mimetypes.guess_type(path)[0] or 'image/png'
     out = describe_image(path, mime_type, RICH_INDEX_PROMPT,
-                         policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT)
+                         policy_channel=ProcessorConfig.PolicyChannel.CHAT)
     return out['description'] or ''

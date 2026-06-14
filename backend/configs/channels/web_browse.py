@@ -68,7 +68,7 @@ class WebBrowseConfig(ProcessorConfig):
 
     uses_delegate_provider: ClassVar[bool] = True
 
-    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
+    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
         super().__init__(
             channel="delegate:web_browse",
             role="web_browse",

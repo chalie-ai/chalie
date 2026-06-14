@@ -5,7 +5,7 @@ Every native AND MCP tool call flows through it (ToolDispatcher.dispatch passes
 ToolDispatcher._execute as the callback).
 
 Settings: internal (always allowed, hidden in Brain) · allow · ask · deny.
-Channels: ProcessorConfig.POLICY_CHANNEL values.
+Channels: ProcessorConfig.PolicyChannel values.
 
 A small set of read-only / scratch / infrastructure tools (``INTERNAL``) ALWAYS
 bypass the gate regardless of channel or any seeded row — they are never
@@ -26,7 +26,7 @@ from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
-CHANNEL = ProcessorConfig.POLICY_CHANNEL
+CHANNEL = ProcessorConfig.PolicyChannel
 VALID_CHANNELS = {c.value for c in CHANNEL}
 VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 
@@ -58,7 +58,7 @@ class PolicyManager:
 
     @staticmethod
     def wrap(channel, permission, callback, error=_BLOCK):
-        """Gate `callback` for (channel, permission). channel is a POLICY_CHANNEL.
+        """Gate `callback` for (channel, permission). channel is a PolicyChannel.
         Returns the callback's result STRING (allow/internal/approved) or the
         shared block STRING (deny / escalated-ask / user-denied). The result is
         always a string so ToolDispatcher.dispatch can record it and the loop can render it

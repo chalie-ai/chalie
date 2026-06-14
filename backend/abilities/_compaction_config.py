@@ -35,7 +35,7 @@ class CompactionConfig(ProcessorConfig):
         super().__init__(
             channel="compaction",
             role="compaction",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             discoverable=[],
             blocked=frozenset(),

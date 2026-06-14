@@ -25,7 +25,7 @@ class SkillAssociationConfig(ProcessorConfig):
         super().__init__(
             channel="skill_association",
             role="skill_association",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             discoverable=[],
             blocked=frozenset(),

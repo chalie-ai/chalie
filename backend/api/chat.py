@@ -492,7 +492,7 @@ def post_action():
                     super().__init__(
                         channel="action_button",
                         role="action_button",
-                        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
+                        policy_channel=ProcessorConfig.PolicyChannel.CHAT,
                         always_available=[],
                         discoverable=[],
                         blocked=frozenset(),

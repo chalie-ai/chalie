@@ -60,7 +60,7 @@ class WebSearchConfig(ProcessorConfig):
 
     uses_delegate_provider: ClassVar[bool] = True
 
-    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
+    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
         tools = list(_WEB_SEARCH_TOOLS)
         super().__init__(
             channel="delegate:web_search",

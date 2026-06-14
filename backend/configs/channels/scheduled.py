@@ -68,7 +68,7 @@ class ScheduledConfig(ProcessorConfig):
     return-path UserConfig turn is what reaches the UI.
     """
 
-    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
+    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
         super().__init__(
             channel="scheduled",
             role="scheduled_worker",

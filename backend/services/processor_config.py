@@ -78,7 +78,7 @@ class ProcessorConfig(ABC):
     and never sets this (vision > delegate > chat)."""
 
     # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
-    class POLICY_CHANNEL(str, Enum):
+    class PolicyChannel(str, Enum):
         CHAT           = "chat"
         SUBCONSCIOUS   = "subconscious"
         EXTERNAL_AGENT = "external_agent"
@@ -93,7 +93,7 @@ class ProcessorConfig(ABC):
     """Transcript role for the input row.  E.g. 'user', 'proactive_thought',
     'external_agent', 'pattern_match'."""
 
-    policy_channel: "ProcessorConfig.POLICY_CHANNEL"
+    policy_channel: "ProcessorConfig.PolicyChannel"
     """Which policy channel this processor's tool calls are gated under.
     usage_class (the llm_call_log string) is derived from it."""
 

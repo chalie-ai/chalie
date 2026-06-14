@@ -976,7 +976,7 @@ class McpClientService:
         if stripped[:1] in ("{", "["):
             try:
                 parsed = json.loads(stripped)
-            except (json.JSONDecodeError, ValueError):
+            except ValueError:
                 return text
             if isinstance(parsed, (dict, list)):
                 return parsed

@@ -50,10 +50,10 @@ const PanelMcp = (() => {
         <div id="mcpOutboundContent"><div class="loading">Loading…</div></div>
       </section>
     `;
-    if (!_inLoaded) _loadInbound();
-    else _renderInbound();
-    if (!_outLoaded) _loadOutbound();
-    else _renderOutbound();
+    if (_inLoaded) _renderInbound();
+    else _loadInbound();
+    if (_outLoaded) _renderOutbound();
+    else _loadOutbound();
   }
 
   // ── ── Inbound section ─────────────────────────────────────────────────────
@@ -77,7 +77,7 @@ const PanelMcp = (() => {
       <div class="mcp-row">
         <label class="mcp-label">Server Enabled</label>
         <label class="switch">
-          <input type="checkbox" id="mcpEnabled" ${_inConfig.enabled !== false ? 'checked' : ''}>
+          <input type="checkbox" id="mcpEnabled" ${_inConfig.enabled === false ? '' : 'checked'}>
           <span class="switch-track"></span>
         </label>
       </div>
@@ -150,7 +150,7 @@ const PanelMcp = (() => {
   async function _loadOutbound() {
     try {
       const res = await BrainApp.apiFetch('/api/mcp-clients/');
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error('Failed to fetch outbound MCP servers');
       _outServers = await res.json();
       _outLoaded = true;
     } catch {

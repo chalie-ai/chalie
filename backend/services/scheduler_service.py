@@ -377,7 +377,7 @@ def _run_scheduled_work_loop(message: str) -> str:
     from services.message_processor import MessageProcessor  # noqa: PLC0415
     from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
-    config = ScheduledConfig(ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS)
+    config = ScheduledConfig(ProcessorConfig.PolicyChannel.SUBCONSCIOUS)
     return MessageProcessor.process(message, config)
 
 

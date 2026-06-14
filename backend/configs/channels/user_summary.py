@@ -173,7 +173,7 @@ class UserSummaryConfig(ProcessorConfig):
         super().__init__(
             channel="user_summary",
             role="user_summary",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             discoverable=[],
             blocked=frozenset(),

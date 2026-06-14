@@ -132,7 +132,7 @@ class PatternConfig(ProcessorConfig):
         super().__init__(
             channel="pattern_match",
             role="pattern_match",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
             discoverable=[],
             blocked=frozenset(),

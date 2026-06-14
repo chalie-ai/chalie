@@ -84,10 +84,7 @@ def _call_with_retry(fn, max_retries=2, backoff=1.0):
                     e.provider or 'provider', e.retry_after,
                 )
                 time.sleep(e.retry_after)
-                try:
-                    return fn()
-                except RateLimitError:
-                    raise
+                return fn()
             raise
         except Exception as e:
             if attempt == max_retries:

@@ -91,7 +91,7 @@ class DmnConfig(ProcessorConfig):
         super().__init__(
             channel="dmn",
             role="proactive_thought",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
             blocked=DELEGATE_TOOLS | PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,

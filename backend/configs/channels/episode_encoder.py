@@ -10,7 +10,7 @@ class EpisodeEncoderConfig(ProcessorConfig):
         super().__init__(
             channel="episode_encoder",
             role="episode_encoder",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             discoverable=[],
             blocked=frozenset(),

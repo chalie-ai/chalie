@@ -66,7 +66,7 @@ class EAMPConfig(ProcessorConfig):
         super().__init__(
             channel=f"external-agent:{agent_name}",
             role="external_agent",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.EXTERNAL_AGENT,
+            policy_channel=ProcessorConfig.PolicyChannel.EXTERNAL_AGENT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
             blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,

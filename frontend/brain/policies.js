@@ -28,7 +28,7 @@ const PanelPolicies = (() => {
       const btn = e.target.closest('.seg-btn');
       if (btn) _setAll(btn.dataset.bulk);
     });
-    if (!_loaded) _load(); else _renderPolicies();
+    if (_loaded) _renderPolicies(); else _load();
   }
 
   async function _load() {

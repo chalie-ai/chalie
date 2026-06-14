@@ -7,7 +7,7 @@
  *     context window. Re-fetched on page load and on every inbound WS message.
  */
 const THINKING_KEY = 'thinking_level_override';
-const LEVELS = ['auto', 'medium', 'high'];
+const LEVELS = new Set(['auto', 'medium', 'high']);
 
 export class ChatControls {
   /** @param {{ api: object, ws: object }} deps */
@@ -64,7 +64,7 @@ export class ChatControls {
   async _loadThinking() {
     try {
       const data = await this._api.getSetting(THINKING_KEY);
-      this._setLabel(LEVELS.includes(data?.value) ? data.value : 'auto');
+      this._setLabel(LEVELS.has(data?.value) ? data.value : 'auto');
     } catch {
       this._setLabel('auto');
     }
@@ -72,7 +72,7 @@ export class ChatControls {
 
   async _select(level) {
     this._closeMenu();
-    if (!LEVELS.includes(level)) return;
+    if (!LEVELS.has(level)) return;
     const previous = this._current;
     this._setLabel(level);
     try {

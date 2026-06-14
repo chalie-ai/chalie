@@ -82,7 +82,7 @@ def _read_summary(db):
         "WHERE kind='system' AND key IN ('user_summary', 'user_summary_long') "
         "AND active=1 AND deleted_at IS NULL"
     ).fetchall()
-    return {key: value for key, value in rows}
+    return dict(rows)
 
 
 def test_exploding_sibling_does_not_block_real_hook(db):

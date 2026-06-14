@@ -228,7 +228,7 @@ def stream_to_file(
                     if max_bytes is not None and written > max_bytes:
                         raise DownloadTooLarge(max_bytes)
                     fh.write(chunk)
-        except (DownloadTooLarge, requests.RequestException, OSError):
+        except (DownloadTooLarge, OSError):
             if os.path.exists(dest_path):
                 os.remove(dest_path)
             raise

@@ -265,7 +265,7 @@ def test_explicit_recall_surfaces_moment_in_labeled_lane(authed_client):
     surfaces a pinned moment in a clearly-labeled lane — its result row carries
     ``kind="moment"`` — while the TKT-886 ``{results, fallback}`` contract is
     preserved."""
-    client, db, _store = authed_client
+    client, _, _store = authed_client
     tid = _seed_assistant_turn()
     created = client.post(
         "/moments", json={"transcript_id": tid}, content_type="application/json"

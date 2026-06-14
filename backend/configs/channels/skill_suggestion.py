@@ -11,7 +11,7 @@ class SkillSuggestionConfig(ProcessorConfig):
         super().__init__(
             channel="skills_building",
             role="skills_building",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["skill_manager"],
             discoverable=[],
             blocked=frozenset(),

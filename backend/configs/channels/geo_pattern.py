@@ -96,7 +96,7 @@ class GeoConfig(ProcessorConfig):
         super().__init__(
             channel="geo_pattern",
             role="geo_pattern",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
             discoverable=[],
             blocked=frozenset(),

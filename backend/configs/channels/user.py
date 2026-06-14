@@ -60,7 +60,7 @@ class UserConfig(ProcessorConfig):
         super().__init__(
             channel="user",
             role="user",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
+            policy_channel=ProcessorConfig.PolicyChannel.CHAT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             discoverable=DEFAULT_DISCOVERABLE,
             blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,

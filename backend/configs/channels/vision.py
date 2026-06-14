@@ -37,7 +37,7 @@ class VisionConfig(ProcessorConfig):
 
     uses_vision_provider: ClassVar[bool] = True
 
-    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
+    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
         super().__init__(
             channel="delegate:vision",
             role="vision",

@@ -554,7 +554,7 @@ def _join_threads(prefix, timeout=15.0):
     spawns the Stage-2 user turn synchronously on a ``chat-<id>`` thread
     (api/chat.py:314) before it returns, so joining ``scheduled-work-*`` first
     guarantees the ``chat-*`` thread already exists when we enumerate for it."""
-    for t in list(threading.enumerate()):
+    for t in threading.enumerate():
         if t.name.startswith(prefix) and t is not threading.current_thread():
             t.join(timeout)
 
