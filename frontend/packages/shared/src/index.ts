@@ -9,13 +9,14 @@ export type {
   ActionCallbacks,
 } from './services/WebSocketService';
 export { getHost, setHost } from './config/host';
-export type { PlatformAdapter } from './platform/PlatformAdapter';
+export type { PlatformAdapter, WakeLockHandle } from './platform/PlatformAdapter';
 export { webPlatformAdapter } from './platform/webPlatformAdapter';
 export { useThemeStore } from './stores/theme';
 export type { Theme } from './stores/theme';
 export { useConnectionStore } from './stores/connection';
 export { useTheme } from './composables/useTheme';
 export { useWebSocket, getWebSocket } from './composables/useWebSocket';
+export { useApiClient } from './composables/useApiClient';
 export { default as BaseButton } from './ui/BaseButton.vue';
 export { default as BaseCard } from './ui/BaseCard.vue';
 export { default as BaseField } from './ui/BaseField.vue';

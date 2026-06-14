@@ -26,4 +26,15 @@ export interface PlatformAdapter {
 
   // Navigation — web opens a tab; native opens an in-app webview (later epic)
   openBrain(): void;
+
+  // Screen Wake Lock — keeps the display on during voice record/playback (C1/C5)
+  createWakeLock(): WakeLockHandle;
+}
+
+/** Handle returned by PlatformAdapter.createWakeLock(). */
+export interface WakeLockHandle {
+  /** Request the screen wake lock. No-op when already active. */
+  acquire(): Promise<void>;
+  /** Release the screen wake lock. No-op when not active. */
+  release(): Promise<void>;
 }
