@@ -67,7 +67,10 @@ const PanelImportExport = (() => {
 
   async function _doExport() {
     const password = document.getElementById("snapExportPass")?.value || "";
-    _setExportLoading(true);
+    const card =
+      document.getElementById("snapExportBtn")?.closest(".export-card") ||
+      _root?.querySelector(".export-card");
+    _setCardLoading(card, true, "Preparing your export…");
     try {
       const res = await BrainApp.apiFetch("/api/snapshot/export", {
         method: "POST",
@@ -88,39 +91,38 @@ const PanelImportExport = (() => {
     } catch (e) {
       BrainApp.showToast(e.message || "Export failed", "error");
     } finally {
-      _setExportLoading(false);
+      _setCardLoading(card, false);
     }
   }
 
-  /* While the server assembles the snapshot, hide the password field + button
-     and show an inline "Preparing your export" loader in their place; restore
-     them when the export finishes (success or failure). */
-  function _setExportLoading(on) {
-    const card =
-      document.getElementById("snapExportBtn")?.closest(".export-card") ||
-      _root?.querySelector(".export-card");
+  /* While a long operation runs on an export-card, hide all its input fields
+     and the action button, and show an inline loader with `message` in their
+     place; restore them when called with `on=false`. Shared by export (assemble
+     snapshot) and import (stage restore + restart).
+
+     Toggle via inline display (not the `hidden` attribute): `.btn` and
+     `.form-label` carry author `display` rules that override the low-priority
+     `[hidden]` UA style, so the attribute alone wouldn't hide them. */
+  function _setCardLoading(card, on, message) {
     if (!card) return;
-    const passLabel = document.getElementById("snapExportPass")?.closest("label");
-    const btn = document.getElementById("snapExportBtn");
+    const fields = card.querySelectorAll(".form-label");
+    const btn = card.querySelector("button");
     let loader = card.querySelector(".export-loader");
 
-    // Toggle via inline display (not the `hidden` attribute): `.btn` and
-    // `.form-label` carry author `display` rules that override the low-priority
-    // `[hidden]` UA style, so the attribute alone wouldn't hide them.
     if (on) {
-      if (passLabel) passLabel.style.display = "none";
+      fields.forEach((f) => (f.style.display = "none"));
       if (btn) btn.style.display = "none";
       if (!loader) {
         loader = document.createElement("div");
         loader.className = "export-loader";
         loader.innerHTML =
-          `<span class="export-spinner" aria-hidden="true"></span><span>Preparing your export…</span>`;
+          `<span class="export-spinner" aria-hidden="true"></span><span>${message}</span>`;
         card.appendChild(loader);
       }
       loader.style.display = "";
     } else {
       if (loader) loader.remove();
-      if (passLabel) passLabel.style.display = "";
+      fields.forEach((f) => (f.style.display = ""));
       if (btn) btn.style.display = "";
     }
   }
@@ -143,18 +145,22 @@ const PanelImportExport = (() => {
 
   async function _doImport(file) {
     const password = document.getElementById("snapImportPass")?.value || "";
+    const card = document.getElementById("snapImportBtn")?.closest(".export-card");
     const form = new FormData();
     form.append("file", file);
     if (password) form.append("password", password);
 
+    _setCardLoading(card, true, "Restoring snapshot — the instance will restart…");
     BrainApp.showToast("Staging restore…", "info");
     try {
       const res = await BrainApp.apiFetch("/api/snapshot/import", { method: "POST", body: form }, true);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Import failed");
       BrainApp.showToast("Restore staged — restarting to apply…", "success", { duration: 8000 });
+      // Keep the loader up through the restart; the page reloads itself.
       setTimeout(() => location.reload(), 6000);
     } catch (e) {
+      _setCardLoading(card, false);
       BrainApp.showToast(e.message || "Import failed", "error");
     }
   }
