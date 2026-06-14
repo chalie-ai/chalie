@@ -19,6 +19,8 @@ screenshot ledger; the post-turn hook closes both when the run ends.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from abilities._delegate import render_trail
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
@@ -63,6 +65,8 @@ class WebBrowseConfig(ProcessorConfig):
     """ProcessorConfig for the web_browse delegate. ``policy_channel`` is
     inherited from the caller that invoked the tool; the user-facing permission
     check happens at the outer ``web_browse`` tool."""
+
+    uses_delegate_provider: ClassVar[bool] = True
 
     def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
         super().__init__(

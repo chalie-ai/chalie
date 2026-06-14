@@ -486,9 +486,18 @@ class MessageProcessor:
         except ValueError:
             level = ThinkingLevel.LOW
 
-        # Derive provider type from the config flag (replaces uses_vision_provider).
+        # Derive provider type from the config flags — precedence
+        # vision > delegate > chat. VisionConfig is itself a delegate channel
+        # (delegate:vision) but keeps VISION precedence so it always resolves
+        # the image-understanding provider.
         uses_vision = getattr(self.config, "uses_vision_provider", False)
-        provider_type = ProviderType.VISION if uses_vision else ProviderType.CHAT
+        uses_delegate = getattr(self.config, "uses_delegate_provider", False)
+        if uses_vision:
+            provider_type = ProviderType.VISION
+        elif uses_delegate:
+            provider_type = ProviderType.DELEGATE
+        else:
+            provider_type = ProviderType.CHAT
 
         return ProviderApiRequest(
             system=system,

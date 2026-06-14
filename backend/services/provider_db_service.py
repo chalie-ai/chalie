@@ -436,3 +436,70 @@ class ProviderDbService:
                     (str(provider_id),)
                 )
             cursor.close()
+
+    # ── Delegate Provider ──────────────────────────────────────────
+    #
+    # The provider that subagent (delegate) turns — web_search, web_browse,
+    # and friends — run on, independent of the main chat provider. Unlike
+    # vision there is NO 'Disabled'/none clear state: clearing the pin falls
+    # back to the selected (main) provider, never the last-pinned one. There is
+    # also no supports_vision requirement — any active provider can be pinned.
+
+    def _resolve_delegate_provider(self):
+        """Resolve (provider_or_None, source) where source ∈ explicit|auto|none.
+
+        explicit — an active provider id is stored in settings.
+        auto     — no explicit id, but a selected (main) provider exists; the
+                   delegate defaults to it (NOT persisted; the "use main
+                   provider" default surfaced to the UI).
+        none     — no pin and no selected provider.
+        """
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT value FROM settings WHERE key = 'delegate_provider_id'"
+            )
+            row = cursor.fetchone()
+            cursor.close()
+        if row and row[0]:
+            try:
+                pid = int(row[0])
+                provider = self.get_provider_by_id(pid)  # active-only
+                if provider:
+                    return provider, 'explicit'
+            except (ValueError, TypeError):
+                pass
+        selected = self.get_selected_provider()
+        if selected:
+            return selected, 'auto'
+        return None, 'none'
+
+    def get_delegate_provider(self) -> Optional[Dict[str, Any]]:
+        """Runtime resolver — the provider to use for delegate turns, or None."""
+        provider, _ = self._resolve_delegate_provider()
+        return provider
+
+    def get_delegate_provider_status(self) -> Dict[str, Any]:
+        """UI-facing — {'provider': dict|None, 'source': 'explicit'|'auto'|'none'}."""
+        provider, source = self._resolve_delegate_provider()
+        return {'provider': provider, 'source': source}
+
+    def set_delegate_provider(self, provider_id: Optional[int]) -> None:
+        """Persist the explicit delegate provider id, or clear it when None.
+
+        Clearing does NOT disable delegate turns — resolution then falls back
+        to the selected (main) provider (see _resolve_delegate_provider)."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            if provider_id is None:
+                cursor.execute(
+                    "DELETE FROM settings WHERE key = 'delegate_provider_id'"
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
+                    "VALUES ('delegate_provider_id', ?, 'int', 'ID of the provider used for subagent (delegate) turns', 0) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                    (str(provider_id),)
+                )
+            cursor.close()

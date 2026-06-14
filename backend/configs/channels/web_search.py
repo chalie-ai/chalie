@@ -27,6 +27,8 @@ invoked the tool.
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from abilities._delegate import render_trail
 from services.processor_config import ProcessorConfig
 
@@ -52,6 +54,8 @@ class WebSearchConfig(ProcessorConfig):
     is supplied by the caller (inherited from whoever invoked the tool) rather
     than hardcoded.
     """
+
+    uses_delegate_provider: ClassVar[bool] = True
 
     def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
         tools = list(_WEB_SEARCH_TOOLS)
