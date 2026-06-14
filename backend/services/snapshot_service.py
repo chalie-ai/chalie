@@ -77,6 +77,13 @@ _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm")
 # as opposed to single-file kinds that map straight to one destination path.
 _TREE_KINDS = (_KIND_SECURE, _KIND_DOCUMENTS, _KIND_SKILLS_USER)
 
+# Every artifact KIND this build knows how to restore. A snapshot is a portable,
+# cross-version backup, so it may legitimately carry an artifact a newer build
+# has since dropped (e.g. the removed session_secret). Restoring such a snapshot
+# skips the unknown artifact with a warning rather than aborting the whole
+# restore — see _swap_in.
+_KNOWN_KINDS = frozenset((*_SINGLE_FILE_DB_KINDS, _KIND_VERSION, *_TREE_KINDS))
+
 
 class SnapshotError(Exception):
     """Raised when an import is rejected loudly (bad password handled by the
@@ -413,6 +420,14 @@ class SnapshotService:
         moved: list[tuple[Path, Path]] = []  # (live_destination, aside_copy)
         try:
             for entry in manifest["artifacts"]:
+                if entry["kind"] not in _KNOWN_KINDS:
+                    logger.warning(
+                        "[snapshot] skipping unknown artifact kind %r (arcname=%s) — "
+                        "snapshot was exported by a build that declared an artifact "
+                        "this build no longer restores",
+                        entry["kind"], entry.get("arcname"),
+                    )
+                    continue
                 self._swap_artifact(pending, aside, entry, moved)
         except Exception:
             self._rollback(moved)

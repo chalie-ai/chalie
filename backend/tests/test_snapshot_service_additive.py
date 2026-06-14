@@ -46,7 +46,23 @@ Why each test exists (a real user can hit each path; the locked suite cannot):
     with no password (must succeed) and then feeds a manifest-less zip to
     ``stage_import`` (must raise loudly, stage nothing).
 
-Total snapshot-service tests: 6 locked + 4 additive = 10 (≤ 10 cap honoured).
+  * ``test_restore_skips_unknown_artifact_kind_from_an_older_build`` — a snapshot
+    is a portable, cross-version backup, so it may carry an artifact KIND a newer
+    build has since dropped (the removed ``session_secret``). Before the fix the
+    swap loop did ``routes[kind]`` and a legacy ``session_secret`` entry raised
+    ``KeyError`` inside ``_swap_in`` (``snapshot_service.py:107``) — the restore
+    rolled back and quarantined, so the instance restarted but imported NOTHING.
+    This crafts a snapshot as an OLDER build would have written it (a real
+    ``export()`` zip + one extra legacy artifact) and drives the real
+    ``stage_import`` + ``apply_pending``: the restore must COMPLETE — clear the
+    ``.pending-restore`` marker, leave NO ``.restore-failed-*`` quarantine — with
+    the unknown artifact skipped, not the whole restore aborted.
+
+Total snapshot-service tests: 6 locked + 5 additive = 11. This exceeds the soft
+10-per-service cap by one to cover a proven, user-reported production regression
+(cross-version restore silently importing nothing); the snapshot engine's
+distinct safety-critical paths (crypto, staging, verify, downgrade guard, swap,
+rollback, quarantine, no-op, HTTP route, cross-version skip) justify it.
 """
 
 import os
@@ -213,3 +229,64 @@ class TestSnapshotPlainCryptoAndManifest:
         assert not FileMapperService.get_pending_restore_path().exists(), \
             "a manifest-less zip must stage nothing"
         assert _pre_restore_asides() == [], "no aside before any apply"
+
+
+@pytest.mark.unit
+class TestSnapshotCrossVersionRestore:
+
+    def test_restore_skips_unknown_artifact_kind_from_an_older_build(self, instance):  # noqa: F811
+        """A snapshot from an OLDER build can declare an artifact KIND this build
+        has dropped (the removed ``session_secret``). The restore must SKIP it and
+        apply the rest — not ``KeyError`` and abort the whole restore (which made
+        the instance restart but import nothing). Real ``export()`` → inject the
+        legacy artifact at the zip level (as the old exporter would have) → real
+        ``stage_import`` + ``apply_pending``."""
+        import json
+        import zipfile as _zip
+
+        from services.snapshot_service import _MANIFEST_NAME, SnapshotService
+
+        _seed_transcript("user", "user", "XVERSION-RESTORE-MARKER")
+        svc = SnapshotService()
+        real_zip = svc.export(password=None)
+
+        # Hash one legacy session_secret payload with the production hasher, then
+        # rebuild the zip exactly as a pre-removal build would have: every real
+        # member, plus a single-file 'session_secret' artifact this build no
+        # longer knows how to route.
+        secret_bytes = b"legacy-session-secret-bytes"
+        secret_src = FileMapperService.get_data_path("legacy-secret.bin")
+        secret_src.write_bytes(secret_bytes)
+        legacy_arcname = "session_secret/session_secret"
+
+        with _zip.ZipFile(str(real_zip), "r") as zin:
+            manifest = json.loads(zin.read(_MANIFEST_NAME))
+            members = {n: zin.read(n) for n in zin.namelist() if n != _MANIFEST_NAME}
+        manifest["artifacts"].append({
+            "kind": "session_secret",
+            "arcname": legacy_arcname,
+            "sha256": SnapshotService._sha256(secret_src),
+        })
+        members[legacy_arcname] = secret_bytes
+
+        legacy_zip = FileMapperService.get_data_path("legacy-xversion.zip")
+        with _zip.ZipFile(str(legacy_zip), "w", _zip.ZIP_DEFLATED) as zout:
+            zout.writestr(_MANIFEST_NAME, json.dumps(manifest, indent=2))
+            for name, data in members.items():
+                zout.writestr(name, data)
+
+        svc.stage_import(legacy_zip, None)
+        assert FileMapperService.get_pending_restore_path().exists(), \
+            "the cross-version snapshot must stage like any other"
+
+        SnapshotService.apply_pending()
+
+        # The restore must COMPLETE, not roll back: marker cleared, no quarantine.
+        assert not FileMapperService.get_pending_restore_path().exists(), \
+            "restore must complete and clear .pending-restore, not abort on the legacy artifact"
+        assert _quarantine_dirs() == [], \
+            "a skippable legacy artifact must not crash the swap into a .restore-failed-* quarantine"
+        # The known artifacts were applied: the restored chalie.db is live + readable.
+        _db_mod._local.conn = None
+        assert "XVERSION-RESTORE-MARKER" in _recent_contents("user"), \
+            "the known artifacts (chalie.db) must be restored while the unknown one is skipped"
