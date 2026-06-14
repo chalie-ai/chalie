@@ -2,6 +2,7 @@
 import { onMounted } from 'vue';
 import { useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
+import { useVoiceStore } from './stores/voice';
 import AmbientCanvas from './components/layout/AmbientCanvas.vue';
 import PresenceBar from './components/layout/PresenceBar.vue';
 import ConversationFeed from './components/conversation/ConversationFeed.vue';
@@ -10,11 +11,13 @@ import LoadingOverlay from './components/layout/LoadingOverlay.vue';
 
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
+const voiceStore = useVoiceStore();
 
 onMounted(() => {
-  // Theme init first, then session (WS connect).
+  // Theme init first, then session (WS connect), then voice availability.
   initTheme();
   session.init();
+  voiceStore.checkAvailability();
 });
 </script>
 

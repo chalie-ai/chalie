@@ -1,35 +1,74 @@
 <script setup lang="ts">
 /**
  * Loading overlay — shown on every load until backend health passes (Task A5).
- * For S5, fades out automatically after first paint via a short delay.
+ *
+ * Real gate: fade out after first paint AND once voiceStore.loading === false.
  * The skip button hides it immediately.
+ *
+ * Port of app.js _showLoadingOverlay / _dismissLoadingOverlay.
+ * Transition: 220ms opacity fade, then remove from DOM after 260ms.
  */
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue';
+import { useVoiceStore } from '../../stores/voice';
+
+const voiceStore = useVoiceStore();
 
 const visible = ref(true);
 const fading = ref(false);
 
-let autoHideTimer: ReturnType<typeof setTimeout> | null = null;
-let removeTimer: ReturnType<typeof setTimeout> | null = null;
+/** Whether the component has completed first paint. */
+let firstPaintDone = false;
 
+let removeTimer: ReturnType<typeof setTimeout> | null = null;
+let unwatchVoice: (() => void) | null = null;
+
+/**
+ * Kick off the 220ms CSS fade then remove from the DOM after 260ms.
+ * Idempotent — subsequent calls while fading are no-ops.
+ */
 function hide(): void {
-  if (fading.value) return; // idempotent — skip + skip-during-fade are no-ops
+  if (fading.value) return;
   fading.value = true;
-  // Wait for the CSS opacity transition (220ms) then remove from layout.
   removeTimer = setTimeout(() => {
     visible.value = false;
   }, 260);
 }
 
+/**
+ * Attempt to hide: both conditions must be met:
+ *   1. First paint has happened (nextTick in onMounted).
+ *   2. voiceStore.loading is false (health check resolved).
+ */
+function maybeHide(): void {
+  if (firstPaintDone && !voiceStore.loading) {
+    hide();
+  }
+}
+
 onMounted(async () => {
-  // Wait for first paint, then fade out. Task A5 replaces this with the
-  // real voice-health / backend-ready gate.
+  // Wait for first paint.
   await nextTick();
-  autoHideTimer = setTimeout(hide, 800);
+  firstPaintDone = true;
+
+  // Guard: if voice already resolved before we mounted (e.g. fast cache hit).
+  if (!voiceStore.loading) {
+    hide();
+    return;
+  }
+
+  // Watch for voiceStore.loading to become false.
+  unwatchVoice = watch(
+    () => voiceStore.loading,
+    (isLoading) => {
+      if (!isLoading) {
+        maybeHide();
+      }
+    },
+  );
 });
 
 onBeforeUnmount(() => {
-  if (autoHideTimer !== null) clearTimeout(autoHideTimer);
+  unwatchVoice?.();
   if (removeTimer !== null) clearTimeout(removeTimer);
 });
 </script>
