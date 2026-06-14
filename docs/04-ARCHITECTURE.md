@@ -25,7 +25,6 @@ Everything runs in one process. Workers are daemon threads supervised by a `Work
 | `scheduler-service` | Fires due reminders and scheduled prompts |
 | `subconscious-worker` | The background-cognition tick (see below) |
 | `world-awareness-service` | Hourly news scan based on the user's interests |
-| `moment-context-service` | 6-hourly enrichment of recent conversation moments |
 | `folder-watcher-service` | Watches configured folders and ingests new documents |
 | `document-purge-service` | Periodic cleanup of deleted documents |
 | `search-expander-service` | Generates and embeds paraphrase variants for new memory rows |
@@ -112,9 +111,12 @@ Four layers, each on a different timescale:
 | **Transcript** | Append-only record of every turn, channel-scoped, optionally GPS-tagged | Pruned after 90 days |
 | **Compaction** | LLM-written continuity summaries; the newest `role='compaction'` transcript row is the history watermark | No |
 | **Episodes** | Narrative snapshots extracted from transcript windows (see per-source profiles below), with salience and emotional scores; episodes form a three-level hierarchy — leaf (0), topic super-episode (1), era digest (2) — via periodic density-clustering roll-ups | Yes — exponential decay on last relevance, per-level tau |
-| **Data graph** | Structured facts (`user_specific`, `behavioral_pattern`, `place`, `moment`, `document`, …) with per-kind decay and contradiction/canonicalisation rules | Yes — per-kind policy |
+| **Data graph** | Structured facts (`user_specific`, `behavioral_pattern`, `place`, `document`, …) with per-kind decay and contradiction/canonicalisation rules | Yes — per-kind policy |
+| **Moments** | User-curated bookmarks of individual assistant replies (the "remember this" pin), in their own table outside the data graph | No — lives until the user deletes it |
  
 Episode retrieval is hybrid: vector KNN + FTS5, reranked by relevance, recency, and salience, with a relative floor that drops weak candidates instead of padding results. Every data-graph write is also expanded asynchronously into paraphrase variants (doc2query) and embedded, so differently-worded questions still hit the right facts.
+
+The data-graph kind set is **closed and enforced**: a write with an unrecognised kind is rejected rather than stored, so no channel can invent its own kind. (`moment` used to be a data-graph kind; it is now its own store — see below.)
 
 ### Episode hierarchy and roll-up
 
@@ -145,6 +147,16 @@ Memory **reads cross channels.** Episode recall never filters by the caller's ow
 
 **Provenance** is stamped at write time, not declared in the profile: a fact records the channel of the episode it came from (`fact_extraction:<channel>`), and a behavioural pattern records which background pass produced it (`pattern_match` for the behavioural pass, `geo_pattern` for the location pass).
 
+### Moments
+
+A **moment** is an explicit user bookmark of a single assistant reply — the "remember this" pin. Moments live in their own `moments` table (with companion `moments_fts` lexical index and `moments_vec` semantic-KNN index), entirely outside the data graph. Each moment is keyed to one assistant transcript turn (`transcript_id` is unique — one pin per turn) and stores the reply verbatim.
+
+Unlike data-graph facts, a moment carries **no retrieval weight, no decay, and no janitor** on its own table — it persists until the user explicitly forgets it. The content embedding is computed **synchronously when the user pins**, because pinning is a deliberate user action rather than part of the chat turn's hot path.
+
+Moments surface in memory recall as a **clearly-labeled lane**, but only on **explicit recall** — never in the silent turn-zero seed. So a pinned bookmark is available when the user (or the model) deliberately searches memory, yet it never leaks unbidden into the start-of-turn flashback.
+
+A standing step in the decay cycle wipes any leftover `kind='moment'` rows from the data graph (a one-time clean-up of a legacy storage path; idempotent, and a no-op once drained). Moments are also covered by the "delete all my data" privacy path. The `moments` tables are created declaratively by the schema-convergence pass — there is no migration code.
+
  ---
  
 ## Background Cognition
@@ -152,7 +164,7 @@ Memory **reads cross channels.** Episode recall never filters by the caller's ow
 The **subconscious worker** ticks every 5 minutes but only fires when the user has been idle for 30+ minutes and there is something new since the last run. Each tick runs seven steps, each isolated so one failure can't block the rest:
  
 1. **Consolidate** — run the hierarchy roll-up on each episode-producing channel (`user`, `dmn`, each `external-agent:*`): a leaf round (level-0 → level-1) fires at 50+ apex leaves, and an era round (level-1 → level-2) fires at 25+ level-1 apexes; both use the UMAP→HDBSCAN pipeline described above; clusters stay channel-scoped and are never pooled across sources
-2. **Decay** — run the decay engine over episodes, the data graph, old transcripts, and tool-call records (7-day retention). A fossil janitor tombstones stranded leaves on muted/legacy channels but protects episode-producing channels — the proactive voice never consolidates, so its leaves are permanently apex and must not be reaped
+2. **Decay** — run the decay engine over episodes, the data graph, old transcripts, and tool-call records (7-day retention), and wipe any leftover legacy `kind='moment'` rows from the data graph (moments now have their own table). A fossil janitor tombstones stranded leaves on muted/legacy channels but protects episode-producing channels — the proactive voice never consolidates, so its leaves are permanently apex and must not be reaped
 3. **Pattern match** — an LLM pass over new user-behaviour transcripts that records behavioural patterns and facts (`save_pattern` / `save_graph`), then maps patterns to skills
 4. **Synthesis** — refresh the running user summary when new traits or patterns have appeared
 5. **DMN** — a reflective ACT pass over the user summary and recent episodes; findings are saved to memory, nothing is pushed to chat

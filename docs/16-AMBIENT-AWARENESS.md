@@ -66,7 +66,6 @@ POST /api/signals
 |---|---|---|
 | **Subconscious worker** | Every 5 min, fires only after 30+ min of user idleness | The seven-step cognition tick — consolidation, decay, pattern matching, user-summary synthesis, DMN reflection, capability sync, geo patterns (see [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition)) |
 | **World awareness** | Hourly | Derives up to 8 interests from the user's strongest traits and recent topics, fetches matching headlines, pushes a `news` signal — zero LLM calls |
-| **Moment context** | Every 6 h | Distils recent assistant turns into `moment` rows in the data graph |
 | **Decay engine** | Inside each subconscious tick | Recomputes episode retrieval weights, applies per-kind data-graph decay, deletes expired rows, prunes old transcripts and tool-call records |
 
 All background work degrades gracefully: every step is wrapped at its boundary, a failed step is logged and skipped, and a missing signal means "nothing interesting happened", never an error.
