@@ -9,7 +9,6 @@
   --sidebar-w: 248px;
   --sidebar-w-collapsed: 64px;
   --topbar-h: 56px;
-  --content-max: 1100px;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -247,7 +246,7 @@ body::before {
 
 /* ── Main content area ────────────────────────────────────────── */
 .main { grid-area: main; padding: 24px; overflow-y: auto; }
-.main-inner { max-width: var(--content-max); margin: 0 auto; }
+.main-inner { width: 100%; }
 
 /* ── Panel headers ────────────────────────────────────────────── */
 .panel-header {
@@ -1118,7 +1117,6 @@ input[type="checkbox"]:checked::after {
 }
 
 .brain-overview {
-  max-width: 640px;
   display: flex;
   flex-direction: column;
   gap: 24px;
