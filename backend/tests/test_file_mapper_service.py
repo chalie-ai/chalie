@@ -58,7 +58,6 @@ class TestFileMapperService:
         root = FileMapperService._CHALIE_ROOT
         candidates = [
             FileMapperService.get_db_path(),
-            FileMapperService.get_session_secret_path(),
             FileMapperService.get_schema_path(),
             FileMapperService.get_version_path(),
             FileMapperService.get_abilities_db_path(),

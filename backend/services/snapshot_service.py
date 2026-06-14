@@ -2,8 +2,8 @@
 
 Produces a single standard ``.zip`` that is a complete clone of the running
 instance (the WAL-folded SQLite databases, the vault key-material backups, the
-document store, the user skills, the session secret, and the VERSION marker),
-and restores such a clone with a true wipe-and-replace at the next boot.
+document store, the user skills, and the VERSION marker), and restores such a
+clone with a true wipe-and-replace at the next boot.
 
 Crypto: a password yields a real WZ-AES-256 zip via ``pyzipper``; no password
 yields a plain ``ZIP_DEFLATED`` zip. One read path (``pyzipper.AESZipFile``)
@@ -52,7 +52,6 @@ _TS_FORMAT = "%Y%m%dT%H%M%S%fZ"
 # Mirrors VaultService: secure DIR owner-rwx, each backup file owner-read-only.
 _SECURE_DIR_MODE = 0o700
 _SECURE_FILE_MODE = 0o400
-_SESSION_SECRET_MODE = 0o600
 _RESTORE_FAILED_PREFIX = ".restore-failed-"
 _PRE_RESTORE_PREFIX = ".pre-restore-"
 
@@ -64,7 +63,6 @@ _KIND_SKILLS = "skills"
 _KIND_SECURE = "secure"
 _KIND_DOCUMENTS = "documents"
 _KIND_SKILLS_USER = "skills_user"
-_KIND_SESSION_SECRET = "session_secret"
 _KIND_VERSION = "version"
 
 # The three WAL-folded SQLite databases, in (kind, destination-helper) form.
@@ -104,7 +102,6 @@ class SnapshotService:
             _KIND_CHALIE_DB: self._fm.get_db_path(),
             _KIND_MCP_TOOLS: self._fm.get_mcp_tools_db_path(),
             _KIND_SKILLS: self._fm.get_skills_db_path(),
-            _KIND_SESSION_SECRET: self._fm.get_session_secret_path(),
             _KIND_VERSION: self._fm.get_version_path(),
         }
         return routes[kind]
@@ -173,13 +170,13 @@ class SnapshotService:
         """Lay every artifact into *staged* and return the manifest dict.
 
         WAL-folds the three DBs, copies the secure/documents/skills_user trees,
-        and copies the session secret + VERSION, recording KIND + arcname +
-        sha256 for each member.
+        and copies the VERSION marker, recording KIND + arcname + sha256 for
+        each member.
         """
         entries: list[dict] = []
         self._stage_single_file_dbs(staged, entries)
         self._stage_trees(staged, entries)
-        self._stage_loose_files(staged, entries)
+        self._stage_version(staged, entries)
         return {"version": _MANIFEST_VERSION, "artifacts": entries}
 
     def _stage_single_file_dbs(self, staged: Path, entries: list[dict]) -> None:
@@ -219,20 +216,16 @@ class SnapshotService:
                 shutil.copy2(item, target)
                 entries.append(self._entry(kind, arcname, target, rel=rel))
 
-    def _stage_loose_files(self, staged: Path, entries: list[dict]) -> None:
-        """Copy the session secret and VERSION marker into staging."""
-        loose = {
-            _KIND_SESSION_SECRET: self._fm.get_session_secret_path(),
-            _KIND_VERSION: self._fm.get_version_path(),
-        }
-        for kind, src in loose.items():
-            if not src.exists():
-                continue
-            arcname = f"{kind}/{src.name}"
-            target = staged / arcname
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, target)
-            entries.append(self._entry(kind, arcname, target))
+    def _stage_version(self, staged: Path, entries: list[dict]) -> None:
+        """Copy the VERSION marker into staging."""
+        src = self._fm.get_version_path()
+        if not src.exists():
+            return
+        arcname = f"{_KIND_VERSION}/{src.name}"
+        target = staged / arcname
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, target)
+        entries.append(self._entry(_KIND_VERSION, arcname, target))
 
     def _entry(self, kind: str, arcname: str, staged_file: Path, rel: str | None = None) -> dict:
         """Build one manifest entry recording KIND + arcname + sha256 (+ rel)."""
@@ -433,17 +426,14 @@ class SnapshotService:
     def _reenforce_secure_perms(self) -> None:
         """Re-lock the restored key material — zip extraction does not preserve
         the restrictive perms VaultService writes (secure dir 0o700, each backup
-        0o400) nor the 0o600 session secret. Best-effort: a restore that already
-        succeeded must not be undone by a chmod failure, so log loudly instead."""
+        0o400). Best-effort: a restore that already succeeded must not be undone
+        by a chmod failure, so log loudly instead."""
         secure_dir = self._fm.get_secure_dir()
         try:
             if secure_dir.is_dir():
                 os.chmod(secure_dir, _SECURE_DIR_MODE)
                 for backup in self._fm.list_vault_backups():
                     os.chmod(backup, _SECURE_FILE_MODE)
-            secret = self._fm.get_session_secret_path()
-            if secret.exists():
-                os.chmod(secret, _SESSION_SECRET_MODE)
         except OSError:
             logger.exception("[snapshot] could not re-enforce secure-dir perms after restore")
 

@@ -182,8 +182,7 @@ def authed_client768(db768):
     real_store = MemoryStore()
     with patch("services.auth_session_service.validate_session", return_value=True), \
          patch("services.memory_store.get_shared_store", return_value=real_store), \
-         patch("services.memory_client.MemoryClientService.create_connection", return_value=real_store), \
-         patch("api._get_or_generate_session_secret", return_value="test-secret"):
+         patch("services.memory_client.MemoryClientService.create_connection", return_value=real_store):
         app = create_app()
         app.config["TESTING"] = True
         with app.test_client() as client:

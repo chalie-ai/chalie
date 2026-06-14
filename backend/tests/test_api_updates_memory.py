@@ -11,7 +11,6 @@ DB effects.  No collaborators are mocked.
 """
 
 import pytest
-from unittest.mock import patch
 
 from services.wrapper_auth_service import WrapperAuthService
 
@@ -27,17 +26,12 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 def _make_client():
-    """Return a real Flask test client with no session patches applied.
-
-    The only infra patch is ``_get_or_generate_session_secret`` → it reads from
-    disk (or generates a file) during app construction, which is irrelevant to
-    bearer-auth tests and would fail if the file path is not writable in CI.
-    """
-    with patch('api._get_or_generate_session_secret', return_value='test-secret-updates'):
-        from api import create_app
-        app = create_app()
-        app.config['TESTING'] = True
-        return app.test_client()
+    """Return a real Flask test client with no session patches applied, so the
+    real require_auth decorator runs the real bearer path."""
+    from api import create_app
+    app = create_app()
+    app.config['TESTING'] = True
+    return app.test_client()
 
 
 # ---------------------------------------------------------------------------

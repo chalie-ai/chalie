@@ -83,8 +83,8 @@ def instance(_db_template, tmp_path, monkeypatch):
     ``FileMapperService`` class attributes, so redirecting ``_CHALIE_ROOT`` /
     ``_DATA_DIR`` / ``_SECURE_DIR`` to a temp tree relocates the whole instance
     — chalie.db, data/secure/, data/documents/, data/skills/user/,
-    .session_secret, the .pending-restore / .pre-restore-<ts> dirs — without
-    touching the real ``data/`` directory. The DB is the fully-converged
+    the .pending-restore / .pre-restore-<ts> dirs — without touching the real
+    ``data/`` directory. The DB is the fully-converged
     session template (real schema.sql via SchemaConvergenceService), copied to
     the redirected db path, and injected as the process-wide singleton exactly
     like the ``db`` fixture does. VERSION and schema.sql are copied so the
@@ -129,8 +129,6 @@ def instance(_db_template, tmp_path, monkeypatch):
     # A real skills.sqlite + mcp_tools.sqlite so the WAL-fold step has genuine DBs.
     _make_min_sqlite(str(FileMapperService.get_skills_db_path()))
     _make_min_sqlite(str(FileMapperService.get_mcp_tools_db_path()))
-    # A real .session_secret so the clone has the file to carry.
-    FileMapperService.get_session_secret_path().write_text("a" * 64, encoding="utf-8")
 
     # Inject a real DatabaseService bound to the redirected path as the singleton.
     db_service = DatabaseService(db_path)
@@ -188,8 +186,7 @@ def client(instance):
     real_store = MemoryStore()
     with patch('services.auth_session_service.validate_session', return_value=True), \
          patch('services.memory_store.get_shared_store', return_value=real_store), \
-         patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store), \
-         patch('api._get_or_generate_session_secret', return_value='test-secret'):
+         patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store):
         app = create_app()
         app.config['TESTING'] = True
         with app.test_client() as c:
