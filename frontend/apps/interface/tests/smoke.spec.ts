@@ -1,35 +1,33 @@
 import { test, expect } from '@playwright/test';
 
-test('boots and renders the Vue foundation home', async ({ page }) => {
+// Feature test — drives the REAL interface served at /next/ by a real Chalie
+// instance (authenticated via the global-setup login cookie). No mocks: every
+// assertion is a downstream effect of the real boot path.
+
+test('interface boots against the real backend and renders the shell', async ({ page }) => {
   await page.goto('/next/');
-  const home = page.getByTestId('home');
-  await expect(home).toBeVisible();
-  await expect(home).toContainText('Vue foundation');
+
+  // The loading overlay polls GET /ready and removes itself once the backend
+  // answers ready. Its disappearance is the real downstream signal that the
+  // typed ApiClient reached a live backend (LoadingOverlay.vue).
+  await expect(page.locator('#loadingOverlay')).toBeHidden({ timeout: 15_000 });
+
+  // The real app shell is mounted directly by App.vue (no RouterView): the
+  // conversation spine, the compose dock, and the presence bar are all present.
+  await expect(page.locator('#conversationFeed.conversation-spine')).toBeVisible();
+  await expect(page.locator('#chatInput')).toBeVisible();
+  await expect(page.locator('.presence-bar')).toBeVisible();
+
+  // Presence rests at the idle label ("Chalie") on a healthy connection — never
+  // the "Connection lost" error label (presence.ts LABELS).
+  await expect(page.locator('.presence-label')).not.toHaveText('Connection lost');
 });
 
-test('theme toggles dark↔light and persists across reload', async ({ page }) => {
+test('compose textarea accepts input', async ({ page }) => {
   await page.goto('/next/');
-  await page.evaluate(() => localStorage.setItem('chalie-theme', 'dark'));
-  await page.reload();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  const darkBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  await expect(page.locator('#loadingOverlay')).toBeHidden({ timeout: 15_000 });
 
-  await page.getByTestId('toggle-theme').click();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  await expect(page.getByTestId('theme')).toHaveText('light');
-  const lightBg = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-  // Inequality only — body has a 420ms background-color transition, so this read
-  // may land mid-interpolation. Do NOT harden to an exact value or it will flake.
-  expect(darkBg).not.toBe(lightBg);
-
-  await page.reload();
-  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-});
-
-test('base components render and accept input', async ({ page }) => {
-  await page.goto('/next/');
-  await expect(page.getByTestId('toggle-theme')).toBeVisible();
-  const note = page.getByTestId('note').locator('input');
-  await note.fill('hello');
-  await expect(note).toHaveValue('hello');
+  const input = page.locator('#chatInput');
+  await input.fill('hello chalie');
+  await expect(input).toHaveValue('hello chalie');
 });

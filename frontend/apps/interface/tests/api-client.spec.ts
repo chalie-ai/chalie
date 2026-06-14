@@ -2,7 +2,9 @@ import { test, expect } from '@playwright/test';
 
 test('backend readiness resolves through the typed ApiClient', async ({ page }) => {
   await page.goto('/next/');
-  await expect(page.getByTestId('ready')).toHaveText('ready', { timeout: 15_000 });
+  // LoadingOverlay polls GET /ready via the typed ApiClient and removes itself
+  // once the backend reports ready — the real downstream signal of readiness.
+  await expect(page.locator('#loadingOverlay')).toBeHidden({ timeout: 15_000 });
 });
 
 test('unauthenticated API call is rejected (401)', async ({ page }) => {
