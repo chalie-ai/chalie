@@ -41,4 +41,14 @@ export const scheduler = {
     const api = useApiClient();
     return api.get('/chat/subagents/active');
   },
+
+  /**
+   * POST /chat/subagent/<subId>/stop — request cancellation of a running delegate.
+   * Returns { ok, cancelled } on success or { ok, reason: 'not_found' } when the
+   * sub_id is unknown.
+   */
+  subagentStop(subId: string): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
+    const api = useApiClient();
+    return api.post(`/chat/subagent/${encodeURIComponent(subId)}/stop`, {});
+  },
 };

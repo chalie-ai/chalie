@@ -3,14 +3,17 @@ import { getHost } from '@chalie/shared';
 /**
  * Tips API — /api/tips/dismiss and /api/tips/mute.
  *
- * NOTE: These routes are called by legacy quick_tip_card.js but no corresponding
- * backend route was found in the backend/api/ directory. They are typed as opaque
- * and use raw fetch (matching the legacy implementation) so they fail gracefully
- * if the backend lacks the endpoint.
+ * NOTE: These routes are dormant (no backend emitter currently exists for
+ * quick_tip events). They are ported faithfully so they activate correctly
+ * if/when the backend ships the endpoint.
+ *
+ * Body shapes match the legacy quick_tip_card.js exactly:
+ *   dismiss → { tip_id: id }       (legacy line 129: JSON.stringify({ tip_id: tipId }))
+ *   mute    → {}                   (legacy line 142-146: no body, credentials only)
  */
 export const tips = {
   /**
-   * POST /api/tips/dismiss — dismiss a single tip by id.
+   * POST /api/tips/dismiss — mark a single tip as seen by its tip_id.
    */
   dismiss(id: string): Promise<Response> {
     const host = getHost();
@@ -19,21 +22,21 @@ export const tips = {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id }),
+      body: JSON.stringify({ tip_id: id }),
     });
   },
 
   /**
-   * POST /api/tips/mute — mute an entire tip category.
+   * POST /api/tips/mute — disable all tips globally.
+   * Legacy quick_tip_card.js lines 141-146: POST with Content-Type header, no body.
    */
-  mute(category: string): Promise<Response> {
+  mute(): Promise<Response> {
     const host = getHost();
     const base = host ? host.replace(/\/$/, '') : '';
     return fetch(`${base}/api/tips/mute`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category }),
     });
   },
 };

@@ -1,7 +1,7 @@
 /**
  * Typed CustomEvent bus for Chalie interface events.
  *
- * All events are dispatched on / listened from `document`.  The 6 event types
+ * All events are dispatched on / listened from `document`.  The 7 event types
  * exactly match §9.3 of the parity map.
  *
  * Usage:
@@ -14,9 +14,12 @@ export interface ChalieEventMap {
   'chalie:theme-changed': { theme: 'dark' | 'light' };
   'chalie:pin-moment': { content?: string };
   'chalie:speak-message': { text: string };
+  'chalie:voice-transcript': { text: string };
   'chalie:action': Record<string, unknown>;
   'chalie:silent-action': Record<string, unknown>;
   'chalie:attention': Record<string, unknown>;
+  /** Recall button → App.vue opens the moment-search dialog (no payload). */
+  'chalie:open-recall': Record<string, never>;
 }
 
 /**

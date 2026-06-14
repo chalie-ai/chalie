@@ -19,18 +19,25 @@ import { on } from '../composables/useEventBus';
 import { conversation } from '../api/conversation';
 import { moments } from '../api/moments';
 import { getHost } from '../api/index';
+import { showToast } from '../utils/toast';
 import { useConversationStore } from './conversation';
 import type { AttachmentPreview } from './conversation';
 import type { ConversationSegment } from '../api/conversation';
 import { usePresenceStore } from './presence';
 import { useTasksStore } from './tasks';
 import { useNotificationsStore } from './notifications';
+import type { TipState, UpdateState } from './notifications';
 import { usePermissionsStore } from './permissions';
+import { useContextUsageStore } from './contextUsage';
+import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 // ── Module-level state ────────────────────────────────────────────────────────
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
+
+/** Last pin-moment timestamp (ms) — 250ms debounce (port of app.js:475-479). */
+let _pinDebounce = 0;
 
 /**
  * Unbind functions for event bus listeners registered in init().
@@ -72,6 +79,7 @@ export const useSessionStore = defineStore('session', {
 
       const ws = getWebSocket();
       const conn = useConnectionStore();
+      const contextUsage = useContextUsageStore();
 
       ws.onConnect(() => {
         conn.setConnected(true);
@@ -86,11 +94,13 @@ export const useSessionStore = defineStore('session', {
         this.routeDrift(data);
       });
 
-      // onAny feeds context-usage coalescer in P1c — must never throw.
+      // onAny feeds the context-usage indicator — must never throw.
+      // refresh() is coalesced inside the store, so a per-frame call is safe
+      // (port of chat_controls.js `this._ws.onAny(() => this.refreshContext())`).
       ws.onAny((data: WsInboundEvent) => {
         try {
-          // P1c: contextUsage coalescer hooks here via the event bus.
           void data;
+          void contextUsage.refresh();
         } catch {
           /* never break the WS pipe */
         }
@@ -113,13 +123,31 @@ export const useSessionStore = defineStore('session', {
       );
 
       // chalie:pin-moment — Remember button: pin plaintext to moments store.
+      // Exact port of app.js:474-508: 250ms debounce, single POST /moments,
+      // then a "Remembered" / "Already remembered" toast with an Undo action
+      // (Undo → POST /moments/<transcript_id>/forget). The Remember flow has NO
+      // confirmation dialog — MomentSearchDialog is recall-only, matching
+      // legacy moment_search.js.
       _busUnbinds.push(
         on('chalie:pin-moment', (detail) => {
           const text = (detail as { content?: string }).content ?? '';
           if (!text) return;
-          void moments.pin(text).catch(() => {
-            // Best-effort — swallow network errors silently (no toast in P1a)
-          });
+          const now = Date.now();
+          if (now - _pinDebounce < 250) return;
+          _pinDebounce = now;
+          void moments
+            .pin(text)
+            .then((res) => {
+              const transcriptId = res.item?.transcript_id ?? null;
+              const msg = res.duplicate ? 'Already remembered' : 'Remembered';
+              showToast(
+                msg,
+                transcriptId != null ? () => void moments.forget(transcriptId) : null,
+              );
+            })
+            .catch((err: unknown) => {
+              console.warn('[Session] pin moment failed:', err);
+            });
         }),
       );
 
@@ -316,6 +344,8 @@ export const useSessionStore = defineStore('session', {
               timestamp: responseMeta.timestamp,
               duration_ms: responseMeta.duration_ms,
             });
+            // Port of app.js line 137: record ambient response timestamp.
+            useAmbientSensor().recordResponse();
             this._activeActId = null;
             presence.setState('resting');
             this.isSending = false;
@@ -536,10 +566,15 @@ export const useSessionStore = defineStore('session', {
       // Step 4: background notify
       this._notifyBackground(content);
 
-      // Step 5: notification
+      // Step 5: notification — scheduler fired (reminder/task done). Port of
+      // event_router.js._routeNotificationEvent → app.js onNotification (385-388):
+      // chime UNCONDITIONALLY (no focus/permission gate) and refresh the task
+      // strip. Distinct from the focus-gated background chime in step 4.
       if (data.type === 'notification') {
         const notifications = useNotificationsStore();
-        notifications.applyDriftEvent(data);
+        const tasks = useTasksStore();
+        notifications.chime();
+        void tasks.loadActiveTasks();
         return;
       }
 
@@ -554,28 +589,32 @@ export const useSessionStore = defineStore('session', {
     _routeSimpleEvent(data: WsPushEvent): boolean {
       const tasks = useTasksStore();
       const permissions = usePermissionsStore();
+      const notifications = useNotificationsStore();
 
       switch (data.type as string) {
         case 'app_update':
-          // P1c: surface update notification UI
+          // Update prompt (dormant — backend does not yet emit app_update).
+          notifications.handleUpdate(data as unknown as UpdateState);
           return true;
         case 'task':
           tasks.applyDriftEvent(data);
           return true;
         case 'capability_alert':
-          // P1c: surface capability alert
+          // No-op: dormant capability-alert channel (no legacy UI consumer).
           return true;
         case 'permission_request':
           permissions.enqueue(data);
           return true;
         case 'quick_tip':
-          // P1c: surface quick tip card
+          // Quick-tip card (dormant — backend does not yet emit quick_tip).
+          notifications.handleTip(data as unknown as TipState);
           return true;
         case 'subagent_start':
-          // P1c: subagent indicator
+          // Subagent lifecycle feeds the task drawer's subagent list.
+          tasks.applyDriftEvent(data);
           return true;
         case 'subagent_end':
-          // P1c: subagent indicator
+          tasks.applyDriftEvent(data);
           return true;
         default:
           return false;

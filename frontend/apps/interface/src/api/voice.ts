@@ -33,13 +33,14 @@ export const voice = {
   },
 
   /**
-   * POST /voice/speak — body: { text }. Returns raw Response (binary audio blob).
-   * Retry-After / reason:'loading' retries are handled in the player.
+   * POST /voice/synthesize — body: { text }. Returns raw Response (binary audio/wav blob).
+   * HTTP 503 + reason:'loading' means the TTS model is still warming up; the player
+   * handles the Retry-After retry loop.
    */
   speak(text: string): Promise<Response> {
     const host = getHost();
     const base = host ? host.replace(/\/$/, '') : '';
-    return fetch(`${base}/voice/speak`, {
+    return fetch(`${base}/voice/synthesize`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },

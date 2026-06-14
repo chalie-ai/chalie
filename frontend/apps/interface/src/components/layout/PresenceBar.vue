@@ -1,17 +1,31 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
 import { usePresenceStore } from '../../stores/presence';
+import { useTasksStore } from '../../stores/tasks';
 import { useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 
 const presence = usePresenceStore();
 const { state, label } = storeToRefs(presence);
 
+const tasks = useTasksStore();
+const { totalCount } = storeToRefs(tasks);
+
 const { toggle, theme } = useTheme();
 
 function handleThemeToggle(): void {
   toggle();
   emit('chalie:theme-changed', { theme: theme.value });
+}
+
+/** Recall button → App.vue opens the moment-search dialog. */
+function handleRecall(): void {
+  emit('chalie:open-recall', {});
+}
+
+/** Settings button → open the Brain admin dashboard (port of app.js:266-267). */
+function handleSettings(): void {
+  globalThis.open('/brain/', 'chalie-brain');
 }
 </script>
 
@@ -24,6 +38,47 @@ function handleThemeToggle(): void {
       <span class="presence-label">{{ label }}</span>
     </div>
     <div class="presence-bar__right">
+      <!-- Recall — opens the moment-search dialog (App.vue owns the dialog ref). -->
+      <button
+        id="recallBtn"
+        class="btn-icon"
+        aria-label="Recall"
+        title="Recall"
+        @click="handleRecall"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z"></path>
+        </svg>
+      </button>
+      <!-- Task drawer trigger — shown only when there is something to display.
+           Port of legacy index.html lines 122-127 (taskDrawerBtn).
+           Visibility matches task_strip.js _render(): trigger hidden when totalCount === 0. -->
+      <button
+        v-if="totalCount > 0"
+        id="taskDrawerBtn"
+        class="btn-icon task-drawer-trigger"
+        aria-label="Active tasks"
+        title="Active tasks"
+        @click="tasks.open()"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+        <span class="task-trigger__badge">{{ totalCount }}</span>
+      </button>
+      <!-- Settings — opens the Brain admin dashboard (app.js:266-267). -->
+      <button
+        id="settingsBtn"
+        class="btn-icon"
+        aria-label="Settings"
+        @click="handleSettings"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/>
+          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/>
+        </svg>
+      </button>
       <button
         class="theme-toggle"
         :aria-label="'Toggle light or dark theme'"
@@ -48,6 +103,34 @@ function handleThemeToggle(): void {
 </template>
 
 <style scoped lang="scss">
+// --------------------------------------------------------------------------
+// Task drawer trigger (presence-bar placement)
+// --------------------------------------------------------------------------
+
+.task-drawer-trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.task-trigger__badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
 // --------------------------------------------------------------------------
 // Presence Dot + per-state animations
 // Port of legacy style.css §6 (lines 479–602).

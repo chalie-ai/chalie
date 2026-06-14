@@ -1,38 +1,75 @@
 <script setup lang="ts">
 /**
- * InputDock — compose / send / stop.
+ * InputDock — compose / send / stop, plus the full peripheral controls.
  *
  * Port sources:
- *   legacy app.js _initInput (auto-grow, send-on-click, onSendComplete focus)
- *   legacy chat.js sendMessage / requestStop (orchestration is in session store)
+ *   legacy app.js   _initInput (auto-grow, send-on-click, onSendComplete focus),
+ *                   _initAttachMenu (+ button, vision-provider gating),
+ *                   _ambientSensor.bindTypingInput
+ *   legacy chat.js  sendMessage (image files + previews; orchestration is in
+ *                   the session store)
+ *   legacy chat_controls.js thinking-level dropdown + context-usage indicator
+ *   legacy voice_recorder.js mic button (toggle recording; state + error)
  *   legacy index.html .input-dock markup (classes preserved for interface.scss)
- *   legacy style.css §10–12 (already in interface.scss; no new global CSS added here)
  *
- * Intentionally unimplemented (wired in P1c):
- *   - Mic recording / voice source
- *   - Image/document attach handlers
- *   - Context-usage bar values
- *   - Thinking-level dropdown logic
+ * WS single-owner rule is honoured: send/stop go through the session store;
+ * this component never touches the WebSocket directly.
  */
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { storeToRefs } from 'pinia';
+import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
+import { useAttachmentsStore } from '../../stores/attachments';
+import { useContextUsageStore } from '../../stores/contextUsage';
+import { useAmbientSensor } from '../../composables/useAmbientSensor';
+import { system } from '../../api/system';
+import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
+import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
+import DocumentConfirmCard from '../upload/DocumentConfirmCard.vue';
 
-// ── Stores ────────────────────────────────────────────────────────────────────
+// ── Stores / composables ────────────────────────────────────────────────────
 
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
+const attachments = useAttachmentsStore();
+const contextUsage = useContextUsageStore();
+const ambient = useAmbientSensor();
+
 const { isSending } = storeToRefs(session);
-const { available: voiceAvailable } = storeToRefs(voiceStore);
+const { available: voiceAvailable, recorderState, recError } = storeToRefs(voiceStore);
+const { level, levelLabel, usageDisplay } = storeToRefs(contextUsage);
+
+// Thinking-level options — order + labels match legacy index.html lines 249-251.
+const THINKING_ITEMS = [
+  { level: 'auto', label: 'Auto' },
+  { level: 'medium', label: 'Medium' },
+  { level: 'high', label: 'High' },
+] as const;
 
 // ── Local state ───────────────────────────────────────────────────────────────
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const text = ref('');
 
-/** True when there is non-empty text to send (gates the send button). */
-const canSend = computed(() => text.value.trim().length > 0);
+// Attach-menu UI
+const attachMenuOpen = ref(false);
+const attachBtnRef = ref<HTMLButtonElement | null>(null);
+const attachMenuRef = ref<HTMLDivElement | null>(null);
+const imageInputRef = ref<HTMLInputElement | null>(null);
+const docInputRef = ref<HTMLInputElement | null>(null);
+/** Hidden when no vision-capable provider is configured (legacy app.js:699-706). */
+const hasVisionProvider = ref(true);
+
+// Thinking-level dropdown UI
+const thinkingMenuOpen = ref(false);
+const thinkingWrapRef = ref<HTMLDivElement | null>(null);
+
+/** True when there is something to send: non-empty text OR ≥1 image attachment.
+ *  Port of app.js:574 `!textarea.value.trim() && !this._imageAttach.count`. */
+const canSend = computed(
+  () => text.value.trim().length > 0 || attachments.previews.some((p) => p.isImage),
+);
 
 // ── Auto-grow ─────────────────────────────────────────────────────────────────
 
@@ -48,16 +85,30 @@ function grow(): void {
 
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
-  // session.sendMessage no-ops on empty text, but guard here too so we don't
-  // clear the textarea or re-grow unnecessarily.
-  if (!trimmed) return;
 
-  // Clear textarea before awaiting so UI feels instant.
+  // Read image files + previews BEFORE clear() wipes the strip (chat.js:132-136).
+  const files = attachments.getFiles();
+  const previews: ConvoAttachmentPreview[] = attachments.previews
+    .filter((p) => p.isImage)
+    .map((p) => ({ filename: p.filename, objectUrl: p.dataUrl, isImage: p.isImage }));
+
+  // session.sendMessage no-ops on empty input, but guard here too so we don't
+  // clear the textarea or re-grow unnecessarily (chat.js:138).
+  if (!trimmed && files.length === 0) return;
+
+  // Capture send-mode before the store flips isSending: legacy clears the image
+  // strip only on a fresh turn, not on the mid-ACT append path (chat.js:160).
+  const wasSending = session.isSending;
+
+  // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
   await nextTick();
   grow();
 
-  await session.sendMessage(trimmed);
+  await session.sendMessage(trimmed, 'text', files, previews);
+
+  if (!wasSending) attachments.clear();
+
   // Re-focus after the turn completes (port of app.js onSendComplete handler).
   textareaRef.value?.focus();
 }
@@ -80,6 +131,73 @@ function handleKeydown(e: KeyboardEvent): void {
   }
 }
 
+// ── Mic (voice recorder) ──────────────────────────────────────────────────────
+
+function handleMicClick(): void {
+  void voiceStore.toggleRecording();
+}
+
+// ── Attach menu ───────────────────────────────────────────────────────────────
+
+function toggleAttachMenu(): void {
+  attachMenuOpen.value = !attachMenuOpen.value;
+}
+
+function chooseDocument(): void {
+  attachMenuOpen.value = false;
+  docInputRef.value?.click();
+}
+
+function chooseImage(): void {
+  attachMenuOpen.value = false;
+  imageInputRef.value?.click();
+}
+
+function onImageInputChange(e: Event): void {
+  const input = e.target as HTMLInputElement;
+  if (input.files?.length) void attachments.addFiles(input.files);
+  input.value = ''; // allow re-selecting the same file
+}
+
+function onDocInputChange(e: Event): void {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) void attachments.uploadDocument(file);
+  input.value = '';
+}
+
+// ── Thinking-level dropdown ───────────────────────────────────────────────────
+
+function toggleThinkingMenu(): void {
+  thinkingMenuOpen.value = !thinkingMenuOpen.value;
+}
+
+function selectLevel(next: (typeof THINKING_ITEMS)[number]['level']): void {
+  void contextUsage.setLevel(next);
+  thinkingMenuOpen.value = false;
+}
+
+// ── Outside-click / scroll close (port of app.js + chat_controls.js) ──────────
+
+function onDocumentClick(e: MouseEvent): void {
+  const target = e.target as Node;
+  if (
+    attachMenuOpen.value &&
+    !attachMenuRef.value?.contains(target) &&
+    !attachBtnRef.value?.contains(target)
+  ) {
+    attachMenuOpen.value = false;
+  }
+  if (thinkingMenuOpen.value && !thinkingWrapRef.value?.contains(target)) {
+    thinkingMenuOpen.value = false;
+  }
+}
+
+function onWindowScroll(): void {
+  // Legacy closes the attach menu on body/window scroll (app.js:676-681).
+  if (attachMenuOpen.value) attachMenuOpen.value = false;
+}
+
 // ── session:turn-interrupted listener ────────────────────────────────────────
 
 function onTurnInterrupted(e: Event): void {
@@ -96,31 +214,111 @@ function onTurnInterrupted(e: Event): void {
   });
 }
 
+// ── Voice transcript paste (faithful port of app.js _pasteVoiceTranscript) ───
+
+/** Unbind function returned by on('chalie:voice-transcript', …). */
+let _unsubVoiceTranscript: (() => void) | null = null;
+
+/**
+ * Paste the voice transcript into the compose textarea for review — does NOT
+ * auto-send.  Port of app.js _pasteVoiceTranscript (lines 357-368).
+ */
+function onVoiceTranscript({ text: transcript }: { text: string }): void {
+  text.value = transcript;
+  nextTick(() => {
+    grow();
+    textareaRef.value?.focus();
+    // Move cursor to end (app.js:367: selectionStart = selectionEnd = text.length).
+    const el = textareaRef.value;
+    if (el) {
+      el.selectionStart = el.selectionEnd = el.value.length;
+    }
+  });
+}
+
 onMounted(() => {
   document.addEventListener('session:turn-interrupted', onTurnInterrupted);
+  _unsubVoiceTranscript = on('chalie:voice-transcript', onVoiceTranscript);
+  document.addEventListener('click', onDocumentClick);
+  globalThis.addEventListener('scroll', onWindowScroll, { passive: true });
+
+  // Behavioral signals: typing cadence feeds the ambient snapshot.
+  if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
+
+  // Thinking-level: load the persisted override; context indicator: first paint.
+  void contextUsage.loadLevel();
+  void contextUsage.refresh();
+
+  // Vision-provider gating for the image attach option (app.js:699-706).
+  system
+    .authStatus()
+    .then((s) => {
+      hasVisionProvider.value = s.has_vision_provider;
+    })
+    .catch(() => {
+      /* leave the image option visible on error */
+    });
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('session:turn-interrupted', onTurnInterrupted);
+  _unsubVoiceTranscript?.();
+  document.removeEventListener('click', onDocumentClick);
+  globalThis.removeEventListener('scroll', onWindowScroll);
+  voiceStore.destroyRecorder();
 });
 </script>
 
 <template>
   <footer class="input-dock">
-    <!-- Image preview strip — P1c wires real images; slot is structurally present -->
-    <!-- <div class="image-preview hidden"></div> -->
+    <!-- Image / document preview strip (renders #imagePreview, self-handles drag-drop). -->
+    <ImageAttachStrip />
 
-    <!-- Attach menu — P1c wires handlers; structurally present but inert -->
-    <!-- <div class="attach-menu hidden"> ... </div> -->
+    <!-- Inline document synthesis / duplicate confirmation card. -->
+    <DocumentConfirmCard />
+
+    <!-- Slide-up attachment menu -->
+    <div
+      id="attachMenu"
+      ref="attachMenuRef"
+      class="attach-menu"
+      :class="{ hidden: !attachMenuOpen }"
+    >
+      <div class="attach-menu__inner">
+        <button class="attach-menu__item" type="button" @click="chooseDocument">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+          <span>Attach Document</span>
+        </button>
+        <button
+          v-if="hasVisionProvider"
+          id="attachImageBtn"
+          class="attach-menu__item"
+          type="button"
+          @click="chooseImage"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <circle cx="8.5" cy="8.5" r="1.5"></circle>
+            <polyline points="21 15 16 10 5 21"></polyline>
+          </svg>
+          <span>Take Photo / Pick Image</span>
+        </button>
+      </div>
+    </div>
 
     <div class="input-dock__outer">
       <div class="input-dock__inner">
-        <!-- + attach button — inert until P1c -->
+        <!-- + button: opens slide-up attachment menu -->
         <button
+          id="attachBtn"
+          ref="attachBtnRef"
           class="btn-action btn-action--attach"
+          :class="{ active: attachMenuOpen }"
           aria-label="Attach"
-          disabled
-          title="Attach (coming soon)"
+          @click.stop="toggleAttachMenu"
         >
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -128,14 +326,14 @@ onBeforeUnmount(() => {
           </svg>
         </button>
 
-        <!-- Mic button — visible only when voice is available (gated by P1c for real handling) -->
+        <!-- Mic button: record voice → transcript posted as a 'voice' turn -->
         <button
           v-if="voiceAvailable"
+          id="voiceRecBtn"
           class="btn-icon voice-rec-btn"
           aria-label="Record voice message"
-          data-state="idle"
-          disabled
-          title="Voice recording (coming soon)"
+          :data-state="recorderState"
+          @click="handleMicClick"
         >
           <svg class="voice-rec-btn__mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
@@ -143,6 +341,8 @@ onBeforeUnmount(() => {
             <line x1="12" y1="19" x2="12" y2="23"></line>
             <line x1="8" y1="23" x2="16" y2="23"></line>
           </svg>
+          <span class="voice-rec-btn__dot" aria-hidden="true"></span>
+          <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
 
         <!-- Compose textarea -->
@@ -177,53 +377,67 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Composer controls: thinking-level (left) + context-size (right) — values wired in C8 -->
+    <!-- Composer controls: thinking-level override (left) + context-size indicator (right) -->
     <div class="dock-controls">
-      <div class="thinking-select">
+      <div ref="thinkingWrapRef" class="thinking-select">
         <button
+          id="thinkingTrigger"
           class="thinking-select__trigger"
           type="button"
           aria-haspopup="true"
-          aria-expanded="false"
-          disabled
+          :aria-expanded="thinkingMenuOpen"
+          @click.stop="toggleThinkingMenu"
         >
           <span class="thinking-select__caption">Thinking</span>
-          <span class="thinking-select__value">Auto</span>
+          <span id="thinkingLabel" class="thinking-select__value">{{ levelLabel }}</span>
         </button>
+        <div
+          id="thinkingMenu"
+          class="thinking-select__menu"
+          :class="{ hidden: !thinkingMenuOpen }"
+          role="menu"
+        >
+          <button
+            v-for="item in THINKING_ITEMS"
+            :key="item.level"
+            class="thinking-select__item"
+            :class="{ active: level === item.level }"
+            :data-level="item.level"
+            type="button"
+            role="menuitem"
+            @click="selectLevel(item.level)"
+          >
+            {{ item.label }}
+          </button>
+        </div>
       </div>
-      <div class="context-display">
+      <div id="contextDisplay" class="context-display" :class="{ hidden: !usageDisplay }">
         <span class="context-display__caption">Context</span>
-        <span class="context-indicator" title="Last request size / context window">—</span>
+        <span class="context-indicator" title="Last request size / context window">{{ usageDisplay }}</span>
       </div>
     </div>
 
-    <!-- Hidden file input for image attachment (P1c wires the picker) -->
+    <!-- Mic error label — shown below the dock when mic access / STT fails -->
+    <p v-if="recError" id="voiceRecError" class="voice-rec-error">{{ recError }}</p>
+
+    <!-- Hidden image picker. No capture attr: lets mobile show the standard OS
+         picker (photo library + take-photo), WhatsApp-style. -->
     <input
-      type="file"
       id="imageFileInput"
+      ref="imageInputRef"
+      type="file"
       accept="image/jpeg,image/png,image/webp,image/gif"
       hidden
+      @change="onImageInputChange"
+    />
+
+    <!-- Hidden document picker — accepts the legacy document set (index.html:319). -->
+    <input
+      ref="docInputRef"
+      type="file"
+      accept=".pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml"
+      hidden
+      @change="onDocInputChange"
     />
   </footer>
 </template>
-
-<style scoped lang="scss">
-// Mic button disabled state — no visible change needed beyond the disabled attribute,
-// but ensure the cursor communicates the state.
-.voice-rec-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-// Attach button disabled state.
-.btn-action--attach:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-// Thinking-select trigger disabled state.
-.thinking-select__trigger:disabled {
-  cursor: default;
-  opacity: 0.65;
-}
-</style>
