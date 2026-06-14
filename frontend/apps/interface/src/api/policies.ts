@@ -1,0 +1,18 @@
+import { useApiClient } from '@chalie/shared';
+
+/** Payload sent to POST /api/policies/respond. */
+export interface PolicyRespondPayload {
+  request_id: string;
+  approved: boolean;
+}
+
+export const policies = {
+  /**
+   * POST /api/policies/respond — resolve a pending permission gate.
+   * Wakes the blocked ACT dispatch thread with the user's allow/deny decision.
+   */
+  respond(payload: PolicyRespondPayload): Promise<{ ok: boolean }> {
+    const api = useApiClient();
+    return api.post('/api/policies/respond', payload);
+  },
+};
