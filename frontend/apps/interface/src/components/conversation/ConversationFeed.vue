@@ -127,7 +127,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main ref="feedRef" class="conversation-spine" id="conversationFeed">
+  <main id="conversationFeed" ref="feedRef" class="conversation-spine">
     <!-- History loader — shown at TOP while fetching older history pages -->
     <div v-if="session.historyLoading" class="history-loader">
       <span class="history-loader__spinner" aria-label="Loading history" role="status" />

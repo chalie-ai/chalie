@@ -10,6 +10,8 @@ export default [
       '**/node_modules/**',
       '**/playwright-report/**',
       '**/test-results/**',
+      // Vendored third-party bundles (minified, not authored here)
+      '**/vendor/**',
       // Legacy hand-rolled JS files — not part of the Vue migration
       'brain/**',
       'interface/**',
