@@ -120,7 +120,6 @@ function skipVoice(): void {
             id="accountPassword"
             v-model="password"
             type="password"
-            minlength="8"
             required
             :disabled="pending"
           />
@@ -131,7 +130,6 @@ function skipVoice(): void {
             id="accountConfirmPassword"
             v-model="confirmPassword"
             type="password"
-            minlength="8"
             required
             :disabled="pending"
           />
