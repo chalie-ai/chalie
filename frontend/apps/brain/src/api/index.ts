@@ -15,5 +15,6 @@ export { policies } from './policies';
 export { skills } from './skills';
 export { mcp } from './mcp';
 export { brain } from './brain';
+export { vision } from './vision';
 
 export { getHost } from '@chalie/shared';

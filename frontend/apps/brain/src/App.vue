@@ -7,6 +7,7 @@ import { useHeartbeat } from './composables/useHeartbeat';
 import BrainSidebar from './ui/BrainSidebar.vue';
 import BrainTopbar from './ui/BrainTopbar.vue';
 import CommandPalette from './ui/CommandPalette.vue';
+import ConfirmDialog from './ui/ConfirmDialog.vue';
 import ToastHost from './ui/ToastHost.vue';
 
 const { init: initTheme } = useTheme();
@@ -61,4 +62,7 @@ function closeMobileScrim(): void {
 
   <!-- Command palette overlay -->
   <CommandPalette id="cpOverlay" />
+
+  <!-- Confirm dialog (singleton, always mounted so useConfirm() resolves) -->
+  <ConfirmDialog />
 </template>

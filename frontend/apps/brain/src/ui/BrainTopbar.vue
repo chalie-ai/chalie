@@ -3,17 +3,13 @@
   Shows hamburger (mobile), collapse toggle (desktop), breadcrumb, search button.
 -->
 <script setup lang="ts">
-import { computed, inject } from 'vue';
+import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useShellStore } from '../stores/shell';
 import BrainIcon from './BrainIcon.vue';
 
 const shell = useShellStore();
 const route = useRoute();
-
-// Inject the openCommandPalette function provided by CommandPalette or App.vue.
-// Fallback is a no-op if not provided.
-const openCP = inject<() => void>('openCommandPalette', () => {});
 
 const LABELS: Record<string, string> = {
   providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
@@ -34,7 +30,7 @@ const subLabel = computed(() => LABELS[segments.value[1]] ?? segments.value[1] ?
 function handleSearchKeydown(e: KeyboardEvent): void {
   if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault();
-    openCP();
+    shell.openCommandPalette();
   }
 }
 </script>
@@ -73,7 +69,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
         class="topbar-search"
         role="button"
         tabindex="0"
-        @click="openCP()"
+        @click="shell.openCommandPalette()"
         @keydown="handleSearchKeydown"
       >
         <BrainIcon name="Search" :size="14" />

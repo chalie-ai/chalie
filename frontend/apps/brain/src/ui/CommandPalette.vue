@@ -1,10 +1,10 @@
 <!--
   CommandPalette — port of legacy _renderCommandPalette() in app.js.
   Opened by ⌘K/Ctrl-K or the topbar search button.
-  Provides the openCommandPalette injection consumed by BrainTopbar.
+  Visibility is driven by shell.commandPaletteOpen (Pinia store).
 -->
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, provide, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { useShellStore } from '../stores/shell';
 import BrainIcon from './BrainIcon.vue';
@@ -12,7 +12,6 @@ import BrainIcon from './BrainIcon.vue';
 const shell = useShellStore();
 const router = useRouter();
 
-const visible = ref(false);
 const query = ref('');
 const selectedIdx = ref(0);
 const inputRef = ref<HTMLInputElement | null>(null);
@@ -60,26 +59,18 @@ const filtered = computed(() => {
 });
 
 watch(query, () => { selectedIdx.value = 0; });
-watch(visible, (v) => {
+watch(() => shell.commandPaletteOpen, (v) => {
   if (v) {
+    query.value = '';
     selectedIdx.value = 0;
     void nextTick(() => inputRef.value?.focus());
   }
 });
 
-function open(): void {
-  query.value = '';
-  visible.value = true;
-}
-
-function close(): void {
-  visible.value = false;
-}
-
 function selectItem(item: CPItem): void {
   if (shell.providersOnly && item.path !== '/providers') return;
   void router.push(item.path);
-  close();
+  shell.closeCommandPalette();
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -94,29 +85,26 @@ function onKeydown(e: KeyboardEvent): void {
     const item = filtered.value[selectedIdx.value];
     if (item) selectItem(item);
   } else if (e.key === 'Escape') {
-    close();
+    shell.closeCommandPalette();
   }
 }
 
 function onGlobalKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
     e.preventDefault();
-    if (visible.value) close(); else open();
-  } else if (e.key === 'Escape' && visible.value) {
-    close();
+    shell.toggleCommandPalette();
+  } else if (e.key === 'Escape' && shell.commandPaletteOpen) {
+    shell.closeCommandPalette();
   }
 }
 
 onMounted(() => document.addEventListener('keydown', onGlobalKeydown));
 onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKeydown));
-
-// Provide the open function so BrainTopbar can call it via inject.
-provide('openCommandPalette', open);
 </script>
 
 <template>
-  <div :class="['cp-overlay', { hidden: !visible }]" @click.self="close">
-    <div class="cp" v-if="visible">
+  <div :class="['cp-overlay', { hidden: !shell.commandPaletteOpen }]" @click.self="shell.closeCommandPalette()">
+    <div class="cp" v-if="shell.commandPaletteOpen">
       <input
         ref="inputRef"
         class="cp-input"

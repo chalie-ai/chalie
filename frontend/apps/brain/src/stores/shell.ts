@@ -26,6 +26,9 @@ export const useShellStore = defineStore('brain-shell', {
 
     /** Current sub-panel label (set by sub-views inside panels). */
     subTitle: '' as string,
+
+    /** Whether the command palette overlay is open. */
+    commandPaletteOpen: false as boolean,
   }),
 
   actions: {
@@ -38,6 +41,18 @@ export const useShellStore = defineStore('brain-shell', {
      */
     liftProvidersOnly(): void {
       this.providersOnly = false;
+    },
+
+    openCommandPalette(): void {
+      this.commandPaletteOpen = true;
+    },
+
+    closeCommandPalette(): void {
+      this.commandPaletteOpen = false;
+    },
+
+    toggleCommandPalette(): void {
+      this.commandPaletteOpen = !this.commandPaletteOpen;
     },
 
     toggleSidebar(): void {

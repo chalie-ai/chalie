@@ -40,6 +40,7 @@ export const brain = {
       window.location.replace(
         '/login/?next=' + encodeURIComponent(window.location.pathname),
       );
+      throw new Error('redirecting to login');
     }
     return res;
   },
