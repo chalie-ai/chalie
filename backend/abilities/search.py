@@ -175,7 +175,15 @@ class SearchAbility(Ability):
             # Weak-routing supplement mixes DDG into a real result set — name it.
             result_meta["fallback"] = _DDG
 
-        rich = self._build_rich_card(results) if structured else None
+        # --- Rich media card temporarily disabled (web_search latency work) ---
+        # _build_rich_card resolves og:image URLs with synchronous network calls
+        # on every search. Inside the web_search delegate (which never broadcasts
+        # the card to the user) that is pure latency tax, and even on the chat
+        # channel it serialises the turn behind 1-3 extra HTTP fetches. Left in
+        # place but not invoked; to be re-wired properly with a design spec.
+        # See follow-up ticket: "Re-wire rich media card for web_search results".
+        # rich = self._build_rich_card(results) if structured else None
+        rich = None
         return ToolResult.ok(structured, rich=rich, **result_meta)
 
     # ── Provider registry ──────────────────────────────────────────────────────
