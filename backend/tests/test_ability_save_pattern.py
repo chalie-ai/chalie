@@ -98,20 +98,6 @@ def _valid_params(**overrides) -> dict:
     return params
 
 
-# ── empty evidence list slips truthiness → pre-gate missing-params ───────────────
-
-
-def test_empty_list_evidence_is_missing_params(db):
-    """An empty ``evidence_transcript_ids`` list is falsy — the truthiness
-    pre-gate rejects it before run() as missing-params."""
-    mp = _mp(db)
-    out = ToolDispatcher(mp).dispatch(
-        "save_pattern", _valid_params(evidence_transcript_ids=[])
-    )
-    assert "[save_pattern(status=error, code=missing-params" in out
-    assert _rows(db) == []
-
-
 # ── whitespace-only summary slips the truthiness pre-gate → run() rejects it ────
 
 

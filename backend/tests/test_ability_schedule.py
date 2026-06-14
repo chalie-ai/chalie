@@ -232,15 +232,15 @@ def test_cancel_by_message_removes_row(db, chat_mp):
     assert _row(db, item_id)["status"] == "cancelled"
 
 
-def test_cancel_without_target_errors_with_stable_code(db, chat_mp):
-    """``cancel`` with neither item_id nor message errors with a stable kebab-case
-    code (NOT the placeholder) and a hint."""
+def test_cancel_without_target_errors_with_cancel_target_required(db, chat_mp):
+    """``cancel`` needs ``item_id`` OR ``message`` — an either/or the pre-gate map
+    cannot express (ACTION_REQUIRED["cancel"] == ()), so the guard lives in run()
+    and surfaces the tool-unique ``code=cancel-target-required`` (schedule.py)."""
     out = ToolDispatcher(chat_mp).dispatch(
         "schedule", {"action": "cancel", "act_summary": "x"}
     )
 
-    assert "[schedule(status=error" in out
-    assert "code=error]" not in out
+    assert "[schedule(status=error, code=cancel-target-required" in out
     assert "hint:" in out
 
 
@@ -248,14 +248,15 @@ def test_cancel_without_target_errors_with_stable_code(db, chat_mp):
 
 
 def test_invalid_recurrence_errors_with_valid_ladder(db, chat_mp):
-    """A bad ``recurrence`` errors with a stable code and a ``valid:`` ladder of
-    the accepted recurrence keywords."""
+    """A bad ``recurrence`` errors with the tool-unique ``code=invalid-recurrence``
+    and a ``valid:`` ladder naming the real accepted keywords (schedule.py
+    ``_VALID_RECURRENCES`` + ``interval:N``)."""
     out = ToolDispatcher(chat_mp).dispatch(
         "schedule",
         {"action": "create", "message": "Standup",
          "due_at": "tomorrow 9am", "recurrence": "fortnightly", "act_summary": "x"},
     )
 
-    assert "[schedule(status=error" in out
-    assert "code=error]" not in out
-    assert "valid:" in out
+    assert "[schedule(status=error, code=invalid-recurrence" in out
+    for keyword in ("daily", "weekly", "monthly", "weekdays", "hourly", "interval:N"):
+        assert keyword in out, keyword

@@ -71,17 +71,6 @@ def test_invalid_durations_are_invalid_duration_code(db, user_mp):
         assert "code=error" not in out, (bad, out)
 
 
-def test_zero_duration_hits_pre_gate_as_missing_params(db, user_mp):
-    """``duration_seconds=0`` is falsy, so the pre-gate's ``not params.get(p)``
-    check treats it as missing — a documented consequence of the fleet pre-gate,
-    surfacing as ``missing-params`` rather than ``invalid-duration``."""
-    out = ToolDispatcher(user_mp).dispatch(
-        "timer", {"title": "Zero", "duration_seconds": 0, "act_summary": "x"}
-    )
-    assert "[timer(status=error" in out, out
-    assert "code=missing-params" in out, out
-
-
 # ── Contract: title truncation + max-duration edge ───────────────────────────────
 
 

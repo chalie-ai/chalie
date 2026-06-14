@@ -105,15 +105,18 @@ def test_schema_provider_enum_matches_real_registry(db):
     assert "stackoverflow" not in enum
 
 
-# ── Missing/blank query: pre-gated, never reaches the network ─────────────────
+# ── Blank query: slips the pre-gate, caught by search's own .strip() guard ─────
 
 
 def test_blank_query_reports_missing_params(db, chat_mp):
-    """A whitespace-only ``query`` is treated the same as missing — no network."""
+    """A whitespace-only ``query`` is truthy, so it slips the ACTION_REQUIRED
+    pre-gate and is caught by search's own ``.strip()`` guard inside run()
+    (search.py) — that tool-specific guard is what this test pins, surfacing as
+    ``missing-params`` naming ``query`` with no network call."""
     out = ToolDispatcher(chat_mp).dispatch(
         "search", {"query": "   ", "act_summary": "x"}
     )
 
-    assert "[search(status=error" in out
-    assert "code=error]" not in out
+    assert "[search(status=error, code=missing-params" in out
+    assert "query" in out
     assert "[end:search]" in out
