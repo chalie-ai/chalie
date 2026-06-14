@@ -104,9 +104,12 @@ const PanelImportExport = (() => {
     const btn = document.getElementById("snapExportBtn");
     let loader = card.querySelector(".export-loader");
 
+    // Toggle via inline display (not the `hidden` attribute): `.btn` and
+    // `.form-label` carry author `display` rules that override the low-priority
+    // `[hidden]` UA style, so the attribute alone wouldn't hide them.
     if (on) {
-      if (passLabel) passLabel.hidden = true;
-      if (btn) btn.hidden = true;
+      if (passLabel) passLabel.style.display = "none";
+      if (btn) btn.style.display = "none";
       if (!loader) {
         loader = document.createElement("div");
         loader.className = "export-loader";
@@ -114,11 +117,11 @@ const PanelImportExport = (() => {
           `<span class="export-spinner" aria-hidden="true"></span><span>Preparing your export…</span>`;
         card.appendChild(loader);
       }
-      loader.hidden = false;
+      loader.style.display = "";
     } else {
       if (loader) loader.remove();
-      if (passLabel) passLabel.hidden = false;
-      if (btn) btn.hidden = false;
+      if (passLabel) passLabel.style.display = "";
+      if (btn) btn.style.display = "";
     }
   }
 
