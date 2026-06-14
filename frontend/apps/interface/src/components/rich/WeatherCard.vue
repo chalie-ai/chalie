@@ -1,0 +1,458 @@
+<script setup lang="ts">
+import { computed } from 'vue';
+import { renderMarkup } from '../../composables/useMarkup';
+
+// ── Payload contract ───────────────────────────────────────────────────────
+
+export interface WeatherPayload {
+  location?: string;
+  temperature_c?: number;
+  feels_like_c?: number;
+  condition?: string;
+  sunrise?: string;
+  sunset?: string;
+  hourly?: Array<{
+    hour: number;
+    temp_c: number;
+  }>;
+}
+
+const props = defineProps<{ payload: WeatherPayload; synthesis?: string }>();
+
+// ── Constants ───────────────────────────────────────────────────────────────
+
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+// ── Time-of-day phase ───────────────────────────────────────────────────────
+
+/** Parse an Open-Meteo local ISO ("YYYY-MM-DDTHH:MM") into a Date. */
+function parseLocalISO(s: string | undefined): Date | null {
+  if (!s) return null;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Pick a sky phase from the current local hour and the daily sunrise/sunset
+ * times. Falls back to a coarse day/night split when astro times are missing.
+ */
+function pickPhase(
+  now: Date,
+  sunrise: string | undefined,
+  sunset: string | undefined,
+): 'dawn' | 'day' | 'sunset' | 'night' {
+  const sr = parseLocalISO(sunrise);
+  const ss = parseLocalISO(sunset);
+  if (!sr || !ss) {
+    return now.getHours() >= 6 && now.getHours() < 20 ? 'day' : 'night';
+  }
+
+  const t = now.getTime();
+  const ms = 60 * 60 * 1000;
+  if (t >= sr.getTime() - ms && t < sr.getTime() + ms) return 'dawn';
+  if (t >= ss.getTime() - ms && t < ss.getTime() + ms) return 'sunset';
+  if (t >= sr.getTime() && t < ss.getTime()) return 'day';
+  return 'night';
+}
+
+function formatHM(d: Date): string {
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+// ── Derived state ───────────────────────────────────────────────────────────
+
+const now = new Date();
+
+const phase = computed<'dawn' | 'day' | 'sunset' | 'night'>(() =>
+  pickPhase(now, props.payload.sunrise, props.payload.sunset),
+);
+
+const roundedTemp = computed<number>(() => Math.round(props.payload.temperature_c ?? 0));
+
+const dayLabel = computed<string>(() => DAYS[now.getDay()]);
+
+const timeLabel = computed<string>(() => formatHM(now));
+
+const captionHtml = computed<string>(() => {
+  if (props.synthesis) return renderMarkup(props.synthesis);
+  return '';
+});
+
+const fallbackCaption = computed<string>(() => {
+  if (props.synthesis) return '';
+  const loc = props.payload.location || 'your area';
+  const feels =
+    props.payload.feels_like_c == null
+      ? ''
+      : ` Feels like ${Math.round(props.payload.feels_like_c)}°.`;
+  const p = phase.value;
+  if (p === 'sunset') return `Golden hour in ${loc}.${feels}`;
+  if (p === 'dawn') return `Sun's coming up over ${loc}.${feels}`;
+  if (p === 'night') return `Quiet night in ${loc}.${feels}`;
+  return `${props.payload.condition || 'Steady weather'} in ${loc}.${feels}`;
+});
+
+// ── Hourly rail ─────────────────────────────────────────────────────────────
+
+interface HourCell {
+  hour: number;
+  temp_c: number;
+  isCurrent: boolean;
+  isPeak: boolean;
+  barWidth: number;
+}
+
+const hourCells = computed<HourCell[]>(() => {
+  const hourly = props.payload.hourly;
+  if (!hourly || hourly.length === 0) return [];
+
+  const temps = hourly.map((h) => h.temp_c).filter((t) => t != null);
+  const min = temps.length ? Math.min(...temps) : 0;
+  const max = temps.length ? Math.max(...temps) : 1;
+  const span = Math.max(1, max - min);
+  const peakTemp = max;
+  const currentHour = now.getHours();
+
+  return hourly.map((h) => ({
+    hour: h.hour,
+    temp_c: h.temp_c,
+    isCurrent: h.hour === currentHour,
+    isPeak: h.temp_c === peakTemp,
+    barWidth: 35 + Math.round(((h.temp_c - min) / span) * 65),
+  }));
+});
+
+const hasRail = computed<boolean>(() => hourCells.value.length > 0);
+</script>
+
+<template>
+  <div class="rich-card weather-card" :data-phase="phase">
+    <!-- Sky canvas -->
+    <div class="weather-card__sky">
+      <!-- Sun / moon (phase-styled via CSS) -->
+      <div class="weather-card__sun" aria-hidden="true" />
+
+      <!-- Drifting clouds -->
+      <div class="weather-card__cloud weather-card__cloud--1" aria-hidden="true" />
+      <div class="weather-card__cloud weather-card__cloud--2" aria-hidden="true" />
+
+      <!-- Skyline silhouette -->
+      <div class="weather-card__skyline" aria-hidden="true" />
+
+      <!-- Overlay: readout + caption -->
+      <div class="weather-card__overlay">
+        <div class="weather-card__readout">
+          <!-- Big temperature top-left -->
+          <div class="weather-card__temp">
+            {{ roundedTemp }}<sup>°</sup>
+          </div>
+
+          <!-- Location + day/time top-right -->
+          <div class="weather-card__loc">
+            <div>{{ payload.location || '—' }}</div>
+            <div>{{ dayLabel }} · {{ timeLabel }}</div>
+          </div>
+        </div>
+
+        <!-- Caption: synthesis (HTML) or fallback plain text -->
+        <div
+          v-if="synthesis"
+          class="weather-card__caption"
+          v-html="captionHtml"
+        />
+        <div
+          v-else
+          class="weather-card__caption"
+        >{{ fallbackCaption }}</div>
+      </div>
+    </div>
+
+    <!-- Hourly rail (hidden when hourly data is absent) -->
+    <div v-if="hasRail" class="weather-card__rail">
+      <div
+        v-for="cell in hourCells"
+        :key="cell.hour"
+        class="weather-card__hour"
+        :class="{
+          'weather-card__hour--cur': cell.isCurrent,
+          'weather-card__hour--peak': cell.isPeak,
+        }"
+      >
+        <span class="weather-card__hour-label">{{ cell.hour }}</span>
+        <b class="weather-card__hour-temp">{{ cell.temp_c }}°</b>
+        <div class="weather-card__hour-bar" :style="{ width: cell.barWidth + '%' }" />
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped lang="scss">
+/*
+ * Card-specific rules only. Base chrome (.rich-card, __divider, __synthesis,
+ * card-enter animation) is declared globally in base_card.css — not repeated here.
+ */
+
+/* Override base padding — the sky canvas IS the card body */
+.rich-card.weather-card {
+  padding: 0;
+  overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+  background: transparent;
+  border: 1px solid var(--border, color-mix(in oklab, var(--violet) 22%, transparent));
+}
+
+/* ── Sky canvas ──────────────────────────────────────────────────────────── */
+
+.weather-card__sky {
+  position: relative;
+  height: 220px;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* Phase-driven gradients. Fallback (no phase) is night. */
+.weather-card[data-phase="day"] .weather-card__sky {
+  background: linear-gradient(180deg, #4a8cd6 0%, #6ea7e0 40%, #a9c8eb 80%, #f0d59f 100%);
+}
+.weather-card[data-phase="dawn"] .weather-card__sky {
+  background: linear-gradient(180deg, #1a2240 0%, #4a4070 35%, #c87a5a 75%, #ffc97a 100%);
+}
+.weather-card[data-phase="sunset"] .weather-card__sky {
+  background: linear-gradient(180deg, #1a2240 0%, #2a3560 35%, #c75a3f 75%, #ffb070 100%);
+}
+.weather-card[data-phase="night"] .weather-card__sky {
+  background: linear-gradient(180deg, #06080e 0%, #121a30 50%, #1f2a4a 100%);
+}
+
+.weather-card__sky::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 70% 30%, rgba(255, 200, 140, 0.30), transparent 60%),
+    radial-gradient(ellipse 80% 50% at 20% 85%, rgba(138, 92, 255, 0.20), transparent 60%);
+  pointer-events: none;
+}
+
+/* ── Sun / moon ──────────────────────────────────────────────────────────── */
+
+.weather-card__sun {
+  position: absolute;
+  right: 14%;
+  top: 38%;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  filter: blur(2px);
+  opacity: 0.9;
+  animation: weather-sun-bob 12s ease-in-out infinite alternate;
+  pointer-events: none;
+
+  .weather-card[data-phase="day"] & {
+    background: radial-gradient(circle, #fff4cc 0%, #ffd972 60%, transparent 80%);
+  }
+
+  .weather-card[data-phase="dawn"] &,
+  .weather-card[data-phase="sunset"] & {
+    background: radial-gradient(circle, #ffd28c 0%, #ff9b50 60%, transparent 80%);
+  }
+
+  .weather-card[data-phase="night"] & {
+    width: 70px;
+    height: 70px;
+    background: radial-gradient(circle, #f4f1ff 0%, #b8b3d6 55%, transparent 80%);
+    filter: blur(1px);
+    opacity: 0.85;
+  }
+}
+
+@keyframes weather-sun-bob {
+  from { transform: translateY(0); }
+  to   { transform: translateY(8px); }
+}
+
+/* ── Drifting clouds ─────────────────────────────────────────────────────── */
+
+.weather-card__cloud {
+  position: absolute;
+  background: rgba(255, 255, 255, 0.18);
+  filter: blur(14px);
+  border-radius: 50%;
+  animation: weather-cloud-drift 30s linear infinite;
+  pointer-events: none;
+
+  &--1 {
+    width: 220px;
+    height: 60px;
+    top: 30%;
+    left: -25%;
+    animation-duration: 38s;
+  }
+
+  &--2 {
+    width: 160px;
+    height: 48px;
+    top: 50%;
+    left: -25%;
+    animation-duration: 26s;
+    animation-delay: -10s;
+    opacity: 0.55;
+  }
+}
+
+@keyframes weather-cloud-drift {
+  from { transform: translateX(0); }
+  to   { transform: translateX(160vw); }
+}
+
+/* ── Skyline silhouette ──────────────────────────────────────────────────── */
+
+.weather-card__skyline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36px;
+  background: linear-gradient(to top, #06080e 0%, #06080e 30%, transparent 100%);
+  pointer-events: none;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 28px;
+    background-image: linear-gradient(to right,
+      transparent 5%, #0a0d18 5%, #0a0d18 8%, transparent 8%,
+      transparent 14%, #0a0d18 14%, #0a0d18 18%, transparent 18%,
+      transparent 24%, #0a0d18 24%, #0a0d18 30%, transparent 30%,
+      transparent 38%, #0a0d18 38%, #0a0d18 41%, transparent 41%,
+      transparent 50%, #0a0d18 50%, #0a0d18 56%, transparent 56%,
+      transparent 64%, #0a0d18 64%, #0a0d18 68%, transparent 68%,
+      transparent 76%, #0a0d18 76%, #0a0d18 82%, transparent 82%,
+      transparent 90%, #0a0d18 90%, #0a0d18 95%, transparent 95%);
+    background-size: 100% 100%;
+    background-position: bottom;
+    background-repeat: no-repeat;
+    mask-image: linear-gradient(to top, black 60%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to top, black 60%, transparent 100%);
+  }
+}
+
+/* ── Overlay (readout + caption) ─────────────────────────────────────────── */
+
+.weather-card__overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  padding: 18px 22px;
+  color: white;
+  z-index: 1;
+}
+
+.weather-card__readout {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.weather-card__temp {
+  font-size: 4rem;
+  font-weight: 300;
+  letter-spacing: -0.04em;
+  line-height: 1;
+
+  sup {
+    font-size: 1.6rem;
+    font-weight: 400;
+    opacity: 0.85;
+    vertical-align: super;
+  }
+}
+
+.weather-card__loc {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.92;
+  text-align: right;
+  margin-top: 6px;
+
+  div:last-child {
+    opacity: 0.6;
+    margin-top: 4px;
+  }
+}
+
+.weather-card__caption {
+  align-self: end;
+  max-width: 62%;
+  font-size: 0.92rem;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.92);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+/* ── Hour rail ───────────────────────────────────────────────────────────── */
+
+.weather-card__rail {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  background: rgba(6, 8, 14, 0.72);
+  border-top: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+}
+
+.weather-card__hour {
+  padding: 12px 4px 14px;
+  text-align: center;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.7rem;
+  color: color-mix(in oklab, white 55%, transparent);
+  letter-spacing: 0.06em;
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+
+  &:last-child {
+    border-right: none;
+  }
+
+  &--cur {
+    background: rgba(255, 255, 255, 0.05);
+
+    .weather-card__hour-temp {
+      color: color-mix(in oklab, var(--violet) 80%, white);
+    }
+  }
+
+  &--peak .weather-card__hour-temp {
+    color: var(--amber, #ffb257);
+  }
+}
+
+.weather-card__hour-label {
+  display: block;
+}
+
+.weather-card__hour-temp {
+  display: block;
+  font-family: var(--font-sans, system-ui, sans-serif);
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: color-mix(in oklab, white 90%, transparent);
+  margin-top: 4px;
+  letter-spacing: 0;
+}
+
+.weather-card__hour-bar {
+  height: 2px;
+  margin: 6px auto 0;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.4;
+  max-width: 80%;
+}
+</style>

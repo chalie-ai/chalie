@@ -5,6 +5,7 @@ import '@fontsource/inter/600.css';
 import '@chalie/shared/styles/main.scss';
 import './styles/interface.scss';
 import './styles/conversation.scss';
+import './styles/rich-card-base.scss';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import App from './App.vue';

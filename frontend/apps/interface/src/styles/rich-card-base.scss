@@ -1,0 +1,54 @@
+// ==========================================================================
+// Rich-Media Card — shared chrome (global)
+//
+// Port of legacy frontend/interface/rich_media/base_card.css. These classes
+// are shared by every card SFC (WeatherCard, ArticleCard, …) so they live in a
+// GLOBAL stylesheet rather than any one card's scoped block — a card renders
+// <div class="rich-card <name>-card">, inherits this base chrome, and adds its
+// own card-specific detail via its scoped styles.
+//
+// Theme: uses the shared design tokens (var(--violet), var(--bg-surface), …)
+// for automatic light/dark support — never hardcode colours (Rule 7).
+// Depends on @chalie/shared/styles/main.scss (tokens) being imported first.
+// ==========================================================================
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.rich-card {
+  --card-bg: color-mix(in oklab, var(--violet) 4%, var(--bg-surface));
+  --card-border: color-mix(in oklab, var(--violet) 22%, transparent);
+  --card-radius: 16px;
+  --card-padding: 20px 22px;
+  --card-glow: color-mix(in oklab, var(--violet) 8%, transparent);
+
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--card-radius);
+  padding: var(--card-padding);
+  max-width: 480px;
+  margin: 6px 0;
+  animation: card-enter 200ms ease-out both;
+}
+
+.rich-card__divider {
+  height: 1px;
+  background: var(--border);
+  margin: 14px 0;
+}
+
+.rich-card__synthesis {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  font-style: italic;
+  line-height: 1.5;
+  margin-top: 2px;
+}
