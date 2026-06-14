@@ -20,3 +20,14 @@ export function formatDate(raw: string | null | undefined): string {
     return raw;
   }
 }
+
+/**
+ * Escape HTML special characters. Verbatim port of legacy
+ * `frontend/brain/app.js:380-383` (`BrainApp.escapeHtml`). Needed only where
+ * markup is assembled for `v-html` (e.g. the World view's markdown renderer);
+ * ordinary `{{ }}` interpolation already escapes its content.
+ */
+export function escapeHtml(s: string | null | undefined): string {
+  if (!s) return '';
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
