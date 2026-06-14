@@ -17,6 +17,7 @@ structured row shape.
 
 from typing import ClassVar
 
+from abilities._params import Keys
 from abilities._result import ToolResult
 from abilities._review_window import ReviewWindowAbility
 
@@ -54,7 +55,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "date_time": {
+            Keys.date_time: {
                 "type": "string",
                 "description": (
                     "ISO timestamp to anchor the search "
@@ -62,14 +63,14 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
                     "±buffer_minutes of this time will be returned."
                 ),
             },
-            "buffer_minutes": {
+            Keys.buffer_minutes: {
                 "type": "integer",
                 "description": (
                     f"Half-window size in minutes (default {_DEFAULT_BUFFER_MINUTES}, "
                     f"max {_MAX_BUFFER_MINUTES}). Increase to widen the search."
                 ),
             },
-            "include_subagent_transcripts": {
+            Keys.include_subagent_transcripts: {
                 "type": "boolean",
                 "description": (
                     "When true, include rows from the subagent channel in addition "
@@ -78,7 +79,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
                 ),
             },
         },
-        "required": ["date_time"],
+        "required": [Keys.date_time],
     }
 
     def get_parameters(self) -> dict:
@@ -92,7 +93,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
         A non-int / unparseable value is a loud ``invalid-param`` naming the valid
         range (the old ``int(...)`` crashed the whole dispatch to
         ``unhandled-exception``)."""
-        raw = params.get("buffer_minutes", _DEFAULT_BUFFER_MINUTES)
+        raw = params.get(Keys.buffer_minutes, _DEFAULT_BUFFER_MINUTES)
         try:
             minutes = int(raw)
         except (TypeError, ValueError):
@@ -111,7 +112,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
         channel when ``include_subagent_transcripts`` is truthy — oldest first."""
         from services.database_service import get_shared_db_service
 
-        include_subagent = bool(params.get("include_subagent_transcripts", False))
+        include_subagent = bool(params.get(Keys.include_subagent_transcripts, False))
         channels = ("user", "subagent") if include_subagent else ("user",)
         placeholders = ", ".join("?" for _ in channels)
 

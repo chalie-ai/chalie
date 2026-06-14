@@ -40,6 +40,7 @@ from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._delegate import delegate_goal, delegate_result
+from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
 
@@ -72,19 +73,19 @@ class WebSearchAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "What to research on the web.",
             },
         },
-        "required": ["query"],
+        "required": [Keys.query],
     }
 
     # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
     # ``""`` key covers action-less tools) rejects a missing/empty ``query`` with
     # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
     # query never spawns an expensive delegate on an empty goal.
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("query",)}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.query,)}
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS

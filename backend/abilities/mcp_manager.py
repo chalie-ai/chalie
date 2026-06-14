@@ -41,6 +41,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ class McpManagerAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": ["list", "add", "enable", "disable"],
                 "description": (
@@ -110,7 +111,7 @@ class McpManagerAbility(Ability):
                     "its tools from discovery; by name or server_id)."
                 ),
             },
-            "name": {
+            Keys.name: {
                 "type": "string",
                 "description": (
                     "For add: required human-readable server label "
@@ -118,21 +119,21 @@ class McpManagerAbility(Ability):
                     "label to resolve the server by when no server_id is given."
                 ),
             },
-            "host": {
+            Keys.host: {
                 "type": "string",
                 "description": (
                     "For add: required full URL including port, e.g. "
                     "'https://mcp.example.com/mcp'."
                 ),
             },
-            "headers": {
+            Keys.headers: {
                 "type": "object",
                 "description": (
                     "For add: optional extra HTTP headers as a JSON object "
                     "(e.g. {'Authorization': 'Bearer …'})."
                 ),
             },
-            "server_id": {
+            Keys.server_id: {
                 "type": "string",
                 "description": (
                     "For enable/disable: the server UUID from list (takes "
@@ -140,7 +141,7 @@ class McpManagerAbility(Ability):
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     def get_parameters(self) -> dict:
@@ -161,14 +162,14 @@ class McpManagerAbility(Ability):
     # under the same missing-params code.
     ACTION_REQUIRED: ClassVar[dict] = {
         "list": (),
-        "add": ("name", "host"),
+        "add": (Keys.name, Keys.host),
         "enable": (),
         "disable": (),
     }
 
     def run(self, params: dict) -> ToolResult:
         """Dispatch to the appropriate sub-action handler."""
-        action = (params.get("action") or "").strip()
+        action = (params.get(Keys.action) or "").strip()
         dispatch = {
             "list": self._do_list,
             "add": self._do_add,
@@ -209,15 +210,15 @@ class McpManagerAbility(Ability):
         failed ping is surfaced as an ERROR, never dressed up as a connection.
         """
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
-        name = (params.get("name") or "").strip()
-        host = (params.get("host") or "").strip()
+        name = (params.get(Keys.name) or "").strip()
+        host = (params.get(Keys.host) or "").strip()
         if not name or not host:
             return ToolResult.err(
                 "Both 'name' and 'host' are required to add a server.",
                 code="missing-params",
                 valid=("name", "host"),
             )
-        headers = params.get("headers") or {}
+        headers = params.get(Keys.headers) or {}
 
         svc = McpClientService()
         server = svc.add_server(name=name, host=host, headers=headers, enabled=True)
@@ -318,8 +319,8 @@ class McpManagerAbility(Ability):
         (``missing-params``) or the target does not exist (``not-found``), so the
         caller only proceeds on a real server.
         """
-        server_id = (params.get("server_id") or "").strip()
-        name = (params.get("name") or "").strip()
+        server_id = (params.get(Keys.server_id) or "").strip()
+        name = (params.get(Keys.name) or "").strip()
         if not server_id and not name:
             return ToolResult.err(
                 "Provide a server to act on.",

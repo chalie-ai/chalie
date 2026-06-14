@@ -31,6 +31,7 @@ from RestrictedPython import compile_restricted, safe_builtins, safe_globals
 from RestrictedPython.PrintCollector import PrintCollector
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult, truncate
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ class CodeEvalAbility(Ability):
     # Action-less tool: the dispatcher's ACTION_REQUIRED pre-gate rejects a
     # missing/empty ``code`` as ``code=missing-params`` BEFORE the policy gate or
     # run(). The ``""`` key covers action-less tools (precedent: vision).
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("code",)}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.code,)}
 
     def get_name(self) -> str:
         return "code_eval"
@@ -85,12 +86,12 @@ class CodeEvalAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "code": {
+            Keys.code: {
                 "type": "string",
                 "description": "Python code to execute. Use print() to emit results.",
             },
         },
-        "required": ["code"],
+        "required": [Keys.code],
     }
 
     # Result-contract messages. The error strings are the actionable signals the
@@ -151,7 +152,7 @@ class CodeEvalAbility(Ability):
         ACTION_REQUIRED pre-gate, which rejects it. The guard covers direct
         callers the same way the pre-gate would have.
         """
-        code = (params.get("code") or "").strip()
+        code = (params.get(Keys.code) or "").strip()
         if not code:
             return ToolResult.err(
                 self._ERR_NO_CODE,

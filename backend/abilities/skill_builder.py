@@ -22,6 +22,7 @@ import sqlite3
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.file_mapper_service import FileMapperService
 from utils.skills_io import (
@@ -63,9 +64,9 @@ class SkillBuilderAbility(Ability):
     # one missing-params error naming ALL of them. edit/delete need only a title
     # (the existence/ownership checks live in run()); list needs nothing.
     ACTION_REQUIRED: ClassVar[dict] = {
-        "create": ("title", "use_for", "content"),
-        "edit": ("title",),
-        "delete": ("title",),
+        "create": (Keys.title, Keys.use_for, Keys.content),
+        "edit": (Keys.title,),
+        "delete": (Keys.title,),
         "list": (),
     }
 
@@ -100,7 +101,7 @@ class SkillBuilderAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": ["create", "edit", "delete", "list"],
                 "description": (
@@ -110,7 +111,7 @@ class SkillBuilderAbility(Ability):
                     "list: list all skills (both curated and user-created)."
                 ),
             },
-            "title": {
+            Keys.title: {
                 "type": "string",
                 "description": (
                     "The skill title — a short noun phrase describing what the skill does "
@@ -118,7 +119,7 @@ class SkillBuilderAbility(Ability):
                     "Required for create, edit, and delete."
                 ),
             },
-            "use_for": {
+            Keys.use_for: {
                 "type": "string",
                 "description": (
                     "One sentence describing when to use this skill "
@@ -126,7 +127,7 @@ class SkillBuilderAbility(Ability):
                     "Required for create."
                 ),
             },
-            "content": {
+            Keys.content: {
                 "type": "string",
                 "description": (
                     "The skill body as numbered steps (1. 2. 3. …). "
@@ -141,7 +142,7 @@ class SkillBuilderAbility(Ability):
                     "Required for create."
                 ),
             },
-            "tags": {
+            Keys.tags: {
                 "type": "string",
                 "description": (
                     "Comma-separated keywords that describe the skill's domain "
@@ -149,7 +150,7 @@ class SkillBuilderAbility(Ability):
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     def get_parameters(self) -> dict:
@@ -161,7 +162,7 @@ class SkillBuilderAbility(Ability):
         # four real actions and its required params are present. No try/except
         # swallow: an unexpected failure bubbles to the dispatcher's _run, which
         # renders it as code=unhandled-exception (errors must surface).
-        action = params.get("action", "list")
+        action = params.get(Keys.action, "list")
         config = getattr(self.mp, "config", None)
         channel = getattr(config, "channel", None)
         logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
@@ -203,9 +204,9 @@ def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | No
 def _handle_create(params: dict) -> ToolResult:
     # title / use_for / content presence is guaranteed by the ACTION_REQUIRED
     # pre-gate; here we only normalise.
-    title = (params.get("title") or "").strip()
-    use_for = (params.get("use_for") or "").strip()
-    content = (params.get("content") or "").strip()
+    title = (params.get(Keys.title) or "").strip()
+    use_for = (params.get(Keys.use_for) or "").strip()
+    content = (params.get(Keys.content) or "").strip()
 
     if not SKILLS_DB_PATH.exists():
         return ToolResult.err(
@@ -225,7 +226,7 @@ def _handle_create(params: dict) -> ToolResult:
                 action="create",
             )
 
-        tags = (params.get("tags") or "").strip()
+        tags = (params.get(Keys.tags) or "").strip()
         meta = {
             "title": title,
             "use_for": use_for,
@@ -263,7 +264,7 @@ def _handle_create(params: dict) -> ToolResult:
 
 
 def _handle_edit(params: dict) -> ToolResult:
-    title = (params.get("title") or "").strip()  # presence guaranteed by pre-gate
+    title = (params.get(Keys.title) or "").strip()  # presence guaranteed by pre-gate
 
     if not SKILLS_DB_PATH.exists():
         return ToolResult.err(
@@ -286,9 +287,9 @@ def _handle_edit(params: dict) -> ToolResult:
         skill_id = existing["id"]
         updated_meta = {
             "title": title,
-            "use_for": (params.get("use_for") or "").strip() or existing["use_for"],
-            "content": (params.get("content") or "").strip() or existing["content"],
-            "tags": (params.get("tags") or "").strip() if params.get("tags") is not None else (existing["tags"] or ""),
+            "use_for": (params.get(Keys.use_for) or "").strip() or existing["use_for"],
+            "content": (params.get(Keys.content) or "").strip() or existing["content"],
+            "tags": (params.get(Keys.tags) or "").strip() if params.get(Keys.tags) is not None else (existing["tags"] or ""),
             "version": existing["version"] + 1,
         }
 
@@ -327,7 +328,7 @@ def _handle_edit(params: dict) -> ToolResult:
 
 
 def _handle_delete(params: dict) -> ToolResult:
-    title = (params.get("title") or "").strip()  # presence guaranteed by pre-gate
+    title = (params.get(Keys.title) or "").strip()  # presence guaranteed by pre-gate
 
     if not SKILLS_DB_PATH.exists():
         return ToolResult.err(

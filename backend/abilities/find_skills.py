@@ -31,6 +31,7 @@ import sqlite3
 from pathlib import Path
 from typing import ClassVar
 
+from abilities._params import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
 from services.embedding_utils import pack_embedding
@@ -71,16 +72,16 @@ class FindSkillsAbility(SearchableAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "Describe the task or topic you need a playbook for.",
             },
-            "limit": {
+            Keys.limit: {
                 "type": "integer",
                 "description": "Max results (default 3, max 5).",
             },
         },
-        "required": ["query"],
+        "required": [Keys.query],
     }
 
     def get_parameters(self) -> dict:
@@ -90,8 +91,8 @@ class FindSkillsAbility(SearchableAbility):
     _LOG_PREFIX = "[FIND_SKILLS]"
 
     def run(self, params: dict) -> ToolResult:
-        query = params.get("query", "").strip()
-        limit = min(params.get("limit", _DEFAULT_LIMIT) or _DEFAULT_LIMIT, _MAX_LIMIT)
+        query = params.get(Keys.query, "").strip()
+        limit = min(params.get(Keys.limit, _DEFAULT_LIMIT) or _DEFAULT_LIMIT, _MAX_LIMIT)
         logger.info(f"{self._LOG_PREFIX} query='{query}' limit={limit}")
 
         if not query:

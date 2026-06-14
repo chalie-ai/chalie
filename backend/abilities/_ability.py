@@ -241,7 +241,6 @@ class Ability(ABC):
         params: dict,
         name: str,
         *,
-        aliases: tuple[str, ...] = (),
         default: object = _MISSING,
         choices: "tuple | None" = None,
         clamp: "tuple | None" = None,
@@ -249,28 +248,27 @@ class Ability(ABC):
     ) -> object:
         """Resolve one input the model passed, with self-correcting failures.
 
-        Resolution order: the canonical ``name`` first, then each alias in turn
-        (the TKT-834 ``read`` alias-ladder generalised) — the first key present
-        with a non-None value wins. Missing → *default* (or a ``ToolParamError``
-        when *required* / no default). ``choices`` validates membership; ``clamp``
-        ``(lo, hi)`` bounds a numeric. All failures raise ``ToolParamError`` —
-        the dispatcher catches it and renders ``code=invalid-param`` with a
-        ``hint`` and ``valid=`` so the model fixes the call without re-reading the
-        schema. ``final`` — sealed at import by ``__init_subclass__``.
+        The canonical ``name`` (a :class:`abilities._params.Keys` constant) is
+        matched; the first key present with a non-None value wins. Argument-key
+        healing — a model addressing the parameter by a mangled (``source"``) or
+        alias (``url`` for ``source``) spelling — happens ONCE upstream at the
+        dispatch seam (``abilities._params.KeyHealer.heal``, fed by the shared
+        :data:`abilities._params.VARIANTS` ladders), so by the time ``run()`` calls
+        ``param`` the key is already canonical and this method only matches *name*.
+        Missing → *default* (or a ``ToolParamError`` when *required* / no default).
+        ``choices`` validates membership; ``clamp`` ``(lo, hi)`` bounds a numeric.
+        All failures raise ``ToolParamError`` — the dispatcher catches it and
+        renders ``code=invalid-param`` with a ``hint`` and ``valid=`` so the model
+        fixes the call without re-reading the schema. ``final`` — sealed at import
+        by ``__init_subclass__``.
         """
-        value = _MISSING
-        for key in (name, *aliases):
-            if key in params and params[key] is not None:
-                value = params[key]
-                break
-
-        if value is _MISSING:
+        value = params.get(name)
+        if value is None:
             if required:
-                tried = ", ".join((name, *aliases))
                 raise ToolParamError(
                     f"Required parameter '{name}' is missing.",
                     code="invalid-param",
-                    hint=f"pass one of: {tried}.",
+                    hint=f"pass '{name}'.",
                 )
             if default is _MISSING:
                 return None

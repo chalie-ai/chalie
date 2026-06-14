@@ -21,8 +21,11 @@ The contract under test:
     JSON; str body → verbatim; meta in the open tag; hint/valid lines on errors).
   * ``ACTION_REQUIRED`` pre-validation reports an unknown action with ``valid=``
     and ALL missing params in ONE ``missing-params`` error.
-  * ``Ability.param`` resolves aliases / validates choices / clamps numerics and
-    raises ``ToolParamError`` which the dispatcher renders canonically.
+  * Argument-key aliasing is healed at the dispatch seam
+    (``abilities._params.KeyHealer.heal`` — ``url``/``path`` → ``source``)
+    BEFORE ``run()``; ``Ability.param`` then matches the canonical key, validates
+    choices, clamps numerics, and raises ``ToolParamError`` which the dispatcher
+    renders canonically.
   * Rich-media: an ``ok(rich=…)`` result dispatched on a ``broadcast_to=='user'``
     mp carries the ordinal + the card instruction; on a non-user channel it does
     NOT (the entire card path is gated on user broadcast).
@@ -139,9 +142,21 @@ class _ParamAbility(Ability):
     def get_summary(self): return "throwaway: exercises Ability.param"
     def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
     def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
+    def get_parameters(self):
+        # Declares the canonical 'source'; the seam (KeyHealer.heal) heals the
+        # model's 'url'/'path' onto it via the shared VARIANTS[source] ladder BEFORE
+        # run() — param() itself no longer carries a per-tool alias list.
+        return {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string"},
+                "limit": {"type": "integer"},
+                "mode": {"type": "string"},
+            },
+            "required": ["source"],
+        }
     def run(self, params):
-        source = self.param(params, "source", aliases=("url", "path"), required=True)
+        source = self.param(params, "source", required=True)
         limit = self.param(params, "limit", default=10, clamp=(1, 100))
         mode = self.param(params, "mode", default="fast", choices=("fast", "slow"))
         return ToolResult.ok({"source": source, "limit": limit, "mode": mode})
@@ -267,12 +282,12 @@ def test_action_required_missing_params_reported_in_one_error(db, registered):
     assert "name" in out and "value" in out
 
 
-# ── (e) Ability.param aliases / choices / clamp through the real chokepoint ───
+# ── (e) seam-healed alias + Ability.param choices / clamp through the chokepoint ─
 
 def test_param_alias_clamp_choice_happy_path(db, registered):
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_param", {"url": "x", "limit": 999})
-    # alias url→source; limit clamped 999→100; mode default 'fast'.
+    # seam heals url→source; limit clamped 999→100; mode default 'fast'.
     assert '"source":"x"' in out
     assert '"limit":100' in out
     assert '"mode":"fast"' in out

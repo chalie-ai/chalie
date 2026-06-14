@@ -26,6 +26,7 @@ import logging
 from typing import ClassVar, Optional
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services import news_sources
 from services.news_service import NewsFetchError, NewsService
@@ -42,7 +43,7 @@ class NewsAbility(Ability):
     # key covers action-less tools (see ToolDispatcher._prevalidate); a missing or
     # blank query is rejected as one code=missing-params error naming 'query', so
     # run() never sees a query-less call.
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": ("query",)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
 
     def get_name(self) -> str:
         return "news"
@@ -68,17 +69,17 @@ class NewsAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "What to search for.",
             },
-            "category": {
+            Keys.category: {
                 "type": "string",
                 "enum": list(_CATEGORIES),
                 "description": "Narrow to a news category. Use only for broad topic browsing.",
             },
         },
-        "required": ["query"],
+        "required": [Keys.query],
     }
 
     def get_parameters(self) -> dict:
@@ -102,7 +103,7 @@ class NewsAbility(Ability):
     def run(self, params: dict) -> ToolResult:
         # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
         # whitespace-only value that the truthiness pre-gate lets through.
-        query = (params.get("query") or "").strip()
+        query = (params.get(Keys.query) or "").strip()
         if not query:
             return ToolResult.err(
                 "query is required and cannot be blank.",
@@ -114,7 +115,7 @@ class NewsAbility(Ability):
         # A bogus category must be rejected loudly, never silently degraded into
         # an uncategorised search — the param helper raises ToolParamError
         # (code=invalid-param) which the dispatcher renders canonically.
-        category = self.param(params, "category", default=None, choices=_CATEGORIES)
+        category = self.param(params, Keys.category, default=None, choices=_CATEGORIES)
         telemetry = self.telemetry or {}
 
         svc = self._get_service()

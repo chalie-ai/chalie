@@ -25,6 +25,7 @@ from typing import ClassVar
 import requests
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.time_utils import utc_now
 
@@ -79,7 +80,7 @@ class WeatherAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "location": {
+            Keys.location: {
                 "type": "string",
                 "description": (
                     "City or place name (e.g. 'Malta', 'London'). Omit to "
@@ -104,7 +105,7 @@ class WeatherAbility(Ability):
         success — the dispatcher pairs the weather card when this turn broadcasts
         to the user — or ``ToolResult.err`` when every source is unavailable.
         """
-        location_param = params.get("location", "").strip()
+        location_param = params.get(Keys.location, "").strip()
         lat, lon, location_name = _extract_location(self.telemetry)
 
         # Guardrail: with no device coordinates AND no location param there is no

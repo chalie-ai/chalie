@@ -32,6 +32,7 @@ from uuid import uuid4
 # Neither imports this module, so both import normally — no alias/patch hack.
 from abilities._event_emitter import ActEventEmitter
 from abilities._mcp_ability import _MCPAbility
+from abilities._params import KeyHealer
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolParamError, ToolResult
 # ClientContext owns the per-request client-telemetry snapshot that _run()
@@ -57,8 +58,12 @@ class ToolDispatcher:
     Spec §5 / AC-4.
     """
 
-    def __init__(self, mp: object) -> None:
+    def __init__(self, mp: object, key_healer: "KeyHealer | None" = None) -> None:
         self._mp = mp
+        # The key healer is injected (DIP); the shared default heals against the
+        # production VARIANTS registry. A test can supply a probe healer without
+        # touching the registry.
+        self._key_healer = key_healer or KeyHealer()
 
     # ── The single tool-call entry point ──────────────────────────────────────
 
@@ -81,26 +86,42 @@ class ToolDispatcher:
         ability = self._bind(tool_name)
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
-        elif (pre := self._prevalidate(ability, params)) is not None:
-            # ACTION_REQUIRED pre-gate fires BEFORE the permission is formed: a
-            # hallucinated action would otherwise lazily seed a bogus
-            # '<tool>.<action>' ask row and freeze the turn waiting for human
-            # approval. Malformed input never reaches the policy gate or run().
-            result_text = self._render(tool_name, pre, None)
         else:
-            # The risk class the gate keys on is derived from the inputs via the
-            # ability's classify_action hook (default None), NOT trusted from a
-            # model-supplied 'action' — a self-declared action is prompt-injectable
-            # and must never decide the permission. Fall back to the action param
-            # only when the tool offers no classification.
-            classified = ability.classify_action(params)
-            action = classified if classified is not None else params.get("action")
-            permission = f"{tool_name}.{action}" if action else tool_name
-            result_text = PolicyManager.wrap(
-                channel=getattr(config, "policy_channel", None),
-                permission=permission,
-                callback=lambda: self._execute(ability, params, act_summary),
-            )
+            # Heal model-mangled argument KEYS against the tool's declared schema
+            # before any gate or run() reads them: a stray-quote/case/alias key
+            # (e.g. 'source"', 'URL', or read's 'url' for 'source') is rewritten
+            # to its canonical parameter, so the ACTION_REQUIRED pre-gate and the
+            # ability see the real key instead of a corrupt one that would bounce
+            # on a spurious required-field error (TKT-963 / TKT-964). Defensive: a
+            # registry/schema fault must never break dispatch — on failure the raw
+            # params flow through unchanged.
+            try:
+                params = self._key_healer.heal(params, ability.get_parameters())
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "[ToolDispatcher] key canonicalisation failed for %s — "
+                    "proceeding with raw params", tool_name,
+                )
+            if (pre := self._prevalidate(ability, params)) is not None:
+                # ACTION_REQUIRED pre-gate fires BEFORE the permission is formed: a
+                # hallucinated action would otherwise lazily seed a bogus
+                # '<tool>.<action>' ask row and freeze the turn waiting for human
+                # approval. Malformed input never reaches the policy gate or run().
+                result_text = self._render(tool_name, pre, None)
+            else:
+                # The risk class the gate keys on is derived from the inputs via the
+                # ability's classify_action hook (default None), NOT trusted from a
+                # model-supplied 'action' — a self-declared action is prompt-injectable
+                # and must never decide the permission. Fall back to the action param
+                # only when the tool offers no classification.
+                classified = ability.classify_action(params)
+                action = classified if classified is not None else params.get("action")
+                permission = f"{tool_name}.{action}" if action else tool_name
+                result_text = PolicyManager.wrap(
+                    channel=getattr(config, "policy_channel", None),
+                    permission=permission,
+                    callback=lambda: self._execute(ability, params, act_summary),
+                )
 
         from services.act_trail import ActTrail  # noqa: PLC0415
         ActTrail().record(

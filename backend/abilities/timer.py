@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.time_utils import parse_utc
 
@@ -41,7 +42,7 @@ class TimerAbility(Ability):
     # title + duration_seconds are both required; presence is enforced by the
     # dispatcher pre-gate (ACTION_REQUIRED) BEFORE run(). Key "" — action-less.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "": ("title", "duration_seconds"),
+        "": (Keys.title, Keys.duration_seconds),
     }
 
     def get_name(self) -> str:
@@ -66,26 +67,26 @@ class TimerAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "title": {
+            Keys.title: {
                 "type": "string",
                 "description": "Short label for the timer (max 80 chars). E.g. 'Focus block', 'Pasta', 'Breath hold'.",
             },
-            "duration_seconds": {
+            Keys.duration_seconds: {
                 "type": "integer",
                 "description": "Total countdown length in seconds. Must be between 1 and 86400 (24 hours).",
                 "minimum": _MIN_DURATION_SECONDS,
                 "maximum": _MAX_DURATION_SECONDS,
             },
         },
-        "required": ["title", "duration_seconds"],
+        "required": [Keys.title, Keys.duration_seconds],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        title = (params.get("title") or "").strip()
-        duration_seconds = params.get("duration_seconds")
+        title = (params.get(Keys.title) or "").strip()
+        duration_seconds = params.get(Keys.duration_seconds)
 
         # bool is an int subclass — exclude it so a literal True/False is rejected
         # rather than coerced into a 1-second / 0-second timer.

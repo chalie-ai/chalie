@@ -29,6 +29,7 @@ from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._delegate import delegate_goal, delegate_result
+from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
 
@@ -64,7 +65,7 @@ class WebBrowseAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "goal": {
+            Keys.goal: {
                 "type": "string",
                 "description": (
                     "What to accomplish in the browser. Include everything the "
@@ -73,14 +74,14 @@ class WebBrowseAbility(Ability):
                 ),
             },
         },
-        "required": ["goal"],
+        "required": [Keys.goal],
     }
 
     # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
     # ``""`` key covers action-less tools) rejects a missing/empty ``goal`` with
     # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
     # goal never spawns an expensive browser delegate on nothing.
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("goal",)}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.goal,)}
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS

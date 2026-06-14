@@ -11,6 +11,7 @@ from any processor that opts it in.
 from typing import ClassVar
 
 from abilities._budget import BudgetCappedAbility
+from abilities._params import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
@@ -33,7 +34,7 @@ class SaveGraph(BudgetCappedAbility):
     # or empty kind/key/value as code=missing-params before run() is reached
     # (precedent: _delegate.py, file_permissions.py). The pre-gate is
     # truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("kind", "key", "value")}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.kind, Keys.key, Keys.value)}
 
     def get_name(self) -> str:
         return "save_graph"
@@ -63,11 +64,11 @@ class SaveGraph(BudgetCappedAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "enum": ALLOWED_KINDS},
-            "key": {"type": "string"},
-            "value": {"type": "string"},
+            Keys.kind: {"type": "string", "enum": ALLOWED_KINDS},
+            Keys.key: {"type": "string"},
+            Keys.value: {"type": "string"},
         },
-        "required": ["kind", "key", "value"],
+        "required": [Keys.kind, Keys.key, Keys.value],
     }
 
     def get_parameters(self) -> dict:
@@ -79,7 +80,7 @@ class SaveGraph(BudgetCappedAbility):
             return capped
 
         proc = self.mp
-        kind = params.get("kind", "")
+        kind = params.get(Keys.kind, "")
         if kind not in ALLOWED_KINDS:
             return ToolResult.err(
                 f"Unknown kind {kind!r}; not a storable fact kind.",
@@ -91,8 +92,8 @@ class SaveGraph(BudgetCappedAbility):
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only key/value slips past it and must be rejected here
         # (precedent: file_permissions.py).
-        key = params.get("key", "").strip()
-        value = params.get("value", "").strip()
+        key = params.get(Keys.key, "").strip()
+        value = params.get(Keys.value, "").strip()
         if not key or not value:
             missing = ", ".join(
                 name for name, val in (("key", key), ("value", value)) if not val
