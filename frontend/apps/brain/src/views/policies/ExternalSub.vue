@@ -1,3 +1,7 @@
+<script setup lang="ts">
+import PoliciesPanel from './PoliciesPanel.vue';
+</script>
+
 <template>
-  <div class="panel-placeholder"><p>Policies External — implementation in P2d.</p></div>
+  <PoliciesPanel channel="external_agent" />
 </template>

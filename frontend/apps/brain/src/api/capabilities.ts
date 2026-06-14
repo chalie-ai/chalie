@@ -1,19 +1,40 @@
 /**
  * Capabilities API — endpoints derived from frontend/brain/capabilities.js.
  *
- * GET  /api/capabilities              → { capabilities: Capability[] }
- * GET  /api/capabilities/:id          → { capability: Capability }
- * POST /api/capabilities/:id/setup    → configure a capability
+ * GET  /api/capabilities                → { capabilities: Capability[] }
+ * GET  /api/capabilities/:id            → flat Capability (id, name, version, connected, last_sync_at, config)
+ * POST /api/capabilities/:id/setup      → configure a capability
  * POST /api/capabilities/:id/disconnect → disconnect a capability
  */
 import { useApiClient } from '@chalie/shared';
 import { withAuth } from './http';
 
+export interface CapabilityFieldOption {
+  value: string;
+  label: string;
+}
+
+export interface CapabilityField {
+  name: string;
+  label: string;
+  type: string; // 'checkbox' | 'select' | 'textarea' | 'text' | 'password'
+  placeholder?: string;
+  default?: unknown;
+  required?: boolean;
+  options?: CapabilityFieldOption[];
+  show_when?: Record<string, unknown>;
+}
+
 export interface Capability {
   id: string;
   name: string;
-  enabled?: boolean;
+  version?: string | null;
   connected?: boolean;
+  status?: string | null;
+  platform?: string | null;
+  last_sync_at?: string | null;
+  fields?: CapabilityField[];
+  config?: Record<string, unknown> | null;
   [key: string]: unknown;
 }
 
@@ -23,7 +44,8 @@ export const capabilities = {
     return withAuth(() => api.get('/api/capabilities'));
   },
 
-  get(id: string): Promise<{ capability: Capability }> {
+  // Backend returns a FLAT object (no { capability } wrapper): { id, name, version, connected, last_sync_at, config }.
+  get(id: string): Promise<Capability> {
     const api = useApiClient();
     return withAuth(() => api.get(`/api/capabilities/${id}`));
   },

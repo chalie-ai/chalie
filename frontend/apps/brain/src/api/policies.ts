@@ -12,9 +12,14 @@ export interface PolicyRow {
   channel: string;
   permission: string;
   setting: string;
+  label?: string;
+  group?: string;
 }
 
 export interface BlockedEntry {
+  action_id?: string | null;
+  context?: string | null;
+  created_at?: string | null;
   [key: string]: unknown;
 }
 
