@@ -67,7 +67,7 @@ const PanelImportExport = (() => {
 
   async function _doExport() {
     const password = document.getElementById("snapExportPass")?.value || "";
-    BrainApp.showToast("Exporting snapshot…", "info");
+    _setExportLoading(true);
     try {
       const res = await BrainApp.apiFetch("/api/snapshot/export", {
         method: "POST",
@@ -87,6 +87,38 @@ const PanelImportExport = (() => {
       BrainApp.showToast("Snapshot exported", "success");
     } catch (e) {
       BrainApp.showToast(e.message || "Export failed", "error");
+    } finally {
+      _setExportLoading(false);
+    }
+  }
+
+  /* While the server assembles the snapshot, hide the password field + button
+     and show an inline "Preparing your export" loader in their place; restore
+     them when the export finishes (success or failure). */
+  function _setExportLoading(on) {
+    const card =
+      document.getElementById("snapExportBtn")?.closest(".export-card") ||
+      _root?.querySelector(".export-card");
+    if (!card) return;
+    const passLabel = document.getElementById("snapExportPass")?.closest("label");
+    const btn = document.getElementById("snapExportBtn");
+    let loader = card.querySelector(".export-loader");
+
+    if (on) {
+      if (passLabel) passLabel.hidden = true;
+      if (btn) btn.hidden = true;
+      if (!loader) {
+        loader = document.createElement("div");
+        loader.className = "export-loader";
+        loader.innerHTML =
+          `<span class="export-spinner" aria-hidden="true"></span><span>Preparing your export…</span>`;
+        card.appendChild(loader);
+      }
+      loader.hidden = false;
+    } else {
+      if (loader) loader.remove();
+      if (passLabel) passLabel.hidden = false;
+      if (btn) btn.hidden = false;
     }
   }
 
