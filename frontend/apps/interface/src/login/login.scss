@@ -1,0 +1,8 @@
+// Login page layout — centres the card on the viewport.
+// Tokens come from @chalie/shared/styles/main.scss (imported before this).
+body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
