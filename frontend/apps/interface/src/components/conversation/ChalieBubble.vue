@@ -1,19 +1,56 @@
 <script setup lang="ts">
+import { ref, computed } from 'vue';
 import type { ChalieForm } from '../../stores/conversation';
+import type { ConversationSegment } from '../../api/conversation';
 import { renderMarkup, extractText } from '../../composables/useMarkup';
 import { emit } from '../../composables/useEventBus';
 import SegmentRenderer from './SegmentRenderer.vue';
 
 const props = defineProps<{ form: ChalieForm }>();
 
+// ── FIX 4: pinned ref — prevents double-fire ───────────────────────────────
+const pinned = ref(false);
+
+// ── FIX 6: mode badge label ────────────────────────────────────────────────
+const MODE_LABELS: Record<string, string> = {
+  ACT: 'acting',
+  CLARIFY: 'clarifying',
+  ACKNOWLEDGE: 'noting',
+};
+
+const modeBadgeLabel = computed(() => {
+  const mode = props.form.meta.mode ?? '';
+  return MODE_LABELS[mode] ?? '';
+});
+
+// ── FIX 3 + 5: plaintext for remember / speak ─────────────────────────────
+function _derivePlaintext(): string {
+  // Segment-based message: concatenate each segment's content/synthesis
+  const segs: ConversationSegment[] | undefined =
+    props.form.meta.segments ?? props.form.segments;
+  if (segs && segs.length) {
+    const raw = segs.map((s) => s.content ?? s.synthesis ?? '').join(' ');
+    return extractText(raw);
+  }
+  // Single text path
+  return extractText(props.form.text ?? '');
+}
+
+// ── FIX 5: only show Speak when there is speakable text ───────────────────
+const speakText = computed(() => _derivePlaintext());
+
+// ── FIX 4: Remember click — 150ms delay, guard against double-fire ─────────
 function onRemember(): void {
-  // 150ms micro-delay mirrors legacy renderer.js
-  emit('chalie:pin-moment', { content: props.form.text ?? '' });
+  if (pinned.value) return;
+  pinned.value = true;
+  setTimeout(() => {
+    // FIX 3: emit plaintext, not raw markup
+    emit('chalie:pin-moment', { content: _derivePlaintext() });
+  }, 150);
 }
 
 function onSpeak(): void {
-  const text = extractText(props.form.text ?? '');
-  emit('chalie:speak-message', { text });
+  emit('chalie:speak-message', { text: speakText.value });
 }
 </script>
 
@@ -50,12 +87,18 @@ function onSpeak(): void {
       v-html="renderMarkup(form.text ?? '')"
     />
 
-    <!-- Meta row: remember + speak buttons -->
+    <!-- Meta row: mode badge + remember + speak buttons -->
     <div class="speech-form__meta">
+      <!-- FIX 6: mode badge -->
+      <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>
+
+      <!-- FIX 4: disabled + active class when pinned -->
       <button
         class="speech-form__remember-btn"
+        :class="{ 'speech-form__remember-btn--active': pinned }"
         aria-label="Remember this"
         type="button"
+        :disabled="pinned"
         @click="onRemember"
       >
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
@@ -63,7 +106,10 @@ function onSpeak(): void {
           <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z" />
         </svg>
       </button>
+
+      <!-- FIX 5: only render when there is speakable text -->
       <button
+        v-if="speakText"
         class="speech-form__speak-btn"
         aria-label="Listen to this message"
         type="button"
@@ -84,9 +130,10 @@ function onSpeak(): void {
 /*
  * Styles targeting v-html'd inner content (chalie-markup, chalie-action-button,
  * chalie-code, auto-linkified <a>) MUST be global — Vue scoped CSS does not
- * reach nodes injected by v-html. Structural bubble layout remains scoped.
+ * reach nodes injected by v-html. Structural bubble layout lives in conversation.scss.
  *
- * These mirror the relevant rules from the legacy style.css.
+ * FIX 8: replace hardcoded rgba(138,92,255,…) with color-mix(in oklab, var(--violet) …)
+ * and rgba(224,108,108,…) with color-mix(in oklab, var(--error) …) so both themes work.
  */
 .chalie-markup {
   word-break: break-word;
@@ -202,6 +249,8 @@ function onSpeak(): void {
 }
 
 /* Action buttons (from <actions>/<action> custom elements wired by useMarkup) */
+/* FIX 8: replaced rgba(138,92,255,…) → color-mix(in oklab, var(--violet) …) */
+/*         replaced rgba(224,108,108,…) → color-mix(in oklab, var(--error) …)  */
 .chalie-actions-row {
   display: flex;
   gap: var(--space-sm);
@@ -212,8 +261,8 @@ function onSpeak(): void {
 .chalie-action-button {
   padding: 6px 16px;
   border-radius: var(--radius-full);
-  border: 1px solid rgba(138, 92, 255, 0.35);
-  background: rgba(138, 92, 255, 0.08);
+  border: 1px solid color-mix(in oklab, var(--violet) 35%, transparent);
+  background: color-mix(in oklab, var(--violet) 8%, transparent);
   color: var(--accent);
   font-size: 0.82rem;
   font-weight: 500;
@@ -223,8 +272,8 @@ function onSpeak(): void {
 }
 
 .chalie-action-button:hover:not([disabled]) {
-  background: rgba(138, 92, 255, 0.18);
-  border-color: rgba(138, 92, 255, 0.55);
+  background: color-mix(in oklab, var(--violet) 18%, transparent);
+  border-color: color-mix(in oklab, var(--violet) 55%, transparent);
 }
 
 .chalie-action-button--secondary {
@@ -234,13 +283,13 @@ function onSpeak(): void {
 }
 
 .chalie-action-button--danger {
-  border-color: rgba(224, 108, 108, 0.4);
-  background: rgba(224, 108, 108, 0.08);
+  border-color: color-mix(in oklab, var(--error) 40%, transparent);
+  background: color-mix(in oklab, var(--error) 8%, transparent);
   color: var(--error);
 }
 
 .chalie-action-button--selected {
-  background: rgba(138, 92, 255, 0.22);
+  background: color-mix(in oklab, var(--violet) 22%, transparent);
   border-color: var(--accent);
   color: var(--text-primary);
 }

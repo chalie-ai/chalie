@@ -1,0 +1,576 @@
+// ==========================================================================
+// Conversation component styles — port of legacy style.css §8 Speech Forms,
+// §25 Cognitive Signals, §27 Critic Escalation, plus ACT cycle UI.
+//
+// THEME RULE (Rule 7): every color uses CSS-var tokens so dark + light
+// both work.  Legacy rgba() values that were theme-specific have been
+// replaced with color-mix() or the appropriate token.
+//
+// Depends on @chalie/shared/styles/main.scss + interface.scss being loaded
+// first (tokens, keyframes).
+// ==========================================================================
+
+// --------------------------------------------------------------------------
+// 1. Speech Form — base bubble
+// --------------------------------------------------------------------------
+.speech-form {
+  position: relative;
+  padding: var(--space-lg);
+  border-radius: 18px;
+  background: var(--bg-chalie);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  animation: formEntry 200ms var(--ease-out) both;
+  transition: background 420ms ease, border-color 400ms ease, box-shadow 400ms ease;
+}
+
+// Neon accent stripe — left for Chalie (violet), right for user (cyan)
+.speech-form::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+// --------------------------------------------------------------------------
+// 2. User bubble
+// --------------------------------------------------------------------------
+.speech-form--user {
+  background: var(--bg-surface-user);
+  border-color: color-mix(in oklab, var(--cyan) 12%, transparent);
+  align-self: flex-end;
+  max-width: 85%;
+}
+
+.speech-form--user::before {
+  right: -1px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    var(--dusk-blue) 12%,
+    color-mix(in oklab, var(--cyan) 85%, #fff) 38%,
+    var(--dusk-blue) 60%,
+    color-mix(in oklab, var(--cyan) 70%, transparent) 80%,
+    transparent 100%
+  );
+  background-size: 100% 240%;
+  animation: stripeFlow 7s ease-in-out infinite;
+  filter: saturate(1.15);
+  box-shadow: 0 0 8px var(--dusk-blue), 0 0 18px color-mix(in oklab, var(--cyan) 33%, transparent);
+}
+
+@keyframes stripeFlow {
+  0%, 100% { background-position: 0% 0%; }
+  50%      { background-position: 0% 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .speech-form--user::before { animation: none; }
+}
+
+// User text — preserve newlines
+.speech-form--user .speech-form__text {
+  white-space: pre-wrap;
+  font-weight: 600;
+}
+
+// Light theme user bubble
+[data-theme="light"] .speech-form--user {
+  background: color-mix(in oklab, var(--bg) 0%, #ffffff 80%);
+}
+
+// Hover lift (pointer devices only)
+@media (hover: hover) {
+  .speech-form:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in oklab, var(--text-primary) 16%, transparent);
+    box-shadow: 0 12px 32px color-mix(in oklab, #000 55%, transparent), 0 0 0 1px color-mix(in oklab, var(--violet) 4%, transparent) inset;
+  }
+
+  .speech-form--user:hover {
+    box-shadow: 0 12px 32px color-mix(in oklab, #000 55%, transparent), 0 0 0 1px color-mix(in oklab, var(--cyan) 5%, transparent) inset;
+  }
+
+  [data-theme="light"] .speech-form:hover,
+  [data-theme="light"] .speech-form--user:hover {
+    box-shadow: none;
+  }
+}
+
+// Hard no-shadow guard inside bubbles
+.speech-form,
+.speech-form *,
+.speech-form::before,
+.speech-form::after,
+.speech-form *::before,
+.speech-form *::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.speech-form .sender-glyph,
+.speech-form__header .sender-glyph {
+  filter: none !important;
+}
+
+// --------------------------------------------------------------------------
+// 3. Chalie bubble
+// --------------------------------------------------------------------------
+.speech-form--chalie {
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+// No accent stripe on Chalie — full-bleed text on the spine
+.speech-form--chalie::before {
+  display: none;
+}
+
+// Header row: glyph + timestamp
+.speech-form--chalie .speech-form__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: var(--space-sm);
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+
+.speech-form--chalie .speech-form__header .sender-glyph {
+  position: static;
+  left: auto;
+  right: auto;
+  top: auto;
+  width: 18px;
+  height: 18px;
+  color: var(--violet);
+  filter: drop-shadow(0 0 6px currentColor);
+}
+
+.speech-form--chalie .speech-form__header .speech-form__timestamp {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  letter-spacing: 0.04em;
+}
+
+// --------------------------------------------------------------------------
+// 4. Sender glyph (general)
+// --------------------------------------------------------------------------
+.sender-glyph {
+  position: absolute;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  z-index: 3;
+  pointer-events: none;
+  filter: drop-shadow(0 0 6px currentColor);
+}
+
+.speech-form--chalie .sender-glyph { left: -9px;  color: var(--violet); }
+.speech-form--user   .sender-glyph { right: -9px; color: var(--dusk-blue); }
+
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot {
+  animation: glyphTwinkle 3.2s ease-in-out infinite;
+}
+
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(2) { animation-delay: 0.4s; }
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(3) { animation-delay: 0.9s; }
+.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(4) { animation-delay: 1.4s; }
+
+@keyframes glyphTwinkle {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sender-glyph circle.sender-glyph__dot { animation: none; opacity: 0.85; }
+}
+
+// --------------------------------------------------------------------------
+// 5. Faded messages (outside working memory)
+// --------------------------------------------------------------------------
+.message--faded {
+  opacity: 0.75;
+}
+
+// --------------------------------------------------------------------------
+// 6. Text body
+// --------------------------------------------------------------------------
+.speech-form__text {
+  word-break: break-word;
+  position: relative;
+  z-index: 2;
+}
+
+// --------------------------------------------------------------------------
+// 7. Attachments
+// --------------------------------------------------------------------------
+.speech-form__attachments {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.speech-form__attachments:last-child {
+  margin-bottom: 0;
+}
+
+.speech-form__attachment-img {
+  max-width: min(320px, 100%);
+  max-height: 320px;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  object-fit: contain;
+  display: block;
+}
+
+.speech-form__attachment-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-chalie);
+  font-size: 0.85em;
+  max-width: 100%;
+}
+
+.speech-form__attachment-doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// --------------------------------------------------------------------------
+// 8. Meta row (timestamp, remember, speak)
+// --------------------------------------------------------------------------
+.speech-form__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  justify-content: flex-start;
+  position: relative;
+  z-index: 2;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  letter-spacing: 0.04em;
+}
+
+.speech-form--user .speech-form__meta {
+  justify-content: flex-end;
+}
+
+.speech-form__timestamp {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  opacity: 0.85;
+  letter-spacing: 0.04em;
+}
+
+// --------------------------------------------------------------------------
+// 9. Remember (pin) button
+// --------------------------------------------------------------------------
+.speech-form__remember-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast), box-shadow var(--duration-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.speech-form__remember-btn svg { width: 24px; height: 24px; }
+
+.speech-form__remember-btn:hover {
+  color: var(--accent-primary);
+}
+
+.speech-form__remember-btn--active {
+  color: var(--accent-primary);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 35%, transparent) !important;
+  cursor: default;
+}
+
+.speech-form__remember-btn:disabled:not(.speech-form__remember-btn--active) {
+  opacity: 0.5;
+  cursor: default;
+}
+
+// --------------------------------------------------------------------------
+// 10. Speak button
+// --------------------------------------------------------------------------
+.speech-form__speak-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.speech-form__speak-btn svg { width: 24px; height: 24px; }
+
+.speech-form__speak-btn:hover {
+  color: var(--dusk-blue);
+}
+
+// --------------------------------------------------------------------------
+// 11. Error form
+// --------------------------------------------------------------------------
+.speech-form--error {
+  background: color-mix(in oklab, var(--error) 8%, transparent);
+  border-color: color-mix(in oklab, var(--error) 20%, transparent);
+}
+
+.speech-form--error .speech-form__text {
+  color: var(--error);
+}
+
+// --------------------------------------------------------------------------
+// 12. Escalation form (critic)
+// --------------------------------------------------------------------------
+.speech-form--escalation {
+  border-color: color-mix(in oklab, #ffb432 25%, transparent);
+  box-shadow: 0 0 16px color-mix(in oklab, #ffb432 6%, transparent);
+  margin-top: var(--space-lg);
+}
+
+.speech-form--escalation::before {
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in oklab, #ffb432 85%, transparent) 20%,
+    color-mix(in oklab, #ffb432 85%, transparent) 80%,
+    transparent 100%
+  );
+  box-shadow: 0 0 8px color-mix(in oklab, #ffb432 60%, transparent), 0 0 18px color-mix(in oklab, #ffb432 33%, transparent);
+}
+
+.speech-form--escalation::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, #ffb432 30%, transparent), transparent);
+  pointer-events: none;
+}
+
+// --------------------------------------------------------------------------
+// 13. ACT cycle
+// --------------------------------------------------------------------------
+.act-cycle {
+  align-self: flex-start;
+  max-width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
+  animation: formEntry 200ms var(--ease-out) both;
+}
+
+.act-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 20px;
+}
+
+.act-logo {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--violet);
+  flex-shrink: 0;
+  animation: act-logo-pulse 1.4s ease-in-out infinite;
+}
+
+.act-narrative {
+  font-style: italic;
+  color: var(--text-primary);
+  opacity: 0.75;
+  line-height: 1.5;
+  font-size: 0.95rem;
+  letter-spacing: -0.005em;
+}
+
+.act-narrative:empty {
+  display: none;
+}
+
+// Stop button — embedded in .act-row
+.act-stop-btn {
+  background: transparent;
+  border: none;
+  color: var(--error);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  opacity: 0.7;
+  transition: opacity 180ms ease, transform 180ms ease;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.act-stop-btn:hover { opacity: 1; transform: scale(1.15); }
+.act-stop-btn:active { transform: scale(0.9); }
+.act-stop-btn--stopping { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
+// Tool list — indented under the logo (logo width 12 + gap 12 = 24)
+.act-tools {
+  margin-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.act-tools:empty {
+  display: none;
+}
+
+.act-tool {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0;
+  min-width: 220px;
+  max-width: 760px;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  animation: formEntry 200ms var(--ease-out) both;
+}
+
+.act-tool__name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.act-tool__label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.act-tool__summary {
+  color: var(--text-secondary);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.act-tool__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+}
+
+// States
+.act-tool--running {
+  color: color-mix(in oklab, var(--text-primary) 75%, transparent);
+}
+
+.act-tool--done {
+  color: var(--success);
+  opacity: 0.9;
+}
+
+.act-tool--error {
+  color: var(--error);
+  opacity: 0.5;
+}
+
+// --------------------------------------------------------------------------
+// 14. Spinner
+// --------------------------------------------------------------------------
+.act-spinner {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--text-primary) 20%, transparent);
+  border-top-color: color-mix(in oklab, var(--text-primary) 90%, transparent);
+  animation: act-spinner-spin 0.9s linear infinite;
+  display: inline-block;
+}
+
+@keyframes act-spinner-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes act-logo-pulse {
+  0%, 100% {
+    opacity: 0.55;
+    box-shadow: 0 0 4px color-mix(in oklab, var(--violet) 25%, transparent);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 12px color-mix(in oklab, var(--violet) 70%, transparent);
+  }
+}
+
+// --------------------------------------------------------------------------
+// 15. Meta-mode badge (cognitive signal)
+// --------------------------------------------------------------------------
+.meta-mode-badge {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
+  color: color-mix(in oklab, var(--text-primary) 50%, transparent);
+  margin-left: 8px;
+  vertical-align: middle;
+  animation: meta-fade-in 150ms ease both;
+}
+
+@keyframes meta-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

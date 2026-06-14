@@ -17,6 +17,7 @@ import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
 import type { WsInboundEvent, WsPushEvent, WsMessageEvent } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
 import { conversation } from '../api/conversation';
+import { moments } from '../api/moments';
 import { getHost } from '../api/index';
 import { useConversationStore } from './conversation';
 import type { AttachmentPreview } from './conversation';
@@ -108,6 +109,17 @@ export const useSessionStore = defineStore('session', {
             (payload as { payload?: Record<string, unknown> }).payload ??
             (payload as Record<string, unknown>);
           void this.sendAction(p);
+        }),
+      );
+
+      // chalie:pin-moment — Remember button: pin plaintext to moments store.
+      _busUnbinds.push(
+        on('chalie:pin-moment', (detail) => {
+          const text = (detail as { content?: string }).content ?? '';
+          if (!text) return;
+          void moments.pin(text).catch(() => {
+            // Best-effort — swallow network errors silently (no toast in P1a)
+          });
         }),
       );
 

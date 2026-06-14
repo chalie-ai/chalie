@@ -4,6 +4,7 @@ import '@fontsource/inter/500.css';
 import '@fontsource/inter/600.css';
 import '@chalie/shared/styles/main.scss';
 import './styles/interface.scss';
+import './styles/conversation.scss';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import App from './App.vue';
