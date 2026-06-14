@@ -104,11 +104,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKeydown));
 
 <template>
   <div :class="['cp-overlay', { hidden: !shell.commandPaletteOpen }]" @click.self="shell.closeCommandPalette()">
-    <div class="cp" v-if="shell.commandPaletteOpen">
+    <div v-if="shell.commandPaletteOpen" class="cp">
       <input
         ref="inputRef"
-        class="cp-input"
         v-model="query"
+        class="cp-input"
         placeholder="Search the brain… (try 'memory', 'policy')"
         @keydown="onKeydown"
       />

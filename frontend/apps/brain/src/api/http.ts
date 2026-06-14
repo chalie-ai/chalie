@@ -8,11 +8,16 @@
  */
 import { AuthError } from '@chalie/shared';
 
+/** Redirect to /login/ preserving the current path and query string as `next`. */
+export function redirectToLogin(): never {
+  const next = window.location.pathname + window.location.search;
+  window.location.replace('/login/?next=' + encodeURIComponent(next));
+  throw new Error('redirecting to login');
+}
+
 export function handle401(err: unknown): never {
   if (err instanceof AuthError) {
-    window.location.replace(
-      '/login/?next=' + encodeURIComponent(window.location.pathname + window.location.search),
-    );
+    redirectToLogin();
   }
   throw err;
 }

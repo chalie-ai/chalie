@@ -12,7 +12,7 @@
  * No date formatting is performed here.
  */
 import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { withAuth, redirectToLogin } from './http';
 
 export interface BrainInfo {
   db_size_human?: string | null;
@@ -37,10 +37,7 @@ export const brain = {
       headers: { 'Content-Type': 'application/json' },
     });
     if (res.status === 401) {
-      window.location.replace(
-        '/login/?next=' + encodeURIComponent(window.location.pathname),
-      );
-      throw new Error('redirecting to login');
+      redirectToLogin();
     }
     return res;
   },

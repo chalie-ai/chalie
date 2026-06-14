@@ -41,7 +41,7 @@ function closeMobileScrim(): void {
     :data-providers-only="shell.providersOnly || undefined"
   >
     <!-- Mobile scrim -->
-    <div class="scrim" id="mobileScrim" @click="closeMobileScrim"></div>
+    <div id="mobileScrim" class="scrim" @click="closeMobileScrim"></div>
 
     <!-- Sidebar -->
     <BrainSidebar id="sidebar" />
@@ -51,7 +51,7 @@ function closeMobileScrim(): void {
 
     <!-- Main content with panel root -->
     <main class="main">
-      <div class="main-inner" id="panelRoot">
+      <div id="panelRoot" class="main-inner">
         <RouterView />
       </div>
     </main>

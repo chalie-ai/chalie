@@ -21,12 +21,6 @@ export const useShellStore = defineStore('brain-shell', {
     /** Whether the mobile sidebar overlay is visible. */
     mobileOpen: false as boolean,
 
-    /** Current panel title for topbar breadcrumb (set by each view on mount). */
-    panelTitle: '' as string,
-
-    /** Current sub-panel label (set by sub-views inside panels). */
-    subTitle: '' as string,
-
     /** Whether the command palette overlay is open. */
     commandPaletteOpen: false as boolean,
   }),
