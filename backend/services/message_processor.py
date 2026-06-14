@@ -840,8 +840,8 @@ class MessageProcessor:
         # watermark advanced. The trail term is measured AFTER dispatch on purpose:
         # ToolChainCompactor records a no-op row (no boundary) when the handover
         # summariser returns an empty string, leaving _has_trail True. Counting that
-        # as progress would spin the OVER_CAP loop forever (that branch has no
-        # iteration cap). Returning False instead falls through to send(force=True),
+        # as progress would spin the over-cap compaction loop forever (that branch
+        # has no iteration cap). Returning False instead falls through to send(force=True),
         # letting the provider be the source of truth and fail loud on an
         # irreducible request rather than hang.
         trail_collapsed = trail_before and not self._has_trail()
