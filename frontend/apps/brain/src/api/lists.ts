@@ -2,8 +2,8 @@
  * Lists API — endpoints derived from frontend/brain/lists.js fetch calls.
  *
  * GET    /lists                          → { items: List[] }
- * GET    /lists/:id                      → { list: ListDetail }
- * POST   /lists                          → { list: List } create with { name }
+ * GET    /lists/:id                      → { item: List }
+ * POST   /lists                          → { item: List } create with { name }
  * DELETE /lists/:id                      → delete list
  * PUT    /lists/:id/rename               → rename list { name }
  * POST   /lists/:id/items                → add items { items: string[] }
@@ -32,12 +32,12 @@ export const lists = {
     return withAuth(() => api.get('/lists'));
   },
 
-  get(listId: string | number): Promise<{ list: List }> {
+  get(listId: string | number): Promise<{ item: List }> {
     const api = useApiClient();
     return withAuth(() => api.get(`/lists/${listId}`));
   },
 
-  create(name: string): Promise<{ list: List }> {
+  create(name: string): Promise<{ item: List }> {
     const api = useApiClient();
     return withAuth(() => api.post('/lists', { name }));
   },
