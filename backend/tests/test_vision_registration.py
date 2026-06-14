@@ -40,7 +40,7 @@ from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
-_CHANNEL = ProcessorConfig.POLICY_CHANNEL
+_CHANNEL = ProcessorConfig.PolicyChannel
 
 
 # ---------------------------------------------------------------------------

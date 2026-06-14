@@ -28,7 +28,7 @@ _VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "
 
 def _browse_mp() -> MessageProcessor:
     mp = MessageProcessor("drive a web page")
-    mp.config = WebBrowseConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp.active_tools = list(mp.config.always_available or [])
     return mp
 

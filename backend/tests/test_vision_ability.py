@@ -80,7 +80,7 @@ def test_describe_image_no_vision_provider_falls_back_to_ocr(db, tmp_path):
 
     out = describe_image(
         str(img), "image/png", "what is this",
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
+        policy_channel=ProcessorConfig.PolicyChannel.CHAT,
     )
 
     assert out["vision_used"] is False
@@ -103,7 +103,7 @@ def test_describe_image_provider_path_surfaces_provider_error(db, tmp_path):
     with pytest.raises(Exception):  # noqa: B017,PT011 — the real provider error bubbles up
         describe_image(
             str(img), "image/png", "what is this",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
+            policy_channel=ProcessorConfig.PolicyChannel.CHAT,
         )
 
 

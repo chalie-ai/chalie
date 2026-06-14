@@ -37,7 +37,7 @@ def _browse_mp() -> MessageProcessor:
     is always-available (find_tools isolation test's contract). browser is in
     PolicyManager.INTERNAL, so dispatch bypasses the policy gate entirely."""
     mp = MessageProcessor("drive a web page")
-    mp.config = WebBrowseConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp.active_tools = list(mp.config.always_available or [])
     return mp
 

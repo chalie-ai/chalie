@@ -46,7 +46,7 @@ def _config_with_hooks(hooks):
     return StubProcessorConfig(
         channel=_SUMMARY_CHANNEL,
         role="user_summary",
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+        policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
         build_user_prompt=lambda _mp: "",
         build_user_definition=lambda _mp: "",
         build_system_prompt=lambda _mp: "",

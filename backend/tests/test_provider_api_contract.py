@@ -200,7 +200,7 @@ def test_build_send_dto_type_vision_for_vision_config(db, tmp_path):
         mp, "what is this image?",
         {"image_path": str(img), "mime_type": "image/png"},
     )
-    mp.config = VisionConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp.thinking_level = "low"
 
     dto = mp._build_send_dto()

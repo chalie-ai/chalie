@@ -13,7 +13,7 @@ from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
-CH = ProcessorConfig.POLICY_CHANNEL
+CH = ProcessorConfig.PolicyChannel
 
 
 @pytest.fixture()

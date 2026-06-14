@@ -41,7 +41,7 @@ def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
     return StubProcessorConfig(
         channel=channel,
         role=role,
-        policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
+        policy_channel=ProcessorConfig.PolicyChannel.CHAT,
         build_user_prompt=lambda _mp: _GPM_USER_PROMPT,
         build_user_definition=lambda _mp: _GPM_USER_DEF,
         build_system_prompt=lambda _mp: '',

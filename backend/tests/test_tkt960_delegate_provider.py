@@ -213,7 +213,7 @@ def _delegate_mp(config_cls, raw_input):
 
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, raw_input, {})
-    mp.config = config_cls(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = config_cls(ProcessorConfig.PolicyChannel.CHAT)
     mp.thinking_level = "low"
     return mp
 
@@ -254,7 +254,7 @@ def test_build_send_dto_vision_precedence_over_delegate(db):
 
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "describe this", {})
-    mp.config = VisionConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp.thinking_level = "low"
 
     dto = mp._build_send_dto()

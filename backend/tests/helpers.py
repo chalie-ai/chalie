@@ -69,7 +69,7 @@ def make_stub_config(
     return StubProcessorConfig(
         channel=channel,
         role=role,
-        policy_channel=policy_channel or ProcessorConfig.POLICY_CHANNEL.CHAT,
+        policy_channel=policy_channel or ProcessorConfig.PolicyChannel.CHAT,
         always_available=list(always_available or []),
         discoverable=list(discoverable or []),
         blocked=frozenset(blocked),

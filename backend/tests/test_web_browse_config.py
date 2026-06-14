@@ -16,7 +16,7 @@ from tools.browser.session import close_session, record_screenshot
 
 pytestmark = pytest.mark.unit
 
-_CHAT = ProcessorConfig.POLICY_CHANNEL.CHAT
+_CHAT = ProcessorConfig.PolicyChannel.CHAT
 
 
 def _mp():

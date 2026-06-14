@@ -146,7 +146,7 @@ class TestWebBrowseDelegateHasBrowser:
         """WebBrowseConfig pins browser as always-available, so build_tools
         resolves a real 'browser' tool schema for the delegate — the channel
         raw browser is exclusive to."""
-        mp = _mp_for(WebBrowseConfig(ProcessorConfig.POLICY_CHANNEL.CHAT))
+        mp = _mp_for(WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT))
         assert "browser" in mp.config.always_available
 
         schemas = AbilityRegistry.build_tools(mp)

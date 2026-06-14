@@ -36,7 +36,7 @@ def test_build_send_messages_attaches_image_from_get_image(tmp_path):
 
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "what is this", {"image_path": str(img), "mime_type": "image/png"})
-    mp.config = VisionConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
 
     messages = mp._build_send_messages()
 
@@ -53,7 +53,7 @@ def test_build_send_messages_no_image_when_get_image_returns_none(tmp_path):
 
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "what is this", {})
-    mp.config = VisionConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
 
     messages = mp._build_send_messages()
 

@@ -32,7 +32,7 @@ from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
-_CHAT = ProcessorConfig.POLICY_CHANNEL.CHAT
+_CHAT = ProcessorConfig.PolicyChannel.CHAT
 
 # (config class, expected transcript channel, expected role, user-prompt prefix)
 _DELEGATES = [

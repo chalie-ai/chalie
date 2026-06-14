@@ -103,7 +103,7 @@ class TestContextUsageEndpoint:
         from configs.channels.web_search import WebSearchConfig
         from abilities.thinking import ThinkingConfig
 
-        chat = ProcessorConfig.POLICY_CHANNEL.CHAT
+        chat = ProcessorConfig.PolicyChannel.CHAT
         assert UserConfig().job == 'user:user'
         assert WebSearchConfig(chat).job != 'user:user'
         assert ThinkingConfig([], frozenset(), chat).job != 'user:user'

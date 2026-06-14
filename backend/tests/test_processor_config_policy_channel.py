@@ -19,10 +19,10 @@ def _make(policy_channel):
 
 
 def test_enum_has_three_values():
-    vals = {c.value for c in ProcessorConfig.POLICY_CHANNEL}
+    vals = {c.value for c in ProcessorConfig.PolicyChannel}
     assert vals == {"chat", "subconscious", "external_agent"}
 
 
 def test_usage_class_derives_from_policy_channel():
-    assert _make(ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS).usage_class == "subconscious"
-    assert _make(ProcessorConfig.POLICY_CHANNEL.CHAT).usage_class == "chat"
+    assert _make(ProcessorConfig.PolicyChannel.SUBCONSCIOUS).usage_class == "subconscious"
+    assert _make(ProcessorConfig.PolicyChannel.CHAT).usage_class == "chat"
