@@ -2,9 +2,9 @@ import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
-// Served by Flask under /next/ during coexistence (P3 flips this to '/').
+// Served by Flask at / (canonical, post-cutover).
 export default defineConfig({
-  base: process.env.VITE_BASE ?? '/next/',
+  base: process.env.VITE_BASE ?? '/',
   plugins: [vue()],
   resolve: {
     alias: {

@@ -4,7 +4,6 @@ and static file serving (replaces nginx).
 """
 
 import os
-import re
 import importlib
 import mimetypes
 import pkgutil
@@ -41,112 +40,6 @@ mimetypes.add_type('application/javascript', '.mjs')
 mimetypes.add_type('application/json', '.json')
 mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
-
-_FRONTEND_DIR = FileMapperService.get_frontend_path()
-_INTERFACE_DIR = FileMapperService.get_frontend_path("interface")
-_BRAIN_DIR = FileMapperService.get_frontend_path("brain")
-_ONBOARDING_DIR = FileMapperService.get_frontend_path("on-boarding")
-_LOGIN_DIR = FileMapperService.get_frontend_path("login")
-_SHARED_DIR = FileMapperService.get_frontend_path("shared")
-
-
-# ---------------------------------------------------------------------------
-# Asset version injection
-#
-# Every <script src="…">, <link href="…">, <img src="…">, <source src="…"> in a
-# served HTML page is rewritten so the filename itself carries the current app
-# version — e.g. `app.js` → `app-0.3.3.js`, `style.css` → `style-0.3.3.css`.
-#
-# Static file routes transparently strip the `-{VERSION}` suffix before looking
-# the file up on disk, so the on-disk filenames stay clean.
-#
-# Versioned *paths* (not query strings) are chosen because some intermediate
-# caches and Service Workers treat `foo.js?v=1` and `foo.js?v=2` as the same
-# entry; a distinct filename is universally treated as a new resource.
-# ---------------------------------------------------------------------------
-
-_VERSION_FILE = FileMapperService.get_version_path()
-
-
-def _read_asset_version() -> str:
-    """Return the version string used in asset filenames. Falls back to 'dev'."""
-    try:
-        value = _VERSION_FILE.read_text(encoding='utf-8').strip()
-        return value or 'dev'
-    except OSError:
-        return 'dev'
-
-
-_ASSET_VERSION = _read_asset_version()
-
-_ASSET_REF_RE = re.compile(
-    r'''(<(?:script|link|img|source)\b[^>]*?\s(?:src|href)\s*=\s*)(["'])([^"']+?)\2''',
-    re.IGNORECASE,
-)
-
-# Extension that receives `-{version}` injection. Bare paths (no extension) and
-# HTML itself are left alone.
-_VERSIONABLE_EXT_RE = re.compile(r'^(.*?)(\.[^./]+)$')
-
-_VERSION_SUFFIX_RE = re.compile(
-    rf'(.+?)-{re.escape(_ASSET_VERSION)}(\.[^./]+)$'
-)
-
-
-def _resolve_same_origin_asset(url: str, base_dir: Path) -> Path | None:
-    """Map a URL found in HTML back to a file on disk — or None if external."""
-    if not url or url.startswith(('http://', 'https://', '//', 'data:', 'mailto:', 'tel:', '#')):
-        return None
-    if url.startswith('/'):
-        candidate = _FRONTEND_DIR / url.lstrip('/')
-    else:
-        candidate = base_dir / url
-    return candidate if candidate.is_file() else None
-
-
-def _inject_version_into_url(url: str) -> str:
-    """Insert `-{VERSION}` before the final extension. Returns url unchanged if it has none."""
-    if not _ASSET_VERSION or _ASSET_VERSION == 'dev':
-        return url
-    match = _VERSIONABLE_EXT_RE.match(url)
-    if not match:
-        return url
-    return f"{match.group(1)}-{_ASSET_VERSION}{match.group(2)}"
-
-
-def _strip_version_from_path(path: str) -> str:
-    """Inverse of _inject_version_into_url — remove `-{VERSION}` before the extension."""
-    match = _VERSION_SUFFIX_RE.match(path)
-    return f"{match.group(1)}{match.group(2)}" if match else path
-
-
-def _version_html(html: str, base_dir: Path) -> str:
-    """Rewrite every same-origin asset reference to carry the version in its filename."""
-    def repl(match: re.Match) -> str:
-        prefix, quote, url = match.group(1), match.group(2), match.group(3)
-        if '?' in url:
-            return match.group(0)
-        asset = _resolve_same_origin_asset(url, base_dir)
-        if asset is None:
-            return match.group(0)
-        versioned = _inject_version_into_url(url)
-        if versioned == url:
-            return match.group(0)
-        return f"{prefix}{quote}{versioned}{quote}"
-
-    return _ASSET_REF_RE.sub(repl, html)
-
-
-def _serve_versioned_html(directory: Path, filename: str = 'index.html') -> Response:
-    """Read an HTML file, inject asset versions, return a no-cache response."""
-    path = directory / filename
-    html = path.read_text(encoding='utf-8')
-    versioned = _version_html(html, directory)
-    resp = Response(versioned, mimetype='text/html; charset=utf-8')
-    # HTML itself must never be cached — otherwise the browser would keep
-    # serving an old doc that points at old versioned URLs forever.
-    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-    return resp
 
 
 def _get_or_generate_session_secret() -> str:
@@ -202,21 +95,6 @@ def _register_blueprints(app: Flask) -> None:
             logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
 
 
-def _serve_spa(directory: Path, filename: str) -> Response:
-    """Serve a static file, or fall back to a versioned index.html.
-
-    Incoming paths may carry the `-{VERSION}` suffix injected by the HTML
-    rewriter; strip it so the request resolves to the real on-disk file.
-    """
-    real = _strip_version_from_path(filename)
-    filepath = directory / real
-    if filepath.is_file():
-        if filepath.suffix.lower() in ('.html', '.htm'):
-            return _serve_versioned_html(directory, real)
-        return send_from_directory(str(directory), real)
-    return _serve_versioned_html(directory)
-
-
 def _configure_app(app: Flask) -> None:
     """Apply Flask config, proxy middleware, and CORS to a new app instance."""
     app.secret_key = _get_or_generate_session_secret()
@@ -230,136 +108,78 @@ def _configure_app(app: Flask) -> None:
 
 
 def _register_static_routes(app: Flask) -> None:
-    """Register all static-file and SPA routes on the Flask app."""
+    """Register static-file and SPA routes serving the Vue 3 builds.
 
-    @app.route('/shared/<path:filename>', methods=["GET"])
-    def shared_static(filename):
-        """Serve shared frontend assets (theme.css, etc.)."""
-        real = _strip_version_from_path(filename)
-        return send_from_directory(str(_SHARED_DIR), real)
+    Two Vite builds are served verbatim (Vite content-hashes its own assets):
+      • interface  →  apps/interface/dist  — chat SPA at '/', plus the login and
+        on-boarding multi-page entries (dist/login/index.html, dist/on-boarding/
+        index.html).
+      • brain      →  apps/brain/dist      — admin SPA at '/brain/', auth-gated.
 
-    @app.route('/brain/<path:filename>', methods=["GET"])
-    def brain_static(filename):
-        """Serve brain dashboard SPA."""
-        return _serve_spa(_BRAIN_DIR, filename)
+    index.html documents are served no-cache (they point at hashed asset URLs);
+    SEND_FILE_MAX_AGE_DEFAULT=0 keeps hashed assets revalidating, which is correct
+    because a new build produces new filenames.
+    """
+    interface_dir = FileMapperService.get_frontend_path("apps", "interface", "dist")
+    brain_dir = FileMapperService.get_frontend_path("apps", "brain", "dist")
 
+    def _send_index(directory: Path, filename: str = 'index.html') -> Response:
+        resp = send_from_directory(str(directory), filename)
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return resp
+
+    # ── Brain admin SPA (auth-gated, matches the legacy /brain/ gate) ─────
     @app.route('/brain', methods=["GET"])
     def brain_index_no_slash():
-        """Canonicalize /brain → /brain/ so relative asset paths resolve correctly."""
         return redirect('/brain/', code=301)
 
     @app.route('/brain/', methods=["GET"])
     def brain_index():
-        """Serve brain dashboard index. Redirects to login if unauthenticated."""
         from services.auth_session_service import validate_session
         from flask import request
         if not validate_session(request):
             return redirect('/login/?next=/brain/')
-        return _serve_versioned_html(_BRAIN_DIR)
+        return _send_index(brain_dir)
 
-    @app.route('/on-boarding/<path:filename>', methods=["GET"])
-    def onboarding_static(filename):
-        """Serve onboarding SPA."""
-        return _serve_spa(_ONBOARDING_DIR, filename)
+    @app.route('/brain/<path:filename>', methods=["GET"])
+    def brain_static(filename):
+        from services.auth_session_service import validate_session
+        from flask import request
+        if not validate_session(request):
+            return redirect(f'/login/?next=/brain/{filename}')
+        candidate = brain_dir / filename
+        if candidate.is_file():
+            return send_from_directory(str(brain_dir), filename)
+        return _send_index(brain_dir)
 
-    @app.route('/on-boarding', methods=["GET"])
-    def onboarding_index_no_slash():
-        """Canonicalize /on-boarding → /on-boarding/ so relative asset paths resolve correctly."""
-        return redirect('/on-boarding/', code=301)
-
-    @app.route('/on-boarding/', methods=["GET"])
-    def onboarding_index():
-        """Serve onboarding index."""
-        return _serve_versioned_html(_ONBOARDING_DIR)
-
-    @app.route('/login/<path:filename>', methods=["GET"])
-    def login_static(filename):
-        """Serve login page assets."""
-        return _serve_spa(_LOGIN_DIR, filename)
-
+    # ── Login + on-boarding (interface multi-page entries, pre-auth) ──────
     @app.route('/login', methods=["GET"])
     def login_index_no_slash():
-        """Canonicalize /login → /login/ so relative asset paths resolve correctly."""
         return redirect('/login/', code=301)
 
     @app.route('/login/', methods=["GET"])
     def login_index():
-        """Serve login page."""
-        return _serve_versioned_html(_LOGIN_DIR)
+        return _send_index(interface_dir, 'login/index.html')
 
-    # ── Vue build coexistence (P0 migration) ─────────────────────────
-    # Vite content-hashes its own assets, so this build is served verbatim —
-    # it deliberately bypasses the legacy regex version-injection. Old static
-    # apps keep serving from their existing routes until cutover (P3).
-    _NEXT_INTERFACE_DIR = FileMapperService.get_frontend_path("apps", "interface", "dist")
+    @app.route('/on-boarding', methods=["GET"])
+    def onboarding_index_no_slash():
+        return redirect('/on-boarding/', code=301)
 
-    @app.route('/next', methods=["GET"])
-    def next_interface_index_no_slash():
-        """Canonicalize /next → /next/ so the bare path isn't swallowed by the
-        legacy catch-all (which would silently serve the old interface)."""
-        return redirect('/next/', code=301)
+    @app.route('/on-boarding/', methods=["GET"])
+    def onboarding_index():
+        return _send_index(interface_dir, 'on-boarding/index.html')
 
-    @app.route('/next/', methods=["GET"])
-    def next_interface_index():
-        """Serve the Vue interface build index."""
-        return send_from_directory(str(_NEXT_INTERFACE_DIR), 'index.html')
-
-    @app.route('/next/<path:filename>', methods=["GET"])
-    def next_interface_static(filename):
-        """Serve a Vue build asset, or fall back to index.html (SPA history mode)."""
-        candidate = _NEXT_INTERFACE_DIR / filename
-        if candidate.is_file():
-            return send_from_directory(str(_NEXT_INTERFACE_DIR), filename)
-        return send_from_directory(str(_NEXT_INTERFACE_DIR), 'index.html')
-
-    # ── Vue Brain build (P2 migration) ───────────────────────────
-    # Served verbatim (no legacy version-injection). Auth-gated like /brain/.
-    _NEXT_BRAIN_DIR = FileMapperService.get_frontend_path("apps", "brain", "dist")
-
-    @app.route('/brain-next', methods=["GET"])
-    def brain_next_index_no_slash():
-        """Canonicalize /brain-next → /brain-next/ so relative asset paths resolve."""
-        return redirect('/brain-next/', code=301)
-
-    @app.route('/brain-next/', methods=["GET"])
-    def brain_next_index():
-        """Serve Vue Brain SPA index. Redirects to login if unauthenticated."""
-        from services.auth_session_service import validate_session
-        from flask import request
-        if not validate_session(request):
-            return redirect('/login/?next=/brain-next/')
-        return send_from_directory(str(_NEXT_BRAIN_DIR), 'index.html')
-
-    @app.route('/brain-next/<path:filename>', methods=["GET"])
-    def brain_next_static(filename):
-        """Serve a Vue Brain asset, or SPA history-fallback to index.html.
-
-        Auth-gated: unauthenticated requests redirect to /login/.
-        Static assets (JS/CSS hashed by Vite) can be served without auth;
-        only deep-link / reload paths that map to index.html need the gate so the
-        SPA itself can run its own auth check. We gate all paths for consistency and
-        simplicity, matching the /brain/ pattern.
-        """
-        from services.auth_session_service import validate_session
-        from flask import request
-        if not validate_session(request):
-            next_path = f'/brain-next/{filename}'
-            return redirect(f'/login/?next={next_path}')
-        candidate = _NEXT_BRAIN_DIR / filename
-        if candidate.is_file():
-            return send_from_directory(str(_NEXT_BRAIN_DIR), filename)
-        return send_from_directory(str(_NEXT_BRAIN_DIR), 'index.html')
-
-    # Main interface SPA — catch-all (must be last)
+    # ── Interface chat SPA — catch-all (MUST be registered last) ──────────
     @app.route('/<path:filename>', methods=["GET"])
     def interface_static(filename):
-        """Serve main interface SPA files."""
-        return _serve_spa(_INTERFACE_DIR, filename)
+        candidate = interface_dir / filename
+        if candidate.is_file():
+            return send_from_directory(str(interface_dir), filename)
+        return _send_index(interface_dir)
 
     @app.route('/', methods=["GET"])
     def interface_index():
-        """Serve main interface index."""
-        return _serve_versioned_html(_INTERFACE_DIR)
+        return _send_index(interface_dir)
 
 
 def create_app():

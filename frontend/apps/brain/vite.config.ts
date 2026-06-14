@@ -2,8 +2,9 @@ import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 
+// Served by Flask at /brain/ (canonical, post-cutover).
 export default defineConfig({
-  base: process.env.VITE_BASE ?? '/brain-next/',
+  base: process.env.VITE_BASE ?? '/brain/',
   plugins: [vue()],
   resolve: {
     alias: {
