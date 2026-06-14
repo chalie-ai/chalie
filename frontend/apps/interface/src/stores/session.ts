@@ -16,6 +16,7 @@ import { defineStore } from 'pinia';
 import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
 import type { WsInboundEvent, WsPushEvent, WsMessageEvent } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
+import { extractText } from '../composables/useMarkup';
 import { conversation } from '../api/conversation';
 import { moments } from '../api/moments';
 import { getHost } from '../api/index';
@@ -649,9 +650,10 @@ export const useSessionStore = defineStore('session', {
     _notifyBackground(content: string): void {
       if (document.hasFocus()) return;
       const notifications = useNotificationsStore();
-      // Strip XML/HTML tags for a clean notification text.
-      // Full markup_extract equivalent will be wired in P1c.
-      const plain = content.replace(/<[^>]*>/g, '').trim();
+      // Plain text for the OS notification preview — the faithful markup_extract
+      // equivalent (legacy chat.js/event_router.js use extractPlaintext): drops
+      // <actions> button labels and substitutes <img alt>.
+      const plain = extractText(content);
       if (plain) notifications.pushBackground(plain);
     },
   },
