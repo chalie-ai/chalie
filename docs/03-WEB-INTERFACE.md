@@ -1,35 +1,60 @@
 # Web Interface
 
-The frontend is four independent single-page apps under `frontend/` — plain HTML/CSS/JS served directly by Flask, no build step, no bundler. They share the **Radiant** design language: a near-black canvas, drifting atmospheric orbs, and three accent colors (violet for primary actions, magenta for presence, cyan for processing).
+The frontend is a **pnpm workspace** under `frontend/` built with Vue 3, Vite 5, TypeScript (strict), Pinia, Vue Router, and SCSS. Flask serves the compiled builds verbatim — no runtime asset injection.
 
-| App | URL | Purpose |
+## Workspace layout
+
+```
+frontend/
+  packages/
+    shared/           (@chalie/shared) — ApiClient, WebSocketService, PlatformAdapter,
+                       SCSS theme tokens, base UI components (BaseButton, BaseCard, …)
+  apps/
+    interface/        (@chalie/interface) — chat SPA + login/on-boarding multi-page entries
+    brain/            (@chalie/brain) — admin SPA, asset base /brain/
+```
+
+Build: `pnpm -r build` from `frontend/` — emits `apps/interface/dist` and `apps/brain/dist`.
+
+## URL map
+
+| URL | Build | Purpose |
 |---|---|---|
-| **Chat** | `/` | The conversation: messages, live tool activity, rich cards, voice, attachments |
-| **Brain** | `/brain/` | The dashboard: providers, memory, cognition, policies, skills, MCP, scheduler, documents, vision |
-| **Onboarding** | `/on-boarding/` | One-time account creation |
-| **Login** | `/login/` | Session login (supports `?next=` redirect) |
+| `/` | `apps/interface/dist` | Chat SPA |
+| `/brain/` | `apps/brain/dist` | Admin SPA (auth-gated at the serve layer) |
+| `/login/` | `apps/interface/dist/login/index.html` | Session login (supports `?next=` redirect) |
+| `/on-boarding/` | `apps/interface/dist/on-boarding/index.html` | One-time account creation |
 
-## Auth & Provider Gate
+Flask routes are registered in `backend/api/__init__.py` (`_register_static_routes`). Assets carry Vite content hashes; index files are served `no-cache` so browsers always fetch the latest entry point. There is no server-side version injection.
 
-Every page calls `/auth/status` before booting and redirects as needed: no account → onboarding, no session → login, no providers → Brain (locked to the Providers tab until the first provider is saved).
+## Auth flow
+
+Auth is entirely client-side — the server guards its API endpoints independently.
+
+- **Chat router** — `frontend/apps/interface/src/router.ts` runs a `beforeEach` guard on navigation: no account → redirect `/on-boarding/`, no session → redirect `/login/?next=…`, no providers → redirect `/brain/`.
+- **Brain router** — `frontend/apps/brain/src/router.ts` runs the same guard; no providers locks the router to the Providers panel (no hard redirect, so the user can save a provider without leaving the app).
+- **Login / on-boarding entries** — `src/login/main.ts` and `src/onboarding/main.ts` each run a pre-mount `/auth/status` check and redirect away before the Vue app mounts if the condition is already satisfied.
+- **Serve layer** — `/brain/` and `/brain/<path>` additionally call `validate_session` at request time and redirect to `/login/` if the session is absent.
+
+Network failures in any gate → stay and mount; the API endpoints are still protected.
 
 ## The Chat Surface
 
 **ACT cycle.** While a turn runs, the UI shows a chrome-less working state — a pulsing violet logo, a one-line narration that updates in place, and a cumulative list of tool calls (name, optional `act_summary`, then duration or error). When the turn finishes, the whole ACT UI is replaced by the final reply bubble. The data comes from WebSocket events: `act_tool_start`, `act_tool_end`, `act_narration`, then `message` + `done`.
 
-**Rich-media cards.** Tools can return a structured payload that renders as an inline card instead of prose. The registry (`frontend/interface/rich_media/registry.js`) maps tag prefixes to card modules:
+**Rich-media cards.** Tools can return a structured payload that renders as an inline card instead of prose. The registry (`frontend/apps/interface/src/components/rich/richRegistry.ts`) maps tag prefixes to card components. Eight prefixes resolve to seven components — `news` and `search` share `ArticleCard.vue`:
 
-| Card | Source tools |
-|---|---|
-| `weather` | weather — ambient sky scene with hourly rail |
-| `article` | search + news — shared article layout with thumbnails |
-| `schedule` | schedule — date block + same-day list |
-| `list` | list — checklist with click-to-toggle persistence |
-| `timer` | timer — live countdown with alarm (purely client-side) |
-| `calendar` | calendar — event card |
-| `contacts` | contacts — contact card |
+| Card | Tag prefix | Component | Renders |
+|---|---|---|---|
+| `weather` | `weather` | `WeatherCard.vue` | Ambient sky scene with an hourly rail |
+| `article` | `news`, `search` | `ArticleCard.vue` | Article layout with optional image thumbnail |
+| `schedule` | `schedule` | `SchedulerCard.vue` | Date block + same-day list |
+| `list` | `list` | `ListCard.vue` | Checklist with click-to-toggle persistence |
+| `timer` | `timer` | `TimerCard.vue` | Live countdown with a client-side alarm |
+| `calendar` | `calendar` | `CalendarCard.vue` | Event card |
+| `contacts` | `contacts` | `ContactsCard.vue` | Contact card |
 
-Interactive cards (e.g. checking a list item) post silent actions back to the server without rendering a chat bubble — the card owns its own feedback.
+Cards are loaded via `defineAsyncComponent` so each card and its scoped styles code-split into their own chunk. Interactive cards (e.g. checking a list item) post silent actions back to the server without rendering a chat bubble — the card owns its own feedback.
 
 **Attachments.** Up to 3 images per message via file picker, drag-and-drop, or paste. Thumbnails show an analyzing state while the backend runs vision/OCR; sending is never blocked on analysis. Non-image files route to document upload.
 
@@ -37,17 +62,23 @@ Interactive cards (e.g. checking a list item) post silent actions back to the se
 
 ## The Brain Dashboard
 
-| Tab | What it does |
-|---|---|
-| **Providers** | Add/test/select LLM providers |
-| **Vision** | Vision-provider configuration |
-| **Cognition** | Subtabs: Memory, Tools, World state, Personality, Errors, Usage, Compacted Summary |
-| **Scheduler** | Reminders and scheduled tasks (All / Pending / Fired / Failed / Cancelled) |
-| **Lists** | The user's persistent checklists |
-| **Documents** | Ingested documents and watched folders (Active / Processing / Uploads / Deleted) |
-| **Capabilities** | Connect external services (mail, Home Assistant, UniFi) |
-| **Policies** | Per-action permission control — allow / ask / deny across Chat, Background, and External Agent contexts, plus a blocked-actions log |
-| **Skills** | Curated and user-created playbooks, skill associations |
-| **MCP** | External MCP tool-server connections |
+`frontend/apps/brain/src/router.ts` defines the tab/route set:
+
+| Tab | Route | What it does |
+|---|---|---|
+| **Providers** | `/providers` | Add/test/select LLM providers |
+| **Vision** | `/vision` | Vision-provider configuration |
+| **Cognition** | `/cognition` | Subtabs: Memory, Tools, World state, Personality, Errors, Usage, Compacted Summary |
+| **Scheduler** | `/scheduler` | Reminders and scheduled tasks (All / Pending / Fired / Failed / Cancelled) |
+| **Lists** | `/lists` | The user's persistent checklists |
+| **Documents** | `/documents` | Ingested documents and watched folders (Active / Processing / Uploads / Deleted) |
+| **Capabilities** | `/capabilities` | Connect external services (mail, Home Assistant, UniFi) |
+| **Policies** | `/policies` | Per-action permission control — allow / ask / deny across Chat, Background, and External Agent contexts, plus a blocked-actions log |
+| **Skills** | `/skills` | Curated and user-created playbooks, skill associations |
+| **MCP** | `/mcp` | External MCP tool-server connections |
 
 The **Personality** sliders (warmth, mood, expressiveness, curiosity, humor; −2 to +2) map to a voice paragraph prepended to the system prompt for user-facing conversations only — background processing is unaffected.
+
+## Radiant design system
+
+Both apps import the shared SCSS theme from `packages/shared/src/styles/`. The design language: a near-black canvas, drifting atmospheric orbs, and three accent colors — violet for primary actions, magenta for presence, cyan for processing. Dark and light themes are supported via CSS variables declared in the shared tokens; no hardcoded color values are used in component styles.

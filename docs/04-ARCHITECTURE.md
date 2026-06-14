@@ -10,6 +10,7 @@ The stack:
 - **SQLite** (WAL mode) — the only database; `sqlite-vec` for vector search, FTS5 for keyword search
 - **MemoryStore** — an in-process, thread-safe key/value store with TTL (no Redis)
 - **Pluggable LLM providers** — Ollama, Anthropic, OpenAI (+ OpenAI-compatible), Google Gemini
+- **Vue 3 + Vite 5** — two SPA builds (`apps/interface` and `apps/brain`) in a pnpm workspace under `frontend/`; TypeScript strict, Pinia, Vue Router, SCSS; Flask serves the compiled `dist/` trees verbatim
  
 Everything runs in one process. Workers are daemon threads supervised by a `WorkerManager` that health-checks and restarts them every 5 seconds. Threads communicate through SQLite, MemoryStore, and the WebSocket broker — there are no queues and no inter-process messaging.
  
@@ -161,3 +162,4 @@ All of these are ordinary `MessageProcessor.process()` calls with their own chan
 | Feed ambient context into prompts | Push a signal into WorldState — see [16-AMBIENT-AWARENESS.md](16-AMBIENT-AWARENESS.md) |
 | Connect an external tool server | Add an MCP server via the `mcp_manager` tool or the Brain UI |
 | Add an HTTP endpoint | Add a Flask blueprint under `backend/api/` |
+| Add a frontend route or page | Add a Vue Router route in `frontend/apps/interface/src/router.ts` or `frontend/apps/brain/src/router.ts`; register any new serve path in `backend/api/__init__.py` (`_register_static_routes`) |
