@@ -29,6 +29,27 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
     window.removeEventListener('scroll', _onScroll);
   });
 
+  // ── Guarded scroll to bottom (incremental appends) ─────────────────────────
+
+  /**
+   * Smooth scroll to the bottom, but ONLY if the user has not scrolled up.
+   *
+   * Port of renderer.js _scrollToBottom (lines 550-558): used for every
+   * incremental content mutation — new form, ACT narration, tool-pill add /
+   * resolve — so the feed follows growing content without yanking a user who
+   * has deliberately scrolled up to read history. A single rAF defers the
+   * measurement until the browser has laid out the just-appended nodes.
+   *
+   * (The legacy method also calls _updateAmbientBloom(); that speaker-bloom
+   * highlight is a separate concern wired by the ambient task, not autoscroll.)
+   */
+  function scrollToBottom(): void {
+    if (userScrolledUp.value) return;
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+    });
+  }
+
   // ── Force-scroll to bottom ─────────────────────────────────────────────────
 
   /**
@@ -74,5 +95,5 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
     });
   }
 
-  return { forceScrollToBottom, userScrolledUp };
+  return { scrollToBottom, forceScrollToBottom, userScrolledUp };
 }

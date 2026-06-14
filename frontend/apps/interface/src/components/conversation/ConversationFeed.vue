@@ -28,7 +28,7 @@ const feedRef = ref<HTMLElement | null>(null);
 
 // ── Autoscroll composable ─────────────────────────────────────────────────────
 
-const { forceScrollToBottom, userScrolledUp } = useAutoscroll(feedRef);
+const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
 
 // ── History pagination — scroll-up trigger ────────────────────────────────────
 //
@@ -83,33 +83,40 @@ function _onHistoryInitialLoaded(): void {
   forceScrollToBottom();
 }
 
-// ── Watch forms.length for mid-turn reactive scrolling ────────────────────────
+// ── Deep-watch forms for incremental reactive scrolling ───────────────────────
 //
-// When a new form is added during a turn and the user hasn't scrolled up,
-// scroll to bottom after the DOM has updated.
+// Legacy calls _scrollToBottom() after EVERY content mutation — new form,
+// ACT narration, tool-pill add/resolve (renderer.js:170,239,261,302,374). A
+// count-only watch would miss narration/pill growth inside an in-flight ACT
+// form (forms.length is unchanged), so the feed would stop following the trail
+// mid-cycle. A deep watch fires on those nested mutations too. flush:'post'
+// runs the callback after Vue patches the DOM, so the rAF inside scrollToBottom
+// measures the settled height. scrollToBottom is the GUARDED smooth variant —
+// it self-skips when the user has scrolled up (turn-end uses the force variant).
 
 watch(
-  () => conversationStore.forms.length,
-  async () => {
-    if (!userScrolledUp.value) {
-      await nextTick();
-      forceScrollToBottom();
-    }
+  () => conversationStore.forms,
+  () => {
+    scrollToBottom();
   },
+  { deep: true, flush: 'post' },
 );
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
-  // Wire scroll listener for pagination
-  window.addEventListener('scroll', _onScrollPaginate, { passive: true });
-
   // Wire document events for force-scroll signals
   document.addEventListener('session:turn-done', _onTurnDone);
   document.addEventListener('session:history-initial-loaded', _onHistoryInitialLoaded);
 
   // Initial history load — this is the ONLY trigger (App.vue does NOT call it)
   await session.loadRecentConversation();
+
+  // Wire the pagination scroll listener ONLY AFTER the initial load + scroll-to-
+  // bottom (legacy chat.js init() ordering): registering it earlier lets a short
+  // conversation — where scrollY is 0 < 150 during the load — fire a pagination
+  // cascade on startup.
+  window.addEventListener('scroll', _onScrollPaginate, { passive: true });
 });
 
 onBeforeUnmount(() => {
@@ -168,8 +175,8 @@ onBeforeUnmount(() => {
 .history-loader__spinner {
   width: 18px;
   height: 18px;
-  border: 2px solid rgba(138, 92, 255, 0.2);
-  border-top-color: #8a5cff;
+  border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
+  border-top-color: var(--violet);
   border-radius: 50%;
   animation: history-spin 0.7s linear infinite;
 }
