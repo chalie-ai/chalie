@@ -66,11 +66,9 @@ body {
   outline-offset: 2px;
 }
 
-// body.voice-loading hides voice-rec button until voice health check passes
-body.voice-loading #voiceRecBtn,
-body.voice-loading .speech-form__speak-btn {
-  display: none;
-}
+// Voice-button visibility (hidden until the voice-health check passes) is owned
+// by Task A5 via a reactive flag on the input dock, NOT by a `body.voice-loading`
+// class. The legacy body-class CSS rule is intentionally not ported here.
 
 // --------------------------------------------------------------------------
 // 3. Ambient Background
@@ -388,7 +386,12 @@ body.speaker-user #ambientBloom {
 .loading-overlay {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  // Boot screen must sit above every shell layer (presence bar / input dock at
+  // 100, banners at 1000) while it is visible. Legacy used z-index:100 and hid
+  // the dock via JS during load (app.js:722); until Task A5 wires the real
+  // ready-gate, we layer the overlay on top instead so the dock can't poke
+  // through.
+  z-index: 1100;
   background: #06080e; // always dark — stays consistent in both themes
   display: flex;
   align-items: center;
