@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted } from 'vue';
 import { lists as listsApi } from '../api/lists';
 import type { List, ListItem } from '../api/lists';
 import { useToast } from '../composables/useToast';
@@ -20,7 +20,7 @@ const showNew = ref(false);
 const newListName = ref('');
 const showRename = ref(false);
 const renameName = ref('');
-const renameId = ref<string | number>('');
+const renameId = ref<string | number | null>(null);
 
 // --- counts helper (legacy lists.js:48-51) ---
 function counts(list: List): { done: number; total: number; pct: number } {
@@ -30,6 +30,10 @@ function counts(list: List): { done: number; total: number; pct: number } {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
   return { done, total, pct };
 }
+
+// Decorate each list with its counts once per render pass (the `list` object is the
+// same reference held in listsData, so toggle/fetchListDetail mutations still apply).
+const decoratedLists = computed(() => listsData.value.map((list) => ({ list, c: counts(list) })));
 
 // --- load (legacy lists.js:28-37) ---
 async function load(): Promise<void> {
@@ -114,6 +118,7 @@ async function createList(): Promise<void> {
 
 // --- renameList (legacy lists.js:184-191) ---
 async function renameList(): Promise<void> {
+  if (renameId.value == null) return;
   try {
     await listsApi.rename(renameId.value, renameName.value.trim());
     showRename.value = false;
@@ -168,14 +173,14 @@ onMounted(load);
 
   <!-- List cards (legacy lists.js:47-77) -->
   <template v-else>
-    <div v-for="list in listsData" :key="list.id" class="list-card">
+    <div v-for="{ list, c } in decoratedLists" :key="list.id" class="list-card">
       <div class="list-card-header" @click="toggle(list)">
         <div class="list-card-title">
           <span class="list-chev">
             <BrainIcon :name="expanded[String(list.id)] ? 'ChevronDown' : 'Chevron'" :size="14" />
           </span>
           <span>{{ list.name }}</span>
-          <span class="list-count">{{ counts(list).done }}/{{ counts(list).total }}</span>
+          <span class="list-count">{{ c.done }}/{{ c.total }}</span>
         </div>
         <div class="list-card-actions">
           <button class="btn btn-sm btn-secondary" @click.stop="openRename(list)">Rename</button>
@@ -183,8 +188,8 @@ onMounted(load);
         </div>
       </div>
 
-      <div v-if="counts(list).total > 0" class="progress-bar">
-        <div class="progress-fill" :style="{ width: counts(list).pct + '%' }"></div>
+      <div v-if="c.total > 0" class="progress-bar">
+        <div class="progress-fill" :style="{ width: c.pct + '%' }"></div>
       </div>
 
       <div v-if="expanded[String(list.id)]" class="list-items">

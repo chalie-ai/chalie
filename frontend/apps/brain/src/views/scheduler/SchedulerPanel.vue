@@ -61,7 +61,7 @@ function openForm(item: ScheduleItem | null): void {
 }
 
 async function save(): Promise<void> {
-  const body: ScheduleInput & { recurrence?: string | null } = {
+  const body: ScheduleInput = {
     message: formMsg.value.trim(),
     due_at: formDue.value,
     type: formType.value,

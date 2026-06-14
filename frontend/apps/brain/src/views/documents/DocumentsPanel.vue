@@ -12,6 +12,13 @@ const props = defineProps<{
   statusFilter: 'active' | 'processing' | 'uploads' | 'deleted';
 }>();
 
+const GROUP_TABS = [
+  { key: 'all', label: 'All' },
+  { key: 'doc_category', label: 'Category' },
+  { key: 'doc_project', label: 'Project' },
+  { key: 'doc_date', label: 'Date' },
+] as const;
+
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
@@ -120,8 +127,9 @@ async function viewDoc(d: Document): Promise<void> {
     const data = await documents.get(d.id);
     detailDoc.value = data.item;
     viewMode.value = 'detail';
-  } catch {
-    showToast('Failed to load document', 'error');
+  } catch (e) {
+    // legacy documents.js: non-ok → 'Failed to load document'; network → 'Network error'
+    showToast(e instanceof HttpError ? 'Failed to load document' : 'Network error', 'error');
   }
 }
 
@@ -172,7 +180,7 @@ async function onUpload(event: Event): Promise<void> {
         placeholder="Search documents…"
         @keydown.enter="onSearch"
       >
-      <button class="btn btn-secondary" @click="fileInput?.click()">
+      <button class="btn btn-primary" @click="fileInput?.click()">
         <BrainIcon name="Upload" :size="14" /> Upload
       </button>
     </div>
@@ -210,12 +218,7 @@ async function onUpload(event: Event): Promise<void> {
     <!-- Group tabs -->
     <div class="doc-group-tabs">
       <button
-        v-for="tab in [
-          { key: 'all', label: 'All' },
-          { key: 'doc_category', label: 'Category' },
-          { key: 'doc_project', label: 'Project' },
-          { key: 'doc_date', label: 'Date' },
-        ]"
+        v-for="tab in GROUP_TABS"
         :key="tab.key"
         class="group-tab"
         :class="{ active: groupBy === tab.key }"
@@ -231,11 +234,11 @@ async function onUpload(event: Event): Promise<void> {
       <div class="watched-folders-list">
         <div v-for="f in folders" :key="f.id" class="watched-folder-item">
           <span class="wf-icon"><BrainIcon name="Eye" :size="14" /></span>
-          <span class="wf-label">{{ (f.label as string) || (f.path as string) || '' }}</span>
-          <span class="wf-path">{{ (f.path as string) || '' }}</span>
-          <span class="wf-meta">{{ (f.files as number) || 0 }} files · {{ formatDate(f.last_scan as string) }}</span>
+          <span class="wf-label">{{ f.label || f.folder_path || '' }}</span>
+          <span class="wf-path">{{ f.folder_path || '' }}</span>
+          <span class="wf-meta">{{ f.last_scan_files || 0 }} files · {{ formatDate(f.last_scan_at) }}</span>
           <span class="wf-status">
-            <span class="status-dot" :class="{ active: f.active }"></span>
+            <span class="status-dot" :class="{ active: f.enabled }"></span>
           </span>
         </div>
       </div>

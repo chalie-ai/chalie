@@ -20,9 +20,16 @@ export interface Document {
   [key: string]: unknown;
 }
 
+// Fields mirror the raw `watched_folders` columns — GET /documents/watched-folders
+// returns `dict(zip(cols, row))` from `FolderWatcherService.get_all_folders()`
+// (no serialization layer), so the keys are the DB column names verbatim.
 export interface WatchedFolder {
   id: string | number;
-  path: string;
+  folder_path: string;
+  label?: string | null;
+  enabled?: number | boolean;
+  last_scan_at?: string | null;
+  last_scan_files?: number;
   [key: string]: unknown;
 }
 
