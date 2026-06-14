@@ -46,11 +46,6 @@ class FileMapperService:
         return cls._DATA_DIR / "chalie.db"
 
     @classmethod
-    def get_session_secret_path(cls) -> Path:
-        """Return path to the persisted Flask session secret."""
-        return cls._DATA_DIR / ".session_secret"
-
-    @classmethod
     def get_secure_dir(cls) -> Path:
         """Return the directory holding vault key-material backups.
 
