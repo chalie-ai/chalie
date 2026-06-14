@@ -12,23 +12,30 @@ import { useApiClient } from '@chalie/shared';
 import { withAuth } from './http';
 
 export interface Association {
-  skill_id: string | number;
+  pattern_name: string;
+  skill_title: string;
+  rule: string;
+  created_at?: string | null;
   [key: string]: unknown;
 }
 
 export interface Skill {
   id: string | number;
-  name: string;
-  trigger?: string | null;
-  instructions?: string | null;
+  title: string;
+  use_for: string;
+  content: string;
+  tags?: string | null;
+  version?: string | number;
+  source?: string;
   enabled?: boolean;
   [key: string]: unknown;
 }
 
 export interface SkillInput {
-  name: string;
-  trigger?: string;
-  instructions?: string;
+  title: string;
+  use_for: string;
+  content: string;
+  tags?: string;
 }
 
 export const skills = {
@@ -52,7 +59,7 @@ export const skills = {
     return withAuth(() => api.del(`/api/skills/${id}`));
   },
 
-  toggle(id: string | number): Promise<unknown> {
+  toggle(id: string | number): Promise<{ enabled: boolean }> {
     const api = useApiClient();
     return withAuth(() => api.put(`/api/skills/${id}/toggle`, {}));
   },
