@@ -41,15 +41,15 @@ const prefs = computed(() => telemetry.value.preferences || {});
 const signalEntries = computed(() => Object.entries(signals.value));
 const pendingSched = computed(() => schedule.value.filter((s) => s.status === 'pending'));
 
-function batteryText(): string {
+const batteryText = computed((): string => {
   const pct = Math.round((battery.value.level || 0) * 100);
   return `${pct}%${battery.value.charging ? ' ⚡ charging' : ''}`;
-}
+});
 
-function deviceText(): string {
+const deviceText = computed((): string => {
   const d = deviceInfo.value;
   return `${d.class || '—'} · ${d.platform || ''} · ${d.screen_w || '?'}×${d.screen_h || '?'}`;
-}
+});
 
 function mdToHtml(md: string): string {
   return escapeHtml(md)
@@ -76,8 +76,8 @@ function mdToHtml(md: string): string {
           <tbody>
             <tr><td class="key-cell">Location</td><td>{{ location || '—' }}</td></tr>
             <tr><td class="key-cell">Local Time</td><td>{{ localTime }} ({{ timezone }})</td></tr>
-            <tr><td class="key-cell">Device</td><td>{{ deviceText() }}</td></tr>
-            <tr><td class="key-cell">Battery</td><td>{{ batteryText() }}</td></tr>
+            <tr><td class="key-cell">Device</td><td>{{ deviceText }}</td></tr>
+            <tr><td class="key-cell">Battery</td><td>{{ batteryText }}</td></tr>
             <tr><td class="key-cell">Network</td><td>{{ telemetry.connection || '—' }}</td></tr>
             <tr><td class="key-cell">Theme</td><td>{{ prefs.color_scheme || '—' }}</td></tr>
           </tbody>
@@ -92,7 +92,7 @@ function mdToHtml(md: string): string {
             <tr><th>Message</th><th>Due</th><th>Recurrence</th></tr>
           </thead>
           <tbody>
-            <tr v-for="(s, i) in pendingSched" :key="i">
+            <tr v-for="s in pendingSched" :key="`${s.due_at}-${s.message}`">
               <td class="key-cell">{{ s.message || '' }}</td>
               <td>{{ formatDate(s.due_at) }}</td>
               <td>{{ s.recurrence || '—' }}</td>
@@ -109,7 +109,7 @@ function mdToHtml(md: string): string {
             <tr><th>Signal</th><th>Label</th></tr>
           </thead>
           <tbody>
-            <tr v-for="([k, v], i) in signalEntries" :key="i">
+            <tr v-for="([k, v]) in signalEntries" :key="k">
               <td class="key-cell">{{ k }}</td>
               <td>{{ v.label || JSON.stringify(v) }}</td>
             </tr>

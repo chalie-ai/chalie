@@ -5,9 +5,11 @@ import type { MemoryRecord } from '../../api/cognition';
 import { formatDate } from '../../utils/format';
 import EmptyState from '../../ui/EmptyState.vue';
 
-const SOURCES = ['episodes', 'user', 'system'] as const;
+type MemorySource = 'episodes' | 'user' | 'system';
 
-const source = ref('episodes');
+const SOURCES: MemorySource[] = ['episodes', 'user', 'system'];
+
+const source = ref<MemorySource>('episodes');
 const search = ref('');
 const records = ref<MemoryRecord[]>([]);
 const hasMore = ref(false);
@@ -15,7 +17,10 @@ const offset = ref(0);
 const loading = ref(false);
 const loadFailed = ref(false);
 
+let fetchGen = 0;
+
 async function load(): Promise<void> {
+  const gen = ++fetchGen;
   loading.value = true;
   loadFailed.value = false;
   try {
@@ -25,16 +30,18 @@ async function load(): Promise<void> {
       offset: offset.value,
       q: search.value || undefined,
     });
+    if (gen !== fetchGen) return;
     records.value = data.rows || [];
     hasMore.value = data.has_more || false;
   } catch {
+    if (gen !== fetchGen) return;
     loadFailed.value = true;
   } finally {
-    loading.value = false;
+    if (gen === fetchGen) loading.value = false;
   }
 }
 
-function selectSource(s: string): void {
+function selectSource(s: MemorySource): void {
   source.value = s;
   offset.value = 0;
   load();
@@ -87,7 +94,7 @@ onMounted(load);
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(r, i) in records" :key="i">
+          <tr v-for="r in records" :key="`${r.created}-${r.key ?? r.location ?? ''}`">
             <td>{{ formatDate(r.created) }}</td>
             <td>{{ formatDate(r.last_accessed) }}</td>
             <td class="key-cell">{{ source === 'episodes' ? (r.location || '') : (r.key || '') }}</td>

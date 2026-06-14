@@ -33,15 +33,21 @@ function fmtTokens(n: number): string {
 // ---------------------------------------------------------------------------
 // Fetch
 // ---------------------------------------------------------------------------
+let fetchGen = 0;
+
 async function load(): Promise<void> {
+  const gen = ++fetchGen;
   loading.value = true;
   loadFailed.value = false;
   try {
-    data.value = await cognition.tokenUsage(usageWindow.value);
+    const result = await cognition.tokenUsage(usageWindow.value);
+    if (gen !== fetchGen) return;
+    data.value = result;
   } catch {
+    if (gen !== fetchGen) return;
     loadFailed.value = true;
   } finally {
-    loading.value = false;
+    if (gen === fetchGen) loading.value = false;
   }
 }
 
@@ -274,7 +280,7 @@ const chartGeom = computed(() => {
           :viewBox="`0 0 ${chartGeom.svgW} ${chartGeom.h + chartGeom.labelH}`"
           preserveAspectRatio="none"
         >
-          <g v-for="(bar, i) in chartGeom.bars" :key="i">
+          <g v-for="bar in chartGeom.bars" :key="bar.label">
             <rect
               :x="bar.x"
               :y="bar.outputY"
@@ -314,7 +320,7 @@ const chartGeom = computed(() => {
         </tr>
       </thead>
       <tbody>
-        <tr v-for="(slot, i) in tableSlots" :key="i">
+        <tr v-for="slot in tableSlots" :key="slot.label">
           <td>{{ slot.label }}</td>
           <td class="num">{{ (slot.input || 0).toLocaleString() }}</td>
           <td class="num">{{ (slot.output || 0).toLocaleString() }}</td>
