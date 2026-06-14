@@ -339,11 +339,18 @@ export const useSessionStore = defineStore('session', {
         this._activeActId = null;
       }
 
-      // Remove last user bubble and capture its text for restore
-      const restoredText = this._lastUserText;
+      // Remove last user bubble and capture its LIVE text for restore.
+      // Legacy chat.js requestStop reads textContent off the bubble, which in a
+      // mid-ACT append holds the concatenated "A\n\nB" — not the original "A".
+      // _lastUserText is only a fallback when the form can no longer be found.
+      let restoredText = this._lastUserText;
       if (this._lastUserFormId != null) {
         const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
-        if (uidx !== -1) convo.forms.splice(uidx, 1);
+        if (uidx !== -1) {
+          const uform = convo.forms[uidx];
+          if (uform.kind === 'user') restoredText = uform.text;
+          convo.forms.splice(uidx, 1);
+        }
         this._lastUserFormId = null;
       }
       this._lastUserText = '';
