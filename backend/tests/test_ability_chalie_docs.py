@@ -6,38 +6,11 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for chalie_docs's ToolResult contract (TKT-901).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint exactly as ``MessageProcessor._loop``
-does — real ``AbilityRegistry`` resolution of the production
-``ChalieDocsAbility``, the real ``PolicyManager.wrap`` gate (``chalie_docs`` is in
-``PolicyManager.INTERNAL`` so it needs no policy row), the real
-``ChalieDocsAbility.run``, the real ``services.web_fetch`` fetch stack + SSRF
-guard, and the real ``ActTrail`` write read back from the db.
-
-The regression under test: the old ability answered with an INSTRUCTION to call
-the ``read`` tool and visit a URL list — a round-trip a weak model fumbles —
-instead of fetching the documentation itself. The fix fetches the doc server-side
-and returns the prose; an unknown query is a stable ``code=doc-not-found`` (the
-banned ``code=error`` marker is gone) and an all-urls-down outage is a loud
-``code=fetch-failed`` carrying NO instruction text.
-
-NETWORK CONSTRAINT: unit tests are deterministic and offline. We never hit a real
-chalie.ai host. The no-fabrication / fetch-failed path is exercised by repointing
-the production ``_QUERY_URLS`` table's OWN entries at non-resolvable
-``chalie-docs.invalid`` hosts (the same production seam, not a mock): the SSRF
-guard's resolver rejects the unresolvable host BEFORE any socket opens, so the
-real fetch raises ``requests.RequestException`` offline and the ability returns
-``code=fetch-failed`` with no body. Unknown-query and missing-query short-circuit
-BEFORE any fetch.
-
-Network coverage gap (documented, same as prior tickets): the happy-path content
-fetch (a real chalie.ai page extracted to prose) and the PARTIAL-outage path (one
-live url + one dead url → success with ``failed_sources`` in meta) both require
-the wire — there is no respx/responses precedent in this suite, so they are
-documented here as a coverage gap rather than mocked.
-"""
+"""Chalie-docs-specific business-logic tests migrated from the per-ability
+conformance file removed in TKT-975. The full ToolResult wire contract is
+pinned centrally in test_tool_result_contract.py; this file holds only the
+chalie_docs ability's genuine behaviour tests (unknown-query errors, fetch-failed
+path, no-instruction guarantee) that have no coverage elsewhere."""
 
 import pytest
 
@@ -81,9 +54,6 @@ def _dead_table(monkeypatch) -> None:
     monkeypatch.setattr(abilities.chalie_docs, "_QUERY_URLS", dead)
 
 
-# ── Unknown query: errors loudly with the real valid ladder + closest match ─────
-
-
 def test_unknown_query_errors_with_doc_not_found_and_closest_match(db, chat_mp):
     """A query the table does not know returns a STABLE ``code=doc-not-found``
     error whose ``valid:`` ladder lists the REAL keys, with a closest-match hint —
@@ -121,26 +91,6 @@ def test_unknown_query_valid_ladder_is_the_real_table(db, chat_mp):
     valid_line = next(ln for ln in out.splitlines() if ln.startswith("valid:"))
     advertised = {p.strip() for p in valid_line[len("valid:"):].split("|")}
     assert advertised == set(abilities.chalie_docs._QUERY_URLS)
-
-
-# ── Missing query: pre-gated by the dispatcher, never reaches run() ─────────────
-
-
-def test_missing_query_reports_missing_params(db, chat_mp):
-    """A call with no ``query`` is rejected by the dispatcher's ACTION_REQUIRED
-    pre-gate with ``code=missing-params`` — BEFORE run() ever touches a url or the
-    network. The banned ``code=error`` marker is gone."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "chalie_docs", {"act_summary": "x"}
-    )
-
-    assert "[chalie_docs(status=error, code=missing-params" in out
-    assert "code=error]" not in out
-    assert "query" in out
-    assert "[end:chalie_docs]" in out
-
-
-# ── The heart: all urls unreachable errors loudly, no instruction fabrication ───
 
 
 def test_all_urls_unreachable_yields_fetch_failed_no_instruction(db, chat_mp, monkeypatch):

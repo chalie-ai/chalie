@@ -6,41 +6,11 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the _mcp_* passthrough proxy's ToolResult contract (TKT-895).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint on the CHAT channel against a real
-``MessageProcessor`` carrying a real ``UserConfig``, the real ``_MCPAbility``
-synthetic proxy resolved by the dispatcher's ``_bind`` for any ``_mcp_*`` name,
-the real ``PolicyManager.wrap`` gate (an ``allow`` row is seeded into the real
-policy table the gate reads — no monkeypatch), the real
-``McpClientService.dispatch_mcp_tool`` MCP round-trip, and the real ``ActTrail``
-write.
-
-There are two network realities, both exercised with zero mocks:
-
-* UNREACHABLE — a server is registered via the real ``add_server`` against a host
-  that does not answer; the real outbound MCP connection fails, so the proxy must
-  render ``[<tool>(status=error, code=mcp-unreachable, …)]`` NAMING the server,
-  not a stack-trace string nor an empty success.
-
-* REACHABLE — a real local MCP server (``FastMCP`` over streamable-HTTP, served by
-  uvicorn in a background thread, the same pattern the inbound-server e2e suite
-  uses) is registered + synced via the real ``ping_and_sync``. Its tools are
-  invoked through the real dispatcher so the content-block shaping (text → prose,
-  structured JSON → structured body) and the ``isError`` → ``code=mcp-tool-error``
-  mapping are proven end to end against a genuine remote.
-
-The regression under test (the exact one TKT-895 closes): before the migration the
-proxy returned a plain ``{'text': …}`` dict that swallowed the remote's
-``isError`` flag and collapsed structured content into a stringified blob, and a
-transport failure rendered the legacy ``code="error"`` marker. The contract makes
-the outcome EXPLICIT and machine-readable.
-
-NETWORK CONSTRAINT: the reachable server is a real in-process localhost server, so
-the suite stays deterministic and offline-from-the-internet. The unreachable host
-is a closed localhost port — the connection attempt fails fast.
-"""
+"""_mcp_* passthrough proxy-specific business-logic tests migrated from the
+per-ability conformance file removed in TKT-975. Drives the real ToolDispatcher
+end-to-end hot path with zero mocks, exercising unreachable-server, unknown-server,
+text/struct content shaping, and isError→mcp-tool-error mapping via a real local
+FastMCP stub."""
 
 import json
 import socket

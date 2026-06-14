@@ -6,33 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the search tool's ToolResult contract (TKT-891).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint on the CHAT channel against a real
-``mp``-shaped context, the real ``AbilityRegistry`` resolution of the production
-``SearchAbility``, the real ``PolicyManager.wrap`` gate (``search`` is an INTERNAL
-tool that bypasses the gate unconditionally), the real ``SearchAbility.run`` with
-the real on-disk provider registry (``search_tool_providers.sqlite``), and the
-real ``ActTrail`` write.
-
-The regression under test (the exact silent-masking bug TKT-891 closes): when the
-model FORCES a provider that is not a real provider name, today the DDG fallback
-silently masks it and the model believes it searched the engine it named. The
-guardrail must instead loudly error with ``code=unknown-provider`` and a ``valid:``
-ladder of the REAL provider names — and crucially the schema enum the model reads
-must itself name only real providers (the shipped enum advertised ``hackernews``
-and ``stackoverflow``, which do NOT exist — the real rows are ``hn_algolia`` and
-``stack_exchange`` — so a schema-obedient model was silently DDG-faded every time).
-
-NETWORK CONSTRAINT: unit tests are deterministic and offline. We never hit a real
-search engine. Every path asserted here short-circuits BEFORE any HTTP call:
-unknown-provider rejection (no network), missing-query pre-gate (no network), and
-schema honesty (pure introspection against the real registry). The structured
-result body and the runtime ``meta fallback=ddg`` path require a live engine
-response; there is no respx/responses precedent in this suite, so those are
-covered against the real registry only at the rejection boundary and documented as
-a network-coverage gap in the ticket report rather than mocked.
+"""search-specific business-logic tests migrated from the per-ability conformance
+file removed in TKT-975. Covers the silent-DDG-masking regression (forced unknown
+provider must error loudly), the real-registry valid ladder, schema enum honesty,
+and blank-query missing-params rejection.
 """
 
 import sqlite3
@@ -128,18 +105,7 @@ def test_schema_provider_enum_matches_real_registry(db):
     assert "stackoverflow" not in enum
 
 
-# ── Missing query: pre-gated, never reaches the network ────────────────────────
-
-
-def test_missing_query_reports_missing_params(db, chat_mp):
-    """A call with no ``query`` is rejected with a stable error naming the missing
-    param — BEFORE run() ever touches a provider or the network."""
-    out = ToolDispatcher(chat_mp).dispatch("search", {"act_summary": "x"})
-
-    assert "[search(status=error" in out
-    assert "code=error]" not in out
-    assert "query" in out
-    assert "[end:search]" in out
+# ── Missing/blank query: pre-gated, never reaches the network ─────────────────
 
 
 def test_blank_query_reports_missing_params(db, chat_mp):

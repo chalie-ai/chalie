@@ -1,24 +1,8 @@
-"""Feature tests pinning the ToolResult contract of the two internal compactors.
-
-TKT-919 — VERIFY-THEN-CLOSE-GAP. Most of the ToolResult migration for
-``chat_history_compactor`` and ``tool_chain_compactor`` already shipped (both
-return :class:`abilities._result.ToolResult` via ``ok()``); these tests pin that
-contract and pin the one closed gap: the chat-history SUCCESS result now carries
-an honest ``rows_compacted`` count surfaced out of ``_fit_compaction_input``.
-
-Hard constraints (these run in the OFFLINE unit gate):
-- No test reaches ``MessageProcessor.process(...)`` — that fires a real LLM call.
-  The no-op paths short-circuit BEFORE ``process()`` (empty trail / nothing to
-  compact), and ``_fit_compaction_input`` is exercised directly with a cap of 0
-  (provider max_tokens 8000 → cap = 8000 - max(800, 8000) = 0), which makes the
-  drop loop return on its first iteration WITHOUT calling ``providers.measure``.
-- Real ``transcript_service`` writes + the shared ``db`` fixture, mirroring
-  ``tests/test_compaction_watermark.py``. Zero mocks.
-
-Several pins are GREEN-at-HEAD by design (the contract already holds) and are
-labelled as such; the ``rows_compacted`` pins are RED-at-HEAD (the count was not
-surfaced before this ticket).
-"""
+"""Compactor-specific business-logic tests migrated from the per-ability
+conformance file removed in TKT-975. The full ToolResult wire contract is
+pinned centrally in test_tool_result_contract.py; this file holds only the
+compactor abilities' genuine behaviour tests (rows_compacted surface, broadcast
+guard, trail-boundary invariant) that have no coverage elsewhere."""
 
 import pytest
 
@@ -30,7 +14,6 @@ from abilities.chat_history_compactor import (
 )
 from abilities.tool_chain_compactor import (
     ToolChainCompactionConfig,
-    ToolChainCompactor,
 )
 from abilities._compaction_config import CompactionConfig
 from configs.channels import UserConfig
@@ -39,9 +22,6 @@ from services.message_processor import MessageProcessor
 from services.provider_cache_service import ProviderCacheService
 
 pytestmark = pytest.mark.unit
-
-
-# ── Harness ────────────────────────────────────────────────────────────────
 
 
 def _clear(db, channel):
@@ -79,53 +59,6 @@ def _make_mp(raw_input, channel):
     mp.config = UserConfig()
     assert mp.config.channel == channel  # UserConfig drives the 'user' channel
     return mp
-
-
-# ── 1. No-op paths return a canonical ToolResult (GREEN-at-HEAD) ──────────────
-
-
-def test_tool_chain_no_trail_returns_canonical_ok_empty(db):
-    """Pins existing contract: tool_chain_compactor with no trail since the last
-    boundary returns ``ToolResult.ok("")`` — success, empty body, no code, no
-    rich. uid=None → _has_trail() is False, so run() short-circuits BEFORE any
-    MessageProcessor.process() (offline)."""
-    mp = _make_mp("compact", "user")
-    mp.uid = None  # no transcript row → _has_trail() False → no LLM call
-    ability = ToolChainCompactor(mp=mp)
-
-    tr = ability.run({})
-
-    assert isinstance(tr, ToolResult)
-    assert tr.status == "success"
-    assert tr.body == ""
-    assert tr.code is None
-    assert tr.rich is None
-
-
-def test_chat_history_nothing_to_compact_returns_canonical_ok_empty(db):
-    """Pins existing contract: chat_history_compactor with no rows past the
-    watermark (``_fit_compaction_input`` → None) returns ``ToolResult.ok("")`` —
-    success, empty body, no code, no rich. No rows → get_previous_messages('') →
-    None is returned before any provider.measure / MessageProcessor.process."""
-    ch = "user"
-    _clear(db, ch)
-    _seed_offline_provider_cap_zero(db)
-    mp = _make_mp("compact", ch)
-    ability = ChatHistoryCompactor(mp=mp)
-    try:
-        tr = ability.run({})
-    finally:
-        ProviderCacheService.invalidate()
-        _clear(db, ch)
-
-    assert isinstance(tr, ToolResult)
-    assert tr.status == "success"
-    assert tr.body == ""
-    assert tr.code is None
-    assert tr.rich is None
-
-
-# ── 2. rows_compacted is surfaced out of the fit helper (RED-at-HEAD) ─────────
 
 
 def test_fit_compaction_input_surfaces_kept_row_count(db):
@@ -169,9 +102,6 @@ def test_fit_compaction_input_count_is_none_when_nothing_to_compact(db):
         _clear(db, ch)
 
 
-# ── 3. No rich, no ordinal anywhere ───────────────────────────────────────────
-
-
 def test_compaction_config_never_broadcasts_to_user():
     """Pins existing contract: the shared CompactionConfig (and both concrete
     subclasses) carry ``broadcast_to=None`` — never 'user'. The dispatcher only
@@ -180,24 +110,6 @@ def test_compaction_config_never_broadcasts_to_user():
     assert CompactionConfig().broadcast_to is None
     assert ChatHistoryCompactionConfig().broadcast_to is None
     assert ToolChainCompactionConfig().broadcast_to is None
-
-
-def test_noop_render_carries_no_ordinal_or_span(db):
-    """Pins existing contract: the rendered envelope for a no-op compactor result
-    carries no rich card / no ordinal span instruction. The dispatcher's _render
-    is the single envelope formatter; with rich=None and ordinal=None there is no
-    span tag to anchor a card."""
-    noop = ToolResult.ok("")
-    rendered = ToolDispatcher._render("tool_chain_compactor", noop, None)
-    assert "status=success" in rendered
-    assert "<span" not in rendered
-    assert "rows_compacted" not in rendered  # no-op carries no meta
-    assert rendered == (
-        "[tool_chain_compactor(status=success)]\n\n[end:tool_chain_compactor]"
-    )
-
-
-# ── 4. Boundary invariant — the empty tool_chain result stays a non-boundary ──
 
 
 def test_empty_tool_chain_result_is_not_a_trail_boundary(db):
@@ -222,28 +134,3 @@ def test_empty_tool_chain_result_is_not_a_trail_boundary(db):
     rendered_boundary = ToolDispatcher._render("tool_chain_compactor", handover, None)
     assert "dense handover text" in rendered_boundary
     assert "trail_chars=42" in rendered_boundary
-
-
-# ── 5. Legacy-marker sweep — no banned code="error", no dict/str returns ──────
-
-
-def test_modules_carry_no_banned_error_code_or_legacy_returns():
-    """Pins the contract: neither compactor module emits the banned ``code="error"``
-    sentinel, and every return in run() is a ToolResult (no bare dict/str)."""
-    import inspect
-
-    for module_obj, ability_cls in (
-        (ChatHistoryCompactor, ChatHistoryCompactor),
-        (ToolChainCompactor, ToolChainCompactor),
-    ):
-        src = inspect.getsource(inspect.getmodule(module_obj))
-        assert 'code="error"' not in src
-        assert "code='error'" not in src
-        run_src = inspect.getsource(ability_cls.run)
-        # Every return in run() goes through ToolResult.ok/err.
-        for line in run_src.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("return "):
-                assert "ToolResult." in stripped, (
-                    f"non-canonical return in {ability_cls.__name__}.run: {stripped!r}"
-                )

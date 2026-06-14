@@ -6,28 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the list tool's ToolResult contract + name addressing (TKT-902).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint on the CHAT channel against a real
-``mp``-shaped context, the real ``AbilityRegistry`` resolution of the production
-``ListAbility``, the real ``PolicyManager.wrap`` gate (reading the real ``policy``
-table the ``db`` fixture binds), and the real ``ListService`` (the ``db`` fixture
-binds the singleton to a real SQLite database). The act-trail write is real too.
-
-The automation regression this ticket fixes: id-only addressing forced a
-list-then-act round trip. ``add item="milk" list="shopping"`` must now resolve the
-target by NAME. When a partial name matches more than one list, it must return
-``code=ambiguous-match`` listing every candidate (id + name) and mutate NOTHING —
-never silently pick one. Item names resolve the same consent-safe way against the
-fetched list contents.
-
-The contract: every action returns a ``ToolResult`` rendered by the dispatcher;
-list-returning actions emit JSON rows (id, text, done, position); errors carry a
-stable kebab-case ``code`` (never ``code="error"``). The rich card path is via
-``ToolResult(rich=…)`` carrying the LEGACY FE payload shape (id, name, items with
-content/checked) the frontend card and ``enrich_rich_payload`` depend on.
-"""
+"""list-specific business-logic tests migrated from the per-ability conformance
+file removed in TKT-975. Drives the real ToolDispatcher end-to-end hot path with
+zero mocks, exercising list name addressing, item disambiguation, rich card
+payloads, and the enrich_rich_payload refresh hook."""
 
 import json
 
@@ -246,31 +228,6 @@ def test_exact_item_check_via_id_alias_still_works(db, chat_mp):
     by_content = {i["content"]: bool(i["checked"]) for i in service.get_list(list_id)["items"]}
     assert by_content["whole milk"] is True, by_content
     assert by_content["oat milk"] is False, by_content
-
-
-# ── Contract: errors are errors, not status=success wrapping a fail string ───────
-
-
-def test_unknown_id_is_error_list_not_found(db, chat_mp):
-    """An unknown id returns ``status=error`` + ``code=list-not-found`` — the old
-    code wrapped a json ``"status":"fail"`` body inside a status=success envelope."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "list", {"action": "view", "id": "deadbeef", "act_summary": "x"}
-    )
-    assert "[list(status=error" in out, out
-    assert "code=list-not-found" in out, out
-
-
-def test_unknown_action_renders_valid_ladder(db, chat_mp):
-    """An unknown action returns ``code=unknown-action`` with the 9-action ladder."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "list", {"action": "frobnicate", "act_summary": "x"}
-    )
-    assert "[list(status=error" in out, out
-    assert "code=unknown-action" in out, out
-    assert "valid:" in out, out
-    for action in ("create", "view", "add", "check", "remove", "clear", "rename", "delete"):
-        assert action in out, out
 
 
 def test_empty_list_all_is_success_count_zero(db, chat_mp):

@@ -1,34 +1,22 @@
-"""Feature test: web_search / web_browse failure paths return ToolResult.err.
+# Copyright 2026 Chalie AI
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
-TKT-898. The two delegate twins already return the canonical ``ToolResult`` type;
-this locks the FAILURE half of the contract that was missing:
+"""Web-delegate-ability-specific business-logic tests migrated from the
+per-ability conformance file removed in TKT-975.
 
-  1. A missing/empty ``query`` (web_search) / ``goal`` (web_browse) must be
-     rejected BEFORE a delegate is spawned. At HEAD an empty param flowed straight
-     into ``delegate_goal`` and ``MessageProcessor.process`` spawned an expensive
-     delegate loop on an empty goal. The fix wires each ability's
-     ``ACTION_REQUIRED = {"": (...)}`` so the dispatcher's pre-gate (the ``""`` key
-     covers action-less tools) rejects it with ``code=missing-params`` BEFORE the
-     policy gate and BEFORE run() — no delegate, no LLM, no network.
+Pins TKT-898's failure-half contract for web_search and web_browse: the
+missing-param pre-gate fires before a delegate is spawned, an empty delegate
+answer maps to ``delegate-no-answer``, and a real prose answer is returned
+verbatim as success.
 
-  2. An empty delegate answer is not a success. ``MessageProcessor.process``
-     returns ``""`` when the inner ACT loop exits without a final answer (it hit
-     ``max_iterations`` or was cancelled — ``_loop`` returns ``""`` on every such
-     exit). At HEAD web_search rendered that as ``ok("")`` (a blank success the
-     outer model silently trusts) and web_browse as a success carrying
-     failure-sounding prose. The fix maps it to ``code=delegate-no-answer`` via the
-     shared ``delegate_result`` helper both abilities call.
-
-Test seams, zero mocks:
-  - The param-gate cases drive the REAL ``ToolDispatcher.dispatch()`` chokepoint
-    against the real registry + real policy table. The pre-gate fires before run(),
-    so the delegate is never spawned — fully deterministic, offline.
-  - The empty/non-empty mapping is exercised through ``delegate_result``, the
-    actual module-level production function both ``run()`` methods call (not a
-    test re-implementation, not a mock). The only provider-free way to make the
-    real inner ``_loop`` return ``""`` is a cancel/cap that the public tool path
-    does not expose, so the mapping is asserted at its lowest real seam — the
-    shared helper that owns the mapping — exactly as both abilities use it.
+NOTE: a file ``test_web_delegate_act_trail.py`` already exists covering the
+act-trail surface. This file is named ``test_web_delegates.py`` and covers the
+distinct param-gate + delegate-result-mapping contract.
 """
 
 import pytest

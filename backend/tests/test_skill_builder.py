@@ -315,3 +315,104 @@ class TestSkillBuilderLifecycle:
         assert self._TITLE in titles
         mine = next(row for row in result.body if row["title"] == self._TITLE)
         assert mine["source"] == "user"
+
+
+# ===========================================================================
+# Migrated from test_ability_skills_tool_result.py (TKT-975)
+# Ability-specific business-logic tests that pin the TKT-896 regression.
+# ===========================================================================
+
+
+def _fetch_content_from_db(db_path, title: str) -> str | None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT content FROM skills WHERE lower(title) = lower(?)", (title,)
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def _mp_for_skill_test(config, db):
+    """A real MessageProcessor bound to a real channel config and a real
+    transcript anchor (so the dispatcher's act-trail write lands on a real row),
+    seeded exactly as ``_setup`` seeds it."""
+    from abilities._dispatcher import ToolDispatcher  # noqa: F401 — import used below
+    from services.message_processor import MessageProcessor
+    from tests._tool_result_harness import seed_transcript
+
+    mp = MessageProcessor("manage my skills")
+    mp.config = config
+    mp.active_tools = list(config.always_available or [])
+    pc = getattr(config, "policy_channel", None)
+    mp.uid = seed_transcript(db, pc.value if pc else "chat", "manage my skills")
+    return mp
+
+
+def _skill_head(rendered: str, tool: str) -> str:
+    from tests._tool_result_harness import head
+    return head(rendered, tool)
+
+
+def _skill_body(rendered: str, tool: str) -> object:
+    from tests._tool_result_harness import body
+    return body(rendered, tool)
+
+
+@pytest.mark.unit
+def test_skill_body_containing_skill_builder_survives_manager_op_byte_identical(
+    tmp_path, monkeypatch, db
+):
+    """A skill whose body literally says "use skill_builder for X" is created
+    through the real skill_builder path, then a real skill_manager list runs over
+    it. The stored content must be byte-identical — the blanket .replace the merge
+    kills would have rewritten "skill_builder" -> "skill_manager" inside it."""
+    import abilities.skill_builder as sb
+    import utils.skills_io as sio
+    from abilities._dispatcher import ToolDispatcher
+    from configs.channels import SkillSuggestionConfig, UserConfig
+
+    dest = tmp_path / "skills.sqlite"
+    shutil.copy2(str(_REAL_DB), str(dest))
+    yaml_dir = tmp_path / "user_skills"
+    yaml_dir.mkdir()
+    monkeypatch.setattr(sio, "SKILLS_DB_PATH", dest)
+    monkeypatch.setattr(sio, "USER_SKILLS_DIR", yaml_dir)
+    monkeypatch.setattr(sb, "SKILLS_DB_PATH", dest)
+
+    title = "Tool Authoring Reminder"
+    content = (
+        "1. Use `skill_builder` to create the playbook for X.\n"
+        "2. Remember: use skill_builder for X, never skill_builder for Y.\n"
+        "3. Use `memory` to recall the user's preferences."
+    )
+
+    # Create through the real production hot path (skill_builder, user channel).
+    builder_mp = _mp_for_skill_test(UserConfig({}), db)
+    created = ToolDispatcher(builder_mp).dispatch(
+        "skill_builder",
+        {
+            "action": "create",
+            "title": title,
+            "use_for": "authoring new skills",
+            "content": content,
+            "act_summary": "x",
+        },
+    )
+    assert _skill_head(created, "skill_builder").startswith("[skill_builder(status=success")
+    assert _fetch_content_from_db(dest, title) == content  # stored verbatim
+
+    # Now run the SYSTEM variant (skill_manager) over the same DB via real dispatch.
+    mgr_mp = _mp_for_skill_test(SkillSuggestionConfig(), db)
+    listed = ToolDispatcher(mgr_mp).dispatch(
+        "skill_manager", {"action": "list", "act_summary": "x"}
+    )
+    assert _skill_head(listed, "skill_manager").startswith("[skill_manager(status=success")
+
+    # The acceptance bar: content survives the manager operation byte-identical —
+    # "skill_builder" was NOT silently rewritten to "skill_manager".
+    after = _fetch_content_from_db(dest, title)
+    assert after == content
+    assert "skill_builder" in after
+    assert "skill_manager" not in after

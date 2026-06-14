@@ -6,25 +6,12 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the place tool's ToolResult contract (TKT-885).
+"""Place-ability-specific business-logic tests migrated from the per-ability
+conformance file removed in TKT-975.
 
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint on the CHAT channel against a real
-``mp``-shaped context, the real ``AbilityRegistry`` resolution of the production
-``PlaceAbility``, the real ``PolicyManager.wrap`` gate (place.* is ``allow`` on
-chat by seed), the real ``PlaceAbility.run``, the real ``DataGraphService`` store/
-fetch/delete (the ``db`` fixture binds the singletons to a real SQLite database),
-and the real ``ActTrail`` write.
-
-The regression under test (the exact one that shipped invisibly): every action's
-HAPPY path must render a NON-EMPTY, PARSEABLE envelope the model can read — a
-``[place(status=success, …)]`` tag with a structured JSON body — and every
-failure must carry a STABLE kebab-case ``code`` (NOT the ``code="error"``
-placeholder) plus a ``valid:`` ladder when the input was malformed.
-
-GPS is driven the production way: a real client heartbeat row in the ``telemetry``
-table → ``ClientContext.current()`` (read by the dispatcher's ``_run`` just before
-``run()``) flattens it onto ``ability.telemetry``. No telemetry monkeypatching.
+Pins TKT-885's ToolResult contract: every action's happy path renders a
+non-empty parseable success envelope, and every failure carries a stable
+kebab-case code (NOT ``code="error"``). GPS is driven via real telemetry rows.
 """
 
 import json
@@ -33,10 +20,12 @@ import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
-from services.act_trail import ActTrail
 from tests._tool_result_harness import MP, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
+
+
+# ── GPS telemetry fixtures ───────────────────────────────────────────────────────
 
 
 def _seed_gps(db, *, lat: float, lon: float, location_name: str) -> None:
@@ -108,6 +97,7 @@ def test_save_renders_structured_body_with_coords(db, chat_mp):
     assert any(r.get("key") == "home" for r in rows)
 
     # The act-trail recorded the same non-empty envelope against the transcript.
+    from services.act_trail import ActTrail
     trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
     assert "[place(status=success" in trail[0]["result"]
 
@@ -134,19 +124,6 @@ def test_list_renders_count_meta_and_place_array(db, chat_mp):
     names = {p["name"] for p in body}
     assert names == {"office", "cafe"}
     assert {p["lat"] for p in body} == {10.0, 30.0}
-
-
-def test_list_empty_renders_count_zero_not_blank(db, chat_mp):
-    """An empty ``list`` still renders a parseable envelope (``count=0`` + ``[]``),
-    not a blank string — the model must learn there are zero places, explicitly."""
-    _clear_gps(db)
-
-    out = ToolDispatcher(chat_mp).dispatch(
-        "place", {"action": "list", "act_summary": "x"}
-    )
-
-    assert "[place(status=success, count=0)]" in out
-    assert _parse_body(out) == []
 
 
 def test_get_renders_the_single_place_record(db, chat_mp):
@@ -227,28 +204,3 @@ def test_get_missing_place_errors_with_not_found_code(db, chat_mp):
     assert "[place(status=error, code=not-found" in out
     assert "code=error]" not in out
     assert "hint:" in out
-
-
-def test_unknown_action_lists_the_real_actions_in_valid(db, chat_mp):
-    """An unknown action is pre-gated by ACTION_REQUIRED into ONE
-    ``code=unknown-action`` error whose ``valid:`` line names the REAL actions, so
-    a weak model self-corrects without re-reading the schema."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "place", {"action": "teleport", "act_summary": "x"}
-    )
-
-    assert "[place(status=error, code=unknown-action" in out
-    assert "valid:" in out
-    for action in ("save", "list", "get", "delete"):
-        assert action in out
-
-
-def test_save_without_name_reports_missing_params(db, chat_mp):
-    """``save`` with no ``name`` is pre-gated into a single ``code=missing-params``
-    error naming the missing param — BEFORE run() ever touches GPS or the graph."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "place", {"action": "save", "act_summary": "x"}
-    )
-
-    assert "[place(status=error, code=missing-params" in out
-    assert "name" in out

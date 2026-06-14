@@ -120,3 +120,108 @@ def test_too_large_download_is_an_error(httpbin):
     assert result.meta["max_bytes"] == WebDownloadAbility._MAX_DOWNLOAD_BYTES
     # The partial file was removed.
     assert "path" not in (result.body if isinstance(result.body, dict) else {})
+
+
+# ===========================================================================
+# Migrated from test_ability_web_download_tool_result.py (TKT-975)
+# Offline contract: pre-gate, blocked schemes, SSRF guard, module hygiene.
+# All four scheme/SSRF tests migrated — none were covered in the network tier above.
+# ===========================================================================
+
+import threading  # noqa: E402 — appended to existing file
+
+import abilities.web_download  # noqa: E402
+from abilities._dispatcher import ToolDispatcher  # noqa: E402
+from configs.channels import DmnConfig  # noqa: E402
+from services.act_trail import ActTrail  # noqa: E402
+from tests._tool_result_harness import seed_transcript  # noqa: E402
+
+
+def _seed_dl_transcript(db) -> int:
+    """Insert the transcript anchor (tool_calls.transcript_id FK) the trail hangs
+    its recorded rows off, and return its id."""
+    return seed_transcript(db, channel="dmn", content="download this file for me")
+
+
+class _DownloadMP:
+    """Minimal real MP-shaped context — exactly what dispatch reads off a live
+    processor: ``config`` (policy channel + emitter gate), ``uid`` (the transcript
+    anchor), and ``cancel_event``. No policy row needed — web_download is INTERNAL."""
+
+    def __init__(self, uid: int):
+        self.config = DmnConfig()
+        self.uid = uid
+        self.DISCOVERABLE: list[str] = []
+        self.active_tools: list[str] = []
+        self.cancel_event = threading.Event()
+
+
+@pytest.mark.unit
+def test_file_scheme_is_blocked_url(db):
+    """A ``file://`` URL is refused with ``code=blocked-url`` — the scheme check is
+    network-free and fires before any fetch (was: status=success prose)."""
+    mp = _DownloadMP(_seed_dl_transcript(db))
+
+    result = ToolDispatcher(mp).dispatch("web_download", {"url": "file:///etc/passwd"})
+
+    assert "status=error" in result
+    assert "code=blocked-url" in result
+
+
+@pytest.mark.unit
+def test_data_scheme_is_blocked_url(db):
+    """A ``data:`` URL is refused with ``code=blocked-url`` — urlparse-cheap, no
+    network."""
+    mp = _DownloadMP(_seed_dl_transcript(db))
+
+    result = ToolDispatcher(mp).dispatch(
+        "web_download", {"url": "data:text/plain;base64,SGVsbG8="}
+    )
+
+    assert "status=error" in result
+    assert "code=blocked-url" in result
+
+
+@pytest.mark.unit
+def test_localhost_ssrf_terminal_outcome_is_blocked_url(db):
+    """The single SSRF guard in ``web_fetch.stream_to_file`` refuses
+    ``http://localhost`` (resolves private) and the ability maps the resulting
+    ``FetchBlocked`` to ``code=blocked-url`` — network-free, and the real trail
+    records the outcome against the anchor."""
+    transcript_id = _seed_dl_transcript(db)
+    mp = _DownloadMP(transcript_id)
+
+    result = ToolDispatcher(mp).dispatch("web_download", {"url": "http://localhost/x"})
+
+    assert "status=error" in result
+    assert "code=blocked-url" in result
+
+    rows = ActTrail().fetch_by_transcript_id(transcript_id)
+    assert [r["tool_name"] for r in rows] == ["web_download"]
+    assert "blocked-url" in rows[0]["result"]
+
+
+@pytest.mark.unit
+def test_127_ssrf_terminal_outcome_is_blocked_url(db):
+    """``http://127.0.0.1`` is the same single-guard outcome — proves the guard is
+    address-resolved, not host-string special-cased to 'localhost'."""
+    mp = _DownloadMP(_seed_dl_transcript(db))
+
+    result = ToolDispatcher(mp).dispatch("web_download", {"url": "http://127.0.0.1/secret"})
+
+    assert "status=error" in result
+    assert "code=blocked-url" in result
+
+
+@pytest.mark.unit
+def test_module_no_longer_carries_local_ssrf_guard():
+    """The bespoke local ``is_private_url`` import and ``_validate_url`` helper are
+    gone — the guard lives in ``web_fetch`` (one source), the scheme check is
+    inline. Mirrors the read hygiene assertion in test_ssrf_single_source."""
+    assert not hasattr(abilities.web_download, "is_private_url"), (
+        "web_download must not re-import the SSRF guard; it reaches it through web_fetch"
+    )
+    assert not hasattr(abilities.web_download, "_validate_url"), (
+        "the local _validate_url pre-check is replaced by the inline scheme check + "
+        "the single web_fetch guard"
+    )

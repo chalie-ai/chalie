@@ -6,47 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the news tool's ToolResult contract (TKT-904).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint against a real ``mp``-shaped
-context, the real ``AbilityRegistry`` resolution of the production
-``NewsAbility``, the real ``ToolDispatcher._prevalidate`` ACTION_REQUIRED
-pre-gate, the real ``PolicyManager.wrap`` gate reading the real ``policy`` table
-the ``db`` fixture seeds (``news`` is seeded ``allow`` on chat), the real
-``NewsService.fetch_google_news`` with its real on-disk cache, and the real
-``ActTrail`` write.
-
-The contract this ticket migrates news onto:
-  - run() returns ``ToolResult.ok(rows, count=N)`` where rows are
-    ``{title, source, url, published_at, snippet}`` JSON objects — so the model
-    quotes real headlines instead of re-prosing a blob.
-  - Zero articles from a provider that ANSWERED is a SUCCESS with ``count=0`` and
-    an explicit empty list, never an error and never a blank body.
-  - A provider that is unreachable is ``code=provider-unreachable`` with a hint —
-    NEVER an empty success masquerading as "no news".
-  - Errors carry stable kebab-case codes (``provider-unreachable`` from run(),
-    ``missing-params`` from the pre-gate, ``invalid-param`` from the param
-    helper) — NEVER the banned ``code="error"``.
-  - The rich article card travels via ``ToolResult(rich=…)``; the dispatcher owns
-    the ordinal + the single span instruction and injects the card only when the
-    invoking channel broadcasts to the user.
-
-OFFLINE STRATEGY (happy path + zero-articles):
-  ``NewsService.fetch_google_news`` checks the shared in-memory store FIRST
-  (``news:google:<sha16 of query+country_code>``) and returns the cached articles
-  WITHOUT any network. The shared store (``services.memory_store.MemoryStore``) is
-  the real production singleton and is fully writable in the unit environment, so
-  we seed it through the real ``MemoryClientService.create_connection()`` and the
-  happy path runs end-to-end through the genuine production cache-hit branch — no
-  mock, no network, no alternative path.
-
-  The provider-unreachable path points the REAL Google News base URL at a closed
-  loopback port (``http://127.0.0.1:9``) via a module-level constant introduced
-  by this ticket, so the real ``requests.get`` raises a real ``ConnectionError``
-  the service wraps into the typed ``NewsFetchError`` — a real failure, not a
-  mocked one (TKT-895 closed-port precedent).
-"""
+"""news-specific business-logic tests migrated from the per-ability conformance
+file removed in TKT-975. Drives the real ToolDispatcher end-to-end hot path with
+zero mocks, exercising category validation, provider-unreachable errors, offline
+cache-seeded happy paths, rich card rendering, and zero-article success."""
 
 import hashlib
 import json
@@ -112,25 +75,6 @@ def _seed_google_cache(query: str, articles: list, country_code: str = "US") -> 
         600,
         json.dumps([a.to_dict() for a in articles]),
     )
-
-
-# ── Missing query: pre-gated, never reaches run() or the network ───────────────
-
-
-def test_missing_query_reports_missing_params(db, user_mp):
-    """A call with no ``query`` is caught by the ACTION_REQUIRED pre-gate BEFORE
-    run() — a single ``code=missing-params`` error. The old run()-level guard
-    returned the banned ``code=error``."""
-    out = ToolDispatcher(user_mp).dispatch("news", {"act_summary": "x"})
-
-    assert "[news(status=error" in out, out
-    assert "code=missing-params" in out, out
-    assert "code=error]" not in out, out
-    assert "query" in out, out
-    assert "[end:news]" in out, out
-
-    trail = ActTrail().fetch_by_transcript_id(user_mp.uid)
-    assert any("code=missing-params" in row["result"] for row in trail), trail
 
 
 # ── Invalid category: rejected by the param helper, never silently degraded ────
@@ -297,19 +241,3 @@ def test_zero_articles_is_success_with_empty_list(db, dmn_mp, monkeypatch):
     assert "code=" not in out.splitlines()[0], out
     body = _body(out)
     assert json.loads(body) == [], body
-
-
-# ── Registry ───────────────────────────────────────────────────────────────────
-
-
-def test_registered_in_ability_registry():
-    """The registry walks backend/abilities/*.py and instantiates every concrete
-    Ability subclass. news.py must surface at NAME='news'."""
-    from abilities._registry import AbilityRegistry, _reset_for_tests
-
-    _reset_for_tests()
-    try:
-        ability = AbilityRegistry.get("news")
-        assert isinstance(ability, NewsAbility)
-    finally:
-        _reset_for_tests()

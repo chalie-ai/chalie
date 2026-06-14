@@ -6,45 +6,17 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests — the ``read`` tool's ToolResult contract (TKT-899).
-
-Real hot path, zero mocks: every test drives the live ``ToolDispatcher.dispatch``
-chokepoint exactly as ``MessageProcessor._loop`` does — real ``AbilityRegistry``
-resolution, the real ``PolicyManager.wrap`` gate (with ``read`` seeded ``allow``
-on the channel, the same row prod writes), the real ``ReadAbility.run``, real file
-I/O / the real SSRF guard, and the real ``ActTrail`` write read back from the db.
-
-What these pin:
-  - Plain-text passthrough: a ``.patch`` / ``.diff`` file is returned VERBATIM
-    (no HTML extraction strips it), proving the TKT-899 ``text/*`` fix at the
-    file branch. An ``.html`` file still goes through ``extract_html`` (the junk
-    is stripped) — passthrough is NOT a blanket bypass.
-  - Truncation rides the shared ``truncate`` helper: an over-long file body is
-    clipped and the envelope carries ``truncated=true``.
-  - Error codes survive verbatim (kebab-case): file-not-found, not-a-file,
-    system-path-blocked, and the SSRF terminal outcome
-    (private-or-internal-url-blocked) — other surfaces match on these strings.
-  - Alias resolution is the ``Ability.param`` helper, not bespoke local code:
-    ``_first_source`` / ``_SOURCE_KEYS`` no longer exist in the module.
-  - Meta consistency: both URL and file reads carry ``content_type`` (the file
-    branch's old ``mime`` key is renamed).
-
-Network coverage gap (documented, same as prior tickets): the URL fetch itself
-cannot run offline, so the happy-path URL read (text/* passthrough over the wire,
-HTML extraction over the wire) is NOT exercised here. What IS pinned offline: the
-SSRF terminal outcome via ``http://localhost``, the passthrough/extraction
-decision via real file reads of ``.patch`` / ``.diff`` / ``.html`` files, the
-shared-helper truncation, and every file-branch error code.
+"""read-specific business-logic tests migrated from the per-ability conformance
+file removed in TKT-975. Covers patch/diff verbatim passthrough, HTML extraction,
+truncation behaviour, content_type meta, and the max_chars floor clamp.
 """
 
 import threading
 
 import pytest
 
-import abilities.read
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import DmnConfig
-from services.act_trail import ActTrail
 from tests._tool_result_harness import allow_policy, seed_transcript
 
 pytestmark = pytest.mark.unit
@@ -205,81 +177,6 @@ def test_file_read_meta_carries_content_type(db, tmp_path):
     assert "mime=" not in result
 
 
-def test_file_not_found_renders_kebab_code(db, tmp_path):
-    """A missing path is an error envelope carrying the exact ``file-not-found``
-    code other surfaces match on."""
-    transcript_id = _seed_transcript(db)
-    _allow_read(db)
-    mp = _MP(transcript_id)
-
-    missing = tmp_path / "does_not_exist.txt"
-    result = ToolDispatcher(mp).dispatch("read", {"source": str(missing)})
-
-    assert "status=error" in result
-    assert "code=file-not-found" in result
-
-
-def test_directory_renders_not_a_file_code(db, tmp_path):
-    """A directory target is ``not-a-file`` (the dir exists but is not a file)."""
-    transcript_id = _seed_transcript(db)
-    _allow_read(db)
-    mp = _MP(transcript_id)
-
-    result = ToolDispatcher(mp).dispatch("read", {"source": str(tmp_path)})
-
-    assert "status=error" in result
-    assert "code=not-a-file" in result
-
-
-def test_system_path_blocked_renders_kebab_code(db):
-    """A system path (``/etc/passwd``) is refused with ``system-path-blocked``."""
-    transcript_id = _seed_transcript(db)
-    _allow_read(db)
-    mp = _MP(transcript_id)
-
-    result = ToolDispatcher(mp).dispatch("read", {"source": "/etc/passwd"})
-
-    assert "status=error" in result
-    assert "code=system-path-blocked" in result
-
-
-def test_ssrf_terminal_outcome_via_localhost(db):
-    """The single SSRF guard (now ``FetchBlocked`` from web_fetch, not a local
-    pre-check) still terminates with the exact ``private-or-internal-url-blocked``
-    code, network-free, via ``http://localhost``."""
-    transcript_id = _seed_transcript(db)
-    _allow_read(db)
-    mp = _MP(transcript_id)
-
-    result = ToolDispatcher(mp).dispatch("read", {"source": "http://localhost"})
-
-    assert "status=error" in result
-    assert "code=private-or-internal-url-blocked" in result
-
-    # And the real trail recorded the outcome against the anchor.
-    rows = ActTrail().fetch_by_transcript_id(transcript_id)
-    assert [r["tool_name"] for r in rows] == ["read"]
-    assert "private-or-internal-url-blocked" in rows[0]["result"]
-
-
-def test_url_alias_resolves_through_param_helper(db):
-    """``read({"url": …})`` resolves to the URL branch — proving the alias ladder
-    rides ``Ability.param``. The bespoke ``_first_source`` / ``_SOURCE_KEYS`` are
-    gone from the module (replaced by one ``self.param`` call)."""
-    transcript_id = _seed_transcript(db)
-    _allow_read(db)
-    mp = _MP(transcript_id)
-
-    result = ToolDispatcher(mp).dispatch("read", {"url": "http://localhost"})
-
-    assert "source-required" not in result
-    assert "private-or-internal-url-blocked" in result
-
-    # The bespoke alias machinery no longer exists — resolution is the param helper.
-    assert not hasattr(abilities.read, "_first_source")
-    assert not hasattr(abilities.read, "_SOURCE_KEYS")
-
-
 def test_max_chars_clamped_below_floor(db, tmp_path):
     """``max_chars`` is clamped via the param helper's ``clamp=(100, …)`` floor —
     a value below 100 cannot drop the body to a sub-floor clip. A 250-char body
@@ -298,3 +195,20 @@ def test_max_chars_clamped_below_floor(db, tmp_path):
     assert "truncated=true" in result
     # Floor honoured: at least 100 chars came back (not clipped to 1).
     assert "B" * 100 in result
+
+
+def test_system_path_blocked_renders_kebab_code(db):
+    """A system path (``/etc/passwd``) is refused with ``system-path-blocked``.
+
+    The read tool's path-traversal guard (abilities/read.py) is read-specific and
+    has no sibling coverage, so this stays here rather than collapsing into the
+    central contract test.
+    """
+    transcript_id = _seed_transcript(db)
+    _allow_read(db)
+    mp = _MP(transcript_id)
+
+    result = ToolDispatcher(mp).dispatch("read", {"source": "/etc/passwd"})
+
+    assert "status=error" in result
+    assert "code=system-path-blocked" in result

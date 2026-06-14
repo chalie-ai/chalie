@@ -6,41 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the file_write tool's ToolResult contract (TKT-908).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint against a real ``mp``-shaped
-context, the real ``AbilityRegistry`` resolution of the production
-``FileWriteAbility``, the real ``ToolDispatcher._prevalidate`` ACTION_REQUIRED
-pre-gate, the real ``PolicyManager.wrap`` gate reading the real ``policy`` table
-(``file_write`` is seeded ``ask``; the fixture flips the real row to ``allow`` on
-the chat channel ``UserConfig`` routes through, exactly as a human "always allow"
-does, so the headless test does not hang on a WebSocket ask), the real
-``FileWriteAbility.run`` writing a real file under ``tmp_path``, the real
-act-trail read-guard query over the real ``tool_calls`` table, and the real
-``ActTrail`` write.
-
-What TKT-908 changes, exercised end to end:
-
-* **Empty contents is valid user data:** ``contents=""`` writes a real 0-byte
-  file and echoes ``{"path", "bytes": 0, "created": true}`` — it is no longer
-  rejected (the old code's ``if not contents:`` truthiness guard returned an
-  ``ok()`` "Error: 'contents' is required." prose body).
-* **Errors stop masquerading as success:** read-required / invalid-path /
-  permission-denied / missing-params no longer ship as ``status=success`` prose;
-  they carry a stable kebab ``code``.
-* **Structured success body:** ``{"path", "bytes", "created"}`` — not a
-  ``json.dumps`` string with a redundant ``"success": True`` key.
-* **Read-guard fires as an error code:** overwriting an existing file with no
-  prior ``read`` call is ``code=read-required`` and leaves the file UNCHANGED.
-
-RED-before-change: against the pre-TKT-908 ability the empty-contents case
-renders ``status=success`` carrying "Error: 'contents' is required." prose (and
-no file is written); the success body is a stringified
-``{"success": true, ..., "file_size": ...}`` blob with no ``created`` key; and
-the read-required / relative-path / permission paths all render
-``status=success``. These tests fail against that ability.
-"""
+"""file_write-specific business-logic tests migrated from the per-ability
+conformance file removed in TKT-975. Drives the real ToolDispatcher end-to-end
+hot path with zero mocks, exercising the file_write ability's read-guard,
+empty-contents handling, and structured success/error bodies."""
 
 import os
 
@@ -204,27 +173,7 @@ def test_missing_contents_key_is_missing_params(db, chat_mp, tmp_path):
     assert not target.exists()
 
 
-# ── 6. missing path → pre-gate missing-params, recorded on the act-trail ────────
-
-
-def test_missing_path_is_pre_gated_missing_params(db, chat_mp):
-    """A missing ``path`` is pre-gated by ACTION_REQUIRED into a
-    ``code=missing-params`` error BEFORE run() and the policy gate, and the
-    rejection is recorded on the act-trail against the transcript anchor."""
-    out = ToolDispatcher(chat_mp).dispatch("file_write", {"contents": "x"})
-
-    assert "[file_write(status=error, code=missing-params" in out
-    assert "status=success" not in out
-    assert "path" in out
-
-    trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert any(
-        "[file_write(status=error, code=missing-params" in row["result"]
-        for row in trail
-    )
-
-
-# ── 7. relative path → invalid-path ─────────────────────────────────────────────
+# ── 6. relative path → invalid-path ─────────────────────────────────────────────
 
 
 def test_relative_path_is_invalid_path(db, chat_mp):
@@ -238,7 +187,7 @@ def test_relative_path_is_invalid_path(db, chat_mp):
     assert "status=success" not in out
 
 
-# ── 8. permission denied → permission-denied ────────────────────────────────────
+# ── 7. permission denied → permission-denied ────────────────────────────────────
 
 
 @pytest.mark.skipif(

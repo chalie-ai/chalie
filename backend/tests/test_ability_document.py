@@ -6,31 +6,11 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the document tool's ToolResult contract (TKT-893).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint on the CHAT channel against a real
-``mp``-shaped context, the real ``AbilityRegistry`` resolution of the production
-``DocumentAbility``, the real ``PolicyManager.wrap`` gate (reading the real
-``policy`` table the ``db`` fixture binds), the real ``DocumentService`` +
-``DataGraphService`` (the ``db`` fixture binds the singletons to a real SQLite
-database), real files written under ``tmp_path`` and ingested via the real
-``ingest_file`` mechanical-upload path, and the real ``ActTrail`` write.
-
-The regression under test (the destructive one this ticket fixes): ``delete``
-addressed by a fuzzy ``name`` that matches more than one document — or that
-matches a single document only as a non-exact substring — must NOT silently pick
-the first hit and delete it. It must return ``code=ambiguous-match`` listing
-every candidate (id + name + snippet) so the model can re-call with the exact
-``id``, and EVERY candidate document must still exist afterwards. Deletion only
-proceeds on an exact ``id`` or a single exact-name match.
-
-The other actions are covered for the contract shape the dispatcher renders:
-structured JSON bodies, ``count`` meta, the upload structured body
-(``{"id","hash","name","status"}``) that the turn-0 seed regex parses into a
-transcript-doc link, stable kebab-case error codes (NOT the ``code="error"``
-placeholder), and the ACTION_REQUIRED missing-param pre-gate.
-"""
+"""Document-specific business-logic tests migrated from the per-ability
+conformance file removed in TKT-975. The full ToolResult wire contract is
+pinned centrally in test_tool_result_contract.py; this file holds only the
+document ability's genuine behaviour tests (fuzzy-delete disambiguation,
+upload structured body, search rows/count) that have no coverage elsewhere."""
 
 import os
 
@@ -96,9 +76,6 @@ def _parse_body(rendered: str, tool: str = "document") -> object:
     """Extract and JSON-parse the body between the open tag and ``[end:<tool>]`` —
     proves the envelope the model receives is structured and machine-parseable."""
     return parse_body(rendered, tool)
-
-
-# ── The heart: fuzzy delete must disambiguate, never silently first-hit ────────
 
 
 def test_delete_by_ambiguous_name_lists_candidates_and_deletes_nothing(db, chat_mp, tmp_path):
@@ -187,9 +164,6 @@ def test_delete_unknown_name_is_not_found(db, chat_mp, tmp_path):
     assert "code=not-found" in out, out
 
 
-# ── Contract shape for the remaining actions ───────────────────────────────────
-
-
 def test_upload_renders_structured_body_and_seed_regex_links_doc(db, chat_mp, tmp_path):
     """``upload`` (mechanical, internal) renders a structured JSON body
     ``{"id","hash","name","status"}`` and the turn-0 seed path parses the id back
@@ -249,27 +223,3 @@ def test_search_empty_is_success_count_zero(db, chat_mp, tmp_path):
     assert "[document(status=success" in out, out
     assert "count=0" in out, out
     assert _parse_body(out) == []
-
-
-def test_missing_query_trips_action_required_pregate(db, chat_mp):
-    """``search`` with no ``query`` trips the dispatcher ACTION_REQUIRED pre-gate —
-    ``code=missing-params`` BEFORE the policy gate or run()."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "document", {"action": "search", "act_summary": "x"}
-    )
-
-    assert "[document(status=error" in out, out
-    assert "code=missing-params" in out, out
-    assert "query" in out, out
-
-
-def test_unknown_action_renders_valid_ladder(db, chat_mp):
-    """An unknown action trips the pre-gate ``code=unknown-action`` with the valid
-    action ladder — automatic via the dispatcher's ACTION_REQUIRED map."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "document", {"action": "frobnicate", "act_summary": "x"}
-    )
-
-    assert "[document(status=error" in out, out
-    assert "code=unknown-action" in out, out
-    assert "valid:" in out, out

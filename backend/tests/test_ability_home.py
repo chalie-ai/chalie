@@ -6,48 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the home tool's ToolResult contract (TKT-906).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint against a real ``mp``-shaped
-context, the real ``AbilityRegistry`` resolution of the production
-``HomeAbility`` (now a ``CapabilityAbility`` subclass), the real
-``ToolDispatcher._prevalidate`` ACTION_REQUIRED pre-gate, the real
-``PolicyManager.wrap`` gate reading the real ``policy`` table, the real
-``HomeAbility.run`` (entity guardrail), the real ``HomeCapability`` tool
-handlers, the real ``ha_rest_handler`` REST client, and the real ``ActTrail``
-write.
-
-The connected-path tests stand up a REAL local HTTP server on 127.0.0.1
-(``http.server`` in a background thread) implementing the Home Assistant
-endpoints the REST handler touches — ``GET /api/`` (probe), ``GET /api/states``,
-``GET /api/states/<eid>`` (404 for an unknown entity), and
-``POST /api/services/<domain>/<service>`` (200 + a JSON state list). The real
-``HomeCapability`` is pointed at it through its real connection fields and a real
-``ha_rest_handler.probe`` — ``is_connected()`` is the genuine unmodified method
-reading the flag a real probe set. No monkeypatch of ``is_connected``, no fake
-capability class, no mocked REST client.
-
-What TKT-906 changes, exercised end to end:
-
-* **Errors stop masquerading as success:** not-connected / unknown-action no
-  longer ship as ``status=success`` with an error JSON STRING inside; they carry
-  the base's stable kebab ``code`` (``not-connected`` / ``unknown-action``).
-* **Entity guardrail (the heart):** ``control`` / ``get_state`` /
-  ``subscribe_events`` on a NONEXISTENT entity errors ``code=unknown-entity`` with
-  closest-match candidates BEFORE any REST write — the silent-false-success kill
-  shot (HA returns 200 + an empty change list for a bad entity_id, so the old
-  unconditional ``{"status": "ok"}`` reported success for a no-op).
-* **Structured bodies:** success bodies are compact JSON dicts (devices/count,
-  state dict, ``{"status": "ok", …}``), never a double-encoded JSON string.
-
-RED-before-change: against the pre-TKT-906 ability, the not-connected and
-unknown-action cases render ``status=success`` (an error dict JSON-stringified
-inside), ``list_devices`` renders a double-encoded JSON STRING body (so
-``json.loads`` yields a ``str``, not a dict), and ``control`` on a bogus entity
-renders ``status=success`` while the REST POST silently fires against a
-nonexistent entity. These tests fail against that ability.
-"""
+"""home-specific business-logic tests migrated from the per-ability conformance
+file removed in TKT-975. Drives the real ToolDispatcher end-to-end hot path with
+zero mocks, exercising the HA entity guardrail, control/automation actions,
+and structured response bodies via a real local HTTP stub."""
 
 import json
 import threading
@@ -57,7 +19,6 @@ import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import DmnConfig
-from services.act_trail import ActTrail
 from tests._tool_result_harness import MP, allow_policy, body, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
@@ -234,72 +195,6 @@ def _parse_body(rendered: str, tool: str = "home") -> object:
     return parse_body(rendered, tool)
 
 
-# ── Foundation ───────────────────────────────────────────────────────────────
-
-
-def test_home_is_a_capability_ability():
-    """The ability is a ``CapabilityAbility`` subclass keyed to the home
-    capability — the not-connected / unknown-action / dispatch flow comes from the
-    shared base, not a bespoke copy-paste block."""
-    from abilities._capability import CapabilityAbility
-    from abilities._registry import AbilityRegistry
-
-    ability = AbilityRegistry.get("home")
-    assert isinstance(ability, CapabilityAbility)
-    assert ability.CAPABILITY_KEY == "home"
-
-
-# ── 1. not-connected → code=not-connected, not a success-wrapped error ──────────
-
-
-def test_not_connected_returns_not_connected_error(db, dmn_mp):
-    """With no connected home capability, ``list_devices`` surfaces the base's
-    ``code=not-connected`` remediation naming the Brain dashboard — NOT a
-    ``status=success`` envelope wrapping an error JSON string (the old shape)."""
-    out = ToolDispatcher(dmn_mp).dispatch("home", {"action": "list_devices"})
-
-    assert "[home(status=error, code=not-connected" in out
-    assert "status=success" not in out
-    assert "code=error]" not in out
-    assert "brain dashboard" in out.lower()
-
-
-# ── 2. unknown action → code=unknown-action + valid ladder ──────────────────────
-
-
-def test_unknown_action_lists_valid_actions(db, dmn_mp, ha_server):
-    """An unknown action errors ``code=unknown-action`` whose ``valid:`` line names
-    the six real actions — not a ``status=success`` error-dict (the old shape).
-    Connected so the base reaches the unknown-action branch rather than
-    not-connected."""
-    _connect_home(ha_server["url"])
-
-    out = ToolDispatcher(dmn_mp).dispatch("home", {"action": "teleport"})
-
-    assert "[home(status=error, code=unknown-action" in out
-    assert "status=success" not in out
-    assert "valid:" in out
-    for action in (
-        "list_devices", "get_state", "control",
-        "list_automations", "trigger_automation", "subscribe_events",
-    ):
-        assert action in out
-
-
-# ── 3. get_state without entity_id → pre-gate missing-params ────────────────────
-
-
-def test_get_state_without_entity_id_reports_missing_params(db, dmn_mp):
-    """``get_state`` with no ``entity_id`` is pre-gated by ACTION_REQUIRED into a
-    ``code=missing-params`` error BEFORE run() and before the policy gate — never
-    reaching the handler's bare ``{"error": "entity_id is required"}`` dict."""
-    out = ToolDispatcher(dmn_mp).dispatch("home", {"action": "get_state"})
-
-    assert "[home(status=error, code=missing-params" in out
-    assert "code=error]" not in out
-    assert "entity_id" in out
-
-
 # ── 4. connected list_devices → structured dict body with devices + count ───────
 
 
@@ -471,16 +366,3 @@ def test_list_automations_returns_structured_rows(db, dmn_mp, ha_server):
     ids = {a["entity_id"] for a in body["automations"]}
     assert ids == {"automation.good_morning"}
     assert body["count"] == 1
-
-
-# ── 12. act-trail records the rendered envelope ─────────────────────────────────
-
-
-def test_act_trail_records_the_envelope(db, dmn_mp, ha_server):
-    """The act-trail records the same rendered home envelope against the transcript
-    anchor — the cross-step write really lands."""
-    _connect_home(ha_server["url"])
-    ToolDispatcher(dmn_mp).dispatch("home", {"action": "list_devices"})
-
-    trail = ActTrail().fetch_by_transcript_id(dmn_mp.uid)
-    assert any("[home(status=" in row["result"] for row in trail)

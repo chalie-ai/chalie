@@ -6,42 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the mcp_manager tool's ToolResult contract (TKT-910).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint against a real ``mp``-shaped
-context, the real ``AbilityRegistry`` resolution of the production
-``McpManagerAbility``, the real ``ToolDispatcher._prevalidate`` ACTION_REQUIRED
-pre-gate, and the real ``McpClientService`` writing real rows to the real
-``mcp_client_servers`` table (the ``db`` fixture) plus the real
-``mcp_tools.sqlite`` runtime DB (isolated under ``tmp_path`` via the same
-``FileMapperService._DATA_DIR`` monkeypatch the production service reads).
-
-``mcp_manager`` is ``SYSTEM=True`` — it has no per-action policy gate, so no
-policy row needs flipping and a headless test never hangs on a WebSocket ask.
-
-What TKT-910 changes, exercised end to end:
-
-* **Errors stop masquerading as success:** an unreachable host on ``add``, an
-  unknown action, missing add params, and an unknown enable/disable target no
-  longer ship as ``status=success`` prose — they carry a stable kebab ``code``.
-* **The row is registered despite a loud error:** an unreachable ``add`` still
-  persists the ``mcp_client_servers`` row (existing idempotent-upsert behaviour);
-  the error is purely about the failed connect test.
-* **Structured rows, not prose bullets:** ``list`` returns JSON rows
-  ``{id,name,url,status,enabled,tool_count}``; empty inventory is SUCCESS
-  ``[]`` with ``count=0``.
-
-OFFLINE-safe: every "unreachable" host is ``http://127.0.0.1:1/mcp`` — port 1 is
-a closed local port, so the outbound MCP connect fails fast with connection
-refused, no internet required.
-
-RED-before-change: against the pre-TKT-910 ability the unreachable add renders
-``status=success`` "Registered MCP server …" prose with no ``code``; the unknown
-enable/disable target renders ``status=success`` "No server found …" prose;
-``list`` returns ``status=success`` prose bullet lines, not JSON rows. These
-tests fail against that ability.
-"""
+"""mcp_manager-specific business-logic tests migrated from the per-ability
+conformance file removed in TKT-975. Drives the real ToolDispatcher end-to-end
+hot path with zero mocks, exercising add/list/enable/disable actions, structured
+row bodies, and the _classify_sync_error pure-function contract."""
 
 import pytest
 
@@ -116,39 +84,6 @@ def test_add_unreachable_host_is_loud_error_but_row_registered(db, chat_mp):
     assert row is not None
     assert row[1] == _DEAD_HOST
     assert row[2] == 1  # enabled by default on add
-
-
-# ── 2. unknown action → pre-gate unknown-action + valid lists all four ──────────
-
-
-def test_unknown_action_is_pre_gated(db, chat_mp):
-    """An action outside the enum is rejected by the ACTION_REQUIRED pre-gate as
-    ``code=unknown-action`` BEFORE run(), and ``valid:`` lists ALL four actions so
-    the model can self-correct."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "mcp_manager", {"action": "frobnicate"}
-    )
-
-    assert "[mcp_manager(status=error, code=unknown-action" in out
-    assert "status=success" not in out
-    valid_line = next(line for line in out.splitlines() if line.startswith("valid:"))
-    for action in ("list", "add", "enable", "disable"):
-        assert action in valid_line
-
-
-# ── 3. add missing name+host → ONE missing-params naming BOTH (pre-gate) ────────
-
-
-def test_add_missing_name_and_host_is_one_missing_params(db, chat_mp):
-    """Adding with neither name nor host is a SINGLE ``code=missing-params`` (from
-    the pre-gate) that names BOTH missing params — not two drip-fed errors and not
-    a success body."""
-    out = ToolDispatcher(chat_mp).dispatch("mcp_manager", {"action": "add"})
-
-    assert "[mcp_manager(status=error, code=missing-params" in out
-    assert "status=success" not in out
-    assert "name" in out
-    assert "host" in out
 
 
 # ── 4. list with no servers → success, body [], count=0 ─────────────────────────

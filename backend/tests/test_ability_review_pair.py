@@ -6,23 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the review-pair ToolResult contract (TKT-918).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch(...)`` chokepoint on the CHAT channel against a real
-``mp``-shaped context, the real ``AbilityRegistry`` resolution of the production
-``ReviewToolCallsAbility`` / ``ReviewTranscriptAbility``, the real
-``PolicyManager.wrap`` gate (both names are in ``PolicyManager.INTERNAL`` → the
-gate short-circuits straight through to ``run()``), the real shared base
-``ReviewWindowAbility`` driving a REAL windowed SQLite query against the test
-database, and the real ``ActTrail`` write.
-
-TKT-918 extracts the two near-twin review tools' shared retrieval/formatting into
-one base and migrates both to ToolResult: rows as compact-JSON lists with a
-1-based ``iter`` ordinal, an empty window as ``count=0`` SUCCESS with a prose
-hint (never an error), a LOUD narrow ``query-failed`` on a corrupt read, and
-``code="error"`` gone. Seeds carry KNOWN ``created_at`` ISO timestamps so the
-window arithmetic is exercised for real, fully offline.
+"""review_tool_calls / review_transcript specific business-logic tests migrated
+from the per-ability conformance file removed in TKT-975. Covers windowed row
+retrieval, iter ordinals, empty-window hints, invalid-time errors, subagent
+toggle, buffer clamping, invalid-param handling, and the query-failed loud path.
 """
 
 import pytest
@@ -174,22 +161,7 @@ def test_review_tool_calls_empty_window_is_success_hint(db, chat_mp):
     assert "timestamp" in body
 
 
-# ── 4. review_tool_calls missing date_time → pre-gate missing-params ────────────
-
-
-def test_review_tool_calls_missing_date_time_pre_gate(db, chat_mp):
-    out = ToolDispatcher(chat_mp).dispatch(
-        "review_tool_calls", {"act_summary": "x"}
-    )
-
-    head = _head(out, "review_tool_calls")
-    assert "status=error" in head
-    assert "code=missing-params" in head
-    assert "code=error" not in out
-    assert "[end:review_tool_calls]" in out
-
-
-# ── 5. review_tool_calls garbage date_time → invalid-time with ISO hint ─────────
+# ── 4. review_tool_calls garbage date_time → invalid-time with ISO hint ─────────
 
 
 def test_review_tool_calls_garbage_date_time_invalid_time(db, chat_mp):
@@ -205,7 +177,7 @@ def test_review_tool_calls_garbage_date_time_invalid_time(db, chat_mp):
     assert hint_lines and "2026-04-07T14:30:00+00:00" in hint_lines[0]
 
 
-# ── 6. review_transcript happy path: rows with channel/role/ts, newline flat ────
+# ── 5. review_transcript happy path: rows with channel/role/ts, newline flat ────
 
 
 def test_review_transcript_happy_path(db, chat_mp):
@@ -236,7 +208,7 @@ def test_review_transcript_happy_path(db, chat_mp):
     assert "\n" not in rows[0]["content"]
 
 
-# ── 7. review_transcript subagent toggle ────────────────────────────────────────
+# ── 6. review_transcript subagent toggle ────────────────────────────────────────
 
 
 def test_review_transcript_subagent_toggle(db, chat_mp):
@@ -267,7 +239,7 @@ def test_review_transcript_subagent_toggle(db, chat_mp):
     assert len(sub_rows) == 2
 
 
-# ── 8. review_transcript buffer clamp: widen, and 999 clamps to 30 ──────────────
+# ── 7. review_transcript buffer clamp: widen, and 999 clamps to 30 ──────────────
 
 
 def test_review_transcript_buffer_clamp(db, chat_mp):
@@ -306,7 +278,7 @@ def test_review_transcript_buffer_clamp(db, chat_mp):
     assert [r["content"] for r in clamp_rows] == ["twenty minutes later"]
 
 
-# ── 9. review_transcript invalid buffer → invalid-param, not unhandled-exception ─
+# ── 8. review_transcript invalid buffer → invalid-param, not unhandled-exception ─
 
 
 def test_review_transcript_invalid_buffer_is_invalid_param(db, chat_mp):
@@ -323,7 +295,7 @@ def test_review_transcript_invalid_buffer_is_invalid_param(db, chat_mp):
     assert any(ln.startswith("hint:") for ln in out.splitlines())
 
 
-# ── 10. query-failed is LOUD and narrow: drop the table, dispatch → query-failed ─
+# ── 9. query-failed is LOUD and narrow: drop the table, dispatch → query-failed ─
 
 
 def test_review_tool_calls_query_failed_is_loud(db, chat_mp):
@@ -342,4 +314,3 @@ def test_review_tool_calls_query_failed_is_loud(db, chat_mp):
     assert "code=query-failed" in head
     assert "code=error" not in out
     assert any(ln.startswith("hint:") for ln in out.splitlines())
-

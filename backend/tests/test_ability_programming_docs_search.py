@@ -6,40 +6,9 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for programming_docs_search's ToolResult contract (TKT-892).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint on the CHAT channel against a real
-``mp``-shaped context, the real ``AbilityRegistry`` resolution of the production
-``ProgrammingDocsSearchAbility``, the real ``PolicyManager.wrap`` gate
-(``programming_docs_search`` is allowed on chat), the real
-``ProgrammingDocsSearchAbility.run``, and the real ``ActTrail`` write.
-
-The regression under test (the worst failure mode the audit named): when a
-source lookup FAILS, the old ability fabricated fallback page text and presented
-it as the answer — the model relayed invented documentation with status=success.
-The fix: a dead/unreachable source must produce a LOUD ``code=source-unavailable``
-error the model can route around, and the body must carry NO synthesized page
-text. The mechanical ``code=error`` marker from the pre-TKT-882 era must be gone.
-
-NETWORK CONSTRAINT: unit tests are deterministic and offline. We never hit a
-real documentation host. Every path asserted here short-circuits BEFORE any
-successful HTTP round-trip:
-
-* unknown-source rejection + the ``valid:`` ladder of real source ids (no network),
-* missing-param pre-gate (no network),
-* schema honesty — the enum advertised in ``get_parameters`` matches the source
-  table EXACTLY (pure introspection), and
-* the no-fabrication guarantee — a source resolving to a non-resolvable host
-  fails the SSRF guard fail-closed (``services.ssrf.resolve_and_check`` rejects an
-  unresolvable host BEFORE any socket opens), so the fetch raises offline and the
-  ability returns ``code=source-unavailable`` with NO invented body. The dead
-  host is supplied through the production ``base_url`` override seam the table
-  already exposes, not by mocking any in-process code.
-
-The success body (real fetched documentation) requires a live host; there is no
-respx/responses precedent in this suite, so it is documented as a network
-coverage gap in the ticket report rather than mocked.
+"""programming_docs_search-specific business-logic tests migrated from the
+per-ability conformance file removed in TKT-975. Covers unknown-source error
+ladders, schema enum honesty, and the no-fabrication guarantee on a dead source.
 """
 
 import pytest
@@ -114,35 +83,6 @@ def test_unknown_source_valid_ladder_is_the_real_table(db, chat_mp):
     valid_line = next(ln for ln in out.splitlines() if ln.startswith("valid:"))
     advertised = {p.strip() for p in valid_line[len("valid:"):].split("|")}
     assert advertised == _table_ids()
-
-
-# ── Missing params: pre-gated, never reaches the network ───────────────────────
-
-
-def test_missing_query_reports_error(db, chat_mp):
-    """A call with no ``query`` is rejected with a stable error — BEFORE run()
-    ever touches a source or the network. The ``code=error`` marker is gone."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "programming_docs_search", {"language": "python", "act_summary": "x"}
-    )
-
-    assert "[programming_docs_search(status=error" in out
-    assert "code=error]" not in out
-    assert "query" in out
-    assert "[end:programming_docs_search]" in out
-
-
-def test_missing_language_reports_error(db, chat_mp):
-    """A call with no ``language`` is rejected with a stable error, never DDG-style
-    masked — no network."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "programming_docs_search", {"query": "asyncio", "act_summary": "x"}
-    )
-
-    assert "[programming_docs_search(status=error" in out
-    assert "code=error]" not in out
-    assert "language" in out
-    assert "[end:programming_docs_search]" in out
 
 
 # ── Schema honesty: the enum the model reads matches the table EXACTLY ──────────

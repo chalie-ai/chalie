@@ -6,36 +6,11 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the schedule tool's ToolResult contract (TKT-887).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint on the CHAT channel against a real
-``mp``-shaped context, the real ``AbilityRegistry`` resolution of the production
-``ScheduleAbility``, the real ``PolicyManager.wrap`` gate (schedule.* is
-``allow`` on chat by seed), the real ``ScheduleAbility.run``, the real
-``scheduled_items`` SQLite writes/reads (the ``db`` fixture binds the singletons
-to a real SQLite database), and the real ``ActTrail`` write.
-
-What TKT-887 changes, exercised end to end:
-
-* ``due_at`` accepts natural language ("tomorrow 9am", "in 2 hours") resolved in
-  the user's timezone (seeded the production way via the telemetry table that
-  ``locale_service`` reads), with the resolved instants echoed back in the
-  success body (``due_at_utc`` / ``due_at_local``). ISO 8601 still works.
-* An unparseable ``due_at`` errors with a STABLE ``code=invalid-time`` plus a
-  ``hint:`` of example forms — NEVER a guessed time and NEVER the ``parse_utc``
-  ``datetime.min`` sentinel persisted to the row.
-* The previously-undeclared ``limit`` is a real, schema-declared, clamped param
-  on ``search``.
-* The rich card travels via ``ToolResult(rich=…)`` — the dispatcher injects the
-  ordinal + the single span instruction ONLY when the channel broadcasts to the
-  user; the card payload carries the created record (and same-day siblings).
-* Every failure carries a stable kebab-case ``code`` (NOT the ``code="error"``
-  placeholder); malformed inputs carry a ``valid:`` ladder.
-
-Timezone is driven the production way: a real ``timezone`` heartbeat row in the
-``telemetry`` table → ``locale_service.get_timezone()`` (read by the ability
-when it resolves natural-language ``due_at``). No timezone monkeypatching.
+"""schedule-specific business-logic tests migrated from the per-ability
+conformance file removed in TKT-975. Covers natural-language due_at resolution,
+relative due_at, ISO due_at back-compat, unparseable due_at errors, past due_at
+rejection, schema-declared limit, structured list rows, cancel by message,
+cancel-without-target error, and invalid recurrence error ladder.
 """
 
 import json
@@ -46,7 +21,6 @@ import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
-from services.act_trail import ActTrail
 from services.time_utils import utc_now
 from tests._tool_result_harness import MP, parse_body, seed_transcript
 
@@ -216,40 +190,6 @@ def test_limit_is_declared_in_the_schema():
     assert schema["properties"]["limit"]["type"] == "integer"
 
 
-def test_search_returns_a_structured_contract_envelope(db, chat_mp):
-    """``search`` always returns a single, well-formed ToolResult envelope through
-    the real dispatcher — never a raw exception or the ``code="error"``
-    placeholder. The semantic happy path (vec MATCH ranking) needs the real
-    embedding model paired with a matching-dimension vec table, which is exercised
-    in the integration tier; here we pin that the unit-reachable path renders the
-    stable contract (a structured success body with a ``records`` list, or — when
-    the vec backend is unavailable — a stable kebab ``code`` and no placeholder).
-    """
-    ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Buy milk and eggs",
-         "due_at": "tomorrow 10am", "act_summary": "x"},
-    )
-
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "search", "query": "groceries milk", "limit": 3, "act_summary": "x"},
-    )
-
-    # One rendered envelope, never the mechanical placeholder code.
-    assert out.startswith("[schedule(status=")
-    assert out.rstrip().endswith("[end:schedule]")
-    assert "code=error]" not in out
-
-    if "status=success" in out:
-        body = _parse_body(out)
-        assert body["status"] == "success"
-        assert isinstance(body["records"], list)
-    else:
-        # Graceful degradation still carries a stable, kebab-case code.
-        assert "[schedule(status=error, code=search-" in out
-
-
 # ── list / cancel happy paths render structured, parseable bodies ──────────────
 
 
@@ -267,8 +207,8 @@ def test_list_renders_structured_rows(db, chat_mp):
     )
 
     assert "[schedule(status=success" in out
-    body = _parse_body(out)
-    records = body["records"]
+    b = _parse_body(out)
+    records = b["records"]
     assert any(r["message"] == "Water the plants" for r in records)
     assert all("due_at_utc" in r and "status" in r for r in records)
 
@@ -307,31 +247,6 @@ def test_cancel_without_target_errors_with_stable_code(db, chat_mp):
 # ── Error ladders for malformed input ──────────────────────────────────────────
 
 
-def test_unknown_action_lists_real_actions_in_valid(db, chat_mp):
-    """An unknown action is pre-gated into ONE ``code=unknown-action`` error whose
-    ``valid:`` line names the REAL actions."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule", {"action": "teleport", "act_summary": "x"}
-    )
-
-    assert "[schedule(status=error, code=unknown-action" in out
-    assert "valid:" in out
-    for action in ("create", "list", "search", "cancel"):
-        assert action in out
-
-
-def test_create_without_message_reports_missing_params(db, chat_mp):
-    """``create`` with no ``message`` is pre-gated into a single
-    ``code=missing-params`` error naming the missing param BEFORE run()."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "due_at": "tomorrow 9am", "act_summary": "x"},
-    )
-
-    assert "[schedule(status=error, code=missing-params" in out
-    assert "message" in out
-
-
 def test_invalid_recurrence_errors_with_valid_ladder(db, chat_mp):
     """A bad ``recurrence`` errors with a stable code and a ``valid:`` ladder of
     the accepted recurrence keywords."""
@@ -344,58 +259,3 @@ def test_invalid_recurrence_errors_with_valid_ladder(db, chat_mp):
     assert "[schedule(status=error" in out
     assert "code=error]" not in out
     assert "valid:" in out
-
-
-# ── Rich-media migration: card travels via ToolResult.rich ─────────────────────
-
-
-def test_create_pairs_a_rich_card_on_user_broadcast(db, chat_mp):
-    """On a user-broadcasting channel a successful ``create`` pairs a rich card:
-    the dispatcher injects the ordinal-keyed span instruction, and the card
-    payload (head JSON before the blank line) carries the created record."""
-    assert getattr(chat_mp.config, "broadcast_to", None) == "user"
-
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Yoga class",
-         "due_at": "tomorrow 7am", "act_summary": "x"},
-    )
-
-    assert "[schedule(status=success" in out
-    # The dispatcher-owned span instruction with the ordinal-keyed tag.
-    assert "<span id='schedule_1'>" in out
-    # The card payload is the JSON head before the blank-line instruction.
-    inner = out.index("]\n") + 2
-    body = out[inner:out.index("\n[end:schedule]")]
-    payload_json = body.split("\n\n", 1)[0]
-    payload = json.loads(payload_json)
-    assert payload["action_performed"] == "create"
-    assert payload["record"]["message"] == "Yoga class"
-
-
-def test_no_rich_card_on_non_broadcast_channel(db):
-    """A channel that does NOT broadcast to the user gets NO card — no span
-    instruction is injected (the structured body is consumed by the parent)."""
-    from configs.channels import DmnConfig
-
-    _seed_timezone(db)
-    uid = seed_transcript(db, "subconscious", "remind me to do a thing")
-    mp = MP(uid, DmnConfig())
-    assert getattr(mp.config, "broadcast_to", None) != "user"
-
-    # schedule.create is denied on subconscious by seed; use a channel-allowed
-    # read action to prove the no-card path without tripping the policy gate.
-    out = ToolDispatcher(mp).dispatch(
-        "schedule", {"action": "list", "act_summary": "x"}
-    )
-    assert "<span id=" not in out
-
-
-def test_act_trail_records_the_envelope(db, chat_mp):
-    """The act-trail records the same non-empty schedule envelope against the
-    transcript anchor — the cross-step write really lands."""
-    ToolDispatcher(chat_mp).dispatch(
-        "schedule", {"action": "list", "act_summary": "x"}
-    )
-    trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert any("[schedule(status=" in row["result"] for row in trail)

@@ -6,44 +6,12 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the weather tool's ToolResult contract (TKT-914).
+"""Weather-ability-specific business-logic tests migrated from the per-ability
+conformance file removed in TKT-975.
 
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch("weather", params)`` chokepoint on the CHAT channel
-against a real ``mp``-shaped context, the real ``AbilityRegistry`` resolution of
-the production ``WeatherAbility``, the real ``PolicyManager.wrap`` gate (weather
-seeds ``allow`` on chat via ``apply_seed`` in the ``db`` template — NOT in
-``PolicyManager.INTERNAL``, so the real gate actually runs), the real
-``WeatherAbility.run``, and the real ``ActTrail`` write.
-
-Weather is the ToolResult-contract rich-media exemplar (TKT-882) and the audit's
-best-schema exemplar: ONE optional ``location`` param + telemetry-derived coords.
-This file pins TKT-914's gaps:
-
-  * **No-location dead end (guardrail).** No device coords AND no ``location``
-    param used to dive into the fallback chain, contact NO provider, and return
-    ``code=provider-unreachable`` — a lie. Now it short-circuits to a stable
-    ``code=missing-location`` before any cache lookup or fetch.
-  * **Silent stale success.** A stale-but-real cached payload returned as a plain
-    ``ok`` was indistinguishable from fresh data. Now it carries ``meta
-    stale=true`` in the envelope head (loudness precedent: search ``fallback=ddg``
-    / programming_docs_search ``degraded=true``).
-  * **Schema frozen.** The exemplar's schema is pinned: exactly one optional
-    ``location`` property, ``required == []``. Others copy this — it must not grow.
-
-OFFLINE-DETERMINISTIC: the provider URLs live in module constants
-``_OPEN_METEO_BASE`` / ``_WTTR_BASE``; tests that would otherwise reach the
-network monkeypatch BOTH constants to a dead host (``http://127.0.0.1:9``) so the
-real ``requests`` call fails fast and the production fallback/error paths run for
-real — this neutralises the module's own config field (the TKT-892 precedent),
-NOT a mock of a collaborator. ``WeatherAbility._cache`` is class-level state; an
-autouse fixture clears it before each test.
-
-COVERAGE GAP (documented, not mocked): the genuine live happy-path against a real
-Open-Meteo / wttr.in response is NOT exercised here — it needs the network and
-there is no respx precedent for these endpoints in this suite. The fresh-cache and
-stale-cache success paths below prime ``_cache`` with a real-shaped payload to
-exercise the success rendering + ``stale`` marker deterministically offline.
+Pins TKT-914's contracts: the missing-location guardrail, the provider-unreachable
+path when all providers are dead, fresh vs stale cache rendering, and the frozen
+schema (exactly one optional ``location`` property).
 """
 
 import json
@@ -55,7 +23,6 @@ from abilities._dispatcher import ToolDispatcher
 from abilities._registry import AbilityRegistry
 from abilities.weather import WeatherAbility
 from configs.channels import UserConfig
-from services.act_trail import ActTrail
 from tests._tool_result_harness import MP, body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
@@ -176,10 +143,10 @@ def test_named_location_all_providers_dead_is_provider_unreachable(
         "weather", {"location": "Valletta", "act_summary": "x"}
     )
 
-    head = _head(out)
-    assert "status=error" in head
-    assert "code=provider-unreachable" in head
-    assert "details=" in head
+    h = _head(out)
+    assert "status=error" in h
+    assert "code=provider-unreachable" in h
+    assert "details=" in h
     assert "code=error]" not in out
     assert "hint:" in out
     # This path genuinely contacted a provider — it is NOT the missing-location guard.
@@ -202,9 +169,9 @@ def test_fresh_cache_hit_is_plain_success(db, chat_mp, no_telemetry, dead_provid
         "weather", {"location": "Valletta", "act_summary": "x"}
     )
 
-    head = _head(out)
-    assert "status=success" in head
-    assert "stale=true" not in head
+    h = _head(out)
+    assert "status=success" in h
+    assert "stale=true" not in h
     assert json.loads(_body(out)) == payload
 
 
@@ -225,79 +192,13 @@ def test_stale_cache_is_marked_stale(db, chat_mp, no_telemetry, dead_providers):
         "weather", {"location": "Valletta", "act_summary": "x"}
     )
 
-    head = _head(out)
-    assert "status=success" in head
-    assert "stale=true" in head
+    h = _head(out)
+    assert "status=success" in h
+    assert "stale=true" in h
     assert json.loads(_body(out)) == payload
 
 
-# ── 5. fresh-cache hit pairs a rich card on the user-broadcast channel ───────────
-
-
-def test_success_pairs_rich_card_on_user_broadcast(
-    db, chat_mp, no_telemetry, dead_providers
-):
-    """On a user-broadcasting channel a successful weather lookup pairs a rich card
-    (``rich=payload``): the dispatcher injects the ordinal-keyed span instruction
-    and the card payload (JSON head before the blank line) is the weather dict."""
-    import time
-
-    assert getattr(chat_mp.config, "broadcast_to", None) == "user"
-    payload = _sample_payload()
-    WeatherAbility._cache["valletta"] = (payload, time.time())
-
-    out = ToolDispatcher(chat_mp).dispatch(
-        "weather", {"location": "Valletta", "act_summary": "x"}
-    )
-
-    assert "<span id='weather_1'>" in out
-    assert json.loads(_body(out)) == payload
-
-
-# ── 6. no legacy markers anywhere across the error/success envelopes ─────────────
-
-
-def test_no_legacy_markers_anywhere(db, chat_mp, no_telemetry, dead_providers):
-    """Across the guardrail, provider-failure and success envelopes the
-    ``code=error`` placeholder never appears, and the legacy structured-error
-    sentinel never rides a success envelope."""
-    import time
-
-    missing = ToolDispatcher(chat_mp).dispatch("weather", {"act_summary": "x"})
-    unreachable = ToolDispatcher(chat_mp).dispatch(
-        "weather", {"location": "Valletta", "act_summary": "x"}
-    )
-    WeatherAbility._cache["london"] = (_sample_payload("London, GB"), time.time())
-    success = ToolDispatcher(chat_mp).dispatch(
-        "weather", {"location": "London", "act_summary": "x"}
-    )
-
-    for out in (missing, unreachable, success):
-        assert "code=error]" not in out
-        assert "code=error," not in out
-        assert "code=error)" not in out
-
-    # The legacy "All weather sources unavailable" string is an ERROR body only —
-    # it must never appear on a success envelope.
-    assert "status=success" in _head(success)
-    assert "All weather sources unavailable" not in success
-
-
-# ── 7. an error dispatch still records the rendered envelope on the act-trail ────
-
-
-def test_error_dispatch_writes_act_trail(db, chat_mp, no_telemetry, dead_providers):
-    """The missing-location error dispatch records the same non-empty weather
-    envelope against the transcript anchor — the cross-step write really lands."""
-    ToolDispatcher(chat_mp).dispatch("weather", {"act_summary": "x"})
-
-    trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert any(
-        "[weather(status=error, code=missing-location" in row["result"] for row in trail
-    )
-
-
-# ── 8. schema frozen (exemplar guard): exactly one optional `location` ───────────
+# ── 5. schema frozen (exemplar guard): exactly one optional `location` ───────────
 
 
 def test_schema_is_frozen_one_optional_location():
@@ -308,14 +209,3 @@ def test_schema_is_frozen_one_optional_location():
     assert list(props.keys()) == ["location"]
     assert schema["required"] == []
     assert props["location"]["type"] == "string"
-
-
-# ── 9. registry metadata is present and non-empty ────────────────────────────────
-
-
-def test_weather_registered_with_metadata():
-    ability = AbilityRegistry.get("weather")
-    assert ability.get_name() == "weather"
-    assert ability.get_summary()
-    assert ability.get_examples()
-    assert ability.get_search_tooltip()
