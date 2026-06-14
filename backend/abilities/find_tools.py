@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from typing import ClassVar
 
+from abilities._params import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
 from services.embedding_utils import pack_embedding
@@ -23,12 +24,12 @@ class FindToolsAbility(SearchableAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "select": {
+            Keys.select: {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Exact tool names to activate directly.",
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "Describe what you need.",
             },
@@ -165,7 +166,7 @@ class FindToolsAbility(SearchableAbility):
         params = copy.deepcopy(self._PARAMETERS)
         tools_index = self._build_tools_index(self.mp)
         if tools_index:
-            params["properties"]["select"]["description"] = (
+            params["properties"][Keys.select]["description"] = (
                 f"Exact tool names to activate directly. Available tools: {tools_index}"
             )
         return params
@@ -180,8 +181,8 @@ class FindToolsAbility(SearchableAbility):
         ``blocked-on-channel``) with a ``valid:`` ladder of real selectable names
         — never a prose-only result that hides whether a tool was injected.
         """
-        select_names = params.get("select")
-        query = params.get("query", "").strip()
+        select_names = params.get(Keys.select)
+        query = params.get(Keys.query, "").strip()
 
         # Require at least one param.
         if not select_names and not query:

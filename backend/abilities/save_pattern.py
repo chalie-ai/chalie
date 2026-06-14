@@ -14,6 +14,7 @@ import re
 from typing import ClassVar
 
 from abilities._budget import BudgetCappedAbility
+from abilities._params import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
 from services.database_service import get_shared_db_service
@@ -44,7 +45,7 @@ class SavePattern(BudgetCappedAbility):
     # evidence list is rejected there too, while whitespace-only name/summary
     # residue still reaches run().
     ACTION_REQUIRED: ClassVar[dict] = {
-        "": ("name", "frequency", "summary", "evidence_transcript_ids")
+        "": (Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids)
     }
 
     def get_name(self) -> str:
@@ -74,28 +75,28 @@ class SavePattern(BudgetCappedAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "name": {
+            Keys.name: {
                 "type": "string",
                 "description": "snake_case identifier; mirror existing names when reinforcing.",
             },
-            "frequency": {
+            Keys.frequency: {
                 "type": "string",
                 "enum": ["daily", "weekly", "weekday", "weekend", "ad-hoc"],
             },
-            "time_anchor": {
+            Keys.time_anchor: {
                 "type": "string",
                 "description": "Optional anchor: '07:00' | 'evening' | 'weekends' | '' if not applicable.",
             },
-            "summary": {
+            Keys.summary: {
                 "type": "string",
                 "description": "One concise sentence describing the habitual behavior. Not a narrative or episode summary.",
             },
-            "evidence_transcript_ids": {
+            Keys.evidence_transcript_ids: {
                 "type": "array",
                 "items": {"type": "integer"},
             },
         },
-        "required": ["name", "frequency", "summary", "evidence_transcript_ids"],
+        "required": [Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids],
     }
 
     def get_parameters(self) -> dict:
@@ -109,7 +110,7 @@ class SavePattern(BudgetCappedAbility):
         # The validation ORDER and rules are frozen (regex → frequency set →
         # min-2 evidence); only the failure shape changes from a phantom-success
         # dict to a loud ToolResult error, in parity with save_graph.
-        name = (params.get("name") or "").strip()
+        name = (params.get(Keys.name) or "").strip()
         # The dispatcher pre-gate is truthiness-based, so a whitespace-only name
         # slips past it as a non-empty string and must be rejected here
         # (precedent: save_graph.py, file_permissions.py).
@@ -126,7 +127,7 @@ class SavePattern(BudgetCappedAbility):
                 hint=_EXAMPLE_HINT,
             )
 
-        frequency = params.get("frequency", "")
+        frequency = params.get(Keys.frequency, "")
         if frequency not in _VALID_FREQUENCIES:
             return ToolResult.err(
                 f"Unknown frequency {frequency!r}; not a recognised cadence.",
@@ -135,7 +136,7 @@ class SavePattern(BudgetCappedAbility):
                 hint=_EXAMPLE_HINT,
             )
 
-        summary = (params.get("summary") or "").strip()
+        summary = (params.get(Keys.summary) or "").strip()
         if not summary:
             return ToolResult.err(
                 "Missing required parameter(s): summary.",
@@ -143,7 +144,7 @@ class SavePattern(BudgetCappedAbility):
                 valid=("name", "frequency", "summary", "evidence_transcript_ids"),
             )
 
-        evidence = params.get("evidence_transcript_ids")
+        evidence = params.get(Keys.evidence_transcript_ids)
         n_evidence = len(evidence) if isinstance(evidence, list) else 0
         if n_evidence < 2:
             return ToolResult.err(
@@ -157,7 +158,7 @@ class SavePattern(BudgetCappedAbility):
             "frequency": frequency,
             "summary": summary,
             "evidence": evidence,
-            "time_anchor": params.get("time_anchor", "") or "",
+            "time_anchor": params.get(Keys.time_anchor, "") or "",
         }
         proc = self.mp
         source = pattern_provenance(proc)

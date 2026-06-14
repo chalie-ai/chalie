@@ -36,6 +36,7 @@ from datetime import timedelta, timezone
 from typing import ClassVar
 
 from abilities._capability import CapabilityAbility
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
@@ -80,7 +81,7 @@ class CalendarAbility(CapabilityAbility):
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list_events": (),
         "get_event": (),
-        "create_event": ("summary", "dtstart", "dtend"),
+        "create_event": (Keys.summary, Keys.dtstart, Keys.dtend),
         "update_event": (),
         "delete_event": (),
     }
@@ -116,7 +117,7 @@ class CalendarAbility(CapabilityAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": list(_ALL_ACTIONS),
                 "description": (
@@ -128,32 +129,32 @@ class CalendarAbility(CapabilityAbility):
                     "delete_event — remove an event addressed by uid or title."
                 ),
             },
-            "date_from": {
+            Keys.date_from: {
                 "type": "string",
                 "description": (
                     "list_events: ISO date lower bound (YYYY-MM-DD). "
                     "Defaults to today when omitted."
                 ),
             },
-            "date_to": {
+            Keys.date_to: {
                 "type": "string",
                 "description": (
                     "list_events: ISO date upper bound (YYYY-MM-DD). "
                     "Defaults to 7 days after date_from when omitted."
                 ),
             },
-            "limit": {
+            Keys.limit: {
                 "type": "integer",
                 "description": "list_events: maximum number of events to return (1–200, default 50).",
             },
-            "uid": {
+            Keys.uid: {
                 "type": "string",
                 "description": (
                     "get_event / update_event / delete_event: the event's CalDAV UID. "
                     "Prefer this when known; otherwise pass title for a fuzzy match."
                 ),
             },
-            "title": {
+            Keys.title: {
                 "type": "string",
                 "description": (
                     "get_event / update_event / delete_event: event title for a fuzzy "
@@ -161,11 +162,11 @@ class CalendarAbility(CapabilityAbility):
                     "get the candidate uids back to disambiguate."
                 ),
             },
-            "summary": {
+            Keys.summary: {
                 "type": "string",
                 "description": "create_event / update_event: the event title.",
             },
-            "dtstart": {
+            Keys.dtstart: {
                 "type": "string",
                 "description": (
                     "create_event / update_event: start datetime. Natural language is "
@@ -174,20 +175,20 @@ class CalendarAbility(CapabilityAbility):
                     "NOT need to compute the UTC offset."
                 ),
             },
-            "dtend": {
+            Keys.dtend: {
                 "type": "string",
                 "description": (
                     "create_event / update_event: end datetime, same formats as dtstart."
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     # ── Entry point — reads inline, writes through the base ────────────────────
 
     def run(self, params: dict) -> ToolResult:
-        action = str(params.get("action", self.DEFAULT_ACTION)).lower()
+        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
 
         if action in _READ_ACTIONS:
             return _read_events(action, params)
@@ -244,7 +245,7 @@ def _normalise_write_datetimes(params: dict) -> ToolResult | None:
     ``params``. Returns an ``invalid-time`` ToolResult (and leaves params untouched)
     when a value is present but unparseable — so the CalDAV handler only ever sees
     a valid ISO string, never the datetime.min sentinel."""
-    for field in ("dtstart", "dtend"):
+    for field in (Keys.dtstart, Keys.dtend):
         raw = params.get(field)
         if raw is None:
             continue
@@ -270,10 +271,10 @@ def _resolve_target_uid(params: dict) -> ToolResult | None:
     """For uid-addressed write actions, fill ``params['uid']`` from a fuzzy
     ``title`` match when no uid was given. Returns an error ToolResult on a
     missing target, no match, or an ambiguous (>1) match; ``None`` on success."""
-    if (params.get("uid") or "").strip():
+    if (params.get(Keys.uid) or "").strip():
         return None
 
-    title = (params.get("title") or "").strip()
+    title = (params.get(Keys.title) or "").strip()
     if not title:
         return ToolResult.err(
             "uid or title is required to address the event.",
@@ -291,7 +292,7 @@ def _resolve_target_uid(params: dict) -> ToolResult | None:
     if len(matches) > 1:
         return _ambiguous_match(title, matches, "re-issue the action with the chosen uid.")
 
-    params["uid"] = matches[0]["uid"]
+    params[Keys.uid] = matches[0]["uid"]
     return None
 
 
@@ -332,8 +333,8 @@ def _read_events(action: str, params: dict) -> ToolResult:
     from abilities.schedule import query_items
 
     if action == "get_event":
-        uid = (params.get("uid") or "").strip()
-        title = (params.get("title") or "").strip()
+        uid = (params.get(Keys.uid) or "").strip()
+        title = (params.get(Keys.title) or "").strip()
         if not uid and not title:
             return ToolResult.err(
                 "uid or title is required for get_event.",
@@ -370,7 +371,7 @@ def _read_events(action: str, params: dict) -> ToolResult:
         return ToolResult.ok(body, rich=dict(body), action="get_event")
 
     # list_events — honour the advertised default window (today → +7 days).
-    limit = min(int(params.get("limit") or 50), 200)
+    limit = min(int(params.get(Keys.limit) or 50), 200)
     date_from, date_to = _resolve_window(params)
 
     rows = query_items(
@@ -387,8 +388,8 @@ def _read_events(action: str, params: dict) -> ToolResult:
 def _resolve_window(params: dict) -> tuple[str, str]:
     """Return the (date_from, date_to) ISO bounds for list_events, applying the
     advertised defaults (today → +7 days) when the model omits them."""
-    date_from = (params.get("date_from") or "").strip()
-    date_to = (params.get("date_to") or "").strip()
+    date_from = (params.get(Keys.date_from) or "").strip()
+    date_to = (params.get(Keys.date_to) or "").strip()
 
     if not date_from:
         start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)

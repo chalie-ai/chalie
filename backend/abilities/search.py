@@ -38,6 +38,7 @@ import time
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.file_mapper_service import FileMapperService
 from tools.search.fetcher import fetch_providers, fetch_ddg_fallback
@@ -55,7 +56,7 @@ class SearchAbility(Ability):
     # key covers action-less tools (see ToolDispatcher._prevalidate); a missing or
     # blank query is rejected as one code=missing-params error naming 'query', so
     # run() never sees a query-less call.
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": ("query",)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
 
     def get_name(self) -> str:
         return "search"
@@ -90,11 +91,11 @@ class SearchAbility(Ability):
         return {
             "type": "object",
             "properties": {
-                "query": {
+                Keys.query: {
                     "type": "string",
                     "description": "Plain natural language search query.",
                 },
-                "provider": {
+                Keys.provider: {
                     "type": "string",
                     "enum": sorted(self._known_providers()),
                     "description": (
@@ -104,13 +105,13 @@ class SearchAbility(Ability):
                         "not silently web-searched."
                     ),
                 },
-                "limit": {
+                Keys.limit: {
                     "type": "integer",
                     "description": "Max results per provider (default 5, max 10).",
                     "default": 5,
                 },
             },
-            "required": ["query"],
+            "required": [Keys.query],
         }
 
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
@@ -119,7 +120,7 @@ class SearchAbility(Ability):
     def run(self, params: dict) -> ToolResult:
         # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
         # whitespace-only value that the truthiness pre-gate lets through.
-        query = (params.get("query") or "").strip()
+        query = (params.get(Keys.query) or "").strip()
         if not query:
             return ToolResult.err(
                 "query is required and cannot be blank.",
@@ -128,8 +129,8 @@ class SearchAbility(Ability):
                 valid=("query",),
             )
 
-        limit = self.param(params, "limit", default=5, clamp=(1, 10))
-        forced = (params.get("provider") or "").strip().lower()
+        limit = self.param(params, Keys.limit, default=5, clamp=(1, 10))
+        forced = (params.get(Keys.provider) or "").strip().lower()
 
         if forced:
             guard = self._reject_unknown_forced(forced)

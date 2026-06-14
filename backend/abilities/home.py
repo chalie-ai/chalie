@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from abilities._capability import CapabilityAbility
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 # Actions whose ``entity_id`` must name a real entity. ``control`` is the silent-
@@ -71,11 +72,11 @@ class HomeAbility(CapabilityAbility):
     # naming all missing params. Read/list actions have no hard requirement.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list_devices": (),
-        "get_state": ("entity_id",),
-        "control": ("entity_id", "service"),
+        "get_state": (Keys.entity_id,),
+        "control": (Keys.entity_id, Keys.service),
         "list_automations": (),
-        "trigger_automation": ("automation_id",),
-        "subscribe_events": ("entity_id",),
+        "trigger_automation": (Keys.automation_id,),
+        "subscribe_events": (Keys.entity_id,),
     }
 
     def get_name(self) -> str:
@@ -109,7 +110,7 @@ class HomeAbility(CapabilityAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": [
                     "list_devices",
@@ -128,30 +129,30 @@ class HomeAbility(CapabilityAbility):
                     "subscribe_events -- subscribe to real-time state changes for an entity."
                 ),
             },
-            "entity_id": {
+            Keys.entity_id: {
                 "type": "string",
                 "description": (
                     "HA entity ID, e.g. 'light.living_room'. Must name a real "
                     "entity — call list_devices first if unsure."
                 ),
             },
-            "domain": {
+            Keys.domain: {
                 "type": "string",
                 "description": "list_devices: filter by HA domain (light, switch, sensor, climate, lock, etc.).",
             },
-            "area": {
+            Keys.area: {
                 "type": "string",
                 "description": "list_devices: filter by area name.",
             },
-            "service": {
+            Keys.service: {
                 "type": "string",
                 "description": "control: service to call, e.g. 'turn_on', 'turn_off', 'toggle'.",
             },
-            "service_data": {
+            Keys.service_data: {
                 "type": "object",
                 "description": "control: extra service data (brightness, temperature, etc.).",
             },
-            "automation_id": {
+            Keys.automation_id: {
                 "type": "string",
                 "description": (
                     "trigger_automation: automation entity_id (e.g. "
@@ -160,24 +161,24 @@ class HomeAbility(CapabilityAbility):
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     # ── Entry point — entity guardrail, then delegate to the base ──────────────
 
     def run(self, params: dict) -> ToolResult:
-        action = str(params.get("action", self.DEFAULT_ACTION)).lower()
-        params["action"] = action
+        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
+        params[Keys.action] = action
 
         cap = self._connected_capability()
         if cap is not None:
             if action in _ENTITY_ACTIONS:
-                guard = self._guard_entity(cap, action, str(params.get("entity_id", "")))
+                guard = self._guard_entity(cap, action, str(params.get(Keys.entity_id, "")))
                 if guard is not None:
                     return guard
             elif action == "trigger_automation":
                 guard = self._guard_automation(
-                    cap, action, str(params.get("automation_id", ""))
+                    cap, action, str(params.get(Keys.automation_id, ""))
                 )
                 if guard is not None:
                     return guard
