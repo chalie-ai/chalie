@@ -32,7 +32,7 @@ from uuid import uuid4
 # Neither imports this module, so both import normally — no alias/patch hack.
 from abilities._event_emitter import ActEventEmitter
 from abilities._mcp_ability import _MCPAbility
-from abilities._params import canonicalize_keys
+from abilities._params import KeyHealer
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolParamError, ToolResult
 # ClientContext owns the per-request client-telemetry snapshot that _run()
@@ -58,8 +58,12 @@ class ToolDispatcher:
     Spec §5 / AC-4.
     """
 
-    def __init__(self, mp: object) -> None:
+    def __init__(self, mp: object, key_healer: "KeyHealer | None" = None) -> None:
         self._mp = mp
+        # The key healer is injected (DIP); the shared default heals against the
+        # production VARIANTS registry. A test can supply a probe healer without
+        # touching the registry.
+        self._key_healer = key_healer or KeyHealer()
 
     # ── The single tool-call entry point ──────────────────────────────────────
 
@@ -92,7 +96,7 @@ class ToolDispatcher:
             # registry/schema fault must never break dispatch — on failure the raw
             # params flow through unchanged.
             try:
-                params = canonicalize_keys(params, ability.get_parameters())
+                params = self._key_healer.heal(params, ability.get_parameters())
             except Exception:  # noqa: BLE001
                 logger.exception(
                     "[ToolDispatcher] key canonicalisation failed for %s — "

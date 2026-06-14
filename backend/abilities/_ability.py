@@ -252,7 +252,7 @@ class Ability(ABC):
         matched; the first key present with a non-None value wins. Argument-key
         healing — a model addressing the parameter by a mangled (``source"``) or
         alias (``url`` for ``source``) spelling — happens ONCE upstream at the
-        dispatch seam (``abilities._params.canonicalize_keys``, fed by the shared
+        dispatch seam (``abilities._params.KeyHealer.heal``, fed by the shared
         :data:`abilities._params.VARIANTS` ladders), so by the time ``run()`` calls
         ``param`` the key is already canonical and this method only matches *name*.
         Missing → *default* (or a ``ToolParamError`` when *required* / no default).

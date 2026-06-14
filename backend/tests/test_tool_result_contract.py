@@ -22,7 +22,7 @@ The contract under test:
   * ``ACTION_REQUIRED`` pre-validation reports an unknown action with ``valid=``
     and ALL missing params in ONE ``missing-params`` error.
   * Argument-key aliasing is healed at the dispatch seam
-    (``abilities._params.canonicalize_keys`` — ``url``/``path`` → ``source``)
+    (``abilities._params.KeyHealer.heal`` — ``url``/``path`` → ``source``)
     BEFORE ``run()``; ``Ability.param`` then matches the canonical key, validates
     choices, clamps numerics, and raises ``ToolParamError`` which the dispatcher
     renders canonically.
@@ -143,7 +143,7 @@ class _ParamAbility(Ability):
     def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
     def get_search_tooltip(self): return "x"
     def get_parameters(self):
-        # Declares the canonical 'source'; the seam (canonicalize_keys) heals the
+        # Declares the canonical 'source'; the seam (KeyHealer.heal) heals the
         # model's 'url'/'path' onto it via the shared VARIANTS[source] ladder BEFORE
         # run() — param() itself no longer carries a per-tool alias list.
         return {
