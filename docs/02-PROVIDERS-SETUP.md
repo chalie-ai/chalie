@@ -85,6 +85,18 @@ curl -X PUT http://localhost:31025/providers/selected \
   -d '{"provider_id": 1}'
 ```
 
-Chalie uses **one globally selected provider** for all chat/reasoning turns, plus an optional dedicated **vision provider** (`GET/PUT /providers/vision`) for image understanding. `POST /providers/list-models` fetches the live model list for a given platform and credentials, populating the wizard's model picker for every provider type. `GET /providers/catalog` returns the curated preset list the wizard's provider grid is built from.
+Chalie resolves three provider roles at runtime:
+
+| Role | Settings key | Fallback | REST endpoint |
+|------|-------------|---------|---------------|
+| **Chat (main)** | `selected_provider_id` | — | `GET/PUT /providers/selected` |
+| **Vision** | `vision_provider_id` | Falls back to the main provider when it supports vision; shows "Disabled" only when no vision-capable provider exists | `GET/PUT /providers/vision` |
+| **Delegate** | `delegate_provider_id` | Falls back to the main provider (no "Disabled" state) | `GET/PUT /providers/delegate` |
+
+The Vision and Delegate selectors appear inside **Brain → Settings → Providers → LLM Providers** — Vision pre-filtered to vision-capable providers, Delegate showing the full provider list plus "Use main provider".
+
+**Deletion guard.** A provider that is currently assigned as the main, vision, or delegate provider cannot be deleted — the API returns **HTTP 409**. Clear or reassign the role first, then delete.
+
+`POST /providers/list-models` fetches the live model list for a given platform and credentials, populating the wizard's model picker for every provider type. `GET /providers/catalog` returns the curated preset list the wizard's provider grid is built from.
 
 API keys are encrypted at rest (AES-256-GCM) in the local SQLite database and never leave your machine.
