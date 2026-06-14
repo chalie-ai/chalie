@@ -170,7 +170,7 @@ const BrainApp = (() => {
       { kind: 'Jump', label: 'Policies · Chat', icon: 'Policy', section: 'policies', sub: 'chat' },
       { kind: 'Jump', label: 'Skills', icon: 'Skill', section: 'skills' },
       { kind: 'Jump', label: 'MCP', icon: 'Server', section: 'mcp' },
-      { kind: 'Jump', label: 'Import / Export', icon: 'Brain', section: 'import-export' },
+      { kind: 'Jump', label: 'Import / Export', icon: 'Backup', section: 'import-export' },
     ];
 
     const q = query.toLowerCase();

@@ -26,7 +26,7 @@ const PanelImportExport = (() => {
     if (!_root) return;
     _root.innerHTML = `
       <div class="panel-header">
-        <h2>${Icons.Brain(20)} Import / Export</h2>
+        <h2>${Icons.Backup(20)} Import / Export</h2>
       </div>
       <div class="brain-overview">
         <div class="export-card">
