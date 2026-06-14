@@ -67,6 +67,11 @@ _LAST_FIRED_TIMESTAMP = DurableTimestamp(
 # SubconsciousWorker._step_dmn() skips when neither row is present.
 _DMN_SYNTHESIS_KEYS = ('user_summary', 'user_summary_long')
 
+# Per-tick consolidation summarization cap: at most this many cluster→parent LLM
+# summarization calls run per tick across all channels and both roll-up rounds,
+# so a large backlog drains over several ticks instead of stalling one tick.
+_SUMMARIZATION_CLUSTER_BUDGET = 5
+
 # Fact-extraction step budget (§F / spec §4.6 mechanism 3). The backlog of
 # episodes WHERE facts_extracted_at IS NULL drains at a fixed per-tick budget,
 # measured in LLM calls so the tick stays bounded regardless of backlog size:
@@ -128,6 +133,10 @@ class SubconsciousWorker:
         self.idle_window = timedelta(seconds=idle_window_sec)
         self._lock = threading.Lock()
         self._cached_last_fired: Optional[datetime] = None
+        # Per-tick consolidation summarization budget; reset at the start of
+        # each _step_consolidate run (declared here so _write_round never reads
+        # an unset attribute).
+        self._summarization_budget_remaining = _SUMMARIZATION_CLUSTER_BUDGET
         # Single DecayEngineService instance — shared across ticks.
         # Lazy-built on first use so import failures surface as a step error.
         self._decay_engine = None
@@ -281,6 +290,11 @@ class SubconsciousWorker:
         db = get_shared_db_service()
         emb_svc = get_embedding_service()
 
+        # Per-tick summarization budget shared across every channel and round.
+        # Reset each tick so a backlog drains over successive ticks, never
+        # blowing one tick's LLM budget.
+        self._summarization_budget_remaining = _SUMMARIZATION_CLUSTER_BUDGET
+
         channels = self._consolidating_channels(db)
         total_clusters = 0
         supers_written = 0
@@ -334,33 +348,80 @@ class SubconsciousWorker:
         return channels
 
     def _consolidate_channel(self, channel: str, db, emb_svc) -> tuple[int, int]:
-        """Consolidate one channel's apex clusters. Returns (clusters_found,
-        supers_written).
+        """Consolidate one channel across both hierarchy rounds. Returns
+        (clusters_found, supers_written) summed over the rounds.
 
-        Mirrors the per-channel flow: find clusters, hoist the channel's novelty
-        comparison set once, then encode + store one super-episode per cluster.
-        A per-cluster failure is logged and skipped so one bad cluster never
-        aborts the channel; a find/novelty failure on one channel is contained
-        to that channel.
+        Two count-gated rounds run sequentially:
+          - Leaf round (level-0 → level-1): fires at ``APEX_COUNT_TRIGGER`` leaf
+            apexes via ``find_super_candidates``.
+          - Era round (level-1 → level-2): fires at ``ERA_DIGEST_TRIGGER`` level-1
+            apexes; clusters their stored summary embeddings the same way.
+        Both rounds emit clusters into the shared write path. A find/novelty
+        failure on one round is contained to that round.
         """
+        from services.episodic_constants import ERA_DIGEST_TRIGGER  # noqa: PLC0415
         from services.episodic_service import (  # noqa: PLC0415
             EpisodicService,
+            cluster_apex_embeddings,
             find_super_candidates,
-            _fetch_novelty_comparison_set,
+            _fetch_apex_embeddings,
         )
 
+        episodic_svc = EpisodicService(db)
+
+        # Leaf round — count trigger lives inside find_super_candidates.
         try:
-            clusters = find_super_candidates(channel)
+            leaf_clusters = find_super_candidates(channel)
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} find_super_candidates failed (channel={channel}): {exc}"
             )
+            leaf_clusters = []
+
+        # Era round — cluster stored level-1 summary embeddings when enough
+        # level-1 apexes have accumulated. The count gate is explicit here
+        # because the era round reads its own (level=1) apex set.
+        # Intentional one-tick lag: this reads level-1 apexes BEFORE the leaf
+        # round below writes this tick's new level-1 parents, so a super is never
+        # rolled into an era the same tick it is born — it waits one tick. Do not
+        # "fix" this into a same-tick re-read.
+        era_clusters: list[list[str]] = []
+        try:
+            l1_ids, l1_embs = _fetch_apex_embeddings(channel, level=1)
+            if len(l1_ids) >= ERA_DIGEST_TRIGGER:
+                era_clusters = cluster_apex_embeddings(l1_ids, l1_embs)
+        except Exception as exc:
+            logger.warning(
+                f"{LOG_PREFIX} era clustering failed (channel={channel}): {exc}"
+            )
+
+        # Leaf clusters → level-1 parents; era clusters → level-2 parents.
+        rounds = ((leaf_clusters, 1), (era_clusters, 2))
+        found = sum(len(clusters) for clusters, _ in rounds)
+        if found == 0:
             return 0, 0
 
-        if not clusters:
-            return 0, 0
+        written = 0
+        for clusters, level in rounds:
+            written += self._write_round(
+                channel, clusters, level, db, emb_svc, episodic_svc
+            )
+        return found, written
 
-        episodic_svc = EpisodicService(db)
+    def _write_round(
+        self, channel, clusters, level, db, emb_svc, episodic_svc
+    ) -> int:
+        """Write one roll-up round's clusters at ``level``. Returns supers written.
+
+        Hoists the channel's novelty comparison set once for the round, then
+        encodes + stores one parent per cluster while the per-tick summarization
+        budget lasts. A per-cluster failure is logged and skipped.
+        """
+        from services.episodic_service import _fetch_novelty_comparison_set  # noqa: PLC0415
+
+        if not clusters or self._summarization_budget_remaining <= 0:
+            return 0
+
         try:
             prior_embeddings = _fetch_novelty_comparison_set(channel)
         except Exception as exc:
@@ -372,20 +433,26 @@ class SubconsciousWorker:
 
         written = 0
         for cluster_ids in clusters:
+            if self._summarization_budget_remaining <= 0:
+                break
             if self._write_super_episode(
-                channel, cluster_ids, db, emb_svc, episodic_svc, prior_embeddings
+                channel, cluster_ids, level, db, emb_svc, episodic_svc, prior_embeddings
             ):
                 written += 1
-        return len(clusters), written
+                self._summarization_budget_remaining -= 1
+        return written
 
     @staticmethod
     def _write_super_episode(
-        channel, cluster_ids, db, emb_svc, episodic_svc, prior_embeddings
+        channel, cluster_ids, level, db, emb_svc, episodic_svc, prior_embeddings
     ) -> bool:
-        """Encode + store one super-episode for a cluster. Returns True on write.
+        """Encode + store one parent episode for a cluster. Returns True on write.
 
-        The cluster's source channel is stamped onto the super-episode so the
-        hierarchy stays channel-scoped. Any failure is logged and returns False.
+        Shared by the leaf round (``level=1`` super) and the era round
+        (``level=2`` digest). The source channel and ``level`` are stamped onto
+        the parent so the hierarchy stays channel-scoped and decays at the right
+        tau. Children get a back-pointer + tombstone via ``set_consolidated_into``.
+        Any failure is logged and returns False.
         """
         from configs.channels import (  # noqa: PLC0415
             SuperEpisodeConfig,
@@ -393,7 +460,7 @@ class SubconsciousWorker:
             _fetch_transcript_spans,
             _safe_json_load_object,
         )
-        from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER  # noqa: PLC0415
+        from services.episodic_constants import HDBSCAN_MIN_CLUSTER_SIZE  # noqa: PLC0415
         from services.episodic_service import compute_novelty  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
         from services.salience_service import compute_salience  # noqa: PLC0415
@@ -405,7 +472,7 @@ class SubconsciousWorker:
                 )
                 if ep
             ]
-            if len(sources) < SUPER_EPISODE_MIN_CLUSTER:
+            if len(sources) < HDBSCAN_MIN_CLUSTER_SIZE:
                 return False
 
             all_t_ids = _collect_transcript_ids(sources)
@@ -430,6 +497,7 @@ class SubconsciousWorker:
                 return False
 
             super_ep["channel"] = channel
+            super_ep["level"] = level
             unique_t_ids = sorted(all_t_ids)
             super_ep["transcript_ids"] = unique_t_ids
             super_ep["transcript_id_start"] = min(unique_t_ids) if unique_t_ids else None
@@ -452,14 +520,14 @@ class SubconsciousWorker:
                 episodic_svc.set_consolidated_into(src_id, new_id)
 
             logger.info(
-                f"{LOG_PREFIX} Super-episode {new_id} created from cluster "
+                f"{LOG_PREFIX} level-{level} episode {new_id} created from cluster "
                 f"{cluster_ids} (channel={channel})"
             )
             return True
 
         except Exception as exc:
             logger.warning(
-                f"{LOG_PREFIX} Super-episode creation failed for cluster "
+                f"{LOG_PREFIX} level-{level} consolidation failed for cluster "
                 f"{cluster_ids} (channel={channel}): {exc}"
             )
             return False

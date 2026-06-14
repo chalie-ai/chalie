@@ -12,7 +12,19 @@ dependencies = [
     "transformers>=4.48.0",
     "flask>=3.0.0",
     "flask-cors>=4.0.0",
-    "numpy>=1.24.0",
+    # numpy upper bound: numba 0.65.x metadata caps numpy<2.5; exceeding it
+    # breaks the UMAP→HDBSCAN clustering stack below at import time.
+    "numpy>=1.24,<2.5",
+    # Episodic hierarchy roll-up clustering (episodic_service.find_super_candidates):
+    # L2-normalise → UMAP reduce → sklearn HDBSCAN density clustering. UMAP is the
+    # only reducer that yields usable clusters at our embedding scale — raw 768-d
+    # HDBSCAN collapses to one blob and PCA degenerates at every component count.
+    # sklearn ships HDBSCAN built-in; scipy/numba/llvmlite are UMAP's compiled deps.
+    "scikit-learn>=1.7",
+    "scipy>=1.11",
+    "umap-learn>=0.5.5",
+    "numba>=0.59",
+    "llvmlite>=0.42",
     "anthropic>=0.39.0",
     "openai>=1.0.0",
     "google-genai>=1.0.0",

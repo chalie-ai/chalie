@@ -53,6 +53,8 @@ class of silent loss).
 
 import contextlib
 import json
+import math
+import struct
 import threading
 from datetime import timedelta
 
@@ -328,17 +330,88 @@ def _sqlite_vec_available() -> bool:
 def _super_episodes(db, channel):
     """Super-episodes (consolidated_from non-empty) currently in a channel."""
     return db.execute(
-        "SELECT id, gist, consolidated_from FROM episodes "
+        "SELECT id, gist, consolidated_from, level FROM episodes "
         "WHERE channel=? AND deleted_at IS NULL "
         "  AND consolidated_from IS NOT NULL AND consolidated_from != '[]'",
         (channel,),
     ).fetchall()
 
 
+# ── Count-trigger apex seeding (mirrors tests/test_super_episode_pipeline.py) ───
+# The roll-up now fires on a per-channel apex COUNT (>= APEX_COUNT_TRIGGER), then
+# clusters via UMAP→HDBSCAN. To make the trigger fire AND produce real clusters we
+# seed apex leaves with directly-inserted 256-dim embeddings (the test vec table
+# is 256-d; the production embedder emits 768-d, which the vec table rejects on
+# width — so the production store_episode path leaves no usable embedding here).
+# This is the same seeding idiom test_super_episode_pipeline.py uses, kept
+# consistent across the two files.
+
+def _pack(floats: list) -> bytes:
+    """Pack a float list into a sqlite-vec binary blob."""
+    return struct.pack(f"{len(floats)}f", *floats)
+
+
+def _topic_vec(axis: int, *, jitter_axis: int, jitter: float = 0.0,
+               dim: int = _DIM) -> list:
+    """An L2-normalised vector dominated by one ``axis`` with a small component on
+    a second ``jitter_axis``. Identical primary axes are mutually cosine ~1.0 (one
+    tight topic); distinct axes are orthogonal (separated topics). The per-leaf
+    jitter gives a topic intra-cluster spread so a density clusterer sees real
+    points instead of one degenerate stacked point."""
+    v = [0.0] * dim
+    v[axis] = 1.0
+    if jitter:
+        v[jitter_axis] = jitter
+    norm = math.sqrt(sum(x * x for x in v))
+    return [x / norm for x in v]
+
+
+def _insert_embedding(db, episode_id: str, emb: list) -> None:
+    """Insert an embedding blob into episodes_vec for ``episode_id``."""
+    row = db.execute(
+        "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
+    ).fetchone()
+    if row:
+        db.execute(
+            "INSERT OR REPLACE INTO episodes_vec(rowid, embedding) VALUES (?, ?)",
+            (row[0], _pack(emb)),
+        )
+        db.commit()
+
+
+def _seed_apex_cluster(db, channel, *, count, axis, jitter_axis, salience=7):
+    """Seed ``count`` apex leaves on one tight topic (shared primary ``axis``)
+    via the PRODUCTION write path (EpisodicService.store_episode), then attach a
+    256-d clusterable embedding directly to episodes_vec. Returns the leaf ids."""
+    es = EpisodicService(_db_service())
+    ids = []
+    for i in range(count):
+        eid = es.store_episode(
+            {"gist": f"{channel} shard {axis}-{i}", "salience": salience,
+             "channel": channel},
+        )
+        _insert_embedding(
+            db, eid,
+            _topic_vec(axis, jitter_axis=jitter_axis, jitter=0.05 * ((i % 5) + 1)),
+        )
+        ids.append(eid)
+    return ids
+
+
+def _apex_leaf_count(db, channel):
+    """Count apex level-0 leaves (consolidated_into IS NULL, not deleted)."""
+    return db.execute(
+        "SELECT COUNT(*) FROM episodes "
+        "WHERE channel=? AND consolidated_into IS NULL AND deleted_at IS NULL "
+        "  AND level=0",
+        (channel,),
+    ).fetchone()[0]
+
+
 def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
     """``_step_consolidate`` must consolidate EACH episode-producing channel into
-    its OWN super-episode (channel-scoped, never pooled across channels), and must
-    NEVER consolidate a muted channel even when it carries an apex cluster.
+    its OWN super-episode(s) (channel-scoped, never pooled across channels), and
+    must NEVER consolidate a muted channel even when it carries an apex cluster.
 
     This is the direct feature lock for the consolidation generalization
     (Decision-1: dmn HEAVY + external-agent first-class consolidate; delegates
@@ -346,42 +419,53 @@ def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
     hard-coded, so dmn and external-agent apex clusters were never consolidated;
     a regression to that pooled/single-channel form reds these assertions.
 
-    Seeds three tight clusters (3 apex episodes each, identical embeddings so
-    cosine = 1.0 ≥ the 0.90 super-episode threshold) on the user, dmn and an
-    external-agent channel, plus a fourth tight cluster on a MUTED delegate
-    channel. Drives the real ``SubconsciousWorker._step_consolidate()`` end to
-    end — the per-cluster SuperEpisode encode runs ``MessageProcessor.process``
-    through the sanctioned ``Providers._resolve`` seam. The worker stamps the
-    cluster's source channel onto each super-episode (``super_ep['channel']``),
-    so a super-episode appearing under the wrong channel would fail (a) and a
-    pooled implementation would collapse three clusters into one.
+    The roll-up now fires on a per-channel apex COUNT (>= APEX_COUNT_TRIGGER=50),
+    not a similarity gate, and clusters via UMAP→HDBSCAN. So each consolidating
+    channel — user, dmn AND an external-agent channel — is seeded with >= 50 apex
+    leaves spanning two well-separated topics (orthogonal axes) so density
+    clustering finds coherent groups. The MUTED delegate channel is seeded with an
+    identical >= 50-leaf cluster: it would consolidate too if the muting were
+    broken, so the count trigger is NOT the thing keeping it out — the source
+    profile is.
+
+    Drives the real ``SubconsciousWorker._step_consolidate()`` end to end — the
+    per-cluster SuperEpisode encode runs ``MessageProcessor.process`` through the
+    sanctioned ``Providers._resolve`` seam. The per-tick summarization budget is
+    bounded, so the real multi-tick drain is exercised. The worker stamps the
+    cluster's source channel + level=1 onto each super-episode, so a super-episode
+    appearing under the wrong channel fails (a) and a pooled implementation would
+    consolidate leaves from another channel into one super.
     """
     if not _sqlite_vec_available():
         pytest.skip("sqlite-vec not available — consolidation requires episodes_vec")
 
-    from services.episodic_constants import SUPER_EPISODE_MIN_CLUSTER
-
-    n = max(3, SUPER_EPISODE_MIN_CLUSTER)
-    # Distinct one-hot index per channel keeps each channel's cluster internally
-    # cosine-1.0 (identical index within a channel) while channels stay apart.
+    # Two orthogonal topics per channel (25 + 25 = 50 apex leaves) so the >= 50
+    # count trigger fires and HDBSCAN finds coherent groups. Distinct axis pairs
+    # per channel keep every channel's geometry independent.
     consolidating = {
-        "user": 10,
-        "dmn": 11,
-        "external-agent:bob": 12,
+        "user": (0, 1),
+        "dmn": (2, 3),
+        "external-agent:bob": (4, 5),
     }
     muted_channel = "delegate:research"
+    seeded_leaves: dict[str, set] = {}
 
-    for channel, idx in consolidating.items():
-        for i in range(n):
-            _seed_episode(db, f"{channel} memory shard {i}",
-                          channel=channel, emb_index=idx, salience=7)
-    for i in range(n):
-        _seed_episode(db, f"delegate work shard {i}",
-                      channel=muted_channel, emb_index=13, salience=7)
+    for channel, (axis_a, axis_b) in consolidating.items():
+        a = _seed_apex_cluster(db, channel, count=25, axis=axis_a,
+                               jitter_axis=axis_a + 200)
+        b = _seed_apex_cluster(db, channel, count=25, axis=axis_b,
+                               jitter_axis=axis_b + 200)
+        seeded_leaves[channel] = set(a) | set(b)
+        assert _apex_leaf_count(db, channel) == 50  # at the literal count trigger
+
+    # The muted channel carries an identical >= 50-leaf apex cluster.
+    _seed_apex_cluster(db, muted_channel, count=25, axis=6, jitter_axis=206)
+    _seed_apex_cluster(db, muted_channel, count=25, axis=7, jitter_axis=207)
+    assert _apex_leaf_count(db, muted_channel) == 50
 
     def _send(_dto):
         # The SuperEpisode encoder expects a JSON object carrying at least a
-        # non-empty 'gist'; the worker overwrites 'channel' itself.
+        # non-empty 'gist'; the worker overwrites 'channel'/'level' itself.
         return _text_response(json.dumps({
             "gist": "Consolidated reflection of the shards.",
             "emotional_valence": 0.0,
@@ -392,36 +476,58 @@ def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
     with _inject_fake_client(_send):
         _worker()._step_consolidate()
 
-    # (a) One super-episode per consolidating channel, stamped with THAT channel
-    # (channel-scoped — not pooled). Each super-episode's consolidated_from must
-    # reference exactly that channel's leaves.
+    # (a) Every episode-producing channel consolidated its OWN apex cluster into
+    # at least one level-1 super-episode (channel-scoped — never pooled across
+    # channels). Each super-episode consolidates ONLY that channel's own leaves,
+    # and every reparented leaf on the channel is one of that channel's seeds and
+    # back-points at one of that channel's supers. A pooled / single-channel
+    # implementation (the pre-generalization ``find_super_candidates('user')``)
+    # reds this for dmn and external-agent.
     for channel in consolidating:
         supers = _super_episodes(db, channel)
-        assert len(supers) == 1, (
-            f"channel {channel!r} must consolidate its apex cluster into exactly "
-            f"one super-episode; found {len(supers)}: {supers!r}"
-        )
-        leaf_ids = {
-            r[0] for r in db.execute(
-                "SELECT id FROM episodes WHERE channel=? AND consolidated_into IS NOT NULL",
-                (channel,),
-            ).fetchall()
-        }
-        assert len(leaf_ids) == n, (
-            f"all {n} leaves of channel {channel!r} must point at the super-episode; "
-            f"got {len(leaf_ids)}"
-        )
-        consolidated_from = json.loads(supers[0][2])
-        assert set(consolidated_from) == leaf_ids, (
-            f"channel {channel!r} super-episode must consolidate ONLY its own "
-            f"channel's leaves (channel-scoped); from={consolidated_from!r} "
-            f"leaves={leaf_ids!r}"
+        assert supers, (
+            f"channel {channel!r} reached the count trigger but produced no "
+            f"super-episode — the count-triggered roll-up did not run for it"
         )
 
-    # (b) The muted channel — despite carrying an identical apex cluster — is
-    # NEVER consolidated. No super-episode, no leaf re-parented.
+        super_ids = set()
+        for sid, _gist, cfrom_json, level in supers:
+            super_ids.add(sid)
+            assert level == 1, (
+                f"channel {channel!r} super-episode must be stamped level=1 "
+                f"(decays at the wrong tau otherwise), got {level!r}"
+            )
+            children = set(json.loads(cfrom_json))
+            assert children, "super-episode carries an empty consolidated_from"
+            assert children <= seeded_leaves[channel], (
+                f"channel {channel!r} super-episode consolidated a leaf from "
+                f"another channel — consolidation must be channel-scoped; "
+                f"from={children!r}"
+            )
+
+        # Every reparented leaf on this channel is one of this channel's seeds and
+        # back-points at one of this channel's supers (no cross-channel leakage).
+        reparented = db.execute(
+            "SELECT id, consolidated_into FROM episodes "
+            "WHERE channel=? AND consolidated_into IS NOT NULL",
+            (channel,),
+        ).fetchall()
+        assert reparented, f"channel {channel!r} consolidated no leaves"
+        for leaf_id, into in reparented:
+            assert leaf_id in seeded_leaves[channel]
+            assert into in super_ids, (
+                f"leaf {leaf_id} on channel {channel!r} back-points at a super "
+                f"that is not one of this channel's — consolidation leaked across "
+                f"channels"
+            )
+
+    # (b) The muted channel — despite carrying an identical >= 50-leaf apex
+    # cluster — is NEVER consolidated. No super-episode, no leaf re-parented. It
+    # is the source profile (muted), not the count trigger, that keeps it out:
+    # the cluster is above the trigger, so the only thing excluding it is muting.
     assert _super_episodes(db, muted_channel) == [], (
-        "a muted channel must never be consolidated, even with an apex cluster"
+        "a muted channel must never be consolidated, even with an apex cluster "
+        "above the count trigger"
     )
     muted_consolidated = db.execute(
         "SELECT COUNT(*) FROM episodes WHERE channel=? AND consolidated_into IS NOT NULL",
@@ -429,6 +535,9 @@ def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
     ).fetchone()[0]
     assert muted_consolidated == 0, (
         "no leaf on a muted channel may be re-parented into a super-episode"
+    )
+    assert _apex_leaf_count(db, muted_channel) == 50, (
+        "all 50 muted-channel leaves must remain apex (untouched)"
     )
 
 

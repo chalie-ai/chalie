@@ -10,10 +10,10 @@
 Episodic Service — Episode storage + CRUD.
 
 Retrieval lives in ``episodic_retrieval_service``. Super-episode clustering
-helpers (``find_super_candidates``, ``compute_novelty``, and their DB helpers)
-remain module-level in this file because they operate directly on the
-``episodes`` + ``episodes_vec`` tables and are used by ``transcript_service``
-during post-extraction consolidation.
+helpers (``find_super_candidates``, ``cluster_apex_embeddings``,
+``compute_novelty``, and their DB helpers) remain module-level in this file
+because they operate directly on the ``episodes`` + ``episodes_vec`` tables and
+are used by ``transcript_service`` during post-extraction consolidation.
 """
 
 import json
@@ -22,9 +22,18 @@ import struct
 import uuid
 from typing import Optional
 
+import numpy as np
+
 from services.database_service import DatabaseService
 from services.embedding_utils import pack_embedding
 from services.time_utils import utc_now
+
+# Hierarchy roll-up clustering stack. Bidirectional dependency: declared in
+# pyproject.toml ("scikit-learn"/"umap-learn"/"scipy"/"numba"/"llvmlite") and
+# consumed only by ``find_super_candidates`` below. UMAP is the only reducer that
+# yields usable density clusters at our embedding scale; sklearn ships HDBSCAN.
+import umap
+from sklearn.cluster import HDBSCAN
 
 
 class EpisodicService:
@@ -85,19 +94,23 @@ class EpisodicService:
                 now_iso = utc_now().isoformat()
                 cursor.execute("""
                     INSERT INTO episodes (
-                        id, gist, salience, channel,
+                        id, gist, salience, channel, level,
                         transcript_ids, transcript_id_start, transcript_id_end,
                         emotional_valence, emotional_arousal,
                         consolidated_from, storage_strength, retrieval_weight,
                         location_lat, location_lon, location_name,
                         last_relevant_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     episode_id,
                     episode_data['gist'],
                     episode_data['salience'],
                     episode_data['channel'],
+                    # Hierarchy depth: 0=leaf, 1=super-episode, 2+=era digest.
+                    # Roll-up writes stamp this so per-level decay tau applies;
+                    # untagged callers default to leaf (0).
+                    episode_data.get('level', 0),
                     json.dumps(episode_data.get('transcript_ids', [])),
                     transcript_id_start,
                     transcript_id_end,
@@ -195,13 +208,17 @@ class EpisodicService:
             """, (episode_id,))
 
     def set_consolidated_into(self, leaf_id: str, super_id: str) -> None:
-        """Set the consolidated_into back-pointer on a leaf episode.
+        """Set the consolidated_into back-pointer and tombstone a rolled-up child.
 
         Consolidation is a write-relevant event for the leaf — its content has
-        just been rolled into a parent — so the relevance clock advances too.
+        just been rolled into a parent — so the relevance clock advances. The
+        child is also tombstoned: its information now lives in the parent, so the
+        decay engine collapses it onto the 7-day tombstone tau and hard-deletes
+        it once aged past the janitor threshold. Both markers are written in one
+        statement so a child can never carry a back-pointer without a tombstone.
 
         Args:
-            leaf_id: UUID of the leaf episode to update.
+            leaf_id: UUID of the child episode to update.
             super_id: UUID of the super-episode (episodes.id TEXT).
 
         Raises:
@@ -210,8 +227,10 @@ class EpisodicService:
         now_iso = utc_now().isoformat()
         with self.db_service.connection() as conn:
             conn.execute(
-                "UPDATE episodes SET consolidated_into = ?, last_relevant_at = ? WHERE id = ?",
-                (super_id, now_iso, leaf_id),
+                "UPDATE episodes "
+                "SET consolidated_into = ?, last_relevant_at = ?, tombstoned_at = ? "
+                "WHERE id = ?",
+                (super_id, now_iso, now_iso, leaf_id),
             )
 
     def fetch_fact_extraction_backlog(self, limit: int) -> list:
@@ -384,85 +403,92 @@ def _unpack_blob(blob: bytes) -> list[float]:
     return list(struct.unpack(f'{n}f', blob))
 
 
-def _cosine_sim_blobs(blob_a: bytes, blob_b: bytes) -> float:
-    """Compute cosine similarity between two sqlite-vec binary blobs.
+def cluster_apex_embeddings(ep_ids: list[str], ep_embs: list[bytes]) -> list[list[str]]:
+    """Density-cluster apex embeddings into candidate roll-up groups.
 
-    Embeddings from EmbeddingService are L2-normalised, so cosine similarity
-    is just the dot product of the unpacked float vectors.  Returns 0.0 if
-    either blob is malformed or the lengths differ.
-    """
-    try:
-        import numpy as np
-        vec_a = np.array(_unpack_blob(blob_a), dtype=np.float32)
-        vec_b = np.array(_unpack_blob(blob_b), dtype=np.float32)
-        if vec_a.shape != vec_b.shape or vec_a.shape[0] == 0:
-            return 0.0
-        # Embeddings are pre-normalised — dot product equals cosine sim.
-        return float(np.dot(vec_a, vec_b))
-    except Exception:
-        return 0.0
+    L2-normalise rows → UMAP reduce to a low-dimensional space → sklearn HDBSCAN.
+    Episodes sharing an HDBSCAN label form a group; the noise label (-1) is
+    dropped so genuine outliers stay leaf apexes (never force-assigned). Only
+    groups of at least ``HDBSCAN_MIN_CLUSTER_SIZE`` survive.
 
-
-def _build_adjacency(ep_embs: list[bytes], threshold: float) -> list[list[int]]:
-    """Return an undirected adjacency list for episodes whose cosine >= threshold."""
-    n = len(ep_embs)
-    adj: list[list[int]] = [[] for _ in range(n)]
-    for i in range(n):
-        for j in range(i + 1, n):
-            if _cosine_sim_blobs(ep_embs[i], ep_embs[j]) >= threshold:
-                adj[i].append(j)
-                adj[j].append(i)
-    return adj
-
-
-def _bfs_components(adj: list[list[int]], n: int, min_cluster: int) -> list[list[int]]:
-    """Return connected components of size >= min_cluster via iterative BFS."""
-    visited: set[int] = set()
-    components: list[list[int]] = []
-    for start in range(n):
-        if start in visited:
-            continue
-        component: list[int] = []
-        queue: list[int] = [start]
-        visited.add(start)
-        while queue:
-            node = queue.pop()
-            component.append(node)
-            for neighbour in adj[node]:
-                if neighbour not in visited:
-                    visited.add(neighbour)
-                    queue.append(neighbour)
-        if len(component) >= min_cluster:
-            components.append(component)
-    return components
-
-
-def find_super_candidates(channel: str) -> list[list[str]]:
-    """Return lists of episode IDs that form semantic clusters via connected components.
-
-    A cluster qualifies when:
-      - it contains at least SUPER_EPISODE_MIN_CLUSTER episodes,
-      - every member is connected (directly or transitively) to every other
-        member via edges where cosine >= SUPER_EPISODE_THRESHOLD.
-
-    Algorithm: build an undirected graph where nodes are apex episodes and
-    edges are pairs whose cosine >= SUPER_EPISODE_THRESHOLD. Emit each
-    connected component of size >= SUPER_EPISODE_MIN_CLUSTER as a cluster.
-    Clique-tightness is NOT required — a chain of related episodes counts as
-    one cluster even if the endpoints aren't direct neighbours. This matches
-    how humans group related memories and prevents the pair-threshold bar
-    from compounding against itself when min_cluster > 2.
+    Shared by the leaf round (level-0 → level-1) and the era round (level-1 →
+    level-2) — both feed the same matrix path. The native blob dimension is read
+    as-is (768 prod / 256 test); UMAP reduces either to ``UMAP_N_COMPONENTS``.
 
     Args:
-        channel: The episode channel to cluster.
+        ep_ids:  Episode UUIDs, index-aligned with ``ep_embs``.
+        ep_embs: Raw sqlite-vec embedding blobs for those episodes.
 
     Returns:
-        List of ID-lists (strings), each list being one connected component.
-        Components are non-overlapping and deterministic (sorted IDs within
-        each list; outer list sorted by first ID).
+        List of ID-lists, one per surviving cluster, deterministic (sorted IDs
+        within each list; outer list sorted by first ID). Empty when the input
+        is too small to cluster.
+    """
+    from services.episodic_constants import (
+        HDBSCAN_MIN_CLUSTER_SIZE,
+        UMAP_DISCONNECTION_DISTANCE,
+        UMAP_MIN_DIST,
+        UMAP_N_COMPONENTS,
+        UMAP_N_NEIGHBORS,
+        UMAP_RANDOM_SEED,
+    )
+
+    n = len(ep_ids)
+    # UMAP needs n_neighbors < n_samples; below the cluster floor nothing can form.
+    if n < HDBSCAN_MIN_CLUSTER_SIZE or n < 2:
+        return []
+
+    matrix = np.vstack([
+        np.asarray(_unpack_blob(blob), dtype=np.float32) for blob in ep_embs
+    ])
+    # L2-normalise rows so UMAP's cosine metric sees unit vectors; guard the rare
+    # zero-norm row (division would yield NaN and poison the reducer).
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    matrix /= norms
+
+    reducer = umap.UMAP(
+        n_components=UMAP_N_COMPONENTS,
+        metric="cosine",
+        n_neighbors=min(UMAP_N_NEIGHBORS, n - 1),
+        min_dist=UMAP_MIN_DIST,
+        random_state=UMAP_RANDOM_SEED,
+        # Detach genuine off-topic isolates instead of force-embedding them into
+        # the nearest dense region; they then surface as HDBSCAN noise and stay
+        # leaf apexes rather than polluting a topically-pure roll-up.
+        disconnection_distance=UMAP_DISCONNECTION_DISTANCE,
+    )
+    reduced = reducer.fit_transform(matrix)
+
+    labels = HDBSCAN(
+        min_cluster_size=HDBSCAN_MIN_CLUSTER_SIZE,
+        metric="euclidean",
+        copy=True,
+    ).fit_predict(reduced)
+
+    groups: dict[int, list[str]] = {}
+    for label, ep_id in zip(labels, ep_ids):
+        # Any negative label is noise: -1 is HDBSCAN's own outlier flag and -3 is
+        # a UMAP-disconnected isolate. Both stay leaf apexes — never force-grouped.
+        if label < 0:
+            continue
+        groups.setdefault(int(label), []).append(ep_id)
+
+    clusters = sorted(
+        (sorted(ids) for ids in groups.values() if len(ids) >= HDBSCAN_MIN_CLUSTER_SIZE),
+        key=lambda c: c[0],
+    )
+    return clusters
+
+
+def _fetch_apex_embeddings(channel: str, level: int) -> tuple[list[str], list[bytes]]:
+    """Return (ids, embedding blobs) for apex episodes at a given hierarchy level.
+
+    Apex = ``consolidated_into IS NULL AND deleted_at IS NULL`` with an embedding
+    present, scoped to one channel and one ``level`` (0 = leaves, 1 = supers).
+    Returns two index-aligned lists, or two empty lists on any query failure.
     """
     from services.database_service import get_shared_db_service
-    from services.episodic_constants import SUPER_EPISODE_THRESHOLD, SUPER_EPISODE_MIN_CLUSTER
 
     try:
         db = get_shared_db_service()
@@ -474,35 +500,52 @@ def find_super_candidates(channel: str) -> list[list[str]]:
                 FROM episodes e
                 JOIN episodes_vec ev ON ev.rowid = e.rowid
                 WHERE e.channel = ?
+                  AND e.level = ?
                   AND e.consolidated_into IS NULL
                   AND e.deleted_at IS NULL
                   AND ev.embedding IS NOT NULL
                 ORDER BY e.created_at ASC
                 """,
-                (channel,),
+                (channel, level),
             )
             rows = cursor.fetchall()
             cursor.close()
     except Exception as exc:
-        logging.warning(f"[SUPER_CLUSTER] find_super_candidates query failed: {exc}")
+        logging.warning(f"[SUPER_CLUSTER] apex fetch failed (channel={channel}, level={level}): {exc}")
+        return [], []
+
+    ep_ids = [str(r[0]) for r in rows]
+    ep_embs = [r[1] for r in rows]
+    return ep_ids, ep_embs
+
+
+def find_super_candidates(channel: str) -> list[list[str]]:
+    """Return candidate clusters of leaf apex episodes for roll-up, count-gated.
+
+    Count trigger: NO-OP (return ``[]``) until the channel holds at least
+    ``APEX_COUNT_TRIGGER`` leaf apexes — a count trigger always eventually fires,
+    unlike the old similarity gate that never did. At the trigger the leaves are
+    density-clustered via UMAP→HDBSCAN; HDBSCAN noise is dropped so outliers stay
+    leaf apexes. The signature ``(channel) -> list[list[str]]`` is preserved.
+
+    Args:
+        channel: The episode channel to cluster.
+
+    Returns:
+        List of ID-lists (strings), each list being one surviving cluster.
+        Empty below the count trigger or when no cluster forms.
+    """
+    from services.episodic_constants import APEX_COUNT_TRIGGER
+
+    ep_ids, ep_embs = _fetch_apex_embeddings(channel, level=0)
+
+    if len(ep_ids) < APEX_COUNT_TRIGGER:
         return []
 
-    if not rows:
-        return []
-
-    ep_ids: list[str] = [str(r[0]) for r in rows]
-    ep_embs: list[bytes] = [r[1] for r in rows]
-
-    adj = _build_adjacency(ep_embs, SUPER_EPISODE_THRESHOLD)
-    raw_components = _bfs_components(adj, len(ep_ids), SUPER_EPISODE_MIN_CLUSTER)
-
-    clusters = sorted(
-        [sorted(ep_ids[m] for m in comp) for comp in raw_components],
-        key=lambda c: c[0],
-    )
+    clusters = cluster_apex_embeddings(ep_ids, ep_embs)
     if clusters:
         logging.info(
-            f"[SUPER_CLUSTER] {len(clusters)} component(s) found "
+            f"[SUPER_CLUSTER] {len(clusters)} cluster(s) found "
             f"(sizes={[len(c) for c in clusters]}, channel={channel})"
         )
     return clusters
