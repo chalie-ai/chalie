@@ -31,7 +31,7 @@ const { available: voiceAvailable } = storeToRefs(voiceStore);
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const text = ref('');
 
-/** True while a send request is active (mirrors session.isSending reactively). */
+/** True when there is non-empty text to send (gates the send button). */
 const canSend = computed(() => text.value.trim().length > 0);
 
 // ── Auto-grow ─────────────────────────────────────────────────────────────────
@@ -72,14 +72,11 @@ async function handleStop(): Promise<void> {
 
 function handleKeydown(e: KeyboardEvent): void {
   // Enter without Shift → send. Shift+Enter → newline (default behaviour).
+  // While a turn is in flight, Enter still sends: session.sendMessage appends
+  // the text to the active turn (the mid-ACT append is handled in the store).
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    if (isSending.value) {
-      // Mid-ACT: pressing Enter appends to the current turn via sendMessage.
-      handleSend();
-    } else {
-      handleSend();
-    }
+    handleSend();
   }
 }
 

@@ -14,7 +14,9 @@ const session = useSessionStore();
 const voiceStore = useVoiceStore();
 
 onMounted(() => {
-  // Theme init first, then session (WS connect), then voice availability.
+  // Theme init first, then session (WS connect). Voice availability runs
+  // independently — it only governs mic/speaker visibility and must never gate
+  // the loading overlay (which polls /ready on its own; see LoadingOverlay.vue).
   initTheme();
   session.init();
   voiceStore.checkAvailability();
@@ -30,7 +32,7 @@ onMounted(() => {
   <!-- Fixed presence bar -->
   <PresenceBar />
 
-  <!-- Loading overlay (fades after first paint; full gate wired in Task A5) -->
+  <!-- Loading overlay — polls /ready, fades once the backend is up -->
   <LoadingOverlay />
 
   <!-- Scrollable conversation spine -->

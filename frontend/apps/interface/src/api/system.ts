@@ -21,6 +21,11 @@ export interface UpdateApplyResult {
   message: string;
 }
 
+/** Response from GET /ready — backend readiness probe. */
+export interface ReadyStatus {
+  ready: boolean;
+}
+
 export const system = {
   /**
    * GET /auth/status — check master-account / session / provider readiness.
@@ -29,6 +34,22 @@ export const system = {
   authStatus(): Promise<AuthStatus> {
     const api = useApiClient();
     return api.get('/auth/status');
+  },
+
+  /**
+   * GET /ready — backend readiness probe for the loading overlay.
+   *
+   * NEVER rejects: any failure resolves to { ready: false } so the overlay's
+   * poll loop can simply retry (port of legacy api.js readyCheck, lines 87-90).
+   */
+  async readyCheck(): Promise<ReadyStatus> {
+    const api = useApiClient();
+    try {
+      const result = await api.get<ReadyStatus>('/ready');
+      return { ready: Boolean(result?.ready) };
+    } catch {
+      return { ready: false };
+    }
   },
 
   /**
