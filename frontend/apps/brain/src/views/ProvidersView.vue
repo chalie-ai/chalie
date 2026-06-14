@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch, onUnmounted } from 'vue';
 import { providers } from '../api/providers';
 import type { Provider, CatalogEntry } from '../api/providers';
+import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useShellStore } from '../stores/shell';
@@ -51,6 +52,11 @@ const lastFetchKey = ref('');
 let modelFetchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const MODEL_FETCH_DEBOUNCE_MS = 600;
+
+// FIX 6: suppress the debounced watch that fires right after openWizard() pre-populates
+// formHost/formKey and then directly calls fetchModels() itself. Without this, the watch
+// would schedule a second debounced fetch on top of the one already in flight.
+let suppressNextCredsWatch = false;
 
 // Test button state
 const testing = ref(false);
@@ -123,8 +129,7 @@ async function selectProvider(id: number): Promise<void> {
     selectedId.value = id;
     showToast('Provider selected', 'success');
   } catch (e: unknown) {
-    const err = e as { error?: string };
-    showToast(err.error || 'Failed', 'error');
+    showToast(apiErrorMessage(e, 'Failed', 'Failed to select provider'), 'error');
   }
 }
 
@@ -144,11 +149,7 @@ async function confirmDelete(id: number): Promise<void> {
     showToast('Provider deleted', 'success');
     await load();
   } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'error' in e) {
-      showToast((e as { error?: string }).error || 'Delete failed', 'error');
-    } else {
-      showToast('Network error', 'error');
-    }
+    showToast(apiErrorMessage(e, 'Delete failed'), 'error');
   }
 }
 
@@ -177,6 +178,10 @@ async function openWizard(id: number | null): Promise<void> {
     models.value = editModel.value ? [editModel.value] : [];
     preset.value = presetFor(p);
     formName.value = p.name;
+    // Suppress the creds watch: we mutate formHost/formKey here and call
+    // fetchModels() directly below, so we must skip the debounced watch that
+    // would otherwise schedule a redundant second fetch.
+    suppressNextCredsWatch = true;
     formHost.value = p.host || '';
     formKey.value = '';
     formModel.value = editModel.value;
@@ -213,10 +218,12 @@ async function ensureCatalog(): Promise<void> {
   try {
     const res = await providers.getCatalog();
     catalog.value = Array.isArray(res.catalog) ? res.catalog : [];
+    catalogLoaded.value = true;  // only mark loaded on success so next open retries
   } catch {
     catalog.value = [];
+    showToast('Could not load provider catalog', 'error');
+    // catalogLoaded stays false → next wizard open will retry
   }
-  catalogLoaded.value = true;
 }
 
 // ── Wizard: picker ────────────────────────────────────────────────
@@ -256,6 +263,12 @@ function cancelForm(): void {
 // ── Progressive reveal: watch creds inputs ────────────────────────
 watch([() => formHost.value, () => formKey.value], () => {
   if (mode.value !== 'form') return;
+  // FIX 6: openWizard() pre-populates these fields and calls fetchModels()
+  // directly. Skip the debounced duplicate triggered by that mutation.
+  if (suppressNextCredsWatch) {
+    suppressNextCredsWatch = false;
+    return;
+  }
   debouncedFetchModels();
 });
 
@@ -307,15 +320,12 @@ async function fetchModels(): Promise<void> {
     modelStatus.value = `${n} model${n === 1 ? '' : 's'}`;
     modelStatusClass.value = 'model-status ok';
   } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'error' in e) {
-      modelStatus.value = (e as { error?: string }).error || 'Failed to fetch models';
-    } else {
-      modelStatus.value = 'Network error';
-    }
+    modelStatus.value = apiErrorMessage(e, 'Failed to fetch models');
     modelStatusClass.value = 'model-status err';
     lastFetchKey.value = ''; // allow retry
+  } finally {
+    modelsFetchInFlight.value = false;
   }
-  modelsFetchInFlight.value = false;
 }
 
 // ── Test connection ───────────────────────────────────────────────
@@ -345,10 +355,11 @@ async function testConnection(): Promise<void> {
     } else {
       showToast(data.error || 'Test failed', 'error');
     }
-  } catch {
-    showToast('Network error', 'error');
+  } catch (e: unknown) {
+    showToast(apiErrorMessage(e, 'Test failed'), 'error');
+  } finally {
+    testing.value = false;
   }
-  testing.value = false;
 }
 
 // ── Save provider ─────────────────────────────────────────────────
@@ -398,11 +409,7 @@ async function saveProvider(): Promise<void> {
       }
     }
   } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'error' in e) {
-      showToast((e as { error?: string }).error || 'Save failed', 'error');
-    } else {
-      showToast('Network error', 'error');
-    }
+    showToast(apiErrorMessage(e, 'Save failed'), 'error');
   }
 }
 </script>

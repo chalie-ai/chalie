@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { providers } from '../api/providers';
 import type { Provider } from '../api/providers';
+import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import BrainIcon from '../ui/BrainIcon.vue';
 
@@ -34,11 +35,7 @@ async function setVision(id: number): Promise<void> {
     source.value = 'explicit';
     showToast('Vision provider set', 'success');
   } catch (e: unknown) {
-    if (e && typeof e === 'object' && 'error' in e) {
-      showToast((e as { error?: string }).error || 'Failed', 'error');
-    } else {
-      showToast('Failed to set vision provider', 'error');
-    }
+    showToast(apiErrorMessage(e, 'Failed', 'Failed to set vision provider'), 'error');
   }
 }
 </script>

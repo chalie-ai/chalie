@@ -8,7 +8,11 @@ export class AuthError extends Error {
 }
 
 export class HttpError extends Error {
-  constructor(public readonly status: number) {
+  constructor(
+    public readonly status: number,
+    public readonly error?: string,   // server-provided message parsed from a JSON {error} body, if any
+    public readonly body?: unknown,    // the full parsed JSON error body, if any
+  ) {
     super(`HTTP ${status}`);
     this.name = 'HttpError';
   }
@@ -23,6 +27,16 @@ export class ApiClient {
     return host ? host.replace(/\/$/, '') + path : path;
   }
 
+  /** Parse the response body and throw an HttpError carrying the server message, if any. */
+  private async throwHttp(res: Response): Promise<never> {
+    const body = await res.json().catch(() => null);
+    const msg =
+      body && typeof body === 'object' && 'error' in body && typeof (body as { error?: unknown }).error === 'string'
+        ? (body as { error?: string }).error
+        : undefined;
+    throw new HttpError(res.status, msg, body ?? undefined);
+  }
+
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(this.buildUrl(path), {
       credentials: 'same-origin',
@@ -30,7 +44,7 @@ export class ApiClient {
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     });
     if (res.status === 401) throw new AuthError();
-    if (!res.ok) throw new HttpError(res.status);
+    if (!res.ok) return this.throwHttp(res);
     return (await res.json()) as T;
   }
 
@@ -50,7 +64,7 @@ export class ApiClient {
       headers: { 'Content-Type': 'application/json' },
     });
     if (res.status === 401) throw new AuthError();
-    if (!res.ok) throw new HttpError(res.status);
+    if (!res.ok) return this.throwHttp(res);
     return (await res.json().catch(() => ({}))) as T;
   }
 
@@ -62,7 +76,7 @@ export class ApiClient {
       body: formData,
     });
     if (res.status === 401) throw new AuthError();
-    if (!res.ok) throw new HttpError(res.status);
+    if (!res.ok) return this.throwHttp(res);
     return (await res.json()) as T;
   }
 

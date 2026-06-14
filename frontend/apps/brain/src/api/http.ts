@@ -6,7 +6,7 @@
  * Port of legacy BrainApp.apiFetch()'s `if (res.status === 401)` branch
  * (app.js:68) — but targeted at /brain-next/ (not /brain/).
  */
-import { AuthError } from '@chalie/shared';
+import { AuthError, HttpError } from '@chalie/shared';
 
 /** Redirect to /login/ preserving the current path and query string as `next`. */
 export function redirectToLogin(): never {
@@ -29,4 +29,15 @@ export async function withAuth<T>(fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     return handle401(err);
   }
+}
+
+/**
+ * Resolve a user-facing message for a thrown API error.
+ * - HTTP (non-2xx) error → the server's {error} message if present, else `httpFallback`.
+ * - anything else (network/unexpected) → `networkFallback`.
+ * Mirrors the legacy panels' `data.error || '<fallback>'` (non-ok) vs catch-branch message split.
+ */
+export function apiErrorMessage(e: unknown, httpFallback: string, networkFallback = 'Network error'): string {
+  if (e instanceof HttpError) return e.error || httpFallback;
+  return networkFallback;
 }
