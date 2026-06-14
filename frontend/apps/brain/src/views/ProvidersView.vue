@@ -235,6 +235,9 @@ function selectTile(p: CatalogEntry): void {
   modelStatus.value = '';
   modelStatusClass.value = '';
   formName.value = p.name;
+  // FIX 6 (cont.): like openWizard(), this mutates formHost/formKey and may call
+  // fetchModels() directly below, so suppress the watch's redundant debounced fetch.
+  suppressNextCredsWatch = true;
   formHost.value = p.host || '';
   formKey.value = '';
   formModel.value = '';
