@@ -111,10 +111,24 @@ Four layers, each on a different timescale:
 |---|---|---|
 | **Transcript** | Append-only record of every turn, channel-scoped, optionally GPS-tagged | Pruned after 90 days |
 | **Compaction** | LLM-written continuity summaries; the newest `role='compaction'` transcript row is the history watermark | No |
-| **Episodes** | Narrative snapshots extracted from transcript windows (see per-source profiles below), with salience and emotional scores; similar episodes consolidate into super-episodes | Yes — exponential decay on last relevance |
+| **Episodes** | Narrative snapshots extracted from transcript windows (see per-source profiles below), with salience and emotional scores; episodes form a three-level hierarchy — leaf (0), topic super-episode (1), era digest (2) — via periodic density-clustering roll-ups | Yes — exponential decay on last relevance, per-level tau |
 | **Data graph** | Structured facts (`user_specific`, `behavioral_pattern`, `place`, `moment`, `document`, …) with per-kind decay and contradiction/canonicalisation rules | Yes — per-kind policy |
  
 Episode retrieval is hybrid: vector KNN + FTS5, reranked by relevance, recency, and salience, with a relative floor that drops weak candidates instead of padding results. Every data-graph write is also expanded asynchronously into paraphrase variants (doc2query) and embedded, so differently-worded questions still hit the right facts.
+
+### Episode hierarchy and roll-up
+
+Episodes sit in a three-level hierarchy. Every extracted episode starts as a **leaf** (`level=0`). When enough leaves accumulate on a channel they are density-clustered into **topic super-episodes** (`level=1`), and when enough of those accumulate they are further clustered into **era digests** (`level=2`).
+
+**Count trigger.** Roll-up fires on a per-channel count, not a similarity floor: once a channel holds at least 50 leaf apexes, clustering runs. The count trigger always eventually fires; a similarity gate can silently never fire on densely-packed embedding spaces.
+
+**Clustering pipeline.** The apex embeddings for a channel are assembled into a matrix, L2-normalised, then reduced to 10 dimensions with UMAP (cosine metric, pinned seed for deterministic output), and finally clustered with HDBSCAN (minimum cluster size 10, euclidean metric on the reduced space). UMAP reduction is mandatory — raw 768-dimensional HDBSCAN collapses into one blob, and PCA produces degenerate results at every dimensionality. HDBSCAN returns a noise label (−1) for genuine outliers; those episodes are **never force-assigned** and remain leaf apexes eligible for the next round.
+
+**Era digests.** After the leaf round, the worker reads the stored summary embeddings of level-1 apexes on the same channel. If at least 25 are present, the same UMAP→HDBSCAN pipeline clusters them into level-2 era digests. There is an intentional one-tick lag: the era round reads level-1 apexes from before the current leaf round, so a newly created super-episode waits at least one tick before it can roll up further.
+
+**Hierarchy write contract.** When a parent is written, `store_episode` stamps its `level` (1 or 2) and `last_relevant_at`. Each child episode receives `consolidated_into` (back-pointer to the parent id) and `tombstoned_at` in a single atomic update — a child can never carry a back-pointer without a tombstone. The per-level decay tau then applies correctly: leaf 14 days, level-1 90 days, level-2 365 days, tombstoned 7 days. Tombstoned episodes are hard-deleted by the janitor after 30 days. The decay and deletion steps are owned by the decay engine (step 2 of the background tick); the roll-up only writes the markers.
+
+**Per-tick cap.** To prevent an overdue roll-up from monopolising one background tick, the worker summarises at most 5 clusters per tick. Remaining clusters roll up on the next qualifying tick.
 
 ### Per-source memory profiles
 
@@ -137,7 +151,7 @@ Memory **reads cross channels.** Episode recall never filters by the caller's ow
  
 The **subconscious worker** ticks every 5 minutes but only fires when the user has been idle for 30+ minutes and there is something new since the last run. Each tick runs seven steps, each isolated so one failure can't block the rest:
  
-1. **Consolidate** — cluster episodes into super-episodes, per episode-producing channel (`user`, `dmn`, each `external-agent:*`); clusters stay channel-scoped and are never pooled across sources
+1. **Consolidate** — run the hierarchy roll-up on each episode-producing channel (`user`, `dmn`, each `external-agent:*`): a leaf round (level-0 → level-1) fires at 50+ apex leaves, and an era round (level-1 → level-2) fires at 25+ level-1 apexes; both use the UMAP→HDBSCAN pipeline described above; clusters stay channel-scoped and are never pooled across sources
 2. **Decay** — run the decay engine over episodes, the data graph, old transcripts, and tool-call records (7-day retention). A fossil janitor tombstones stranded leaves on muted/legacy channels but protects episode-producing channels — the proactive voice never consolidates, so its leaves are permanently apex and must not be reaped
 3. **Pattern match** — an LLM pass over new user-behaviour transcripts that records behavioural patterns and facts (`save_pattern` / `save_graph`), then maps patterns to skills
 4. **Synthesis** — refresh the running user summary when new traits or patterns have appeared
