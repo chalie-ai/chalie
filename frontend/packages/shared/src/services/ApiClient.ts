@@ -80,6 +80,22 @@ export class ApiClient {
     return (await res.json()) as T;
   }
 
+  /**
+   * POST returning the raw Response (for binary/blob downloads).
+   * Throws AuthError on 401; does NOT throw on other non-ok statuses —
+   * the caller inspects res.ok and reads .blob()/.json() itself.
+   */
+  async download(path: string, body?: unknown): Promise<Response> {
+    const res = await fetch(this.buildUrl(path), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body ?? {}),
+    });
+    if (res.status === 401) throw new AuthError();
+    return res;
+  }
+
   // ── Foundation endpoints (feature endpoints added in P1/P2) ──────────────
   health(): Promise<{ status: string } | null> {
     return fetch(this.buildUrl('/health'), { credentials: 'same-origin' })
