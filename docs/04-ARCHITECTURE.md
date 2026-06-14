@@ -165,17 +165,18 @@ A standing step in the decay cycle wipes any leftover `kind='moment'` rows from 
  
 ## Background Cognition
  
-The **subconscious worker** ticks every 5 minutes but only fires when the user has been idle for 30+ minutes and there is something new since the last run. Each tick runs seven steps, each isolated so one failure can't block the rest:
+The **subconscious worker** ticks every 5 minutes but only fires when the user has been idle for 30+ minutes and there is something new since the last run. Each tick runs eight steps, each isolated so one failure can't block the rest:
  
-1. **Consolidate** — run the hierarchy roll-up on each episode-producing channel (`user`, `dmn`, each `external-agent:*`): a leaf round (level-0 → level-1) fires at 50+ apex leaves, and an era round (level-1 → level-2) fires at 25+ level-1 apexes; both use the UMAP→HDBSCAN pipeline described above; clusters stay channel-scoped and are never pooled across sources
-2. **Decay** — run the decay engine over episodes, the data graph, old transcripts, and tool-call records (7-day retention), and wipe any leftover legacy `kind='moment'` rows from the data graph (moments now have their own table). A fossil janitor tombstones stranded leaves on muted/legacy channels but protects episode-producing channels — the proactive voice never consolidates, so its leaves are permanently apex and must not be reaped
-3. **Pattern match** — an LLM pass over new user-behaviour transcripts that records behavioural patterns and facts (`save_pattern` / `save_graph`), then maps patterns to skills
-4. **Synthesis** — refresh the running user summary when new traits or patterns have appeared
-5. **DMN** — a reflective ACT pass over the user summary and recent episodes; findings are saved to memory, nothing is pushed to chat
-6. **Capability sync** — poll connected external services (mail, calendar, contacts)
-7. **Geo patterns** — extract location-tied behavioural patterns from GPS-tagged transcripts. The pattern and geo windows (and their cursors) read only the channels the source profiles mark as user activity, so background loops never masquerade as the user being somewhere
+1. **Compact** — proactively fold the user channel's accumulated history into its durable compaction watermark before any other work, so the context window stays small while the user is away. This runs only the channel's compactors through the normal dispatch path (no LLM turn), and is a pure no-op — no LLM call, no watermark write — when nothing new sits past the watermark, so re-running it on a later idle tick costs nothing
+2. **Consolidate** — run the hierarchy roll-up on each episode-producing channel (`user`, `dmn`, each `external-agent:*`): a leaf round (level-0 → level-1) fires at 50+ apex leaves, and an era round (level-1 → level-2) fires at 25+ level-1 apexes; both use the UMAP→HDBSCAN pipeline described above; clusters stay channel-scoped and are never pooled across sources
+3. **Decay** — run the decay engine over episodes, the data graph, old transcripts, and tool-call records (7-day retention), and wipe any leftover legacy `kind='moment'` rows from the data graph (moments now have their own table). A fossil janitor tombstones stranded leaves on muted/legacy channels but protects episode-producing channels — the proactive voice never consolidates, so its leaves are permanently apex and must not be reaped
+4. **Pattern match** — an LLM pass over new user-behaviour transcripts that records behavioural patterns and facts (`save_pattern` / `save_graph`), then maps patterns to skills
+5. **Synthesis** — refresh the running user summary when new traits or patterns have appeared
+6. **DMN** — a reflective ACT pass over the user summary and recent episodes; findings are saved to memory, nothing is pushed to chat
+7. **Capability sync** — poll connected external services (mail, calendar, contacts)
+8. **Geo patterns** — extract location-tied behavioural patterns from GPS-tagged transcripts. The pattern and geo windows (and their cursors) read only the channels the source profiles mark as user activity, so background loops never masquerade as the user being somewhere
  
-All of these are ordinary `MessageProcessor.process()` calls with their own channel configs — there is no separate background engine.
+Every step after the compaction pass is an ordinary `MessageProcessor.process()` call with its own channel config; the compaction pass builds a user-channel `MessageProcessor` and runs only its compactors. There is no separate background engine.
  
 **Delegate tools** (`web_search`, `web_browse`, `vision`) are focused sub-turns: each spawns its own ACT loop with a fixed minimal tool surface and returns a synthesized answer to the calling turn. On the user channel they can run async (the answer arrives as a follow-up assistant message); a delegate can never spawn another delegate.
  
