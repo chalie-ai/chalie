@@ -23,13 +23,16 @@ logger = logging.getLogger(__name__)
 KIND_USER_SPECIFIC = 'user_specific'
 KIND_SYSTEM = 'system'
 KIND_MISC = 'misc'
-KIND_MOMENT = 'moment'
 KIND_DOCUMENT = 'document'
 KIND_BEHAVIORAL_PATTERN = 'behavioral_pattern'
 KIND_PLACE = 'place'
+# 'moment' is deliberately absent: moments are a dedicated user-curated store
+# (services/moments_service.py), not a data_graph kind. With it gone from
+# VALID_KINDS the store() guard below rejects any kind='moment' write — closing
+# the hole where any channel could write any kind.
 VALID_KINDS = frozenset({
     KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
-    KIND_MOMENT, KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE,
+    KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE,
 })
 
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
@@ -67,7 +70,6 @@ _KIND_POLICY = {
     KIND_USER_SPECIFIC:      {'ttl_days': 30,    'reinforce': True,  'contradiction': 'lut_canonicalize', 'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
     KIND_SYSTEM:             {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
     KIND_MISC:               {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
-    KIND_MOMENT:             {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
     KIND_DOCUMENT:           {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
     # behavioral_pattern: written exclusively by abilities.pattern_match.save_pattern.SavePattern
     # via raw SQL UPSERT (one-active-row-per-(kind, key)). Decay (-0.005/pass with
@@ -200,7 +202,6 @@ class DataGraphService:
     KIND_USER_SPECIFIC = KIND_USER_SPECIFIC
     KIND_SYSTEM = KIND_SYSTEM
     KIND_MISC = KIND_MISC
-    KIND_MOMENT = KIND_MOMENT
 
     def __init__(self, db_service=None):
         if db_service is None:

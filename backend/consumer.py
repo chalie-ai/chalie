@@ -215,8 +215,4 @@ if __name__ == "__main__":
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
 
-    # Moment context enrichment service (6h worker)
-    from services.moment_context_service import moment_context_worker
-    manager.register_service("moment-context-service", moment_context_worker)
-
     manager.run()

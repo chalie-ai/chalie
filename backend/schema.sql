@@ -267,9 +267,40 @@ CREATE TABLE IF NOT EXISTS user_tool_preferences (
 );
 
 
--- NOTE: moments are stored in data_graph as kind='moment' (parent)
--- and kind='moment_context' (enrichment context rows). The old dedicated
--- moments table and documents-table path (source_type='moment') are removed.
+-- ────────────────────────────────────────────────────────────────
+-- MOMENTS — user-curated bookmarks of assistant replies
+-- ────────────────────────────────────────────────────────────────
+-- A moment is an explicit "remember this" pin on one assistant turn. Unlike
+-- data_graph facts it carries no retrieval_weight, no decay and no janitor on
+-- this table — a bookmark lives until the user deletes it. Persisted +
+-- FTS/vec-synced by MomentsService (services/moments_service.py); served by
+-- api/moments.py; surfaced in explicit recall only (never the turn-0 flashback).
+-- rowid == id binds moments_fts and moments_vec to each moment row.
+CREATE TABLE IF NOT EXISTS moments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    transcript_id INTEGER NOT NULL UNIQUE,   -- pinned assistant turn; one pin per turn
+    content       TEXT NOT NULL,             -- the assistant reply, verbatim
+    note          TEXT,                      -- optional user annotation (reserved)
+    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+
+-- transcript_id is UNIQUE (declared above), so SQLite maintains its own index on
+-- it — a separate idx_moments_transcript would be redundant. The UNIQUE is the
+-- dedup backstop: find-then-insert in MomentsService.store() cannot by itself
+-- block a concurrent double-pin, so the DB enforces one moment per turn.
+CREATE INDEX IF NOT EXISTS idx_moments_created     ON moments(created_at DESC);
+
+-- FTS5 over the moment content. content='moments' + content_rowid='id' make this
+-- an external-content index (postings removed via the FTS5 'delete' command —
+-- services/_fts_delete.py). tokenize='porter unicode61' matches data_graph_fts.
+CREATE VIRTUAL TABLE IF NOT EXISTS moments_fts USING fts5(
+    content, content='moments', content_rowid='id',
+    tokenize='porter unicode61'
+);
+
+-- One vec0 row per moment; rowid matches moments.id. The 768-dim embedding of
+-- the content is written synchronously on pin (MomentsService).
+CREATE VIRTUAL TABLE IF NOT EXISTS moments_vec USING vec0(embedding float[768]);
 
 -- Note: tables that disappear from this schema are dropped automatically by
 -- SchemaConvergenceService on the next boot.  No explicit DROP statements

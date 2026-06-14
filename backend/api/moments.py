@@ -4,9 +4,15 @@ Moments API — pin, list, search, and forget moments.
 Routes (all require session auth):
   POST   /moments                         — pin a moment
                                             (body: {transcript_id} OR {message_text})
-  GET    /moments                         — list all active moments
-  POST   /moments/<transcript_id>/forget  — soft-delete
-  GET    /moments/search                  — semantic search (?q=query)
+  GET    /moments                         — list all moments
+  POST   /moments/<transcript_id>/forget  — delete
+  GET    /moments/search                  — semantic + lexical search (?q=query)
+
+Moments live in the dedicated ``moments`` table (services/moments_service.py),
+NOT in data_graph. The JSON this blueprint emits is byte-identical to the
+earlier data_graph-backed shape so the frontend renders unchanged: every
+item carries ``{id, transcript_id, key, value, message_text, created_at}`` with
+``key == moment_<transcript_id>`` and ``value == message_text == content``.
 
 Resolving the pinned turn
 -------------------------
@@ -37,6 +43,11 @@ logger = logging.getLogger(__name__)
 
 _ERR_INTERNAL = "Internal server error"
 
+# Prefix for the synthesized client-facing key (``moment_<transcript_id>``) and
+# the forget round-trip — the key is derived, not stored, now that transcript_id
+# is a real column.
+_KEY_PREFIX = "moment_"
+
 # Channel the user chat turns are written under (api/chat.py UMP path).
 _USER_CHANNEL = "user"
 
@@ -50,11 +61,11 @@ moments_bp = Blueprint("moments", __name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_dg():
-    if 'moments_dg' not in g:
-        from services.data_graph_service import get_data_graph_service
-        g.moments_dg = get_data_graph_service()
-    return g.moments_dg
+def _get_moments():
+    if 'moments_svc' not in g:
+        from services.moments_service import get_moments_service
+        g.moments_svc = get_moments_service()
+    return g.moments_svc
 
 
 def _get_db():
@@ -65,32 +76,26 @@ def _get_db():
 
 
 def _serialize_moment(row: dict) -> dict:
-    created_at = row.get('first_seen_at') or row.get('created_at')
+    """Project a ``moments`` row into the frontend contract shape.
+
+    ``key`` is synthesized from the real ``transcript_id`` column (the client
+    keys the forget round-trip on it); ``value`` and ``message_text`` both alias
+    ``content`` so both shapes the Recall overlay reads resolve.
+    """
+    created_at = row.get('created_at')
     if created_at:
         try:
             created_at = parse_utc(created_at).isoformat()
         except Exception:
             pass
 
-    key = row.get('key', '')
-    transcript_id = None
-    if key.startswith('moment_'):
-        try:
-            transcript_id = int(key[len('moment_'):])
-        except (ValueError, TypeError):
-            pass
-
-    value = row.get('value') or ''
+    transcript_id = row.get('transcript_id')
+    value = row.get('content') or ''
     return {
-        # ``id`` is the data_graph row id; ``transcript_id`` is the pinned
-        # assistant turn. The forget route is keyed by ``transcript_id`` (the
-        # moment key encodes it), so the client uses that for the round-trip.
         'id': row.get('id'),
         'transcript_id': transcript_id,
-        'key': key,
+        'key': f"{_KEY_PREFIX}{transcript_id}",
         'value': value,
-        # Alias the Recall overlay reads directly (moment_search.js renders
-        # ``item.message_text``); kept beside ``value`` so both shapes resolve.
         'message_text': value,
         'created_at': created_at,
     }
@@ -156,8 +161,9 @@ def create_moment():
     """Pin an assistant transcript turn as a moment.
 
     Accepts either an explicit integer ``transcript_id`` or a ``message_text``
-    string. Only assistant turns can be pinned. Same dedupe key + ``source='pin'``
-    regardless of which identifier resolved the turn.
+    string, plus an optional ``note``. Only assistant turns can be pinned.
+    Dedupes on ``transcript_id`` (one moment per assistant turn): a re-pin
+    returns the existing row with 200 + duplicate=True; a fresh pin returns 201.
     """
     if not request.is_json:
         return jsonify({"error": "Content-Type must be application/json"}), 400
@@ -165,9 +171,10 @@ def create_moment():
     data = request.get_json() or {}
     raw_transcript_id = data.get("transcript_id")
     message_text = (data.get("message_text") or "").strip()
+    note = data.get("note")
 
     db = _get_db()
-    dg = _get_dg()
+    moments = _get_moments()
 
     if raw_transcript_id:
         try:
@@ -188,38 +195,19 @@ def create_moment():
     else:
         return jsonify({"error": "transcript_id or message_text is required"}), 400
 
-    from services.data_graph_service import KIND_MOMENT
-    key = f"moment_{transcript_id}"
-
-    with db.connection() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM data_graph WHERE kind=? AND key=? AND active=1 LIMIT 1",
-            (KIND_MOMENT, key)
-        ).fetchone()
-    already_exists = row is not None
-
-    result = dg.store(
-        kind=KIND_MOMENT,
-        key=key,
-        value=turn['content'],
-        source='pin',
-    )
-
-    if result is None:
-        return jsonify({"error": "Failed to store moment"}), 500
+    already_exists = moments.find_by_transcript(transcript_id) is not None
+    row = moments.store(transcript_id, turn['content'], note=note)
 
     status = 200 if already_exists else 201
-    return jsonify({"item": _serialize_moment(result), "duplicate": already_exists}), status
+    return jsonify({"item": _serialize_moment(row), "duplicate": already_exists}), status
 
 
 @moments_bp.route("/moments", methods=["GET"])
 @require_session
 def list_moments():
-    """List all active kind='moment' rows ordered by first_seen_at DESC."""
+    """List all moments ordered by created_at DESC."""
     try:
-        from services.data_graph_service import KIND_MOMENT
-        dg = _get_dg()
-        rows = dg.fetch(kinds=[KIND_MOMENT], order_by='first_seen_at DESC')
+        rows = _get_moments().list_all()
         return jsonify({"items": [_serialize_moment(r) for r in rows]})
     except Exception as e:
         logger.exception(f"[MOMENTS API] list_moments error: {e}")
@@ -229,16 +217,10 @@ def list_moments():
 @moments_bp.route("/moments/<int:transcript_id>/forget", methods=["POST"])
 @require_session
 def forget_moment(transcript_id):
-    """Soft-delete a moment row."""
+    """Delete the moment pinned from ``transcript_id``."""
     try:
-        from services.data_graph_service import KIND_MOMENT
-        dg = _get_dg()
-        key = f"moment_{transcript_id}"
-        rows = dg.fetch(kinds=[KIND_MOMENT])
-        match = next((r for r in rows if r.get('key') == key), None)
-        if match is None:
+        if not _get_moments().delete_by_transcript(transcript_id):
             return jsonify({"error": "Moment not found"}), 404
-        dg.soft_delete_by_id(match['id'])
         return jsonify({"ok": True})
     except Exception as e:
         logger.exception(f"[MOMENTS API] forget_moment error: {e}")
@@ -248,16 +230,14 @@ def forget_moment(transcript_id):
 @moments_bp.route("/moments/search", methods=["GET"])
 @require_session
 def search_moments():
-    """Semantic search over moments."""
+    """Search moments across the lexical (FTS) and semantic (vec) lanes."""
     query = (request.args.get("q") or "").strip()
     if not query:
         return jsonify({"error": "Query parameter 'q' is required"}), 400
 
     try:
-        from services.data_graph_service import KIND_MOMENT
-        dg = _get_dg()
-        results = dg.recall(query, kinds=[KIND_MOMENT])
-        return jsonify({"items": [_serialize_moment(r) for r in results]})
+        rows = _get_moments().search(query)
+        return jsonify({"items": [_serialize_moment(r) for r in rows]})
     except Exception as e:
         logger.exception(f"[MOMENTS API] search_moments error: {e}")
         return jsonify({"error": _ERR_INTERNAL}), 500

@@ -33,6 +33,7 @@ _DELETE_ALL_TABLES = (
     "transcript",
     "episodes",
     "data_graph",
+    "moments",
     "lists",
     "scheduled_items",
     "documents",
@@ -42,6 +43,13 @@ _DELETE_ALL_TABLES = (
     "llm_call_log",
     "concept_lut_misses",
 )
+
+# Companion index tables wiped alongside ``moments``. ``moments_fts`` is an
+# external-content FTS5 table, so its postings are cleared with the FTS5
+# ``'delete-all'`` command (a plain DELETE would strand them and corrupt the
+# next pin); ``moments_vec`` is a standalone vec0 table cleared by plain DELETE.
+_DELETE_ALL_MOMENTS_FTS = "moments_fts"
+_DELETE_ALL_MOMENTS_VEC = "moments_vec"
 
 # MemoryStore key patterns that belong to the user and must be cleared.
 _DELETE_ALL_STORE_PATTERNS = (
@@ -273,6 +281,18 @@ def delete_all():
                 except Exception as e:
                     logger.warning(f"[REST API] Failed to delete from {table}: {e}")
                     truncate_failures.append(table)
+            # The moments base table is cleared above; its external-content FTS
+            # index needs the FTS5 'delete-all' command (a plain DELETE strands
+            # postings), and its vec0 shadow is cleared by rowid-free DELETE.
+            try:
+                cursor.execute(
+                    f"INSERT INTO {_DELETE_ALL_MOMENTS_FTS}({_DELETE_ALL_MOMENTS_FTS}) "
+                    "VALUES ('delete-all')"
+                )
+                cursor.execute(f"DELETE FROM {_DELETE_ALL_MOMENTS_VEC}")
+            except Exception as e:
+                logger.warning(f"[REST API] Failed to clear moments indexes: {e}")
+                truncate_failures.append(_DELETE_ALL_MOMENTS_FTS)
             cursor.close()
 
         # Clear user-owned MemoryStore keys
