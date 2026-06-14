@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@chalie/shared": "workspace:*",
+    "@fontsource/inter": "^5.2.8",
     "pinia": "^2.2.0",
     "vue": "^3.5.0",
     "vue-router": "^4.4.0"

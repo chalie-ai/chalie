@@ -1,0 +1,495 @@
+// ==========================================================================
+// Chalie Interface — interface.scss
+// Structural/layout styles for the app shell.
+//
+// Scope: app skeleton, fixed bars, ambient canvas layers, banners, loading
+// overlay, shell keyframes. Component-internal visual detail lives in each
+// SFC's scoped styles.
+//
+// Depends on @chalie/shared/styles/main.scss being imported first (tokens).
+// ==========================================================================
+
+// --------------------------------------------------------------------------
+// 1. Interface-specific Design Tokens
+// --------------------------------------------------------------------------
+:root {
+  --sand:              var(--magenta);      // alias for accent-secondary
+  --dusk-blue:         var(--cyan);         // alias for accent-tertiary
+  --amber:             #B07CFF;             // soft violet used on responding state
+
+  --bg-surface-user:   var(--bg-user);
+  --bg-surface-chalie: var(--bg-chalie);
+
+  // Spacing scale
+  --space-xs:  4px;
+  --space-sm:  8px;
+  --space-md:  16px;
+  --space-lg:  24px;
+  --space-xl:  40px;
+  --space-2xl: 64px;
+
+  // Typography (interface-specific sizes)
+  --font-size-sm:  0.8125rem;
+  --font-size-lg:  1.125rem;
+  --font-size-xl:  1.5rem;
+
+  // Radii
+  --radius-sm:   8px;
+  --radius-md:   16px;
+  --radius-lg:   24px;
+  --radius-full: 9999px;
+
+  // Transitions
+  --duration-fast:   150ms;
+  --duration-normal: 300ms;
+  --duration-slow:   500ms;
+}
+
+// --------------------------------------------------------------------------
+// 2. Base — interface-specific additions
+// (body bg/color/font handled by _tokens.scss + _reset.scss)
+// --------------------------------------------------------------------------
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+body {
+  overflow-x: hidden;
+  min-height: 100vh;
+  text-rendering: optimizeLegibility;
+}
+
+:focus-visible {
+  outline: 1.5px solid rgba(138, 92, 255, 0.45);
+  outline-offset: 2px;
+}
+
+// body.voice-loading hides voice-rec button until voice health check passes
+body.voice-loading #voiceRecBtn,
+body.voice-loading .speech-form__speak-btn {
+  display: none;
+}
+
+// --------------------------------------------------------------------------
+// 3. Ambient Background
+// --------------------------------------------------------------------------
+#ambientCanvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+#ambientBloom {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 1200ms cubic-bezier(0.4, 0, 0.2, 1),
+    background 1200ms cubic-bezier(0.4, 0, 0.2, 1);
+  background:
+    radial-gradient(ellipse 70% 55% at 12% 35%, rgba(138, 92, 255, 0.22), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 88% 75%, rgba(0, 240, 255, 0.05), transparent 60%);
+}
+
+body.speaker-chalie #ambientBloom { opacity: 1; }
+body.speaker-user #ambientBloom {
+  opacity: 1;
+  background:
+    radial-gradient(ellipse 60% 45% at 18% 30%, rgba(138, 92, 255, 0.05), transparent 60%),
+    radial-gradient(ellipse 70% 55% at 88% 65%, rgba(0, 240, 255, 0.20), transparent 55%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #ambientBloom { transition: opacity 200ms linear; }
+}
+
+#grainOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: var(--grain-blend);
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+// --------------------------------------------------------------------------
+// 4. Connection Banner
+// --------------------------------------------------------------------------
+.connection-banner {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(224, 108, 108, 0.15);
+  border: 1px solid rgba(224, 108, 108, 0.3);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  color: var(--error);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+}
+
+.connection-banner__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--error);
+  animation: blink 1.5s infinite;
+}
+
+@keyframes fadeSlideDown {
+  from { opacity: 0; transform: translateX(-50%) translateY(-8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+// --------------------------------------------------------------------------
+// 4a. Capability Alert Banner
+// --------------------------------------------------------------------------
+.capability-alert-banner {
+  position: fixed;
+  top: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(220, 130, 40, 0.15);
+  border: 1px solid rgba(220, 130, 40, 0.35);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  color: var(--warning-banner-text);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+}
+
+.banner-dismiss {
+  background: none;
+  border: none;
+  color: color-mix(in srgb, var(--warning-banner-text) 55%, transparent);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.banner-dismiss:hover {
+  color: var(--warning-banner-text);
+}
+
+// --------------------------------------------------------------------------
+// 4b. Update Banner
+// --------------------------------------------------------------------------
+.update-banner {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.25);
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-sm);
+  color: var(--accent-tertiary);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: fadeSlideDown var(--duration-normal) var(--ease-out);
+}
+
+.update-banner__icon {
+  display: flex;
+  align-items: center;
+  color: var(--accent-tertiary);
+}
+
+.update-banner__text {
+  color: var(--text-primary);
+}
+
+.update-banner__text strong {
+  color: var(--accent-tertiary);
+}
+
+.update-banner__action {
+  background: var(--accent-tertiary);
+  color: #06080e;
+  border: none;
+  border-radius: var(--radius-full);
+  padding: 2px 12px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity var(--duration-fast) var(--ease-out);
+}
+
+.update-banner__action:hover {
+  opacity: 0.85;
+}
+
+.update-banner__dismiss {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  transition: color var(--duration-fast) var(--ease-out);
+}
+
+.update-banner__dismiss:hover {
+  color: var(--text-primary);
+}
+
+// --------------------------------------------------------------------------
+// 5. Presence Bar (structural layout)
+// --------------------------------------------------------------------------
+.presence-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 var(--space-lg);
+  background: var(--scrim-top);
+  backdrop-filter: blur(24px) saturate(120%);
+  -webkit-backdrop-filter: blur(24px) saturate(120%);
+  border-bottom: 1px solid color-mix(in oklab, var(--violet) 8%, transparent);
+  transition: background 420ms ease, border-color 420ms ease;
+}
+
+.presence-bar__left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+.presence-bar__right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+// --------------------------------------------------------------------------
+// 6. Conversation Spine (structural layout)
+// --------------------------------------------------------------------------
+.conversation-spine {
+  position: relative;
+  z-index: 10;
+  width: 95vw;
+  max-width: 95vw;
+  margin: 0 auto;
+  padding: calc(56px + var(--space-xl)) var(--space-lg) calc(80px + var(--space-xl));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+  min-height: 100vh;
+  mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent);
+}
+
+// --------------------------------------------------------------------------
+// 7. Input Dock (structural layout)
+// --------------------------------------------------------------------------
+.input-dock {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  padding: var(--space-md) var(--space-lg);
+  background: linear-gradient(to top, var(--scrim-dock) 50%, transparent);
+  transition: background 420ms ease;
+}
+
+.input-dock__outer {
+  max-width: min(80%, 1200px);
+  margin: 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.input-dock__inner {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  padding: var(--space-sm) var(--space-md);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
+  box-shadow: var(--shadow-card);
+  transition: background 420ms ease, border-color 220ms ease, box-shadow 220ms ease;
+}
+
+.input-dock__inner:focus-within {
+  border-color: color-mix(in oklab, var(--violet) 45%, transparent);
+  box-shadow:
+    var(--shadow-card),
+    0 0 0 4px color-mix(in oklab, var(--violet) 12%, transparent);
+}
+
+.input-dock__textarea {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  resize: none;
+  max-height: 120px;
+  padding: var(--space-sm) 0;
+}
+
+.input-dock__textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+// --------------------------------------------------------------------------
+// 8. Loading Overlay
+// --------------------------------------------------------------------------
+.loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #06080e; // always dark — stays consistent in both themes
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 220ms ease;
+}
+
+.loading-overlay.loading-overlay--fading {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.loading-overlay__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+}
+
+.loading-overlay__dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--violet, #8a5cff);
+  animation: loadingGlow 2s ease-in-out infinite;
+}
+
+.loading-overlay__text {
+  color: var(--text-secondary, #888);
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.loading-overlay__skip {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 8px;
+  opacity: 0;
+  animation: loadingTextFadeIn 400ms ease 4s both;
+  transition: color 220ms ease;
+}
+
+.loading-overlay__skip:hover { color: var(--text-secondary); }
+
+.loading-overlay__skip:focus-visible {
+  outline: 1.5px solid rgba(138, 92, 255, 0.45);
+  outline-offset: 2px;
+}
+
+// --------------------------------------------------------------------------
+// 9. Shell Keyframes
+// --------------------------------------------------------------------------
+@keyframes formEntry {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ambientFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 0.85; transform: translateY(0); }
+}
+
+@keyframes loadingGlow {
+  0%, 100% { box-shadow: 0 0 12px var(--violet, #8a5cff), 0 0 24px rgba(138, 92, 255, 0.3); }
+  50%       { box-shadow: 0 0 24px var(--violet, #8a5cff), 0 0 48px rgba(138, 92, 255, 0.45); }
+}
+
+@keyframes loadingTextFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+// --------------------------------------------------------------------------
+// 10. Responsive adjustments
+// --------------------------------------------------------------------------
+@media (max-width: 640px) {
+  .conversation-spine {
+    width: 100%;
+    max-width: 100%;
+    padding-left: var(--space-sm);
+    padding-right: var(--space-sm);
+  }
+
+  .input-dock { padding: var(--space-sm) var(--space-md); }
+  .input-dock__outer { max-width: 100%; }
+
+  .presence-bar { padding: 0 var(--space-md); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-overlay__dot { animation: none; }
+  .loading-overlay__skip { animation: none; opacity: 1; }
+}
+
+// No-backdrop-filter fallback (print / old browsers)
+@media print {
+  .presence-bar { background: var(--scrim-fallback); }
+  .input-dock   { background: var(--scrim-fallback); }
+  .connection-banner { background: rgba(40, 20, 20, 0.95); }
+}
