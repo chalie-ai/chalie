@@ -807,6 +807,23 @@ class MessageProcessor:
             out.append(trail.render(r))
         return "\n".join(out)
 
+    def compact(self) -> bool:
+        """Public entry point — fire this channel's compactors once, no turn.
+
+        Runs ONLY the compaction tool calls (tool_chain + chat_history) through
+        the real dispatch chokepoint — no ``_setup``, no ACT loop, no LLM turn.
+        Intended for proactive idle-time compaction: a caller builds a
+        channel-bound MP (``mp = MessageProcessor("", None); mp.config = X``) and
+        calls this to fold accumulated history into the durable watermark while
+        the user is away.
+
+        Returns True when compaction advanced the state (the watermark moved or
+        the act-trail collapsed), False when there was nothing to compact — a pure
+        no-op with zero side effects (no LLM call, no DB write), so re-running on
+        an idle tick with no new messages costs nothing.
+        """
+        return self._dispatch_compaction()
+
     def _dispatch_compaction(self) -> bool:
         """Fire both compactors through the normal tool-dispatch chokepoint and
         report whether they made progress.

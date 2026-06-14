@@ -6,6 +6,9 @@ decay, pattern extraction, user synthesis, and background DMN reflection.
 Fires only when the user is not active.
 
 Tick body (sequential, per §5.3):
+    0. Compact the user channel — fold accumulated chat history into the durable
+       watermark (no LLM turn; no-op when nothing is past the watermark). Runs
+       first so the context window is small before any other job.
     1. Consolidate episodes → super-episodes  (per HEAVY channel: user, dmn,
        external-agent:*; clusters stay channel-scoped).
     2. Fact extraction — route hard facts from new episodes into data_graph
@@ -189,6 +192,7 @@ class SubconsciousWorker:
         sequential contract ensures DMN always sees the latest synthesis output.
         """
         steps: dict = {}
+        steps["compaction"] = self._safe_step("compaction", self._step_compaction)
         steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
         steps["fact_extraction"] = self._safe_step("fact_extraction", self._step_fact_extraction)
         steps["decay"] = self._safe_step("decay", self._step_decay)
@@ -209,6 +213,7 @@ class SubconsciousWorker:
 
         logger.info(
             f"{LOG_PREFIX} tick complete: "
+            f"compaction={steps['compaction']['status']} "
             f"consolidate={steps['consolidate']['status']} "
             f"fact_extraction={steps['fact_extraction']['status']} "
             f"decay={steps['decay']['status']} "
@@ -270,6 +275,27 @@ class SubconsciousWorker:
         return None
 
     # ── Steps ────────────────────────────────────────────────────────────────
+
+    def _step_compaction(self) -> str:
+        """Step 0 — proactively compact the user channel before any other job.
+
+        Fires the moment the idle gate opens: folds accumulated user-channel chat
+        history into the durable compaction watermark so the next user turn starts
+        with a small context window and compaction never has to happen mid-turn on
+        the over-cap recovery path. Runs ONLY the compaction tool calls (no LLM
+        turn) — a fresh user-channel MP fires its compactors via ``mp.compact()``.
+
+        When there is nothing new past the watermark the compactors no-op with
+        zero side effects (no LLM call, no DB write), so repeating this on a later
+        idle tick costs nothing.
+        """
+        from configs.channels import UserConfig  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+
+        mp = MessageProcessor("", None)
+        mp.config = UserConfig()
+        progressed = mp.compact()
+        return "compacted" if progressed else "no-op: nothing to compact"
 
     def _step_consolidate(self) -> str:
         """Step 1 — consolidate apex episodes into super-episodes, per channel.
