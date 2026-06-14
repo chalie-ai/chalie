@@ -10,6 +10,9 @@ const props = defineProps<{ form: ChalieForm }>();
 
 // ── FIX 4: pinned ref — prevents double-fire ───────────────────────────────
 const pinned = ref(false);
+// Glow is applied AFTER the 150ms delay, matching legacy renderer.js:487
+// (the button disables immediately on click, but the --active glow lands later).
+const pinActive = ref(false);
 
 // ── FIX 6: mode badge label ────────────────────────────────────────────────
 const MODE_LABELS: Record<string, string> = {
@@ -46,6 +49,7 @@ function onRemember(): void {
   setTimeout(() => {
     // FIX 3: emit plaintext, not raw markup
     emit('chalie:pin-moment', { content: _derivePlaintext() });
+    pinActive.value = true; // glow lands with the emit, per legacy timing
   }, 150);
 }
 
@@ -95,7 +99,7 @@ function onSpeak(): void {
       <!-- FIX 4: disabled + active class when pinned -->
       <button
         class="speech-form__remember-btn"
-        :class="{ 'speech-form__remember-btn--active': pinned }"
+        :class="{ 'speech-form__remember-btn--active': pinActive }"
         aria-label="Remember this"
         type="button"
         :disabled="pinned"

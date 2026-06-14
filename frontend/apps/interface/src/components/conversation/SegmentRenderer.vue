@@ -32,14 +32,17 @@ const resolved = computed<ResolvedSegment[]>(() =>
       v-html="renderMarkup(item.seg.content ?? '')"
     />
 
-    <!-- Rich segment: use precomputed entry to avoid double resolve + unsafe ! -->
+    <!-- Rich segment: use precomputed entry to avoid double resolve. The guard
+         lives on a wrapping <template v-if> so vue-tsc narrows richEntry to
+         non-null for the <component :is> inside — no non-null assertion needed. -->
     <template v-else-if="item.seg.type === 'rich'">
-      <component
-        :is="item.richEntry!.component"
-        v-if="item.richEntry"
-        :payload="item.seg.payload"
-        :synthesis="item.seg.synthesis"
-      />
+      <template v-if="item.richEntry">
+        <component
+          :is="item.richEntry.component"
+          :payload="item.seg.payload"
+          :synthesis="item.seg.synthesis"
+        />
+      </template>
       <!-- Unknown-tag fallback: render synthesis or content as markup -->
       <div
         v-else
