@@ -92,7 +92,7 @@ const PanelProviders = (() => {
         </div>
         <div class="provider-actions">
           <button class="btn btn-sm btn-secondary" data-edit="${p.id}">Edit</button>
-          <button class="btn btn-sm btn-danger" data-del="${p.id}">Delete</button>
+          ${_deleteButton(p.id)}
         </div>
       </div>`;
     }).join('');
@@ -501,6 +501,26 @@ const PanelProviders = (() => {
 
   // ── Delete ──────────────────────────────────────────────────────────
 
+  // Returns an array of role names that the given provider id currently holds.
+  function _providerRoles(id) {
+    const roles = [];
+    if (id === _selectedId) roles.push('main');
+    if (_visionSource === 'explicit' && id === _visionId) roles.push('vision');
+    if (_delegateSource === 'explicit' && id === _delegateId) roles.push('delegate');
+    return roles;
+  }
+
+  // Renders the Delete button for a provider card. Disabled + tooltip when in use.
+  function _deleteButton(id) {
+    const roles = _providerRoles(id);
+    if (roles.length === 0) {
+      return `<button class="btn btn-sm btn-danger" data-del="${id}">Delete</button>`;
+    }
+    const label = roles.join(', ');
+    const tip = `In use as the ${label} provider — clear or reassign this role before deleting`;
+    return `<button class="btn btn-sm btn-danger btn-danger-disabled" disabled title="${BrainApp.escapeHtml(tip)}" aria-disabled="true">Delete</button>`;
+  }
+
   function _showConfirm({ title, desc, confirmLabel, confirmClass, onConfirm }) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -527,7 +547,7 @@ const PanelProviders = (() => {
         try {
           const res = await BrainApp.apiFetch(`/providers/${id}`, { method: 'DELETE' });
           if (res.ok) { BrainApp.showToast('Provider deleted', 'success'); await _load(); }
-          else { BrainApp.showToast('Delete failed', 'error'); }
+          else { const e = await res.json().catch(() => ({})); BrainApp.showToast(e.error || 'Delete failed', 'error'); }
         } catch { BrainApp.showToast('Network error', 'error'); }
       }
     });

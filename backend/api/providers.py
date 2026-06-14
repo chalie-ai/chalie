@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 import requests as req
 from flask import Blueprint, jsonify, request
 
+from services.provider_db_service import PROVIDER_IN_USE_MSG
+
 from .auth import require_session
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ _SAFE_VALIDATION_MESSAGES = {
     "openai_compatible provider requires 'host' field "
     "(base URL, e.g. 'https://api.minimax.io/v1')",
     "openai_compatible provider requires 'api_key' field",
+    PROVIDER_IN_USE_MSG,
 }
 
 
