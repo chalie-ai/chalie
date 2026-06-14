@@ -4,7 +4,7 @@ Covers the NEW behaviours introduced by the refactor:
   - Providers().send(dto) raises RequestOverCapError on pre-flight over-cap.
   - Providers().measure(dto) returns a usable token estimate.
   - MessageProcessor._build_send_dto() derives the correct ProviderType for
-    CHAT vs VISION configs (replaces the deleted uses_vision_provider boolean).
+    CHAT vs VISION configs, carrying the provider role on the DTO's type field.
   - send_image_with_config builds a VISION DTO and returns None (not raises)
     when the provider is unreachable (defensive probe path).
 
@@ -152,8 +152,8 @@ def test_build_send_dto_type_chat_for_user_config(db):
     type=CHAT for a standard UserConfig — proving the DTO construction derives
     the correct provider pool for the most common message path.
 
-    Replaces the deleted uses_vision_provider boolean: the config's role is now
-    encoded in the DTO, not as a side-channel flag on the config class.
+    The config's role is now encoded in the DTO's type field, derived from the
+    config's provider flags rather than read directly at the send call site.
     """
     from services.message_processor import MessageProcessor
     from configs.channels.user import UserConfig
@@ -183,7 +183,7 @@ def test_build_send_dto_type_chat_for_user_config(db):
 def test_build_send_dto_type_vision_for_vision_config(db, tmp_path):
     """MessageProcessor._build_send_dto() produces a ProviderApiRequest with
     type=VISION for a VisionConfig — the DTO type drives provider resolution in
-    Providers.send(dto) instead of the deleted uses_vision_provider flag.
+    Providers.send(dto), derived from the config's uses_vision_provider flag.
 
     Also proves the image payload from config.get_image(mp) survives into the
     DTO's messages array.
