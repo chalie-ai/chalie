@@ -9,7 +9,7 @@ test.describe('Brain SPA — theme parity (Rule 7)', () => {
   test('toggle flips html[data-theme], persists across reload, shell renders in both', async ({
     page,
   }) => {
-    await page.goto('/brain-next/providers');
+    await page.goto('/brain/providers');
     await expect(page.locator('aside.sidebar')).toBeVisible();
 
     const html = page.locator('html');

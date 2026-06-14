@@ -8,7 +8,7 @@ import { test, expect } from '@playwright/test';
 test('sending a message drives a real turn and renders Chalie’s reply', async ({ page }) => {
   test.setTimeout(120_000); // a real LLM round-trip can take a while
 
-  await page.goto('/next/');
+  await page.goto('/');
   await expect(page.locator('#loadingOverlay')).toBeHidden({ timeout: 15_000 });
 
   const prompt = 'Reply with exactly the single word: pong';

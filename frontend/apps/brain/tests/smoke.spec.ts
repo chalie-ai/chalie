@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-// Boots the real Brain SPA served by Chalie at /brain-next/ and proves the
+// Boots the real Brain SPA served by Chalie at /brain/ and proves the
 // shell chrome + every top-level nav entry actually renders. Drives the real
 // production serve route + Vue Router boot + auth gate (the storageState cookie
 // from global-setup carries a live session, and the QA env has a provider, so
@@ -22,11 +22,11 @@ const NAV_IDS = [
 ] as const;
 
 test.describe('Brain SPA — smoke', () => {
-  test('boots at /brain-next/, redirects to providers, shell + nav render', async ({ page }) => {
-    await page.goto('/brain-next/');
+  test('boots at /brain/, redirects to providers, shell + nav render', async ({ page }) => {
+    await page.goto('/brain/');
 
     // Router "/" → "/providers" redirect (BrainView default).
-    await expect(page).toHaveURL(/\/brain-next\/providers(\/|$|\?)/);
+    await expect(page).toHaveURL(/\/brain\/providers(\/|$|\?)/);
 
     // Shell grid chrome.
     await expect(page.locator('#appShell')).toBeVisible();

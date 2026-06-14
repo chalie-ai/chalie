@@ -2,7 +2,7 @@ import { request } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 
 // Authenticate once against the real Chalie instance and persist the session
-// cookie. The Brain SPA is auth-gated at the serve layer (/brain-next/ redirects
+// cookie. The Brain SPA is auth-gated at the serve layer (/brain/ redirects
 // to /login/ without a valid session) AND in the router beforeEach gate, so every
 // spec needs a live login cookie to reach a panel.
 export default async function globalSetup(): Promise<void> {

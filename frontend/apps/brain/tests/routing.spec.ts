@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 // Verifies the SPA history-fallback contract end-to-end: a deep link typed into
 // the address bar (and a hard reload of it) is served index.html by the backend
-// /brain-next/ route, Vue Router boots, the auth gate passes, and the correct
+// /brain/ route, Vue Router boots, the auth gate passes, and the correct
 // panel renders. This is the real production deep-link path — a 404 or a wrong
 // panel on reload would fail loudly here.
 
@@ -20,22 +20,22 @@ async function deepLinkSurvivesReload(
 
 test.describe('Brain SPA — routing & deep-link reload', () => {
   test('Lists deep link + reload', async ({ page }) => {
-    await deepLinkSurvivesReload(page, '/brain-next/lists', async () => {
-      await expect(page).toHaveURL(/\/brain-next\/lists(\/|$|\?)/);
+    await deepLinkSurvivesReload(page, '/brain/lists', async () => {
+      await expect(page).toHaveURL(/\/brain\/lists(\/|$|\?)/);
       await expect(page.getByRole('heading', { name: 'Lists', exact: true })).toBeVisible();
     });
   });
 
   test('MCP deep link + reload', async ({ page }) => {
-    await deepLinkSurvivesReload(page, '/brain-next/mcp', async () => {
-      await expect(page).toHaveURL(/\/brain-next\/mcp(\/|$|\?)/);
+    await deepLinkSurvivesReload(page, '/brain/mcp', async () => {
+      await expect(page).toHaveURL(/\/brain\/mcp(\/|$|\?)/);
       await expect(page.getByRole('heading', { name: 'MCP', exact: true })).toBeVisible();
     });
   });
 
   test('Skills deep link + reload renders skill cards', async ({ page }) => {
-    await deepLinkSurvivesReload(page, '/brain-next/skills', async () => {
-      await expect(page).toHaveURL(/\/brain-next\/skills(\/|$|\?)/);
+    await deepLinkSurvivesReload(page, '/brain/skills', async () => {
+      await expect(page).toHaveURL(/\/brain\/skills(\/|$|\?)/);
       await expect(page.getByRole('heading', { name: 'Skills', exact: true })).toBeVisible();
       // Curated skills ship with the install → at least one card must render.
       await expect(page.locator('.skill-card').first()).toBeVisible();
@@ -43,16 +43,16 @@ test.describe('Brain SPA — routing & deep-link reload', () => {
   });
 
   test('Brain panel deep link + reload', async ({ page }) => {
-    await deepLinkSurvivesReload(page, '/brain-next/brain', async () => {
-      await expect(page).toHaveURL(/\/brain-next\/brain(\/|$|\?)/);
+    await deepLinkSurvivesReload(page, '/brain/brain', async () => {
+      await expect(page).toHaveURL(/\/brain\/brain(\/|$|\?)/);
       // Brain backup/restore panel — Import/Export actions are its anchor.
       await expect(page.locator('#panelRoot')).toContainText(/Export|Import|Backup/i);
     });
   });
 
   test('Nested route (cognition/memory) deep link + reload', async ({ page }) => {
-    await deepLinkSurvivesReload(page, '/brain-next/cognition/memory', async () => {
-      await expect(page).toHaveURL(/\/brain-next\/cognition\/memory(\/|$|\?)/);
+    await deepLinkSurvivesReload(page, '/brain/cognition/memory', async () => {
+      await expect(page).toHaveURL(/\/brain\/cognition\/memory(\/|$|\?)/);
       // CognitionView shell heading + the active sub-nav prove the route resolved…
       await expect(page.getByRole('heading', { name: 'Cognition' })).toBeVisible();
       await expect(page.locator('[data-nav="cognition"].active')).toBeVisible();
@@ -67,9 +67,9 @@ test.describe('Brain SPA — routing & deep-link reload', () => {
   });
 
   test('Unknown route falls through catch-all to providers', async ({ page }) => {
-    await page.goto('/brain-next/this-route-does-not-exist');
+    await page.goto('/brain/this-route-does-not-exist');
     // Catch-all redirect → /providers (does not 404, does not white-screen).
-    await expect(page).toHaveURL(/\/brain-next\/providers(\/|$|\?)/);
+    await expect(page).toHaveURL(/\/brain\/providers(\/|$|\?)/);
     await expect(page.getByRole('heading', { name: 'LLM Providers' })).toBeVisible();
   });
 });

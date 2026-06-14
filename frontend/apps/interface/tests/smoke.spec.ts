@@ -1,11 +1,11 @@
 import { test, expect } from '@playwright/test';
 
-// Feature test — drives the REAL interface served at /next/ by a real Chalie
+// Feature test — drives the REAL interface served at / by a real Chalie
 // instance (authenticated via the global-setup login cookie). No mocks: every
 // assertion is a downstream effect of the real boot path.
 
 test('interface boots against the real backend and renders the shell', async ({ page }) => {
-  await page.goto('/next/');
+  await page.goto('/');
 
   // The loading overlay polls GET /ready and removes itself once the backend
   // answers ready. Its disappearance is the real downstream signal that the
@@ -24,7 +24,7 @@ test('interface boots against the real backend and renders the shell', async ({ 
 });
 
 test('compose textarea accepts input', async ({ page }) => {
-  await page.goto('/next/');
+  await page.goto('/');
   await expect(page.locator('#loadingOverlay')).toBeHidden({ timeout: 15_000 });
 
   const input = page.locator('#chatInput');

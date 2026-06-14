@@ -11,7 +11,7 @@ test.describe('Brain SPA — Lists CRUD round-trip', () => {
   test('create a list, see it, delete it', async ({ page }) => {
     const name = `pw-e2e-${Date.now()}`;
 
-    await page.goto('/brain-next/lists');
+    await page.goto('/brain/lists');
     await expect(page.getByRole('heading', { name: 'Lists', exact: true })).toBeVisible();
 
     // Open the create modal and submit.

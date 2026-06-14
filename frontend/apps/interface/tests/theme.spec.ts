@@ -2,12 +2,12 @@ import { test, expect } from '@playwright/test';
 
 // Theme parity (Rule 7) — the real PresenceBar theme toggle drives html
 // [data-theme], persists to localStorage (key 'chalie-theme'), and the shell
-// renders in BOTH themes. All against the real interface served at /next/.
+// renders in BOTH themes. All against the real interface served at /.
 
 test('theme toggles dark↔light via the real toggle and persists across reload', async ({
   page,
 }) => {
-  await page.goto('/next/');
+  await page.goto('/');
   await expect(page.locator('#loadingOverlay')).toBeHidden({ timeout: 15_000 });
 
   // Force a known starting point, then reload so the pre-paint bootstrap + the

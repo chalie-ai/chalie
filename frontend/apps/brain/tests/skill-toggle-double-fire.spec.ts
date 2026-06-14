@@ -39,7 +39,7 @@ test.describe('Brain SPA — nested-label switch does not double-fire', () => {
       if (req.method() === 'PUT' && /\/api\/skills\/[^/]+\/toggle$/.test(req.url())) puts++;
     });
 
-    await page.goto('/brain-next/skills');
+    await page.goto('/brain/skills');
     const wrap = page.locator('.skill-toggle-wrap').first();
     await expect(wrap).toBeVisible();
 
