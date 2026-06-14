@@ -21,7 +21,7 @@ does — real ``AbilityRegistry`` resolution, the real ``PolicyManager.wrap`` ga
 (reading the real ``policy`` table the ``db`` fixture binds), the real
 ``Ability.run`` with real file I/O / the real SSRF guard, and the real
 ``ActTrail`` write. The healing under test happens at the seam
-(``abilities._params.canonicalize_keys``), so a corrupt key is canonicalised
+(``abilities._params.KeyHealer.heal``), so a corrupt key is canonicalised
 BEFORE the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees it.
 
 The discriminator in every case is a downstream effect that can ONLY be reached
@@ -36,15 +36,12 @@ import pytest
 
 from abilities._ability import Ability
 from abilities._dispatcher import ToolDispatcher
-from abilities._params import (
-    Keys,
-    RegistryOverlapError,
-    validate_registry,
-)
+from abilities._params import Keys
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
 from configs.channels import DmnConfig, UserConfig
 from services.act_trail import ActTrail
+from tests._registry_invariants import RegistryInvariant, RegistryOverlapError
 from tests._tool_result_harness import MP, allow_policy, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
@@ -226,8 +223,8 @@ def _shipping_abilities() -> list:
 def test_real_registry_has_no_variant_overlaps():
     """The whole design rests on this: within every shipping tool, no variant of
     one declared parameter may collide with another declared parameter or a
-    framework key. ``validate_registry`` over the real registry must not raise."""
-    validate_registry(_shipping_abilities())
+    framework key. ``check_no_overlaps`` over the real registry must not raise."""
+    RegistryInvariant().check_no_overlaps(_shipping_abilities())
 
 
 def test_every_native_param_is_a_keys_constant():
@@ -236,7 +233,7 @@ def test_every_native_param_is_a_keys_constant():
     :class:`Keys` constant, so the wire keys and the variant registry can never
     drift from the schema. A new ability that hard-codes a bare string key fails
     here."""
-    allowed = Keys.values()
+    allowed = RegistryInvariant().canonical_keys()
     offenders = []
     for ability in _shipping_abilities():
         properties = (ability.get_parameters() or {}).get("properties") or {}
@@ -283,7 +280,7 @@ def test_overlap_validator_rejects_a_tool_declaring_two_aliased_params():
             return ToolResult.ok("x")
 
     with pytest.raises(RegistryOverlapError) as excinfo:
-        validate_registry([_OverlapProbe()])
+        RegistryInvariant().check_no_overlaps([_OverlapProbe()])
 
     message = str(excinfo.value)
     assert "source" in message and "url" in message, message
@@ -323,7 +320,7 @@ def test_read_collision_first_key_wins_and_warning_emitted(db, tmp_path, caplog)
 
     # The warning must name both original keys and the resolved canonical.
     warn_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-    assert warn_messages, "expected a canonicalize_keys collision warning, got none"
+    assert warn_messages, "expected a KeyHealer collision warning, got none"
     combined = " ".join(str(m) for m in warn_messages)
     assert "source" in combined and "url" in combined, combined
     assert "source" in combined, combined   # the canonical that both map to
@@ -357,6 +354,6 @@ def test_read_collision_order_decides_winner_not_key_identity(db, tmp_path, capl
 
     # Collision warning fires regardless of which key wins.
     warn_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
-    assert warn_messages, "expected a canonicalize_keys collision warning, got none"
+    assert warn_messages, "expected a KeyHealer collision warning, got none"
     combined = " ".join(str(m) for m in warn_messages)
     assert "source" in combined and "url" in combined, combined
