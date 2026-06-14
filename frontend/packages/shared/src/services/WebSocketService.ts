@@ -43,7 +43,13 @@ export type WsPushType =
   | 'notification'
   | 'permission_request'
   | 'intent'
-  | 'capability_alert';
+  | 'capability_alert'
+  | 'app_update'
+  | 'quick_tip'
+  | 'subagent_start'
+  | 'subagent_end'
+  | 'thought'
+  | 'response';
 export interface WsPushEvent {
   type: WsPushType;
   [k: string]: unknown;

@@ -5,6 +5,7 @@ export type {
   WsInboundEvent,
   WsPushEvent,
   WsPushType,
+  WsMessageEvent,
   ChatCallbacks,
   ActionCallbacks,
 } from './services/WebSocketService';
