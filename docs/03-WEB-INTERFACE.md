@@ -31,6 +31,7 @@ Flask routes are registered in `backend/api/__init__.py` (`_register_static_rout
 
 Auth is entirely client-side — the server guards its API endpoints independently.
 
+- **Shared `ApiClient`** — on any HTTP 401 from an authenticated call, the client redirects to `/login/?next=<current-path>` (idempotent per client instance) and throws `AuthError`. This is the single place mid-session expiry is handled for both apps, replacing the Brain app's former per-call `withAuth()` wrapper. A few callers opt out with `{ redirectOnAuthError: false }` because their 401 is *data*, not expiry: the `/auth/status` gate probe (the router inspects the result to route), the public probes (`/ready`, `POST /health`, `/voice/health`), and the login / register / voice-settings onboarding calls (401 = bad credentials or no session yet).
 - **Chat router** — `frontend/apps/interface/src/router.ts` runs a `beforeEach` guard on navigation: no account → redirect `/on-boarding/`, no session → redirect `/login/?next=…`, no providers → redirect `/brain/`.
 - **Brain router** — `frontend/apps/brain/src/router.ts` runs the same guard; no providers locks the router to the Providers panel (no hard redirect, so the user can save a provider without leaving the app).
 - **Login / on-boarding entries** — `src/login/main.ts` and `src/onboarding/main.ts` each run a pre-mount `/auth/status` check and redirect away before the Vue app mounts if the condition is already satisfied.
