@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { documents } from '../../api/documents';
 import type { Document, WatchedFolder } from '../../api/documents';
 import { formatDate } from '../../utils/format';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { HttpError } from '@chalie/shared';
+import { useBrainResource } from '../../composables/useBrainResource';
 import BrainIcon from '../../ui/BrainIcon.vue';
 
 const props = defineProps<{
@@ -22,9 +23,22 @@ const GROUP_TABS = [
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-const docs = ref<Document[]>([]);
-const folders = ref<WatchedFolder[]>([]);
-const loading = ref(true);
+interface DocsPayload { docs: Document[]; folders: WatchedFolder[] }
+
+const { data: docsPayload, loading, reload: load } = useBrainResource(
+  async () => {
+    const [docRes, wfRes] = await Promise.all([
+      documents.list(props.statusFilter === 'deleted'),
+      documents.watchedFolders(),
+    ]);
+    return { docs: docRes.items ?? [], folders: wfRes.items ?? [] } satisfies DocsPayload;
+  },
+  { initial: { docs: [], folders: [] } as DocsPayload, failMsg: 'Failed to load documents' },
+);
+
+const docs = computed(() => docsPayload.value.docs);
+const folders = computed(() => docsPayload.value.folders);
+
 const search = ref('');
 const groupBy = ref('all');
 const drillGroup = ref<string | null>(null);
@@ -32,23 +46,6 @@ const viewMode = ref<'list' | 'detail'>('list');
 const detailDoc = ref<Document | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-async function load(): Promise<void> {
-  loading.value = true;
-  try {
-    const [docRes, wfRes] = await Promise.all([
-      documents.list(props.statusFilter === 'deleted'),
-      documents.watchedFolders(),
-    ]);
-    docs.value = docRes.items ?? [];
-    folders.value = wfRes.items ?? [];
-  } catch {
-    showToast('Failed to load documents', 'error');
-  } finally {
-    loading.value = false;
-  }
-}
-
-onMounted(load);
 
 const filtered = computed<Document[]>(() => {
   let result = docs.value;

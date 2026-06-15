@@ -1,24 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
 import { cognition } from '../../api/cognition';
 import type { ErrorEntry } from '../../api/cognition';
 import { formatDate } from '../../utils/format';
+import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 
-const loading = ref(true);
-const loadFailed = ref(false);
-const errors = ref<ErrorEntry[]>([]);
-
-onMounted(async () => {
-  try {
-    const data = await cognition.errors();
-    errors.value = data.errors || [];
-  } catch {
-    loadFailed.value = true;
-  } finally {
-    loading.value = false;
-  }
-});
+const { data: errors, loading, error: loadFailed } = useAsyncResource(
+  async () => (await cognition.errors()).errors ?? [],
+  { initial: [] as ErrorEntry[] },
+);
 </script>
 
 <template>

@@ -1,23 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
 import { cognition } from '../../api/cognition';
 import type { CompactionEntry } from '../../api/cognition';
+import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 
-const loading = ref(true);
-const loadFailed = ref(false);
-const compaction = ref<CompactionEntry | null>(null);
-
-onMounted(async () => {
-  try {
+const { data: compaction, loading, error: loadFailed } = useAsyncResource(
+  async () => {
     const data = await cognition.compaction();
-    compaction.value = data.compaction || null;
-  } catch {
-    loadFailed.value = true;
-  } finally {
-    loading.value = false;
-  }
-});
+    return data.compaction || null;
+  },
+  { initial: null as CompactionEntry | null },
+);
 </script>
 
 <template>

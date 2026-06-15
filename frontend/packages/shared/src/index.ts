@@ -19,6 +19,8 @@ export { useConnectionStore } from './stores/connection';
 export { useTheme } from './composables/useTheme';
 export { useWebSocket, getWebSocket } from './composables/useWebSocket';
 export { useApiClient, api } from './composables/useApiClient';
+export { useAsyncResource } from './composables/useAsyncResource';
+export type { AsyncResource, AsyncResourceOptions } from './composables/useAsyncResource';
 export { default as BaseButton } from './ui/BaseButton.vue';
 export { default as BaseCard } from './ui/BaseCard.vue';
 export { default as BaseField } from './ui/BaseField.vue';

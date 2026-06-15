@@ -1,29 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { cognition } from '../../api/cognition';
 import type { WorldState, WorldTelemetry, WorldSchedule } from '../../api/cognition';
 import { formatDate, escapeHtml } from '../../utils/format';
+import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 import SegmentedControl from '../../ui/SegmentedControl.vue';
 
-const worldState = ref<WorldState>({});
+const { data: worldState, loading, error: loadFailed } = useAsyncResource(
+  () => cognition.worldState(),
+  { initial: {} as WorldState },
+);
+
 const viewMode = ref<'formatted' | 'raw'>('formatted');
-const loading = ref(false);
-const loadFailed = ref(false);
-
-async function load(): Promise<void> {
-  loading.value = true;
-  loadFailed.value = false;
-  try {
-    worldState.value = await cognition.worldState();
-  } catch {
-    loadFailed.value = true;
-  } finally {
-    loading.value = false;
-  }
-}
-
-onMounted(load);
 
 const inputs = computed(() => worldState.value.inputs || {});
 const telemetry = computed<WorldTelemetry>(() => inputs.value.telemetry || {});

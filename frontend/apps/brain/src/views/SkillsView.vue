@@ -1,19 +1,30 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { skills as skillsApi } from '../api/skills';
 import type { Skill, Association } from '../api/skills';
 import { formatDate } from '../utils/format';
 import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
+import { useBrainResource } from '../composables/useBrainResource';
 import BrainIcon from '../ui/BrainIcon.vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-const skills = ref<Skill[]>([]);
-const associations = ref<Association[]>([]);
-const loading = ref(true);
+interface SkillsPayload { skills: Skill[]; associations: Association[] }
+
+const { data: skillsPayload, loading, reload: load } = useBrainResource(
+  async () => {
+    const d = await skillsApi.list();
+    return { skills: d.skills ?? [], associations: d.associations ?? [] } satisfies SkillsPayload;
+  },
+  { initial: { skills: [], associations: [] } as SkillsPayload, failMsg: 'Failed to load skills' },
+);
+
+const skills = computed(() => skillsPayload.value.skills);
+const associations = computed(() => skillsPayload.value.associations);
+
 const expandedId = ref<string | number | null>(null);
 const editingId = ref<string | number | null>(null);
 const viewMode = ref<'list' | 'create'>('list');
@@ -31,21 +42,6 @@ const createContent = ref('');
 const editUseFor = ref('');
 const editTags = ref('');
 const editContent = ref('');
-
-// ── Load ─────────────────────────────────────────────────────────────
-
-async function load(): Promise<void> {
-  loading.value = true;
-  try {
-    const data = await skillsApi.list();
-    skills.value = data.skills ?? [];
-    associations.value = data.associations ?? [];
-  } catch {
-    showToast('Failed to load skills', 'error');
-  } finally {
-    loading.value = false;
-  }
-}
 
 // ── Expand ───────────────────────────────────────────────────────────
 
@@ -69,8 +65,9 @@ async function saveEdit(skill: Skill): Promise<void> {
   try {
     const data = await skillsApi.update(skill.id, { use_for, content, tags });
     showToast('Skill updated', 'success');
-    const idx = skills.value.findIndex((s) => s.id === skill.id);
-    if (idx !== -1) skills.value[idx] = data.skill;
+    skillsPayload.value.skills = skillsPayload.value.skills.map((s) =>
+      s.id === skill.id ? data.skill : s,
+    );
     editingId.value = null;
   } catch (e) {
     showToast(apiErrorMessage(e, 'Failed to update skill'), 'error');
@@ -82,7 +79,9 @@ async function saveEdit(skill: Skill): Promise<void> {
 async function toggleSkill(skill: Skill): Promise<void> {
   try {
     const data = await skillsApi.toggle(skill.id);
-    skill.enabled = data.enabled;
+    skillsPayload.value.skills = skillsPayload.value.skills.map((s) =>
+      s.id === skill.id ? { ...s, enabled: data.enabled } : s,
+    );
     showToast(data.enabled ? 'Skill enabled' : 'Skill disabled', 'success');
   } catch (e) {
     showToast(apiErrorMessage(e, 'Failed to toggle skill'), 'error');
@@ -102,7 +101,7 @@ async function deleteSkill(skill: Skill): Promise<void> {
   try {
     await skillsApi.delete(skill.id);
     showToast('Skill deleted', 'success');
-    skills.value = skills.value.filter((s) => s.id !== skill.id);
+    skillsPayload.value.skills = skillsPayload.value.skills.filter((s) => s.id !== skill.id);
     editingId.value = null;
   } catch (e) {
     showToast(apiErrorMessage(e, 'Failed to delete skill'), 'error');
@@ -146,7 +145,7 @@ async function submitCreate(): Promise<void> {
   try {
     const data = await skillsApi.create({ title, use_for, content, tags });
     showToast(`Skill "${title}" created`, 'success');
-    skills.value.push(data.skill);
+    skillsPayload.value.skills = [...skillsPayload.value.skills, data.skill];
     editingId.value = null;
     viewMode.value = 'list';
   } catch (e) {
@@ -154,7 +153,6 @@ async function submitCreate(): Promise<void> {
   }
 }
 
-onMounted(load);
 </script>
 
 <template>

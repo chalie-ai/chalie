@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { brain } from '../api/brain';
 import type { BrainInfo } from '../api/brain';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
+import { useAsyncResource } from '@chalie/shared';
 import BrainModal from '../ui/BrainModal.vue';
 import BrainIcon from '../ui/BrainIcon.vue';
 import { apiErrorMessage } from '../api/http';
@@ -12,9 +13,10 @@ const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
 // ── Info state ────────────────────────────────────────────────────────────────
-const info = ref<BrainInfo | null>(null);
-const loading = ref(true);
-const loadError = ref(false);
+const { data: info, loading, error: loadError } = useAsyncResource(
+  () => brain.info(),
+  { initial: null as BrainInfo | null },
+);
 
 // ── Export modal state ────────────────────────────────────────────────────────
 const showExport = ref(false);
@@ -41,17 +43,6 @@ const ghUploadPass = ref('');
 // ── Computed ──────────────────────────────────────────────────────────────────
 const dbSize = computed(() => info.value?.db_size_human || '0 B');
 const docCount = computed(() => info.value?.document_count || 0);
-
-// ── loadInfo (brain.js:26-36) ─────────────────────────────────────────────────
-async function loadInfo(): Promise<void> {
-  try {
-    info.value = await brain.info();
-  } catch {
-    loadError.value = true;
-  } finally {
-    loading.value = false;
-  }
-}
 
 // ── openExport (brain.js:89-107) ─────────────────────────────────────────────
 function openExport(): void {
@@ -215,7 +206,6 @@ async function doGhUpload(): Promise<void> {
   }
 }
 
-onMounted(loadInfo);
 </script>
 
 <template>

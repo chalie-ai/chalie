@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed } from 'vue';
 import { lists as listsApi } from '../api/lists';
 import type { List, ListItem } from '../api/lists';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
+import { useBrainResource } from '../composables/useBrainResource';
 import BrainModal from '../ui/BrainModal.vue';
 import BrainIcon from '../ui/BrainIcon.vue';
 import { HttpError } from '@chalie/shared';
@@ -11,8 +12,11 @@ import { HttpError } from '@chalie/shared';
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-const listsData = ref<List[]>([]);
-const loading = ref(true);
+const { data: listsData, loading, reload: load } = useBrainResource(
+  async () => (await listsApi.list()).items ?? [],
+  { initial: [] as List[], failMsg: 'Failed to load lists' },
+);
+
 const expanded = reactive<Record<string, boolean>>({});
 
 // Modal state
@@ -34,19 +38,6 @@ function counts(list: List): { done: number; total: number; pct: number } {
 // Decorate each list with its counts once per render pass (the `list` object is the
 // same reference held in listsData, so toggle/fetchListDetail mutations still apply).
 const decoratedLists = computed(() => listsData.value.map((list) => ({ list, c: counts(list) })));
-
-// --- load (legacy lists.js:28-37) ---
-async function load(): Promise<void> {
-  loading.value = true;
-  try {
-    const d = await listsApi.list();
-    listsData.value = d.items ?? [];
-  } catch {
-    showToast('Failed to load lists', 'error');
-  } finally {
-    loading.value = false;
-  }
-}
 
 // --- fetchListDetail (legacy lists.js:113-123) ---
 async function fetchListDetail(list: List): Promise<void> {
@@ -147,7 +138,6 @@ async function deleteList(list: List): Promise<void> {
   }
 }
 
-onMounted(load);
 </script>
 
 <template>

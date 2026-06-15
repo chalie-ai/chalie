@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed } from 'vue';
 import { scheduler } from '../../api/scheduler';
 import type { ScheduleItem, ScheduleInput } from '../../api/scheduler';
 import { formatDate } from '../../utils/format';
 import { apiErrorMessage } from '../../api/http';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
+import { useBrainResource } from '../../composables/useBrainResource';
 import BrainIcon from '../../ui/BrainIcon.vue';
 
 const props = defineProps<{ statusFilter: 'all' | 'pending' | 'fired' | 'failed' | 'cancelled' }>();
@@ -13,8 +14,13 @@ const props = defineProps<{ statusFilter: 'all' | 'pending' | 'fired' | 'failed'
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-const items = ref<ScheduleItem[]>([]);
-const loading = ref(true);
+const { data: items, loading, reload: load } = useBrainResource(
+  async () => {
+    const data = await scheduler.list();
+    return data.schedules ?? data.items ?? [];
+  },
+  { initial: [] as ScheduleItem[], failMsg: 'Failed to load schedules' },
+);
 
 // Inline form state
 type FormMode = 'list' | 'form';
@@ -37,18 +43,6 @@ function statusClass(status: string | null | undefined): string {
     cancelled: 'badge-muted',
   };
   return map[status ?? ''] ?? 'badge-muted';
-}
-
-async function load(): Promise<void> {
-  loading.value = true;
-  try {
-    const data = await scheduler.list();
-    items.value = data.schedules ?? data.items ?? [];
-  } catch {
-    showToast('Failed to load schedules', 'error');
-  } finally {
-    loading.value = false;
-  }
 }
 
 function openForm(item: ScheduleItem | null): void {
@@ -98,7 +92,6 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
   }
 }
 
-onMounted(load);
 </script>
 
 <template>

@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed } from 'vue';
 import { capabilities } from '../api/capabilities';
 import type { Capability, CapabilityField } from '../api/capabilities';
 import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
+import { useBrainResource } from '../composables/useBrainResource';
 import BrainIcon from '../ui/BrainIcon.vue';
 
 const { show: showToast } = useToast();
 
-const caps = ref<Capability[]>([]);
-const loading = ref(true);
+const { data: caps, loading, reload: load } = useBrainResource(
+  async () => (await capabilities.list()).capabilities ?? [],
+  { initial: [] as Capability[], failMsg: 'Failed to load capabilities' },
+);
+
 const viewMode = ref<'list' | 'form'>('list');
 const formCap = ref<Capability | null>(null);
 const formConnected = ref(false);
@@ -28,17 +32,6 @@ function isVisible(f: CapabilityField): boolean {
     !f.show_when ||
     Object.entries(f.show_when).every(([k, v]) => textValues[k] === v)
   );
-}
-
-async function load(): Promise<void> {
-  loading.value = true;
-  try {
-    caps.value = (await capabilities.list()).capabilities ?? [];
-  } catch {
-    showToast('Failed to load capabilities', 'error');
-  } finally {
-    loading.value = false;
-  }
 }
 
 async function openForm(c: Capability): Promise<void> {
@@ -104,7 +97,6 @@ async function disconnect(c: Capability): Promise<void> {
   }
 }
 
-onMounted(load);
 </script>
 
 <template>
