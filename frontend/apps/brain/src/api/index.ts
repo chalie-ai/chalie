@@ -2,7 +2,7 @@
  * Brain API barrel — domain endpoint wrappers over the shared ApiClient.
  *
  * Each module wraps a domain's endpoints with typed request/response shapes.
- * All modules use withAuth() from http.ts to handle 401 → /login/ redirect.
+ * 401 → /login/ redirect is handled centrally by the shared ApiClient.
  */
 export { system } from './system';
 export { providers } from './providers';

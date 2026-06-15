@@ -13,8 +13,7 @@
  * POST /providers/list-models   → list models for credentials
  * POST /providers/test          → test connection
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface Provider {
   id: number;
@@ -49,57 +48,46 @@ export interface TestInput extends ProviderInput {
 
 export const providers = {
   list(): Promise<{ providers: Provider[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/providers'));
+    return api.get('/providers');
   },
 
   getSelected(): Promise<{ provider: Provider | null }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/providers/selected'));
+    return api.get('/providers/selected');
   },
 
   setSelected(providerId: number): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.put('/providers/selected', { provider_id: providerId }));
+    return api.put('/providers/selected', { provider_id: providerId });
   },
 
   getCatalog(): Promise<{ catalog: CatalogEntry[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/providers/catalog'));
+    return api.get('/providers/catalog');
   },
 
   getVision(): Promise<{ provider: Provider | null; source: string }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/providers/vision'));
+    return api.get('/providers/vision');
   },
 
   setVision(providerId: number): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.put('/providers/vision', { provider_id: providerId }));
+    return api.put('/providers/vision', { provider_id: providerId });
   },
 
   create(input: ProviderInput): Promise<{ provider: Provider }> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/providers', input));
+    return api.post('/providers', input);
   },
 
   update(id: number, input: Partial<ProviderInput>): Promise<{ provider: Provider }> {
-    const api = useApiClient();
-    return withAuth(() => api.put(`/providers/${id}`, input));
+    return api.put(`/providers/${id}`, input);
   },
 
   delete(id: number): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.del(`/providers/${id}`));
+    return api.del(`/providers/${id}`);
   },
 
   listModels(body: { platform: string; host?: string; api_key?: string }): Promise<{ models: (string | { id: string })[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/providers/list-models', body));
+    return api.post('/providers/list-models', body);
   },
 
   test(body: TestInput): Promise<{ success: boolean; message?: string; error?: string }> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/providers/test', body));
+    return api.post('/providers/test', body);
   },
 };

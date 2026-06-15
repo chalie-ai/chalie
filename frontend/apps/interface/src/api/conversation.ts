@@ -1,4 +1,4 @@
-import { useApiClient } from '@chalie/shared';
+import { api } from '@chalie/shared';
 
 /** A single attachment served from /documents/<id>/preview. */
 export interface ConversationAttachment {
@@ -41,7 +41,6 @@ export const conversation = {
     limit = 12,
     before?: number,
   ): Promise<{ messages: ConversationMessage[]; has_more: boolean }> {
-    const api = useApiClient();
     const q = new URLSearchParams({ limit: String(limit) });
     if (before != null) q.set('before', String(before));
     return api.get(`/conversation/recent?${q.toString()}`);

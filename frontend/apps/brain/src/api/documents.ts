@@ -8,8 +8,7 @@
  * DELETE /documents/:id                   → delete document
  * POST   /documents/upload                → multipart upload
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface Document {
   id: string | number;
@@ -35,28 +34,23 @@ export interface WatchedFolder {
 
 export const documents = {
   list(includeDeleted = false): Promise<{ items: Document[] }> {
-    const api = useApiClient();
     const url = includeDeleted ? '/documents?include_deleted=true' : '/documents';
-    return withAuth(() => api.get(url));
+    return api.get(url);
   },
 
   watchedFolders(): Promise<{ items: WatchedFolder[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/documents/watched-folders'));
+    return api.get('/documents/watched-folders');
   },
 
   get(id: string | number): Promise<{ item: Document }> {
-    const api = useApiClient();
-    return withAuth(() => api.get(`/documents/${id}`));
+    return api.get(`/documents/${id}`);
   },
 
   delete(id: string | number): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.del(`/documents/${id}`));
+    return api.del(`/documents/${id}`);
   },
 
   upload(formData: FormData): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.upload('/documents/upload', formData));
+    return api.upload('/documents/upload', formData);
   },
 };

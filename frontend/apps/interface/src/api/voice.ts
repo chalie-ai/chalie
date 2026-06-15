@@ -1,5 +1,4 @@
-import { getHost } from '@chalie/shared';
-import { useApiClient } from '@chalie/shared';
+import { getHost, api } from '@chalie/shared';
 
 /** Response from GET /voice/health */
 export interface VoiceHealth {
@@ -10,10 +9,14 @@ export interface VoiceHealth {
 }
 
 export const voice = {
-  /** GET /voice/health — returns status in {ok, loading, unavailable}. */
+  /**
+   * GET /voice/health — returns status in {ok, loading, unavailable}.
+   * Public probe (no auth, always 200), like /ready and /health, so it opts out
+   * of the client's redirect-on-401: a probe failure should mark voice
+   * unavailable (handled by the store's catch), never yank the user to /login/.
+   */
   health(): Promise<VoiceHealth> {
-    const api = useApiClient();
-    return api.get('/voice/health');
+    return api.get('/voice/health', { redirectOnAuthError: false });
   },
 
   /**

@@ -1,4 +1,5 @@
 export { ApiClient, AuthError, HttpError } from './services/ApiClient';
+export type { RequestOpts, AuthErrorHandler } from './services/ApiClient';
 export type { GetHost } from './services/types';
 export { WebSocketService } from './services/WebSocketService';
 export type {
@@ -17,7 +18,7 @@ export type { Theme } from './stores/theme';
 export { useConnectionStore } from './stores/connection';
 export { useTheme } from './composables/useTheme';
 export { useWebSocket, getWebSocket } from './composables/useWebSocket';
-export { useApiClient } from './composables/useApiClient';
+export { useApiClient, api } from './composables/useApiClient';
 export { default as BaseButton } from './ui/BaseButton.vue';
 export { default as BaseCard } from './ui/BaseCard.vue';
 export { default as BaseField } from './ui/BaseField.vue';

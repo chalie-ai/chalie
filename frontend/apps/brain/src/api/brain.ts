@@ -11,8 +11,7 @@
  * NOTE: timestamps are rendered AS-IS from the backend (spec requirement).
  * No date formatting is performed here.
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface BrainInfo {
   db_size_human?: string | null;
@@ -49,32 +48,27 @@ export interface GithubTestResult {
 
 export const brain = {
   info(): Promise<BrainInfo> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/brain/info'));
+    return api.get('/brain/info');
   },
 
   /**
    * POST /brain/export → returns the raw Response so the caller can handle the blob.
-   * Throws AuthError on 401 (via withAuth); does NOT throw on other non-ok statuses —
+   * Throws AuthError on 401; does NOT throw on other non-ok statuses —
    * the caller inspects res.ok and reads .blob()/.json() itself.
    */
   export(body: BrainExportBody): Promise<Response> {
-    const api = useApiClient();
-    return withAuth(() => api.download('/brain/export', body));
+    return api.download('/brain/export', body);
   },
 
   import(formData: FormData): Promise<BrainImportResult> {
-    const api = useApiClient();
-    return withAuth(() => api.upload('/brain/import', formData));
+    return api.upload('/brain/import', formData);
   },
 
   exportUpload(body: BrainUploadBody): Promise<BrainUploadResult> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/brain/export/upload', body));
+    return api.post('/brain/export/upload', body);
   },
 
   testGithub(body: { github_token: string }): Promise<GithubTestResult> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/brain/github/test', body));
+    return api.post('/brain/github/test', body);
   },
 };

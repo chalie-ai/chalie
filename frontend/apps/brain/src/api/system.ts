@@ -1,4 +1,4 @@
-import { useApiClient } from '@chalie/shared';
+import { api } from '@chalie/shared';
 
 /** Response from GET /auth/status. */
 export interface AuthStatus {
@@ -10,9 +10,12 @@ export interface AuthStatus {
 }
 
 export const system = {
-  /** GET /auth/status — used by the router auth gate. */
+  /**
+   * GET /auth/status — used by the router auth gate.
+   * Opts out of the client's redirect-on-401: the gate inspects the result to
+   * decide where to route, rather than treating a 401 as session expiry.
+   */
   authStatus(): Promise<AuthStatus> {
-    const api = useApiClient();
-    return api.get('/auth/status');
+    return api.get('/auth/status', { redirectOnAuthError: false });
   },
 };

@@ -1,4 +1,4 @@
-import { useApiClient } from '@chalie/shared';
+import { api } from '@chalie/shared';
 
 /** Payload sent to POST /api/policies/respond. */
 export interface PolicyRespondPayload {
@@ -12,7 +12,6 @@ export const policies = {
    * Wakes the blocked ACT dispatch thread with the user's allow/deny decision.
    */
   respond(payload: PolicyRespondPayload): Promise<{ ok: boolean }> {
-    const api = useApiClient();
     return api.post('/api/policies/respond', payload);
   },
 };

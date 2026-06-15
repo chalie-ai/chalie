@@ -5,8 +5,7 @@
  * GET /api/policies/blocked      → { entries: BlockedEntry[] }
  * PUT /api/policies              → update one policy { channel, permission, setting }
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface PolicyRow {
   channel: string;
@@ -31,17 +30,14 @@ export interface PolicyUpdate {
 
 export const policies = {
   list(): Promise<{ policies: PolicyRow[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/api/policies'));
+    return api.get('/api/policies');
   },
 
   blocked(): Promise<{ entries: BlockedEntry[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/api/policies/blocked'));
+    return api.get('/api/policies/blocked');
   },
 
   update(body: PolicyUpdate): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.put('/api/policies', body));
+    return api.put('/api/policies', body);
   },
 };

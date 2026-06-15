@@ -1,4 +1,4 @@
-import { useApiClient } from '@chalie/shared';
+import { api } from '@chalie/shared';
 
 /** Response from GET /auth/status. */
 export interface AuthStatus {
@@ -26,14 +26,19 @@ export interface ReadyStatus {
   ready: boolean;
 }
 
+// authStatus / readyCheck / heartbeat are probes (the gate inspects the 401 to
+// route; /ready and /health are public best-effort), so they opt out of the
+// client's redirect-on-401. The authenticated settings calls below keep the
+// default: a 401 there means the session expired → redirect to /login/.
+const NO_REDIRECT = { redirectOnAuthError: false } as const;
+
 export const system = {
   /**
    * GET /auth/status — check master-account / session / provider readiness.
    * Used by the auth gate in main.ts.
    */
   authStatus(): Promise<AuthStatus> {
-    const api = useApiClient();
-    return api.get('/auth/status');
+    return api.get('/auth/status', NO_REDIRECT);
   },
 
   /**
@@ -43,9 +48,8 @@ export const system = {
    * poll loop can simply retry (port of legacy api.js readyCheck, lines 87-90).
    */
   async readyCheck(): Promise<ReadyStatus> {
-    const api = useApiClient();
     try {
-      const result = await api.get<ReadyStatus>('/ready');
+      const result = await api.get<ReadyStatus>('/ready', NO_REDIRECT);
       return { ready: Boolean(result?.ready) };
     } catch {
       return { ready: false };
@@ -57,15 +61,13 @@ export const system = {
    * No auth required; always returns { status: 'ok', version: string }.
    */
   heartbeat(payload: Record<string, unknown>): Promise<{ status: string; version: string }> {
-    const api = useApiClient();
-    return api.post('/health', payload);
+    return api.post('/health', payload, NO_REDIRECT);
   },
 
   /**
    * GET /system/context-usage — last request token count + context window.
    */
   contextUsage(): Promise<ContextUsage> {
-    const api = useApiClient();
     return api.get('/system/context-usage');
   },
 
@@ -73,7 +75,6 @@ export const system = {
    * GET /system/settings/thinking_level_override
    */
   thinkingLevel(): Promise<{ key: string; value: string | null }> {
-    const api = useApiClient();
     return api.get('/system/settings/thinking_level_override');
   },
 
@@ -82,7 +83,6 @@ export const system = {
    * Empty value string deletes the row (reverts to auto).
    */
   setThinkingLevel(value: string): Promise<Record<string, unknown>> {
-    const api = useApiClient();
     return api.put('/system/settings/thinking_level_override', { value });
   },
 
@@ -90,7 +90,6 @@ export const system = {
    * POST /system/update/apply — apply an in-place installer update.
    */
   updateApply(tag: string): Promise<UpdateApplyResult> {
-    const api = useApiClient();
     return api.post('/system/update/apply', { tag });
   },
 };

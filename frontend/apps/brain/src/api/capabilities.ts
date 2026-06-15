@@ -6,8 +6,7 @@
  * POST /api/capabilities/:id/setup      → configure a capability
  * POST /api/capabilities/:id/disconnect → disconnect a capability
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface CapabilityFieldOption {
   value: string;
@@ -40,23 +39,19 @@ export interface Capability {
 
 export const capabilities = {
   list(): Promise<{ capabilities: Capability[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/api/capabilities'));
+    return api.get('/api/capabilities');
   },
 
   // Backend returns a FLAT object (no { capability } wrapper): { id, name, version, connected, last_sync_at, config }.
   get(id: string): Promise<Capability> {
-    const api = useApiClient();
-    return withAuth(() => api.get(`/api/capabilities/${id}`));
+    return api.get(`/api/capabilities/${id}`);
   },
 
   setup(id: string, body: Record<string, unknown>): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.post(`/api/capabilities/${id}/setup`, body));
+    return api.post(`/api/capabilities/${id}/setup`, body);
   },
 
   disconnect(id: string): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.post(`/api/capabilities/${id}/disconnect`, {}));
+    return api.post(`/api/capabilities/${id}/disconnect`, {});
   },
 };

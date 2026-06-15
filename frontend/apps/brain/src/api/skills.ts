@@ -8,8 +8,7 @@
  * PUT    /api/skills/:id/toggle   → toggle skill enabled
  * POST   /api/skills/:id/copy     → duplicate skill
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface Association {
   pattern_name: string;
@@ -40,32 +39,26 @@ export interface SkillInput {
 
 export const skills = {
   list(): Promise<{ skills: Skill[]; associations: Association[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/api/skills'));
+    return api.get('/api/skills');
   },
 
   create(body: SkillInput): Promise<{ skill: Skill }> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/api/skills', body));
+    return api.post('/api/skills', body);
   },
 
   update(id: string | number, body: Partial<SkillInput>): Promise<{ skill: Skill }> {
-    const api = useApiClient();
-    return withAuth(() => api.put(`/api/skills/${id}`, body));
+    return api.put(`/api/skills/${id}`, body);
   },
 
   delete(id: string | number): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.del(`/api/skills/${id}`));
+    return api.del(`/api/skills/${id}`);
   },
 
   toggle(id: string | number): Promise<{ enabled: boolean }> {
-    const api = useApiClient();
-    return withAuth(() => api.put(`/api/skills/${id}/toggle`, {}));
+    return api.put(`/api/skills/${id}/toggle`, {});
   },
 
   copy(id: string | number): Promise<{ skill: Skill }> {
-    const api = useApiClient();
-    return withAuth(() => api.post(`/api/skills/${id}/copy`, {}));
+    return api.post(`/api/skills/${id}/copy`, {});
   },
 };

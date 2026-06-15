@@ -1,4 +1,4 @@
-import { useApiClient } from '@chalie/shared';
+import { api } from '@chalie/shared';
 
 /** A single moment as returned by the moments API. */
 export interface Moment {
@@ -17,7 +17,6 @@ export const moments = {
    * GET /moments/search?q=<query>
    */
   search(q: string): Promise<{ items: Moment[] }> {
-    const api = useApiClient();
     return api.get(`/moments/search?q=${encodeURIComponent(q)}`);
   },
 
@@ -26,7 +25,6 @@ export const moments = {
    * POST /moments — body: { message_text } or { transcript_id }
    */
   pin(content: string): Promise<{ item: Moment; duplicate: boolean }> {
-    const api = useApiClient();
     return api.post('/moments', { message_text: content });
   },
 
@@ -35,7 +33,6 @@ export const moments = {
    * POST /moments/<tid>/forget
    */
   forget(tid: number): Promise<{ ok: boolean }> {
-    const api = useApiClient();
     return api.post(`/moments/${tid}/forget`, {});
   },
 };

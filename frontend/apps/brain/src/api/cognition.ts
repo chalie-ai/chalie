@@ -10,8 +10,7 @@
  * GET  /system/observability/token-usage?window=                 → token usage
  * GET  /system/observability/compaction                          → compaction summary
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface MemoryRecord {
   created: string | null;
@@ -117,47 +116,39 @@ export const cognition = {
     offset?: number;
     q?: string;
   }): Promise<MemoryResponse> {
-    const api = useApiClient();
     const p = new URLSearchParams();
     if (params.source) p.set('source', params.source);
     if (params.limit != null) p.set('limit', String(params.limit));
     if (params.offset != null) p.set('offset', String(params.offset));
     if (params.q) p.set('q', params.q);
-    return withAuth(() => api.get(`/system/observability/records?${p.toString()}`));
+    return api.get(`/system/observability/records?${p.toString()}`);
   },
 
   tools(): Promise<{ tools: Tool[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/system/observability/tools'));
+    return api.get('/system/observability/tools');
   },
 
   worldState(): Promise<WorldState> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/system/observability/world-state'));
+    return api.get('/system/observability/world-state');
   },
 
   personality(): Promise<Personality> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/settings/personality'));
+    return api.get('/settings/personality');
   },
 
   setPersonality(data: Partial<Personality>): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.put('/settings/personality', data));
+    return api.put('/settings/personality', data);
   },
 
   errors(): Promise<{ errors: ErrorEntry[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/system/observability/errors'));
+    return api.get('/system/observability/errors');
   },
 
   tokenUsage(window: string = 'day'): Promise<UsageResponse> {
-    const api = useApiClient();
-    return withAuth(() => api.get(`/system/observability/token-usage?window=${encodeURIComponent(window)}`));
+    return api.get(`/system/observability/token-usage?window=${encodeURIComponent(window)}`);
   },
 
   compaction(): Promise<{ compaction: CompactionEntry | null }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/system/observability/compaction'));
+    return api.get('/system/observability/compaction');
   },
 };

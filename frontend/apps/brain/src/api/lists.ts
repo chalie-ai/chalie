@@ -9,8 +9,7 @@
  * POST   /lists/:id/items                → add items { items: string[] }
  * PUT    /lists/:id/items/:endpoint      → toggle item (check/uncheck) { items }
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface ListItem {
   id: string | number;
@@ -28,37 +27,30 @@ export interface List {
 
 export const lists = {
   list(): Promise<{ items: List[] }> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/lists'));
+    return api.get('/lists');
   },
 
   get(listId: string | number): Promise<{ item: List }> {
-    const api = useApiClient();
-    return withAuth(() => api.get(`/lists/${listId}`));
+    return api.get(`/lists/${listId}`);
   },
 
   create(name: string): Promise<{ item: List }> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/lists', { name }));
+    return api.post('/lists', { name });
   },
 
   delete(listId: string | number): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.del(`/lists/${listId}`));
+    return api.del(`/lists/${listId}`);
   },
 
   rename(listId: string | number, name: string): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.put(`/lists/${listId}/rename`, { name }));
+    return api.put(`/lists/${listId}/rename`, { name });
   },
 
   addItems(listId: string | number, items: string[]): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.post(`/lists/${listId}/items`, { items }));
+    return api.post(`/lists/${listId}/items`, { items });
   },
 
   toggleItem(listId: string | number, endpoint: string, item: { content: string }): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.put(`/lists/${listId}/items/${endpoint}`, { items: [item.content] }));
+    return api.put(`/lists/${listId}/items/${endpoint}`, { items: [item.content] });
   },
 };

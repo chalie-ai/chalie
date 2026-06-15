@@ -13,8 +13,7 @@
  *   DELETE /api/mcp-clients/:id    → delete client server
  *   POST   /api/mcp-clients/:id/test → test connection
  */
-import { useApiClient } from '@chalie/shared';
-import { withAuth } from './http';
+import { api } from '@chalie/shared';
 
 export interface McpServerConfig {
   enabled?: boolean;
@@ -45,44 +44,36 @@ export const mcp = {
   // ── Inbound ──────────────────────────────────────────────────────────────
 
   getServerConfig(): Promise<McpServerConfig> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/api/mcp-server'));
+    return api.get('/api/mcp-server');
   },
 
   updateServerConfig(body: Partial<McpServerConfig>): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.put('/api/mcp-server', body));
+    return api.put('/api/mcp-server', body);
   },
 
   regenerateToken(): Promise<{ token: string }> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/api/mcp-server/regenerate-token', {}));
+    return api.post('/api/mcp-server/regenerate-token', {});
   },
 
   // ── Outbound ─────────────────────────────────────────────────────────────
 
   listClients(): Promise<McpClient[]> {
-    const api = useApiClient();
-    return withAuth(() => api.get('/api/mcp-clients/'));
+    return api.get('/api/mcp-clients/');
   },
 
   createClient(body: McpClientInput): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.post('/api/mcp-clients/', body));
+    return api.post('/api/mcp-clients/', body);
   },
 
   updateClient(id: string | number, body: Partial<McpClientInput>): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.put(`/api/mcp-clients/${id}`, body));
+    return api.put(`/api/mcp-clients/${id}`, body);
   },
 
   deleteClient(id: string | number): Promise<unknown> {
-    const api = useApiClient();
-    return withAuth(() => api.del(`/api/mcp-clients/${id}`));
+    return api.del(`/api/mcp-clients/${id}`);
   },
 
   testClient(id: string | number): Promise<{ reachable: boolean; tool_count?: number; status?: string }> {
-    const api = useApiClient();
-    return withAuth(() => api.post(`/api/mcp-clients/${id}/test`, {}));
+    return api.post(`/api/mcp-clients/${id}/test`, {});
   },
 };

@@ -1,4 +1,4 @@
-import { useApiClient } from '@chalie/shared';
+import { api } from '@chalie/shared';
 
 /** A single scheduled item from the scheduler API. */
 export interface ScheduledItem {
@@ -30,7 +30,6 @@ export const scheduler = {
    * GET /scheduler?status=pending — list pending scheduled items.
    */
   pending(): Promise<{ items: ScheduledItem[]; total: number; limit: number; offset: number }> {
-    const api = useApiClient();
     return api.get('/scheduler?status=pending');
   },
 
@@ -38,7 +37,6 @@ export const scheduler = {
    * GET /chat/subagents/active — list currently running async delegates.
    */
   subagentsActive(): Promise<{ subagents: ActiveSubagent[] }> {
-    const api = useApiClient();
     return api.get('/chat/subagents/active');
   },
 
@@ -48,7 +46,6 @@ export const scheduler = {
    * sub_id is unknown.
    */
   subagentStop(subId: string): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
-    const api = useApiClient();
     return api.post(`/chat/subagent/${encodeURIComponent(subId)}/stop`, {});
   },
 };

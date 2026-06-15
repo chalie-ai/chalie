@@ -1,5 +1,4 @@
-import { getHost } from '@chalie/shared';
-import { useApiClient } from '@chalie/shared';
+import { getHost, api } from '@chalie/shared';
 
 /** A document duplicate detected at upload time. */
 export interface DocumentDuplicate {
@@ -57,7 +56,6 @@ export const documents = {
    * Legacy document_upload.js reads res?.item?.status.
    */
   status(id: string): Promise<{ item: DocumentItem }> {
-    const api = useApiClient();
     return api.get(`/documents/${encodeURIComponent(id)}`);
   },
 
@@ -65,7 +63,6 @@ export const documents = {
    * POST /documents/<id>/confirm — confirm the extracted synthesis.
    */
   confirm(id: string): Promise<{ ok: boolean; status: string }> {
-    const api = useApiClient();
     return api.post(`/documents/${encodeURIComponent(id)}/confirm`);
   },
 
@@ -73,7 +70,6 @@ export const documents = {
    * POST /documents/<id>/augment — add user context to the document.
    */
   augment(id: string, context: string): Promise<{ ok: boolean; status: string }> {
-    const api = useApiClient();
     return api.post(`/documents/${encodeURIComponent(id)}/augment`, { context });
   },
 
@@ -81,7 +77,6 @@ export const documents = {
    * DELETE /documents/<id>/purge — discard the document.
    */
   discard(id: string): Promise<{ ok: boolean }> {
-    const api = useApiClient();
     return api.del(`/documents/${encodeURIComponent(id)}/purge`);
   },
 
@@ -89,7 +84,6 @@ export const documents = {
    * POST /documents/<id>/supersede — replace an older duplicate document.
    */
   supersede(id: string, oldId: string): Promise<{ ok: boolean; supersedes_id: string }> {
-    const api = useApiClient();
     return api.post(`/documents/${encodeURIComponent(id)}/supersede`, { old_id: oldId });
   },
 };

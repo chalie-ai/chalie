@@ -18,13 +18,65 @@ export class HttpError extends Error {
   }
 }
 
-/** Centralised Chalie REST client. Configurable host; 401 → AuthError. */
+/** Per-call options accepted by every request method. */
+export interface RequestOpts {
+  /**
+   * On HTTP 401, invoke the auth-error handler (by default a redirect to the
+   * login page) before throwing AuthError. Set `false` for the few callers that
+   * must read the 401 as *data* rather than treat it as session expiry — the
+   * login form (401 = bad credentials) and the auth-status gate probe (401 →
+   * routing decision). Defaults to `true`.
+   */
+  redirectOnAuthError?: boolean;
+}
+
+/** Handler invoked when a request gets a 401 and the caller didn't opt out. */
+export type AuthErrorHandler = () => void;
+
+/**
+ * Default auth-error handler: hard-navigate to /login/, preserving the current
+ * path + query string as `next`. Idempotency is owned by the client (see the
+ * `_authErrorFired` latch in `fail401`), so this handler is pure — it just
+ * navigates. Ports the `_authRedirected` guard the apps previously kept
+ * individually.
+ */
+function redirectToLogin(): void {
+  const next = window.location.pathname + window.location.search;
+  window.location.replace('/login/?next=' + encodeURIComponent(next));
+}
+
+/**
+ * Centralised Chalie REST client. Configurable host; sends the same-origin
+ * session cookie on every request. On 401 it runs the auth-error handler
+ * (default: redirect to /login/) unless the caller passes
+ * `{ redirectOnAuthError: false }`, then always throws AuthError so callers can
+ * still react. Non-2xx → HttpError carrying the server's {error} message.
+ */
 export class ApiClient {
-  constructor(private readonly getHost: GetHost) {}
+  /**
+   * Idempotency latch: once a 401 has triggered the auth-error handler, later
+   * 401s on this client are no-ops (we're already navigating away). Scoped to
+   * the client instance, not the module, so test/HMR lifetimes stay isolated.
+   */
+  private _authErrorFired = false;
+
+  constructor(
+    private readonly getHost: GetHost,
+    private readonly onAuthError: AuthErrorHandler = redirectToLogin,
+  ) {}
 
   private buildUrl(path: string): string {
     const host = this.getHost();
     return host ? host.replace(/\/$/, '') + path : path;
+  }
+
+  /** React to a 401: redirect (unless opted out), then always throw AuthError. */
+  private fail401(opts?: RequestOpts): never {
+    if ((opts?.redirectOnAuthError ?? true) && !this._authErrorFired) {
+      this._authErrorFired = true;
+      this.onAuthError();
+    }
+    throw new AuthError();
   }
 
   /** Parse the response body and throw an HttpError carrying the server message, if any. */
@@ -37,62 +89,63 @@ export class ApiClient {
     throw new HttpError(res.status, msg, body ?? undefined);
   }
 
-  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+  private async request<T>(path: string, init?: RequestInit, opts?: RequestOpts): Promise<T> {
     const res = await fetch(this.buildUrl(path), {
       credentials: 'same-origin',
       ...init,
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     });
-    if (res.status === 401) throw new AuthError();
+    if (res.status === 401) this.fail401(opts);
     if (!res.ok) return this.throwHttp(res);
     return (await res.json()) as T;
   }
 
-  get<T>(path: string): Promise<T> {
-    return this.request<T>(path);
+  get<T>(path: string, opts?: RequestOpts): Promise<T> {
+    return this.request<T>(path, undefined, opts);
   }
-  post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) });
+  post<T>(path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
+    return this.request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }, opts);
   }
-  put<T>(path: string, body?: unknown): Promise<T> {
-    return this.request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) });
+  put<T>(path: string, body?: unknown, opts?: RequestOpts): Promise<T> {
+    return this.request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }, opts);
   }
-  async del<T>(path: string): Promise<T> {
+  async del<T>(path: string, opts?: RequestOpts): Promise<T> {
     const res = await fetch(this.buildUrl(path), {
       method: 'DELETE',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
     });
-    if (res.status === 401) throw new AuthError();
+    if (res.status === 401) this.fail401(opts);
     if (!res.ok) return this.throwHttp(res);
     return (await res.json().catch(() => ({}))) as T;
   }
 
   /** Multipart upload — no JSON Content-Type (browser sets the boundary). */
-  async upload<T>(path: string, formData: FormData): Promise<T> {
+  async upload<T>(path: string, formData: FormData, opts?: RequestOpts): Promise<T> {
     const res = await fetch(this.buildUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
       body: formData,
     });
-    if (res.status === 401) throw new AuthError();
+    if (res.status === 401) this.fail401(opts);
     if (!res.ok) return this.throwHttp(res);
     return (await res.json()) as T;
   }
 
   /**
    * POST returning the raw Response (for binary/blob downloads).
-   * Throws AuthError on 401; does NOT throw on other non-ok statuses —
-   * the caller inspects res.ok and reads .blob()/.json() itself.
+   * Throws AuthError on 401 (redirecting unless opted out); does NOT throw on
+   * other non-ok statuses — the caller inspects res.ok and reads
+   * .blob()/.json() itself.
    */
-  async download(path: string, body?: unknown): Promise<Response> {
+  async download(path: string, body?: unknown, opts?: RequestOpts): Promise<Response> {
     const res = await fetch(this.buildUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body ?? {}),
     });
-    if (res.status === 401) throw new AuthError();
+    if (res.status === 401) this.fail401(opts);
     return res;
   }
 
