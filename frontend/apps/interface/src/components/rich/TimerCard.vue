@@ -2,8 +2,13 @@
 /**
  * TimerCard — Vue 3 SFC port of frontend/interface/rich_media/timer.js
  *
- * Faithful 1:1 parity port. The single sanctioned modernisation is replacing
- * the legacy MutationObserver DOM-detach guard with Vue's onBeforeUnmount.
+ * Ported from timer.js with two sanctioned changes:
+ *   1. The legacy MutationObserver DOM-detach guard is replaced with Vue's
+ *      onBeforeUnmount.
+ *   2. The expiry alarm now auto-silences ALARM_AUTO_STOP_MS after it starts,
+ *      so an unattended timer no longer bleeps forever (legacy rang until the
+ *      user pressed Stop). The card stays on "Done"; only the audio and the
+ *      ring's attention pulse stop. See onExpire / silenceAlarm.
  * Everything else — ring math, stale-reload guard, alarm scheduling, pause /
  * resume / stop state machine — is reproduced exactly.
  */
@@ -40,6 +45,14 @@ const RING_PATH_LENGTH = 100;
  * than blasting the alarm on every page load.
  */
 const STALE_RELOAD_GRACE_MS = 60 * 1_000;
+
+/**
+ * How long the expiry alarm bleeps before it auto-silences. The legacy timer
+ * rang until the user pressed Stop; an unattended timer would bleep forever.
+ * After this window the audio stops and the ring drops its attention pulse,
+ * while the card stays on "Done".
+ */
+const ALARM_AUTO_STOP_MS = 30 * 1_000;
 
 // ── Helpers (ported 1:1 from timer.js) ────────────────────────────────────
 
@@ -166,6 +179,12 @@ const ringOffset = ref<number>(RING_PATH_LENGTH);
 /** Human-readable countdown/status line. */
 const timeHtml = ref<string>('');
 
+/**
+ * True once the expiry alarm has auto-silenced (after ALARM_AUTO_STOP_MS).
+ * Drives `.timer-card--silenced`, which drops the ring's attention pulse.
+ */
+const silenced = ref<boolean>(false);
+
 // ── Mutable runtime (not reactive — not rendered directly) ─────────────────
 
 /** Wall-clock ms at which the timer expires; recomputed on resume. */
@@ -177,6 +196,9 @@ let pausedRemainingMs: number | null = null;
 let displayId: ReturnType<typeof setInterval> | null = null;
 let alarmId: ReturnType<typeof setTimeout> | null = null;
 let alarm: AlarmHandle | null = null;
+
+/** Pending auto-silence timer scheduled by onExpire; cleared on stop/unmount. */
+let autoStopId: ReturnType<typeof setTimeout> | null = null;
 
 // ── Ring helper ────────────────────────────────────────────────────────────
 
@@ -216,6 +238,26 @@ function onExpire(): void {
   state.value = 'done';
   setProgress(1);
   alarm = startAlarm();
+  // Auto-silence the alarm after the grace window so an unattended timer does
+  // not bleep indefinitely. Pressing Stop earlier cancels this via cleanup().
+  autoStopId = setTimeout(silenceAlarm, ALARM_AUTO_STOP_MS);
+}
+
+/**
+ * Silence the expiry alarm: stop the audio, cancel the auto-stop timer, and
+ * flip `silenced` so the ring drops its attention pulse (card stays on "Done").
+ * Idempotent — safe whether fired by the auto-stop timer or called again.
+ */
+function silenceAlarm(): void {
+  if (autoStopId !== null) {
+    clearTimeout(autoStopId);
+    autoStopId = null;
+  }
+  if (alarm !== null) {
+    alarm.stop();
+    alarm = null;
+  }
+  silenced.value = true;
 }
 
 // ── Cleanup (replaces MutationObserver from timer.js) ─────────────────────
@@ -229,6 +271,10 @@ function cleanup(): void {
   if (alarmId !== null) {
     clearTimeout(alarmId);
     alarmId = null;
+  }
+  if (autoStopId !== null) {
+    clearTimeout(autoStopId);
+    autoStopId = null;
   }
   if (alarm !== null) {
     alarm.stop();
@@ -326,6 +372,7 @@ onBeforeUnmount((): void => {
     :class="{
       'timer-card--done': state === 'done' || state === 'stale',
       'timer-card--stopped': state === 'stopped',
+      'timer-card--silenced': silenced,
     }"
   >
     <!-- Progress ring (56 × 56 px; SVG viewBox 36 × 36; radius 16; pathLength 100) -->
@@ -456,6 +503,17 @@ onBeforeUnmount((): void => {
 @keyframes timer-ring-pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.45; }
+}
+
+/*
+ * Auto-silenced alarm: keep the amber "Done" ring but stop the attention
+ * pulse once the audio has auto-stopped (ALARM_AUTO_STOP_MS after expiry).
+ * Compound `--done--silenced` selector (specificity 0-3-0) deliberately
+ * outranks the `--done` pulse rule (0-2-0) so it wins by specificity, not by
+ * source order — a silenced card always carries both classes.
+ */
+.timer-card--done.timer-card--silenced .timer-card__ring-fill {
+  animation: none;
 }
 
 /* ── Title + time ────────────────────────────────────────────────────────── */
