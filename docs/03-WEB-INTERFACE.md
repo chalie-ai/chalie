@@ -51,7 +51,7 @@ Network failures in any gate → stay and mount; the API endpoints are still pro
 | `article` | `news`, `search` | `ArticleCard.vue` | Article layout with optional image thumbnail |
 | `schedule` | `schedule` | `SchedulerCard.vue` | Date block + same-day list |
 | `list` | `list` | `ListCard.vue` | Checklist with click-to-toggle persistence |
-| `timer` | `timer` | `TimerCard.vue` | Live countdown with a client-side alarm |
+| `timer` | `timer` | `TimerCard.vue` | Live countdown with a client-side alarm that auto-silences 30s after it starts |
 | `calendar` | `calendar` | `CalendarCard.vue` | Event card |
 | `contacts` | `contacts` | `ContactsCard.vue` | Contact card |
 
