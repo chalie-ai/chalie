@@ -160,7 +160,7 @@ onBeforeUnmount(() => {
   </main>
 </template>
 
-<style scoped>
+<style scoped lang="scss">
 /*
   History loader and end-pill styles.
   `.conversation-spine` layout is owned by interface.scss (Task S5) — not duplicated here.

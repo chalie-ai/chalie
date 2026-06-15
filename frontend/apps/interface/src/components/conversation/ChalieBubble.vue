@@ -132,7 +132,7 @@ function onSpeak(): void {
   </div>
 </template>
 
-<style>
+<style lang="scss">
 /*
  * Styles targeting v-html'd inner content (chalie-markup, chalie-action-button,
  * chalie-code, auto-linkified <a>) MUST be global — Vue scoped CSS does not

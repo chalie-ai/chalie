@@ -243,8 +243,8 @@ docker compose up -d</code>
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(0, 240, 255, 0.08);
-  border: 1px solid rgba(0, 240, 255, 0.25);
+  background: color-mix(in oklab, var(--accent-tertiary) 8%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent-tertiary) 25%, transparent);
   border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   color: var(--accent-tertiary);
@@ -268,7 +268,7 @@ docker compose up -d</code>
 
 .update-banner__action {
   background: var(--accent-tertiary);
-  color: #06080e;
+  color: var(--bg);
   border: none;
   border-radius: var(--radius-full);
   padding: 2px 12px;
@@ -317,7 +317,7 @@ docker compose up -d</code>
 .update-dialog__content {
   position: relative;
   background: var(--surface-elevated, rgba(16, 20, 32, 0.98));
-  border: 1px solid rgba(0, 240, 255, 0.15);
+  border: 1px solid color-mix(in oklab, var(--accent-tertiary) 15%, transparent);
   border-radius: var(--radius-md);
   padding: var(--space-lg);
   color: var(--text-primary);
@@ -385,7 +385,7 @@ docker compose up -d</code>
 .update-dialog__spinner {
   width: 20px;
   height: 20px;
-  border: 2px solid rgba(0, 240, 255, 0.2);
+  border: 2px solid color-mix(in oklab, var(--accent-tertiary) 20%, transparent);
   border-top-color: var(--accent-tertiary);
   border-radius: 50%;
   flex-shrink: 0;

@@ -264,13 +264,13 @@ function deny(req: PermissionRequest): void {
   line-height: 1.4;
 
   &--allow {
-    background: rgba(52, 211, 153, 0.15);
-    border-color: rgba(52, 211, 153, 0.35);
-    color: var(--success, #34d399);
+    background: color-mix(in oklab, var(--success) 15%, transparent);
+    border-color: color-mix(in oklab, var(--success) 35%, transparent);
+    color: var(--success);
 
     &:hover {
-      background: rgba(52, 211, 153, 0.25);
-      border-color: rgba(52, 211, 153, 0.55);
+      background: color-mix(in oklab, var(--success) 25%, transparent);
+      border-color: color-mix(in oklab, var(--success) 55%, transparent);
     }
   }
 
