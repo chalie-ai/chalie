@@ -120,7 +120,7 @@ onBeforeUnmount(() => {
         class="image-preview__remove"
         type="button"
         aria-label="Remove attachment"
-        @click="attachments.removeImage(index)"
+        @click="attachments.remove(index)"
       >
         ×
       </button>

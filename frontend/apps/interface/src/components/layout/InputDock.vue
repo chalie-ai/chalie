@@ -26,7 +26,6 @@ import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { system } from '../../api/system';
 import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
-import DocumentConfirmCard from '../upload/DocumentConfirmCard.vue';
 
 // ── Stores / composables ────────────────────────────────────────────────────
 
@@ -65,10 +64,11 @@ const hasVisionProvider = ref(true);
 const thinkingMenuOpen = ref(false);
 const thinkingWrapRef = ref<HTMLDivElement | null>(null);
 
-/** True when there is something to send: non-empty text OR ≥1 image attachment.
- *  Port of app.js:574 `!textarea.value.trim() && !this._imageAttach.count`. */
+/** True when there is something to send: non-empty text OR ≥1 attachment
+ *  (image OR document). Mirrors the handleSend guard exactly — both gate on
+ *  getFiles(), the files that actually ride the multipart /chat request. */
 const canSend = computed(
-  () => text.value.trim().length > 0 || attachments.previews.some((p) => p.isImage),
+  () => text.value.trim().length > 0 || attachments.getFiles().length > 0,
 );
 
 // ── Auto-grow ─────────────────────────────────────────────────────────────────
@@ -86,14 +86,17 @@ function grow(): void {
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
 
-  // Read image files + previews BEFORE clear() wipes the strip (chat.js:132-136).
+  // Read files + previews BEFORE clear() wipes the strip (chat.js:132-136).
+  // Images AND documents both ride the multipart /chat and render in the bubble.
   const files = attachments.getFiles();
-  const previews: ConvoAttachmentPreview[] = attachments.previews
-    .filter((p) => p.isImage)
-    .map((p) => ({ filename: p.filename, objectUrl: p.dataUrl, isImage: p.isImage }));
+  const previews: ConvoAttachmentPreview[] = attachments.previews.map((p) => ({
+    filename: p.filename,
+    objectUrl: p.dataUrl,
+    isImage: p.isImage,
+  }));
 
   // session.sendMessage no-ops on empty input, but guard here too so we don't
-  // clear the textarea or re-grow unnecessarily (chat.js:138).
+  // clear the textarea or re-grow unnecessarily (chat.js:138). Same gate as canSend.
   if (!trimmed && files.length === 0) return;
 
   // Capture send-mode before the store flips isSending: legacy clears the image
@@ -153,17 +156,11 @@ function chooseImage(): void {
   imageInputRef.value?.click();
 }
 
-function onImageInputChange(e: Event): void {
+/** Shared by both the image and document pickers — addFiles dispatches on type. */
+function onFileInputChange(e: Event): void {
   const input = e.target as HTMLInputElement;
   if (input.files?.length) void attachments.addFiles(input.files);
   input.value = ''; // allow re-selecting the same file
-}
-
-function onDocInputChange(e: Event): void {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (file) void attachments.uploadDocument(file);
-  input.value = '';
 }
 
 // ── Thinking-level dropdown ───────────────────────────────────────────────────
@@ -273,9 +270,6 @@ onBeforeUnmount(() => {
   <footer class="input-dock">
     <!-- Image / document preview strip (renders #imagePreview, self-handles drag-drop). -->
     <ImageAttachStrip />
-
-    <!-- Inline document synthesis / duplicate confirmation card. -->
-    <DocumentConfirmCard />
 
     <!-- Slide-up attachment menu -->
     <div
@@ -428,7 +422,7 @@ onBeforeUnmount(() => {
       type="file"
       accept="image/jpeg,image/png,image/webp,image/gif"
       hidden
-      @change="onImageInputChange"
+      @change="onFileInputChange"
     />
 
     <!-- Hidden document picker — accepts the legacy document set (index.html:319). -->
@@ -437,7 +431,7 @@ onBeforeUnmount(() => {
       type="file"
       accept=".pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml"
       hidden
-      @change="onDocInputChange"
+      @change="onFileInputChange"
     />
   </footer>
 </template>
