@@ -1788,6 +1788,36 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   object-fit: cover;
 }
 
+/* Document chip — 📄 icon + filename. Overrides the fixed 56px image box with an
+   auto-width column so the filename is readable (mirrors the image flow). */
+.image-preview__thumb--doc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px;
+  width: auto;
+  min-width: 64px;
+  max-width: 120px;
+  background: color-mix(in oklab, var(--text) 4%, transparent);
+}
+
+.image-preview__doc-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.image-preview__doc-name {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 .image-preview__remove {
   position: absolute;
   top: -4px;
@@ -1902,229 +1932,6 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   outline-offset: -2px;
   background: rgba(138, 92, 255, 0.04);
   transition: outline 120ms ease, background 120ms ease;
-}
-
-/* --------------------------------------------------------------------------
-   14. Upload Dialog
-   -------------------------------------------------------------------------- */
-.upload-dialog { position: relative; }
-
-.upload-dialog__close {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  z-index: 1;
-}
-
-.upload-dropzone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 20px;
-  border: 1.5px dashed color-mix(in oklab, var(--text) 12%, transparent);
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--text) 2%, transparent);
-  cursor: pointer;
-  transition: all 220ms ease;
-  margin-bottom: 12px;
-  min-height: 120px;
-}
-
-.upload-dropzone:hover,
-.upload-dropzone.dragover {
-  border-color: var(--accent-tertiary);
-  background: rgba(0, 240, 255, 0.03);
-  box-shadow: 0 0 20px rgba(0, 240, 255, 0.08);
-}
-
-.upload-dropzone__label { font-size: 14px; color: var(--text-secondary); margin-bottom: 4px; }
-.upload-dropzone__hint  { font-size: 12px; color: var(--text-tertiary); }
-
-.upload-progress { margin-bottom: 12px; }
-
-.upload-progress__bar {
-  height: 2px;
-  background: color-mix(in oklab, var(--text) 7%, transparent);
-  border-radius: 1px;
-  overflow: hidden;
-  margin-bottom: 6px;
-}
-
-.upload-progress__fill {
-  height: 100%;
-  background: var(--accent-tertiary);
-  border-radius: 1px;
-  width: 0%;
-  animation: upload-indeterminate 1.5s ease-in-out infinite;
-}
-
-@keyframes upload-indeterminate {
-  0%   { width: 0%;  margin-left: 0; }
-  50%  { width: 60%; margin-left: 20%; }
-  100% { width: 0%;  margin-left: 100%; }
-}
-
-.upload-progress__label { font-size: 12px; color: var(--accent-tertiary); }
-
-.upload-duplicate {
-  padding: 10px 12px;
-  background: rgba(255, 200, 0, 0.06);
-  border: 1px solid rgba(255, 200, 0, 0.15);
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--text-secondary);
-  margin-bottom: 12px;
-}
-
-.upload-duplicate__actions { display: flex; gap: 8px; margin-top: 8px; }
-
-.upload-duplicate__btn {
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 4px;
-  border: 1px solid color-mix(in oklab, var(--text) 12%, transparent);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 220ms ease;
-}
-
-.upload-duplicate__btn:hover { background: color-mix(in oklab, var(--text) 6%, transparent); }
-
-.upload-duplicate__btn--primary {
-  border-color: var(--accent-tertiary);
-  color: var(--accent-tertiary);
-}
-
-.upload-privacy {
-  font-size: 11px;
-  color: var(--text-tertiary);
-  line-height: 1.5;
-  margin-top: 8px;
-}
-
-/* Document synthesis confirmation card */
-.doc-synthesis-card {
-  background: color-mix(in oklab, var(--text) 3%, transparent);
-  border: 1px solid rgba(0, 240, 255, 0.15);
-  border-radius: 10px;
-  padding: 16px 18px;
-  margin: 12px 0;
-  max-width: 520px;
-  animation: doc-synth-in 300ms ease;
-}
-
-@keyframes doc-synth-in {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-.doc-synthesis__header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-
-.doc-synthesis__name {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.doc-synthesis__tag {
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 4px;
-  background: rgba(0, 240, 255, 0.08);
-  color: var(--accent-tertiary);
-  border: 1px solid rgba(0, 240, 255, 0.15);
-}
-
-.doc-synthesis__text {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--text-secondary);
-  margin: 0 0 10px;
-  font-style: italic;
-}
-
-.doc-synthesis__facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 14px;
-}
-
-.doc-synthesis__fact {
-  font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 4px;
-  background: color-mix(in oklab, var(--text) 4%, transparent);
-  color: var(--text-secondary);
-  border: 1px solid color-mix(in oklab, var(--text) 7%, transparent);
-}
-
-.doc-synthesis__actions { display: flex; gap: 8px; }
-
-.doc-synthesis__btn {
-  font-size: 12px;
-  padding: 6px 14px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in oklab, var(--text) 10%, transparent);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 220ms ease;
-}
-
-.doc-synthesis__btn:hover    { background: color-mix(in oklab, var(--text) 5%, transparent); }
-.doc-synthesis__btn:disabled { opacity: 0.5; cursor: default; }
-
-.doc-synthesis__btn--confirm {
-  border-color: rgba(0, 240, 255, 0.30);
-  color: var(--accent-tertiary);
-}
-
-.doc-synthesis__btn--confirm:hover {
-  background: rgba(0, 240, 255, 0.08);
-  box-shadow: 0 0 12px rgba(0, 240, 255, 0.10);
-}
-
-.doc-synthesis__btn--discard {
-  color: #f87171;
-  border-color: rgba(248, 113, 113, 0.20);
-}
-
-.doc-synthesis__btn--discard:hover { background: rgba(248, 113, 113, 0.08); }
-
-.doc-synthesis__augment-area {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.doc-synthesis__textarea {
-  width: 100%;
-  min-height: 60px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in oklab, var(--text) 10%, transparent);
-  background: color-mix(in oklab, var(--text) 2%, transparent);
-  color: var(--text-primary);
-  font-size: 13px;
-  line-height: 1.5;
-  resize: vertical;
-  transition: border-color 220ms ease;
-}
-
-.doc-synthesis__textarea:focus {
-  outline: none;
-  border-color: rgba(0, 240, 255, 0.30);
-  box-shadow: 0 0 8px rgba(0, 240, 255, 0.08);
-}
-
-.doc-synthesis__btn--submit {
-  align-self: flex-end;
-  border-color: rgba(0, 240, 255, 0.30);
-  color: var(--accent-tertiary);
 }
 
 /* --------------------------------------------------------------------------

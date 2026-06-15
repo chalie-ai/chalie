@@ -3,16 +3,15 @@
  */
 export class Chat {
   /**
-   * @param {{ api, ws, renderer, presence, notifications, imageAttach, documentUpload }} deps
+   * @param {{ api, ws, renderer, presence, notifications, imageAttach }} deps
    */
-  constructor({ api, ws, renderer, presence, notifications, imageAttach, documentUpload }) {
+  constructor({ api, ws, renderer, presence, notifications, imageAttach }) {
     this._api = api;
     this._ws = ws;
     this._renderer = renderer;
     this._presence = presence;
     this._notifications = notifications;
     this._imageAttach = imageAttach || null;
-    this._documentUpload = documentUpload || null;
 
     // Send state
     this._isSending = false;

@@ -264,6 +264,11 @@
     <input type="file" id="imageFileInput"
            accept="image/jpeg,image/png,image/webp,image/gif"
            hidden>
+    <!-- Hidden file input for document attachment. Documents ride the same
+         multipart POST /chat as images (see image_attach.js) — no pre-upload. -->
+    <input type="file" id="docFileInput"
+           accept=".pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml"
+           hidden>
   </footer>
 
   <!-- Voice player overlay — modal audio player for Chalie message playback -->
@@ -296,34 +301,6 @@
           <line x1="6" y1="6" x2="18" y2="18"></line>
         </svg>
       </button>
-    </div>
-  </dialog>
-
-  <!-- Upload dialog -->
-  <dialog id="uploadDialog" class="api-key-dialog">
-    <div class="api-key-dialog__content upload-dialog">
-      <button class="upload-dialog__close btn-icon" aria-label="Close" id="uploadDialogClose">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-      <h2 class="api-key-dialog__title">Upload Document</h2>
-      <div id="uploadDropzone" class="upload-dropzone">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.4;margin-bottom:8px;">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-        </svg>
-        <span class="upload-dropzone__label">Drag & drop a file here, or click to browse</span>
-        <span class="upload-dropzone__hint">PDF, DOCX, PPTX, HTML, TXT, MD</span>
-        <input type="file" id="uploadFileInput" accept=".pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml" hidden>
-      </div>
-      <div id="uploadProgress" class="upload-progress hidden">
-        <div class="upload-progress__bar"><div class="upload-progress__fill"></div></div>
-        <span id="uploadProgressLabel" class="upload-progress__label">Uploading...</span>
-      </div>
-      <div id="uploadDuplicateWarning" class="upload-duplicate hidden"></div>
-      <p class="upload-privacy">Your documents are stored locally and never leave this device. Text extraction runs entirely on your hardware.</p>
     </div>
   </dialog>
 
