@@ -16,7 +16,7 @@ exactly how the test proves no LLM call was made).
 
 import pytest
 
-from services import compaction_persistence, transcript_service
+from services import compaction_persistence
 from services.provider_cache_service import ProviderCacheService
 from services.subconscious_worker import SubconsciousWorker
 

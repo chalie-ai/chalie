@@ -234,20 +234,3 @@ def calculate_interval(
     next_utc = base + delta
     next_local = next_utc.astimezone(get_timezone())
     return next_utc, next_local
-
-
-def format_currency(amount: float | int, symbol: bool = True) -> str:
-    """Format a monetary amount using the user's currency.
-
-    Args:
-        amount: Numeric amount.
-        symbol: If True, prefix with currency code.
-
-    Returns:
-        Formatted string like 'EUR 1,234.56' or '1,234.56'.
-    """
-    currency_code = get_currency()
-    formatted = f"{amount:,.2f}"
-    if symbol:
-        return f"{currency_code} {formatted}"
-    return formatted

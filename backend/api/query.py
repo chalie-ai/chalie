@@ -40,18 +40,6 @@ def _get_retrieval_module():
     return episodic_retrieval_service
 
 
-def _get_memory_client():
-    """Return MemoryClientService class (lazy, fail-open)."""
-    from services.memory_client import MemoryClientService
-    return MemoryClientService
-
-
-def _get_db_service():
-    """Return the shared DatabaseService instance (lazy, fail-open)."""
-    from services.database_service import get_shared_db_service
-    return get_shared_db_service()
-
-
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------

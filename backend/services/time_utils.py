@@ -5,12 +5,11 @@ Rule: ALL datetime values in this codebase must be timezone-aware UTC.
 - Use utc_now() instead of datetime.now() or datetime.utcnow()
 - Use parse_utc() whenever reading a datetime from SQLite, JSON, or any external source
 - Never create naive datetimes (datetimes without tzinfo)
-- Use get_user_tz() to get the user's IANA timezone (for display/conversion)
+- For user-tz display, call services.locale_service.get_timezone() directly.
 """
 
 import logging
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +47,3 @@ def parse_utc(value) -> datetime:
             pass
 
     return datetime.min.replace(tzinfo=timezone.utc)
-
-
-def get_user_tz() -> ZoneInfo:
-    """Return the user's IANA timezone as a ZoneInfo object.
-
-    Delegates to locale_service.get_timezone() — the single source of truth.
-    """
-    from services.locale_service import get_timezone
-    return get_timezone()

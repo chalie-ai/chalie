@@ -67,14 +67,3 @@ for _domain, _up in _UNIFIED_PROVIDERS.items():
     if _up.caldav_url:
         _slug = _up.name.lower()
         _CALDAV_PROVIDERS[_domain] = _slug
-
-
-def email_to_caldav_provider(email: str) -> str | None:
-    """Map an email address to a CalDAV provider name.
-
-    Returns ``None`` for domains without CalDAV support.
-    """
-    if not email or "@" not in email:
-        return None
-    domain = Email.get_domain(email)
-    return _CALDAV_PROVIDERS.get(domain)

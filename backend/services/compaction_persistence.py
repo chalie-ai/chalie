@@ -12,7 +12,7 @@ Callers:
 """
 
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 
 
 logger = logging.getLogger(__name__)
@@ -49,12 +49,3 @@ def get_compaction(channel: str) -> Optional[Dict]:
     except Exception as exc:
         logger.warning("%s Failed to get compaction for %s: %s", LOG_PREFIX, channel, exc)
         return None
-
-
-def get_entries_since(channel: str, watermark: int = 0, limit: int = 2000) -> List[Dict]:
-    """Read transcript entries with id > watermark for a channel.
-
-    Returns entries in chronological order (oldest first).
-    """
-    from services import transcript_service
-    return transcript_service.get_recent(channel, limit=limit, since_id=watermark)

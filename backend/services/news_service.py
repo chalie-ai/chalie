@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Optional
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 # feedparser: tolerant RSS/Atom/RDF parsing + media/date normalisation,
 # replaces hand-rolled ElementTree pipeline
@@ -378,16 +378,3 @@ def _entry_to_article(entry, src, feed_image_url: str) -> Optional[NewsArticle]:
 
 def _normalize_title(title: str) -> str:
     return _WHITESPACE_RE.sub(" ", _PUNCT_RE.sub("", title.lower())).strip()
-
-
-def _derive_domain(feed_url: str) -> Optional[str]:
-    """Derive a publisher domain from an RSS feed URL."""
-    try:
-        hostname = urlparse(feed_url).hostname
-        if not hostname:
-            return None
-        if hostname in _PROXY_HOSTS:
-            return None
-        return _RSS_SUBDOMAIN_RE.sub("", hostname)
-    except Exception:
-        return None

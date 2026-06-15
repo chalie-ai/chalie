@@ -18,7 +18,6 @@ Key design choices:
 import dataclasses
 import json
 import logging
-import uuid
 from typing import Optional
 
 from services.time_utils import utc_now, parse_utc
@@ -79,15 +78,6 @@ class CognitiveIntent:
             JSON-encoded string.
         """
         return json.dumps(self.to_dict())
-
-
-def _make_intent_id() -> str:
-    """Generate a new UUID string for an intent.
-
-    Returns:
-        UUID4 string.
-    """
-    return str(uuid.uuid4())
 
 
 class IntentService:
