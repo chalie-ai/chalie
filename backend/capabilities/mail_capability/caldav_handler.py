@@ -1,10 +1,4 @@
-"""
-CaldavHandler — protocol-specific CalDAV logic for the mail capability.
 
-Plain class (no AbstractCapability subclass). Credentials are passed per-call
-for server-facing methods; DB-only methods query ``scheduled_items`` directly.
-Signal emission uses ``capability_id='mail'`` throughout.
-"""
 
 from __future__ import annotations
 
@@ -105,10 +99,6 @@ def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
 
 
 def _get_user_tz():
-    """Return user's ZoneInfo timezone or None.
-
-    Returns None when the result is plain UTC (no user timezone detected).
-    """
     from services.locale_service import get_timezone
     tz = get_timezone()
     if tz.key == "UTC":
@@ -117,7 +107,6 @@ def _get_user_tz():
 
 
 def _next_morning_8am() -> _dt_module.datetime:
-    """Return the next 08:00 in the user's local timezone (UTC fallback)."""
     from services.locale_service import local_now, to_utc
     now = local_now()
     local_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -154,7 +143,6 @@ class CaldavHandler:
         past_days: int = _DEFAULT_PAST_DAYS,
         future_days: int = _DEFAULT_FUTURE_DAYS,
     ) -> list[dict]:
-        """Fetch events from all calendars on *client* within the date range."""
         if not _CALDAV_AVAILABLE:
             logger.error("[caldav_handler] ingest: 'caldav' package unavailable.")
             return []
@@ -292,11 +280,6 @@ class CaldavHandler:
     # ------------------------------------------------------------------
 
     def upsert_events(self, events: list[dict], now: _dt_module.datetime) -> None:
-        """Mark-sweep delta-sync events into scheduled_items (source='mail').
-
-        Creates derivative items: 15-min alerts, conflict/b2b notifications,
-        daily digest prompt, and a one-time greeting.
-        """
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
@@ -452,11 +435,6 @@ class CaldavHandler:
     # ------------------------------------------------------------------
 
     def create_event(self, client, params: dict) -> dict:
-        """Create a new VEVENT on the CalDAV server.
-
-        Required params: summary, dtstart (ISO 8601 UTC), dtend (ISO 8601 UTC).
-        Optional: location, description, calendar_name.
-        """
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
@@ -573,11 +551,6 @@ class CaldavHandler:
             break
 
     def update_event(self, client, params: dict) -> dict:
-        """Update an existing CalDAV event by UID.
-
-        Required params: uid.
-        Optional: summary, dtstart, dtend, location, description.
-        """
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
@@ -604,7 +577,6 @@ class CaldavHandler:
             return {"error": str(exc)}
 
     def delete_event(self, client, params: dict) -> dict:
-        """Delete a calendar event from the CalDAV server by UID."""
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
 
@@ -633,11 +605,6 @@ class CaldavHandler:
     # ------------------------------------------------------------------
 
     def find_free_slots(self, params: dict) -> dict:
-        """Find free time slots within working hours by querying scheduled_items.
-
-        params: date_from, date_to, min_duration_minutes (30), working_hours_start (8),
-                working_hours_end (18).
-        """
         try:
             from datetime import timezone as _tz
             from services.database_service import get_shared_db_service
@@ -712,7 +679,6 @@ class CaldavHandler:
             return {"error": f"Failed to find free slots: {exc}"}
 
     def get_attendees(self, params: dict) -> dict:
-        """Return resolved attendees for a calendar event by UID."""
         uid = params.get("uid") or params.get("event_uid")
         if not uid:
             return {"error": "uid is required"}
