@@ -210,23 +210,7 @@ class ModeGateService:
     def tick(
         self, user_turn: str, turn_id: Optional[object] = None
     ) -> Set[str]:
-        """Classify the current turn, advance state, persist, return active modes.
-
-        Steps:
-          1. _load_state() — cold start → zero vector
-          2. bootstrap if cold + enabled
-          3. _classify(user_turn) → probs dict
-          4. _update_state(state, probs)
-          5. _save_state(state_after)
-          6. Emit [MODE-GATE] log line
-          7. Return set of modes whose post-update state >= activation_threshold
-
-        All exceptions are trapped. Returns empty set on any failure.
-
-        Args:
-            user_turn: Raw user input text for this turn.
-            turn_id:   Identifier for log correlation (caller-supplied).
-        """
+        """All exceptions are trapped; returns empty set on any failure."""
         t_start = time.perf_counter()
 
         try:
@@ -299,12 +283,7 @@ class ModeGateService:
             return set()
 
     def get_state(self) -> Dict[str, float]:
-        """Return the current per-mode activation state as a fresh dict.
-
-        Reads from MemoryStore. Callers should fire ``tick()`` first within a
-        turn to ensure the state reflects the current user input; otherwise
-        this returns the prior turn's persisted state.
-        """
+        """Callers should fire ``tick()`` first within a turn; otherwise returns the prior turn's persisted state."""
         try:
             return self._load_state()
         except Exception as exc:
@@ -312,21 +291,12 @@ class ModeGateService:
             return dict.fromkeys(self.MODES, 0.0)
 
     def get_system_prompt_additions(self) -> str:
-        """Return the system-prompt suffix dictated by current mode state.
+        """Returns a suffix to append to the system prompt based on which modes are strongly active (>= STEER_THRESHOLD).
 
-        Reads persisted state from MemoryStore. Callers should fire ``tick()``
-        first within a turn so the result reflects the current user input.
-
-        Behaviour (state >= STEER_THRESHOLD per mode):
-          * brainstorm OR research → proactive suggestion + verification block
-          * analyze                → assumption-check block
-          * math OR coding         → mandatory code_eval verification block
-        Multiple may fire in the same turn — blocks stack in declaration
-        order (brainstorm/research, analyze, math/coding), separated by
-        blank lines.
-
-        Returns the empty string when no mode is strongly active so callers
-        can append unconditionally without conditional join logic.
+        brainstorm OR research → proactive suggestion + verification block;
+        analyze → assumption-check block;
+        math OR coding → mandatory code_eval block.
+        Blocks stack in that order, separated by blank lines. Returns empty string when none are active.
         """
         state = self.get_state()
         parts: List[str] = []
@@ -391,13 +361,8 @@ class ModeGateService:
             logger.warning("%s _save_state failed: %s", LOG_PREFIX, exc)
 
     def _bootstrap_from_last_turn(self, state: Dict[str, float]) -> Dict[str, float]:
-        """Warm up state from the previous user transcript row.
-
-        Only runs once — when the current state vector is all zeros (cold start).
-        Classifies the last user turn and applies one extra decay step to
-        represent the N-1 → N gap.
-
-        On any failure, returns state unchanged and logs at DEBUG.
+        """Classifies the last user turn and applies one extra decay step to represent the N-1 → N gap.
+        On any failure, returns state unchanged.
         """
         if any(v > 0 for v in state.values()):
             return state

@@ -1,11 +1,4 @@
-"""
-Metrics Service — Redis-backed counters, timing records, and dashboard data.
-
-record_counter() is called at the send gateway (Providers._log_after_call) to
-increment daily request / turn counters, bucketed by the bound processor's
-channel (§4e). get_dashboard_data() is called by the /metrics API endpoint and
-derives user_messages_total from an on-read COUNT over the transcript table.
-"""
+"""Metrics Service — Redis-backed counters, timing records, and dashboard data."""
 
 import time
 import json
@@ -21,7 +14,6 @@ class MetricsService:
         self.store = MemoryClientService.create_connection()
 
     def start_trace(self) -> str:
-        """Start a new trace for a request. Returns a unique trace identifier."""
         trace_id = str(uuid.uuid4())[:8]
         trace_key = f"trace:{trace_id}"
         trace_data = {
@@ -34,13 +26,6 @@ class MetricsService:
         return trace_id
 
     def record_timing(self, trace_id: str, operation: str, duration_ms: float):
-        """Record a timing measurement for a traced operation.
-
-        Args:
-            trace_id: Trace identifier from start_trace().
-            operation: Name of the operation (e.g., 'classification').
-            duration_ms: Duration in milliseconds.
-        """
         trace_key = f"trace:{trace_id}"
         trace_json = self.store.get(trace_key)
         if trace_json:
@@ -56,12 +41,6 @@ class MetricsService:
         pipe.execute()
 
     def record_counter(self, metric_name: str, value: int = 1):
-        """Increment a counter metric.
-
-        Args:
-            metric_name: Name of the metric (e.g., 'requests_total').
-            value: Value to increment by (default 1).
-        """
         day_key = time.strftime('%Y-%m-%d')
         counter_key = f"metrics:counter:{metric_name}:{day_key}"
         pipe = self.store.pipeline()

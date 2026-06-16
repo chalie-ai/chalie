@@ -6,18 +6,11 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-MessageProcessor — the single flat processor for all LLM message turns.
+"""MessageProcessor — single flat processor for all LLM message turns.
 
-Lifecycle: one instance per turn. Two turns never share the same object.
-Do not add `.instance()` / singleton accessors. There are NO subclasses
-(spec §7a / P1): every input channel calls the static ``process()`` entry
-point with a per-turn ``ProcessorConfig`` that carries all channel-specific
-behaviour (channel, role, prompt builders, tool scopes, post-turn hook, …).
-
-The class provides the ACT lifecycle (``process`` → ``_run`` → ``_setup`` →
-``_loop`` → ``_record``), tool dispatch through ``ToolDispatcher.dispatch()``, and
-the trail/compaction primitives.
+One instance per turn (no sharing, no subclasses, no singleton accessors).
+Every channel calls the static ``process()`` entry point with a per-turn
+``ProcessorConfig`` carrying all channel-specific behaviour.
 """
 
 import json
@@ -114,29 +107,7 @@ def _sanitize_llm_args(value):
 
 
 class MessageProcessor:
-    """The single flat message processor for every channel (spec §1 / §4 / §7a).
-
-    There are no subclasses.  A turn is driven entirely by a per-turn
-    ``ProcessorConfig`` (channel, role, prompt builders, tool scope, the
-    ``post_turn_hooks`` tuple, …) supplied to the ``process()`` entry point.  The
-    lifecycle is ``process → _run → _setup → _loop → _record``; tool calls route
-    through ``ToolDispatcher.dispatch`` and the act-trail is reconstructed from
-    ``tool_calls`` rows (§4c) rather than held in memory.
-    """
-
-    # ── Tool visibility — per channel, no class-level default ──────────────────
-    #
-    # Tool discovery/blocking is NOT a MessageProcessor class constant.  It is
-    # carried per turn by the channel's ``ProcessorConfig``:
-    #   * ``mp.config.discoverable`` — names find_tools may surface for this turn
-    #   * ``mp.config.blocked``      — names never offered, even via find_tools
-    # ``find_tools`` reads both off ``mp.config`` (see FindToolsAbility), so the
-    # single source of truth for the default discoverable surface is
-    # ``configs.channels._common.DEFAULT_DISCOVERABLE``.  The legacy static
-    # ``DISCOVERABLE`` class list and the never-set ``_BLOCKED`` attribute were
-    # removed here: they made the per-config ``blocked`` set dead code and leaked
-    # delegate-exclusive raw tools (browser/search) onto every channel.
-    # ─────────────────────────────────────────────────────────────────────────
+    """Single flat message processor for every channel — one instance per turn."""
 
     def __init__(self, raw_input: str, metadata: dict | None = None):
         self._raw_input = raw_input
@@ -168,11 +139,6 @@ class MessageProcessor:
         self._cancel_event: threading.Event = threading.Event()
 
     def cancel(self) -> None:
-        """Signal the ACT loop to exit at the next iteration boundary.
-
-        Public interface for stop endpoints — avoids reaching into the private
-        ``_cancel_event`` attribute from outside the class hierarchy.
-        """
         self._cancel_event.set()
 
     # ── Public per-turn attribute aliases ─────────────────────────────────────
@@ -182,16 +148,10 @@ class MessageProcessor:
 
     @property
     def raw_input(self) -> str:
-        """Public, read-only alias for the turn's raw input text.
-
-        Read by the turn-0 flashback (continuation gate + topic inference) so the
-        seed never reaches into the private backing field across class lines.
-        """
         return self._raw_input
 
     @property
     def uid(self) -> 'int | None':
-        """Public alias for _uid (the flat-path turn's transcript id)."""
         return self._uid
 
     @uid.setter
@@ -200,7 +160,6 @@ class MessageProcessor:
 
     @property
     def cancel_event(self) -> threading.Event:
-        """Public alias for _cancel_event (the flat-path cooperative cancel flag)."""
         return self._cancel_event
 
     @cancel_event.setter
@@ -209,9 +168,6 @@ class MessageProcessor:
 
     @property
     def active_tools(self) -> list:
-        """Public alias for _active_tools — the tool NAMES live this turn (seeded
-        with config.always_available by _setup, appended by find_tools).
-        build_tools resolves these names to schemas each ACT iteration."""
         return self._active_tools
 
     @active_tools.setter
