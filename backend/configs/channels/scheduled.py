@@ -6,25 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""ScheduledConfig — the work-loop channel for a fired scheduled prompt.
+"""ScheduledConfig — work-loop channel for a fired scheduled prompt.
 
-A scheduled prompt fires in two stages (modelled on the web_browse/web_search
-delegates):
-
-  1. **Work loop (this config)** — an independent ``MessageProcessor.process``
-     runs the instruction with the full tool surface and the memory tool, on its
-     own ``scheduled`` channel. The instruction is persisted (``skip_input_row``
-     is False) so a fired task is recoverable, and the act-trail renders across
-     iterations. This channel resolves to the MUTED source profile
-     (services/source_profiles.py), so the work loop produces no episodes, facts,
-     geo or pattern signal.
-
-  2. **Return hop** — the scheduler hands this loop's result to an ordinary
-     ``UserConfig`` turn on channel ``user`` (the existing ``dispatch_message``
-     seam), which is what surfaces to the user and is episodically encoded as a
-     normal user episode.
-
-Runs outside any user session, so ``policy_channel`` is SUBCONSCIOUS.
+The scheduler hands the result to a UserConfig turn on the user channel; that
+turn is what surfaces to the user and gets episodically encoded.
 """
 
 from __future__ import annotations
@@ -61,12 +46,8 @@ _SCHEDULED_BLOCKED = PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS
 
 
 class ScheduledConfig(ProcessorConfig):
-    """ProcessorConfig for the scheduled work loop.
-
-    ``policy_channel`` is SUBCONSCIOUS — a scheduled task runs without a live
-    user session. ``broadcast_to`` is None: the work loop is silent; the
-    return-path UserConfig turn is what reaches the UI.
-    """
+    """``broadcast_to=None`` — the work loop is silent; the return-path
+    UserConfig turn is what reaches the UI."""
 
     def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
         super().__init__(
