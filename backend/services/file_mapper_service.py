@@ -47,29 +47,17 @@ class FileMapperService:
 
     @classmethod
     def get_secure_dir(cls) -> Path:
-        """Return the directory holding vault key-material backups.
-
-        Lives under the persistent data volume (``data/secure``) so the backup
-        survives container recreation — see ``Dockerfile`` ``VOLUME`` declaration.
-        """
+        """Return the vault key-material backups directory."""
         return cls._SECURE_DIR
 
     @classmethod
     def get_vault_backup_path(cls, stamp: str) -> Path:
-        """Return path to a vault key-material backup file for the given stamp.
-
-        Backups are append-only and retained forever — each new DEK generation
-        writes a fresh, uniquely-stamped file. See ``VaultService._write_backup``.
-        """
+        """Return the vault key-material backup path for a given stamp."""
         return cls._SECURE_DIR / f"vault_backup_{stamp}.json"
 
     @classmethod
     def list_vault_backups(cls) -> list[Path]:
-        """Return all vault backup files, newest first.
-
-        Ordered by filename descending; the fixed-width UTC timestamp stamp makes
-        lexical order match chronological order. Empty list if the dir is absent.
-        """
+        """Return all vault backup files, newest first."""
         if not cls._SECURE_DIR.is_dir():
             return []
         return sorted(cls._SECURE_DIR.glob("vault_backup_*.json"), reverse=True)
@@ -158,21 +146,12 @@ class FileMapperService:
 
     @classmethod
     def get_pending_restore_path(cls, *parts: str) -> Path:
-        """Return the staged-restore directory (``data/.pending-restore``).
-
-        Written by ``SnapshotService.stage_import`` and consumed at boot by
-        ``SnapshotService.apply_pending`` — the dotted-dir name lives here so it
-        is never scattered as a literal at call sites.
-        """
+        """Return the staged-restore directory (``data/.pending-restore``)."""
         return cls.get_data_path(_PENDING_RESTORE_DIR, *parts)
 
     @classmethod
     def get_snapshot_staging_path(cls, *parts: str) -> Path:
-        """Return a scratch directory under data/ for assembling a snapshot.
-
-        Used by ``SnapshotService`` as the temp workspace while extracting and
-        verifying an import before it is atomically renamed into place.
-        """
+        """Return the data-level scratch directory for assembling a snapshot."""
         return cls.get_data_path(_SNAPSHOT_STAGING_DIR, *parts)
 
     @classmethod
@@ -232,7 +211,7 @@ class FileMapperService:
 
     @classmethod
     def validate_document_path(cls, full_path: str) -> bool:
-        """Return True if *full_path* resolves inside the documents root."""
+        """Check if *full_path* resolves inside the documents root."""
         import os
         real = os.path.realpath(full_path)
         root = os.path.realpath(str(cls._DOCUMENTS_DIR))
