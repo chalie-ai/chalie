@@ -14,11 +14,10 @@ import { showToast } from './utils.js';
  */
 export class ImageAttach {
   /**
-   * @param {{ getHost: () => string, onDocumentDrop?: (file: File) => void }} opts
+   * @param {{ getHost: () => string }} opts
    */
-  constructor({ getHost, onDocumentDrop }) {
+  constructor({ getHost }) {
     this._getHost = getHost;
-    this._onDocumentDrop = onDocumentDrop || null;
 
     // [{file: File, filename: string, element: HTMLElement, objectUrl, isImage}]
     this._attachments = [];
@@ -32,10 +31,14 @@ export class ImageAttach {
    * Bind the file input change handler.  Must be called once the DOM is ready.
    */
   init() {
-    document.getElementById('imageFileInput')?.addEventListener('change', (e) => {
-      if (e.target.files?.length) this.handleFile(e.target.files[0]);
-      e.target.value = '';
-    });
+    const bindInput = (id) => {
+      document.getElementById(id)?.addEventListener('change', (e) => {
+        if (e.target.files?.length) this.handleFile(e.target.files[0]);
+        e.target.value = '';
+      });
+    };
+    bindInput('imageFileInput');
+    bindInput('docFileInput');
   }
 
   /**
@@ -141,15 +144,8 @@ export class ImageAttach {
       dropzone.classList.remove('dragover');
       const files = ev.dataTransfer?.files;
       if (!files?.length) return;
-      for (const file of files) {
-        if (file.type.startsWith('image/')) {
-          this.handleFile(file);
-        } else if (this._onDocumentDrop) {
-          this._onDocumentDrop(file);
-        } else {
-          showToast('Drop an image or document here');
-        }
-      }
+      // Images and documents both ride the multipart POST /chat via handleFile.
+      for (const file of files) this.handleFile(file);
     });
 
     pasteTarget.addEventListener('paste', (ev) => {

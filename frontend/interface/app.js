@@ -19,7 +19,6 @@ import { TaskStrip } from './task_strip.js';
 import { EventRouter } from './event_router.js';
 import { Notifications } from './notifications.js';
 import { ImageAttach } from './image_attach.js';
-import { DocumentUpload } from './document_upload.js';
 import { UpdateSystem } from './update_system.js';
 import { PermissionNotifications } from './permission_notifications.js';
 import { QuickTipCard } from './quick_tip_card.js';
@@ -64,10 +63,9 @@ class ChalieApp {
     // Notifications module
     this._notifications = new Notifications();
 
-    // Image attach module
+    // File attach module — images AND documents ride the multipart POST /chat.
     this._imageAttach = new ImageAttach({
       getHost: () => this._backendHost,
-      onDocumentDrop: (file) => this._docUpload?.uploadFile(file),
     });
     this._imageAttach.init();
 
@@ -80,10 +78,6 @@ class ChalieApp {
     // Voice player (speaker button → overlay audio player)
     this._voicePlayer = new VoicePlayer({ getHost: () => this._backendHost });
 
-    // Document upload module (must be constructed before Chat so the reference is live)
-    this._docUpload = new DocumentUpload({ api: this.api, getHost: () => this._backendHost });
-    this._docUpload.init();
-
     // Chat module (send + history)
     this._chat = new Chat({
       api: this.api,
@@ -92,7 +86,6 @@ class ChalieApp {
       presence: this.presence,
       notifications: this._notifications,
       imageAttach: this._imageAttach,
-      documentUpload: this._docUpload,
     });
     this._chat.onAuthFailure(() => this._handleAuthFailure());
 
@@ -634,13 +627,8 @@ class ChalieApp {
       hideOverlay();
       const files = ev.dataTransfer?.files;
       if (!files?.length) return;
-      for (const file of files) {
-        if (file.type.startsWith('image/')) {
-          this._imageAttach.handleFile(file);
-        } else {
-          this._docUpload.uploadFile(file);
-        }
-      }
+      // Images and documents both ride the multipart POST /chat.
+      for (const file of files) this._imageAttach.handleFile(file);
     });
 
     // Hide overlay when drop is handled elsewhere (e.g. input-dock)
@@ -680,11 +668,11 @@ class ChalieApp {
       }
     }, { passive: true });
 
-    // "Attach Document" → upload dialog
+    // "Attach Document" → document file picker (rides the multipart POST /chat)
     menu.querySelector('[data-action="document"]')?.addEventListener('click', () => {
       menu.classList.add('hidden');
       attachBtn.classList.remove('active');
-      this._docUpload.openDialog();
+      document.getElementById('docFileInput')?.click();
     });
 
     // "Take Photo / Pick Image" → image file input
