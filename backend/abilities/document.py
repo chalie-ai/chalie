@@ -177,14 +177,11 @@ def _dispatch(service, action: str, params: dict) -> ToolResult:
 
 
 def _exact_name_matches(docs: list, name: str) -> list:
-    """Candidates whose ``original_name`` equals *name* case-insensitively."""
     lowered = name.lower()
     return [d for d in docs if (d.get("original_name") or "").lower() == lowered]
 
 
 def _candidate_rows(docs: list) -> list:
-    """Render candidate documents as JSON rows (id, name, snippet) for an
-    ambiguous-match error body so the model can re-call with the chosen id."""
     rows = []
     for d in docs:
         snippet = (d.get("summary") or d.get("clean_text") or "").strip()[:_SNIPPET_CHARS]
@@ -250,7 +247,6 @@ def _resolve_unique(service, params: dict) -> "dict | ToolResult":
 
 
 def _group_results_by_doc(results: list) -> dict:
-    """Bucket data_graph search rows by their owning document id."""
     doc_artifacts: dict = {}
     for row in results:
         source = row.get("source", "") or ""
@@ -311,7 +307,6 @@ def _handle_list(service) -> ToolResult:
 
 
 def _append_meta_summary(lines: list, doc: dict, meta: dict) -> None:
-    """Append type/pages/companies/dates/values/refs lines to ``lines`` based on parsed meta."""
     doc_type = meta.get("document_type", {})
     if isinstance(doc_type, dict):
         doc_type = doc_type.get("value", "")
@@ -336,7 +331,6 @@ def _append_meta_summary(lines: list, doc: dict, meta: dict) -> None:
 
 
 def _fetch_doc_fragments(doc_id: str) -> list:
-    """Pull data_graph artifact fragments for a document, ordered by key."""
     from services.data_graph_service import get_data_graph_service
     dgs = get_data_graph_service()
     with dgs.db.connection() as conn:

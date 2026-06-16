@@ -290,7 +290,6 @@ def _resolve_items(lst: dict, terms: list) -> "list | ToolResult":
 
 
 def _rows(lst: dict) -> list:
-    """Model-facing item rows: id/text/done/position (content→text, checked→done)."""
     return [
         {
             "id": item["id"],
@@ -303,12 +302,10 @@ def _rows(lst: dict) -> list:
 
 
 def _body(lst: dict) -> dict:
-    """The structured body for a list-returning action: id, name, and rows."""
     return {"id": lst["id"], "name": lst["name"], "items": _rows(lst)}
 
 
 def _fe_card(lst: dict) -> dict:
-    """The LEGACY frontend card payload: id, name, items with content/checked."""
     return {
         "id": lst["id"],
         "name": lst["name"],

@@ -47,7 +47,6 @@ _PRINT_VAR = "_print"
 
 
 def _guarded_getattr(obj, name):
-    """Block access to private/dunder attributes inside the sandbox."""
     if name.startswith("_"):
         raise AttributeError(f"Access to '{name}' is not permitted in the sandbox")
     return getattr(obj, name)
@@ -274,8 +273,6 @@ def _compile_and_run(code: str) -> dict:
 
 
 def _captured(exec_locals: dict) -> str:
-    """Return text accumulated by the sandbox PrintCollector, or '' if the code
-    never called print()."""
     collector = exec_locals.get(_PRINT_VAR)
     return collector() if collector is not None else ""
 

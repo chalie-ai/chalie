@@ -278,15 +278,10 @@ def _is_relevant(identifier: str, contact: dict) -> bool:
 
 
 def _contact_name(contact: dict) -> str:
-    """The display name of a contact dict — ``fn`` for CardDAV profiles, ``name``
-    for legacy IMAP rows."""
     return (contact.get("fn") or contact.get("name") or "").strip()
 
 
 def _contact_id(contact: dict) -> str:
-    """A stable identifier for a contact dict — ``uid`` for CardDAV profiles,
-    falling back to the display name / legacy email so a candidate row always
-    carries an addressable id."""
     return (
         contact.get("uid")
         or _contact_name(contact)

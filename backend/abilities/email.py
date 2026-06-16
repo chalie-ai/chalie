@@ -211,12 +211,6 @@ _READ_BODY_LIMIT = 4000
 def _shape_result(action: str, body: dict) -> ToolResult:
     """Reshape a successful handler dict into the contract body for *action*.
 
-    search → JSON rows (id, from, subject, date, snippet) + count meta.
-    read   → the structured message (body clipped via ``truncate``, truncated meta).
-    send / reply / forward / draft → an echo of the sent envelope (to, subject,
-    message_id when the handler surfaces it).
-    manage → the operation echo.
-
     A handler that surfaced its own ``error`` key (a backend failure, NOT a bad
     input) is passed through as the success body unchanged — the contract reserves
     ``err()`` for anticipated input failures; the dispatcher wraps the unexpected."""
@@ -266,13 +260,7 @@ def _shape_result(action: str, body: dict) -> ToolResult:
 # ---------------------------------------------------------------------------
 
 def _validate_recipient(params: dict) -> ToolResult | None:
-    """Reject an obviously-malformed ``to`` recipient BEFORE a send is attempted.
-
-    Returns an ``invalid-recipient`` ToolResult when ``to`` is present but does
-    not look like an email address; ``None`` when it is absent (the dispatcher's
-    ACTION_REQUIRED pre-gate already reports a missing ``to`` as missing-params)
-    or well-formed. Runs ahead of the base's connected gate so the error fires
-    regardless of SMTP state."""
+    """Runs ahead of the base's connected gate so the error fires regardless of SMTP state."""
     to = (params.get(Keys.to) or "").strip()
     if not to:
         return None

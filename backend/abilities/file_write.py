@@ -136,8 +136,6 @@ class FileWriteAbility(Ability):
         )
 
     def _read_called_first(self, db, target: Path) -> bool:
-        """True if a prior ``read`` call on this resolved path exists in the
-        transcript (or the guard cannot anchor and so does not block)."""
         proc = self.mp
         if proc is None:
             return True
