@@ -36,20 +36,14 @@ class BudgetCappedAbility(Ability, ABC):
     BUDGET_CAP: ClassVar[int] = 0
 
     def _budget_count(self) -> int:
-        """Current call count read off the processor (0 when absent / no mp)."""
         proc = self.mp
         if proc is None:
             return 0
         return getattr(proc, self.BUDGET_COUNTER_ATTR, 0)
 
     def budget_exceeded(self) -> ToolResult | None:
-        """Return a loud ``capped`` result when the per-turn cap is hit, else None.
-
-        The result is a SUCCESS (nothing failed — the budget is a deliberate
-        ceiling) but it is never silent: ``meta capped=true`` is the flat signal
-        the model reads, and the body spells out that nothing was stored. Returns
-        ``None`` while the ability is still under its cap.
-        """
+        """Returns SUCCESS (not error) — the budget is a deliberate ceiling, not a
+        failure. ``meta capped=true`` is the flat signal the model reads."""
         if self._budget_count() >= self.BUDGET_CAP:
             return ToolResult.ok(
                 {
@@ -65,7 +59,6 @@ class BudgetCappedAbility(Ability, ABC):
         return None
 
     def bump_budget(self) -> None:
-        """Increment the processor's call counter for this ability by one."""
         proc = self.mp
         if proc is not None:
             setattr(proc, self.BUDGET_COUNTER_ATTR, self._budget_count() + 1)
