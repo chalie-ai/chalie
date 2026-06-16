@@ -32,7 +32,6 @@ class HaWebSocketHandler:
         return self._thread is not None and self._thread.is_alive()
 
     def start(self, ws_url: str, token: str) -> None:
-        """Start the WebSocket listener thread (idempotent)."""
         if self.is_alive:
             return
         self._url = ws_url
@@ -46,7 +45,6 @@ class HaWebSocketHandler:
         self._thread.start()
 
     def stop(self) -> None:
-        """Signal the thread to stop and wait for it to exit."""
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
