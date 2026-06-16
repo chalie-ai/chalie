@@ -51,41 +51,24 @@ _BATCH_MAX = 50
 # ---------------------------------------------------------------------------
 
 def _get_rate_limiter():
-    """Return the process-singleton WrapperRateLimiter."""
     from services.wrapper_rate_limiter import WrapperRateLimiter
     return WrapperRateLimiter()
 
 
 def _get_wrapper_service():
-    """Return a WrapperAuthService using the shared DatabaseService."""
     from services.database_service import get_shared_db_service
     from services.wrapper_auth_service import WrapperAuthService
     return WrapperAuthService(get_shared_db_service())
 
 
 def _effective_wrapper_id() -> str:
-    """Return the caller's wrapper_id, falling back to '__chat_ui__' for cookie auth."""
     wid = getattr(g, "wrapper_id", None)
     return wid if wid else "__chat_ui__"
 
 
 def _check_signal_capability(wrapper_id: str, signal_type: str) -> bool:
-    """Return True if the wrapper may emit ``signal_type``.
-
-    Cookie-authenticated callers (wrapper_id == '__chat_ui__') are always
-    allowed — they are the native UI, not an external wrapper.
-
-    Bearer-authenticated callers must have ``signal_type`` listed in
-    ``capabilities.signals``.  An absent or empty ``signals`` list means the
-    wrapper may not emit *any* signals.
-
-    Args:
-        wrapper_id: The resolved wrapper identifier.
-        signal_type: The signal type string the caller wants to emit.
-
-    Returns:
-        ``True`` if the caller is permitted, ``False`` otherwise.
-    """
+    """Cookie callers are always allowed; bearer callers need ``signal_type`` in
+    ``capabilities.signals`` (absent/empty list means no signals permitted)."""
     if wrapper_id == "__chat_ui__":
         return True
 
@@ -99,16 +82,6 @@ def _check_signal_capability(wrapper_id: str, signal_type: str) -> bool:
 
 
 def _validate_signal(body: dict | None) -> tuple[dict | None, str | None]:
-    """Validate a single signal payload.
-
-    Args:
-        body: Raw dict from the request JSON.
-
-    Returns:
-        ``(cleaned_dict, None)`` on success, or ``(None, error_message)`` on
-        failure.  The cleaned dict contains only the known fields with defaults
-        applied.
-    """
     if not isinstance(body, dict):
         return None, "signal must be a JSON object"
 

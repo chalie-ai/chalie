@@ -36,7 +36,6 @@ _INTERVAL_PREFIX = "interval:"
 # ---------------------------------------------------------------------------
 
 def _normalize_hhmm(s: str) -> str | None:
-    """Return HH:MM string if valid, else None."""
     if not s:
         return None
     parts = s.strip().split(":")
@@ -52,10 +51,7 @@ def _normalize_hhmm(s: str) -> str | None:
 
 
 def _validate_recurrence(recurrence: str | None) -> tuple:
-    """Validate and normalise the recurrence field.
-
-    Returns (normalised_recurrence, None) on success, or (None, error_str).
-    """
+    """Returns (normalised_recurrence, None) on success, or (None, error_str)."""
     if recurrence is None:
         return None, None
     recurrence = recurrence.strip()
@@ -73,7 +69,7 @@ def _validate_recurrence(recurrence: str | None) -> tuple:
 
 
 def _validate_window(window_start: str | None, window_end: str | None, recurrence: str | None) -> str | None:
-    """Validate window_start/window_end consistency. Returns error string or None."""
+    """Returns error string or None."""
     if (window_start or window_end) and recurrence != "hourly":
         return "window_start/window_end are only valid for 'hourly' recurrence"
     if window_start and not window_end:
@@ -84,10 +80,7 @@ def _validate_window(window_start: str | None, window_end: str | None, recurrenc
 
 
 def _validate_item(data: dict, require_future: bool = True) -> tuple:
-    """
-    Validate item fields.  Returns (clean_dict, None) on success,
-    or (None, error_str) on failure.
-    """
+    """Returns (clean_dict, None) on success, or (None, error_str) on failure."""
     message = (data.get("message") or "").strip()
     if not message:
         return None, "message is required"

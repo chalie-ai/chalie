@@ -27,7 +27,6 @@ def _get_services():
 @voice_settings_bp.route("", methods=["GET"])
 @require_session
 def get_voice_settings():
-    """Return current voice enabled state and installation status."""
     from services.runtime_deps_service import RuntimeDepsService
 
     settings = _get_services()
@@ -44,11 +43,6 @@ def get_voice_settings():
 @voice_settings_bp.route("", methods=["PUT"])
 @require_session
 def update_voice_settings():
-    """Enable or disable voice support.
-
-    Body: {"enabled": true/false}
-    When enabling, triggers background installation of voice dependencies.
-    """
     from services.runtime_deps_service import RuntimeDepsService
 
     body = request.get_json(force=True)
