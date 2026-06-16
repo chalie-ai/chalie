@@ -421,15 +421,18 @@ onBeforeUnmount(() => {
       ref="imageInputRef"
       type="file"
       accept="image/jpeg,image/png,image/webp,image/gif"
+      aria-label="Attach image"
       hidden
       @change="onFileInputChange"
     />
 
     <!-- Hidden document picker — accepts the legacy document set (index.html:319). -->
     <input
+      id="docFileInput"
       ref="docInputRef"
       type="file"
       accept=".pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml"
+      aria-label="Attach document"
       hidden
       @change="onFileInputChange"
     />
