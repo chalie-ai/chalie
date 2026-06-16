@@ -1,18 +1,3 @@
-"""
-Wrappers API — CRUD endpoints for external wrapper bearer tokens.
-
-Routes:
-  POST   /api/wrappers                    — create a wrapper token (cookie auth only)
-  GET    /api/wrappers                    — list active wrappers
-  GET    /api/wrappers/<id>              — get wrapper details + capabilities
-  PUT    /api/wrappers/<id>/capabilities — update capabilities (bearer, own wrapper only)
-  DELETE /api/wrappers/<id>             — revoke wrapper token
-
-The POST route intentionally restricts token creation to cookie-authenticated
-sessions: only a human sitting in front of the UI should be able to mint new
-wrapper credentials.  All other routes accept both cookie and bearer auth.
-"""
-
 import logging
 
 from flask import Blueprint, g, jsonify, request

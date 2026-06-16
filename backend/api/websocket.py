@@ -1,20 +1,3 @@
-"""
-WebSocket endpoint — server→client push channel.
-
-All client→server requests use HTTP (POST /chat, POST /action, POST /upload).
-The WebSocket is receive-only from the client's perspective. The server sends:
-  ← {"type": "status", "stage": "..."}
-  ← {"type": "message", "content": "...", ...}
-  ← {"type": "act_narration", "text": "...", "step": N}
-  ← {"type": "done", "duration_ms": N}
-  ← {"type": "drift|task|reminder|escalation|notification", ...}
-  ← {"type": "permission_request", ...}
-  ← {"type": "ping"}
-
-The only client→server message the server expects is {"type": "pong"}.
-Any other client message is silently ignored.
-"""
-
 import json
 import logging
 import uuid

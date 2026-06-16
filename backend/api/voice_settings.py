@@ -1,10 +1,3 @@
-"""Voice Settings API — enable/disable voice and check installation status.
-
-Routes:
-  GET  /api/voice-settings          — get voice enabled state + install status
-  PUT  /api/voice-settings          — enable or disable voice
-"""
-
 import logging
 
 from flask import Blueprint, jsonify, request
