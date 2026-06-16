@@ -1,50 +1,23 @@
 #!/usr/bin/env python3
-"""
-One-time migration: rebuild transcript table with clean north-star-aligned data.
+"""One-time migration: rebuild transcript with clean north-star-aligned pairs.
 
-IMPORTANT: Stop Chalie before running this script.
+STOP CHALIE before running. Reads the last N entries per channel, groups
+into (user → assistant) exchange pairs, strips the UserPromptAssemblyService
+wrapper from user content, dedupes, and re-inserts clean pairs WITHOUT
+tool_calls rows — north-star format has no role='tool' in transcript and no
+tool_calls table entries (intermediate tool work is intentionally lost).
 
-What this does:
-  1. Reads the last N transcript entries for the specified channel(s)
-  2. Groups into (user → assistant) exchange pairs; skips background turns
-     (proactive_thought, subagent, scheduled) and tool-result rows
-  3. Strips the UserPromptAssemblyService wrapper from user content — keeps
-     only the raw user message below the "## User Message" marker
-  4. Deduplicates pairs by content hash
-  5. Deletes orphaned tool_calls, truncates transcript
-     rows for the affected channels
-  6. Re-inserts clean (user, assistant) pairs in chronological order
-     WITHOUT tool_calls rows — north-star format: no role='tool' in transcript,
-     no tool_calls table entries (tool call intermediate work is intentionally lost)
+build_messages() reads tool_calls[] joined to a tool_call_id IS NOT NULL row;
+with no re-created tool_calls rows, assistant messages rebuild with an empty
+tool_calls[] — valid provider format, no orphaned tool/result sequences.
 
-Why tool calls are dropped:
-  build_messages() only adds tool_calls[] to an assistant message if there are
-  matching tool_calls table rows with tool_call_id IS NOT NULL.  With no
-  re-created tool_calls rows, assistant messages rebuild with an empty
-  tool_calls[] — valid provider format, no orphaned tool/result sequences.
+Collateral tables (episodes, memory_recall_log, compaction tool_calls) get
+orphaned integer IDs that are harmless: episode retrieval uses vector
+similarity, not transcript ID lookup; compaction lookup filters by
+transcript.channel JOIN so orphaned tool_calls rows for deleted IDs are
+invisible.
 
-Collateral tables:
-  - episodes: transcript_id_start/end references in episodes become orphaned
-    integer IDs. SQLite does not enforce this FK, and episode retrieval uses
-    vector similarity, not transcript ID lookup — harmless.
-  - memory_recall_log: same orphaned-ID situation, same non-impact.
-  - compaction tool_calls rows: watermark IDs reference transcript rows that
-    no longer exist after the rebuild. These rows are harmless — the canonical
-    lookup (get_compaction) filters by transcript.channel JOIN, so orphaned
-    tool_calls rows for deleted transcript IDs are invisible to the lookup.
-
-Usage:
-  # Dry run — show what would happen, change nothing
-  python migrate_transcript_rebuild.py --dry-run
-
-  # Run against default DB (data/chalie.db), channel='user'
-  python migrate_transcript_rebuild.py
-
-  # Custom DB path (e.g. operating on a backup)
-  python migrate_transcript_rebuild.py --db /tmp/chalie.db.pre-0.5.0
-
-  # Different channel or limit
-  python migrate_transcript_rebuild.py --channel main --limit 200
+Usage: --dry-run, default, --db PATH, --channel NAME, --limit N
 """
 
 import argparse
@@ -99,18 +72,16 @@ _SKIP_ROLES = {"proactive_thought", "subagent", "subagent_return", "scheduled", 
 
 
 def extract_user_message(content: str) -> str | None:
-    """Extract the raw user message from an assembled prompt.
-
-    Returns the extracted text, or None if unrecoverable.
+    """Returns the raw message, or None if unrecoverable.
 
     Three cases:
-      1. Has '## User Message\\n' marker: extract everything after it.
-         If the extracted text itself contains assembly headers, the entry
-         is a recursive blob (world-state injected into the prior turn's
-         content, then re-assembled) — skip it.
-      2. No assembly headers at all, short enough, no injection prefix:
-         treat as raw user text (old format before UserPromptAssemblyService).
-      3. Anything else: unrecoverable — skip.
+    1. Has '## User Message\\n' marker → extract everything after it. If the
+       extracted text still contains assembly headers, the entry is a
+       recursive blob (world-state injected into the prior turn's content,
+       then re-assembled) — skip it.
+    2. No assembly headers, short enough, no injection prefix → treat as
+       raw user text (old pre-UserPromptAssemblyService format).
+    3. Anything else: unrecoverable.
     """
     if not content:
         return None
@@ -152,7 +123,6 @@ def _pair_key(user_content: str, assistant_content: str) -> str:
 # ── Core migration ──────────────────────────────────────────────────────────
 
 def run_migration(db_path: str, channel: str, limit: int, dry_run: bool):
-    """Main migration routine for one channel.  Returns a result dict."""
 
     if not Path(db_path).exists():
         print(f"  ERROR: DB not found at {db_path}", file=sys.stderr)
@@ -379,18 +349,11 @@ def _flag_path(db_path: str) -> Path:
 
 
 def run_once_on_boot(db_path: str | None = None, limit: int = 100) -> None:
-    """Run the transcript rebuild migration exactly once at boot time.
+    """Sentinel-file gated — runs once on boot then no-ops.
 
-    Checks for a sentinel file alongside the DB.  If absent, runs the
-    migration silently on all non-background channels and writes the sentinel
-    on success.  Subsequent boots are no-ops.
-
-    Safe to call even if the DB has no transcript rows — the per-channel
-    loop exits early with "Nothing to write."
-
-    Args:
-        db_path: Override the DB path (default: FileMapperService.get_db_path()).
-        limit:   Number of most-recent rows to analyse per channel (default 100).
+    Safe to call on an empty DB (per-channel loop exits early with
+    'Nothing to write.'). Never raises — logs and carries on so a failed
+    migration cannot block startup.
     """
     db_path = _resolve_db(db_path)
     flag = _flag_path(db_path)

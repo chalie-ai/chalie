@@ -1,9 +1,6 @@
-"""
-Dev utility — clears all cognitive data tables in the SQLite database.
+"""Dev utility — clears all cognitive data tables in the SQLite database.
 
-Usage:
-    cd backend && python scripts/reset_db.py
-"""
+Usage: `cd backend && python scripts/reset_db.py`"""
 
 import logging
 import sys

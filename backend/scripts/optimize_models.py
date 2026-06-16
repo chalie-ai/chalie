@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
-"""
-Pre-optimize ONNX models for faster cold boot.
+"""Pre-optimize ONNX models for faster cold boot.
 
-Loads each model with ORT_ENABLE_EXTENDED graph optimization and saves the
-optimized graph to disk. At runtime, services detect these files and
-skip graph optimization entirely — turning a multi-minute session
-creation into a sub-second file read.
+Loads each model with ORT_ENABLE_EXTENDED graph optimization and writes the
+optimized graph to disk. At runtime services detect these files and skip
+graph optimization entirely — turning a multi-minute session creation into
+a sub-second file read.
 
 Uses ORT_ENABLE_EXTENDED (not ORT_ENABLE_ALL) so the output is portable
 across CPU architectures (ARM/x86). The runtime fallback still uses
 ORT_ENABLE_ALL for hardware-specific optimizations when no pre-optimized
 file exists.
 
-The optimized files are tied to the pinned onnxruntime version (1.20.1).
-Re-run this script after upgrading onnxruntime.
+Optimized files are tied to the pinned onnxruntime version (1.20.1) —
+re-run this script after upgrading onnxruntime.
 
-Usage:
-    cd backend && python scripts/optimize_models.py
-
-    # Then upload the .optimized.onnx files to GitHub releases or
-    # commit them to the models directory for Docker builds.
+Usage: `cd backend && python scripts/optimize_models.py`, then upload the
+`.optimized.onnx` files to GitHub releases or commit them to the models
+directory for Docker builds.
 """
 
 import sys

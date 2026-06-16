@@ -6,12 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-MCP Server — exposes Chalie as an MCP endpoint for external agents.
+"""MCP server — exposes Chalie as an MCP endpoint for external agents.
 
-External agents (Claude Code, Codex, etc.) connect over HTTP and communicate
-with Chalie via a single tool. Conversations are stored in per-agent channels
-and optionally disclosed to the user.
+Conversations are stored in per-agent channels and optionally disclosed to
+the user.
 """
 
 from mcp_server.server import create_mcp_server, run_mcp_server
