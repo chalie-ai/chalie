@@ -67,7 +67,14 @@ docs/superpowers/
 backend/docs/superpowers/
 
 # Vue frontend workspace
+# The built app dists are COMMITTED (TKT-993) so source/tarball installs ship
+# ready-to-serve assets without a Node/pnpm build step. Other dist/ dirs
+# (shared packages, build intermediates) stay ignored.
 frontend/**/dist/
+!frontend/apps/interface/dist/
+!frontend/apps/interface/dist/**
+!frontend/apps/brain/dist/
+!frontend/apps/brain/dist/**
 frontend/apps/*/test-results/
 frontend/apps/*/playwright-report/
 frontend/**/.auth/
