@@ -180,14 +180,8 @@ class SavePattern(BudgetCappedAbility):
 
 
 def _upsert_pattern(validated: dict, source: str) -> tuple[int, float, bool]:
-    """Insert or merge a behavioral_pattern row in data_graph.
-
-    ``source`` is the provenance of the pass that produced this pattern
-    (``pattern_match`` or ``geo_pattern``).
-
-    Returns ``(row_id, confidence, reinforced)`` — ``reinforced`` is True when an
-    existing pattern was merged, False when a fresh row was inserted.
-    """
+    """``source`` is the provenance of the pass that produced this pattern
+    (``pattern_match`` or ``geo_pattern``)."""
     now_iso = utc_now().isoformat()
     db = get_shared_db_service()
 
