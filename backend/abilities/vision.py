@@ -49,10 +49,9 @@ _NO_VISION_NOTE = (
 
 
 def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel) -> dict:
-    """Describe an image. Forks ONCE on vision-provider-configured.
-    Returns {"description": str, "vision_used": bool, "note": str|None}.
-    Provider path RAISES on provider failure (never swallowed); the OCR fallback
-    is ONLY for the not-configured path."""
+    """Forks ONCE on vision-provider-configured. Provider path RAISES on provider
+    failure (never swallowed); the OCR fallback is ONLY for the not-configured path.
+    """
     from services.database_service import get_shared_db_service  # noqa: PLC0415
     from services.provider_db_service import ProviderDbService  # noqa: PLC0415
 

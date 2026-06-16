@@ -48,7 +48,6 @@ _META_TOOLS = frozenset({
 
 
 def _discover_tool_names() -> str:
-    """Auto-discover user-facing ability names from the abilities directory."""
     abilities_dir = FileMapperService.get_abilities_path()
     names = sorted(
         p.stem for p in abilities_dir.glob("*.py")
@@ -180,7 +179,6 @@ class SkillBuilderAbility(Ability):
 
 
 def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | None:
-    """Return the skill row for a user-created skill matching title (case-insensitive)."""
     row = conn.execute(
         "SELECT id, title, use_for, content, tags, version "
         "FROM skills WHERE source = 'user' AND lower(title) = lower(?)",
