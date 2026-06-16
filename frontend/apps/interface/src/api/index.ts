@@ -12,7 +12,6 @@
 export { conversation } from './conversation';
 export { moments } from './moments';
 export { voice } from './voice';
-export { documents } from './documents';
 export { scheduler } from './scheduler';
 export { system } from './system';
 export { tips } from './tips';

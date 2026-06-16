@@ -120,7 +120,7 @@ onBeforeUnmount(() => {
         class="image-preview__remove"
         type="button"
         aria-label="Remove attachment"
-        @click="attachments.removeImage(index)"
+        @click="attachments.remove(index)"
       >
         ×
       </button>
@@ -166,6 +166,12 @@ onBeforeUnmount(() => {
       width: auto;
       min-width: 64px;
       max-width: 120px;
+      // Image thumbs hide the frame behind the <img>; a doc thumb shows it, so
+      // it needs a theme-aware surface. The base --surface-raised/--surface vars
+      // don't exist in the interface theme and fell back to a hardcoded #222 —
+      // illegible dark-on-dark with the theme-aware --text-secondary filename in
+      // light mode. Use the real raised-surface token so both themes have contrast.
+      background: var(--bg-surface-2);
     }
   }
 
