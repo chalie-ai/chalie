@@ -1,18 +1,4 @@
-"""
-Providers — standalone orchestrator facade for all provider API communication.
-
-Single chokepoint for every LLM call. Resolves the concrete client by
-ProviderType, pre-flight checks, calls, folds telemetry, returns.
-
-No mp is ever passed in. Every caller builds its own ProviderApiRequest and
-calls Providers().send(dto). The three DTO-creation points are:
-  1. MessageProcessor.send()
-  2. api/providers.py _test_api_provider (test-connection)
-  3. services/vision_service.py send_image_with_config (vision probe)
-
-Consumed by: services.message_processor, api.providers,
-             services.vision_service, abilities.chat_history_compactor.
-"""
+"""Providers — standalone orchestrator facade for all provider API communication."""
 
 import json
 import logging
