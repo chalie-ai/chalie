@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 
 def _drain_capability_alerts(store) -> None:
-    """Replay persisted capability alert keys via broker and delete them after delivery."""
     try:
         broker = WebSocketBroker()
         alert_keys = store.keys('capability:alert:*')
@@ -44,12 +43,6 @@ def _drain_capability_alerts(store) -> None:
 
 
 def _ws_handler(ws) -> None:
-    """WebSocket connection lifecycle: auth → register → keep-alive loop.
-
-    The receive loop exists solely for keep-alive: on receive timeout (60s)
-    the server sends a ping; the client responds with pong. All other
-    client→server traffic uses HTTP endpoints.
-    """
     from flask import request as flask_request
     from services.auth_session_service import validate_session
 
@@ -90,8 +83,6 @@ def _ws_handler(ws) -> None:
 
 
 def register_websocket(sock):
-    """Register the /ws endpoint on a flask-sock instance."""
-
     @sock.route('/ws')
     def ws_handler(ws):
         _ws_handler(ws)

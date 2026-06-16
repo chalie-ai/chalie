@@ -32,7 +32,6 @@ wrappers_bp = Blueprint("wrappers", __name__, url_prefix="/api/wrappers")
 # ---------------------------------------------------------------------------
 
 def _get_service():
-    """Return a WrapperAuthService using the shared DatabaseService."""
     from services.database_service import get_shared_db_service
     from services.wrapper_auth_service import WrapperAuthService
     return WrapperAuthService(get_shared_db_service())
@@ -48,16 +47,6 @@ def _cookie_only(f):
 
     @wraps(f)
     def decorated(*args, **kwargs):
-        """Return 403 if the request was authenticated via bearer token.
-
-        Args:
-            *args: Positional arguments forwarded to the wrapped view.
-            **kwargs: Keyword arguments forwarded to the wrapped view.
-
-        Returns:
-            403 JSON error if ``g.wrapper_id`` is set (bearer auth); otherwise
-            the return value of the wrapped view.
-        """
         if getattr(g, "wrapper_id", None) is not None:
             return jsonify({"error": "Token creation requires cookie session auth"}), 403
         return f(*args, **kwargs)

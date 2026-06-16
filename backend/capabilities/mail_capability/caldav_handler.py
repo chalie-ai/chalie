@@ -60,7 +60,6 @@ _SQL_INSERT_NOTIFICATION = """INSERT OR IGNORE INTO scheduled_items
 
 
 def _make_date_utc(d: object) -> _dt_module.datetime:
-    """Convert date or datetime to UTC-aware datetime. date-only → midnight UTC."""
     if isinstance(d, _dt_module.datetime):
         if d.tzinfo is not None:
             return d.astimezone(_dt_module.timezone.utc)
@@ -75,7 +74,6 @@ def _events_overlap(a: dict, b: dict) -> bool:
 
 
 def _find_overlap_pairs(events: list, now: _dt_module.datetime) -> list:
-    """Return ``(ev_a, ev_b, canon_key)`` tuples for upcoming overlapping events."""
     upcoming = [
         e for e in events
         if e.get("dtstart") and e.get("uid")
@@ -90,7 +88,6 @@ def _find_overlap_pairs(events: list, now: _dt_module.datetime) -> list:
 
 
 def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
-    """Return ``(ev_a, ev_b, gap_minutes, canon_key)`` for gaps < 5 minutes."""
     threshold = _BACK_TO_BACK_GAP.total_seconds() / 60
     upcoming = sorted(
         [e for e in events
@@ -110,7 +107,6 @@ def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
 def _get_user_tz():
     """Return user's ZoneInfo timezone or None.
 
-    Delegates to locale_service.get_timezone().
     Returns None when the result is plain UTC (no user timezone detected).
     """
     from services.locale_service import get_timezone
@@ -136,14 +132,12 @@ def _next_morning_8am() -> _dt_module.datetime:
 
 
 class CaldavHandler:
-    """Protocol-specific CalDAV operations for the mail capability."""
 
     # ------------------------------------------------------------------
     # Server connection
     # ------------------------------------------------------------------
 
     def open_client(self, url: str, username: str, password: str):
-        """Create and return an authenticated caldav.DAVClient."""
         if not _CALDAV_AVAILABLE:
             raise RuntimeError(_ERR_CALDAV_NOT_INSTALLED)
         return _caldav_lib.DAVClient(
@@ -214,7 +208,6 @@ class CaldavHandler:
     # ------------------------------------------------------------------
 
     def parse_event(self, raw_event: object, calendar_name: str) -> list[dict]:
-        """Parse a CalDAV resource into normalised event dicts (one per VEVENT)."""
         results: list[dict] = []
 
         try:
@@ -534,7 +527,6 @@ class CaldavHandler:
 
     @staticmethod
     def _find_event_by_uid(client, uid: str):
-        """Search all calendars for an event matching ``uid``. Returns the event or None."""
         principal = client.principal()
         for calendar in principal.calendars():
             try:
@@ -547,7 +539,6 @@ class CaldavHandler:
 
     @staticmethod
     def _parse_ical_from_event(found_event):
-        """Parse the icalendar Calendar object from a CalDAV event."""
         try:
             ical_data = (
                 found_event.data if isinstance(found_event.data, str)
@@ -559,7 +550,6 @@ class CaldavHandler:
 
     @staticmethod
     def _apply_event_updates(ical, params: dict) -> None:
-        """Apply field updates from ``params`` onto the VEVENT component in-place."""
         for component in ical.walk():
             if component.name != "VEVENT":
                 continue
