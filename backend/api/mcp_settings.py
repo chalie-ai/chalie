@@ -6,15 +6,6 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-MCP Server Settings API — manage MCP server enable/disable, port, and token.
-
-Routes:
-  GET  /api/mcp-server          — get current MCP server settings + token
-  PUT  /api/mcp-server          — update enabled/port settings
-  POST /api/mcp-server/regenerate-token — revoke old token and generate new one
-"""
-
 import logging
 
 from flask import Blueprint, jsonify, request
@@ -38,7 +29,6 @@ def _get_services():
 @mcp_settings_bp.route("", methods=["GET"])
 @require_session
 def get_mcp_settings():
-    """Return current MCP server settings and connection token."""
     settings, auth_svc, _ = _get_services()
 
     enabled = settings.get("mcp_server_enabled")
@@ -62,7 +52,6 @@ def get_mcp_settings():
 @mcp_settings_bp.route("", methods=["PUT"])
 @require_session
 def update_mcp_settings():
-    """Update MCP server enabled state and/or port."""
     settings, _, _ = _get_services()
     data = request.get_json(silent=True) or {}
 
@@ -86,7 +75,6 @@ def update_mcp_settings():
 @mcp_settings_bp.route("/regenerate-token", methods=["POST"])
 @require_session
 def regenerate_token():
-    """Revoke the current MCP token and generate a new one."""
     settings, auth_svc, _ = _get_services()
 
     old_wrapper_id = settings.get("mcp_server_token_wrapper_id")
@@ -110,11 +98,9 @@ def regenerate_token():
 
 
 def _get_stored_token(settings):
-    """Retrieve the stored raw token (set at generation time)."""
     return settings.get("mcp_server_token")
 
 
 def _short_id():
-    """Generate a short unique suffix for wrapper_id on regeneration."""
     import uuid
     return uuid.uuid4().hex[:8]

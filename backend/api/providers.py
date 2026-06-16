@@ -53,7 +53,6 @@ _SSRF_BLOCKED_HOSTS = {
 
 
 def _normalise_ollama_host(host: str) -> str:
-    """Strip trailing slash; prepend http:// if no scheme is present."""
     host = (host or '').strip().rstrip('/')
     if host and '://' not in host:
         host = 'http://' + host
@@ -61,12 +60,6 @@ def _normalise_ollama_host(host: str) -> str:
 
 
 def _validate_ollama_host(host: str) -> tuple[str | None, str | None]:
-    """Return ``(safe_host, error)``. ``safe_host`` is the normalised URL if OK.
-
-    Rejects non-http(s) schemes and cloud-metadata endpoints. Private/loopback
-    IPs are explicitly allowed — this is a local-first app where pointing at
-    192.168.x.y or localhost is the common case.
-    """
     safe = _normalise_ollama_host(host)
     parsed = urlparse(safe)
     if parsed.scheme not in ('http', 'https'):
@@ -112,7 +105,6 @@ _OPENAI_DENY_SUBSTR = (
 
 
 def _fetch_ollama_models(host: str):
-    """Fetch the model list from an Ollama instance via GET /api/tags."""
     safe_host, err = _validate_ollama_host(host)
     if err is not None:
         return None, err
@@ -136,7 +128,7 @@ def _fetch_ollama_models(host: str):
 
 
 def _fetch_openai_models(api_key: str):
-    """Fetch chat-capable model IDs from GET https://api.openai.com/v1/models."""
+    """Filter to chat-capable text models only."""
     if not api_key:
         return None, "API key is required"
     try:
@@ -173,7 +165,6 @@ def _fetch_openai_models(api_key: str):
 
 
 def _fetch_anthropic_models(api_key: str):
-    """Fetch chat models from GET https://api.anthropic.com/v1/models."""
     if not api_key:
         return None, "API key is required"
     try:
@@ -219,14 +210,7 @@ _GEMINI_MAX_PAGES = 10
 
 
 def _fetch_gemini_models(api_key: str):
-    """Fetch chat-capable model IDs from the Gemini ListModels REST API.
-
-    Keeps only models advertising ``generateContent`` and strips the leading
-    ``models/`` prefix from each name so the IDs match what the provider form
-    and ``GeminiService`` expect (e.g. ``gemini-2.5-flash``). The key travels
-    in the ``x-goog-api-key`` header — never the URL — to keep it out of access
-    and proxy logs, mirroring the other helpers.
-    """
+    """Cap pagination at 10 pages. Only ``generateContent`` models; strips ``models/`` prefix."""
     if not api_key:
         return None, "API key is required"
     try:
@@ -270,7 +254,6 @@ def _fetch_gemini_models(api_key: str):
 
 
 def _fetch_openai_compatible_models(host: str, api_key: str):
-    """Fetch models from an OpenAI-compatible endpoint via GET {host}/models."""
     if not host:
         return None, "Host URL is required"
     if not api_key:
@@ -314,7 +297,6 @@ def _fetch_openai_compatible_models(host: str, api_key: str):
 
 
 def get_provider_service():
-    """Get ProviderDbService instance."""
     from services.database_service import get_shared_db_service
     from services.provider_db_service import ProviderDbService
     db = get_shared_db_service()
@@ -324,7 +306,7 @@ def get_provider_service():
 @providers_bp.route('', methods=['GET'])
 @require_session
 def list_providers():
-    """List all active providers (omit api_key value)."""
+    """Omit ``api_key`` from output."""
     try:
         service = get_provider_service()
         providers = service.list_providers_summary()
@@ -353,7 +335,6 @@ def list_catalog_providers():
 @providers_bp.route('', methods=['POST'])
 @require_session
 def create_provider():
-    """Create a new provider."""
     try:
         data = request.get_json()
         if not data:
@@ -396,7 +377,6 @@ def create_provider():
 @providers_bp.route('/<int:provider_id>', methods=['GET'])
 @require_session
 def get_provider(provider_id):
-    """Get a single provider by ID."""
     try:
         service = get_provider_service()
         provider = service.get_provider_by_id(provider_id)
@@ -417,7 +397,6 @@ def get_provider(provider_id):
 @providers_bp.route('/<int:provider_id>', methods=['PUT'])
 @require_session
 def update_provider(provider_id):
-    """Update a provider."""
     try:
         data = request.get_json()
         if not data:
@@ -452,7 +431,6 @@ def update_provider(provider_id):
 @providers_bp.route('/<int:provider_id>', methods=['DELETE'])
 @require_session
 def delete_provider(provider_id):
-    """Permanently delete a provider."""
     try:
         service = get_provider_service()
         service.delete_provider(provider_id)
@@ -476,23 +454,7 @@ def delete_provider(provider_id):
 @providers_bp.route('/list-models', methods=['POST'])
 @require_session
 def list_models():
-    """Live model-list fetch for the brain provider form.
-
-    Body JSON:
-      {"platform": "ollama" | "openai" | "anthropic" | "gemini"
-                   | "openai_compatible",
-       "api_key": "...",   # openai / anthropic / gemini / openai_compatible
-       "host": "..."}      # ollama / openai_compatible
-
-    Always returns HTTP 200 — auth/network/parse failures land in the body's
-    ``error`` field so the UI can render them inline. Credentials are POSTed
-    (never a query param) to keep them out of Flask access logs and reverse-
-    proxy logs.
-
-    Response 200: {"models": [{"id": "...", "display_name": "..."|null}, ...],
-                   "error": "..."|null}
-    Response 400: {"error": "..."}  (only for malformed/unsupported requests)
-    """
+    """Always returns HTTP 200 — failures in body ``error`` field. Credentials POSTed (not query param) to keep out of access logs."""
     body = request.get_json(silent=True) or {}
     platform = (body.get('platform') or '').strip().lower()
     if platform == 'ollama':
@@ -516,7 +478,6 @@ def list_models():
 
 
 def _map_api_error(error_str: str, platform: str, model: str) -> str:
-    """Map a raw exception message to a user-facing error string."""
     el = error_str.lower()
     if any(k in el for k in ('authentication', 'auth_token', 'api_key', 'invalid_api', '401', 'unauthorized', 'invalid x-api-key')):
         return "Invalid API key"
@@ -534,7 +495,6 @@ def _map_api_error(error_str: str, platform: str, model: str) -> str:
 
 
 def _test_ollama_provider(config: dict, model: str, start: float):
-    """Test an Ollama provider and return a JSON response tuple."""
     import time
     available, err = _fetch_ollama_models(config.get('host', ''))
     latency_ms = int((time.time() - start) * 1000)
@@ -569,7 +529,6 @@ def _test_ollama_provider(config: dict, model: str, start: float):
 
 
 def _test_api_provider(config: dict, platform: str, model: str, start: float):
-    """Test an API-based provider (Anthropic, OpenAI, etc.) and return a JSON response tuple."""
     import time
     api_key = config.get('api_key')
     if not api_key:
@@ -612,7 +571,6 @@ def _test_api_provider(config: dict, platform: str, model: str, start: float):
 @providers_bp.route('/test', methods=['POST'])
 @require_session
 def test_provider():
-    """Test a provider connection with a lightweight call."""
     import time
 
     try:
@@ -657,7 +615,6 @@ def test_provider():
 @providers_bp.route('/selected', methods=['GET'])
 @require_session
 def get_selected_provider():
-    """Return the currently selected provider."""
     try:
         service = get_provider_service()
         provider = service.get_selected_provider()
@@ -675,7 +632,6 @@ def get_selected_provider():
 @providers_bp.route('/selected', methods=['PUT'])
 @require_session
 def set_selected_provider():
-    """Set the selected provider ID."""
     try:
         data = request.get_json()
         if not data or "provider_id" not in data:
@@ -714,7 +670,6 @@ def set_selected_provider():
 @providers_bp.route('/vision', methods=['GET'])
 @require_session
 def get_vision_provider():
-    """Return the configured vision provider + how it was resolved."""
     try:
         service = get_provider_service()
         status = service.get_vision_provider_status()
@@ -730,7 +685,6 @@ def get_vision_provider():
 @providers_bp.route('/vision', methods=['PUT'])
 @require_session
 def set_vision_provider():
-    """Set (or clear) the explicit vision provider id."""
     try:
         data = request.get_json() or {}
         if 'provider_id' not in data:
@@ -763,12 +717,7 @@ def set_vision_provider():
 @providers_bp.route('/delegate', methods=['GET'])
 @require_session
 def get_delegate_provider():
-    """Return the configured delegate provider + how it was resolved.
-
-    Source 'auto' means no pin is set and the delegate defaults to the main
-    provider ("use main provider"); 'explicit' means a dedicated provider is
-    pinned; 'none' means no provider is configured at all.
-    """
+    """Return the configured delegate provider + resolution source ('auto'|'explicit'|'none')."""
     try:
         service = get_provider_service()
         status = service.get_delegate_provider_status()
@@ -784,13 +733,7 @@ def get_delegate_provider():
 @providers_bp.route('/delegate', methods=['PUT'])
 @require_session
 def set_delegate_provider():
-    """Set (or clear) the explicit delegate provider id.
-
-    Clearing (provider_id null) has NO 'Disabled' state — unlike vision it
-    falls back to the main provider, so the response returns the RESOLVED
-    status (typically source 'auto' pointing at the selected main provider),
-    never {provider: null, source: 'none'}.
-    """
+    """Set or clear the delegate provider ID. Clearing falls back to main provider (no 'Disabled' state)."""
     try:
         data = request.get_json() or {}
         if 'provider_id' not in data:
