@@ -65,13 +65,6 @@ def _model_fits_coreml(model_path: Path, limit: int = METAL_TEXTURE_LIMIT) -> bo
 
 
 def choose_providers(model_path: Optional[Union[Path, str]] = None) -> List[str]:
-    """Return the provider list to hand ORT, ordered by preference.
-
-    ``model_path`` is optional. When provided, it is inspected for the Metal
-    texture limit and CoreML is stripped if the model would trip it. Pass
-    ``None`` for models known to be small (e.g. classifier heads, Kokoro
-    phoneme decoder).
-    """
     import onnxruntime as ort
 
     providers = list(ort.get_available_providers())
@@ -97,23 +90,6 @@ def build_session(
     *,
     log_prefix: str = "[ONNX]",
 ):
-    """Construct an ``ort.InferenceSession`` with CPU fallback on failure.
-
-    Args:
-        model_path: Path to the ``.onnx`` file.
-        sess_options: Optional pre-configured ``ort.SessionOptions``. A fresh
-            default is built when None.
-        providers: Explicit provider list. When None, ``choose_providers`` is
-            consulted.
-        log_prefix: Bracketed tag prepended to log lines ("[VOICE]", etc.).
-
-    Returns:
-        The constructed ``ort.InferenceSession``.
-
-    Raises:
-        The original ORT error when CPU-only construction also fails — at that
-        point the host cannot run the model at all.
-    """
     import onnxruntime as ort
 
     model_path = Path(model_path)

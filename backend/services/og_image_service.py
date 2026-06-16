@@ -1,16 +1,4 @@
-"""OG Image Service — extract og:image / twitter:image + description from article URLs.
 
-Used as a fallback when a search/news provider doesn't surface a native
-image URL (Google News RSS strips them, for example). Fetches the article
-HTML in parallel, scans the head for og:image and og:description / og:title
-meta tags, and returns structured metadata per URL.
-
-Public API:
-    resolve_og_images(urls, max_workers=3, timeout=3.0) -> dict[str, dict]
-
-Each value is ``{"image_url": str, "description": str}``.  Either field may
-be an empty string if not found.  URLs that fail entirely are omitted.
-"""
 
 from __future__ import annotations
 
@@ -62,16 +50,7 @@ _CONTENT_RE = re.compile(
 def resolve_og_images(
     urls: Iterable[str], max_workers: int = 3, timeout: float = _FETCH_TIMEOUT
 ) -> dict[str, dict]:
-    """Fetch article HTML in parallel and extract og:image + description for each URL.
-
-    Returns ``{article_url: {"image_url": str, "description": str}}`` for URLs
-    that yielded at least an image URL.  Failures and pages with no og:image
-    are omitted entirely — callers should not assume every input URL is present.
-
-    ``description`` is derived from og:description ≥ 20 chars, falling back to
-    og:title, then <title>.  It may be an empty string when none of the above
-    are found.
-    """
+    """description derived from og:description (≥ 20 chars) → og:title → <title>."""
     targets = [u for u in urls if isinstance(u, str) and u.startswith(("http://", "https://"))]
     if not targets:
         return {}

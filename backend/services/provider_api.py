@@ -1,10 +1,3 @@
-"""
-Provider API contract — DTOs, enums, and exception hierarchy.
-
-Consumed by: services.providers, services.llm_clients.*, services.message_processor,
-             services.vision_service, api.providers, services.provider_token_limits.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -13,16 +6,6 @@ from typing import Optional
 
 
 class ProviderType(Enum):
-    """Which provider pool to resolve for a send call.
-
-    CHAT resolves the globally selected provider (ProviderCacheService).
-    VISION resolves the DB vision provider (ProviderDbService).
-    DELEGATE resolves the DB delegate provider (ProviderDbService); when none
-    is pinned it falls back to the selected (main) provider — the
-    "use main provider" default for subagent turns.
-    VISUAL_OUTPUT is reserved for future rendering-model providers.
-    """
-
     CHAT = "chat"
     VISION = "vision"
     DELEGATE = "delegate"

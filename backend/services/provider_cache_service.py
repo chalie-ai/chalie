@@ -10,11 +10,9 @@ class ProviderCacheService:
     """
     In-memory lazy cache for provider configurations.
 
-    Solves cache staleness by using MemoryStore versioning:
-    - API process mutates DB → increments MemoryStore version → local caches invalidate
-    - Worker processes: next get_providers() sees version mismatch → cache miss → re-fetch
-
-    Decryption happens ONLY on cache miss (cold start or after provider change).
+    Cross-process invalidation via MemoryStore versioning: API mutations in one
+    process invalidate caches in others on the next get_providers() call.
+    Decryption happens ONLY on cache miss.
     """
 
     # Class-level state (shared across all calls in this process)
@@ -24,12 +22,7 @@ class ProviderCacheService:
 
     @staticmethod
     def get_providers() -> Dict[str, Any]:
-        """
-        Get all providers with lazy caching and MemoryStore-based invalidation.
 
-        Returns:
-            dict: {provider_name: {platform, model, host, api_key, ...}}
-        """
         # Check if MemoryStore version has changed (cross-process invalidation)
         try:
             from services.memory_client import MemoryClientService
@@ -126,13 +119,7 @@ class ProviderCacheService:
 
     @staticmethod
     def get_selected_provider() -> Optional[Dict[str, Any]]:
-        """
-        Return the currently selected provider config, or None.
 
-        Resolution:
-          1. Look up selected_provider_id from settings via ProviderDbService
-          2. Return the matching provider config from the cache
-        """
         try:
             from services.database_service import get_shared_db_service
             from services.provider_db_service import ProviderDbService
@@ -157,15 +144,7 @@ class ProviderCacheService:
 
     @staticmethod
     def invalidate() -> None:
-        """
-        Invalidate provider cache across all processes.
-        Called after create/update/delete provider.
-
-        Uses MemoryStore version counter for cross-process invalidation:
-        - Increments MemoryStore version
-        - Clears local cache (this process)
-        - Other processes detect version mismatch on next get_providers()
-        """
+        """Invalidate and bump the MemoryStore version counter so other processes detect a cache miss on next call."""
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()

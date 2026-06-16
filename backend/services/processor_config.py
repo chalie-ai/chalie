@@ -9,26 +9,13 @@
 """
 ProcessorConfig — frozen dataclass for per-channel MessageProcessor behaviour.
 
-Spec: ACT Loop Orchestrator Refactor §2.
-
 Every channel's behavioural surface is expressed through a single
 ProcessorConfig instance.  The dataclass is frozen so that a config created
-for one turn can never be mutated mid-loop (AC-5 / §2).
-
-Usage
------
-Every channel is a named ``ProcessorConfig`` subclass with a typed ``__init__``.
-The caller instantiates the subclass directly::
-
-    from configs.channels import DmnConfig
-    mp = MessageProcessor.process(raw_input, DmnConfig())
-
-    from configs.channels import UserConfig
-    mp = MessageProcessor.process(raw_input, UserConfig(metadata=request_metadata))
+for one turn can never be mutated mid-loop.
 
 The ``job`` property — ``f"{channel}:{role}"`` — is the telemetry label passed
 through ``Providers.send`` to the resolved provider and ``_log_after_call``.
-There is no separate ``LOG_LABEL`` field; ``config.job`` IS the label (§2, AC-13).
+There is no separate ``LOG_LABEL`` field; ``config.job`` IS the label.
 """
 
 from __future__ import annotations
@@ -47,15 +34,10 @@ if TYPE_CHECKING:
 class ProcessorConfig(ABC):
     """Everything that varies between channels.  Immutable per-turn.
 
-    See spec §2 for field-by-field rationale.
-
-    The three prompt builders are **abstract methods** — every channel is a
-    concrete subclass that implements ``get_system_prompt`` /
-    ``get_user_prompt`` / ``get_user_definition``.  The base class is abstract
-    (ABC) so a subclass that forgets any of the three cannot be instantiated.
-    Each method receives the turn's ``MessageProcessor`` as an explicit ``mp``
-    argument; the config holds no reference to the processor and stays a pure,
-    fully-immutable frozen dataclass.
+    Every concrete subclass must implement ``get_system_prompt``,
+    ``get_user_prompt``, and ``get_user_definition``; the ABC constraint ensures
+    a subclass that omits any of the three cannot be instantiated.  The config
+    holds no reference to the processor — it stays a pure, frozen dataclass.
     """
 
     # ── Async capability (ClassVar — not a dataclass field) ────────────────────
@@ -149,32 +131,21 @@ class ProcessorConfig(ABC):
 
     @abstractmethod
     def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        """The system instruction block for this channel's turn.
-
-        Receives the turn's MessageProcessor.  Every concrete config MUST
-        implement this; the returned string is byte-identical to the
-        pre-refactor builder output."""
+        """System instruction block for this channel's turn."""
 
     @abstractmethod
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """The user-turn body (world state, history, input, ACT trail).
-
-        Receives the turn's MessageProcessor.  Every concrete config MUST
-        implement this."""
+        """User-turn body (world state, history, input, ACT trail)."""
 
     @abstractmethod
     def get_user_definition(self, mp: "MessageProcessor") -> str:
-        """The user/persona preamble.  Receives the turn's MessageProcessor.
-
-        Every concrete config MUST implement this (return ``""`` when the
-        channel has no user definition)."""
+        """User/persona preamble. Return ``""`` when the channel has none."""
 
     # ── Per-turn image attachment (concrete hook — default: no image) ──────────
 
     def get_image(self, mp: "MessageProcessor") -> "dict | None":
-        """The image to attach to this turn's single user message, or None.
-        Default: no image. VisionConfig overrides this to return
-        {"data": <base64>, "mime_type": <str>} — the shape every converter
+        """VisionConfig overrides this to return
+        ``{"data": <base64>, "mime_type": <str>}`` — the shape every converter
         consumes."""
         return None
 
@@ -182,34 +153,24 @@ class ProcessorConfig(ABC):
 
     @property
     def job(self) -> str:
-        """Telemetry label for Provider calls: ``channel:role``.
-
-        Passed as the ``job`` argument through ``Providers.send()`` to the
-        resolved provider's ``send_messages()`` and the ``_log_after_call``
-        telemetry.  Replaces the per-subclass ``LOG_LABEL`` class attribute
-        (§2 / AC-13).
-        """
+        """Telemetry label passed through ``Providers.send()`` to the resolved
+        provider's ``send_messages()`` and ``_log_after_call``.  Replaces the
+        per-subclass ``LOG_LABEL`` class attribute."""
         return f"{self.channel}:{self.role}"
 
     @property
     def usage_class(self) -> str:
-        """LLM usage class string for llm_call_log / telemetry — the value of
-        policy_channel ('chat' | 'subconscious' | 'external_agent')."""
+        """LLM usage class written to llm_call_log."""
         return self.policy_channel.value
 
     # ── Cloning ───────────────────────────────────────────────────────────────
 
     def with_hidden_input(self) -> "ProcessorConfig":
-        """Return a copy of this frozen config with the input row suppressed.
+        """Return a shallow copy with ``skip_input_row=True``.
 
-        Used to synthesise a background turn whose 'input' is a tool result, not
-        a user message — the assistant row is still written, the input row is not
-        (skip_input_row=True).  ``copy.copy`` preserves the concrete subclass and
-        every field without re-running the typed ``__init__``; frozen dataclasses
-        forbid field mutation, so the one override goes through
-        ``object.__setattr__``.
-
-        Spec §4.4 — captured-``mp`` async delivery.
+        ``copy.copy`` preserves the concrete subclass and every field without
+        re-running the typed ``__init__``; ``object.__setattr__`` is required
+        because frozen dataclasses forbid normal field mutation.
         """
         import copy  # noqa: PLC0415
         clone = copy.copy(self)
