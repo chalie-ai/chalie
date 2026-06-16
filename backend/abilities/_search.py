@@ -16,8 +16,6 @@ KNN_DEPTH = 30
 
 
 class SearchableAbility(Ability, ABC):
-    """Ability that searches a vec+FTS5 sqlite database via RRF fusion."""
-
     _DB_PATH: ClassVar[Path]
     _LOG_PREFIX: ClassVar[str] = ""
 
@@ -72,9 +70,7 @@ class SearchableAbility(Ability, ABC):
         fts_params: tuple,
         db_path: Path | None = None,
     ) -> list[dict]:
-        """RRF-fused vec+FTS search against ``db_path`` (defaults to ``_DB_PATH``).
-
-        The vec query is wrapped in its own try/except so a missing vec table or
+        """The vec query is wrapped in its own try/except so a missing vec table or
         invalid blob degrades gracefully to FTS-only — never fewer results, never
         raises.  Callers may pass any sqlite DB that shares the vec+FTS schema
         (e.g. mcp_tools.sqlite via ``_MCP_DB_PATH``).
@@ -111,9 +107,7 @@ class SearchableAbility(Ability, ABC):
         fts_params: tuple,
         db_path: Path | None = None,
     ) -> list:
-        """FTS-only search against ``db_path`` (defaults to ``_DB_PATH``).
-
-        Callers may pass any sqlite DB that exposes the FTS5 schema.
+        """Callers may pass any sqlite DB that exposes the FTS5 schema.
         """
         target = db_path if db_path is not None else self._DB_PATH
         if not target.exists():

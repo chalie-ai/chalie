@@ -213,12 +213,7 @@ class CalendarAbility(CapabilityAbility):
 # ---------------------------------------------------------------------------
 
 def _parse_dt(value: str):
-    """Resolve a natural-language OR ISO 8601 datetime to a UTC datetime.
-
-    Natural language ("tomorrow 3pm", "friday 9am") is resolved in the user's
-    timezone (read from the telemetry heartbeat via ``locale_service``); ISO 8601
-    with an offset is parsed too. Returns a tz-aware UTC ``datetime`` on success,
-    or ``None`` when the string is unparseable — the caller maps ``None`` to
+    """Returns ``None`` when the string is unparseable — the caller maps ``None`` to
     ``code=invalid-time`` and NEVER persists the ``parse_utc`` ``datetime.min``
     sentinel.
     """

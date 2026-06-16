@@ -247,7 +247,6 @@ def _classify_heuristic(command: str) -> str | None:
 
 
 def _has_unquoted(command: str, needle: str) -> bool:
-    """Check if *needle* appears in *command* outside of quoted strings."""
     in_single = False
     in_double = False
     i = 0
