@@ -95,7 +95,7 @@ def _serialize_dt(val):
 
 
 def _serialize_doc(doc: dict) -> dict:
-    """Serialize document dict for JSON response."""
+    """Strips ``clean_text`` from list responses (too large)."""
     out = dict(doc)
     for field in ('created_at', 'updated_at', 'deleted_at', 'purge_after'):
         if field in out:
@@ -106,7 +106,6 @@ def _serialize_doc(doc: dict) -> dict:
 
 
 def _sanitize_filename(name: str) -> str:
-    """Sanitize a document filename, falling back to a generic name."""
     return safe_filename(name) or _FALLBACK_DOCUMENT_NAME
 
 
@@ -278,7 +277,6 @@ def upload_document():
 @documents_bp.route("/documents", methods=["GET"])
 @require_session
 def list_documents():
-    """List all documents."""
     include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
     try:
         svc = _get_document_service()
@@ -346,7 +344,6 @@ def get_document_content(doc_id):
 @documents_bp.route("/documents/<doc_id>/download", methods=["GET"])
 @require_session
 def download_document(doc_id):
-    """Download original file."""
     try:
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
@@ -443,7 +440,6 @@ def get_document_groups(field):
 @documents_bp.route("/documents/<doc_id>", methods=["DELETE"])
 @require_session
 def delete_document(doc_id):
-    """Soft-delete a document."""
     try:
         svc = _get_document_service()
         ok = svc.soft_delete(doc_id)
@@ -458,7 +454,6 @@ def delete_document(doc_id):
 @documents_bp.route("/documents/<doc_id>/restore", methods=["POST"])
 @require_session
 def restore_document(doc_id):
-    """Undo soft delete."""
     try:
         svc = _get_document_service()
         ok = svc.restore(doc_id)
@@ -473,7 +468,6 @@ def restore_document(doc_id):
 @documents_bp.route("/documents/<doc_id>/purge", methods=["DELETE"])
 @require_session
 def purge_document(doc_id):
-    """Immediate hard delete."""
     try:
         svc = _get_document_service()
         ok = svc.hard_delete(doc_id)
@@ -524,7 +518,6 @@ def search_documents():
 @documents_bp.route("/documents/<doc_id>/confirm", methods=["POST"])
 @require_session
 def confirm_document(doc_id):
-    """Confirm document after synthesis review — marks it as ready."""
     try:
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
@@ -544,7 +537,6 @@ def confirm_document(doc_id):
 @documents_bp.route("/documents/<doc_id>/augment", methods=["POST"])
 @require_session
 def augment_document(doc_id):
-    """Add user context to a document and confirm it."""
     try:
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
@@ -581,7 +573,6 @@ def augment_document(doc_id):
 @documents_bp.route("/documents/<doc_id>/supersede", methods=["POST"])
 @require_session
 def supersede_document(doc_id):
-    """Mark a new document as replacing an older one, and soft-delete the old."""
     try:
         svc = _get_document_service()
 
@@ -620,7 +611,6 @@ def _get_watcher_service():
 @documents_bp.route("/documents/watched-folders", methods=["GET"])
 @require_session
 def list_watched_folders():
-    """List all watched folders."""
     try:
         svc = _get_watcher_service()
         folders = svc.get_all_folders()
@@ -633,7 +623,6 @@ def list_watched_folders():
 @documents_bp.route("/documents/watched-folders", methods=["POST"])
 @require_session
 def create_watched_folder():
-    """Add a new watched folder."""
     data = request.get_json(silent=True) or {}
     folder_path = (data.get('folder_path') or '').strip()
 
@@ -665,7 +654,6 @@ def create_watched_folder():
 @documents_bp.route("/documents/watched-folders/<folder_id>", methods=["PUT"])
 @require_session
 def update_watched_folder(folder_id):
-    """Update watched folder settings."""
     data = request.get_json(silent=True) or {}
     try:
         svc = _get_watcher_service()
@@ -685,7 +673,6 @@ def update_watched_folder(folder_id):
 @documents_bp.route("/documents/watched-folders/<folder_id>", methods=["DELETE"])
 @require_session
 def delete_watched_folder(folder_id):
-    """Remove a watched folder."""
     delete_documents = request.args.get('delete_documents', 'false').lower() == 'true'
     try:
         svc = _get_watcher_service()
@@ -701,7 +688,6 @@ def delete_watched_folder(folder_id):
 @documents_bp.route("/documents/watched-folders/<folder_id>/scan", methods=["POST"])
 @require_session
 def trigger_scan(folder_id):
-    """Trigger an immediate scan for a watched folder."""
     try:
         svc = _get_watcher_service()
         folder = svc.get_folder(folder_id)
@@ -718,7 +704,6 @@ def trigger_scan(folder_id):
 @documents_bp.route("/documents/watched-folders/browse", methods=["POST"])
 @require_session
 def browse_directories():
-    """Browse host filesystem directories for folder selection."""
     data = request.get_json(silent=True) or {}
     path = data.get('path')
 

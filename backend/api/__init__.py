@@ -93,7 +93,6 @@ _VERSION_SUFFIX_RE = re.compile(
 
 
 def _resolve_same_origin_asset(url: str, base_dir: Path) -> Path | None:
-    """Map a URL found in HTML back to a file on disk — or None if external."""
     if not url or url.startswith(('http://', 'https://', '//', 'data:', 'mailto:', 'tel:', '#')):
         return None
     if url.startswith('/'):
@@ -104,7 +103,6 @@ def _resolve_same_origin_asset(url: str, base_dir: Path) -> Path | None:
 
 
 def _inject_version_into_url(url: str) -> str:
-    """Insert `-{VERSION}` before the final extension. Returns url unchanged if it has none."""
     if not _ASSET_VERSION or _ASSET_VERSION == 'dev':
         return url
     match = _VERSIONABLE_EXT_RE.match(url)
@@ -114,13 +112,11 @@ def _inject_version_into_url(url: str) -> str:
 
 
 def _strip_version_from_path(path: str) -> str:
-    """Inverse of _inject_version_into_url — remove `-{VERSION}` before the extension."""
     match = _VERSION_SUFFIX_RE.match(path)
     return f"{match.group(1)}{match.group(2)}" if match else path
 
 
 def _version_html(html: str, base_dir: Path) -> str:
-    """Rewrite every same-origin asset reference to carry the version in its filename."""
     def repl(match: re.Match) -> str:
         prefix, quote, url = match.group(1), match.group(2), match.group(3)
         if '?' in url:
@@ -152,9 +148,9 @@ def _register_blueprints(app: Flask) -> None:
     """Auto-discover and register every Blueprint defined in this package.
 
     Walks `backend/api/*.py`, imports each module, and registers any top-level
-    `Blueprint` instance it exposes. Modules without a Blueprint (e.g. `auth`,
-    `websocket`) are skipped silently. Drop a new `foo.py` exposing `foo_bp`
-    in this folder and it lights up on next boot — no edits here required.
+    `Blueprint` instance it exposes. Modules without a Blueprint are skipped
+    silently. Drop a new `foo.py` exposing `foo_bp` in this folder and it
+    lights up on next boot — no edits here required.
     """
     package = importlib.import_module(__name__)
     seen: set[int] = set()
@@ -171,9 +167,7 @@ def _register_blueprints(app: Flask) -> None:
 
 
 def _serve_spa(directory: Path, filename: str) -> Response:
-    """Serve a static file, or fall back to a versioned index.html.
-
-    Incoming paths may carry the `-{VERSION}` suffix injected by the HTML
+    """Incoming paths may carry the `-{VERSION}` suffix injected by the HTML
     rewriter; strip it so the request resolves to the real on-disk file.
     """
     real = _strip_version_from_path(filename)
@@ -186,7 +180,6 @@ def _serve_spa(directory: Path, filename: str) -> Response:
 
 
 def _configure_app(app: Flask) -> None:
-    """Apply Flask config, proxy middleware, and CORS to a new app instance."""
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
@@ -201,13 +194,11 @@ def _register_static_routes(app: Flask) -> None:
 
     @app.route('/shared/<path:filename>', methods=["GET"])
     def shared_static(filename):
-        """Serve shared frontend assets (theme.css, etc.)."""
         real = _strip_version_from_path(filename)
         return send_from_directory(str(_SHARED_DIR), real)
 
     @app.route('/brain/<path:filename>', methods=["GET"])
     def brain_static(filename):
-        """Serve brain dashboard SPA."""
         return _serve_spa(_BRAIN_DIR, filename)
 
     @app.route('/brain', methods=["GET"])
@@ -217,7 +208,7 @@ def _register_static_routes(app: Flask) -> None:
 
     @app.route('/brain/', methods=["GET"])
     def brain_index():
-        """Serve brain dashboard index. Redirects to login if unauthenticated."""
+        """Redirects to login if unauthenticated."""
         from services.auth_session_service import validate_session
         from flask import request
         if not validate_session(request):
@@ -226,7 +217,6 @@ def _register_static_routes(app: Flask) -> None:
 
     @app.route('/on-boarding/<path:filename>', methods=["GET"])
     def onboarding_static(filename):
-        """Serve onboarding SPA."""
         return _serve_spa(_ONBOARDING_DIR, filename)
 
     @app.route('/on-boarding', methods=["GET"])
@@ -236,12 +226,10 @@ def _register_static_routes(app: Flask) -> None:
 
     @app.route('/on-boarding/', methods=["GET"])
     def onboarding_index():
-        """Serve onboarding index."""
         return _serve_versioned_html(_ONBOARDING_DIR)
 
     @app.route('/login/<path:filename>', methods=["GET"])
     def login_static(filename):
-        """Serve login page assets."""
         return _serve_spa(_LOGIN_DIR, filename)
 
     @app.route('/login', methods=["GET"])
@@ -251,23 +239,19 @@ def _register_static_routes(app: Flask) -> None:
 
     @app.route('/login/', methods=["GET"])
     def login_index():
-        """Serve login page."""
         return _serve_versioned_html(_LOGIN_DIR)
 
     # Main interface SPA — catch-all (must be last)
     @app.route('/<path:filename>', methods=["GET"])
     def interface_static(filename):
-        """Serve main interface SPA files."""
         return _serve_spa(_INTERFACE_DIR, filename)
 
     @app.route('/', methods=["GET"])
     def interface_index():
-        """Serve main interface index."""
         return _serve_versioned_html(_INTERFACE_DIR)
 
 
 def create_app():
-    """Create and configure Flask application with all blueprints."""
     app = Flask(__name__)
 
     _configure_app(app)
