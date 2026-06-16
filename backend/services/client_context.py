@@ -1,14 +1,13 @@
-"""ClientContext — a frozen snapshot of per-request client telemetry.
+"""ClientContext — frozen snapshot of per-request client telemetry.
 
-Captures the caller's location / locale / time at tool-dispatch time so an
-Ability can localise its behaviour (weather lookups, date formatting, currency
-conversion) without reaching into request-scoped globals itself. Built from
-``services.locale_service`` — the request-scoped contextvars the client
-heartbeat populates.
-
-The tool dispatcher stores ``ClientContext.current().as_dict()`` onto
-``ability.telemetry`` immediately before ``run()``; abilities read the flat
-dict, so the value object is an internal detail of how that dict is assembled.
+Captures the caller's location / locale / time at tool-dispatch time so
+an Ability can localise its behaviour (weather lookups, date formatting,
+currency conversion) without reaching into request-scoped globals itself.
+Built from ``services.locale_service`` — the request-scoped contextvars
+the client heartbeat populates. The tool dispatcher stores
+``ClientContext.current().as_dict()`` onto ``ability.telemetry`` immediately
+before ``run()``; abilities read the flat dict, so the value object is an
+internal detail of how that dict is assembled.
 """
 
 from __future__ import annotations
@@ -36,11 +35,8 @@ class ClientContext:
 
     @classmethod
     def current(cls) -> "ClientContext | None":
-        """Snapshot the live client context.
-
-        Returns None when no context is stored yet (fresh boot, no heartbeat) or
-        the locale services are unavailable, so callers fall back gracefully.
-        """
+        """Returns None when no context is stored yet (fresh boot, no
+        heartbeat) or the locale services are unavailable."""
         try:
             from services.locale_service import (  # noqa: PLC0415
                 format_date,

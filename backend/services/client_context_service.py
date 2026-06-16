@@ -1,24 +1,21 @@
-"""
-Client Context Service — Stores and retrieves client timezone, location, device info,
-behavioral signals, and system info.
+"""Stores and retrieves client timezone, location, device info, behavioral
+signals, and system info.
 
 The raw heartbeat payload (whatever the frontend sends) is persisted to the
-``telemetry`` table as flat key/value rows, e.g. ``device.name`` → ``"iPhone"``.
-The frontend (heartbeat.js) is the single source of truth for which keys are
-collected; this service blindly persists what it receives and reconstructs the
-nested dict on read so existing consumers (time_utils, scheduler_skill,
-…) see the same shape they always did.
+``telemetry`` table as flat key/value rows, e.g. ``device.name`` →
+``"iPhone"``. The frontend (heartbeat.js) is the single source of truth for
+which keys are collected; this service blindly persists what it receives
+and reconstructs the nested dict on read so existing consumers (time_utils,
+scheduler_skill, …) see the same shape they always did.
 
-Side concerns that stay in MemoryStore (NOT telemetry):
-  - location-history ring buffer (mobility inference)
-  - session re-entry / place-transition flags (ephemeral inference state)
-  - culture-seeding cookie
-
-Side concerns persisted elsewhere:
-  - demographic traits → data_graph
+Side concerns that stay in MemoryStore (NOT telemetry): location-history
+ring buffer (mobility inference), session re-entry / place-transition
+flags (ephemeral inference state), culture-seeding cookie. Side concerns
+persisted elsewhere: demographic traits → data_graph.
 
 Locale fields (timezone, locale, language, currency, location) are read
-exclusively via ``services.locale_service`` — never directly from this service.
+exclusively via ``services.locale_service`` — never directly from this
+service.
 """
 
 import json
@@ -102,24 +99,13 @@ class ClientContextService:
     """
 
     def __init__(self):
-        """Initialize the service and open a MemoryStore connection."""
         self._store = MemoryClientService.create_connection()
 
     def _resolve_location_name(self, lat: float, lon: float) -> str | None:
-        """Resolve a human-readable city/country name from coordinates.
-
-        Uses the geopy Nominatim geocoder (OpenStreetMap). Prefers
-        city → town → municipality → county → state_district as the locality
-        label, combined with the country name.
-
-        Args:
-            lat: Latitude in decimal degrees.
-            lon: Longitude in decimal degrees.
-
-        Returns:
-            A string such as ``"Valletta, Malta"`` on success, or ``None`` if
-            the geocoder call fails or returns an unusable address.
-        """
+        """Uses the geopy Nominatim geocoder (OpenStreetMap). Prefers
+        city → town → municipality → county → state_district as the
+        locality label, combined with the country name. Returns ``None``
+        on geocoder failure or unusable address."""
         try:
             geocoder = _get_nominatim()
             location = geocoder.reverse((lat, lon), language="en", exactly_one=True)
@@ -141,12 +127,8 @@ class ClientContextService:
         return None
 
     def save(self, ctx: dict):
-        """
-        Save client context to MemoryStore with extended processing.
-
-        Handles: location resolution, behavioral data merging, location history,
-        session re-entry, and demographic seeding.
-        """
+        """Handles location resolution, behavioral-data merging, location
+        history, session re-entry, and demographic seeding."""
         cached_ctx = self.get()
 
         # Merge behavioral data: don't overwrite if new heartbeat lacks it
@@ -200,16 +182,8 @@ class ClientContextService:
         return heartbeat_service.read()
 
     def is_stale(self, max_age_seconds: int = 600) -> bool:
-        """Check whether the stored client context is older than the allowed age.
-
-        Args:
-            max_age_seconds: Maximum acceptable age in seconds. Defaults to
-                600 (10 minutes).
-
-        Returns:
-            ``True`` if the stored context is missing or its ``saved_at``
-            timestamp is older than ``max_age_seconds``, ``False`` otherwise.
-        """
+        """``True`` if the stored context is missing or its ``saved_at`` is
+        older than ``max_age_seconds`` (default 600 = 10 min)."""
         ctx = self.get()
         saved_at = ctx.get("saved_at", 0)
         is_stale = (time.time() - saved_at) > max_age_seconds
@@ -241,12 +215,8 @@ class ClientContextService:
     # ── Demographic Trait Seeding ──────────────────────────────────────
 
     def _seed_demographic_traits(self, ctx: dict):
-        """
-        Seed culture-region trait from locale/location (Possible tier).
-        Runs once — subsequent reinforcement comes from conversation.
-        Religion, gender, and age are NEVER telemetry-seeded.
-        """
-        # Only seed once
+        """Runs once per 30-day window — subsequent reinforcement comes from
+        conversation. Religion, gender, age are NEVER telemetry-seeded."""
         if self._store.get(CULTURE_SEED_KEY):
             return
 

@@ -1,14 +1,15 @@
 """Pure SQL helpers for compaction state.
 
-The canonical watermark home (design §3.6) is the transcript table: a row with
-role='compaction' whose OWN id is the watermark (compacted_up_to_id). Downstream
-`id > watermark` reads naturally exclude that row and everything before it.
+The canonical watermark home (design §3.6) is the transcript table: a row
+with role='compaction' whose OWN id is the watermark (compacted_up_to_id).
+Downstream `id > watermark` reads naturally exclude that row and everything
+before it.
 
-Callers:
-  - MessageProcessor._previous_rows         (watermark for `id > watermark` reads)
-  - MessageProcessor._wrap_with_checkpoint  (checkpoint envelope prepend)
-  - transcript_service.cleanup_unlinked_entries (watermark-bounded cleanup)
-  - api.system compaction observability     (Brain read-only view)
+Callers: ``MessageProcessor._previous_rows`` (watermark for `id >
+watermark` reads), ``MessageProcessor._wrap_with_checkpoint`` (checkpoint
+envelope prepend), ``transcript_service.cleanup_unlinked_entries``
+(watermark-bounded cleanup), ``api.system`` compaction observability
+(Brain read-only view).
 """
 
 import logging
@@ -20,12 +21,8 @@ LOG_PREFIX = "[COMPACTION]"
 
 
 def get_compaction(channel: str) -> Optional[Dict]:
-    """Latest history-compaction summary for a channel, or None.
-
-    Canonical watermark reader (design §3.6): the newest transcript row with
-    role='compaction'. Its OWN id is the watermark (compacted_up_to_id), so
-    _previous_rows()'s `id > watermark` naturally excludes it and everything
-    before it. Never raises — DB errors are logged and treated as 'no compaction'."""
+    """Latest history-compaction summary for a channel, or None. Never raises
+    — DB errors are logged and treated as 'no compaction'."""
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -52,9 +49,6 @@ def get_compaction(channel: str) -> Optional[Dict]:
 
 
 def get_entries_since(channel: str, watermark: int = 0, limit: int = 2000) -> List[Dict]:
-    """Read transcript entries with id > watermark for a channel.
-
-    Returns entries in chronological order (oldest first).
-    """
+    """Returns entries in chronological order (oldest first)."""
     from services import transcript_service
     return transcript_service.get_recent(channel, limit=limit, since_id=watermark)
