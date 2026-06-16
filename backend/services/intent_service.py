@@ -1,18 +1,8 @@
-"""
-Intent Service — structured intents from Chalie to external wrappers.
+"""Intent Service — structured intents from Chalie to external wrappers.
 
-Chalie emits CognitiveIntents when it needs a wrapper to execute something
-on its behalf (e.g. open a PR, run a command, display a notification).
-The intent is stored in MemoryStore and delivered via the REST API when
-the wrapper polls or receives a push notification.
-
-Key design choices:
-- Storage is ephemeral (MemoryStore) — intents are transient coordination
-  messages, not permanent records.
-- Broadcast intents (target_wrapper=None) land in ``intents:__broadcast__``.
-- Individual intents are also stored by ID for O(1) lookup.
-- Pub/sub channel ``intents:{wrapper_id}`` lets connected wrappers receive
-  intents via a streaming endpoint in the future.
+Chalie emits CognitiveIntents when it needs a wrapper to execute something on its behalf. Intents
+are transient coordination messages stored in MemoryStore. Broadcast intents (target_wrapper=None)
+land in ``intents:__broadcast__``; individual ones are also keyed by ID for O(1) lookup.
 """
 
 import dataclasses
@@ -31,25 +21,7 @@ _INTENT_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 
 @dataclasses.dataclass
 class CognitiveIntent:
-    """Structured intent emitted by the cognitive runtime to a wrapper.
-
-    Attributes:
-        intent_id: UUID string uniquely identifying this intent.
-        intent_type: Semantic category — ``"suggest"``, ``"notify"``,
-            ``"request_input"``, or ``"execute"``.
-        target_wrapper: The ``wrapper_id`` of the intended recipient, or
-            ``None`` to broadcast to all capable wrappers.
-        payload: Type-specific structured data the wrapper acts on.
-        urgency: Priority hint — ``"critical"``, ``"normal"``, or ``"low"``.
-        confidence: Chalie's confidence in this intent (0.0–1.0).
-        expires_at: ISO-8601 UTC timestamp after which the intent expires,
-            or ``None`` for no expiry.
-        requires_ack: When ``True``, the wrapper must call the ``/ack``
-            endpoint after receiving the intent.
-        created_at: ISO-8601 UTC timestamp set at creation time.
-        status: Lifecycle state — ``"pending"`` | ``"delivered"`` |
-            ``"acknowledged"`` | ``"executed"`` | ``"failed"`` | ``"expired"``.
-    """
+    """Structured intent emitted by the cognitive runtime to a wrapper."""
 
     intent_id: str
     intent_type: str
@@ -65,45 +37,24 @@ class CognitiveIntent:
     status: str = "pending"
 
     def to_dict(self) -> dict:
-        """Serialize the intent to a plain dict for JSON storage.
-
-        Returns:
-            Dict representation of all fields.
-        """
+        """Serialize the intent to a plain dict for JSON storage."""
         return dataclasses.asdict(self)
 
     def to_json(self) -> str:
-        """Serialize the intent to a JSON string.
-
-        Returns:
-            JSON-encoded string.
-        """
+        """Serialize the intent to a JSON string."""
         return json.dumps(self.to_dict())
 
 
 def _make_intent_id() -> str:
-    """Generate a new UUID string for an intent.
-
-    Returns:
-        UUID4 string.
-    """
+    """Generate a new intent ID."""
     return str(uuid.uuid4())
 
 
 class IntentService:
-    """Broker for cognitive intents between Chalie and external wrappers.
-
-    Intents are stored in the shared MemoryStore.  The service is stateless
-    between calls — all state lives in MemoryStore keys.
-    """
+    """Broker for cognitive intents between Chalie and external wrappers."""
 
     def __init__(self, store=None):
-        """Initialize the service, optionally injecting a MemoryStore.
-
-        Args:
-            store: A MemoryStore instance.  When ``None``, the shared
-                singleton is used via ``MemoryClientService.create_connection()``.
-        """
+        """Initialize with an optional MemoryStore (uses shared singleton when None)."""
         if store is None:
             from services.memory_client import MemoryClientService
             self._store = MemoryClientService.create_connection()
@@ -115,16 +66,7 @@ class IntentService:
     # ------------------------------------------------------------------
 
     def emit(self, intent: CognitiveIntent) -> None:
-        """Store the intent and notify the target wrapper channel.
-
-        The intent JSON is appended to the ``intents:{target}`` list and
-        also stored under ``intent:{intent_id}`` for O(1) retrieval.  A
-        pub/sub message is published to ``intents:{target}`` so any
-        streaming subscriber can react immediately.
-
-        Args:
-            intent: The intent to emit.
-        """
+        """Store the intent and notify the target wrapper channel via pub/sub broadcast."""
         target = intent.target_wrapper or _BROADCAST_KEY
         list_key = f"intents:{target}"
         id_key = f"intent:{intent.intent_id}"
@@ -162,20 +104,7 @@ class IntentService:
     # ------------------------------------------------------------------
 
     def get_pending(self, wrapper_id: str, limit: int = 10) -> list[dict]:
-        """Return undelivered intents for ``wrapper_id`` and mark them delivered.
-
-        Fetches from both the wrapper-specific list and the broadcast list,
-        filters to ``status == "pending"`` intents, marks each as
-        ``"delivered"``, and returns them (most-recent-last, capped at
-        ``limit``).
-
-        Args:
-            wrapper_id: The wrapper polling for intents.
-            limit: Maximum number of intents to return.
-
-        Returns:
-            List of intent dicts (may be empty).
-        """
+        """Fetch undelivered pending intents for ``wrapper_id`` from both its list and the broadcast list, mark them delivered."""
         results = []
         seen_ids: set[str] = set()
 
@@ -223,14 +152,7 @@ class IntentService:
         return results
 
     def get_intent(self, intent_id: str) -> Optional[dict]:
-        """Retrieve a single intent by its ID.
-
-        Args:
-            intent_id: UUID string of the intent.
-
-        Returns:
-            Intent dict, or ``None`` if not found or expired.
-        """
+        """Retrieve a single intent by its ID; ``None`` when not found or expired."""
         raw = self._store.get(f"intent:{intent_id}")
         if not raw:
             return None
@@ -244,15 +166,7 @@ class IntentService:
     # ------------------------------------------------------------------
 
     def acknowledge(self, intent_id: str, wrapper_id: str) -> bool:
-        """Mark an intent as acknowledged by a wrapper.
-
-        Args:
-            intent_id: UUID string of the intent.
-            wrapper_id: The wrapper acknowledging the intent (used for logging).
-
-        Returns:
-            ``True`` if the intent was found and updated, ``False`` otherwise.
-        """
+        """Mark an intent as acknowledged; returns False when it doesn't exist."""
         intent = self.get_intent(intent_id)
         if intent is None:
             return False
@@ -266,19 +180,8 @@ class IntentService:
         return True
 
     def resolve(self, intent_id: str, result: dict) -> bool:
-        """Record the execution result reported by a wrapper.
-
-        The ``result`` dict should contain a ``status`` key
-        (``"executed"``, ``"failed"``, or ``"skipped"``) plus any
-        type-specific fields (e.g. ``result``, ``error``, ``reason``).
-
-        Args:
-            intent_id: UUID string of the intent.
-            result: Execution result dict from the wrapper.
-
-        Returns:
-            ``True`` if the intent was found and updated, ``False`` otherwise.
-        """
+        """Record execution status reported by a wrapper. The ``result`` dict should contain
+        ``status`` (``"executed"``, ``"failed"``, or ``"skipped"``) plus any type-specific fields."""
         intent = self.get_intent(intent_id)
         if intent is None:
             return False
@@ -301,11 +204,7 @@ class IntentService:
     # ------------------------------------------------------------------
 
     def _persist_intent(self, intent_dict: dict) -> None:
-        """Update the ``intent:{id}`` key with the current intent state.
-
-        Args:
-            intent_dict: The intent dict (must contain ``intent_id``).
-        """
+        """Persist an intent to its ``intent:{id}`` key."""
         intent_id = intent_dict.get("intent_id")
         if not intent_id:
             return
@@ -314,14 +213,7 @@ class IntentService:
 
     @staticmethod
     def _is_expired(intent_dict: dict) -> bool:
-        """Check whether an intent has passed its ``expires_at`` deadline.
-
-        Args:
-            intent_dict: The intent dict to check.
-
-        Returns:
-            ``True`` if ``expires_at`` is set and has passed, ``False`` otherwise.
-        """
+        """Check whether an intent has passed its ``expires_at`` deadline."""
         expires_at = intent_dict.get("expires_at")
         if not expires_at:
             return False
