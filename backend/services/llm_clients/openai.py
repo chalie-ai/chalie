@@ -87,12 +87,9 @@ def _openai_convert_messages(messages: list) -> list:
 
 
 class OpenAIClient(ProviderClient):
-    """OpenAI (and openai_compatible) API thin client."""
-
     CONTENT_FIELD_LABEL: ClassVar[str] = "choices[].message.content"
 
     def __init__(self, config: dict) -> None:
-        """Initialise from provider config dict."""
         self._config = config
         self.model: str = config.get('model', 'gpt-4o-mini')
         self._timeout: int = config.get('timeout', 120)
