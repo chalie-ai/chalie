@@ -6,14 +6,6 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-E2E test for the MCP server external agent communication feature.
-
-Tests:
-1. MCP server starts and exposes the talk_to_chalie tool
-2. Authenticated requests get a response
-3. Unauthenticated requests are rejected
-"""
 
 import json
 import os
@@ -31,7 +23,6 @@ _TEST_PORT = 18462
 
 @pytest.fixture(scope="module", autouse=True)
 def _patch_db(tmp_path_factory):
-    """Create a temp SQLite DB with required tables and patch get_shared_db_service."""
     import sqlite3
     from services import database_service
 
@@ -143,7 +134,6 @@ def _patch_db(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def auth_token(_patch_db):
-    """Create a test auth token in the patched DB."""
     from services.wrapper_auth_service import WrapperAuthService
 
     auth_svc = WrapperAuthService(_patch_db)
@@ -156,7 +146,6 @@ def auth_token(_patch_db):
 
 @pytest.fixture(scope="module")
 def mcp_server(_patch_db):
-    """Start MCP server with auth middleware in a background thread."""
     from mcp_server.server import create_mcp_server, _build_app
 
     mcp = create_mcp_server(host="127.0.0.1", port=_TEST_PORT)
@@ -183,10 +172,7 @@ def mcp_server(_patch_db):
 
 
 class TestMCPServerAuth:
-    """Verify auth enforcement."""
-
     def test_unauthenticated_request_rejected(self, mcp_server):
-        """Requests without a valid bearer token should be rejected (401)."""
         import urllib.request
         import urllib.error
 
@@ -212,7 +198,6 @@ class TestMCPServerAuth:
         assert exc_info.value.code == 401
 
     def test_invalid_token_rejected(self, mcp_server):
-        """Requests with an invalid bearer token should be rejected (401)."""
         import urllib.request
         import urllib.error
 
@@ -240,10 +225,7 @@ class TestMCPServerAuth:
 
 
 class TestMCPServerToolList:
-    """Verify the MCP server exposes talk_to_chalie."""
-
     def _mcp_request(self, url, method, params, auth_token, session_id=None):
-        """Send a JSON-RPC request to the MCP endpoint, return (response_data, headers)."""
         import urllib.request
 
         body = json.dumps({
@@ -278,7 +260,6 @@ class TestMCPServerToolList:
         return None, resp_session_id
 
     def test_tool_list_contains_talk_to_chalie(self, mcp_server, auth_token):
-        """The tools/list response should include talk_to_chalie."""
         url = f"{mcp_server['url']}/mcp"
 
         # Step 1: Initialize session
@@ -306,10 +287,7 @@ class TestMCPServerToolList:
 
 
 class TestMCPServerToolCall:
-    """Verify talk_to_chalie tool execution via tools/call."""
-
     def _mcp_request(self, url, method, params, auth_token, session_id=None):
-        """Send a JSON-RPC request to the MCP endpoint."""
         import urllib.request
 
         body = json.dumps({
@@ -342,7 +320,6 @@ class TestMCPServerToolCall:
         return None, resp_session_id
 
     def test_talk_to_chalie_returns_response(self, mcp_server, auth_token):
-        """Calling talk_to_chalie with a valid message returns a non-empty response."""
         from unittest.mock import patch, MagicMock
 
         fake_response = MagicMock()

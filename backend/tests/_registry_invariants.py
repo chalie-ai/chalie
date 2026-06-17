@@ -6,23 +6,13 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Registry invariants for the parameter-key healer — a TEST-ONLY surface.
+"""Registry-invariant checks for the parameter-key healer - TEST-ONLY surface.
 
-The production healer (``abilities._params``) carries only what every live tool
-call needs: the :class:`~abilities._params.Keys` registry, the :data:`VARIANTS`
-ladders, and the :class:`~abilities._params.KeyHealer` /
-:class:`~abilities._params.KeyNormalizer` pair. The *checks* that the registry is
-internally consistent — that no variant of one parameter collides with another
-parameter (or a framework key) within the same tool, and that every declared key
-is a ``Keys`` constant — are properties asserted by the feature suite, never run
-on the hot path. They live here so production code never imports a validator it
-never calls.
-
-This module is plumbing only: it imports the real registry from
-``abilities._params`` and reflects over the real ``AbilityRegistry`` (the caller
-supplies the shipping abilities). It re-implements NO production logic, adds NO
-mocks, and creates NO alternative code path. The ``_`` prefix keeps pytest from
-collecting it as a test module while ``test_param_key_resilience`` imports it.
+Lives here so production code never imports a validator it never calls. Imports
+the real registry from ``abilities._params`` and reflects over the real
+``AbilityRegistry`` supplied by the caller. Re-implements NO production logic,
+adds NO mocks, and creates NO alternative code path. The ``_`` prefix keeps pytest
+from collecting it as a test module while ``test_param_key_resilience`` imports it.
 """
 
 from __future__ import annotations
@@ -37,17 +27,15 @@ FRAMEWORK_KEYS = ("act_summary", "async")
 
 
 class RegistryOverlapError(Exception):
-    """Raised by :meth:`RegistryInvariant.check_no_overlaps` when a tool's variant
-    ladders overlap with another of its parameters or a framework key — the
-    invariant that keeps key healing unambiguous."""
+    """Raised when a tool's variant ladders overlap with another parameter or a
+    framework key - the invariant that keeps key healing unambiguous."""
 
 
 class RegistryInvariant:
-    """Asserts the structural invariants the key-healing design rests on.
+    """Asserts structural invariants the key-healing design rests on.
 
-    Holds the same dependencies as the production healer — the variant registry,
-    the framework keys, and a :class:`KeyNormalizer` — injected (DIP) so a test can
-    drive the checks against a probe registry. Stateless across calls.
+    Dependencies are injected so a test can drive the checks against a probe
+    registry. Stateless across calls.
     """
 
     def __init__(
@@ -61,11 +49,9 @@ class RegistryInvariant:
         self._normalizer = normalizer or KeyNormalizer()
 
     def canonical_keys(self) -> "frozenset[str]":
-        """Every canonical wire key declared on :class:`Keys`.
-
-        Schema-completeness check: a registered ability's property keys MUST be a
-        subset of these, so the wire keys and the variant registry can never drift
-        from the schema.
+        """Schema-completeness check: a registered ability's property keys must be
+        a subset of these, so wire keys and the variant registry cannot drift from
+        the schema.
         """
         return frozenset(
             v for k, v in vars(Keys).items()
@@ -73,18 +59,8 @@ class RegistryInvariant:
         )
 
     def check_no_overlaps(self, abilities: "list") -> None:
-        """Assert the no-overlap invariant for every ability, or raise.
-
-        For each tool, every variant of every declared parameter must:
-          * not squeeze onto a DIFFERENT declared parameter of the same tool, and
-          * not be claimed by two declared parameters of the same tool, and
-          * not collide with a framework key.
-
-        No declared parameter may collide with a framework key either. Every
-        :data:`VARIANTS` key must be a real parameter of at least one ability
-        (catches a typo'd canonical). Raises :class:`RegistryOverlapError` listing
-        EVERY violation found (not just the first), so one run fixes the whole
-        registry.
+        """Raises :class:`RegistryOverlapError` listing ALL violations found (not
+        just the first), so one run surfaces the entire registry state.
         """
         squeeze = self._normalizer.squeeze
         framework_sq = {squeeze(k) for k in self._framework_keys}

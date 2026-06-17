@@ -1,25 +1,9 @@
-"""
-Integration: voice API — synthesize (single WAV blob) + transcribe + health.
-
-Tests exercise the real kokoro-onnx + moonshine-onnx models via the real Flask
-app. Each test that requires model files skips cleanly when the model files are
-absent (resources/voice-models/), so the suite stays green in CI environments
-without voice dependencies installed.
-
-The pure-function tests in test_voice_xml_strip.py run unconditionally; these
-integration tests are for the full HTTP contract only.
-
-Uses the authed_client fixture from conftest.py (real Flask app, auth bypassed,
-real SQLite + MemoryStore).
-"""
-
 import io
 
 import pytest
 
 
 def _voice_available(client) -> bool:
-    """Return True only if /voice/health reports status='ok'."""
     resp = client.get('/voice/health')
     if resp.status_code != 200:
         return False
