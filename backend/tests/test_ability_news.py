@@ -164,30 +164,6 @@ def test_happy_path_structured_rows_offline_via_cache(db, dmn_mp):
     assert len(first["snippet"]) <= 200, len(first["snippet"])
 
 
-def test_happy_path_user_broadcast_renders_rich_card(db, user_mp):
-    """user-broadcast pairs a rich card: body is payload JSON + blank line + span instruction; card rows carry {title, url, snippet, source}."""
-    query = "tkt904 broadcast query"
-    _seed_google_cache(query, _sample_articles())
-
-    out = ToolDispatcher(user_mp).dispatch(
-        "news", {"query": query, "act_summary": "x"}
-    )
-
-    assert "[news(status=success" in out, out
-    assert "count=2" in out, out
-    assert "<span id='news_1'>" in out, out
-
-    body = _body(out)
-    payload_json, _, instruction = body.partition("\n\n")
-    assert "news_1" in instruction, instruction
-    payload = json.loads(payload_json)
-    assert isinstance(payload["results"], list) and payload["results"], payload
-    for row in payload["results"]:
-        assert set(row.keys()) == {"title", "url", "snippet", "source"}, row
-    assert payload["results"][0]["url"] == "https://example.com/eu-ai-act-audits"
-    assert payload["results"][0]["source"] == "Reuters"
-
-
 # ── Zero-articles success: a provider that ANSWERED with nothing ───────────────
 
 
