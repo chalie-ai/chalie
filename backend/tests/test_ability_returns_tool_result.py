@@ -6,32 +6,12 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Registry-wide ToolResult return-type contract — statically enforced.
+"""Enforce ToolResult as the static return-type boundary for every registered ability.
 
-Every tool the model can call funnels through ``ToolDispatcher``, which at runtime
-hard-fails any ability whose ``run()`` returns a non-:class:`ToolResult`
-(``code=non-canonical-result``). That runtime guard only ever fires on the single
-code path a given call happens to take. This module enforces the same contract
-*statically, across every path*, by type-checking the abilities package: a
-``run()`` that could return a non-``ToolResult`` on any branch is a build-time
-error here, not a latent runtime surprise that surfaces only when that branch is
-hit in production.
-
-Two guards, together forming the static contract:
-
-* :func:`test_run_is_annotated_toolresult` pins the ``-> ToolResult`` annotation on
-  every registered ability. This is load-bearing: a type checker only validates a
-  function body when the function is annotated, so this annotation is precisely
-  what makes the return-type check below apply to ``run()`` at all.
-* :func:`test_ability_return_types_are_statically_honoured` runs mypy over the real
-  abilities package and asserts no declared return type is violated on any path
-  (the ``return-value`` / ``return`` error family). With every ``run()`` annotated
-  above, this proves each one yields a ``ToolResult`` on every branch — the
-  all-paths static superset of the old single-path runtime conformance sweep.
-
-The per-ability envelope *shape* (status/body/meta/code invariants) is pinned once
-in :mod:`tests.test_tool_result_contract`; this module pins the *boundary* that
-makes that single contract sufficient for **every registered ability**.
+This module handles two concerns: (1) asserting each ``Ability.run()`` carries the
+``-> ToolResult`` annotation at its source, and (2) running mypy over the real abilities
+package to verify no path violates that declared type. The per-ability envelope *shape*
+(status/body/meta/code invariants) is pinned once in :mod:`tests.test_tool_result_contract`.
 """
 
 import importlib.util
@@ -58,11 +38,6 @@ _RETURN_CONTRACT_CODES = ("[return-value]", "[return]")
 
 @pytest.mark.parametrize("name", _NAMES)
 def test_run_is_annotated_toolresult(name):
-    """Every registered ability declares ``run() -> ToolResult`` at the source.
-
-    This is the precondition that makes the static return check below bite: mypy
-    only validates a function body once the function carries an annotation.
-    """
     ability = next(a for a in _ABILITIES if a.get_name() == name)
     hints = typing.get_type_hints(type(ability).run)
     assert hints.get("return") is ToolResult, (
@@ -71,13 +46,10 @@ def test_run_is_annotated_toolresult(name):
 
 
 def test_ability_return_types_are_statically_honoured():
-    """mypy proves no ability violates its declared return type on ANY path.
+    """Assert mypy sees no return-type violations for the abilities package.
 
-    Combined with the per-ability annotation guard above, this guarantees every
-    ``run()`` yields a ``ToolResult`` on every branch — caught at build time,
-    before it could ever reach the dispatcher's runtime ``non-canonical-result``
-    rescue. It is the all-paths static superset of a runtime conformance sweep
-    (which can only exercise one input, hence one path, per ability).
+    The subprocess stderr/stdout is also asserted to confirm mypy itself ran
+    successfully (returncode ∈ {0, 1}) rather than crashing or misconfiguring.
     """
     assert importlib.util.find_spec("mypy") is not None, (
         "mypy must be installed (it is a pyproject dependency) for the static "

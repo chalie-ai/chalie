@@ -6,11 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""_mcp_* passthrough proxy-specific business-logic tests migrated from the
-per-ability conformance file removed in TKT-975. Drives the real ToolDispatcher
-end-to-end hot path with zero mocks, exercising unreachable-server, unknown-server,
-text/struct content shaping, and isError→mcp-tool-error mapping via a real local
-FastMCP stub."""
+"""_mcp_* passthrough proxy business-logic tests."""
 
 import json
 import socket
@@ -37,7 +33,6 @@ pytestmark = pytest.mark.unit
 
 
 def _free_port() -> int:
-    """Bind to port 0 to let the OS pick a free port, then release it."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
@@ -50,9 +45,6 @@ def _seed_transcript(db, channel: str) -> int:
 
 
 def _mp_for(config, db) -> MessageProcessor:
-    """A real MessageProcessor bound to a real channel config and a real transcript
-    anchor, exactly as the production loop builds it — so the dispatcher's
-    ActTrail write lands against a real row."""
     mp = MessageProcessor("call an mcp tool")
     mp.config = config
     mp.active_tools = list(config.always_available or [])
@@ -63,10 +55,9 @@ def _mp_for(config, db) -> MessageProcessor:
 def _allow(db, permission: str) -> None:
     """Seed an ``allow`` policy row so the gate runs the callback (reaches run()).
 
-    This is the real policy table the production ``PolicyManager.wrap`` SELECTs —
+    This is the real policy table the production ``PolicyManager.wrap`` SELECTS —
     seeding it is the prod-faithful way to make an _mcp_* call resolve past the
-    lazy-'ask' default (which on chat would freeze on a human prompt), NOT a
-    monkeypatch of the gate.
+    lazy-'ask' default, NOT a monkeypatch of the gate.
     """
     allow_policy(db, permission, channel="chat")
 
@@ -83,10 +74,6 @@ def _body(rendered: str, tool_name: str) -> str:
 
 
 def test_unreachable_server_renders_mcp_unreachable_naming_the_server(db):
-    """A registered-but-unreachable MCP server: the real outbound connection
-    fails, and the proxy renders ``code=mcp-unreachable`` with the server NAMED in
-    the message/hint — never the legacy ``code="error"`` marker, never an empty
-    success, never a raw stack trace."""
     svc = McpClientService()
     # Real registration through the production CRUD path; the host is a closed
     # localhost port so the outbound MCP connection fails fast.
@@ -115,9 +102,6 @@ def test_unreachable_server_renders_mcp_unreachable_naming_the_server(db):
 
 
 def test_unknown_mcp_server_renders_stable_error_code(db):
-    """An ``_mcp_*`` name with no registered server resolves to a stable error code
-    (not the bare ``code="error"`` marker), naming the offending tool so the model
-    can self-correct rather than retry forever."""
     tool = "_mcp_nosuchserver_whatever"
     _allow(db, tool)
     mp = _mp_for(UserConfig({}), db)
@@ -135,13 +119,6 @@ def test_unknown_mcp_server_renders_stable_error_code(db):
 
 @pytest.fixture()
 def local_mcp_server():
-    """A real ``FastMCP`` server over streamable-HTTP in a background thread.
-
-    Zero mocks: the proxy's real outbound ``streamablehttp_client`` connects to
-    this genuine remote. Three tools cover the content-block shapes the proxy must
-    map — a text return, a structured-dict return, and a tool that raises (the
-    remote sets ``isError=true``).
-    """
     port = _free_port()
     mcp = FastMCP("passthrough_probe", host="127.0.0.1", port=port)
 
@@ -181,12 +158,6 @@ def local_mcp_server():
 
 @pytest.fixture()
 def registered_server(db, tmp_path, monkeypatch, local_mcp_server):
-    """Register + sync the local server through the REAL production path.
-
-    ``add_server`` writes the row; ``ping_and_sync`` performs the real outbound
-    tool-list sync into mcp_tools.sqlite (redirected to tmp_path so the runtime DB
-    is isolated). Returns the McpClientService for the test to read state from.
-    """
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
     svc = McpClientService()
     server = svc.add_server(
@@ -203,8 +174,6 @@ def registered_server(db, tmp_path, monkeypatch, local_mcp_server):
 
 
 def test_text_tool_renders_prose_body(db, registered_server):
-    """A remote tool returning text yields a SUCCESS envelope whose body is the
-    text joined as prose (verbatim str body), never JSON-wrapped."""
     tool = "_mcp_probe_say_text"
     _allow(db, tool)
     mp = _mp_for(UserConfig({}), db)
@@ -221,9 +190,6 @@ def test_text_tool_renders_prose_body(db, registered_server):
 
 
 def test_struct_tool_keeps_structured_body_no_double_wrapping(db, registered_server):
-    """A remote tool returning structured JSON yields a structured body rendered as
-    compact JSON by the dispatcher — NOT a JSON string re-serialised inside another
-    JSON string (the double-wrapping the ticket forbids)."""
     tool = "_mcp_probe_give_struct"
     _allow(db, tool)
     mp = _mp_for(UserConfig({}), db)
@@ -250,9 +216,6 @@ def test_struct_tool_keeps_structured_body_no_double_wrapping(db, registered_ser
 
 
 def test_remote_iserror_renders_mcp_tool_error(db, registered_server):
-    """A remote tool that raises sets ``isError=true``; the proxy must map that to
-    ``code=mcp-tool-error`` with the remote's error message as the body — NOT treat
-    the error content as success prose."""
     tool = "_mcp_probe_explode"
     _allow(db, tool)
     mp = _mp_for(UserConfig({}), db)

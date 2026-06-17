@@ -6,10 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""news-specific business-logic tests migrated from the per-ability conformance
-file removed in TKT-975. Drives the real ToolDispatcher end-to-end hot path with
-zero mocks, exercising category validation, provider-unreachable errors, offline
-cache-seeded happy paths, rich card rendering, and zero-article success."""
+
 
 import hashlib
 import json
@@ -30,45 +27,34 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def user_mp(db):
-    """A real user-broadcast mp (``broadcast_to == 'user'``). On this channel the
-    dispatcher assigns a rich-media ordinal and renders the news card trailer."""
     return MP(seed_transcript(db, "chat", "what's in the news"), UserConfig({}))
 
 
 @pytest.fixture
 def dmn_mp(db):
-    """A real non-user-broadcast mp (``broadcast_to is None``). On this channel the
-    dispatcher drops the rich card, so the rendered body is the raw model-facing
-    rows with no span/instruction trailer."""
     return MP(seed_transcript(db, "subconscious", "what's in the news"), DmnConfig())
+
 
 
 @pytest.fixture(autouse=True)
 def _reset_news_service():
-    """The ability caches a single ``NewsService`` on the class. Reset it around
-    each test so a base-URL override in one test never leaks into another, and so
-    every test exercises a fresh service against the real store."""
     NewsAbility._service = None
     yield
     NewsAbility._service = None
 
 
 def _body(rendered: str, tool: str = "news") -> str:
-    """Return the text between the open tag and ``[end:<tool>]`` (verbatim, no
-    rich-card split — the news tests own the ``partition`` themselves)."""
     return _harness_body(rendered, tool)
 
 
 def _cache_key(query: str, country_code: str = "US") -> str:
-    """The exact cache key the production ``fetch_google_news`` computes."""
     digest = hashlib.sha256((query + country_code).encode()).hexdigest()[:16]
     return f"news:google:{digest}"
 
 
 def _seed_google_cache(query: str, articles: list, country_code: str = "US") -> None:
-    """Seed the REAL shared store at the production Google-News cache key so a
-    dispatch of ``news`` for *query* returns these articles through the genuine
-    cache-hit branch — zero network, zero mock."""
+    """Seed the REAL shared store at the production cache key so a dispatch of
+    ``news`` for *query* returns these articles through the genuine cache-hit branch."""
     store = MemoryClientService.create_connection()
     store.setex(
         _cache_key(query, country_code),
@@ -81,10 +67,8 @@ def _seed_google_cache(query: str, articles: list, country_code: str = "US") -> 
 
 
 def test_invalid_category_rejected_with_valid_enum(db, user_mp):
-    """A bogus ``category`` (passes the query pre-gate, then reaches run()) is
-    rejected by the base ``param`` helper as ``code=invalid-param`` with a
-    ``valid:`` ladder of the real enum — it does NOT silently fall back to an
-    uncategorised search."""
+    """invalid category must be rejected as ``code=invalid-param`` — not silently
+    fall back to an uncategorised search."""
     out = ToolDispatcher(user_mp).dispatch(
         "news",
         {"query": "anything", "category": "politics", "act_summary": "x"},
@@ -102,11 +86,7 @@ def test_invalid_category_rejected_with_valid_enum(db, user_mp):
 
 
 def test_dead_provider_is_provider_unreachable_not_empty_success(db, user_mp, monkeypatch):
-    """Pointing the REAL Google News base URL at a closed loopback port makes the
-    genuine ``requests.get`` raise a real ``ConnectionError`` the service wraps
-    into ``NewsFetchError``; the ability surfaces ``code=provider-unreachable``
-    with a recovery hint. The exact "Bad" the ticket closes — a dead provider
-    must NOT return an empty success masquerading as "no news"."""
+    """dead provider must surface ``code=provider-unreachable`` with a recovery Hint — NEVER an empty success."""
     monkeypatch.setattr(news_service, "GOOGLE_NEWS_BASE", "http://127.0.0.1:9/rss/search")
 
     out = ToolDispatcher(user_mp).dispatch(
@@ -156,12 +136,7 @@ def _sample_articles() -> list:
 
 
 def test_happy_path_structured_rows_offline_via_cache(db, dmn_mp):
-    """Seeding the REAL shared store at the production cache key makes
-    ``fetch_google_news`` return real articles through its genuine cache-hit
-    branch — no network. The success envelope carries ``count=N`` and the body is
-    a JSON list whose rows carry EXACTLY {title, source, url, published_at,
-    snippet} so the model quotes real headlines verbatim. (dmn channel → no card
-    trailer.)"""
+    """real cache-hit returns rich ``count=N`` envelope with rows of {title, source, url, published_at, snippet}."""
     query = "tkt904 happy path query"
     _seed_google_cache(query, _sample_articles())
 
@@ -190,10 +165,7 @@ def test_happy_path_structured_rows_offline_via_cache(db, dmn_mp):
 
 
 def test_happy_path_user_broadcast_renders_rich_card(db, user_mp):
-    """On a user-broadcast turn the dispatcher pairs the card: the body becomes the
-    rich payload JSON + blank line + the span instruction (``<span id='news_1'>``).
-    The card payload rows carry {title, url, snippet, source} (card shape, no
-    published_at) so the FE article card renders domain pills from ``url``/``source``."""
+    """user-broadcast pairs a rich card: body is payload JSON + blank line + span instruction; card rows carry {title, url, snippet, source}."""
     query = "tkt904 broadcast query"
     _seed_google_cache(query, _sample_articles())
 
@@ -220,11 +192,7 @@ def test_happy_path_user_broadcast_renders_rich_card(db, user_mp):
 
 
 def test_zero_articles_is_success_with_empty_list(db, dmn_mp, monkeypatch):
-    """A provider that ANSWERS but yields no usable articles is a SUCCESS with
-    ``count=0`` and an explicit empty list — never an error, never a blank body.
-    We force the REAL ``fetch_google_news`` to answer empty by replacing it with a
-    real method that returns ``[]`` (the genuine "answered, but nothing matched"
-    shape — distinct from the unreachable path which RAISES). No network."""
+    """answered provider returning zero articles is SUCCESS with ``count=0`` and an empty list — never an error."""
 
     def _empty_answer(self, query, country_code="US", timeout=5.0):
         return []

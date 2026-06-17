@@ -59,8 +59,7 @@ def _seed_transcript_row(db, *, channel, role, content, created_at):
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database. Both review tools are in
-    ``PolicyManager.INTERNAL`` so the gate short-circuits straight to run()."""
+    """Both review tools are in ``PolicyManager.INTERNAL`` so the gate short-circuits straight to run()."""
     return MP(seed_transcript(db, content="review the history"), UserConfig({}))
 
 
@@ -299,9 +298,7 @@ def test_review_transcript_invalid_buffer_is_invalid_param(db, chat_mp):
 
 
 def test_review_tool_calls_query_failed_is_loud(db, chat_mp):
-    """A corrupt read must NOT masquerade as an empty window (the bug the deleted
-    get_by_timerange swallowed). Drop the real table → real sqlite3.OperationalError
-    → narrow query-failed envelope, zero mocks (TKT-911 corrupt-index precedent)."""
+    """A corrupt read must NOT masquerade as an empty window (the bug the deleted get_by_timerange swallowed)."""
     db.execute("DROP TABLE tool_calls")
     db.commit()
 
