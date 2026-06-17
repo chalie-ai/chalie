@@ -5,29 +5,6 @@ All SQLite write operations (INSERT / UPDATE / DELETE) that would otherwise
 race under concurrent callers are funnelled through a single background thread
 that drains a :class:`queue.Queue`.  This eliminates ``SQLITE_BUSY`` under
 high write concurrency while keeping call-sites simple.
-
-Two access patterns are supported:
-
-- **Fire-and-forget** (:meth:`WriteQueueService.submit`) — caller returns
-  immediately; the write happens asynchronously.
-- **Synchronous** (:meth:`WriteQueueService.submit_sync`) — caller blocks
-  until the callable completes and receives its return value.
-
-Typical usage::
-
-    from services.write_queue_service import get_write_queue
-
-    wq = get_write_queue()
-    wq.submit(db.execute, "INSERT INTO foo (bar) VALUES (?)", ("baz",))
-    row_id = wq.submit_sync(db.execute, "INSERT INTO foo (bar) VALUES (?)", ("qux",))
-
-Design notes
-------------
-- Internal implementation uses :class:`queue.Queue` (unbounded) and a single
-  daemon thread with a per-name lock pattern, simplified to one shared thread.
-- The background thread obtains its own thread-local SQLite connection from
-  :class:`~services.database_service.DatabaseService`, keeping it separate
-  from callers' connections.
 """
 
 import logging
@@ -43,18 +20,7 @@ _TYPE_SINGLE = "single"
 
 
 class _QueueItem:
-    """Internal container for a single work item placed on the write queue.
-
-    Attributes:
-        item_type: Always ``_TYPE_SINGLE``.
-        fn: Callable to execute.
-        args: Positional arguments forwarded to *fn*.
-        kwargs: Keyword arguments forwarded to *fn*.
-        done_event: :class:`threading.Event` set by the worker when execution
-            completes.  ``None`` for fire-and-forget items.
-        result: Mutable one-element list used to pass the callable's return
-            value (or raised exception) back to a waiting caller.
-    """
+    """Internal container for a single work item placed on the write queue."""
 
     __slots__ = ("item_type", "fn", "args", "kwargs", "done_event", "result")
 
@@ -67,20 +33,6 @@ class _QueueItem:
         done_event: Optional[threading.Event] = None,
         result: Optional[List] = None,
     ) -> None:
-        """Initialise a queue work item.
-
-        Args:
-            item_type: Execution strategy — always ``_TYPE_SINGLE``.
-            fn: Callable invoked for the item.
-            args: Positional arguments forwarded to *fn*.
-            kwargs: Keyword arguments forwarded to *fn*.
-                Defaults to an empty dict when ``None``.
-            done_event: :class:`threading.Event` signalled by the worker on
-                completion.  ``None`` means fire-and-forget.
-            result: One-element list whose first slot receives either the
-                callable's return value or a raised :class:`Exception`.
-                ``None`` for fire-and-forget items.
-        """
         self.item_type = item_type
         self.fn = fn
         self.args = args

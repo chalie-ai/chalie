@@ -1,20 +1,3 @@
-"""
-Wrapper Authentication Service — bearer token auth for external wrappers.
-
-External wrappers (IDE, trading terminal, automation scripts, etc.) connect to
-Chalie programmatically using bearer tokens rather than the cookie-based session
-auth used by the chat UI.
-
-Tokens are generated as URL-safe random strings (48 bytes → 64 chars).  Only the
-SHA-256 hash is persisted; the raw token is shown exactly once at creation time
-and never stored.
-
-Each wrapper has:
-  - A stable ``wrapper_id`` for identity across token rotations.
-  - A ``capabilities`` JSON payload declaring which signals/intents it can emit.
-  - A ``permissions`` JSON payload controlling which API operations it may call.
-"""
-
 import hashlib
 import json
 import logging
@@ -32,27 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 def _hash_token(raw_token: str) -> str:
-    """Return the SHA-256 hex digest of a raw bearer token.
-
-    Args:
-        raw_token: The plain-text bearer token.
-
-    Returns:
-        64-character lowercase hex string.
-    """
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
 class WrapperAuthService:
-    """Manages wrapper bearer-token lifecycle: creation, validation, and revocation."""
-
     def __init__(self, db=None):
-        """Initialise the service, optionally injecting a DatabaseService.
-
-        Args:
-            db: DatabaseService instance.  When ``None`` the shared singleton is
-                used.  Pass an in-memory instance in tests.
-        """
         self._db = db or get_shared_db_service()
 
     # ------------------------------------------------------------------
@@ -69,25 +36,7 @@ class WrapperAuthService:
     ) -> tuple[str, str]:
         """Create a new wrapper token and persist its hash.
 
-        Args:
-            name: Human-readable label for the wrapper (e.g. "IDE Wrapper").
-            capabilities: Dict declaring wrapper capabilities, e.g.
-                ``{"signals": ["context_change"], "intents": ["read_memory"]}``.
-                Defaults to an empty dict.
-            permissions: Dict controlling allowed operations, e.g.
-                ``{"query": ["memory", "threads"], "update": [], "broadcast": False}``.
-                Defaults to an empty dict.
-            metadata: Optional dict with version, description, etc.
-                Defaults to an empty dict.
-            wrapper_id_override: Optional fixed ``wrapper_id`` to use instead of
-                the auto-generated one.  Reserved for built-in wrappers such as
-                ``"__chat_ui__"`` that must have a stable, well-known identifier.
-
-        Returns:
-            A ``(raw_token, wrapper_id)`` tuple.  ``raw_token`` is the plain-text
-            bearer token that must be given to the wrapper — it is **not** stored
-            and cannot be recovered later.  ``wrapper_id`` is the stable identifier
-            for this wrapper.
+        The raw bearer token is **not** stored server-side and cannot be recovered later.
         """
         raw_token = secrets.token_urlsafe(48)
         token_hash = _hash_token(raw_token)
@@ -132,13 +81,6 @@ class WrapperAuthService:
         """Validate the ``Authorization: Bearer <token>`` header on a Flask request.
 
         On success, slides ``last_seen_at`` to the current UTC time.
-
-        Args:
-            request: The Flask ``request`` proxy object.
-
-        Returns:
-            The ``wrapper_id`` string if the token is valid and not revoked,
-            otherwise ``None``.
         """
         auth_header = request.headers.get("Authorization", "")
         if not auth_header.startswith("Bearer "):
@@ -192,16 +134,6 @@ class WrapperAuthService:
                 "update":    ["memory"],               # writable resources
                 "broadcast": true                      # may push events
             }
-
-        Args:
-            wrapper_id: The stable wrapper identifier.
-            operation: One of ``"query"``, ``"update"``, or ``"broadcast"``.
-            resource: The resource name (e.g. ``"memory"``, ``"threads"``).
-                Ignored when ``operation`` is ``"broadcast"``.
-
-        Returns:
-            ``True`` if the permission is granted, ``False`` otherwise (including
-            when the wrapper does not exist or has been revoked).
         """
         wrapper = self.get_wrapper(wrapper_id)
         if wrapper is None:
@@ -220,15 +152,6 @@ class WrapperAuthService:
     # ------------------------------------------------------------------
 
     def revoke(self, wrapper_id: str) -> bool:
-        """Revoke a wrapper token by setting its ``revoked_at`` timestamp.
-
-        Args:
-            wrapper_id: The stable wrapper identifier to revoke.
-
-        Returns:
-            ``True`` if the wrapper was found and revoked, ``False`` if it did
-            not exist or was already revoked.
-        """
         now = utc_now().isoformat()
 
         with self._db.connection() as conn:
@@ -254,13 +177,6 @@ class WrapperAuthService:
     # ------------------------------------------------------------------
 
     def list_wrappers(self) -> list[dict]:
-        """Return all non-revoked wrappers.
-
-        Returns:
-            List of dicts with keys: ``id``, ``wrapper_id``, ``name``,
-            ``capabilities``, ``permissions``, ``metadata``, ``last_seen_at``,
-            ``created_at``.  JSON fields are decoded into Python dicts.
-        """
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -278,15 +194,6 @@ class WrapperAuthService:
         return [self._row_to_dict(row) for row in rows]
 
     def get_wrapper(self, wrapper_id: str) -> Optional[dict]:
-        """Retrieve a single non-revoked wrapper by ``wrapper_id``.
-
-        Args:
-            wrapper_id: The stable wrapper identifier.
-
-        Returns:
-            Dict with the same keys as :meth:`list_wrappers`, or ``None`` if
-            the wrapper does not exist or has been revoked.
-        """
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -307,15 +214,6 @@ class WrapperAuthService:
         return self._row_to_dict(row)
 
     def update_capabilities(self, wrapper_id: str, capabilities: dict) -> bool:
-        """Replace the capabilities payload for a wrapper.
-
-        Args:
-            wrapper_id: The stable wrapper identifier.
-            capabilities: New capabilities dict.
-
-        Returns:
-            ``True`` if the wrapper was found and updated, ``False`` otherwise.
-        """
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -338,15 +236,6 @@ class WrapperAuthService:
 
     @staticmethod
     def _row_to_dict(row) -> dict:
-        """Convert a sqlite3.Row (or sequence) to a clean wrapper dict.
-
-        Args:
-            row: A row with columns in the order returned by the SELECT
-                statements in this service.
-
-        Returns:
-            Dict with JSON fields decoded and timestamps left as ISO strings.
-        """
         return {
             "id": row[0],
             "wrapper_id": row[1],
