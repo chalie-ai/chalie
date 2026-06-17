@@ -1,4 +1,3 @@
-"""Unit tests for the vision_provider_id setting + compute-on-read resolver."""
 import pytest
 
 pytestmark = pytest.mark.unit

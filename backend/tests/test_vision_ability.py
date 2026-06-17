@@ -51,7 +51,6 @@ def _make_user_mp() -> MessageProcessor:
 
 
 def _force_vision_provider(db) -> int:
-    """Create a real, RESOLVABLE-but-unreachable vision provider and select it."""
     svc = ProviderDbService(get_shared_db_service())
     provider = svc.create_provider(
         {

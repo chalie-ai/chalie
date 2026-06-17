@@ -1,30 +1,11 @@
-"""Feature test: voice "not ready" remediation hints.
-
-Voice ONNX models are no longer shipped by the installer. ``c3633e0c`` moved the
-download into ``RuntimeDepsService``: turning voice on in Settings
-(``PUT /api/voice-settings`` → ``RuntimeDepsService.enable_voice()``) background-
-installs the voice deps and downloads the models into ``resources/voice-models/``.
-
-So every user-facing "voice not ready" hint must point the user at that setting —
-never at the (now voice-agnostic) installer. This drives the real Flask
-``/voice/health`` and ``/voice/synthesize`` endpoints through the production app
-+ real SQLite (the ``authed_client`` fixture) and asserts the remediation
-contract on whatever readiness branch the environment exercises.
-
-Environment note (same capability-gating as ``tests/integration/test_voice_api.py``):
-the ``models_missing`` branch is only reachable when the voice deps are importable
-but the model files are absent. Where deps are absent (CI, and any box that has
-not enabled voice) the endpoints take the ``deps_missing`` branch instead — the
-test still runs and still asserts the cross-cutting "no installer remediation"
-invariant on that branch; the ``models_missing``-specific assertion fires
-wherever that branch is live.
+"""Feature test: every user-facing "voice not ready" hint must point at Settings,
+never the installer, across whatever readiness branch the environment exercises.
 """
 
 import pytest
 
 
 def _no_installer(hint: str) -> None:
-    """A voice remediation hint must never tell the user to re-run the installer."""
     assert "installer" not in (hint or "").lower(), (
         "voice remediation hint must not reference the installer "
         "(models download at runtime via Settings → RuntimeDepsService.enable_voice); "
