@@ -61,9 +61,6 @@ def _allow_ubiquiti_actions(db, channel: str = "chat") -> None:
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor for the act-trail write and every ubiquiti action flipped to ``allow``
-    in the real policy table so the gate passes through to the production run()."""
     _allow_ubiquiti_actions(db)
     return MP(seed_transcript(db, content="is the office AP up?"), UserConfig({}))
 
@@ -72,9 +69,6 @@ def chat_mp(db):
 
 
 def test_prose_dsl_params_absent_from_parameters():
-    """``command`` and ``sub_action`` — the undocumented prose-DSL the model had
-    to guess — are REMOVED from the schema. ``mac`` is gone too: addressing is the
-    single ``target`` param."""
     from abilities._registry import AbilityRegistry
 
     props = AbilityRegistry.get("ubiquiti").get_parameters()["properties"]
@@ -85,9 +79,6 @@ def test_prose_dsl_params_absent_from_parameters():
 
 
 def test_action_enum_matches_action_handlers_exactly():
-    """Every action the schema advertises really dispatches — the enum is EXACTLY
-    the ACTION_HANDLERS keys, so a weak model cannot pick an action that has no
-    handler."""
     from abilities._registry import AbilityRegistry
 
     ability = AbilityRegistry.get("ubiquiti")
@@ -106,11 +97,6 @@ def test_action_enum_matches_action_handlers_exactly():
 
 
 def test_policy_defaults_seed_the_new_action_ids():
-    """The static policy_defaults.json carries a row for EVERY new action on the
-    chat channel — read ops ``allow``, mutating / outward-facing ops ``ask`` —
-    and ``deny`` on the agent channels for the network-touching ops. This mirrors
-    how the seed drives the real PolicyManager gate; a missing row would lazily
-    default a network action to ``ask``→deny."""
     with open(FileMapperService.get_policy_defaults_path()) as fh:
         seed = json.load(fh)
 
