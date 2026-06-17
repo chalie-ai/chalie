@@ -1,16 +1,3 @@
-"""
-Build or drift-check the ability search database.
-
-Walks backend/abilities/ for concrete Ability subclasses, embeds SUMMARY +
-EXAMPLES for each, and writes:
-  backend/abilities/assets/abilities.sqlite  — vector + FTS5 search index
-  backend/pre-trained/abilities_sha.json   — drift sidecar
-
-Run from backend/:
-    python -m utils.build_ability_db           # build (default)
-    python -m utils.build_ability_db --check   # drift check
-"""
-
 import argparse
 import hashlib
 import json
@@ -48,7 +35,6 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
-    """Create tables in a fresh (empty) database."""
     conn.execute("""
         CREATE TABLE abilities (
             id      INTEGER PRIMARY KEY,
@@ -85,11 +71,8 @@ def _dedup_entries(
     entries: list[tuple[str, str]],
     embeddings: list[np.ndarray],
 ) -> tuple[list[tuple[str, str]], list[np.ndarray]]:
-    """Drop entry j when cos(emb[i], emb[j]) > 0.95 for any i < j.
-
-    Embeddings are L2-normalised, so dot-product == cosine similarity.
-    Entry order determines precedence: summary first, then examples in order.
-    """
+    # Embeddings are L2-normalised, so dot-product == cosine similarity.
+    # Entry order determines precedence: summary first, then examples in order.
     kept_entries: list[tuple[str, str]] = []
     kept_embs: list[np.ndarray] = []
 
@@ -103,7 +86,6 @@ def _dedup_entries(
 
 
 def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability) -> int:
-    """Insert one ability and its search entries; return count of entries inserted."""
     summary = ability.get_summary()
     conn.execute(
         "INSERT INTO abilities(name, summary) VALUES (?, ?)",
