@@ -6,13 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Weather-ability-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975.
 
-Pins TKT-914's contracts: the missing-location guardrail, the provider-unreachable
-path when all providers are dead, fresh vs stale cache rendering, and the frozen
-schema (exactly one optional ``location`` property).
-"""
 
 import json
 
@@ -35,26 +29,18 @@ _DEAD_HOST = "http://127.0.0.1:9"
 
 @pytest.fixture(autouse=True)
 def _clear_weather_cache():
-    """``WeatherAbility._cache`` is CLASS-level — clear it before AND after each
-    test so a primed payload from one test never leaks into another."""
     WeatherAbility._cache.clear()
     yield
     WeatherAbility._cache.clear()
 
-
 @pytest.fixture
 def dead_providers(monkeypatch):
-    """Point BOTH provider URL constants at a dead host so any real fetch fails
-    fast and deterministically offline (neutralise the module's own config —
-    TKT-892 precedent)."""
     monkeypatch.setattr(weather_mod, "_OPEN_METEO_BASE", _DEAD_HOST)
     monkeypatch.setattr(weather_mod, "_WTTR_BASE", _DEAD_HOST)
 
 
 @pytest.fixture
 def no_telemetry(monkeypatch):
-    """Force ``ClientContext.current()`` to None so the dispatcher binds
-    ``ability.telemetry = None`` — no device coordinates, fully deterministic."""
     monkeypatch.setattr(
         "services.client_context.ClientContext.current", classmethod(lambda cls: None)
     )
@@ -62,9 +48,6 @@ def no_telemetry(monkeypatch):
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor. Weather seeds ``allow`` on chat in the db template, so the real gate
-    passes through to the production run()."""
     return MP(seed_transcript(db, "chat", "what's the weather"), UserConfig({}))
 
 
@@ -73,16 +56,10 @@ def _head(rendered: str) -> str:
 
 
 def _body(rendered: str) -> str:
-    """Extract the body between the open tag and ``[end:weather]``. On a
-    user-broadcasting channel a rich card is paired (``<json>\\n\\n<span ...>``);
-    the ``rich=True`` harness extractor splits on the blank line and returns the
-    JSON head."""
     return body(rendered, "weather", rich=True)
 
 
 def _sample_payload(location: str = "Valletta, Malta") -> dict:
-    """A real-shaped weather payload carrying the FULL key set the Open-Meteo
-    fetcher emits — so the cache-hit tests round-trip a genuine card payload."""
     return {
         "location": location,
         "condition": "Partly cloudy",
@@ -117,9 +94,6 @@ def _sample_payload(location: str = "Valletta, Malta") -> dict:
 
 
 def test_no_location_is_missing_location(db, chat_mp, no_telemetry, dead_providers):
-    """No device coordinates AND no ``location`` param short-circuits to a stable
-    ``code=missing-location`` BEFORE any provider is contacted — never the
-    ``provider-unreachable`` lie that claims a source was tried."""
     out = ToolDispatcher(chat_mp).dispatch("weather", {"act_summary": "x"})
 
     assert "[weather(status=error, code=missing-location" in out
@@ -136,9 +110,6 @@ def test_no_location_is_missing_location(db, chat_mp, no_telemetry, dead_provide
 def test_named_location_all_providers_dead_is_provider_unreachable(
     db, chat_mp, no_telemetry, dead_providers
 ):
-    """A named location with every provider pointed at a dead host genuinely tried
-    and failed → ``code=provider-unreachable`` with a hint and ``details`` meta in
-    the head (the failure strings), never the ``code=error`` placeholder."""
     out = ToolDispatcher(chat_mp).dispatch(
         "weather", {"location": "Valletta", "act_summary": "x"}
     )
@@ -157,9 +128,6 @@ def test_named_location_all_providers_dead_is_provider_unreachable(
 
 
 def test_fresh_cache_hit_is_plain_success(db, chat_mp, no_telemetry, dead_providers):
-    """A fresh cached payload is returned as a plain ``ok`` success: the body JSON
-    round-trips to the primed payload and the head carries NO ``stale=true`` —
-    fresh data must not be marked degraded."""
     import time
 
     payload = _sample_payload()
@@ -179,9 +147,6 @@ def test_fresh_cache_hit_is_plain_success(db, chat_mp, no_telemetry, dead_provid
 
 
 def test_stale_cache_is_marked_stale(db, chat_mp, no_telemetry, dead_providers):
-    """A stale-but-real cached payload (timestamp older than the TTL) returned when
-    every live provider is dead carries ``stale=true`` in the head so the model can
-    tell degraded data from fresh — the body still round-trips to the payload."""
     import time
 
     payload = _sample_payload()
@@ -202,8 +167,6 @@ def test_stale_cache_is_marked_stale(db, chat_mp, no_telemetry, dead_providers):
 
 
 def test_schema_is_frozen_one_optional_location():
-    """The exemplar's schema is pinned: exactly one property ``location`` and an
-    empty ``required`` list. Others copy this schema — it must not grow params."""
     schema = AbilityRegistry.get("weather").get_parameters()
     props = schema["properties"]
     assert list(props.keys()) == ["location"]

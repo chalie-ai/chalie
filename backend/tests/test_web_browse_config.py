@@ -1,11 +1,4 @@
-"""Feature tests: the rebuilt web_browse delegate config.
 
-Real config + real MessageProcessor._setup (uid assignment is prod's, not the
-test's) + the real screenshot ledger module the browser ability writes to.
-Locks: vision in the toolset, 200 iterations, the act-trail flags, the STOP RULE
-prompt, the compaction-immune screenshot ledger in the user prompt, the
-post-turn close hook wiring, and the cap-hit message.
-"""
 
 import pytest
 
@@ -41,8 +34,6 @@ def test_config_contract():
 
 
 def test_screenshot_ledger_pins_doc_ids_into_every_prompt(db):
-    """The ledger is mechanical state, not act-trail text — it survives
-    compaction because get_user_prompt re-renders it deterministically."""
     mp = _mp()
     before = mp.config.get_user_prompt(mp)
     assert before.startswith("Browsing goal:")
@@ -67,9 +58,6 @@ def test_post_turn_hook_clears_the_ledger(db):
 
 
 def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db):
-    """The mechanical handoff: the hook stashes the ledger before close_session
-    pops it, and the ability appends every doc_id (+ the vision affordance) to
-    the delegate's answer — even when the delegate never mentioned them."""
     from abilities._delegate import delegate_result
     from abilities.web_browse import WebBrowseAbility
 

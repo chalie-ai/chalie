@@ -1,5 +1,3 @@
-"""Tests for world_awareness_service — interest extraction and news scanning."""
-
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -11,7 +9,6 @@ from services.world_awareness_service import WorldAwarenessService
 
 
 def _reset_dgs_singleton():
-    """Clear the DataGraphService singleton so the next call creates a fresh one."""
     import services.data_graph_service as _dgs_mod
     _dgs_mod._instance = None
 
@@ -31,7 +28,6 @@ def _make_article(title="AI Breakthrough", **kwargs):
 
 
 def _seed_trait(db, key, value, confidence, evidence_count, category='preference'):
-    """Insert a data_graph row for a high-confidence user trait."""
     db.execute(
         """INSERT INTO data_graph (kind, key, value, retrieval_weight, evidence_count,
                                    source, deleted_at, active)
@@ -42,7 +38,6 @@ def _seed_trait(db, key, value, confidence, evidence_count, category='preference
 
 
 def _seed_topic_transcript(db, topic, count, last_ts=None):
-    """Insert `count` user transcript rows for a given channel."""
     if last_ts is None:
         from services.time_utils import utc_now
         last_ts = utc_now().isoformat()
@@ -56,7 +51,6 @@ def _seed_topic_transcript(db, topic, count, last_ts=None):
 
 
 def _make_service(db):
-    """Create a WorldAwarenessService backed by the real test DB."""
     db_service = get_shared_db_service()
     return WorldAwarenessService(db_service)
 

@@ -6,17 +6,14 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Web-delegate-ability-specific business-logic tests migrated from the
-per-ability conformance file removed in TKT-975.
+"""Web-delegate-ability tests migrated from TKT-975's removed conformance file.
 
-Pins TKT-898's failure-half contract for web_search and web_browse: the
-missing-param pre-gate fires before a delegate is spawned, an empty delegate
-answer maps to ``delegate-no-answer``, and a real prose answer is returned
-verbatim as success.
+Pins TKT-898's failure-half contract for web_search and web_browse: missing-param
+pre-gate fires before a delegate spawns, empty delegate answer maps to
+``delegate-no-answer``, and real prose answers are returned verbatim.
 
-NOTE: a file ``test_web_delegate_act_trail.py`` already exists covering the
-act-trail surface. This file is named ``test_web_delegates.py`` and covers the
-distinct param-gate + delegate-result-mapping contract.
+NOTE: ``test_web_delegate_act_trail.py`` covers the act-trail surface; this file
+covers the param-gate + delegate-result-mapping contract.
 """
 
 import pytest
