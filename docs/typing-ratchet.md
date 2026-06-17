@@ -70,17 +70,23 @@ package again.
    python3 -m mypy <package-name>
    ```
 
-3. **Fix every surfaced error.** Two categories will appear:
+3. **Fix every surfaced error.** Three categories will appear:
 
-   - **Strict annotation errors** (`no-untyped-def`, `no-untyped-call`,
-     `disallow-any-generics`, etc.) — add missing type annotations,
-     type arguments, and return types.
+   - **Strict annotation errors** (`no-untyped-def`, `disallow-any-generics`,
+     etc.) — add missing type annotations, type arguments, and return types.
 
    - **Default-level correctness errors** (`arg-type`, `attr-defined`,
      `assignment`, `return-value`, etc.) — these may be **real latent bugs**.
      Fix the underlying code rather than adding `# type: ignore` suppression.
      Reserve `# type: ignore[<code>]` only for verified false positives (e.g.
      a third-party stub is wrong), always with a comment explaining why.
+
+   - **Cross-package cascade errors** (`no-untyped-call` in a newly-migrated
+     package that calls into a not-yet-migrated package) — these cannot be
+     fixed until the dependency package is migrated. Track them in the
+     `_MAX_RESIDUAL_ERRORS` ratchet ceiling in the gate test and document them
+     in its comment block. The ceiling must only decrease; these errors resolve
+     automatically when the dependency package's ticket lands.
 
 4. **Run the full unit suite** to confirm no regressions:
    ```sh
@@ -96,9 +102,11 @@ package again.
 ## Final flip
 
 When the last package glob is removed from the `module` list, delete the
-entire `[[tool.mypy.overrides]]` block (including `disable_error_code`).
-Verify `tests/test_static_typing_gate.py` still passes — at that point the
-whole codebase runs under strict mode with no exceptions.
+entire `[[tool.mypy.overrides]]` block (including `disable_error_code`), set
+`_MAX_RESIDUAL_ERRORS = 0` in the gate test, and change the assertion back to
+`assert proc.returncode == 0`. Verify `tests/test_static_typing_gate.py` still
+passes — at that point the whole codebase runs under strict mode with no
+exceptions.
 
 ---
 
