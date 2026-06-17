@@ -1,17 +1,5 @@
 """Feature tests for TKT-928 — Moments v2 (dedicated user-curated store).
 
-Driven through the REAL production entry points end to end, zero mocks:
-
-  * the real Flask app (``api.create_app`` via the ``authed_client`` fixture) for
-    the HTTP CRUD + privacy surfaces,
-  * the real ``ToolDispatcher(mp).dispatch("memory", {...})`` recall path,
-  * the real ``MessageProcessor._seed_turn_zero()`` turn-0 flashback,
-  * the real ``DataGraphService.store`` enum guard,
-  * the real ``DecayEngineService.run_decay_cycle()`` the subconscious worker
-    calls,
-  * the real ``EmbeddingService`` (gte-modernbert-base, 768-dim ONNX) and the
-    real sqlite-vec ``vec0`` KNN — NOT stubbed.
-
 What TKT-928 changes (and therefore what these RED-first tests pin):
 
   Today "moments" live in ``data_graph`` as ``kind='moment'`` (auto-populated by a
@@ -66,7 +54,6 @@ _SEMANTIC_PROBE = "ancient underground tomb sculpture from the stone age"
 
 
 def _seed_assistant_turn(content: str = _ASSISTANT_TURN, channel: str = "user") -> int:
-    """Write a real assistant transcript row; return its id."""
     return transcript_service.write_assistant_row(channel, content)
 
 
@@ -84,11 +71,6 @@ def _moments_rows(conn) -> list:
 
 
 def test_pin_persists_verbatim_in_moments_table_and_dedups(authed_client):
-    """POST /moments for a real assistant turn lands a row in the ``moments``
-    table whose ``content`` is the assistant turn verbatim and whose
-    ``transcript_id`` is set. First pin → 201 duplicate=False; an identical pin →
-    200 duplicate=True; still exactly ONE row. Asserted against
-    ``SELECT … FROM moments`` — NOT data_graph (the whole point of TKT-928)."""
     client, db, _store = authed_client
     tid = _seed_assistant_turn()
 
@@ -129,12 +111,6 @@ def test_pin_persists_verbatim_in_moments_table_and_dedups(authed_client):
 
 @pytest.fixture
 def db768(tmp_path):
-    """A real, fully-converged SQLite DB sized to the real embedding model's 768
-    dims, injected as the process-wide singleton exactly as conftest's ``db``
-    fixture does (rebinds ``_shared_db_service``, resets the data_graph + heartbeat
-    singletons). Built via the production DatabaseService + SchemaConvergenceService
-    — the moments / moments_fts / moments_vec tables come from schema.sql, not from
-    hand-rolled DDL."""
     import services.database_service as _db_mod
     from services.database_service import DatabaseService
     from services.schema_convergence_service import SchemaConvergenceService
@@ -173,8 +149,6 @@ def db768(tmp_path):
 
 @pytest.fixture
 def authed_client768(db768):
-    """The real Flask app bound to the 768-dim DB (auth + store bypassed exactly as
-    the conftest authed_client does)."""
     from unittest.mock import patch  # auth/store boundary only — see conftest
     from api import create_app
     from services.memory_store import MemoryStore
@@ -190,10 +164,6 @@ def authed_client768(db768):
 
 
 def test_pinned_moment_searchable_via_fts_and_vec(authed_client768):
-    """After a pin, /moments/search finds the moment by a lexical substring (proves
-    moments_fts is populated) AND by a semantically-related phrase that shares no
-    content word (proves the moments_vec 768-dim embedding is populated and
-    KNN-searchable). The real gte-modernbert model and real sqlite-vec vec0 run."""
     client, _db, _store = authed_client768
     tid = _seed_assistant_turn()
 
@@ -261,10 +231,6 @@ def _recall_body(out: str) -> dict:
 
 
 def test_explicit_recall_surfaces_moment_in_labeled_lane(authed_client):
-    """An explicit model-invoked ``memory.recall`` (the real ToolDispatcher path)
-    surfaces a pinned moment in a clearly-labeled lane — its result row carries
-    ``kind="moment"`` — while the TKT-886 ``{results, fallback}`` contract is
-    preserved."""
     client, _, _store = authed_client
     tid = _seed_assistant_turn()
     created = client.post(
@@ -321,18 +287,6 @@ def _reset_conversation(conn) -> None:
 
 
 def test_turn_zero_flashback_excludes_pinned_moments(authed_client):
-    """The turn-0 flashback (real ``MessageProcessor._seed_turn_zero()`` →
-    ``TurnZeroFlashback.seed()``) must never contain a pinned moment — moments are
-    a user-curated lane, excluded from the auto-seed by construction. We pin a
-    moment whose content matches the seed query, then fire a genuine session-start
-    flashback (which fires unconditionally) and assert the moment's content is
-    ABSENT from the block the seed injected.
-
-    Regression guard: today the moment is excluded because ``_search_data_graph``
-    omits ``KIND_MOMENT`` from its ``kinds`` filter; after TKT-928 moments leave
-    data_graph entirely. This test pins that exclusion across the refactor — it
-    asserts the flashback DID fire (so the absence is meaningful, not vacuous) and
-    that the moment did not leak into it."""
     client, db, _store = authed_client
     tid = _seed_assistant_turn()
     created = client.post(
@@ -362,10 +316,6 @@ def test_turn_zero_flashback_excludes_pinned_moments(authed_client):
 
 
 def test_data_graph_store_rejects_kind_moment(db):
-    """``data_graph_service.store(kind='moment', …)`` writes NO row and returns a
-    falsy value — once ``moment`` is removed from the data_graph kind enum, the
-    existing ``if kind not in VALID_KINDS: return None`` guard rejects it (this
-    closes the hole where any channel could write any kind)."""
     dgs = get_data_graph_service()
 
     result = dgs.store(kind="moment", key="moment_999", value="should be rejected")
@@ -407,10 +357,6 @@ def _seed_legacy_dg_moment(conn, key: str, value: str) -> None:
 
 
 def test_decay_cycle_wipes_legacy_data_graph_moments(db):
-    """Seed legacy ``data_graph kind='moment'`` rows, run the REAL decay cycle the
-    subconscious worker calls (``DecayEngineService().run_decay_cycle()``), and
-    assert ZERO ``kind='moment'`` rows survive. The standing janitor step idempotently
-    deletes them (moment policy is ttl_days=None, so plain decay never would)."""
     _seed_legacy_dg_moment(db, "moment_101", "an old auto-saved assistant reply")
     _seed_legacy_dg_moment(db, "moment_102", "another stale moment row")
     assert db.execute(
@@ -434,10 +380,6 @@ _CONTRACT_KEYS = {"id", "transcript_id", "key", "value", "message_text", "create
 
 
 def test_frontend_json_contract_is_byte_identical(authed_client):
-    """POST /moments, GET /moments, GET /moments/search and POST /moments/<id>/forget
-    each return exactly the key set the frontend reads, with ``key == moment_<tid>``
-    and ``value == message_text == content``. A regression guard that locks the
-    contract across the data_graph→moments swap."""
     client, _db, _store = authed_client
     tid = _seed_assistant_turn()
 
@@ -477,8 +419,6 @@ def test_frontend_json_contract_is_byte_identical(authed_client):
 
 
 def test_privacy_delete_all_wipes_moments(authed_client):
-    """A pinned moment is destroyed by ``DELETE /privacy/delete-all`` (with the real
-    X-Confirm-Delete header) — proving ``moments`` is in ``_DELETE_ALL_TABLES``."""
     client, db, _store = authed_client
     tid = _seed_assistant_turn()
     created = client.post(

@@ -48,17 +48,14 @@ pytestmark = pytest.mark.unit
 
 
 def _chat_mp(db, *, allow: "tuple[str, ...]" = ()) -> MP:
-    """A real user-channel mp bound to the test db, with each *allow* permission
-    flipped to ``allow`` in the real policy table (so a gate that ships ``ask`` on
-    a headless channel passes through to the production ``run()``)."""
+    # user-channel ``MessageProcessor`` bound to the test db, with each *allow*
+    # permission flipped to ``allow`` in the real policy table.
     for permission in allow:
         allow_policy(db, permission, "chat")
     return MP(seed_transcript(db, "chat", "do a thing"), UserConfig({}))
 
 
 def _list_service():
-    """A real ``ListService`` bound to the test db — built off the same
-    ``get_shared_db_service()`` singleton ``ListAbility.run`` builds it from."""
     from services.database_service import get_shared_db_service
     from services.list_service import ListService
 
@@ -69,10 +66,6 @@ def _list_service():
 
 
 def test_read_mangled_source_key_heals_not_source_required(db):
-    """The exact TKT-963 defect: a model stored ``{'source"': <url>}`` (a stray
-    escaped quote on the KEY). The seam strips the junk char so the key matches the
-    declared ``source`` and the call reaches the URL branch (a deterministic,
-    network-free SSRF block) instead of bouncing on ``source-required``."""
     mp = _chat_mp(db, allow=("read",))
 
     result = ToolDispatcher(mp).dispatch("read", {'source"': "http://localhost", "act_summary": "x"})
@@ -87,9 +80,6 @@ def test_read_mangled_source_key_heals_not_source_required(db):
 
 
 def test_read_uppercase_url_composes_normalize_and_variant(db):
-    """``{'URL': …}`` exercises BOTH layers in one key: normalise (lower-case
-    ``URL`` → ``url``) THEN variant resolution (``url`` is read's ``source`` alias).
-    It must reach the URL branch, not ``source-required``."""
     mp = _chat_mp(db, allow=("read",))
 
     result = ToolDispatcher(mp).dispatch("read", {"URL": "http://localhost", "act_summary": "x"})
@@ -99,12 +89,6 @@ def test_read_uppercase_url_composes_normalize_and_variant(db):
 
 
 def test_read_mangled_max_chars_heals_and_truncates_downstream(db, tmp_path):
-    """``MAX_CHARS`` (capitalised) must heal to the declared ``max_chars`` — proven
-    by a DOWNSTREAM effect: the file is clipped to the healed cap (100) and the
-    envelope carries ``truncated=true``. If the key did NOT heal, ``max_chars``
-    would fall back to its 20000 default, the 200-char file would NOT be clipped,
-    and ``truncated`` would be absent. The compound call also heals ``path`` →
-    ``source`` in the same dict."""
     mp = _chat_mp(db, allow=("read",))
     target = tmp_path / "big.txt"
     target.write_text("A" * 200, encoding="utf-8")
@@ -121,10 +105,6 @@ def test_read_mangled_max_chars_heals_and_truncates_downstream(db, tmp_path):
 
 
 def test_read_genuinely_unknown_key_passes_through_and_still_bounces(db):
-    """Healing must NOT over-reach: a key that is neither a declared param nor a
-    known variant (``foobar``) passes through VERBATIM, so ``read`` still bounces on
-    ``source-required`` and echoes the received key for the model to self-correct.
-    This guards against a future over-broad variant ladder silently absorbing junk."""
     mp = _chat_mp(db, allow=("read",))
 
     result = ToolDispatcher(mp).dispatch(
@@ -139,10 +119,6 @@ def test_read_genuinely_unknown_key_passes_through_and_still_bounces(db):
 
 
 def test_web_download_source_alias_heals_to_url(db):
-    """``web_download({'source': …})`` — a model reusing read's key — must heal to
-    the canonical ``url`` and reach the SSRF guard (``blocked-url``), NOT bounce on
-    the ACTION_REQUIRED ``missing-params`` pre-gate (which fires when ``url`` is
-    absent). ``localhost`` makes the SSRF block deterministic and network-free."""
     mp = _chat_mp(db, allow=("web_download",))
 
     result = ToolDispatcher(mp).dispatch(
@@ -154,9 +130,6 @@ def test_web_download_source_alias_heals_to_url(db):
 
 
 def test_web_download_url_stays_canonical(db):
-    """The same call under the canonical ``url`` resolves identically — proving the
-    variant resolution is per-tool scoped (``url`` is canonical for ``web_download``
-    even though it is a ``source`` ALIAS for ``read``)."""
     mp = _chat_mp(db, allow=("web_download",))
 
     result = ToolDispatcher(mp).dispatch(
@@ -171,11 +144,6 @@ def test_web_download_url_stays_canonical(db):
 
 
 def test_list_id_alias_heals_to_list_selector_and_returns_contents(db):
-    """``list({'action':'view', 'id': <id>})`` — the frontend silent-action key —
-    must heal ``id`` → the declared ``list`` selector and resolve the REAL
-    service-backed list, returning its actual contents (not ``missing-target`` /
-    ``list-not-found``). A non-broadcast channel drops the card so the body head is
-    the model-facing rows."""
     mp = MP(seed_transcript(db, "subconscious", "show my list"), DmnConfig())
     service = _list_service()
     list_id = service.create_list("groceries")
@@ -193,10 +161,6 @@ def test_list_id_alias_heals_to_list_selector_and_returns_contents(db):
 
 
 def test_list_mangled_action_key_heals_before_action_required_pre_gate(db):
-    """A mangled ACTION key (``{'action"': 'list_all'}``) must heal to ``action``
-    BEFORE the ACTION_REQUIRED pre-gate reads it. Without the heal the pre-gate
-    sees no ``action`` and returns ``unknown-action`` (\"requires an 'action'\");
-    with it, ``list_all`` runs and returns a ``count=0`` success."""
     mp = _chat_mp(db)
 
     result = ToolDispatcher(mp).dispatch("list", {'action"': "list_all", "act_summary": "x"})
@@ -210,29 +174,17 @@ def test_list_mangled_action_key_heals_before_action_required_pre_gate(db):
 
 
 def _shipping_abilities() -> list:
-    """The abilities that actually ship — those defined in the ``abilities``
-    package. ``AbilityRegistry.all()`` walks EVERY ``Ability`` subclass, which
-    during a full-suite pytest run also sweeps up the throwaway test abilities
-    other modules define (``_tr_param`` & friends). The production registry only
-    ever holds the ``abilities.*`` classes — no test module is imported in prod —
-    so we assert the invariants against that real, shipping set, not the
-    test-contaminated global subclass walk."""
+    # ``AbilityRegistry.all()`` walks EVERY ``Ability`` subclass, including throwaway
+    # test abilities. The production registry only holds ``abilities.*`` classes — no
+    # test module is imported in prod — so we filter to that real, shipping set.
     return [a for a in AbilityRegistry.all() if type(a).__module__.startswith("abilities.")]
 
 
 def test_real_registry_has_no_variant_overlaps():
-    """The whole design rests on this: within every shipping tool, no variant of
-    one declared parameter may collide with another declared parameter or a
-    framework key. ``check_no_overlaps`` over the real registry must not raise."""
     RegistryInvariant().check_no_overlaps(_shipping_abilities())
 
 
 def test_every_native_param_is_a_keys_constant():
-    """Schema-completeness — the single-source-of-truth invariant the sweep
-    establishes: every property key every shipping ability declares MUST be a
-    :class:`Keys` constant, so the wire keys and the variant registry can never
-    drift from the schema. A new ability that hard-codes a bare string key fails
-    here."""
     allowed = RegistryInvariant().canonical_keys()
     offenders = []
     for ability in _shipping_abilities():
@@ -244,11 +196,6 @@ def test_every_native_param_is_a_keys_constant():
 
 
 def test_overlap_validator_rejects_a_tool_declaring_two_aliased_params():
-    """The validator must actually FIRE when an overlap exists, not vacuously pass.
-    A synthetic probe declaring BOTH ``source`` and ``url`` — whose real VARIANTS
-    ladders name each other — is the canonical overlap: ``source``'s ``url`` alias
-    collides with the declared ``url`` (and vice-versa). ``_SYNTHETIC`` keeps the
-    probe out of the real registry while still exercising the real validator."""
 
     class _OverlapProbe(Ability):
         _SYNTHETIC = True
@@ -291,13 +238,6 @@ def test_overlap_validator_rejects_a_tool_declaring_two_aliased_params():
 
 
 def test_read_collision_first_key_wins_and_warning_emitted(db, tmp_path, caplog):
-    """When a model sends BOTH ``source`` and ``url`` to ``read``, both resolve to
-    the same canonical ``source``.  First dict-iteration entry wins; the loser's
-    VALUE is dropped entirely.  Proven by a DOWNSTREAM discriminator: the first key
-    carries ``http://localhost`` (SSRF block → ``private-or-internal-url-blocked``)
-    and the second carries a real file path that would succeed.  The SSRF error
-    proves the first value survived; ``[read(status=success`` NOT in result proves
-    the file value was dropped.  The warning log proves the collision was surfaced."""
     mp = _chat_mp(db, allow=("read",))
     real_file = tmp_path / "winner.txt"
     real_file.write_text("content if the wrong key won", encoding="utf-8")
@@ -327,10 +267,6 @@ def test_read_collision_first_key_wins_and_warning_emitted(db, tmp_path, caplog)
 
 
 def test_read_collision_order_decides_winner_not_key_identity(db, tmp_path, caplog):
-    """Flipping the dict order reverses the outcome — the file path is now FIRST so
-    its value wins, and the ``http://localhost`` SSRF value is dropped.  The
-    ``[read(status=success`` in the result (the file read succeeds) proves the
-    iteration-order rule, not key identity, decides which value survives."""
     mp = _chat_mp(db, allow=("read",))
     real_file = tmp_path / "order_proof.txt"
     real_file.write_text("MARKER_CONTENT", encoding="utf-8")

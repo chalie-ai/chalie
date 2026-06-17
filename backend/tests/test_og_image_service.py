@@ -1,10 +1,4 @@
-"""Feature tests for services.og_image_service.
 
-Spins up a local HTTP server returning canned HTML pages and asserts the
-og:image / twitter:image extractor pulls the right URL out — including
-relative paths resolved against the post-redirect page URL — and that
-og:description / og:title / <title> are extracted alongside.
-"""
 
 from __future__ import annotations
 
@@ -113,7 +107,6 @@ class TestResolveOgImages:
         assert out[f"{base}/b"]["image_url"] == "https://b.example/b.jpg"
 
     def test_double_quoted_attribute_order_swapped(self, html_server):
-        """Real-world tags often have content before property."""
         from services.og_image_service import resolve_og_images
         base, handler = html_server
         body = _html('<meta content="https://cdn.example.com/swap.jpg" property="og:image"/>')

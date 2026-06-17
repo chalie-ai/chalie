@@ -8,24 +8,16 @@
 
 """Feature tests for per-call async (spec §4.0 / §4.1 / §4.8d — P4).
 
-Real hot path, zero mocks:
+The framework ``async`` boolean is exposed on a tool's schema ONLY on a
+``SUPPORTS_ASYNC`` channel (UserConfig) — never on a delegate/system
+channel (DmnConfig) and never when there is no live processor.  This is the
+schema-exposure gate, not a routing gate (§4.8d).
 
-  * The framework ``async`` boolean is exposed on a tool's schema ONLY on a
-    ``SUPPORTS_ASYNC`` channel (UserConfig) — never on a delegate/system
-    channel (DmnConfig) and never when there is no live processor.  This is the
-    schema-exposure gate, not a routing gate (§4.8d).
-  * A real ability dispatched WITHOUT ``async`` runs inline through the real
-    ``ToolDispatcher._execute`` → ``_run`` → ``run`` → ``_render`` chain and
-    returns the rendered ``[tool(...)]`` envelope of its actual result.
-  * The same ability dispatched WITH ``async: true`` returns the
-    ``dispatched (id: …)`` placeholder immediately (non-blocking — the real
-    ``run`` is still in flight) and registers exactly one active delegate.
-
-The async LLM follow-up turn delivery (the captured-mp synthesis on the user
-channel) is exercised end-to-end in the QA-env / scenario run, not here — it
-requires a real model.  This test proves the *decision* and the *non-blocking*
-contract without firing the LLM by cancelling the delegate before releasing it,
-which makes ``AsyncDelegateRunner._run`` skip delivery (§4.4).
+The async LLM follow-up turn delivery is exercised end-to-end in the QA-env /
+scenario run, not here — it requires a real model.  This test proves the
+*decision* and the *non-blocking* contract without firing the LLM by cancelling
+the delegate before releasing it, which makes ``AsyncDelegateRunner._run`` skip
+delivery (§4.4).
 """
 
 import threading
@@ -44,19 +36,11 @@ pytestmark = pytest.mark.unit
 
 
 class _Ctx:
-    """Minimal real MP-shaped context — exactly what execute / get_input_schema
-    read off the live processor: ``config`` (for the SUPPORTS_ASYNC gate + the
-    emitter). The MessageProcessor is constructor-injected onto the ability as
-    ``self.mp``."""
-
     def __init__(self, config):
         self.config = config
 
 
 def test_async_property_exposed_only_on_supports_async_channel():
-    """§4.8d — the schema-exposure gate keys off config.SUPPORTS_ASYNC
-    alone, applied at the single ``get_input_schema()`` assembler. The processor
-    is constructor-injected, so a fresh mp-bound instance is built per channel."""
     weather_cls = type(AbilityRegistry.get("weather"))
 
     user_schema = weather_cls(mp=_Ctx(UserConfig({}))).get_input_schema()["input_schema"]
@@ -75,8 +59,6 @@ def test_async_property_exposed_only_on_supports_async_channel():
 
 
 def test_build_tools_exposes_async_on_user_channel():
-    """The real tool-presentation path (build_tools → mp-bound get_input_schema)
-    surfaces the async flag alongside act_summary."""
 
     class _Proc:
         config = UserConfig({})
@@ -136,9 +118,6 @@ class _EchoAbility(Ability):
 
 
 def test_dispatch_without_async_runs_inline():
-    """async absent → default False → execute runs run() inline and returns it.
-    DmnConfig keeps broadcast_to=None so the emitter is a no-op (no WS side
-    effects); the async DECISION is independent of channel."""
     ctx = _Ctx(DmnConfig())
     ability = _EchoAbility(mp=ctx)
 
@@ -155,10 +134,6 @@ def test_dispatch_without_async_runs_inline():
 
 
 def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
-    """async: true → execute spawns run() on a daemon thread, returns the
-    placeholder immediately (proving non-blocking), and registers one delegate.
-    The delegate is cancelled before release so the post-run delivery is
-    skipped — no LLM synthesis turn fires."""
     release = threading.Event()
     started = threading.Event()
     finished = []

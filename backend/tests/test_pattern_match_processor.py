@@ -1,27 +1,14 @@
 """
-Feature tests for PatternMatchProcessor and its processor-scoped tools.
+Feature tests for PatternMatchProcessor.
 
-Each test answers exactly one question: does this service do what it claims?
-Real in-memory SQLite via the `db` fixture (schema.sql through
-SchemaConvergenceService). MemoryStore is the real production implementation.
+Each test answers one question: does this service do what it claims?
 
-LLM boundary: the resolved provider client (Providers._resolve) is the ONLY
-boundary that is stubbed — Providers.send itself still runs real prompt
-assembly, tool building, and pre-flight, so everything else (DB,
-DataGraphService, save_pattern, save_graph, _touched_pattern_ids init) runs
-against real production code.
+LLM boundary: Providers._resolve is the only stubbed seam — Providers.send runs
+real prompt assembly, tool building, and pre-flight. DB, DataGraphService,
+save_pattern, save_graph, _touched_pattern_ids all run against real production code.
 
-Per feedback_test_philosophy.md: hot path only, no mock theater.
-
-Spec change: Providers is now mp-free; _resolve returns a
-ProviderClient (not LoggingLLMService). _FakeLLMService is a proper ProviderClient
-subclass: send(dto); estimate_request_tokens(dto) returns 1 so pre-flight passes;
-CONTENT_FIELD_LABEL declared as a ClassVar.
-
-Injection seam: Providers._resolve is swapped at the class level via a plain
-try/finally context manager (_inject_fake_client) — no unittest.mock.patch.
-This is the sanctioned LLM-network-boundary seam (Pattern H): the only thing
-standing in for a real external API call. Everything in-process is real.
+Injection seam: Providers._resolve is swapped via a plain try/finally context
+manager (_inject_fake_client) — no unittest.mock.patch.
 """
 
 import contextlib
@@ -38,8 +25,8 @@ pytestmark = pytest.mark.unit
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _make_llm_response(text="", tool_calls=None):
-    """Return a minimal ProviderApiResponse with the given tool_calls list."""
     return ProviderApiResponse(
         text=text,
         model="test-model",
@@ -49,19 +36,6 @@ def _make_llm_response(text="", tool_calls=None):
 
 
 class _FakeLLMService(ProviderClient):
-    """Stand-in for the resolved LLM provider client — the single sanctioned boundary.
-
-    A proper ProviderClient subclass injected via Providers._resolve so the
-    real Providers.send still runs every production step (system/user prompt
-    assembly — which lazily inits _touched_pattern_ids via
-    PatternConfig.get_user_prompt — tool building, and the over-cap size
-    check) while only the network round-trip is controlled by send_fn.
-
-    Provider contract:
-      - estimate_request_tokens(dto) returns 1 so pre-flight never triggers.
-      - send(dto) returns the controlled response.
-      - CONTENT_FIELD_LABEL mirrors the Ollama client label.
-    """
 
     CONTENT_FIELD_LABEL = "message.content"
 
@@ -72,7 +46,6 @@ class _FakeLLMService(ProviderClient):
         return 200_000
 
     def estimate_request_tokens(self, dto) -> int:
-        """Return 1 so the pre-flight over-cap check never triggers."""
         return 1
 
     def send(self, dto) -> ProviderApiResponse:
@@ -81,13 +54,6 @@ class _FakeLLMService(ProviderClient):
 
 @contextlib.contextmanager
 def _inject_fake_client(send_fn):
-    """Swap Providers._resolve at the class level for the duration of the block.
-
-    This is the sanctioned LLM network-boundary seam: the only thing
-    intercepted is the external API call. Everything in-process (Providers.send
-    pre-flight, tool building, DB writes) runs as real production code.
-    No unittest.mock is used.
-    """
     original = Providers._resolve
     Providers._resolve = lambda self, *_a, **_kw: _FakeLLMService(send_fn)
     try:
@@ -101,18 +67,8 @@ def _tool_call(tool_name, **kwargs):
     return {"name": tool_name, "input": kwargs}
 
 
+
 def _seed_transcripts(db, count):
-    """Seed `count` user-channel transcript rows and return the inserted IDs.
-
-    The behavioural-pattern pass is user-activity-only (TKT-926): both the load
-    window (configs/channels/pattern.py) and the worker pattern cursor filter on
-    ``pattern_user_channels_sql()`` == ``(channel IN ('user'))`` AND
-    ``role != 'compaction'``. Rows must therefore be on channel='user' to count
-    under the cursor + load window and let the pattern step fire exactly as it
-    does in production on real user activity.
-
-    SQLite auto-increments, so we rely on SELECT after INSERT to get IDs.
-    """
     for i in range(count):
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -125,7 +81,6 @@ def _seed_transcripts(db, count):
 
 
 def _seed_cursor(db, cursor_value):
-    """Insert a data_graph row for pattern_match_cursor."""
     db.execute(
         "INSERT INTO data_graph (kind, key, value, active, first_seen_at, last_confirmed_at, source) "
         "VALUES ('system', 'pattern_match_cursor', ?, 1, datetime('now'), datetime('now'), 'test')",
