@@ -6,46 +6,13 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-SystemMessagePrompt — abstract base and concrete subclasses for the stable
-system-message body sent to the LLM on every turn.
-
-The `get_user_definition()` line is prepended by `MessageProcessor.get_system_prompt()`;
-these classes only build the *body* that follows it.
-
-Lifecycle: per-turn instance — `MessageProcessor.get_system_prompt()` constructs a
-fresh subclass instance, calls `get_prompt()`, and lets it go out of scope.
-No singletons.
-
-Design note — all prompts live as Python constants on `_SYSTEM_PROMPT`:
-every subclass overrides only the ``_SYSTEM_PROMPT`` class attribute; the
-``get_prompt()`` method lives on the base and returns ``self._SYSTEM_PROMPT``
-verbatim. No file reads, no fallbacks — if you want to change a prompt,
-edit the constant.
-
-``_SYSTEM_PROMPT`` is declared as an ``@property @abstractmethod`` on the
-base so any concrete subclass that forgets to override it becomes
-non-instantiable (Python's ABC machinery raises ``TypeError`` at
-construction time). Setting ``_SYSTEM_PROMPT = "..."`` as a plain class
-attribute on a subclass is enough to satisfy the abstract contract.
-"""
-
 from abc import ABC, abstractmethod
 
 
 class SystemMessagePrompt(ABC):
-    """Abstract base class for system-message body builders.
-
-    Every concrete subclass MUST override the ``_SYSTEM_PROMPT`` class
-    attribute with a non-empty string. Forgetting to do so makes the
-    subclass non-instantiable — ``TypeError`` is raised at construction
-    time, not at first call.
-    """
-
     @property
     @abstractmethod
     def _SYSTEM_PROMPT(self) -> str:  # noqa: N802
-        """Abstract class constant — subclasses override with a string literal."""
         ...
 
     def get_prompt(self) -> str:
@@ -57,14 +24,7 @@ class SystemMessagePrompt(ABC):
 
 
 class UnifiedSystemMessagePrompt(SystemMessagePrompt):
-    """System-message body for user-facing (unified) turns.
-
-    **Zero-arg by design (Decision Y1 — 2026-04-10).** No constructor
-    parameters, no turn-specific state. Returns ``_SYSTEM_PROMPT`` verbatim.
-
-    The identity/boundaries/principles prefix is stable across turns so
-    provider-side prompt caching keeps it hot.
-    """
+    """Zero-arg by design — no constructor parameters. Identity prefix stable across turns for prompt caching."""
 
     _SYSTEM_PROMPT = """\
 ## Identity
@@ -131,11 +91,7 @@ Avoid using table structures to represent data. If you do need to use tables, ou
 
 
 class DMNSystemMessagePrompt(SystemMessagePrompt):
-    """System-message body for DMN (background proactive review) turns.
-
-    Wired to: ``DMNMessageProcessor``. Runs inside SubconsciousWorker step 5.
-    All findings must be saved via the memory tool — DMN produces no UI output.
-    """
+    """Wired to DMNMessageProcessor — runs in SubconsciousWorker step 5; all findings saved via memory, no UI output."""
 
     _SYSTEM_PROMPT = """\
 ## Scope
@@ -153,10 +109,7 @@ Aim for 2–3 substantive findings per tick — quality over quantity. Once you 
 
 
 class EpisodeEncoderSystemPrompt(SystemMessagePrompt):
-    """Static cacheable system-message body for EpisodeEncoderProcessor.
-
-    Wired to: ``EpisodeEncoderProcessor``.
-    """
+    """Wired to EpisodeEncoderProcessor."""
 
     _SYSTEM_PROMPT = """\
 You are an episodic memory encoder. You read a transcript window plus any memory episodes that were referenced during those turns, and return a JSON array of snapshots.
@@ -189,10 +142,7 @@ Return ONLY a JSON array. No preamble, no markdown. If nothing meaningful happen
 
 
 class SuperEpisodeEncoderSystemPrompt(SystemMessagePrompt):
-    """Static cacheable system-message body for SuperEpisodeEncoderProcessor.
-
-    Wired to: ``SuperEpisodeEncoderProcessor``.
-    """
+    """Wired to SuperEpisodeEncoderProcessor."""
 
     _SYSTEM_PROMPT = """\
 You are a super-episode encoder. You are shown a cluster of coherent episodes and the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
@@ -215,10 +165,7 @@ Return ONLY the JSON object. No preamble, no markdown.\
 
 
 class UserSummarySystemPrompt(SystemMessagePrompt):
-    """Static system-message body for UserSummaryProcessor.
-
-    Wired to: ``UserSummaryProcessor``.
-    """
+    """Wired to UserSummaryProcessor."""
 
     _SYSTEM_PROMPT = """\
 You are a user-profile synthesiser. You receive a list of stored facts about a
@@ -244,14 +191,7 @@ Return ONLY the JSON object. No code fences.\
 
 
 class ChatHistoryCompactionSystemPrompt(SystemMessagePrompt):
-    """System-message body for chat-history compaction.
-
-    Used by the ChatHistoryCompactor ability (a flat ``process()`` run with
-    ``ChatHistoryCompactionConfig``). The model writes its updated living
-    memory DIRECTLY — no ``<analysis>``/``<summary>`` tags, nothing to parse.
-    Whatever it outputs IS the new checkpoint and the ONLY history it will see
-    from the next turn forward, so the prompt makes that contract explicit.
-    """
+    """Wired to ChatHistoryCompactor (process with ChatHistoryCompactionConfig). Output IS the new living-checkpoint — nothing to parse."""
 
     _SYSTEM_PROMPT = """\
 You are updating your memory of one ongoing conversation. Your output replaces all prior history — from the next turn until the next compaction it is the ONLY history you will see; anything not written here is forgotten. Write it to your future self.
@@ -280,14 +220,7 @@ Rules:
 
 
 class ToolChainCompactionSystemPrompt(SystemMessagePrompt):
-    """System-message body for tool-chain (act-trail) compaction.
-
-    Used by the ToolChainCompactor ability (a flat ``process()`` run with
-    ``ToolChainCompactionConfig``). The input is the rendered act-trail of the
-    current turn — the tool calls made so far and their results. The model
-    writes a dense handover the later steps of THIS turn read in place of the
-    raw trail, so it must not lose any fact a later step would need.
-    """
+    """Wired to ToolChainCompactor (process with ToolChainCompactionConfig). Input is the rendered act-trail of the current turn; output is a dense handover for later steps."""
 
     _SYSTEM_PROMPT = """\
 You are compacting this turn's tool-call trail — the tools you have already run and what each returned. Your output replaces the raw trail: from the next step forward it is the ONLY record of what you did and learned this turn.
@@ -307,16 +240,11 @@ Never state a value a tool did not return. No preamble, no commentary.\
 
 
 class ExternalAgentSystemMessagePrompt(SystemMessagePrompt):
-    """System-message body for external-agent communication turns.
+    """Wired to ExternalAgentMessageProcessor. Runtime template variables:
 
-    Wired to: ``ExternalAgentMessageProcessor``. Template variables
-    are substituted by the processor's ``getSystemPrompt()`` override.
-
-    Template variables (substituted at runtime, not here):
-      {user_name}            — resolved from data_graph user_summary
-      {agent_name}           — external agent's identifier
-      {project_or_task_name} — task/project context passed by the caller
-    """
+    {user_name} — from data_graph user_summary
+    {agent_name} — external agent identifier
+    {project_or_task_name} — task/project context passed by the caller."""
 
     _SYSTEM_PROMPT = """\
 ## Identity
@@ -346,12 +274,7 @@ You are Chalie — {user_name}'s executive assistant. You are in agent-to-agent 
 
 
 class SkillSuggestionSystemPrompt(SystemMessagePrompt):
-    """System-message body for background skill suggestion analysis.
-
-    Wired to: ``SkillSuggestionMessageProcessor``.  Instructs the LLM to
-    analyse a completed ACT trail and call ``skill_manager`` with
-    ``action=create`` when the workflow is reusable.
-    """
+    """Wired to SkillSuggestionMessageProcessor — instructs the LLM to call skill_manager with action=create when a workflow is reusable."""
 
     _SYSTEM_PROMPT = """\
 You are analysing a completed AI assistant workflow to determine whether it

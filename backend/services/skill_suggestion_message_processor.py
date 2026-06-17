@@ -1,16 +1,3 @@
-"""
-Proactive skill creation — fully subconscious.
-
-When a user's ACT loop completes with 4+ tool-calling iterations, this module
-runs a background ACT loop with ``skill_manager`` available.  It analyses the
-completed trail, eliminates dead ends, and calls ``skill_manager`` with
-``action=create`` if the workflow is reusable.  No output is ever sent to the
-user — the run operates entirely in the background.
-
-Entry point: ``maybe_suggest_skill(act_trail, raw_input)`` — non-blocking,
-never raises.
-"""
-
 import logging
 import threading
 
@@ -24,11 +11,6 @@ _SKILLS_DB_PATH = FileMapperService.get_skills_db_path()
 
 
 def maybe_suggest_skill(act_trail: list[str], raw_input: str) -> None:
-    """Fire background skill analysis for a completed ACT loop.
-
-    Non-blocking.  Never raises.  Skips immediately when skills.sqlite is
-    absent.  Logs the threshold-met event before spawning the daemon thread.
-    """
     if not act_trail:
         return
 
@@ -56,12 +38,6 @@ def _run_suggestion_processor(
     raw_input: str,
     iteration_count: int,
 ) -> None:
-    """Thread target: run the flat skill-suggestion channel. Never raises.
-
-    _original_trail / _original_input / _iteration_count are read by
-    SkillSuggestionConfig's get_user_prompt; set them on the instance
-    before _run().
-    """
     try:
         from configs.channels import SkillSuggestionConfig
         from services.message_processor import MessageProcessor

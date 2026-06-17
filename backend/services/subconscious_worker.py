@@ -91,10 +91,6 @@ _FACT_SOURCE = "fact_extraction"
 
 
 def _fact_source_for(channel: Optional[str]) -> str:
-    """Return the channel-tagged fact-extraction provenance string.
-
-    ``fact_extraction:<channel>`` when a channel is known, else the bare prefix.
-    """
     return f"{_FACT_SOURCE}:{channel}" if channel else _FACT_SOURCE
 # Maps a data_graph upsert_fact() status to the fact-extraction telemetry
 # counter. A new row (created) counts as an ADD; a contradicting value
@@ -108,7 +104,6 @@ _FACT_STATUS_COUNTER = {
 
 
 def _env_int(name: str, default: int) -> int:
-    """Read an int env-var with a default fallback. Invalid values fall through."""
     try:
         raw = os.environ.get(name)
         return int(raw) if raw else default

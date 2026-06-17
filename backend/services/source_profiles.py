@@ -64,11 +64,7 @@ ROLE_COMPACTION = "compaction"
 
 @dataclass(frozen=True)
 class Profile:
-    """One source's memory behaviour. Immutable — the table is a constant.
-
-    Fields are the orthogonal switches each memory subsystem reads; a channel
-    that wants to participate in a subsystem must turn the matching switch on.
-    """
+    """One source's memory behaviour. Immutable — the table is a constant."""
 
     extract_episodes: bool
     """True → this channel's transcript rows trigger episode extraction."""
@@ -151,11 +147,7 @@ _PREFIX_PROFILES: tuple[tuple[str, Profile], ...] = (
 )
 
 def profile_for(channel: str) -> Profile:
-    """Return the :class:`Profile` for a channel — muted when absent.
-
-    Exact channels match first; then LIKE-prefix patterns. A channel with no
-    explicit row is fully muted (allowlist default).
-    """
+    """Return the :class:`Profile` for a channel — fully muted when absent (allowlist default)."""
     if not channel:
         return _MUTED
     exact = _EXACT_PROFILES.get(channel)
@@ -168,12 +160,10 @@ def profile_for(channel: str) -> Profile:
 
 
 def _exact_channels(predicate) -> list[str]:
-    """Return the exact-channel keys whose profile satisfies ``predicate``."""
     return [ch for ch, profile in _EXACT_PROFILES.items() if predicate(profile)]
 
 
 def _prefix_patterns(predicate) -> list[str]:
-    """Return the LIKE patterns whose profile satisfies ``predicate``."""
     return [pat for pat, profile in _PREFIX_PROFILES if predicate(profile)]
 
 
@@ -200,12 +190,10 @@ def _allowlist_sql(column: str, predicate) -> str:
 
 
 def geo_user_channels_sql(column: str = "channel") -> str:
-    """Allowlist fragment selecting channels that count as user geo-activity."""
     return _allowlist_sql(column, lambda p: p.geo_is_user)
 
 
 def pattern_user_channels_sql(column: str = "channel") -> str:
-    """Allowlist fragment selecting channels that count as user behaviour."""
     return _allowlist_sql(column, lambda p: p.pattern_is_user)
 
 
@@ -221,7 +209,6 @@ def janitor_protected_sql(column: str = "channel") -> str:
 
 
 def non_compaction_sql(column: str = "role") -> str:
-    """Fragment excluding compaction rows from a user-activity reader."""
     return f"{column} != '{ROLE_COMPACTION}'"
 
 
