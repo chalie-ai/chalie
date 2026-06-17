@@ -1,10 +1,4 @@
-"""
-Behavioural tests for WriteQueueService — real queue, real threading.
-
-WriteQueueService serialises SQLite writes through a stdlib queue.Queue backed
-by a daemon thread.  These tests exercise submit / submit_sync / get_stats
-against the real production stack.
-"""
+"""Behavioural tests for WriteQueueService — exercises submit / submit_sync / get_stats against the real production stack."""
 
 import pytest
 
@@ -21,10 +15,8 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def wq():
-    """Fresh WriteQueueService with its own daemon thread."""
     svc = WriteQueueService()
     yield svc
-    # Daemon thread exits with process; no explicit shutdown needed.
 
 
 class TestSubmitSync:
