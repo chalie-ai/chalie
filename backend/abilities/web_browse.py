@@ -28,7 +28,7 @@ happens at the outer ``web_browse`` tool.
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._delegate import delegate_goal, delegate_result
+from abilities._delegate import delegate_result
 from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
@@ -40,11 +40,12 @@ class WebBrowseAbility(Ability):
 
     def get_summary(self) -> str:
         return (
-            "Delegate an interactive web-browsing task to a focused agent that "
-            "drives a real browser — rendering pages, filling forms, navigating "
-            "flows, and taking screenshots it inspects with its own vision — and "
-            "reports what it finds. Screenshots are saved as documents whose "
-            "doc_id any vision-capable tool can view later."
+            "Spawn a subagent with full web browser control to perform an action on "
+            "one or more websites. It drives a real browser — rendering pages, "
+            "filling forms, navigating multi-step flows — and inspects screenshots "
+            "with its own vision. Screenshots are saved as documents whose doc_id "
+            "any vision tool can view later. Use for acting on a specific site — "
+            "not for general lookups."
         )
 
     def get_examples(self) -> list[str]:
@@ -90,7 +91,7 @@ class WebBrowseAbility(Ability):
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         cfg = WebBrowseConfig(self.mp.config.policy_channel)
-        result = MessageProcessor.process(delegate_goal(params), cfg)
+        result = MessageProcessor.process(self.param(params, Keys.goal, required=True), cfg)
         tr = delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."
         )

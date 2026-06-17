@@ -39,7 +39,7 @@ happens at the outer ``web_search`` tool.
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._delegate import delegate_goal, delegate_result
+from abilities._delegate import delegate_result
 from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
@@ -51,8 +51,10 @@ class WebSearchAbility(Ability):
 
     def get_summary(self) -> str:
         return (
-            "Delegate a web-research task to a focused agent that searches the web, "
-            "reads the best sources, and returns a grounded synthesis with citations."
+            "Research something online using various search engines. A focused agent "
+            "runs the searches, reads the best sources, and returns a grounded "
+            "synthesis with citations. Use for looking things up — not for "
+            "interacting with a specific page."
         )
 
     def get_examples(self) -> list[str]:
@@ -94,7 +96,7 @@ class WebSearchAbility(Ability):
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         result = MessageProcessor.process(
-            delegate_goal(params),
+            self.param(params, Keys.query, required=True),
             WebSearchConfig(self.mp.config.policy_channel),
         )
         return delegate_result(

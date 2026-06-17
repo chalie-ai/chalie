@@ -36,7 +36,7 @@ import pytest
 
 from abilities._ability import Ability
 from abilities._dispatcher import ToolDispatcher
-from abilities._params import Keys
+from abilities._params import Keys, KeyHealer
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
 from configs.channels import DmnConfig, UserConfig
@@ -293,3 +293,71 @@ def test_read_collision_order_decides_winner_not_key_identity(db, tmp_path, capl
     assert warn_messages, "expected a KeyHealer collision warning, got none"
     combined = " ".join(str(m) for m in warn_messages)
     assert "source" in combined and "url" in combined, combined
+
+
+# ── web_browse: the goal←query ladder — a model fluent in web_search emits query ──
+
+
+def _shipping_ability(name: str):
+    """The single REAL shipping ability with this tool name, from the live registry —
+    the same instance the dispatcher resolves and the same ``get_parameters()`` the
+    healer reads at the seam."""
+    return next(a for a in _shipping_abilities() if a.get_name() == name)
+
+
+def test_web_browse_query_alias_heals_to_goal():
+    """web_search names its task slot ``query``; web_browse names the SAME slot
+    ``goal``. A model fluent in web_search reaches for ``query`` on web_browse. The
+    goal←query ladder heals it at the dispatch seam — byte-identical to the heal
+    ``ToolDispatcher.dispatch`` performs (``KeyHealer.heal(params,
+    ability.get_parameters())``) — so the call clears the ACTION_REQUIRED ``goal``
+    pre-gate instead of bouncing on ``missing-params``. Asserted at the seam, not
+    end-to-end, because ``web_browse.run()`` spawns a live browser delegate a unit
+    test must never start (see ``test_web_delegates`` for the same reason)."""
+    browse = _shipping_ability("web_browse")
+
+    healed = KeyHealer().heal(
+        {"query": "book the earliest appointment"}, browse.get_parameters()
+    )
+
+    assert healed == {Keys.goal: "book the earliest appointment"}
+
+
+def test_web_browse_goal_canonical_is_untouched():
+    """The canonical ``goal`` still passes the exact-match layer verbatim — the new
+    ladder never disturbs a model that already emits ``goal``."""
+    browse = _shipping_ability("web_browse")
+
+    healed = KeyHealer().heal({"goal": "read the page"}, browse.get_parameters())
+
+    assert healed == {Keys.goal: "read the page"}
+
+
+def test_web_browse_unknown_goal_synonym_still_bounces(db):
+    """Only the REGISTERED ``query`` synonym bridges to ``goal``. A genuinely unknown
+    key (``task``) passes through verbatim, so the real ACTION_REQUIRED pre-gate
+    still bounces with ``missing-params`` naming ``goal``. Drives the real
+    ``ToolDispatcher.dispatch`` chokepoint; it bounces at the pre-gate, so no
+    delegate spawns and it cannot hang."""
+    mp = _chat_mp(db)
+
+    result = ToolDispatcher(mp).dispatch(
+        "web_browse", {"task": "book an appointment", "act_summary": "x"}
+    )
+
+    assert "code=missing-params" in result, result
+    assert "valid: goal" in result, result
+
+
+def test_web_search_query_canonical_untouched_by_goal_ladder():
+    """web_search declares ``query`` as its OWN canonical, so the exact-match layer
+    keeps it verbatim. The goal←query ladder is scoped to web_browse (the only tool
+    that declares ``goal``), so it never rewrites web_search's ``query`` to ``goal``
+    — the cross-tool safety the no-overlap invariant guarantees, proven at the seam."""
+    search = _shipping_ability("web_search")
+
+    healed = KeyHealer().heal(
+        {"query": "latest fusion energy developments"}, search.get_parameters()
+    )
+
+    assert healed == {Keys.query: "latest fusion energy developments"}

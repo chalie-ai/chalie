@@ -23,15 +23,6 @@ from abilities._result import ToolResult
 logger = logging.getLogger(__name__)
 
 
-def delegate_goal(params: dict) -> str:
-    """Extract the delegate's goal/query from the tool params.
-
-    Delegates accept either ``goal`` (web_browse) or ``query`` (web_search) —
-    normalise to a single string.
-    """
-    return params.get("goal") or params.get("query") or ""
-
-
 def delegate_result(result: str, *, hint: str) -> ToolResult:
     """An empty body is NOT success — mapped to ``code=delegate-no-answer`` so a
     weak outer model self-corrects instead of trusting the silence."""

@@ -173,6 +173,13 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     }),
     # the list tool's historical 'id' alias for its list selector. Canonical = list.
     Keys.list: frozenset({Keys.id}),
+    # web_browse names its task slot 'goal'; its sibling delegate web_search names
+    # the SAME "what to do" slot 'query'. A model fluent in web_search reaches for
+    # 'query' on web_browse — the two delegates are routinely conflated — so 'query'
+    # heals to 'goal'. Scoped to web_browse (the only tool that declares 'goal'), so
+    # the 14 tools that declare 'query' as their OWN canonical are never touched.
+    # Canonical = goal.
+    Keys.goal: frozenset({Keys.query}),
 }
 
 
