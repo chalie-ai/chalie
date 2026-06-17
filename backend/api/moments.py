@@ -1,19 +1,4 @@
 """
-Moments API — pin, list, search, and forget moments.
-
-Routes (all require session auth):
-  POST   /moments                         — pin a moment
-                                            (body: {transcript_id} OR {message_text})
-  GET    /moments                         — list all moments
-  POST   /moments/<transcript_id>/forget  — delete
-  GET    /moments/search                  — semantic + lexical search (?q=query)
-
-Moments live in the dedicated ``moments`` table (services/moments_service.py),
-NOT in data_graph. The JSON this blueprint emits is byte-identical to the
-earlier data_graph-backed shape so the frontend renders unchanged: every
-item carries ``{id, transcript_id, key, value, message_text, created_at}`` with
-``key == moment_<transcript_id>`` and ``value == message_text == content``.
-
 Resolving the pinned turn
 -------------------------
 The chat UI does NOT hold the assistant transcript row id: the WS message event
@@ -76,12 +61,7 @@ def _get_db():
 
 
 def _serialize_moment(row: dict) -> dict:
-    """Project a ``moments`` row into the frontend contract shape.
-
-    ``key`` is synthesized from the real ``transcript_id`` column (the client
-    keys the forget round-trip on it); ``value`` and ``message_text`` both alias
-    ``content`` so both shapes the Recall overlay reads resolve.
-    """
+    """``key`` is synthesized from ``transcript_id`` (the client keys the forget round-trip on it)."""
     created_at = row.get('created_at')
     if created_at:
         try:
@@ -117,7 +97,6 @@ def _fetch_transcript_row(db, transcript_id: int) -> dict | None:
 
 
 def _normalise(text: str) -> str:
-    """Collapse whitespace so two plaintext projections compare cleanly."""
     return " ".join((text or "").split())
 
 
@@ -158,13 +137,6 @@ def _resolve_assistant_turn_by_text(db, message_text: str) -> dict | None:
 @moments_bp.route("/moments", methods=["POST"])
 @require_session
 def create_moment():
-    """Pin an assistant transcript turn as a moment.
-
-    Accepts either an explicit integer ``transcript_id`` or a ``message_text``
-    string, plus an optional ``note``. Only assistant turns can be pinned.
-    Dedupes on ``transcript_id`` (one moment per assistant turn): a re-pin
-    returns the existing row with 200 + duplicate=True; a fresh pin returns 201.
-    """
     if not request.is_json:
         return jsonify({"error": "Content-Type must be application/json"}), 400
 
@@ -205,7 +177,6 @@ def create_moment():
 @moments_bp.route("/moments", methods=["GET"])
 @require_session
 def list_moments():
-    """List all moments ordered by created_at DESC."""
     try:
         rows = _get_moments().list_all()
         return jsonify({"items": [_serialize_moment(r) for r in rows]})
@@ -217,7 +188,6 @@ def list_moments():
 @moments_bp.route("/moments/<int:transcript_id>/forget", methods=["POST"])
 @require_session
 def forget_moment(transcript_id):
-    """Delete the moment pinned from ``transcript_id``."""
     try:
         if not _get_moments().delete_by_transcript(transcript_id):
             return jsonify({"error": "Moment not found"}), 404
@@ -230,7 +200,6 @@ def forget_moment(transcript_id):
 @moments_bp.route("/moments/search", methods=["GET"])
 @require_session
 def search_moments():
-    """Search moments across the lexical (FTS) and semantic (vec) lanes."""
     query = (request.args.get("q") or "").strip()
     if not query:
         return jsonify({"error": "Query parameter 'q' is required"}), 400

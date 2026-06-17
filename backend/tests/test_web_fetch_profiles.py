@@ -2,16 +2,15 @@
 
 Two tiers, kept strictly separate (mirrors test_web_download.py):
 
-* ``@pytest.mark.unit`` — the SSRF gate and the named-profile contract. These
-  never touch the network: a private/internal URL is refused BEFORE any socket
-  opens, so we assert the guard fires by pointing at a blocked host.
+* ``@pytest.mark.unit`` — SSRF gate and named-profile contract. Never touch
+   the network: a private/internal URL is blocked BEFORE any socket opens.
 
-* ``@pytest.mark.integration`` — real fetch + real streamed download against
-  httpbin.org, skipped when the host is unreachable.
+* ``@pytest.mark.integration`` — real fetch + streamed download against httpbin.org,
+   skipped when unreachable.
 
-No mocks: the SSRF guard under test is the real ``services.ssrf.is_private_url``
-wired in production, and the profiles are the real objects the read /
-web_download abilities consume.
+No mocks anywhere. The SSRF guard under test is production's own
+``services.ssrf.is_private_url``, and profiles are the same objects read / web_download
+consume.
 """
 
 import os

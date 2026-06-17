@@ -19,7 +19,7 @@ If no patterns match any skills, respond with an empty array: []"""
 
 
 class SkillAssociationConfig(ProcessorConfig):
-    """Subconscious pattern→skill association — own MP loop, no tools, no transcript."""
+    """Own MP loop, no tools, no transcript."""
 
     def __init__(self) -> None:
         super().__init__(

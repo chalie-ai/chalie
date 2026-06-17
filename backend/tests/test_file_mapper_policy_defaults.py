@@ -1,4 +1,3 @@
-"""FileMapperService.get_policy_defaults_path resolves the static seed asset."""
 import pytest
 
 from services.file_mapper_service import FileMapperService

@@ -10,7 +10,7 @@ _geodesic = None
 
 
 def _get_geodesic():
-    """Return the lazily-imported geodesic distance function."""
+    """Lazily import and cache the geodesic distance function."""
     global _geodesic
     if _geodesic is None:
         from geopy.distance import geodesic
@@ -22,6 +22,7 @@ _MIN_SPEED_KMH = 1.0   # guard against GPS noise yielding absurd speeds
 _MAX_SPEED_KMH = 200.0  # guard against GPS jumps
 
 _PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
+
 
 
 def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -22,9 +22,7 @@ from services.source_profiles import PROVENANCE_PATTERN_MATCH
 
 
 def pattern_provenance(proc: object) -> str:
-    """Return the provenance source string for the running pattern-write pass.
-
-    Reads ``proc.config.channel`` — ``pattern_match`` for the pattern pass,
+    """Reads ``proc.config.channel`` — ``pattern_match`` for the pattern pass,
     ``geo_pattern`` for the geo pass — and falls back to the shared pattern-match
     default (the historic literal) when no config/channel is present, so an
     unscoped call is indistinguishable from the pattern pass.

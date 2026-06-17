@@ -58,11 +58,7 @@ class PolicyManager:
 
     @staticmethod
     def wrap(channel, permission, callback, error=_BLOCK):
-        """Gate `callback` for (channel, permission). channel is a PolicyChannel.
-        Returns the callback's result STRING (allow/internal/approved) or the
-        shared block STRING (deny / escalated-ask / user-denied). The result is
-        always a string so ToolDispatcher.dispatch can record it and the loop can render it
-        uniformly — dicts never cross this boundary."""
+        """Gate `callback` for (channel, permission)."""
         from services.database_service import get_shared_db_service  # noqa: PLC0415
         return PolicyManager(get_shared_db_service()).authorize(channel, permission, callback, error)
 

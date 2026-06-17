@@ -29,15 +29,6 @@ _DEAD_HOST = "http://127.0.0.1:1/mcp"
 
 
 class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the policy channel), ``uid`` and ``_uid`` (the
-    act-trail / read-guard anchors). Production binds all three to the same
-    transcript id; the fixture mirrors that.
-
-    Kept local (not the harness ``MP``) because the read-guard reads ``_uid`` as
-    its transcript anchor — the harness ``MP`` is the minimal ``config``+``uid``
-    form only."""
-
     def __init__(self, uid: int, config) -> None:
         self.config = config
         self.uid = uid
@@ -227,9 +218,6 @@ def test_disable_unknown_name_is_not_found(db, chat_mp):
 
 
 def test_classify_sync_error_auth_markers():
-    """Auth-rejection markers (401/403/unauthorized/forbidden, case-insensitive)
-    classify to ``auth-failed``; everything else to ``mcp-unreachable``. This is a
-    pure, side-effect-free function so a direct call is sanctioned."""
     assert _classify_sync_error("HTTP 401 Unauthorized") == "auth-failed"
     assert _classify_sync_error("server returned 403") == "auth-failed"
     assert _classify_sync_error("Forbidden") == "auth-failed"

@@ -1,19 +1,3 @@
-"""Feature test — idle-gate compaction job (TKT-974).
-
-When the idle gate opens, ``SubconsciousWorker`` fires ``_step_compaction()`` as
-the FIRST job in the tick. That job builds a real user-channel
-``MessageProcessor`` and runs ONLY its compactors via ``mp.compact()`` — no
-``_setup``, no ACT loop, no LLM turn. When there is nothing past the durable
-compaction watermark the compactors no-op with zero side effects, so re-running
-the job on a later idle tick costs nothing (no LLM call, no DB write).
-
-This drives the real production job method end-to-end against the real DB. No
-mocks: the only seam is an offline Ollama provider (declared ``max_tokens`` lets
-``providers.get_context_limit()`` resolve with zero network — a generation
-attempt would raise a connection error rather than return cleanly, which is
-exactly how the test proves no LLM call was made).
-"""
-
 import pytest
 
 from services import compaction_persistence, transcript_service
@@ -31,13 +15,6 @@ def _clear(db):
 
 
 def _seed_selected_ollama(db, max_tokens):
-    """Seed an offline Ollama provider and mark it selected.
-
-    OllamaClient.get_context_limit reads the declared max_tokens with zero
-    network, so the compactor's sizing path runs offline. No model is reachable —
-    any actual generation attempt raises a connection error, never a clean
-    return. Mirrors the fixture in test_compaction_watermark.py.
-    """
     cur = db.execute(
         "INSERT INTO providers (name, platform, model, host, max_tokens) "
         "VALUES ('idle-compact-test', 'ollama', 'fit-model', 'http://localhost:11434', ?)",

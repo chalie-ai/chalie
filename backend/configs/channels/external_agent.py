@@ -91,11 +91,6 @@ class EAMPConfig(ProcessorConfig):
         )
 
     def get_system_prompt(self, mp) -> str:
-        """EAMP system prompt.
-
-        Fills in {user_name}, {agent_name}, {project_or_task_name} template
-        variables from data_graph and the EAMP constructor args.  §3b.
-        """
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         _agent_name = self._agent_name
@@ -135,12 +130,6 @@ class EAMPConfig(ProcessorConfig):
             return ""
 
     def get_user_prompt(self, mp) -> str:
-        """EAMP user-message body for one ACT iteration.
-
-        Stripped compared to UMP: no world state, no user definition (it lives
-        in the system prompt for EAMP).  Keeps: previous messages, ACT trail,
-        input line.  §3b.
-        """
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []

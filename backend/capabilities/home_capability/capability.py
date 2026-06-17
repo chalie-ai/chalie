@@ -1,13 +1,3 @@
-"""HomeCapability -- Home Assistant integration via REST + WebSocket.
-
-REST for commands/queries (list_devices, get_state, control, list_automations,
-trigger_automation). Persistent WebSocket for subscribe_events and efficient
-_do_monitor() liveness checks.
-
-Credential storage: home:url, home:token, home:verify_ssl (encrypted via
-VaultService in tool_configs).
-"""
-
 from __future__ import annotations
 
 import logging
@@ -29,13 +19,6 @@ _K_VERIFY_SSL = "home:verify_ssl"
 
 
 class HomeCapability(AbstractCapability):
-    """Home Assistant capability.
-
-    Attributes:
-        _url (str): Home Assistant base URL, e.g. ``http://homeassistant.local:8123``.
-        _token (str): Long-Lived Access Token.
-        _verify_ssl (bool): Whether to verify SSL certificates on HTTPS connections.
-    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -59,15 +42,6 @@ class HomeCapability(AbstractCapability):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def configure(self, credentials: dict) -> None:
-        """Validate credentials, probe HA REST API, and persist.
-
-        Args:
-            credentials: Must contain ``url`` (str) and ``token`` (str).
-                Optional ``verify_ssl`` (bool, default True).
-
-        Raises:
-            ValueError: If url or token is missing, or the HA instance rejects them.
-        """
         url = (credentials.get("url") or "").strip().rstrip("/")
         token = (credentials.get("token") or "").strip()
         if not url:
@@ -94,11 +68,6 @@ class HomeCapability(AbstractCapability):
         self.connect()
 
     def connect(self) -> bool:
-        """Load stored credentials and probe the HA REST API.
-
-        Returns:
-            bool: ``True`` if the probe succeeds, ``False`` otherwise.
-        """
         url = self.load_credential(_K_URL)
         token = self.load_credential(_K_TOKEN)
         ssl_raw = self.load_credential(_K_VERIFY_SSL)
@@ -128,11 +97,6 @@ class HomeCapability(AbstractCapability):
     # ── Cognitive pipeline ───────────────────────────────────────────
 
     def ingest(self) -> list:
-        """Fetch all entity states from HA REST API.
-
-        Returns:
-            list[dict]: Entity summary dicts, or ``[]`` when not connected.
-        """
         if not self.is_connected():
             return []
         try:
@@ -147,21 +111,11 @@ class HomeCapability(AbstractCapability):
         return items
 
     def _do_monitor(self) -> None:
-        """Probe HA REST API unless a WebSocket connection is already alive."""
         if self._ws_handler.is_alive:
             return
         rest.probe(self._url, self._token, self._verify_ssl)
 
     def act(self, action: str, params: dict) -> dict:
-        """Dispatch a write action to the matching tool handler.
-
-        Args:
-            action: Tool name, e.g. ``"control"``, ``"trigger_automation"``.
-            params: Action-specific parameters.
-
-        Returns:
-            dict: Handler result, or ``{"error": ...}`` for unknown actions.
-        """
         tool_map = {t["name"]: t["handler"] for t in self.get_tools()}
         handler = tool_map.get(action)
         if handler is None:
@@ -238,12 +192,6 @@ class HomeCapability(AbstractCapability):
         return {"status": "subscribed", "entity_id": eid}
 
     def get_tools(self) -> list:
-        """Return tool definitions for all 6 home actions.
-
-        Returns:
-            list[dict]: Tool dicts with ``name``, ``description``, ``parameters``,
-            ``handler``, and ``timeout`` keys.
-        """
         return [
             {
                 "name": "list_devices",

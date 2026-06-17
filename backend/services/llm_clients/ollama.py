@@ -129,8 +129,6 @@ def _parse_chat_response(data: dict, default_model: str) -> ProviderApiResponse:
 
 
 class OllamaClient(ProviderClient):
-    """Ollama /api/chat thin client."""
-
     CONTENT_FIELD_LABEL: ClassVar[str] = "message.content"
 
     def __init__(self, config: dict) -> None:

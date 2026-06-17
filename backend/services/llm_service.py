@@ -1,25 +1,14 @@
-"""
-LLM service utilities — shared helpers used by the thin provider clients.
+"""LLM service utilities — shared helpers used by the thin provider clients.
 
 This module retains shared utilities (estimate_tokens, _call_with_retry,
-_app_user_agent, _resolve_api_key, _strip_think_blocks, _parse_retry_after,
-_is_thinking_rejection) after the main client classes — and the message
-converters — were moved to services/llm_clients/*.
+_app_user_agent, _resolve_api_key, _strip_think_blocks,
+_parse_retry_after, _is_thinking_rejection) after the main client
+classes — and the message converters — were moved to
+``services/llm_clients/*``.
 
-DELETED in the provider-client refactor:
-  - AnthropicService, OpenAIService, GeminiService → llm_clients/anthropic.py etc.
-  - FallbackLLMService — dead code (fallback_provider never set in DB/schema).
-  - LoggingLLMService — absorbed by Providers._log_after_call chokepoint.
-  - create_llm_service / _build_service — replaced by llm_clients/factory.build_client.
-  - _log_llm_call — merged into Providers._log_after_call (resolution #4).
-  - LLMResponse — replaced by ProviderApiResponse in services.provider_api.
-  - PayloadTooLargeError — replaced by ResponseOverLimitError in services.provider_api.
-  - NonRetryableError — replaced by ProviderResponseError hierarchy.
-  - RateLimitError — moved to services.provider_api.
-
-No backward-compat re-export shims remain: every caller (production and test)
-imports these symbols from their new homes (services.provider_api,
-services.llm_clients.*) directly.
+The main client classes and their callers were migrated to the new
+homes in ``services/llm_clients/*`` and ``services.provider_api``;
+no backward-compat re-export shims remain.
 """
 
 import re
@@ -66,12 +55,9 @@ def estimate_tokens(text: str) -> int:
 
 
 def _call_with_retry(fn, max_retries=2, backoff=1.0):
-    """Retry fn() up to max_retries times with exponential backoff.
-
-    Rate limits (RateLimitError) are retried once with a short wait if the
-    provider includes a Retry-After header (capped at 10s). If no header is
-    present, the error propagates immediately.
-    """
+    """Rate limits (RateLimitError) are retried once with a short wait if
+    the provider includes a Retry-After header (capped at 10s). If no
+    header is present, the error propagates immediately."""
     from services.provider_api import RateLimitError  # noqa: PLC0415
     attempt = 0
     while attempt <= max_retries:
@@ -116,11 +102,7 @@ def _is_thinking_rejection(exc, create_kwargs: dict) -> bool:
 
 
 def _resolve_api_key(config: dict) -> str:
-    """Resolve API key from provider config (from database).
-
-    Raises:
-        ValueError: if api_key is not found in config.
-    """
+    """Raises ValueError when the API key is not present in config."""
     api_key = config.get('api_key')
     if not api_key:
         raise ValueError(

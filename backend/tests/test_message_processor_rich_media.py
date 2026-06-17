@@ -1,14 +1,4 @@
-"""Integration test: rich-media cards in the message processing pipeline.
-
-Verifies that when the weather tool returns a rich-media instruction string
-(JSON payload + trailer), the resulting tool_calls row contains the full string
-and the sanitised transcript.content contains the span tag emitted by a mocked
-LLM, so that WS segment assembly can pair them.
-
-Uses the real DB fixture (function-scoped SQLite copy), a real
-ActDispatcherService (with weather ability registered), and a mock LLM that
-returns a canned response containing the span tag.
-"""
+"""Integration test: rich-media cards in the message processing pipeline."""
 
 import json
 import pytest
@@ -47,14 +37,6 @@ _MOCK_WEATHER_DICT = {
 
 
 class TestWeatherSerialise:
-    """The weather rich-media envelope is produced by the single production
-    formatter ``ToolDispatcher._render`` from the ``ToolResult`` weather returns.
-
-    Weather returns ``ToolResult.ok(payload, rich=payload)`` on success and
-    ``ToolResult.err(...)`` on failure; the dispatcher assigns the ordinal (only
-    on a user-broadcast turn) and appends the single rich-media instruction
-    trailer carrying ``<span id='weather_N'>``. These drive that real formatter
-    rather than a now-removed ability-local serialise helper."""
 
     def test_render_with_ordinal_produces_json_and_trailer(self):
         from abilities._dispatcher import ToolDispatcher
@@ -62,8 +44,8 @@ class TestWeatherSerialise:
 
         tr = ToolResult.ok({"temperature_c": 12}, rich={"temperature_c": 12})
         rendered = ToolDispatcher._render("weather", tr, 1)
-        # Strip the [weather(...)]\n…\n[end:weather] envelope to the inner body.
         inner = rendered.split("\n", 1)[1].rsplit("\n", 1)[0]
+
         payload_str, trailer = inner.split("\n\n", 1)
         assert json.loads(payload_str) == {"temperature_c": 12}
         assert "<span id='weather_1'>" in trailer

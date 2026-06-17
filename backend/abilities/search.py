@@ -80,13 +80,8 @@ class SearchAbility(Ability):
         return "web and knowledge search"
 
     def get_parameters(self) -> dict:
-        """The input schema, with the ``provider`` enum sourced LIVE from the real
-        registry (+ ``ddg``).
-
-        The enum is built from the same provider names ``run()`` validates against,
-        so the schema can never advertise a provider that the guardrail then
-        rejects — the exact drift (``hackernews``/``stackoverflow`` vs the real
-        ``hn_algolia``/``stack_exchange``) that silently DDG-faded forced searches.
+        """The ``provider`` enum is sourced LIVE from the real registry (+ ``ddg``),
+        so the schema can never advertise a provider that the guardrail then rejects.
         """
         return {
             "type": "object",
@@ -208,19 +203,13 @@ class SearchAbility(Ability):
 
     @classmethod
     def _known_providers(cls) -> set[str]:
-        """The set of provider names a model may legitimately force: every enabled
-        registry row plus the universal DDG web fallback."""
         return set(cls._load_providers().keys()) | {_DDG}
 
     def _reject_unknown_forced(self, provider_name: str) -> ToolResult | None:
-        """Guardrail: reject a forced provider that is not a real name.
-
-        Returns an error ToolResult when *provider_name* is unknown (never a real
-        registry row and not ``ddg``) — the model named an engine that does not
-        exist, and must NOT be silently web-searched. ``valid:`` lists the real
-        names so a weak model self-corrects. Returns None when the name is known
-        (the search proceeds, with a legit runtime DDG fallback if it comes back
-        empty).
+        """Returns an error when *provider_name* is unknown (never a real registry
+        row and not ``ddg``) — the named engine must NOT be silently web-searched.
+        Returns None when the name is known (search proceeds, with a legit runtime
+        DDG fallback if empty).
         """
         known = self._known_providers()
         if provider_name in known:

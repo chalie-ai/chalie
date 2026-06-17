@@ -56,13 +56,6 @@ _AUTH_MARKERS = ("401", "403", "unauthorized", "forbidden")
 
 
 def _classify_sync_error(error: str) -> str:
-    """Map a ``ping_and_sync`` error string onto a stable ToolResult code.
-
-    Returns ``"auth-failed"`` when the error looks like an HTTP 401/403/auth
-    rejection (the endpoint answered but refused the credentials) and
-    ``"mcp-unreachable"`` for every other connect/transport failure.  Pure and
-    side-effect-free so it is directly unit-testable.
-    """
     lowered = (error or "").lower()
     if any(marker in lowered for marker in _AUTH_MARKERS):
         return "auth-failed"
@@ -70,7 +63,6 @@ def _classify_sync_error(error: str) -> str:
 
 
 class McpManagerAbility(Ability):
-    """Manage outbound MCP client server connections (add/list/enable/disable)."""
 
     def get_name(self) -> str:
         return "mcp_manager"
@@ -168,7 +160,6 @@ class McpManagerAbility(Ability):
     }
 
     def run(self, params: dict) -> ToolResult:
-        """Dispatch to the appropriate sub-action handler."""
         action = (params.get(Keys.action) or "").strip()
         dispatch = {
             "list": self._do_list,
@@ -190,25 +181,15 @@ class McpManagerAbility(Ability):
     # ── Sub-action handlers ───────────────────────────────────────────────────
 
     def _do_list(self, params: dict) -> ToolResult:
-        """List all configured servers as structured rows.
-
-        Empty inventory is SUCCESS (``[]``, ``count=0``) — never an error and
-        never prose; an empty list is a valid state, not a failure.
-        """
+        """Empty inventory is SUCCESS (``[]``, ``count=0``) — never an error."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
         rows = [self._server_row(svc, s) for s in svc.list_servers()]
         return ToolResult.ok(rows, count=len(rows))
 
     def _do_add(self, params: dict) -> ToolResult:
-        """Register a new server and immediately ping it.
-
-        The pre-gate guarantees name/host are present and truthy; this guards the
-        whitespace-only residue ("  ") the truthiness pre-gate lets through.  The
-        row is registered BEFORE the connect test, so an unreachable host still
-        persists the connection (existing idempotent-upsert behaviour) — but a
-        failed ping is surfaced as an ERROR, never dressed up as a connection.
-        """
+        """The row is registered BEFORE the connect test — an unreachable host still
+        persists the connection, but a failed ping is surfaced as an ERROR."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         name = (params.get(Keys.name) or "").strip()
         host = (params.get(Keys.host) or "").strip()
@@ -254,12 +235,9 @@ class McpManagerAbility(Ability):
         return self._unreachable_error(code, name)
 
     def _do_enable(self, params: dict) -> ToolResult:
-        """Enable a previously disabled server and re-sync its tools.
-
-        Enabling a dead server is reported as an error (mcp-unreachable /
+        """Enabling a dead server is reported as an error (mcp-unreachable /
         auth-failed): the row IS enabled, but the model must know the tools are
-        not yet available so it never assumes a live connection.
-        """
+        not yet available so it never assumes a live connection."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
         resolved = self._resolve(svc, params)
@@ -285,7 +263,6 @@ class McpManagerAbility(Ability):
         return self._unreachable_error(code, name, enabled=True)
 
     def _do_disable(self, params: dict) -> ToolResult:
-        """Disable a server so its tools disappear from discovery."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
         svc = McpClientService()
         resolved = self._resolve(svc, params)
@@ -301,7 +278,6 @@ class McpManagerAbility(Ability):
 
     @staticmethod
     def _server_row(svc, server: dict) -> dict:
-        """Project a server dict into the structured list/row shape."""
         return {
             "id": server["id"],
             "name": server["name"],
@@ -313,12 +289,9 @@ class McpManagerAbility(Ability):
 
     @staticmethod
     def _resolve(svc, params: dict) -> "tuple[str, str] | ToolResult":
-        """Resolve enable/disable target to ``(server_id, name)``.
-
-        Returns an error ToolResult instead when no target was given
+        """Returns an error ToolResult when no target was given
         (``missing-params``) or the target does not exist (``not-found``), so the
-        caller only proceeds on a real server.
-        """
+        caller only proceeds on a real server."""
         server_id = (params.get(Keys.server_id) or "").strip()
         name = (params.get(Keys.name) or "").strip()
         if not server_id and not name:
@@ -349,13 +322,9 @@ class McpManagerAbility(Ability):
 
     @staticmethod
     def _unreachable_error(code: str, name: str, *, enabled: bool = False) -> ToolResult:
-        """Build the shared connect-failure error for add/enable.
-
-        The hint names the server and states the row WAS persisted (and, for
-        enable, that it IS enabled) so the model knows the connection exists and
-        the tools will sync once the server is reachable — the loud part is that
-        the connect test failed right now.
-        """
+        """The hint states the row WAS persisted (and, for enable, that it IS
+        enabled) so the model knows the connection exists and the tools will sync
+        once the server is reachable."""
         registered_note = (
             f"the connection to {name!r} is "
             f"{'registered and enabled' if enabled else 'registered'}; "

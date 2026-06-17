@@ -9,13 +9,10 @@
 """PostTurnHook — one independent unit of after-turn work.
 
 After the assistant row is persisted, ``MessageProcessor._record`` runs every
-hook in ``mp.config.post_turn_hooks`` (see services/message_processor.py). Each
-hook is a single-responsibility, self-contained object: a config composes the
-ones it needs, and cross-cutting after-turn behaviours (proactive suggestion,
-pattern decay, disclosure-to-human, summary persistence) become reusable units
-instead of one opaque callable field.
-
-Spec: eliminate-_base §4.8; ACT Loop Orchestrator §4.0.
+hook in ``mp.config.post_turn_hooks``. Each hook is a single-responsibility,
+self-contained object: a config composes the ones it needs, and cross-cutting
+after-turn behaviours (proactive suggestion, pattern decay, disclosure-to-human,
+summary persistence) become reusable units instead of one opaque callable field.
 """
 
 from __future__ import annotations
@@ -48,10 +45,6 @@ class PostTurnHook(ABC):
 
     @abstractmethod
     def run(self, mp: "MessageProcessor", result_text: str) -> None:
-        """Perform this hook's after-turn work.
-
-        Called once per turn after the assistant row is persisted, with the
-        turn's processor and the final assistant text. Returns nothing; any
-        result is a side effect (DB write, dispatched message, log). Must be
-        self-contained — see the independence contract above.
+        """Called once per turn after the assistant row is persisted.
+        Any result is a side effect (DB write, dispatched message, log).
         """

@@ -191,8 +191,6 @@ class HomeAbility(CapabilityAbility):
     # ── Guardrails ─────────────────────────────────────────────────────────────
 
     def _guard_entity(self, cap, action: str, entity_id: str) -> "ToolResult | None":
-        """Return an ``unknown-entity`` error when *entity_id* is not in the live
-        states list, else ``None`` (the entity exists — proceed to the base)."""
         entities = self._live_entities(cap, prefix=None)
         if entity_id in entities:
             return None
@@ -205,8 +203,6 @@ class HomeAbility(CapabilityAbility):
         )
 
     def _guard_automation(self, cap, action: str, automation_id: str) -> "ToolResult | None":
-        """Return an ``unknown-automation`` error when *automation_id* is not a real
-        automation entity, else ``None``."""
         automations = self._live_entities(cap, prefix="automation.")
         if automation_id in automations:
             return None
@@ -221,8 +217,6 @@ class HomeAbility(CapabilityAbility):
     # ── Live-state lookup + closest-match helpers ──────────────────────────────
 
     def _connected_capability(self):
-        """Return the connected home capability, or ``None`` when absent / not
-        connected (the base then surfaces the canonical not-connected error)."""
         from capabilities import load_capabilities
 
         cap = load_capabilities().get(self.CAPABILITY_KEY)
@@ -232,12 +226,6 @@ class HomeAbility(CapabilityAbility):
 
     @staticmethod
     def _live_entities(cap, *, prefix: str | None) -> list[str]:
-        """The live entity ids from the capability's own ``list_devices`` handler,
-        optionally restricted to a domain *prefix* (e.g. ``"automation."``).
-
-        Going through the capability handler keeps credentials encapsulated and
-        reuses the one connection the capability owns. ``limit`` is raised so the
-        guardrail sees the full universe, not just the first page."""
         from services.innate_skills._capability import dispatch_capability_handler
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
@@ -251,12 +239,6 @@ class HomeAbility(CapabilityAbility):
 
     @staticmethod
     def _closest(needle: str, candidates: list[str]) -> tuple[str, ...]:
-        """The closest real entity ids to *needle*, ranked by a ci substring /
-        edit-distance proximity, capped at :data:`_MAX_CANDIDATES`.
-
-        Substring hits (either direction) come first; the remainder is ordered by
-        ``difflib`` similarity so a transposed/typo'd id (``light.ofice``) still
-        surfaces ``light.office`` as the top candidate."""
         import difflib
 
         needle_l = needle.lower()
@@ -271,8 +253,6 @@ class HomeAbility(CapabilityAbility):
 
     @classmethod
     def _closest_hint(cls, needle: str, candidates: list[str], list_action: str) -> str:
-        """A one-line recovery hint naming the closest real ids, or directing the
-        model to the matching list action when there is nothing close."""
         closest = cls._closest(needle, candidates)
         if closest:
             return f"closest matches: {', '.join(closest)} — re-issue with an exact id."

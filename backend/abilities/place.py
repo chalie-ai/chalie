@@ -211,7 +211,6 @@ _DEFAULT_RADIUS_M = 200
 
 
 def _extract_location(telemetry: dict | None) -> tuple[float | None, float | None, str | None]:
-    """Pull lat, lon, location_name from telemetry; returns (None, None, None) when absent."""
     if not telemetry:
         return None, None, None
     lat = telemetry.get("lat")
@@ -226,7 +225,6 @@ def _extract_location(telemetry: dict | None) -> tuple[float | None, float | Non
 
 
 def _row_to_place(row: dict) -> dict:
-    """Convert a data_graph row to a concise place dict for API responses."""
     key = row.get("key", "")
     raw_value = row.get("value") or "{}"
     try:

@@ -1,11 +1,3 @@
-"""Feature tests for ``services.markup`` — the nh3-backed sanitiser chokepoint.
-
-The LLM emits a strict subset of HTML. Every assistant response is run
-through ``sanitize()`` before reaching the frontend. Tests here pin the
-contract: which tags survive, which get stripped, which URL schemes are
-blocked, what plain-text extraction produces.
-"""
-
 import pytest
 
 from services.markup import (

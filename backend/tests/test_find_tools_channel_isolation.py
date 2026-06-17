@@ -31,8 +31,6 @@ pytestmark = pytest.mark.unit
 
 
 def _mp_for(config) -> MessageProcessor:
-    """A real MessageProcessor bound to a real channel config, seeded exactly
-    as ``_setup`` seeds it (active_tools = config.always_available)."""
     mp = MessageProcessor("find a tool for me")
     mp.config = config
     mp.active_tools = list(config.always_available or [])

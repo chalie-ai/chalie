@@ -1,5 +1,3 @@
-"""Tests for news_sources — static RSS registry."""
-
 import pytest
 from services.news_sources import (
     SOURCES,
@@ -19,6 +17,4 @@ class TestNewsSources:
         assert src is not None
         assert src.name == "BBC World News"
         assert src.category == "international"
-
-
 

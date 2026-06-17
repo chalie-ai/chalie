@@ -1,16 +1,4 @@
-"""UbiquitiCapability -- UniFi network controller integration via REST.
 
-Provides control and monitoring of UniFi network devices, connected clients,
-WiFi networks, port forwarding rules, and traffic management rules.
-
-Supports two authentication methods:
-- API Key (UniFi OS): Uses the X-API-Key header.
-- Username/Password: Session-cookie authentication.
-
-Credential storage: ubiquiti:url, ubiquiti:auth_method, ubiquiti:api_key,
-ubiquiti:username, ubiquiti:password, ubiquiti:site, ubiquiti:verify_ssl
-(encrypted via VaultService in tool_configs).
-"""
 
 from __future__ import annotations
 
@@ -36,17 +24,6 @@ _K_VERIFY_SSL = "ubiquiti:verify_ssl"
 
 
 class UbiquitiCapability(AbstractCapability):
-    """Ubiquiti UniFi capability.
-
-    Attributes:
-        _url: UniFi controller base URL, e.g. ``https://192.168.1.1``.
-        _auth_method: Either ``"api_key"`` or ``"credentials"``.
-        _api_key: API key for UniFi OS authentication.
-        _username: Username for credential-based authentication.
-        _password: Password for credential-based authentication.
-        _site: UniFi site name, defaults to ``"default"``.
-        _verify_ssl: Whether to verify SSL certificates.
-    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -74,7 +51,6 @@ class UbiquitiCapability(AbstractCapability):
 
     @property
     def _auth(self) -> dict:
-        """Connection kwargs shared by every REST call."""
         return {
             "api_key": self._api_key,
             "username": self._username,
@@ -83,10 +59,6 @@ class UbiquitiCapability(AbstractCapability):
         }
 
     def _require_mac_cmd(self, params: dict, action_name: str) -> dict | None:
-        """Validate that ``mac`` and ``command`` are present.
-
-        Returns an error dict on failure, ``None`` on success.
-        """
         if not params.get("mac"):
             return {"status": "error", "error": f"mac is required for {action_name}"}
         if not params.get("command"):
@@ -96,12 +68,6 @@ class UbiquitiCapability(AbstractCapability):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def configure(self, credentials: dict) -> None:
-        """Validate credentials, probe the controller, and persist.
-
-        Raises:
-            ValueError: If required fields are missing or the controller
-                rejects the provided credentials.
-        """
         url = (credentials.get("url") or "").strip().rstrip("/")
         auth_method = (credentials.get("auth_method") or "api_key").strip()
         api_key = (credentials.get("api_key") or "").strip() or None
@@ -155,7 +121,6 @@ class UbiquitiCapability(AbstractCapability):
         self._connected = True
 
     def connect(self) -> bool:
-        """Load stored credentials and probe the UniFi controller."""
         url = self.load_credential(_K_URL)
         if not url:
             self._connected = False

@@ -124,12 +124,6 @@ _HYDE_JOB_NAME = "turn_zero_hyde"
 
 
 class TurnZeroFlashback:
-    """Builds and injects the turn-0 memory flashback for one turn.
-
-    One instance per seed, bound to the invoking ``MessageProcessor``. Stateless
-    across turns: the conversation centroid is derived from the channel's recent
-    transcript each time, so nothing is persisted on the processor.
-    """
 
     def __init__(self, mp) -> None:
         self._mp = mp

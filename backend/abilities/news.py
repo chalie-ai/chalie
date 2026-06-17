@@ -186,10 +186,7 @@ class NewsAbility(Ability):
 
     @staticmethod
     def _build_rich_card(articles) -> dict:
-        """Build the rich article-card payload: the headline rows plus up to three
-        image candidates the frontend can render as a thumbnail.
-
-        Returned as the ``rich`` payload of the success ToolResult; the dispatcher
+        """Returned as the ``rich`` payload of the success ToolResult; the dispatcher
         serialises it as the card JSON head and appends the single span
         instruction (and the ordinal-keyed tag) ONLY when the invoking channel
         broadcasts to the user. This ability never formats the envelope.

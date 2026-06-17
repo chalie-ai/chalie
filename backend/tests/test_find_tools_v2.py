@@ -41,10 +41,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 def _stub_proc(discoverable: list[str]) -> MessageProcessor:
-    """Flat MessageProcessor (no subclass, per P1 rule) carrying a config whose
-    ``discoverable`` is the allow-list gate.  find_tools reads
-    ``mp.config.discoverable`` / ``mp.config.blocked`` and appends
-    matched names to _active_tools via _append_active()."""
+    """Partial success must never be silent — unresolved names reported explicitly."""
     proc = object.__new__(MessageProcessor)
     proc.config = make_stub_config(discoverable=discoverable)
     proc._active_tools = []

@@ -5,10 +5,6 @@ instance (the WAL-folded SQLite databases, the vault key-material backups, the
 document store, the user skills, and the VERSION marker), and restores such a
 clone with a true wipe-and-replace at the next boot.
 
-Crypto: a password yields a real WZ-AES-256 zip via ``pyzipper``; no password
-yields a plain ``ZIP_DEFLATED`` zip. One read path (``pyzipper.AESZipFile``)
-handles both on import.
-
 Restore is two-phase so a half-finished swap can never corrupt a live instance:
   * Phase A — ``stage_import``: extract + verify checksums + run the
     schema-downgrade guard into a private temp dir, then *atomically* rename it

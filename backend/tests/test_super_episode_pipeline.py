@@ -74,12 +74,10 @@ _EMB_DIM = 256
 
 
 def _pack(floats: list[float]) -> bytes:
-    """Pack a float list into a sqlite-vec binary blob."""
     return struct.pack(f'{len(floats)}f', *floats)
 
 
 def _sim_vec(*, angle_deg: float = 0.0) -> list[float]:
-    """Return a _EMB_DIM unit vector at ``angle_deg`` from the x-axis (2-plane)."""
     rad = math.radians(angle_deg)
     v = [0.0] * _EMB_DIM
     v[0] = math.cos(rad)

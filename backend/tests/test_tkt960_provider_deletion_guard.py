@@ -1,26 +1,13 @@
-"""Feature tests (TKT-960): the provider deletion guard.
+"""Feature tests (TKT-960): provider deletion guard via routes + service layer.
 
-A provider currently assigned as the main (selected), vision, or delegate
-provider cannot be deleted — removing it would leave a dangling reference the
-resolver can no longer satisfy. The admin must clear or reassign that role first.
+A provider assigned as main, vision, or delegate cannot be deleted because it
+would leave a dangling reference the resolver can no longer satisfy; the admin
+must clear or reassign that role first.
 
-Proves, against the real production stack (real DB, real Flask route, real
-ProviderDbService, the shared create_provider factory — zero mocks):
-
-  Through the real HTTP route (DELETE /providers/<id>)
-    1. The active main provider cannot be deleted → HTTP 409 + the exact guard
-       message, and the row survives.
-    2. A provider pinned as the delegate cannot be deleted → HTTP 409, row survives.
-    3. Once the delegate pin is cleared, that now role-free provider is deletable
-       → HTTP 200, row gone.
-    4. A provider holding no role is deletable → HTTP 200, row gone.
-
-  Through the service entry point the route calls directly
-    5. A provider pinned as the vision provider cannot be deleted → ValueError
-       carrying the exact guard message, row survives.
-
-The guard message is asserted byte-for-byte against PROVIDER_IN_USE_MSG so the
-service constant and the api/providers allowlist can never silently drift apart.
+All tests use real production stack (real DB, real Flask route, real
+ProviderDbService — zero mocks). The guard message is asserted against
+PROVIDER_IN_USE_MSG so the service constant and api/providers allowlist never
+drift apart.
 """
 
 import pytest
@@ -36,7 +23,6 @@ def _svc() -> ProviderDbService:
 
 
 def _mk(svc, name, model, host):
-    """Create a provider via the production factory; return its id."""
     return svc.create_provider(
         {"name": name, "platform": "ollama", "model": model, "host": host, "api_key": ""}
     )["id"]
@@ -50,9 +36,6 @@ def _provider_ids(client):
 
 
 def test_cannot_delete_main_provider_returns_409(authed_client):
-    """The first provider an admin adds is auto-selected as main; deleting it via
-    the Providers tab is refused with HTTP 409 and the guard message, and the
-    provider is still listed afterwards."""
     client, _, _ = authed_client
 
     created = client.post(
@@ -72,7 +55,6 @@ def test_cannot_delete_main_provider_returns_409(authed_client):
 
 
 def test_cannot_delete_delegate_provider_returns_409(authed_client):
-    """A provider pinned as the delegate (but NOT the main) cannot be deleted."""
     client, _, _ = authed_client
 
     # First provider → auto-selected as main.
@@ -94,7 +76,6 @@ def test_cannot_delete_delegate_provider_returns_409(authed_client):
 
 
 def test_provider_deletable_after_delegate_pin_cleared(authed_client):
-    """Clearing the delegate pin releases the role; the provider is then deletable."""
     client, _, _ = authed_client
 
     client.post("/providers", json={"name": "Main", "platform": "ollama",
@@ -119,7 +100,6 @@ def test_provider_deletable_after_delegate_pin_cleared(authed_client):
 
 
 def test_can_delete_unassigned_provider(authed_client):
-    """A provider holding no role (not main, vision, or delegate) is deletable."""
     client, _, _ = authed_client
 
     client.post("/providers", json={"name": "Main", "platform": "ollama",

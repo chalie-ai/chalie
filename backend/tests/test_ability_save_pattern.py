@@ -6,11 +6,6 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""save_pattern-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. Covers empty-list evidence rejection,
-whitespace-only summary rejection, invalid name/frequency/evidence errors, happy
-path storage, geo-pass provenance, reinforce semantics, and the budget cap.
-"""
 
 import json
 
@@ -38,10 +33,6 @@ def _seed_transcript(db) -> int:
 
 
 def _mp(db) -> MessageProcessor:
-    """A real MessageProcessor on the pattern config, bound to a real transcript
-    anchor so the dispatcher's act-trail write lands on a real row. The
-    per-instance budget/decay state is initialised exactly as production does
-    via ``_pattern_init_instance_state``."""
     mp = MessageProcessor("look for patterns")
     mp.config = PatternConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])
@@ -71,10 +62,6 @@ def _rows(db, *, name=None, source="pattern_match") -> list:
 
 
 def _geo_mp(db) -> MessageProcessor:
-    """A real MessageProcessor on the GEO config — the other background pass that
-    reaches save_pattern. GeoConfig.get_user_prompt lazily inits the same
-    per-instance budget state PatternConfig does, so we drive it once to
-    initialise exactly as production does (no hand-set attrs)."""
     mp = MessageProcessor("look for geo patterns")
     mp.config = GeoConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])

@@ -1,6 +1,4 @@
-"""
-Config Service — JSON loading and connection settings.
-"""
+"""JSON loading and connection settings."""
 
 import json
 import logging

@@ -6,10 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""find_skills-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. Drives the real ToolDispatcher end-to-end
-hot path with zero mocks, pinning the regression where a corrupt skills index
-silently returned a zero-hit success instead of surfacing code=skill-index-error."""
+"""E2E EDR hot-path tests: real MessageProcessor, zero mocks.
+
+Pins regressions (corrupt skill-index returning zero-hit success).
+"""
 
 import json
 import shutil

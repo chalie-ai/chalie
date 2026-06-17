@@ -6,9 +6,8 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""programming_docs_search-specific business-logic tests migrated from the
-per-ability conformance file removed in TKT-975. Covers unknown-source error
-ladders, schema enum honesty, and the no-fabrication guarantee on a dead source.
+"""Tests for programming_docs_search: unknown-source error ladders, schema
+enum honesty, and the no-fabrication guarantee on a dead source.
 """
 
 import pytest
@@ -27,8 +26,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor for the act-trail write."""
+    """A real chat-channel mp with a seeded transcript for act-trail verification."""
     return MP(
         seed_transcript(db, content="look up something in the docs"),
         UserConfig({}),
@@ -36,8 +34,6 @@ def chat_mp(db):
 
 
 def _table_ids() -> set[str]:
-    """Every source id declared in the production source table — the single
-    source of truth the ability resolves against. No mock."""
     return {src.id for src in SOURCES}
 
 

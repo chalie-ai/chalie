@@ -25,15 +25,11 @@ pytestmark = pytest.mark.unit
 
 
 def _seed_transcript(db, channel: str) -> int:
-    """Insert the transcript anchor (tool_calls.transcript_id FK) the trail hangs
-    its recorded rows off, and return its id."""
     return seed_transcript(db, channel=channel, content="tell me about chalie")
 
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor for the act-trail write."""
     return _MP(_seed_transcript(db, "chat"), UserConfig({}))
 
 

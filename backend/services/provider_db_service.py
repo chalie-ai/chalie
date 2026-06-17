@@ -17,7 +17,6 @@ PROVIDER_IN_USE_MSG = (
 
 
 class ProviderDbService:
-    """Manages provider configuration in database."""
 
     # Column list used by all SELECT queries — order matters for positional access
     _PROVIDER_COLS = (
@@ -26,40 +25,16 @@ class ProviderDbService:
     )
 
     def __init__(self, database_service):
-        """Initialise the service with an injected database dependency.
-
-        Args:
-            database_service: The shared database service instance used for
-                all provider table reads and writes.
-        """
         self.db = database_service
 
     @staticmethod
     def _seal_api_key(value: str) -> str:
-        """Protect *value* with the vault DEK and return a base64-encoded string.
-
-        Uses :func:`~services.vault_service.get_vault_service` to obtain the
-        process-wide :class:`~services.vault_service.VaultService` singleton.
-        The raw AES-256-GCM blob is base64-encoded so it can be stored safely
-        in the TEXT ``api_key`` column.
-
-        Args:
-            value: Plaintext API-key string to protect.
-
-        Returns:
-            Base64-encoded ciphertext string (safe for TEXT column storage).
-
-        Raises:
-            :exc:`~services.vault_service.VaultLockedError`: If the vault has
-                not been unlocked before this call.
-        """
         import base64
         from services.vault_service import get_vault_service
         return base64.b64encode(get_vault_service().encrypt_str(value)).decode()
 
     @staticmethod
     def _unseal_api_key(encrypted_val) -> Optional[str]:
-        """Stored value is always a base64-encoded AES-256-GCM blob (TEXT column)."""
         if not encrypted_val:
             return None
         import base64
@@ -70,23 +45,6 @@ class ProviderDbService:
             return None
 
     def _row_to_provider(self, row) -> Dict[str, Any]:
-        """Convert a database row to a provider dict, decrypting api_key.
-
-        Column order: id, name, platform, model, host, api_key,
-                      dimensions, timeout, supports_vision, max_tokens
-
-        The ``api_key`` field is decrypted via :meth:`_unseal_api_key`.  If the
-        vault is currently locked the field is returned as ``None`` so that
-        listing and read operations still succeed before the user has logged in.
-
-        Args:
-            row: A ``sqlite3.Row`` dict-like object or a positional tuple
-                as returned by ``cursor.fetchone()`` / ``fetchall()``.
-
-        Returns:
-            Provider dict with all fields populated (``api_key`` may be
-            ``None`` when the vault is sealed).
-        """
         if isinstance(row, dict):
             result = {
                 "id": row['id'],
@@ -133,7 +91,6 @@ class ProviderDbService:
         return result
 
     def get_all_providers(self) -> List[Dict[str, Any]]:
-        """Get all providers."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -145,7 +102,6 @@ class ProviderDbService:
             return [self._row_to_provider(row) for row in rows]
 
     def list_providers_summary(self) -> List[Dict[str, Any]]:
-        """Get all providers without decrypting api_key (for REST listings)."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -172,7 +128,6 @@ class ProviderDbService:
             ]
 
     def get_provider_by_id(self, provider_id: int) -> Optional[Dict[str, Any]]:
-        """Get provider by ID."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -187,14 +142,6 @@ class ProviderDbService:
             return self._row_to_provider(row)
 
     def create_provider(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new provider.
-
-        Args:
-            data: Dict with at least ``name``, ``platform``, and ``model``.
-
-        Returns:
-            The newly created provider dict.
-        """
         default_model = data.get("model")
         if not default_model:
             raise ValueError("'model' is required")
@@ -284,7 +231,6 @@ class ProviderDbService:
         return self.get_provider_by_id(new_id)
 
     def update_provider(self, provider_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a provider."""
         updates = []
         params = []
 
@@ -344,14 +290,7 @@ class ProviderDbService:
         return self.get_provider_by_id(provider_id)
 
     def _provider_roles(self, provider_id: int) -> List[str]:
-        """Return which assigned roles reference this provider id.
-
-        A subset of ['main', 'vision', 'delegate'], built from the persisted
-        settings pins: selected_provider_id (main), vision_provider_id,
-        delegate_provider_id. Auto-fallbacks — vision/delegate defaulting to the
-        selected provider when unpinned — are covered transitively by the 'main'
-        role and are deliberately not counted here. An empty list means the
-        provider holds no role and is safe to delete.
+        """An empty list means the provider holds no role and is safe to delete.
         """
         role_by_key = {
             'selected_provider_id': 'main',
@@ -385,14 +324,6 @@ class ProviderDbService:
         return [role for role in ('main', 'vision', 'delegate') if role in assigned]
 
     def delete_provider(self, provider_id: int) -> bool:
-        """Permanently delete a provider row.
-
-        A provider currently assigned as the main (selected), vision, or
-        delegate provider cannot be deleted: removing it would leave a dangling
-        reference the resolver can no longer satisfy. Raises ValueError
-        (surfaced as HTTP 409) when the provider still holds any of those roles —
-        the caller must clear or reassign the role first.
-        """
         if self._provider_roles(provider_id):
             raise ValueError(PROVIDER_IN_USE_MSG)
         with self.db.connection() as conn:
@@ -407,7 +338,6 @@ class ProviderDbService:
     # ── Selected Provider ──────────────────────────────────────────
 
     def get_selected_provider(self) -> Optional[Dict[str, Any]]:
-        """Return the currently selected provider, or None if none is set."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -424,7 +354,6 @@ class ProviderDbService:
                 return None
 
     def set_selected_provider(self, provider_id: int) -> None:
-        """Set the selected provider ID in settings."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -440,14 +369,6 @@ class ProviderDbService:
     _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
 
     def _resolve_vision_provider(self):
-        """Resolve (provider_or_None, source) where source ∈ explicit|auto|none.
-
-        explicit — an active, vision-capable provider id is stored in settings.
-        auto     — no explicit id, but the active selected provider supports
-                   vision (NOT persisted; surfaced to the UI so the user can
-                   lock it in).
-        none     — nothing usable.
-        """
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -469,7 +390,6 @@ class ProviderDbService:
         return None, 'none'
 
     def get_vision_provider(self) -> Optional[Dict[str, Any]]:
-        """Runtime resolver — the provider to use for image understanding, or None."""
         provider, _ = self._resolve_vision_provider()
         return provider
 
@@ -504,14 +424,6 @@ class ProviderDbService:
     # also no supports_vision requirement — any active provider can be pinned.
 
     def _resolve_delegate_provider(self):
-        """Resolve (provider_or_None, source) where source ∈ explicit|auto|none.
-
-        explicit — an active provider id is stored in settings.
-        auto     — no explicit id, but a selected (main) provider exists; the
-                   delegate defaults to it (NOT persisted; the "use main
-                   provider" default surfaced to the UI).
-        none     — no pin and no selected provider.
-        """
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(

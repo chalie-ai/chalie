@@ -1,11 +1,4 @@
-"""LIVE e2e: the persistent-page browser against the real web.
-
-The SSRF guard blocks every local/private address by design, so true-navigation
-coverage runs against example.com (IANA-reserved, stable, JS-free). Real entry
-point, real chromium, real pool thread, real session persistence ACROSS calls —
-the structural fix the rebuild exists for. Requires network + chromium;
-run with: pytest -m e2e tests/e2e/test_browser_live.py
-"""
+# Requires network + chromium; run with: pytest -m e2e tests/e2e/test_browser_live.py
 
 import json
 

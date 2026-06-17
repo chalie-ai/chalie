@@ -1,28 +1,15 @@
 """HTML sanitisation primitives for Chalie's structured response format.
 
-The LLM emits a strict subset of HTML. The backend sanitises every assistant
-response through ``nh3`` (Rust binding to the OWASP-aligned ``ammonia``
-library) before persisting / sending to the frontend. That single chokepoint
-replaces every hand-rolled tokenizer, regex tag-matcher, and markdown
-converter that lived here previously.
+The backend sanitises every assistant response through ``nh3`` before
+persisting/sending to the frontend.
 
-Allowlist (11 tags total):
-- LLM-emittable formatting (8): b, i, u, h1, code, p, ul, li
-- Rich-media pairing (1): span (id attribute only — used by RichMediaParser)
-- Programmatic only (3): img, actions, action
+Security: the LLM is NOT allowed to emit ``<a>`` (URLs are linkified by the
+frontend), so no arbitrary anchors can be injected into the rendered DOM.
 
-The LLM is NOT allowed to emit ``<a>``. Plain-text URLs in the LLM's
-response are linkified by the frontend so the model cannot inject
-arbitrary anchors into the rendered DOM.
-
-``<span id="tool_N">`` is allowed because the rich-media protocol requires
-these tags to survive the sanitisation pass so the parser can read them at
-the WS-send boundary. Only the ``id`` attribute is permitted; ``class``,
-``style``, ``onclick``, and all other span attributes are stripped.
-
-``sanitize()`` is the only entry point for LLM output. It accepts mixed
-plain text + allowlisted HTML and passes both through unchanged — text
-nodes are valid HTML, so no wrapping or escaping heuristics are needed.
+``<span id="tool_N">`` survives sanitisation because the rich-media protocol
+requires these tags at the WS-send boundary; only the ``id`` attribute is
+permitted — ``class``, ``style``, ``onclick``, and all other span attributes
+are stripped.
 """
 from __future__ import annotations
 
@@ -69,11 +56,7 @@ _MAX_CONTENT_LEN = 5_000_000
 
 
 def sanitize(html: str | None) -> str:
-    """Strip every tag / attribute outside the allowlist. Returns clean HTML.
-
-    Single chokepoint for LLM-emitted markup. Empty / ``None`` input returns
-    ``""`` so downstream code never has to nil-check.
-    """
+    """Single chokepoint for LLM-emitted markup. Empty/None input returns ""."""
     if not html:
         return ""
     bounded = html if len(html) <= _MAX_CONTENT_LEN else html[:_MAX_CONTENT_LEN]
@@ -87,12 +70,8 @@ def sanitize(html: str | None) -> str:
 
 
 def actions_to_xml(actions: list[dict]) -> str:
-    """Render programmatic action buttons as XML.
-
-    Each action dict requires ``label`` and ``value`` keys. The harness
-    builds these — they bypass the LLM entirely — so the output here is
-    fed straight to ``sanitize()`` alongside any LLM body.
-    """
+    """Action dicts are built by the harness which bypasses the LLM, so
+    output feeds straight to ``sanitize()`` alongside any LLM body."""
     if not actions:
         return ""
     parts = ["<actions>"]
@@ -108,8 +87,8 @@ def actions_to_xml(actions: list[dict]) -> str:
     return "".join(parts)
 
 
+
 def escape_attr(value: str) -> str:
-    """Escape value for use inside double-quoted XML attribute."""
     if not value:
         return ""
     return (
@@ -150,14 +129,7 @@ _CODE_TOKEN_RE = re.compile("\x00C(\\d+)\x00")
 
 
 def markdown_to_html(text: str | None) -> str:
-    """Best-effort rewrite of leaked markdown markers to the allowlisted HTML
-    subset. Inline-only; a pre-pass for ``sanitize()``, NOT a markdown parser.
-
-    Handles exactly four markers — ``**bold**`` → ``<b>``, ``*italic*`` →
-    ``<i>``, ``_under_`` → ``<u>``, `` `code` `` → ``<code>`` — and returns
-    everything else unchanged, including any HTML the model already emitted.
-    Empty / ``None`` input returns ``""``.
-    """
+    """Best-effort inline markdown→HTML pre-pass for ``sanitize()`` when the LLM leaks emphasis markers. NOT a full markdown parser."""
     if not text:
         return ""
 
@@ -182,16 +154,7 @@ def markdown_to_html(text: str | None) -> str:
 
 
 def extract_plaintext(html: str) -> str:
-    """Strip all tags + drop ``<actions>`` subtree, return spoken plain text.
-
-    Used by the TTS / speak button. ``<actions>`` blocks are dropped entirely
-    via ``clean_content_tags`` — UI affordances do not belong in spoken
-    output. Every other tag (``<p>``, ``<b>``, ``<img>``, …) collapses to
-    its inner text content; image ``alt`` is *not* spoken (it's an a11y
-    label for the visual surface, not narration). Entities are decoded so
-    the speaker says ``cats & dogs``, not ``cats &amp; dogs``. Whitespace
-    is collapsed.
-    """
+    """Used by the TTS / speak button. ``<actions>`` blocks are dropped via ``clean_content_tags`` because UI affordances don't belong in spoken output."""
     if not html:
         return ""
     spaced = _BLOCK_BOUNDARY_RE.sub(" ", html)

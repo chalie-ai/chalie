@@ -1,7 +1,4 @@
-"""Unit tests for WorldState.absorb() and WorldState.snapshot() — v0.5.0 §4.2.
-
-Uses real MemoryStore (the in-process dict-backed store).  No mocks.
-"""
+"""Tests WorldState with real MemoryStore — no mocks."""
 
 import pytest
 from datetime import datetime
@@ -14,25 +11,7 @@ from services.world_state import WorldState, Signal
 class TestWorldStateTypedSnapshot:
     @pytest.fixture
     def ws(self, db):
-        """Fresh WorldState booted against an empty, isolated MemoryStore.
-
-        WorldState now hydrates ``last_user_message_at`` from the process-shared
-        durable store on construction (TKT-922). Pointing the volatile fast-cache
-        at a brand-new empty MemoryStore for the lifetime of each test gives every
-        WorldState built inside the test a genuinely cold boot — the literal
-        effect of a process restart — so each test's absorb→snapshot round-trip is
-        isolated and a fresh, never-written instance honestly snapshots all-None.
-        This is the durability suite's sanctioned isolation pattern: a real, fresh
-        MemoryStore, not a mock of production logic.
-
-        Depends on the per-test ``db`` conftest fixture (TKT-922 critic must-fix):
-        ``absorb`` dual-writes its durable leg via ``DurableTimestamp`` into a
-        ``data_graph kind='system'`` row through ``get_shared_db_service()``.
-        Without ``db``, that write would land in the real production database; the
-        ``db`` fixture rebinds the shared DB singleton to an isolated per-test
-        SQLite copy so the durable leg is captured in the test DB and the
-        production database is never touched.
-        """
+        """Cold-booted WorldState: fresh MemoryStore isolates absorb→snapshot per test."""
         from services.memory_store import MemoryStore
 
         cold_cache = MemoryStore()
@@ -44,7 +23,6 @@ class TestWorldStateTypedSnapshot:
     # ── absorb: user_message ──────────────────────────────────────────────
 
     def test_absorb_user_message_updates_snapshot(self, ws):
-        """absorb(kind='user_message') sets last_user_message_at in snapshot."""
         sig = Signal(source="ws", kind="user_message", payload={"text": "hello"})
         ws.absorb(sig)
         snap = ws.snapshot()
@@ -54,7 +32,6 @@ class TestWorldStateTypedSnapshot:
     # ── absorb: heartbeat ────────────────────────────────────────────────
 
     def test_absorb_heartbeat_updates_snapshot(self, ws):
-        """absorb(kind='heartbeat') sets last_heartbeat_at in snapshot."""
         sig = Signal(source="/health", kind="heartbeat", payload={"battery": 90})
         ws.absorb(sig)
         snap = ws.snapshot()
@@ -64,21 +41,18 @@ class TestWorldStateTypedSnapshot:
     # ── absorb: device ───────────────────────────────────────────────────
 
     def test_absorb_device_updates_snapshot(self, ws):
-        """absorb(kind='device') sets current_device_class in snapshot."""
         sig = Signal(source="/health", kind="device", payload={"device_class": "phone"})
         ws.absorb(sig)
         snap = ws.snapshot()
         assert snap["current_device_class"] == "phone"
 
     def test_absorb_device_without_device_class_ignored(self, ws):
-        """absorb(kind='device') with no device_class payload leaves field None."""
         sig = Signal(source="/health", kind="device", payload={})
         ws.absorb(sig)
         snap = ws.snapshot()
         assert snap["current_device_class"] is None
 
     def test_absorb_device_overwrites_previous(self, ws):
-        """Second absorb(kind='device') overwrites the first."""
         ws.absorb(Signal(source="/health", kind="device", payload={"device_class": "desktop"}))
         ws.absorb(Signal(source="/health", kind="device", payload={"device_class": "phone"}))
         snap = ws.snapshot()
@@ -87,7 +61,6 @@ class TestWorldStateTypedSnapshot:
     # ── absorb: local_time ───────────────────────────────────────────────
 
     def test_absorb_local_time_string_updates_snapshot(self, ws):
-        """absorb(kind='local_time') with ISO string sets current_local_time."""
         time_str = "2026-04-25T14:30:00+00:00"
         sig = Signal(source="/health", kind="local_time", payload={"local_time": time_str})
         ws.absorb(sig)
@@ -96,7 +69,6 @@ class TestWorldStateTypedSnapshot:
         assert isinstance(snap["current_local_time"], datetime)
 
     def test_absorb_local_time_without_value_ignored(self, ws):
-        """absorb(kind='local_time') with empty payload leaves field None."""
         sig = Signal(source="/health", kind="local_time", payload={})
         ws.absorb(sig)
         snap = ws.snapshot()
@@ -105,8 +77,6 @@ class TestWorldStateTypedSnapshot:
     # ── snapshot: unset fields return None ───────────────────────────────
 
     def test_snapshot_returns_none_for_unset_fields(self, ws):
-        """A cold-booted WorldState with no prior persisted state snapshots all
-        four typed fields as None (nothing in the durable store to hydrate)."""
         snap = ws.snapshot()
         assert snap["last_user_message_at"] is None
         assert snap["last_heartbeat_at"] is None
@@ -116,7 +86,6 @@ class TestWorldStateTypedSnapshot:
     # ── unknown signal kinds silently ignored ────────────────────────────
 
     def test_unknown_signal_kind_silently_ignored(self, ws):
-        """Unknown kind leaves snapshot unchanged — forward-compatible."""
         sig = Signal(source="future_interface", kind="mood_shift", payload={"mood": "happy"})
         ws.absorb(sig)
         snap = ws.snapshot()

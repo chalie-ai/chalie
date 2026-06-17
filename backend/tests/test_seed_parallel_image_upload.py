@@ -3,21 +3,6 @@
 Drives the REAL ``MessageProcessor._seed_turn_zero`` — the SAME production method
 that fires once before iteration 0 — with N real image attachments on a real
 ``UserConfig`` channel against the real test DB and real files.  ZERO mocks.
-
-The parallelism contract: every attachment's ``document.upload`` (each of which
-internally runs its own now-network-bound vision/OCR extraction) is dispatched on
-a bounded thread pool whose ``with`` exit is the barrier, so all N MUST be fully
-ingested before ``_seed_turn_zero`` returns.  The strongest real assertion — and
-the one that catches a concurrency race (a lost upload, a duplicate id, a
-half-written row) — is that after the seed EXACTLY N documents exist in the real
-DB, each ``ready``, each with a distinct doc_id, and every original name present.
-A race makes this FAIL; passing it is the barrier-safety proof, achieved with no
-mocks (the writes funnel through thread-local connections + the single-threaded
-document write queue; doc_id is a pre-generated random hex, not a rowid).
-
-NO vision provider is configured -> the OCR fork, which is deterministic and
-needs no network.  The fixtures are distinct named PNGs so each ingests as its
-own document regardless of OCR readability.
 """
 
 import io
@@ -36,7 +21,6 @@ pytestmark = pytest.mark.unit
 
 
 def _png_with_text(text: str) -> bytes:
-    """A small high-contrast PNG rendering *text* (distinct per attachment)."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.new("RGB", (480, 160), "white")
@@ -57,11 +41,7 @@ def _png_with_text(text: str) -> bytes:
 
 
 def _write_attachment(label: str) -> str:
-    """Write a distinct PNG under the Chalie temp prefix and return its path.
-
-    ``_read_attachment`` enforces ``realpath`` startswith ``TMP_PATH_PREFIX``;
-    ``new_tmp_path`` returns exactly such a path so the guard passes.
-    """
+    """Paths must be under ``TMP_PATH_PREFIX`` so the guard passes."""
     path = new_tmp_path(f"seed_parallel_{label}.png")
     with open(path, "wb") as fh:
         fh.write(_png_with_text(label.upper()))
@@ -69,9 +49,6 @@ def _write_attachment(label: str) -> str:
 
 
 def _build_parent(attachments: "list[str]") -> MessageProcessor:
-    """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
-    fires from: input row written, ``active_tools`` seeded with the channel's
-    always_available tier (message_processor._setup), attachments on metadata."""
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, "Here are some files.", {"attachments": attachments})
     parent.config = UserConfig()
@@ -81,10 +58,7 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
 
 
 def test_seed_uploads_all_attachments_in_parallel(db):
-    """N image attachments -> _seed_turn_zero fans out the uploads on a pool and
-    JOINS before returning -> EXACTLY N documents land, all ready, distinct ids,
-    every name present.  A concurrency race (lost/duplicate/half-written upload)
-    fails this; passing proves the barrier never drops or corrupts an upload."""
+    """Proves the barrier joins all uploads before _seed_turn_zero returns."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 
     import os
@@ -122,9 +96,7 @@ def test_seed_uploads_all_attachments_in_parallel(db):
 
 
 def test_seed_skips_unreadable_attachment_without_aborting_others(db):
-    """A bad attachment path is logged and skipped WITHOUT aborting the rest:
-    the good files still ingest.  Proves the per-task OSError guard does not take
-    down the whole barrier."""
+    """Proves the per-task OSError guard doesn't take down the whole barrier."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 
     good = _write_attachment("delta")

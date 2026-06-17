@@ -1,16 +1,4 @@
-"""SSRF guard — the single source of truth for blocked network ranges.
-
-Every part of Chalie that resolves a user- or model-supplied hostname before
-fetching it (the ``read`` / ``web_download`` abilities, the headless browser's
-request interceptor) checks the destination IP against ONE blocklist here. There
-is no second copy: the browser security layer imports ``BLOCKED_NETS`` and
-``resolve_and_check`` from this module, so the two can never drift apart again.
-
-The blocklist is the union of the historical ``abilities/_ssrf.py`` and
-``tools/browser/security.py`` lists: loopback, RFC-1918 private space, link-local
-(incl. the cloud metadata endpoint ``169.254.169.254``), carrier-grade NAT, the
-``0.0.0.0/8`` "this host" range, and the IPv6 equivalents.
-"""
+"""Single SSRF blocklist all consumers import — no second copy."""
 
 from __future__ import annotations
 
@@ -36,13 +24,6 @@ BLOCKED_NETS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
 
 
 def resolve_and_check(hostname: str) -> tuple[bool, str]:
-    """Resolve *hostname* and check every answer against :data:`BLOCKED_NETS`.
-
-    Returns ``(ok, reason)``: ``ok`` is ``True`` only when the hostname resolves
-    and EVERY resolved address is outside the blocklist. A failed lookup or any
-    blocked address returns ``(False, <reason>)`` — fail-closed, so an
-    unresolvable or internal host is never fetched.
-    """
     if not hostname:
         return False, "Empty hostname"
     try:

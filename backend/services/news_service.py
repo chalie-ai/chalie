@@ -106,7 +106,6 @@ class NewsService:
 
     def fetch_feeds(self, source_ids: list, timeout_per_feed: float = PER_FEED_TIMEOUT,
                     total_budget: float = TOTAL_BUDGET) -> list:
-        """Fetch RSS/Atom feeds in parallel with per-feed and total budget timeouts."""
         if not source_ids:
             return []
 
@@ -166,7 +165,6 @@ class NewsService:
         return all_articles
 
     def _parse_feed(self, src, timeout: float) -> list:
-        """Fetch and parse a single RSS/Atom feed via feedparser."""
         try:
             resp = requests.get(
                 src.feed_url,
@@ -196,7 +194,6 @@ class NewsService:
 
     def fetch_google_news(self, query: str, country_code: str = "US",
                           timeout: float = PER_FEED_TIMEOUT) -> list:
-        """Fetch articles from Google News RSS search endpoint."""
         store = self._get_store()
         full_query = query
         cache_key = f"news:google:{hashlib.sha256((full_query + country_code).encode()).hexdigest()[:16]}"
@@ -233,7 +230,6 @@ class NewsService:
     # ── Deduplication ─────────────────────────────────────────
 
     def deduplicate(self, articles: list) -> list:
-        """Remove near-duplicate articles by Levenshtein distance on normalized titles."""
         if len(articles) <= 1:
             return articles
 
@@ -253,7 +249,6 @@ class NewsService:
     # ── Relevance ranking ─────────────────────────────────────
 
     def rank_by_relevance(self, articles: list, query: str) -> list:
-        """Rank articles by cosine similarity of title embeddings to query."""
         if not articles or not query:
             return sorted(articles, key=lambda a: a.published_at, reverse=True)
 
@@ -297,7 +292,6 @@ class NewsService:
 # ── Module-level helpers ──────────────────────────────────────
 
 def _strip_html(text: str) -> str:
-    """Strip HTML tags and decode entities, normalising whitespace."""
     if not text:
         return ""
     cleaned = nh3.clean(text, tags=set())
@@ -381,7 +375,6 @@ def _normalize_title(title: str) -> str:
 
 
 def _derive_domain(feed_url: str) -> Optional[str]:
-    """Derive a publisher domain from an RSS feed URL."""
     try:
         hostname = urlparse(feed_url).hostname
         if not hostname:

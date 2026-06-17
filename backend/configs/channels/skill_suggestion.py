@@ -4,8 +4,8 @@ from services.processor_config import ProcessorConfig
 
 
 class SkillSuggestionConfig(ProcessorConfig):
-    """Skill suggestion — housekeeping, suppress_history=True replaces old
-    get_previous_messages() override.  §3a / AC-26."""
+    """§3a / AC-26 — suppress_history=True replaces the old
+    get_previous_messages() override."""
 
     def __init__(self) -> None:
         super().__init__(
@@ -27,11 +27,8 @@ class SkillSuggestionConfig(ProcessorConfig):
         return ""
 
     def get_user_prompt(self, mp) -> str:
-        """Skill suggestion user-prompt: original request + ACT trail.
-
-        Reads _original_trail, _original_input, _iteration_count from mp (set by
-        the caller before calling MessageProcessor.process()).
-        """
+        """Reads _original_trail, _original_input, _iteration_count from mp
+        (set by the caller before MessageProcessor.process())."""
         original_trail = getattr(mp, "_original_trail", []) or []
         original_input = getattr(mp, "_original_input", "") or ""
         iteration_count = getattr(mp, "_iteration_count", len(original_trail))
@@ -50,11 +47,7 @@ class SkillSuggestionConfig(ProcessorConfig):
         return "\n".join(parts)
 
     def get_system_prompt(self, mp) -> str:
-        """Skill suggestion system prompt: user_definition prefix + body.
-
-        Restores OLD base get_system_prompt assembly.  This channel's
-        get_user_definition() is empty, so OLD emitted ``f"\\n\\n{body}"`` — the
-        leading blank lines are reproduced verbatim for parity with main.
-        """
+        """OLD assembly ``f"\n\n{body}"`` — this channel's get_user_definition
+        is empty so the leading blank lines are reproduced for parity."""
         from services.system_message_prompt import SkillSuggestionSystemPrompt  # noqa: PLC0415
         return f"\n\n{SkillSuggestionSystemPrompt().get_prompt()}"

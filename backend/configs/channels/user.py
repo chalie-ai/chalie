@@ -15,13 +15,8 @@ from configs.channels._common import (
 
 
 class ProactiveSuggestionHook(PostTurnHook):
-    """UMP after-turn: proactive skill suggestion only.  No metrics, no phase.
-
-    Fires only on clean ACT exits with 4+ tool-calling iterations.
-    Non-blocking (daemon thread inside the service).
-
-    §3b / §4e / §6 / §4.8.
-    """
+    """Fires only on clean ACT exits with 4+ tool-calling iterations. Non-blocking
+    (daemon thread inside the service). §3b / §4e / §6 / §4.8."""
 
     def run(self, mp, response_text: str) -> None:
         import logging  # noqa: PLC0415
@@ -40,18 +35,14 @@ class ProactiveSuggestionHook(PostTurnHook):
 
 
 class UserConfig(ProcessorConfig):
-    """UMP config — conversational user channel.
-
-    broadcast_to='user' (live output), memory_seed=True, suppress_history=False.
-    Attachments auto-fire document.upload on turn 0 (no flag needed — presence
-    of metadata['attachments'] drives this).  post_turn_hooks = (ProactiveSuggestionHook(),)
-    — skill suggestion only (no metrics, no phase — §3b / §4e / §6).
+    """Attachments auto-fire document.upload on turn 0 (presence of
+    metadata['attachments'] drives this — no flag needed). post_turn_hooks =
+    (ProactiveSuggestionHook(),) — skill suggestion only (no metrics, no
+    phase — §3b / §4e / §6).
 
     SUPPORTS_ASYNC=True — the user channel is a push channel with a durable
-    session, so it can honour a deferred result: the per-call ``async`` boolean
-    is exposed on every tool here, and a backgrounded call's result is delivered
-    as a later assistant turn on this channel (§4.0 / §4.8d).
-    """
+    session, so a backgrounded call's result is delivered as a later
+    assistant turn on this channel (§4.0 / §4.8d)."""
 
     SUPPORTS_ASYNC = True
 
@@ -74,15 +65,9 @@ class UserConfig(ProcessorConfig):
         )
 
     def get_user_definition(self, mp) -> str:
-        """One-sentence synthesis of the real human user.
-
-        Reads user_summary / user_summary_long from data_graph, preferring the
-        long form when the converse mode is strongly active.  Falls back to a
-        static peer-to-peer framing on any failure or missing row.
-
-        Per-turn cached on mp._user_definition_cached so each ACT iteration is
-        cheap.  §3b / spec body-structure §1.
-        """
+        """Per-turn cached on mp._user_definition_cached so each ACT iteration
+        is cheap. Prefers user_summary_long when converse mode is strongly
+        active; falls back to a static peer-to-peer framing on any failure."""
         _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
         cached = getattr(mp, "_user_definition_cached", None)
         if cached is not None:
@@ -118,12 +103,9 @@ class UserConfig(ProcessorConfig):
         return _FALLBACK
 
     def get_system_prompt(self, mp) -> str:
-        """UMP system prompt — personality voice + template + mode-gate directives.
-
-        Voice line sits at the very top for cache warmth.  The user_definition is
-        NOT emitted here — it lives in the user prompt (spec § Prompt Message
-        Definitions).  §3b / §6.
-        """
+        """Voice line sits at the very top for cache warmth. The
+        user_definition is NOT emitted here — it lives in the user prompt
+        (spec § Prompt Message Definitions). §3b / §6."""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         try:
@@ -150,22 +132,10 @@ class UserConfig(ProcessorConfig):
         return prompt
 
     def get_user_prompt(self, mp) -> str:
-        """UMP user-message body for one ACT iteration.
-
-        Section order:
-          1. User definition (identity anchor — in user prompt, not system prompt).
-          2. World State block.
-          3. ## Previous Messages.
-          (blank separator)
-          4. Input line: user: <raw_input>  (BEFORE the trail).
-          5. ACT loop trail (empty before any tools have run; carries the
-             turn-0 memory/thinking seed once it has fired).
-
-        The framework _loop wraps the returned body with the ### Checkpoint /
-        ### Current State envelope when a compaction row exists.
-
-        §3b / §6 / spec §4.
-        """
+        """Section order: user_def, World State, Previous Messages, blank,
+        input line (BEFORE the trail), ACT trail. The framework _loop wraps
+        the body with the ### Checkpoint / ### Current State envelope when a
+        compaction row exists. §3b / §6 / spec §4."""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []

@@ -1,4 +1,4 @@
-"""Tests for api/system.py — /health, /metrics, /system/status, /system/observability/* endpoints."""
+
 
 import pytest
 from unittest.mock import patch, MagicMock

@@ -34,10 +34,6 @@ def _seed_transcript(db) -> int:
 
 
 def _mp(db) -> MessageProcessor:
-    """A real MessageProcessor on the pattern config, bound to a real transcript
-    anchor so the dispatcher's act-trail write lands on a real row. The
-    per-instance budget/dedupe state is initialised exactly as production does
-    via ``_pattern_init_instance_state``."""
     mp = MessageProcessor("remember a fact")
     mp.config = PatternConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])

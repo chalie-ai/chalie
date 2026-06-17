@@ -1,33 +1,20 @@
 """Feature tests for the whole-instance snapshot Time-Machine (TKT-949).
 
-These drive the REAL production stack — the real Flask app (``create_app`` via
-``authed_client``), the real ``DatabaseService`` singleton, the real
-``VaultService``, the real ``SnapshotService`` engine, and real files on disk.
-ZERO mocks of production code: the only ``patch()`` calls inherited from
-``authed_client`` sit at the auth/session boundary (the established harness
-seam), and ``FileMapperService`` class attributes are *redirected* to a temp
-data root via ``monkeypatch.setattr`` — configuration redirection, not a
-production-code mock (the same idiom used by ``test_vault_fix.py`` and
-``test_mcp_client_service.py``).
+These drive the REAL production stack — no mocks of production code. The only
+``patch()`` calls inherited from ``authed_client`` sit at the auth/session
+boundary. ``FileMapperService`` class attributes are *redirected* to a temp
+data root — configuration redirection, not mocking (same idiom as
+``test_vault_fix.py`` and ``test_mcp_client_service.py``).
 
-Boot ordering note: the import HTTP endpoint stages the snapshot and then calls
-``request_restart()`` (``app_update_service.py:445``), whose daemon thread runs
-``os._exit(42)`` two seconds later. ``os._exit`` bypasses pytest entirely and
-would tear down the whole suite. The roundtrip tests therefore drive the SAME
-production engine method the endpoint drives — ``SnapshotService.stage_import``
-— directly, then ``SnapshotService.apply_pending()`` (simulating the next boot),
-and assert downstream effects on disk and in the reopened DB. The HTTP endpoint
-itself is exercised only on paths that fail BEFORE ``request_restart`` is
-reached (wrong password, >50 MB junk zip) so no ``os._exit`` can fire. This is a
-real design-coupling signal, surfaced rather than papered over — see the build
-source-of-truth §3.6 and the TESTER report.
+Boot ordering note: the import HTTP endpoint calls ``request_restart()`` whose
+daemon thread runs ``os._exit(42)`` two seconds later — it bypasses pytest. The
+roundtrip tests drive the SAME production engine method directly
+(``SnapshotService.stage_import`` → ``apply_pending``). The HTTP endpoint is
+exercised only on paths that fail BEFORE ``request_restart`` is reached (wrong
+password, >50 MB junk zip). Design-coupling signal per build source-of-truth §3.6.
 
-Contract under test (build source of truth §6):
-  - ``SnapshotService.export(password: str | None) -> Path``
-  - ``SnapshotService.stage_import(zip_path: Path, password: str | None) -> None``
-  - ``SnapshotService.apply_pending() -> None``   (@staticmethod, boot Phase B)
-  - ``POST /api/snapshot/export`` (JSON ``{password?}``) streams the zip
-  - ``POST /api/snapshot/import`` (multipart ``file`` + optional ``password``)
+Contract (§6): ``export()``  ·  ``stage_import()``  ·  ``apply_pending()`` boot B  ·
+POST /api/snapshot/export  ·  POST /api/snapshot/import
 """
 
 import sqlite3
@@ -45,11 +32,7 @@ from services.vault_service import _vault_state
 # ── Shared production-path helpers (no re-implementation of prod logic) ───────
 
 def _seed_transcript(channel: str, role: str, content: str) -> int:
-    """Seed a real transcript row through the production transcript service.
-
-    Returns the inserted rowid. This is the SAME entry point production uses to
-    persist a turn, so the row is a faithful fidelity probe for the DB clone.
-    """
+    """Seed via the SAME entry point production uses to persist a turn."""
     import services.transcript_service as transcript_service
     rowid = transcript_service.append(channel=channel, role=role, content=content)
     assert rowid is not None, "production transcript append must persist a row"
@@ -57,7 +40,6 @@ def _seed_transcript(channel: str, role: str, content: str) -> int:
 
 
 def _recent_contents(channel: str) -> list[str]:
-    """Read transcript rows back through the production read path."""
     import services.transcript_service as transcript_service
     return [r['content'] for r in transcript_service.get_recent(channel, limit=50)]
 
@@ -66,8 +48,6 @@ def _recent_contents(channel: str) -> list[str]:
 
 @pytest.fixture(autouse=True)
 def _reset_vault_singletons():
-    """Reset vault module-level singletons before and after each test so the
-    real VaultService rebinds to the per-test DB (mirrors test_vault_fix.py)."""
     _vault_state.dek = None
     _vault_mod._vault_service_instance = None
     yield
@@ -77,21 +57,6 @@ def _reset_vault_singletons():
 
 @pytest.fixture
 def instance(_db_template, tmp_path, monkeypatch):
-    """A real, isolated Chalie instance rooted entirely under ``tmp_path``.
-
-    Every repo-layout path the SnapshotService touches derives from
-    ``FileMapperService`` class attributes, so redirecting ``_CHALIE_ROOT`` /
-    ``_DATA_DIR`` / ``_SECURE_DIR`` to a temp tree relocates the whole instance
-    — chalie.db, data/secure/, data/documents/, data/skills/user/,
-    the .pending-restore / .pre-restore-<ts> dirs — without touching the real
-    ``data/`` directory. The DB is the fully-converged
-    session template (real schema.sql via SchemaConvergenceService), copied to
-    the redirected db path, and injected as the process-wide singleton exactly
-    like the ``db`` fixture does. VERSION and schema.sql are copied so the
-    snapshot manifest + schema-downgrade guard read real files.
-
-    Yields the temp instance root (``Path``).
-    """
     import shutil
 
     root = tmp_path / "instance"
@@ -152,15 +117,11 @@ def instance(_db_template, tmp_path, monkeypatch):
 
 
 class _RealRoots:
-    """Pristine repo-root paths captured at import time (before any redirect),
-    so the instance fixture can copy the real VERSION/schema.sql even while
-    FileMapperService is redirected to a temp tree."""
     chalie_root = FileMapperService.get_chalie_root()
 
 
 def _make_min_sqlite(path: str) -> None:
-    """Create a tiny but real SQLite DB with one row — a genuine artifact for
-    the WAL-fold step to back up (not an empty placeholder)."""
+    """Create a tiny but real SQLite DB with one row for WAL-fold backup."""
     conn = sqlite3.connect(path)
     try:
         conn.execute("CREATE TABLE IF NOT EXISTS marker (k TEXT, v TEXT)")
@@ -172,13 +133,8 @@ def _make_min_sqlite(path: str) -> None:
 
 @pytest.fixture
 def client(instance):
-    """Real Flask app via the production factory, rooted at the temp instance.
-
-    Reuses the auth/session/store boundary seam from conftest's ``authed_client``
-    (the established harness pattern), but binds the DB + paths to the temp
-    instance fixture rather than the bare ``db`` fixture so export/import/apply
-    all operate on one consistent relocated instance.
-    """
+    """Real Flask app via ``create_app``, bound to temp instance.
+    Reuses auth/session/store seam from conftest's ``authed_client``."""
     from unittest.mock import patch
     from api import create_app
     from services.memory_store import MemoryStore
@@ -194,7 +150,6 @@ def client(instance):
 
 
 def _pre_restore_asides() -> list:
-    """All ``.pre-restore-<ts>`` aside dirs under the (redirected) data root."""
     return sorted(FileMapperService.get_data_path().glob(".pre-restore-*"))
 
 
@@ -202,9 +157,6 @@ def _pre_restore_asides() -> list:
 class TestSnapshotRoundtrip:
 
     def test_plain_roundtrip_restores_seeded_rows_and_keeps_pre_restore_aside(self, instance):
-        """Plain (no-password) export → stage_import → apply_pending restores the
-        pre-export DB state, and the prior live artifacts are preserved in a
-        ``.pre-restore-<ts>`` aside (locked decision #4 / §5.4)."""
         from services.snapshot_service import SnapshotService
 
         _seed_transcript("user", "user", "ALPHA-snapshot-marker")

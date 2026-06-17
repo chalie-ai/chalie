@@ -24,7 +24,6 @@ pytestmark = pytest.mark.unit
 
 
 def _run(code):
-    """Execute CodeEvalAbility with the given code param and return the ToolResult."""
     params = {} if code is None else {"code": code}
     return CodeEvalAbility().run(params)
 

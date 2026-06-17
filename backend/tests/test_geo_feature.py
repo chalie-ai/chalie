@@ -41,11 +41,8 @@ _requires_geopy = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 class TestDistanceKm:
-    """distance_km returns the geodesic distance between two real coordinates."""
-
     @_requires_geopy
     def test_valletta_to_sliema_approx_2km(self):
-        """Valletta (35.8989, 14.5146) → Sliema (35.9121, 14.5013) ≈ 1.5–3 km."""
         from services.geo_utils import distance_km
 
         dist = distance_km(35.8989, 14.5146, 35.9121, 14.5013)
@@ -56,7 +53,6 @@ class TestDistanceKm:
 
     @_requires_geopy
     def test_same_point_is_zero(self):
-        """Identical coordinates return 0."""
         from services.geo_utils import distance_km
 
         dist = distance_km(35.8989, 14.5146, 35.8989, 14.5146)
@@ -69,8 +65,6 @@ class TestDistanceKm:
 # ---------------------------------------------------------------------------
 
 class TestEstimateTravelMinutes:
-    """estimate_travel_minutes converts distance and speed to minutes."""
-
     @_requires_geopy
     def test_zero_speed_returns_zero(self):
         """Zero speed guard returns 0.0 rather than raising ZeroDivisionError."""
@@ -86,14 +80,12 @@ class TestEstimateTravelMinutes:
 # ---------------------------------------------------------------------------
 
 class TestEstimateSpeedFromHistory:
-    """estimate_speed_from_history derives median speed from location snapshots."""
 
     def _entry(self, lat, lon, ts):
         return {"location": {"lat": lat, "lon": lon}, "saved_at": ts.isoformat()}
 
     @_requires_geopy
     def test_valid_entries_return_plausible_speed(self):
-        """Two points ~1.9 km apart with 4-minute gap → speed near 28–29 km/h."""
         from services.geo_utils import estimate_speed_from_history
 
         t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
@@ -118,7 +110,6 @@ class TestEstimateSpeedFromHistory:
                     s._entry(35.9121, 14.5013, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc))], "identical timestamps"),
     ], ids=["empty", "single", "gps_noise", "same_ts"])
     def test_degenerate_inputs_return_none(self, entries_fn, reason):
-        """Degenerate history inputs return None."""
         from services.geo_utils import estimate_speed_from_history
 
         result = estimate_speed_from_history(entries_fn(self))
@@ -130,7 +121,6 @@ class TestEstimateSpeedFromHistory:
 # ---------------------------------------------------------------------------
 
 def _seed_located_row(db, *, channel, role="user", content):
-    """Seed one location-tagged transcript row on `channel`."""
     db.execute(
         "INSERT INTO transcript (channel, role, content, created_at, "
         "location_lat, location_lon, location_name) "
@@ -174,7 +164,6 @@ class TestGeoPatternWindowChannelFilter:
         assert "COMPACTION located" not in block
 
     def test_existing_patterns_block_empty_db_returns_none_yet(self, db):
-        """_pattern_existing_patterns_block() with no behavioral_pattern rows returns '(none yet)'."""
         from configs.channels import _pattern_existing_patterns_block
 
         block = _pattern_existing_patterns_block()

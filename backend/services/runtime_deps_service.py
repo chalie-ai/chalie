@@ -1,8 +1,4 @@
-"""Runtime dependency management — background installation of optional features.
 
-Manages playwright (auto-install on boot) and voice (user-triggered via settings).
-All operations run in daemon threads and report status via class methods.
-"""
 
 import importlib.util
 import logging

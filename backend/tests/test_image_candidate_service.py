@@ -1,8 +1,4 @@
-"""Feature tests for services.image_candidate_service.
 
-Real production stack: spins up a local HTTP server serving real PNG bytes.
-No mocks. Each test exercises the fetch + caption derivation path end-to-end.
-"""
 
 from __future__ import annotations
 
@@ -17,7 +13,7 @@ pytestmark = pytest.mark.unit  # no external deps once the local HTTP server is 
 
 
 def _png_bytes(size: tuple[int, int] = (32, 32)) -> bytes:
-    """Return minimal valid PNG bytes (no text needed — caption is URL-derived)."""
+    """Caption is URL-derived so no image text metadata is needed."""
     img = Image.new("RGB", size, "white")
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -131,8 +127,6 @@ class TestBuildImageCandidates:
 
 
 class TestCaptionFromFilename:
-    """Unit tests for the URL-filename caption heuristic."""
-
     def test_caption_from_wikipedia_thumbnail_url(self):
         from services.image_candidate_service import _caption_from_filename
         url = (
@@ -151,8 +145,6 @@ class TestCaptionFromFilename:
         assert caption == ""
 
 class TestCaptionUsesOgDescription:
-    """build_image_candidates uses og:description from og_meta when available."""
-
     def test_caption_uses_og_description_when_available(self, image_server):
         from services.image_candidate_service import build_image_candidates
         base, handler = image_server

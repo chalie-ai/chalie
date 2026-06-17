@@ -1,16 +1,5 @@
-"""Feature test: Providers._resolve branches to the brain's Vision Provider
-when dto.type == ProviderType.VISION.
-
-Providers is now mp-free.
-_resolve(provider_type) takes a ProviderType instead of reading mp.config.
-It returns a ProviderClient, not a LoggingLLMService, so the attribute
-access path changes from ._service.model → .model directly on the client.
-
-Proves: a Providers()._resolve(ProviderType.VISION) resolves the DB-configured
-vision provider — NOT the globally selected provider. Drives the real Providers
-facade against the real test DB, with real provider rows created by the
-production ProviderDbService factory.
-"""
+"""Proves: a Providers()._resolve(ProviderType.VISION) resolves the DB-configured
+vision provider — NOT the globally selected provider."""
 
 import pytest
 
@@ -23,7 +12,6 @@ pytestmark = pytest.mark.unit
 
 
 def test_resolve_chat_returns_global_provider(db):
-    """Providers()._resolve(ProviderType.CHAT) returns the globally selected provider."""
     svc = ProviderDbService(get_shared_db_service())
 
     global_provider = svc.create_provider(
@@ -48,8 +36,6 @@ def test_resolve_chat_returns_global_provider(db):
 
 
 def test_resolve_vision_returns_vision_provider_not_global(db):
-    """Providers()._resolve(ProviderType.VISION) returns the DB vision provider,
-    NOT the globally selected provider — confirmed that the two are distinct."""
     svc = ProviderDbService(get_shared_db_service())
 
     global_provider = svc.create_provider(
@@ -94,8 +80,6 @@ def test_resolve_vision_returns_vision_provider_not_global(db):
 
 
 def test_resolve_vision_raises_when_no_vision_provider_configured(db):
-    """uses_vision_provider set but no vision provider in the DB → fail loud,
-    never silently fall back to the global provider."""
     svc = ProviderDbService(get_shared_db_service())
     svc.set_vision_provider(None)
     assert svc.get_vision_provider() is None

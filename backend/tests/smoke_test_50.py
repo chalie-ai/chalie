@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-50-prompt smoke test with diverse categories, mixed sessions, and rolling metrics.
-
-Sends prompts across multiple UUIDs (cold + warm contexts) and tracks:
-- Mode distribution vs expected
-- Response times with rolling average (detect degradation as context grows)
-
-Usage:
-    python3 tests/smoke_test_50.py
-    python3 tests/smoke_test_50.py --host myserver.local
-"""
 
 import sys
 import json
@@ -97,7 +86,6 @@ PROMPTS = [
 
 
 def send_prompt(uuid, message):
-    """Send a prompt and return (response_dict, status_code, elapsed_seconds)."""
     data = json.dumps({"uuid": uuid, "message": message}).encode()
     req = urllib.request.Request(
         f"{API_BASE}/api/message",

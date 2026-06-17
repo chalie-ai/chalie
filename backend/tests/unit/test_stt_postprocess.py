@@ -1,13 +1,5 @@
-"""
-Feature tests for the STT post-processing pure functions in api.voice.
-
-Covers:
-  * _strip_fillers — removes spoken filler words without damaging real words
-  * _fix_contractions — restores apostrophes dropped by Moonshine
-
-Both functions are pure and have no IO or collaborators, so they are
-tested directly with real input/output assertions under @pytest.mark.unit.
-"""
+# Both functions are pure and have no IO or collaborators, so they are
+# tested directly with real input/output assertions under @pytest.mark.unit.
 
 import pytest
 
@@ -16,8 +8,6 @@ from api.voice import _strip_fillers, _fix_contractions
 
 @pytest.mark.unit
 class TestStripFillers:
-    """_strip_fillers removes spoken fillers and leaves real speech untouched."""
-
     @pytest.mark.parametrize("filler,expected", [
         # Leading filler stripped
         ("um check my calendar", "check my calendar"),
@@ -46,8 +36,6 @@ class TestStripFillers:
 
 @pytest.mark.unit
 class TestFixContractions:
-    """_fix_contractions restores apostrophes that Moonshine drops."""
-
     @pytest.mark.parametrize("raw,expected", [
         ("I didnt say that", "I didn't say that"),
         ("cant wont dont", "can't won't don't"),

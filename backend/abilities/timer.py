@@ -112,9 +112,7 @@ class TimerAbility(Ability):
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
-        """Inject the wall-clock anchor from the tool_calls row's ``created_at``.
-
-        ``started_at`` is intentionally absent from the LLM-visible JSON; the FE
+        """``started_at`` is intentionally absent from the LLM-visible JSON; the FE
         needs it to compute the countdown so the parser grafts it on at render
         time. ``parse_utc`` returns a ``datetime.min`` sentinel on garbage rather
         than raising — that sentinel must be rejected so the FE falls through to

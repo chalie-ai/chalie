@@ -1,5 +1,3 @@
-"""Unit test — personality voice corpus completeness (pure dict lookup)."""
-
 import itertools
 import pytest
 

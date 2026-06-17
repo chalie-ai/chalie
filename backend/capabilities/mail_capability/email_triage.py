@@ -1,9 +1,4 @@
-"""email_triage — embedding-based email classification.
-
-Classifies email header dicts as noise, informational, or actionable using
-cosine similarity against canonical intent anchors.  ``has_unsubscribe`` is
-the only deterministic fast-path; everything else goes through the embeddings.
-"""
+"""embedding-based email classification by cosine similarity against intent anchors."""
 
 from __future__ import annotations
 
@@ -36,7 +31,6 @@ _anchor_cache: dict | None = None
 
 
 def _get_anchor_embeddings() -> dict:
-    """Return cached anchor embeddings, computing on first call."""
     global _anchor_cache
     if _anchor_cache is not None:
         return _anchor_cache
@@ -50,7 +44,6 @@ def _get_anchor_embeddings() -> dict:
 
 
 def _build_email_text(item: dict) -> str:
-    """Build classification text from email signals."""
     parts = []
     subj = item.get("subject", "")
     if subj:
@@ -62,13 +55,6 @@ def _build_email_text(item: dict) -> str:
 
 
 def classify_email(item: dict) -> str:
-    """Classify an email header dict as noise, informational, or actionable.
-
-    Uses embedding similarity against canonical intent anchors.
-    Only ``has_unsubscribe`` is a deterministic fast path; threaded replies
-    (``in_reply_to``) go through the embedding classifier because many
-    automated systems (newsletters, GitHub notifications) set In-Reply-To.
-    """
     if item.get("has_unsubscribe"):
         return "noise"
 

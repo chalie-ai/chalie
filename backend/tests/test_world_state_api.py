@@ -1,16 +1,5 @@
-"""
-Feature tests for the WorldState API surface.
-
-  - GET /system/observability/world-state  (Cognition endpoint)
-  - Signal push via world_state.push_signal() reflected in rendered output
-  - Telemetry rows in the ``telemetry`` table reflected in rendered output
-  - Schedule items seeded into DB appear in rendered output + inputs
-  - bg_process rows seeded into DB appear in rendered output + inputs
-  - Full-lifecycle integration test (@pytest.mark.integration)
-
-All tests use real production code + real SQLite from schema.sql.
-Zero mocks of Chalie services.
-"""
+"""Feature tests for the WorldState API surface using real production code + real
+SQLite (schema.sql). Zero mocks of Chalie services."""
 
 
 import uuid
@@ -35,11 +24,7 @@ def _recent_iso(seconds: int = 30) -> str:
 
 
 def _reset_world_state(db_conn=None):
-    """Wipe all in-memory fragments so each test starts from a clean singleton.
 
-    When ``db_conn`` is supplied the telemetry table is cleared too — the
-    /health and observability endpoints both read it.
-    """
     world_state.set("signals", {})
     if db_conn is not None:
         from services.heartbeat_service import heartbeat_service
@@ -49,7 +34,6 @@ def _reset_world_state(db_conn=None):
 
 
 def _seed_telemetry(db_conn, ctx: dict) -> None:
-    """Persist a flat key/value snapshot into the telemetry table."""
     from services.heartbeat_service import heartbeat_service
     heartbeat_service._ctx = None
     flat = heartbeat_service._flatten(ctx)
@@ -68,9 +52,6 @@ def _seed_telemetry(db_conn, ctx: dict) -> None:
 
 @pytest.mark.unit
 class TestWorldStateObservabilityEmpty:
-    """When no data has been pushed, the endpoint returns empty rendered string
-    and four correctly-keyed inputs with zero entries."""
-
     def test_empty_state_returns_200(self, authed_client):
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
@@ -92,8 +73,6 @@ class TestWorldStateObservabilityEmpty:
 
 @pytest.mark.unit
 class TestWorldStateTelemetryRendering:
-    """Telemetry pushed to the singleton appears verbatim in the rendered block."""
-
     def test_telemetry_location_appears_in_rendered(self, authed_client):
         client, db_conn, _ = authed_client
         _seed_telemetry(db_conn, {"location_name": "Sliema, MT"})
@@ -118,9 +97,6 @@ class TestWorldStateTelemetryRendering:
 
 @pytest.mark.unit
 class TestWorldStateScheduleRendering:
-    """Rows in scheduled_items appear as [schedule] bullets in rendered output
-    and in inputs.schedule."""
-
     def test_pending_scheduled_item_appears_in_rendered_block(self, authed_client):
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)

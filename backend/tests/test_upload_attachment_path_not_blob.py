@@ -46,7 +46,6 @@ pytestmark = pytest.mark.unit
 
 
 def _png_with_text(text: str) -> bytes:
-    """A small high-contrast PNG rendering *text* (real bytes, real OCR input)."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.new("RGB", (480, 160), "white")

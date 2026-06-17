@@ -14,15 +14,7 @@ context_bp = Blueprint("context", __name__)
 @context_bp.route("/api/context", methods=["GET"])
 @require_auth
 def get_context():
-    """Return the user's current ambient context.
-
-    Response fields (all optional — absent if data unavailable):
-        location: {lat, lon, name}
-        timezone: {timezone, local_time}
-        device: {class, platform}
-
-    Auth: Bearer token or session cookie.
-    """
+    """Location is city-level, never raw GPS."""
     result = {}
 
     try:

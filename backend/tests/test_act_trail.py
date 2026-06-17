@@ -6,13 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for ActTrail (spec §4.3 / §4c) — the tool_calls repository.
 
-Real SQLite via the ``db`` fixture (which patches ``get_shared_db_service`` so
-the default ``ActTrail()`` ctor binds to the test database). Zero mocks: a row
-written by ``record`` is read back by ``fetch_by_transcript_id`` and rendered by
-``render`` exactly as the ACT loop renders the trail.
-"""
 
 import pytest
 
@@ -22,8 +16,6 @@ pytestmark = pytest.mark.unit
 
 
 def _seed_transcript(db) -> int:
-    """Insert a real transcript anchor row (tool_calls.transcript_id FK) and
-    return its id."""
     cur = db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
         ("user", "user", "what's the weather in Malta?"),

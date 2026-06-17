@@ -1,11 +1,4 @@
-"""Capability-handler dispatch helper.
-
-Shared by the capability-backed abilities (calendar, contacts, email, home,
-ubiquiti) to invoke a loaded capability's named tool handler.  Replaces the
-former ``Ability.handle()`` static helper (removed in the ACT-loop refactor,
-spec §5 / Q4).
-"""
-
+"""Capability-handler dispatch helper."""
 
 def dispatch_capability_handler(handler: object, params: dict, telemetry: "dict | None") -> dict:
     """Invoke *handler* with framework keys stripped from *params*.

@@ -1,11 +1,4 @@
 """
-Feature tests for _dedup_repetitions in api.voice.
-
-Moonshine (Whisper-family) hallucinates by repeating phrases 15–20× on
-silence or noise.  _dedup_repetitions collapses any n-gram (2–20 words) that
-appears more than _MAX_CONSECUTIVE_PHRASE_REPEATS times in a row down to
-exactly that many occurrences.
-
 Single-word repetitions ("no no no") are intentionally not collapsed because
 they are natural emphasis in real speech.
 """
@@ -17,7 +10,6 @@ from api.voice import _dedup_repetitions, _MAX_CONSECUTIVE_PHRASE_REPEATS
 
 @pytest.mark.unit
 class TestDedupRepetitions:
-    """_dedup_repetitions collapses hallucination loops while leaving real speech alone."""
 
     # ── passthrough cases ──────────────────────────────────────────────────
 

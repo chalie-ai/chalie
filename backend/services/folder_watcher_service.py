@@ -43,12 +43,7 @@ class FolderWatcherService:
     """Manages watched folder CRUD, directory browsing, and file scanning."""
 
     def __init__(self, db_service):
-        """Initialize the folder watcher service.
-
-        Args:
-            db_service: :class:`~services.database_service.DatabaseService`
-                instance for all watched-folder database operations.
-        """
+        """Initialize the service with a DatabaseService instance."""
         self.db = db_service
 
     # CRUD
@@ -65,28 +60,7 @@ class FolderWatcherService:
         source_type: str = 'filesystem',
         source_config: dict = None,
     ) -> Dict[str, Any]:
-        """Create and persist a new watched folder record.
-
-        Resolves the real path via ``os.path.realpath``, validates readability,
-        and enforces the minimum scan interval.
-
-        Args:
-            folder_path: Path to the folder to watch.  Symlinks are resolved.
-            label: Human-readable name (defaults to the folder's basename).
-            file_patterns: Glob patterns for files to include (default ``['*']``).
-            ignore_patterns: Glob patterns for files and directories to skip.
-            recursive: When ``True``, sub-directories are scanned recursively.
-            scan_interval: Seconds between automatic scans (minimum 60).
-            source_type: Origin type label (default ``'filesystem'``).
-            source_config: Optional provider-specific configuration dict.
-
-        Returns:
-            Watched folder dict as returned by :meth:`get_folder`.
-
-        Raises:
-            ValueError: If the resolved path is not a directory.
-            PermissionError: If the directory is not readable.
-        """
+        """Create and persist a new watched folder record."""
         real_path = os.path.realpath(folder_path)
         self._validate_folder_path(real_path)
 
@@ -118,14 +92,7 @@ class FolderWatcherService:
         return self.get_folder(folder_id)
 
     def get_folder(self, folder_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve a single watched folder record by its ID.
-
-        Args:
-            folder_id: Eight-character hex folder identifier.
-
-        Returns:
-            Watched folder dict, or ``None`` if not found.
-        """
+        """Retrieve a single watched folder record by its ID."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM watched_folders WHERE id = ?", (folder_id,))
@@ -137,11 +104,7 @@ class FolderWatcherService:
         return self._row_to_dict(row, cols)
 
     def get_all_folders(self) -> List[Dict[str, Any]]:
-        """Retrieve all watched folder records, newest first.
-
-        Returns:
-            List of watched folder dicts ordered by ``created_at`` descending.
-        """
+        """Retrieve all watched folder records, newest first."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM watched_folders ORDER BY created_at DESC")
@@ -151,11 +114,7 @@ class FolderWatcherService:
         return [self._row_to_dict(row, cols) for row in rows]
 
     def get_enabled_folders(self) -> List[Dict[str, Any]]:
-        """Retrieve only enabled watched folder records.
-
-        Returns:
-            List of enabled watched folder dicts ordered by ``created_at`` descending.
-        """
+        """Retrieve only enabled watched folder records."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM watched_folders WHERE enabled = 1 ORDER BY created_at DESC")
@@ -165,21 +124,7 @@ class FolderWatcherService:
         return [self._row_to_dict(row, cols) for row in rows]
 
     def update_folder(self, folder_id: str, **kwargs) -> Optional[Dict[str, Any]]:
-        """Update mutable fields of a watched folder.
-
-        Only keys present in ``allowed_fields`` are applied.  List/dict values are
-        JSON-encoded before storage.
-
-        Args:
-            folder_id: Eight-character hex folder identifier.
-            **kwargs: Keyword arguments for the fields to update.  Allowed fields:
-                ``folder_path``, ``label``, ``enabled``, ``file_patterns``,
-                ``ignore_patterns``, ``recursive``, ``scan_interval``,
-                ``source_config``.
-
-        Returns:
-            Updated watched folder dict, or ``None`` if not found.
-        """
+        """Update mutable fields of a watched folder."""
         allowed_fields = {
             'folder_path', 'label', 'enabled', 'file_patterns', 'ignore_patterns',
             'recursive', 'scan_interval', 'source_config',
@@ -219,16 +164,7 @@ class FolderWatcherService:
         return self.get_folder(folder_id)
 
     def delete_folder(self, folder_id: str, delete_documents: bool = False) -> bool:
-        """Delete a watched folder record.
-
-        Args:
-            folder_id: Eight-character hex folder identifier.
-            delete_documents: When ``True``, soft-deletes all documents that
-                originated from this folder.
-
-        Returns:
-            ``True`` if the folder was found and deleted.
-        """
+        """Delete a watched folder record."""
         if delete_documents:
             from services.document_service import DocumentService
             doc_svc = DocumentService(self.db)
@@ -250,14 +186,7 @@ class FolderWatcherService:
         return deleted
 
     def trigger_scan(self, folder_id: str) -> None:
-        """Request an out-of-schedule immediate scan for a watched folder.
-
-        Sets a short-lived flag in the MemoryStore that the watcher scheduler
-        checks on its next iteration.
-
-        Args:
-            folder_id: Eight-character hex folder identifier.
-        """
+        """Request an out-of-schedule immediate scan for a watched folder."""
         from services.memory_store import MemoryStore
         store = MemoryStore()
         store.set(f"watcher:scan_now:{folder_id}", "1", ex=600)
@@ -267,21 +196,7 @@ class FolderWatcherService:
     # ─────────────────────────────────────────────
 
     def browse_directory(self, path: str = None) -> Dict[str, Any]:
-        """List readable sub-directories at the given filesystem path.
-
-        Args:
-            path: Directory path to list.  Defaults to the user home directory
-                when ``None``.
-
-        Returns:
-            Dict with keys ``current`` (resolved path), ``parent`` (parent path
-            or ``None`` at the root), and ``directories`` (sorted list of
-            readable sub-directory names, excluding hidden entries).
-
-        Raises:
-            ValueError: If ``path`` is not a directory.
-            PermissionError: If the directory cannot be read.
-        """
+        """List readable sub-directories at the given filesystem path."""
         if not path:
             path = os.path.expanduser("~")
 
@@ -344,16 +259,7 @@ class FolderWatcherService:
         return False
 
     def scan_folder(self, folder: Dict) -> Dict[str, int]:
-        """
-        Scan a watched folder for changes. Returns summary dict.
-
-        Algorithm:
-        1. Walk folder, collect {path: mtime} for matching files
-        2. Compare against existing documents in DB
-        3. Detect: new, modified, renamed, deleted
-        4. Enqueue processing for new/modified (capped at MAX_ENQUEUE_PER_SCAN)
-        5. Soft-delete files missing for MISSING_THRESHOLD consecutive scans
-        """
+        """Scan a watched folder for changes."""
         from services.memory_store import MemoryStore
         store = MemoryStore()
         lock_key = f"watcher:scanning:{folder['id']}"
@@ -376,10 +282,7 @@ class FolderWatcherService:
     def _categorize_existing_file(self, doc_svc, folder, abs_path: str, mtime: float,
                                    existing: dict, cached: dict, scan_cache: dict,
                                    result: dict, enqueued: int) -> int:
-        """Handle a discovered file that already has a document record.
-
-        Returns the updated enqueued count.
-        """
+        """Handle a discovered file that already has a document record."""
         cached_mtime = cached.get('mtime')
 
         if existing.get('status') == 'failed':
@@ -425,10 +328,7 @@ class FolderWatcherService:
     def _categorize_new_file(self, doc_svc, folder, abs_path: str, mtime: float,
                               discovered: dict, existing_by_hash: dict,
                               scan_cache: dict, result: dict, enqueued: int) -> int:
-        """Handle a discovered file with no existing document record.
-
-        Returns the updated enqueued count.
-        """
+        """Handle a discovered file with no existing document record."""
         file_hash = self._compute_hash(abs_path)
 
         renamed_doc = existing_by_hash.get(file_hash)
@@ -451,16 +351,7 @@ class FolderWatcherService:
         return enqueued
 
     def _do_scan(self, folder: Dict, store) -> Dict[str, int]:
-        """Execute the folder scan, comparing discovered files against the database.
-
-        Args:
-            folder: Watched folder dict.
-            store: Active MemoryStore connection for scan-state caching.
-
-        Returns:
-            Summary dict with integer counts for ``new``, ``updated``,
-            ``deleted``, ``renamed``, ``skipped``, and an ``errors`` list.
-        """
+        """Execute the folder scan against the database."""
         from services.document_service import DocumentService
 
         folder_path = folder['folder_path']
@@ -539,18 +430,7 @@ class FolderWatcherService:
     # ─────────────────────────────────────────────
 
     def _walk_folder(self, folder_path, recursive, file_patterns, ignore_patterns):
-        """Yield matching files from a folder tree as (abs_path, mtime) tuples.
-
-        Applies pattern matching, extension filtering, and symlink safety checks.
-        Ignored directories are pruned in-place during ``os.walk`` to avoid
-        descending into them.
-
-        Args:
-            folder_path: Root directory to walk.
-            recursive: When ``True``, descends into sub-directories.
-            file_patterns: Glob patterns that filenames must match.
-            ignore_patterns: Glob patterns for directories and filenames to skip.
-        """
+        """Yield matching files from a folder tree as (abs_path, mtime) tuples."""
         real_root = os.path.realpath(folder_path)
 
         if recursive:
@@ -595,14 +475,7 @@ class FolderWatcherService:
                     logger.debug(f"[WATCHER] Cannot stat {abs_path}: {e}")
 
     def _compute_hash(self, file_path: str) -> str:
-        """Compute the SHA-256 content hash of a file.
-
-        Args:
-            file_path: Absolute path to the file.
-
-        Returns:
-            Lowercase hex-encoded SHA-256 digest string.
-        """
+        """Compute the SHA-256 content hash of a file."""
         h = hashlib.sha256()
         with open(file_path, 'rb') as f:
             for chunk in iter(lambda: f.read(8192), b''):
@@ -610,22 +483,7 @@ class FolderWatcherService:
         return h.hexdigest()
 
     def _create_watched_document(self, doc_svc, folder, abs_path, file_hash):
-        """Create a document record for a file discovered in a watched folder.
-
-        Derives MIME type from the filename extension, creates the database
-        record via :meth:`~services.document_service.DocumentService.create_document`,
-        and applies environment tags from the folder structure.
-
-        Args:
-            doc_svc: :class:`~services.document_service.DocumentService` instance.
-            folder: Watched folder dict (used for ``id`` and tag derivation).
-            abs_path: Absolute path to the discovered file.
-            file_hash: Pre-computed SHA-256 hex digest of the file.
-            mtime: File modification time as a Unix timestamp float.
-
-        Returns:
-            Eight-character hex document ID of the newly created record.
-        """
+        """Create a document record for a file discovered in a watched folder."""
         original_name = os.path.basename(abs_path)
         mime_type = mimetypes.guess_type(abs_path)[0] or 'application/octet-stream'
         file_size = os.path.getsize(abs_path)
@@ -688,17 +546,7 @@ class FolderWatcherService:
         threading.Thread(target=_run, daemon=True, name=f"doc-watch-{doc_id[:8]}").start()
 
     def _derive_environment_tags(self, folder: Dict, abs_path: str) -> list:
-        """Derive semantic environment tags from the folder label and subfolder path.
-
-        Args:
-            folder: Watched folder dict providing the ``label`` and ``folder_path``.
-            abs_path: Absolute path to the file, used to compute the relative
-                subfolder path for secondary tags.
-
-        Returns:
-            List of tag strings: the folder label followed by non-hidden subfolder
-            path segments.
-        """
+        """Derive semantic environment tags from the folder label and subfolder path."""
         tags = []
 
         # Folder label is the primary environment
@@ -718,19 +566,7 @@ class FolderWatcherService:
     # ─────────────────────────────────────────────
 
     def _load_scan_cache(self, store, folder_id: str) -> dict:
-        """Load the per-folder scan state from MemoryStore.
-
-        On cold start (cache miss), rebuilds a minimal cache from the database by
-        mapping each non-deleted document's file path to its ID.
-
-        Args:
-            store: Active MemoryStore connection.
-            folder_id: Eight-character hex folder identifier.
-
-        Returns:
-            Dict mapping absolute file paths to cached state dicts (containing at
-            minimum ``doc_id`` and optionally ``mtime`` and ``missing_count``).
-        """
+        """Load the per-folder scan state from MemoryStore."""
         cache_key = f"watcher:state:{folder_id}"
         raw = store.get(cache_key)
         if raw:
@@ -750,24 +586,12 @@ class FolderWatcherService:
         return cache
 
     def _save_scan_cache(self, store, folder_id: str, cache: dict) -> None:
-        """Persist the per-folder scan state to MemoryStore with a 48-hour TTL.
-
-        Args:
-            store: Active MemoryStore connection.
-            folder_id: Eight-character hex folder identifier.
-            cache: Dict mapping absolute file paths to their cached state.
-        """
+        """Persist the per-folder scan state to MemoryStore with a 48-hour TTL."""
         cache_key = f"watcher:state:{folder_id}"
         store.set(cache_key, json.dumps(cache), ex=172800)
 
     def _clear_scan_cache(self, folder_id: str) -> None:
-        """Clear the MemoryStore scan-state cache for a folder.
-
-        Also removes any pending ``scan_now`` flag for the folder.
-
-        Args:
-            folder_id: Eight-character hex folder identifier.
-        """
+        """Clear the MemoryStore scan-state cache for a folder."""
         from services.memory_store import MemoryStore
         store = MemoryStore()
         store.delete(f"watcher:state:{folder_id}")
@@ -778,12 +602,7 @@ class FolderWatcherService:
     # ─────────────────────────────────────────────
 
     def _update_scan_stats(self, folder_id: str, file_count: int) -> None:
-        """Persist scan completion statistics to the database.
-
-        Args:
-            folder_id: Eight-character hex folder identifier.
-            file_count: Number of matching files discovered during the scan.
-        """
+        """Persist scan completion statistics to the database."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -795,12 +614,7 @@ class FolderWatcherService:
             cursor.close()
 
     def _update_scan_error(self, folder_id: str, error: str) -> None:
-        """Record a scan error message in the database.
-
-        Args:
-            folder_id: Eight-character hex folder identifier.
-            error: Error message string to store (truncated by the caller).
-        """
+        """Record a scan error message in the database."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -811,29 +625,14 @@ class FolderWatcherService:
             cursor.close()
 
     def _validate_folder_path(self, real_path: str) -> None:
-        """Validate that a resolved folder path is a readable directory.
-
-        Args:
-            real_path: Resolved (symlink-free) absolute path string.
-
-        Raises:
-            ValueError: If the path is not a directory.
-            PermissionError: If the directory is not readable.
-        """
+        """Validate that a resolved folder path is a readable directory."""
         if not os.path.isdir(real_path):
             raise ValueError(f"Path is not a directory: {real_path}")
         if not os.access(real_path, os.R_OK):
             raise PermissionError(f"Directory is not readable: {real_path}")
 
     def _parse_json_list(self, val) -> list:
-        """Parse a JSON-encoded list string or pass a list through unchanged.
-
-        Args:
-            val: A JSON string, a list, or any other value.
-
-        Returns:
-            The parsed list, the original list, or an empty list if parsing fails.
-        """
+        """Parse a JSON-encoded list string or pass a list through unchanged."""
         if isinstance(val, list):
             return val
         if isinstance(val, str):
@@ -845,17 +644,7 @@ class FolderWatcherService:
         return []
 
     def _row_to_dict(self, row, cols) -> Dict[str, Any]:
-        """Convert a watched_folders database row to a dict, parsing JSON fields.
-
-        Args:
-            row: sqlite3 row (sequence) of column values.
-            cols: List of column name strings matching the row's positional order.
-
-        Returns:
-            Dict mapping column names to values, with ``file_patterns``,
-            ``ignore_patterns``, and ``source_config`` JSON-decoded to
-            Python objects when stored as strings.
-        """
+        """Convert a watched_folders database row to a dict."""
         d = dict(zip(cols, row))
         # Parse JSON fields
         for field in ('file_patterns', 'ignore_patterns', 'source_config'):

@@ -1,28 +1,11 @@
-"""
-Provider token-limit backfill.
 
-Reads each provider's get_context_limit() and persists max_tokens into
-the providers table.  Used at boot (every row) and on provider creation
-(single row).  The compaction threshold is no longer a stored column —
-Providers._over_cap() measures the request against the max_tokens window
-(reserving max(10% window, 8k) response headroom) at call time and fires
-compaction before sending when it would not fit (compact-first).
-"""
 import logging
 
 logger = logging.getLogger(__name__)
 
 
 def backfill_one(conn, provider_id: int) -> bool:
-    """Compute and persist max_tokens for a single provider row.
-
-    Looks up the provider config via ConfigService.get_providers(), builds a
-    ProviderClient via build_client, calls .get_context_limit(), then
-    UPDATEs the row. Caller owns the connection and the commit.
-
-    Returns True on successful UPDATE, False on any failure (failure is
-    logged at warning; the row's previous values are left intact).
-    """
+    """Failure leaves the row's previous values intact."""
     from services.providers import MAX_CONTEXT_WINDOW
     from services.config_service import ConfigService
     from services.llm_clients.factory import build_client
@@ -77,10 +60,7 @@ def backfill_one(conn, provider_id: int) -> bool:
 
 
 def backfill_all(conn) -> dict:
-    """Run backfill_one() for every provider row (active and inactive).
-
-    Returns {'total': N, 'succeeded': N, 'failed': N}. Caller owns commit.
-    """
+    """Returns {'total': N, 'succeeded': N, 'failed': N}. Caller owns commit."""
     rows = conn.execute("SELECT id FROM providers").fetchall()
     succeeded = 0
     failed = 0

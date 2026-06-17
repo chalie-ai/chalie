@@ -22,13 +22,8 @@ _ALPHA = 0.6
 
 
 class TestDeliberationEmaColdStart:
-    """First call with no prior state seeds the EMA at the raw scalar."""
 
     def test_cold_start_seeds_ema_equal_to_scalar(self, store):
-        """On the very first call, EMA == scalar (no smoothing on cold start).
-
-        Verified by reading the MemoryStore key directly after update_and_bucket.
-        """
         svc = DeliberationEmaService()
         scalar = 0.75
         ema_returned, bucket = svc.update_and_bucket(scalar)
@@ -48,7 +43,6 @@ class TestDeliberationEmaColdStart:
         assert state["ema"] == pytest.approx(scalar, abs=1e-4)
 
     def test_cold_start_low_scalar_seeds_low_ema(self, store):
-        """Cold start with a low scalar stays in the 'low' bucket."""
         svc = DeliberationEmaService()
         ema, bucket = svc.update_and_bucket(0.10)
         assert ema == pytest.approx(0.10, abs=1e-6)
@@ -56,10 +50,8 @@ class TestDeliberationEmaColdStart:
 
 
 class TestDeliberationEmaSmoothing:
-    """Three consecutive low scalars keep the bucket low despite the EMA formula."""
 
     def test_three_low_scalars_keep_bucket_low(self, store):
-        """Feed three 0.1 scalars — EMA stays well below the medium threshold."""
         svc = DeliberationEmaService()
         for _ in range(3):
             ema, bucket = svc.update_and_bucket(0.10)
@@ -72,13 +64,11 @@ class TestDeliberationEmaSmoothing:
         )
 
     def test_single_high_spike_does_not_flip_from_low_immediately(self, store):
-        """Seed with two low turns, then send one high spike.
+        """EMA = alpha * low_ema + (1 - alpha) * spike.
 
-        EMA = alpha * low_ema + (1 - alpha) * spike.
         With alpha=0.6, low_ema=0.10, spike=0.90:
             EMA = 0.6 * 0.10 + 0.4 * 0.90 = 0.06 + 0.36 = 0.42
         0.42 < med_thr (0.46) — bucket stays 'low', not promoted to 'medium'.
-        This is the core EMA smoothing guarantee.
         """
         svc = DeliberationEmaService()
         svc.update_and_bucket(0.10)  # turn 1
@@ -94,17 +84,8 @@ class TestDeliberationEmaSmoothing:
 
 
 class TestDeliberationEmaBucketTransition:
-    """Sustained high scalars eventually flip the bucket from low → high."""
 
     def test_sustained_high_scalars_flip_bucket_to_high(self, store):
-        """Send repeated 0.9 scalars; assert that the bucket eventually becomes 'high'.
-
-        With alpha=0.6 and scalar=0.9, starting from 0.0:
-            turn 1: ema = 0.9 (cold start seed)                    → high immediately
-        So the very first high scalar on a cold store is already 'high'.
-        If the store was seeded low (via test isolation), repeated high inputs converge.
-        We verify convergence by simulating from a known low EMA.
-        """
         svc = DeliberationEmaService()
         # Seed a low EMA.
         svc.update_and_bucket(0.10)
@@ -124,7 +105,6 @@ class TestDeliberationEmaBucketTransition:
         assert ema > _HIGH_THR
 
     def test_reset_clears_ema_and_next_call_is_cold_start(self, store):
-        """After reset(), the next update_and_bucket seeds from scratch (cold start)."""
         svc = DeliberationEmaService()
         svc.update_and_bucket(0.90)  # prime with a high score
         svc.reset()

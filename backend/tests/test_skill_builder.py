@@ -1,24 +1,3 @@
-"""Feature tests for SkillBuilderAbility and skills_io helpers.
-
-Two modules are covered:
-
-1. utils/skills_io.py — pure functions: slugify_title, skill_yaml_path.
-   Tests are unit-marked (no IO, no collaborators, deterministic).
-
-2. abilities/skill_builder.py — SkillBuilderAbility.execute() lifecycle tests.
-   Tests are integration-marked; they run against a real temporary skills.sqlite
-   (copied from the production DB and redirected via module-attribute reassignment
-   — only the file path is redirected, not any business logic).
-
-Redirection strategy:
-  SKILLS_DB_PATH and USER_SKILLS_DIR are module-level Path constants imported
-  directly into skill_builder.py. Both modules must be patched so that:
-    - The .exists() guard in _handle_* passes against the temp DB copy.
-    - open_skills_db() and skill_yaml_path() write to tmp directories.
-  Only Path constants are redirected; all SQL, YAML-write, embedding, and
-  search-index logic runs through real production code paths.
-"""
-
 import shutil
 import sqlite3
 from pathlib import Path
@@ -43,7 +22,6 @@ _REAL_DB = FileMapperService.get_skills_db_path()
 
 
 def _copy_db(tmp_path: Path) -> Path:
-    """Copy the real skills.sqlite into tmp_path; return the copy path."""
     dest = tmp_path / "skills.sqlite"
     shutil.copy2(str(_REAL_DB), str(dest))
     return dest
@@ -81,15 +59,6 @@ def _get_skill_row(db_path: Path, title: str) -> dict | None:
 
 @pytest.fixture
 def skill_env(tmp_path, monkeypatch):
-    """
-    Provide a clean, isolated skill environment for each integration test.
-
-    - Copies the real skills.sqlite to tmp_path.
-    - Redirects SKILLS_DB_PATH and USER_SKILLS_DIR in both utils.skills_io
-      and abilities.skill_builder so all production code writes to tmp_path.
-    - The redirect touches only Path constants (infrastructure), not any
-      business logic — no production function is mocked.
-    """
     db_path = _copy_db(tmp_path)
     yaml_dir = tmp_path / "user_skills"
     yaml_dir.mkdir()
@@ -111,7 +80,6 @@ def skill_env(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 class TestSlugifyTitle:
-    """slugify_title converts titles to safe filename slugs."""
 
     def test_spaces_become_hyphens(self):
         from utils.skills_io import slugify_title
@@ -141,7 +109,6 @@ class TestSlugifyTitle:
 
 @pytest.mark.unit
 class TestSkillYamlPath:
-    """skill_yaml_path returns the correct YAML file path for a title."""
 
     def test_returns_path_in_user_skills_dir(self):
         from utils.skills_io import USER_SKILLS_DIR, skill_yaml_path
@@ -165,15 +132,8 @@ class TestSkillYamlPath:
 
 @pytest.mark.integration
 class TestSkillBuilderCreateValidation:
-    """create action returns error tags when required fields are missing."""
 
     def test_create_existing_db_succeeds(self, skill_env):
-        """create with all required fields returns a success ToolResult.
-
-        Missing-param rejection now lives in the dispatcher's ACTION_REQUIRED
-        pre-gate (covered end-to-end in test_ability_skills_tool_result.py), so
-        run() is only reached with the required params present.
-        """
         from abilities._result import ToolResult
         from abilities.skill_builder import SkillBuilderAbility
 
@@ -192,14 +152,12 @@ class TestSkillBuilderCreateValidation:
 
 @pytest.mark.integration
 class TestSkillBuilderLifecycle:
-    """Full create → edit → delete lifecycle against a real skills.sqlite copy."""
 
     _TITLE = "Test Weekly Review"
     _USE_FOR = "conducting structured weekly reviews"
     _CONTENT = "1. Summarise completed tasks.\n2. Plan next week."
 
     def test_create_inserts_row_and_writes_yaml(self, skill_env):
-        """create action: new user skill row appears in DB and YAML file is written."""
         from abilities.skill_builder import SkillBuilderAbility
 
         db_path = skill_env["db_path"]
@@ -232,7 +190,6 @@ class TestSkillBuilderLifecycle:
         assert self._USE_FOR in content
 
     def test_create_duplicate_title_returns_error(self, skill_env):
-        """Creating a skill whose title already exists returns a skill-already-exists error."""
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
@@ -249,7 +206,6 @@ class TestSkillBuilderLifecycle:
         assert result.code == "skill-already-exists"
 
     def test_edit_increments_version_and_updates_content(self, skill_env):
-        """edit action: version increments and new content is stored in DB and YAML."""
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
@@ -271,7 +227,6 @@ class TestSkillBuilderLifecycle:
         assert row["content"] == new_content
 
     def test_delete_removes_row_and_yaml_file(self, skill_env):
-        """delete action: DB row is removed and YAML file is gone."""
         from abilities.skill_builder import SkillBuilderAbility
 
         db_path = skill_env["db_path"]
@@ -295,7 +250,6 @@ class TestSkillBuilderLifecycle:
         assert len(yaml_files) == 0
 
     def test_list_includes_created_skill(self, skill_env):
-        """list action: newly created user skill appears in the listing."""
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
@@ -335,9 +289,6 @@ def _fetch_content_from_db(db_path, title: str) -> str | None:
 
 
 def _mp_for_skill_test(config, db):
-    """A real MessageProcessor bound to a real channel config and a real
-    transcript anchor (so the dispatcher's act-trail write lands on a real row),
-    seeded exactly as ``_setup`` seeds it."""
     from abilities._dispatcher import ToolDispatcher  # noqa: F401 — import used below
     from services.message_processor import MessageProcessor
     from tests._tool_result_harness import seed_transcript
@@ -364,10 +315,6 @@ def _skill_body(rendered: str, tool: str) -> object:
 def test_skill_body_containing_skill_builder_survives_manager_op_byte_identical(
     tmp_path, monkeypatch, db
 ):
-    """A skill whose body literally says "use skill_builder for X" is created
-    through the real skill_builder path, then a real skill_manager list runs over
-    it. The stored content must be byte-identical — the blanket .replace the merge
-    kills would have rewritten "skill_builder" -> "skill_manager" inside it."""
     import abilities.skill_builder as sb
     import utils.skills_io as sio
     from abilities._dispatcher import ToolDispatcher

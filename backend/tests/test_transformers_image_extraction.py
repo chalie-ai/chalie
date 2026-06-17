@@ -1,10 +1,3 @@
-"""Unit tests for per-provider image extraction in tools.search.transformers.
-
-Pure functions: feed shaped dicts / XML strings, assert URL extracted.
-Covers GitHub, Reddit, Open Library, iTunes, and the generic RSS thumbnail
-patterns (media:thumbnail, media:content, enclosure, <image><url>).
-"""
-
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET

@@ -13,9 +13,7 @@ _registry: dict[str, Ability] | None = None
 
 
 def _load() -> dict[str, Ability]:
-    """Walk backend/abilities/ and import every non-underscore .py module.
-
-    Concrete Ability subclasses self-register via __init_subclass__; we collect
+    """Concrete Ability subclasses self-register via __init_subclass__; we collect
     them after the walk by inspecting all subclasses of Ability.
     """
     abilities_dir = FileMapperService.get_abilities_path()
@@ -33,7 +31,6 @@ def _load() -> dict[str, Ability]:
 
 
 def _all_concrete_subclasses(cls: type) -> list[type]:
-    """Recursively collect unique concrete (non-abstract) subclasses of *cls*."""
     seen: set[type] = set()
     out: list[type] = []
 
@@ -72,12 +69,11 @@ class AbilityRegistry:
 
     @staticmethod
     def get(name: str) -> Ability:
-        """Return the Ability instance for *name*; raises KeyError on miss."""
+        """Raises KeyError on miss."""
         return _get_registry()[name]
 
     @staticmethod
     def all() -> list[Ability]:
-        """Return every registered Ability instance."""
         return list(_get_registry().values())
 
     @staticmethod

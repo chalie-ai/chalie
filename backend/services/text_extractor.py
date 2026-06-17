@@ -5,17 +5,9 @@ Pure functions — no database, no MemoryStore, no Chalie services.
 Used by DocumentProcessingService (file pipeline) and the `read` innate skill
 (URL fetch + local file read).
 
-Supported formats:
-  - PDF         (pdfplumber)
-  - DOCX        (python-docx)
-  - PPTX        (python-pptx)
-  - HTML        (trafilatura)
-  - Plain text  (direct read)
-  - Markdown    (direct read)
-  - Any text/*  (direct read)
-  - Image       (PNG/JPEG/WEBP/GIF/BMP/TIFF via RapidOCR)
-
-All heavy-library imports are lazy so missing optional deps degrade gracefully.
+Supported formats (heavy-library imports are lazy):
+    PDF(pdfplumber), DOCX(python-docx), PPTX(python-pptx),
+    HTML(trafilatura), images via RapidOCR/vision, plain text/markdown.
 """
 
 import logging
@@ -28,16 +20,7 @@ logger = logging.getLogger(__name__)
 # ─── Public API ──────────────────────────────────────────────────────────────
 
 def extract_text(file_path: str, mime_type: str = None) -> str:
-    """
-    Extract plain text from a local file.
-
-    Dispatches to a format-specific extractor based on MIME type.
-    If mime_type is not provided, it is inferred from the file extension.
-
-    Most formats return an empty string on failure. The exception is image
-    extraction, which propagates provider errors when a vision provider is
-    configured but failing — fail loud, never swallowed.
-    """
+    """Dispatches to format-specific extractors by MIME type."""
     if not mime_type:
         mime_type = detect_mime_type(file_path)
 

@@ -27,11 +27,6 @@ _HEARTBEAT_INTERVAL_SECS = 900
 
 
 def mcp_client_worker() -> None:
-    """Heartbeat loop — runs indefinitely as a daemon thread.
-
-    Depends on McpClientService, which in turn depends on the main chalie.db
-    and the MCP library (mcp>=1.24.0, already declared in pyproject.toml).
-    """
     logger.info("[MCP CLIENT WORKER] Starting; initial delay %ds", _INITIAL_DELAY_SECS)
     time.sleep(_INITIAL_DELAY_SECS)
 

@@ -14,17 +14,7 @@ from services.llm_clients.base import ProviderClient
 
 
 def build_client(config: dict) -> ProviderClient:
-    """Return a ProviderClient for the given provider config dict.
-
-    Args:
-        config: Provider row from the DB (platform, model, api_key, host, …).
-
-    Returns:
-        A concrete ProviderClient ready to send.
-
-    Raises:
-        ValueError: When 'platform', 'model', or required fields are missing.
-    """
+    """Return a ProviderClient for the given provider config dict."""
     platform = config.get('platform')
     if not platform:
         raise ValueError(

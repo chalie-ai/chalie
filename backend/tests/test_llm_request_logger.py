@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Unit tests for llm_request_logger.py."""
+
 
 import pytest
 
@@ -23,8 +23,7 @@ def logs_dir(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 def test_writes_file_with_all_fields_verbatim(logs_dir):
-    """One file per call, all required fields present, content verbatim
-    (including large strings and unicode)."""
+
     big_user = 'x' * 100_000
     unicode_sys = 'Hello 🌍 — こんにちは — <>&"'
     tools = [{'name': 'search', 'description': 'Search the web'}]
@@ -58,7 +57,7 @@ def test_writes_file_with_all_fields_verbatim(logs_dir):
 
 @pytest.mark.unit
 def test_does_not_raise_on_unwritable_dir(tmp_path, monkeypatch):
-    """Logger must never block the LLM call — any write failure is swallowed."""
+    # Side-effect: write failures are silently swallowed so the LLM call is never blocked.
     fake_file = tmp_path / 'i_am_a_file'
     fake_file.write_text('block')
     monkeypatch.setattr(llm_request_logger, '_LOGS_DIR', fake_file / 'logs')

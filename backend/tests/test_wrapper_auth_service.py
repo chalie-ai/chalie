@@ -1,7 +1,4 @@
-"""Tests for WrapperAuthService — bearer token auth lifecycle."""
-
 import json
-
 import pytest
 from unittest.mock import MagicMock
 

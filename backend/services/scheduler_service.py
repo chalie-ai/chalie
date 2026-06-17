@@ -50,17 +50,7 @@ def register_system_handler(source: str, callback: callable):
 
 
 def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
-    """
-    Generate and store an embedding for a scheduled item.
-
-    Inserts into scheduled_items_vec keyed by the item's rowid.
-    Non-fatal: logs a warning and returns silently on any failure.
-
-    Args:
-        item_id: The text primary key of the scheduled item (e.g. '3f8a2b1c').
-        message: The message field to embed.
-        db: Optional DatabaseService instance; fetches shared db if not provided.
-    """
+    """Non-fatal: logs a warning and returns silently on any failure."""
     try:
         from services.embedding_service import get_embedding_service
         if db is None:
@@ -95,7 +85,6 @@ def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
 
 
 def scheduler_worker():
-    """Module-level entry point for run.py."""
     Logger.start()
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")
 
@@ -116,7 +105,6 @@ def scheduler_worker():
 
 
 def _poll_and_fire():
-    """Poll for due items and fire them — direct delivery or chat chokepoint."""
     try:
         from services.database_service import get_shared_db_service
 

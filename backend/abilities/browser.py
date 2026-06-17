@@ -238,9 +238,7 @@ class BrowserAbility(Ability):
 
     @staticmethod
     def _reply(envelope: dict) -> ToolResult:
-        """Map a session-layer envelope onto a canonical ToolResult.
-
-        A successful envelope (``error`` is None) becomes ``ok`` with the DICT
+        """A successful envelope (``error`` is None) becomes ``ok`` with the DICT
         body — the dispatcher renders compact JSON. An error envelope becomes
         ``err`` with the plain human-readable message string and a stable kebab
         ``code`` derived from the failure (carrying any internal ``_code`` /
@@ -263,9 +261,7 @@ class BrowserAbility(Ability):
 
 
 def _classify_error(message: str) -> str:
-    """Derive a stable kebab code from a session-layer error message.
-
-    The session layer (tools/browser/session.py) returns its failures as the
+    """The session layer (tools/browser/session.py) returns its failures as the
     envelope ``error`` string; this is the single place those strings are mapped
     to a self-correction code. Anything unrecognised falls back to the generic —
     but still stable, never ``code=error`` — ``browser-action-failed``.

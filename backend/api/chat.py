@@ -65,7 +65,6 @@ def _set_active_ump(proc) -> None:
 
 
 def _clear_active_ump(turn) -> None:
-    """Clear active UMP only if it still points to *turn*."""
     global _active_ump
     with _ump_lock:
         if _active_ump is turn:
@@ -73,12 +72,9 @@ def _clear_active_ump(turn) -> None:
 
 
 class _ActiveTurn:
-    """Minimal handle for an in-flight UMP turn.
-
-    Holds the cancel_event (so interrupt/stop endpoints can signal cancellation)
-    and the original raw_input (so dispatch_message can combine mid-turn
-    messages).  No MessageProcessor subclass reference — the flat
-    MessageProcessor.process() owns the turn lifecycle.
+    """Holds the cancel_event (so interrupt/stop endpoints can signal
+    cancellation) and the original raw_input (so dispatch_message can combine
+    mid-turn messages).
     """
 
     __slots__ = ("_cancel_event", "_raw_input")
@@ -88,7 +84,6 @@ class _ActiveTurn:
         self._raw_input = raw_input
 
     def cancel(self) -> None:
-        """Signal the ACT loop to exit at the next iteration boundary."""
         self._cancel_event.set()
 
 
@@ -104,16 +99,8 @@ def _run_chat_background(
     request_id: str,
     turn_start: float,
 ) -> None:
-    """Background thread: process user message via flat MessageProcessor and broadcast.
-
-    Uses MessageProcessor.process() with the UserConfig ProcessorConfig subclass.
-    Live narration and tool events are emitted by the flat loop via WS.emit()
-    (gated on config.broadcast_to='user') — no callbacks required (AC-28).
-
-    Clears the active UMP reference BEFORE broadcasting done so the frontend
-    can immediately POST /chat without hitting a race where active_ump is still
-    set when the new request arrives.
-    """
+    """Clears the active UMP reference BEFORE broadcasting done so the frontend
+    can immediately POST /chat without racing a still-set active_ump."""
     from services.message_processor import MessageProcessor  # noqa: PLC0415
 
     broker = WebSocketBroker()
@@ -151,13 +138,8 @@ def _run_chat_background(
 
 
 def _broadcast_turn_result(response: str, request_id: str, turn_start: float) -> None:
-    """Emit the assistant ``message`` + ``done`` events for a completed turn.
-
-    The hot-path delivery tail (spec §4.0 lever 2): shared by the foreground user
-    turn (``_run_chat_background``) and the background async-result synthesis
-    (``deliver_async_result``) so both surface a turn through the exact same WS
-    event shape — one flow, no duplication.
-    """
+    """Shared by the foreground user turn and the background async-result synthesis
+    so both surface a turn through the exact same WS event shape."""
     broker = WebSocketBroker()
 
     # Resolve the transcript id this turn's tool_calls are keyed to (the
@@ -201,19 +183,9 @@ def _broadcast_turn_result(response: str, request_id: str, turn_start: float) ->
 
 
 def deliver_async_result(mp: object, result_text: str) -> None:
-    """Deliver a backgrounded tool result by synthesising a fresh assistant turn.
-
-    Called by the async-delegate daemon when a backgrounded tool finishes. Spawns
-    a fresh synthesis MessageProcessor — a clone of the CAPTURED ``mp``'s config
-    with the input row suppressed (the 'input' is the tool result, not a user
-    message) — so the LLM synthesises a reply, then emits it on the hot path
-    (``_broadcast_turn_result``).  Delivery rides the captured ``mp``'s own
-    channel, never the old ``UserConfig``-hardwired ``dispatch_message`` route.
-
-    Deliberately self-contained: it does NOT register ``_active_ump`` and does NOT
-    go through ``dispatch_message`` / ``_start_turn``, so it never cancels or
-    combines the user's in-flight foreground turn — it is a background task that
-    simply appends another assistant turn (spec §4.0 / §4.4).
+    """Does NOT register _active_ump and does NOT go through dispatch_message /
+    _start_turn, so it never cancels or combines the user's in-flight foreground
+    turn — it simply appends another assistant turn.
     """
     from services.message_processor import MessageProcessor  # noqa: PLC0415
 
@@ -242,21 +214,10 @@ def dispatch_message(
     attachments: list | None = None,
     hidden_input: bool = False,
 ) -> None:
-    """Single chokepoint for all message sources entering the user channel.
-
-    If an ACT loop is already in-flight (active UMP exists), cancels it,
-    concatenates the original message with the new one (separated by two
-    newlines), and starts a fresh turn with the combined text. The cancelled
-    turn's DB rows are cleaned up by _cleanup_cancelled() in the processor.
-
-    Args:
-        text: Message content.
-        source: Origin identifier (``"text"``, ``"voice"``, ``"scheduled"``,
-                ``"external_agent"``).
-        attachments: Optional temp file paths staged from the /chat multipart
-                      request (see ``_stage_chat_uploads``).
-        hidden_input: When True the input row is NOT written to the transcript
-                      (the synthesized assistant response still is).
+    """If an ACT loop is already in-flight, cancels it, concatenates the original
+    message with the new one (separated by two newlines), and starts a fresh turn
+    with the combined text. The cancelled turn's DB rows are cleaned up by
+    _cleanup_cancelled() in the processor.
     """
     attachments = attachments or []
 
@@ -271,14 +232,6 @@ def dispatch_message(
 
 
 def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = False) -> str:
-    """Start a new UMP turn via MessageProcessor.process() in a background thread.
-
-    Uses UserConfig to build the ProcessorConfig and passes it to
-    MessageProcessor.process().  Live WS events (narration, tool start/end) are
-    emitted by the flat loop via WS.emit() — no per-turn callbacks (AC-28).
-
-    Returns the new request_id.
-    """
     from configs.channels import UserConfig  # noqa: PLC0415
 
     request_id = str(uuid.uuid4())
@@ -321,12 +274,8 @@ def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = 
 
 
 def _stage_chat_uploads(files: list) -> list:
-    """Stage each multipart upload to a unique temp path for turn-0 ingest.
-
-    Returns the temp paths (under ``TMP_PATH_PREFIX``) that ``_seed_turn_zero``
-    feeds to ``document.upload`` — which ingests by PATH, never bytes, so no file
-    blob ever reaches the act-trail. A per-file token keeps same-named uploads
-    from colliding. Files with no filename are skipped.
+    """Returns temp paths that _seed_turn_zero feeds to document.upload — which
+    ingests by PATH, never bytes, so no file blob ever reaches the act-trail.
     """
     from services.filename_utils import safe_filename  # noqa: PLC0415
     from services.tmp_storage import new_tmp_path  # noqa: PLC0415
@@ -345,18 +294,9 @@ def _stage_chat_uploads(files: list) -> list:
 @chat_bp.route("/chat", methods=["POST"])
 @require_auth
 def post_chat():
-    """Receive a user message (multipart/form-data) and start a new UMP turn.
+    """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0.
 
-    Form fields:
-        text (str): Message text.
-        source (str, optional): ``"text"`` or ``"voice"``. Default ``"text"``.
-    Files (``request.files``, field name ``files``):
-        Up to 10 raw file attachments. Each is staged to a temp path and ingested
-        via ``document.upload`` (by PATH, never bytes) at turn 0.
-
-    Response:
-        202 Accepted — the message was received.
-        Response arrives asynchronously via WebSocketBroker.broadcast().
+    Response arrives asynchronously via WebSocketBroker.broadcast().
     """
     text = (request.form.get("text") or "").strip()
     source = request.form.get("source") or "text"
@@ -375,17 +315,9 @@ def post_chat():
 @chat_bp.route("/chat/interrupt", methods=["POST"])
 @require_auth
 def post_chat_interrupt():
-    """Interrupt the active UMP turn.
-
-    Cancels the active processor so the ACT loop exits at the next iteration
-    boundary. The cancelled turn deletes its own transcript and tool_call rows
-    — no data persists for an interrupted turn.
+    """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
 
     Always returns HTTP 200.
-
-    Response JSON:
-        {ok: true, interrupted: true}        — cancel signal delivered
-        {ok: true, reason: "no_active_turn"} — nothing was in-flight
     """
     proc = _get_active_ump()
     if proc is not None:
@@ -398,29 +330,18 @@ def post_chat_interrupt():
 @chat_bp.route("/chat/stop", methods=["POST"])
 @require_auth
 def post_chat_stop():
-    """Deprecated alias for POST /chat/interrupt.
-
-    Retained for backwards compatibility. New callers should use
-    POST /chat/interrupt instead.
-    """
+    """Deprecated alias for POST /chat/interrupt. New callers should use POST /chat/interrupt instead."""
     return post_chat_interrupt()
 
 
 @chat_bp.route("/chat/subagents/active", methods=["GET"])
 @require_auth
 def get_active_subagents():
-    """Return all currently active async delegates.
-
-    Used by the frontend to hydrate the task drawer on page load/reconnect,
+    """Used by the frontend to hydrate the task drawer on page load/reconnect,
     since WS push events are missed if the client was disconnected.
 
-    Response JSON:
-        {subagents: [{sub_id}]}
-
-    Note: the delegate registry (async_delegate_runner) tracks only
-    delegate_ids and cancel events — no per-type metadata.  Richer metadata
-    (agent_type, description, started_at) will be restored when the T11
-    delegate tools (web_search, web_browse) land.
+    The delegate registry tracks only delegate_ids and cancel events — no
+    per-type metadata.
     """
     from services.async_delegate_runner import async_delegate_runner
 
@@ -453,16 +374,7 @@ def post_subagent_stop(sub_id: str):
 @chat_bp.route("/action", methods=["POST"])
 @require_auth
 def post_action():
-    """Receive an action button click and dispatch via ToolDispatcher.dispatch().
-
-    Body (JSON):
-        skill (str): The ability name to invoke.
-        Any additional keys are passed as parameters to the ability.
-
-    Response:
-        202 Accepted — the action was received.
-        Response arrives asynchronously via WebSocketBroker.broadcast().
-    """
+    """Response arrives asynchronously via WebSocketBroker.broadcast()."""
     body = request.get_json(silent=True) or {}
     skill = body.get("skill") or ""
     if not skill:

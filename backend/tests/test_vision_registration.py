@@ -1,24 +1,11 @@
 """Feature tests — the ``vision`` delegate tool is fully registered.
 
-Task 7 of the Vision Subagent feature wires an already-built ``VisionAbility``
-into three production surfaces. These tests drive the REAL production hot paths
-for all three — zero mocks, real DB, real seed file, real config resolution,
-real search index — and assert the downstream effects:
+Policy defaults seeded by ``policy_defaults.json``:
+    (chat, vision) -> allow · (external_agent, vision) -> allow ·
+    (subconscious, vision) -> deny.
 
-1. Policy gate — the real ``PolicyManager.apply_seed()`` reads the real
-   ``policy_defaults.json`` into a real (temp) DB exactly as ``run.py`` boots it,
-   and the real ``_setting`` lookup returns the seeded vision settings:
-       (chat, vision) -> allow · (external_agent, vision) -> allow ·
-       (subconscious, vision) -> deny.
-2. Tool visibility — the real ``FindToolsAbility.run({"select": ["vision"]})``
-   dispatch (the same call ToolDispatcher makes) injects ``vision`` into a
-   user-facing config's ``active_tools`` and is rejected on a background config,
-   because ``vision`` is in ``DELEGATE_TOOLS`` (subtracted on DmnConfig) yet in
-   ``DEFAULT_DISCOVERABLE`` (offered on UserConfig). The real subtraction runs —
-   the test never re-implements it.
-3. Search index — the rebuilt real ``abilities.sqlite`` carries a row for
-   ``vision``, and the real ``AbilityRegistry`` resolves ``"vision"`` to
-   ``VisionAbility``. This proves the index rebuild captured the new ability.
+``vision`` is in ``DELEGATE_TOOLS`` (subtracted on DmnConfig) and in
+``DEFAULT_DISCOVERABLE`` (offered on UserConfig).
 """
 
 import sqlite3
@@ -48,8 +35,6 @@ _CHANNEL = ProcessorConfig.PolicyChannel
 # ---------------------------------------------------------------------------
 
 def _mp_for(config) -> MessageProcessor:
-    """A real MessageProcessor bound to a real channel config, seeded exactly
-    as ``_setup`` seeds it (active_tools = config.always_available)."""
     mp = MessageProcessor("find a vision tool for me")
     mp.config = config
     mp.active_tools = list(config.always_available or [])
@@ -57,19 +42,12 @@ def _mp_for(config) -> MessageProcessor:
 
 
 def _find_tools_on(mp: MessageProcessor, params: dict) -> str:
-    """Drive the real find_tools dispatch path: bind the invoking mp and run.
-
-    ``run()`` returns a ``ToolResult``; its ``body`` is the human-readable
-    select-result text the model sees (the dispatcher adds the envelope)."""
     ability = FindToolsAbility()
     ability.mp = mp
     return ability.run(params).body
 
 
 def _seeded_policy_db(tmp_path) -> PolicyManager:
-    """Boot a real DB through the exact ``run.py`` _init_database order
-    (legacy copy → converge → apply_seed) so the real policy_defaults.json is
-    seeded into a real ``policy`` table. Returns a PolicyManager over it."""
     db = DatabaseService(str(tmp_path / "vision_policy.db"))
     _migrate_legacy_policy_rules(db)                                  # no-op on fresh
     SchemaConvergenceService(db, embedding_dimensions=256).converge()  # creates policy
@@ -110,9 +88,6 @@ class TestVisionVisibility:
         assert "vision" in DELEGATE_TOOLS
 
     def test_vision_selectable_on_user_channel(self):
-        """vision is in DEFAULT_DISCOVERABLE and NOT subtracted on UserConfig
-        (UserConfig.blocked does not include DELEGATE_TOOLS), so the real
-        find_tools select path injects it into active_tools."""
         mp = _mp_for(UserConfig())
         assert "vision" not in mp.config.blocked  # contract guard
 
@@ -129,9 +104,6 @@ class TestVisionVisibility:
         )
 
     def test_vision_blocked_on_dmn_background_channel(self):
-        """DmnConfig.blocked = DELEGATE_TOOLS | ... so vision (a delegate tool)
-        is subtracted from discovery on this background loop — the real select
-        path must reject it."""
         mp = _mp_for(DmnConfig())
         assert "vision" in mp.config.blocked  # contract guard
 
@@ -154,8 +126,6 @@ class TestVisionSearchIndex:
         assert isinstance(AbilityRegistry.get("vision"), VisionAbility)
 
     def test_abilities_sqlite_contains_vision_row(self):
-        """The rebuilt search index must carry a ``vision`` row in the real
-        ``abilities`` table — proof the rebuild captured the new ability."""
         db_path = FileMapperService.get_abilities_db_path()
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         try:

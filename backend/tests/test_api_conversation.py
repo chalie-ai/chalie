@@ -1,5 +1,3 @@
-"""Test chat history retrieval — calls the same function the API uses."""
-
 import pytest
 
 from api.conversation import get_recent_history
@@ -9,7 +7,6 @@ from api.conversation import get_recent_history
 class TestChatHistory:
 
     def test_boot_and_scroll(self, db):
-        """Seed 30 messages, verify boot=12 and scroll-up=next 12."""
         for i in range(30):
             role = 'user' if i % 2 == 0 else 'assistant'
             db.execute(
@@ -38,9 +35,8 @@ class TestChatHistory:
     def test_subagent_return_role_hidden_from_recent_history(self, db):
         """subagent_return rows must be hidden from user-visible chat history.
 
-        Plan §Q-spec-1 hard requirement: the role 'subagent_return' is an
-        internal async-delivery mechanism — only Chalie's synthesised response
-        reaches the chat, not the raw subagent envelope that triggered it.
+        Plan §Q-spec-1: 'subagent_return' role is internal async-delivery — only the
+        synthesised response reaches the chat, not the raw subagent envelope.
         """
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "

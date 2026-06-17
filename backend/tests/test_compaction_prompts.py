@@ -4,13 +4,11 @@ Drive the exact production entry point — ``*CompactionConfig().get_system_prom
 the same call ``_build_send_dto`` makes when a compactor turn assembles its
 request — and pin the slimmed prompt shape:
 
-- History prompt: materially shorter (the old body restated every rule twice),
-  still carries the full contract — ``## Previous Summary`` / ``## New Turns``
+- History prompt: carries the full contract — ``## Previous Summary`` / ``## New Turns``
   input markers, the six living-document sections in order, the 200-400 token
   target, and no legacy ``<analysis>``/``<summary>`` tag machinery.
 - Trail prompt: fixed four-part handover structure (Goal / Done / Failed / Next)
-  plus the never-state-a-value-a-tool-did-not-return guard, replacing the
-  free-form "dense paragraph" instruction weak models ramble on.
+  plus the never-state-a-value-a-tool-did-not-return guard.
 """
 
 import re

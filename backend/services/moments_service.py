@@ -40,14 +40,7 @@ _SEARCH_LIMIT = 10
 # KNN depth for the vec lane — a small multiple of the surfaced limit.
 _VEC_K = 30
 
-
 class MomentsService:
-    """CRUD + search over the ``moments`` table with coherent FTS/vec sync.
-
-    Dependency-injected DB service (DIP) so callers and tests share one instance
-    bound to the active database. All datetimes are tz-aware UTC via ``utc_now``.
-    """
-
     def __init__(self, db_service=None):
         self.db = db_service if db_service is not None else get_shared_db_service()
 
@@ -57,12 +50,6 @@ class MomentsService:
         return dict(row) if row is not None else None
 
     def _generate_embedding(self, text: str):
-        """Compute the 768-d gte-modernbert embedding for ``text``.
-
-        Returns a plain list of floats, or ``None`` if the model is unavailable —
-        the lexical (FTS) lane still works without a vector, so an embedding
-        failure must never abort a pin.
-        """
         try:
             from services.embedding_service import get_embedding_service
             return get_embedding_service().generate_embedding(text)
@@ -71,7 +58,11 @@ class MomentsService:
             return None
 
     def _sync_fts(self, conn, rowid: int, content: str) -> None:
-        """Insert the content posting into the external-content moments_fts index."""
+        """Insert the content posting into the external-content moments_fts index.
+
+        Failure only logs a warning — this is a soft sync against an external index;
+        an individual row missing from FTS does not corrupt data.
+        """
         try:
             conn.execute(
                 f"INSERT INTO {_FTS_TABLE}(rowid, content) VALUES (?, ?)",
@@ -81,12 +72,6 @@ class MomentsService:
             logger.warning("%s FTS sync failed for rowid=%s: %s", _LOG_PREFIX, rowid, exc)
 
     def _store_vec(self, conn, rowid: int, embedding) -> None:
-        """Write the content embedding into moments_vec (rowid == moments.id).
-
-        A vec0 table rejects a width mismatch (e.g. a 768-d vector against a
-        256-d test table); that is non-fatal — the FTS lane carries lexical
-        recall — so it is caught and logged, mirroring DataGraphService.
-        """
         if embedding is None:
             return
         blob = pack_embedding(embedding)
@@ -101,13 +86,11 @@ class MomentsService:
             logger.warning("%s vec write failed for rowid=%s: %s", _LOG_PREFIX, rowid, exc)
 
     def _delete_fts(self, conn, rowid: int, content: str) -> None:
-        """Remove the moments_fts posting via the shared external-delete idiom."""
         fts5_external_delete(conn, _FTS_TABLE, rowid, {"content": content})
 
     # ── store / read / delete ──────────────────────────────────────────
 
     def find_by_transcript(self, transcript_id: int) -> Optional[dict]:
-        """Return the moment pinned from ``transcript_id``, or None."""
         with self.db.connection() as conn:
             row = conn.execute(
                 "SELECT * FROM moments WHERE transcript_id = ? LIMIT 1",
@@ -116,20 +99,9 @@ class MomentsService:
         return self._row_to_dict(row)
 
     def store(self, transcript_id: int, content: str, *, note: str = None) -> dict:
-        """Pin one assistant turn as a moment; dedupe on ``transcript_id``.
+        """Dedupe on ``transcript_id`` — re-pin returns existing row instead of inserting.
 
-        A re-pin of an already-saved turn is a no-op that returns the existing
-        row (so the API can answer 200 duplicate). A new pin inserts the row,
-        syncs FTS and writes the synchronous content embedding into moments_vec.
-        Returns the stored row dict.
-
-        ``transcript_id`` is UNIQUE in schema.sql, so two concurrent pins for the
-        same turn (double-click / retry) cannot both insert: the INSERT uses
-        ``ON CONFLICT(transcript_id) DO NOTHING``, the loser sees zero rows
-        affected, skips the FTS/vec sync (the winner already wrote them) and
-        re-fetches the winner's row. The find-first short-circuit still serves the
-        common duplicate case; this is purely the race backstop, so the contract
-        holds — one row, never a duplicate, never a 500.
+        Embedding failure is non-fatal; the lexical lane still serves the pin.
         """
         existing = self.find_by_transcript(transcript_id)
         if existing is not None:
@@ -168,7 +140,6 @@ class MomentsService:
         return self._row_to_dict(row)
 
     def list_all(self) -> List[dict]:
-        """Return every moment, newest first."""
         with self.db.connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM moments ORDER BY created_at DESC, id DESC"
@@ -176,12 +147,6 @@ class MomentsService:
         return [self._row_to_dict(r) for r in rows]
 
     def delete_by_transcript(self, transcript_id: int) -> bool:
-        """Hard-delete the moment pinned from ``transcript_id`` with index cleanup.
-
-        Returns True when a row was removed, False when none matched. The FTS
-        posting is removed BEFORE the base row (external-content requirement);
-        the vec row is removed by rowid.
-        """
         row = self.find_by_transcript(transcript_id)
         if row is None:
             return False
@@ -196,7 +161,6 @@ class MomentsService:
     # ── search ─────────────────────────────────────────────────────────
 
     def _search_fts(self, conn, query: str) -> List[int]:
-        """Lexical lane — return moment ids matching ``query`` via moments_fts."""
         import re
         terms = re.sub(r"[^\w\s]", " ", query).split()
         if not terms:
@@ -214,7 +178,6 @@ class MomentsService:
         return [r[0] for r in rows]
 
     def _search_vec(self, conn, query: str) -> List[int]:
-        """Semantic lane — return moment ids by KNN over moments_vec."""
         embedding = self._generate_embedding(query)
         blob = pack_embedding(embedding) if embedding is not None else None
         if blob is None:
@@ -231,12 +194,6 @@ class MomentsService:
         return [r[0] for r in rows]
 
     def search(self, query: str, limit: int = _SEARCH_LIMIT) -> List[dict]:
-        """Find moments matching ``query`` across the FTS and vec lanes.
-
-        Runs both lanes, unions and de-duplicates by id (FTS hits first, so a
-        lexical match keeps its slot), then materialises the rows. Returns up to
-        ``limit`` moment row dicts ordered by their search-rank arrival.
-        """
         clean = (query or "").strip()
         if not clean:
             return []
@@ -262,11 +219,6 @@ _instance: Optional[MomentsService] = None
 
 
 def get_moments_service() -> MomentsService:
-    """Return the process-wide MomentsService (bound to the shared DB service).
-
-    A new instance is built whenever the shared DB service has been rebound, so
-    the service always talks to the live database rather than a stale handle.
-    """
     global _instance
     db = get_shared_db_service()
     if _instance is None or _instance.db is not db:

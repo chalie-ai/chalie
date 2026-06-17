@@ -1,68 +1,9 @@
 """Additive feature tests for the snapshot Time-Machine (TKT-949).
 
-These are ADDITIVE coverage for production behaviours the six locked tests in
-``test_snapshot_service.py`` do not reach. They do NOT modify, weaken, or
-duplicate any locked test — each one drives a distinct, real production entry
-point with ZERO mocks of production code, reusing the SAME ``instance`` /
-``client`` fixtures the locked file defines (imported, never re-implemented —
-Law 4: no alternative path) so there is exactly one definition of the relocated
-real instance shared by both files.
-
-Why each test exists (a real user can hit each path; the locked suite cannot):
-
-  * ``test_http_export_route_streams_a_real_zip`` — the locked roundtrip drives
-    the engine ``export()`` directly; the production HTTP entry point
-    ``POST /api/snapshot/export`` (``api/snapshot.py:36``) — the exact route the
-    Brain "Export" button calls — is never exercised end-to-end. A regression in
-    the route (wrong mimetype, ``send_file`` path bug, auth gate) would pass all
-    six locked tests. This drives the real route and asserts the streamed bytes
-    are a genuine zip carrying a ``chalie.db`` member.
-
-  * ``test_apply_pending_is_a_noop_when_nothing_is_staged`` — every ordinary
-    boot of a non-restoring instance hits the early return at
-    ``snapshot_service.py:394``. No locked test exercises it; a regression that
-    crashed ``apply_pending`` on a clean boot (no ``.pending-restore``) would
-    take down every restart. Asserts the live DB is untouched and no stray
-    aside/quarantine dirs appear.
-
-  * ``test_mid_swap_failure_rolls_back_and_quarantines_to_break_boot_loop`` — the
-    locked rollback test (#5) chmods a staged ``.db`` to ``0o000``, which raises
-    inside the PRE-swap re-verification (``_verify_members``) BEFORE ``_swap_in``
-    runs — so the ``_swap_in`` rollback (``snapshot_service.py:421-428``), the
-    artifact ``_rollback`` (``:478``), and the ``.restore-failed-*`` quarantine
-    (``:493``) are all UNCOVERED. This induces a genuine MID-swap filesystem
-    fault (a read-only destination directory — no production test hook) so the
-    swap fails AFTER ``chalie.db`` is already swapped, and asserts: the live
-    ``chalie.db`` is rolled back byte-faithfully (the pre-restore row survives),
-    the ``.pending-restore`` marker is GONE, and a ``.restore-failed-*`` aside
-    exists — the boot-loop guard the spec requires (§8 / §9.1).
-
-  * ``test_plain_export_opens_without_password_and_missing_manifest_is_rejected``
-    — the locked encrypted test proves an AES zip CANNOT be read without the
-    password; nothing proves the no-password export produces a genuinely
-    password-FREE zip (the distinguishing behaviour of the two crypto paths),
-    and the ``_read_manifest`` missing-manifest rejection
-    (``snapshot_service.py:298``) is never exercised. This reads a plain export
-    with no password (must succeed) and then feeds a manifest-less zip to
-    ``stage_import`` (must raise loudly, stage nothing).
-
-  * ``test_restore_skips_unknown_artifact_kind_from_an_older_build`` — a snapshot
-    is a portable, cross-version backup, so it may carry an artifact KIND a newer
-    build has since dropped (the removed ``session_secret``). Before the fix the
-    swap loop did ``routes[kind]`` and a legacy ``session_secret`` entry raised
-    ``KeyError`` inside ``_swap_in`` (``snapshot_service.py:107``) — the restore
-    rolled back and quarantined, so the instance restarted but imported NOTHING.
-    This crafts a snapshot as an OLDER build would have written it (a real
-    ``export()`` zip + one extra legacy artifact) and drives the real
-    ``stage_import`` + ``apply_pending``: the restore must COMPLETE — clear the
-    ``.pending-restore`` marker, leave NO ``.restore-failed-*`` quarantine — with
-    the unknown artifact skipped, not the whole restore aborted.
-
-Total snapshot-service tests: 6 locked + 5 additive = 11. This exceeds the soft
-10-per-service cap by one to cover a proven, user-reported production regression
-(cross-version restore silently importing nothing); the snapshot engine's
-distinct safety-critical paths (crypto, staging, verify, downgrade guard, swap,
-rollback, quarantine, no-op, HTTP route, cross-version skip) justify it.
+Covers production paths the six locked tests in ``test_snapshot_service.py``
+do not reach: the HTTP export route, the no-staged-restore early return, the
+mid-swap rollback + quarantine path, the plain-crypto / missing-manifest
+branch, and cross-version artifact skipping.
 """
 
 import os
@@ -88,7 +29,6 @@ from tests.test_snapshot_service import (  # noqa: F401
 
 
 def _quarantine_dirs() -> list:
-    """All ``.restore-failed-<ts>`` quarantine dirs under the redirected data root."""
     return sorted(FileMapperService.get_data_path().glob(".restore-failed-*"))
 
 
@@ -96,10 +36,6 @@ def _quarantine_dirs() -> list:
 class TestSnapshotHttpExport:
 
     def test_http_export_route_streams_a_real_zip(self, client):  # noqa: F811
-        """The Brain 'Export' button calls ``POST /api/snapshot/export``. Driving
-        the REAL route (not just the engine) must stream a genuine zip — an
-        attachment with the zip mimetype whose bytes are a real zip carrying a
-        ``chalie.db`` member produced by the WAL-fold path."""
         _seed_transcript("user", "user", "HTTP-EXPORT-MARKER")
 
         resp = client.post("/api/snapshot/export", json={})
@@ -123,9 +59,6 @@ class TestSnapshotHttpExport:
 class TestSnapshotApplyNoop:
 
     def test_apply_pending_is_a_noop_when_nothing_is_staged(self, instance):  # noqa: F811
-        """Every ordinary boot with no staged restore hits the early return in
-        ``apply_pending``. It must be a clean no-op: the live DB is untouched and
-        no aside / quarantine dirs are created."""
         from services.snapshot_service import SnapshotService
 
         _seed_transcript("user", "user", "NO-STAGED-RESTORE")
@@ -146,15 +79,11 @@ class TestSnapshotApplyNoop:
 class TestSnapshotMidSwapRollback:
 
     def test_mid_swap_failure_rolls_back_and_quarantines_to_break_boot_loop(self, instance):  # noqa: F811
-        """A REAL mid-swap filesystem fault (after the pre-swap re-verify passes
-        and after ``chalie.db`` is already swapped) must roll the live artifacts
-        back, leave the live ``chalie.db`` intact and readable, clear the
-        ``.pending-restore`` marker, and quarantine the staged set as
-        ``.restore-failed-<ts>`` so the next boot does NOT re-apply it (§8 /
-        §9.1). No production test hook — the fault is a read-only destination
-        directory. This exercises the ``_swap_in`` rollback + ``_quarantine``
-        path the locked rollback test cannot reach (it fails in the pre-swap
-        re-verify, before any live move)."""
+        """A mid-swap filesystem fault (read-only destination dir, AFTER chalie.db
+        is already swapped) must roll back live artifacts, clear
+        ``.pending-restore``, and quarantine the staged set as
+        ``.restore-failed-<ts>`` (boot-loop guard). Exercises the ``_swap_in``
+        rollback + ``_quarantine`` path the locked rollback test cannot reach."""
         from services.snapshot_service import SnapshotService
 
         _seed_transcript("user", "user", "MIDSWAP-LIVE-STATE")
@@ -197,14 +126,9 @@ class TestSnapshotMidSwapRollback:
 class TestSnapshotPlainCryptoAndManifest:
 
     def test_plain_export_opens_without_password_and_missing_manifest_is_rejected(self, instance):  # noqa: F811
-        """Two unguarded contracts in one real-stack scenario:
-
-        (a) the no-password export is genuinely password-FREE — pyzipper can read
-            a member with NO password set (the distinguishing behaviour vs. the
-            AES path the locked encrypted test covers from the other side); and
-        (b) ``stage_import`` rejects a manifest-less zip loudly and stages nothing
-            (the ``_read_manifest`` missing-manifest branch, never otherwise hit).
-        """
+        """(a) Plain export is readable with no password (distinct from AES path).
+        (b) A manifest-less zip raises from ``stage_import`` and stages nothing
+        (exercises ``_read_manifest`` missing-manifest branch)."""
         from pyzipper import AESZipFile
         from services.snapshot_service import SnapshotService
 
@@ -235,12 +159,8 @@ class TestSnapshotPlainCryptoAndManifest:
 class TestSnapshotCrossVersionRestore:
 
     def test_restore_skips_unknown_artifact_kind_from_an_older_build(self, instance):  # noqa: F811
-        """A snapshot from an OLDER build can declare an artifact KIND this build
-        has dropped (the removed ``session_secret``). The restore must SKIP it and
-        apply the rest — not ``KeyError`` and abort the whole restore (which made
-        the instance restart but import nothing). Real ``export()`` → inject the
-        legacy artifact at the zip level (as the old exporter would have) → real
-        ``stage_import`` + ``apply_pending``."""
+        """A snapshot carrying a dropped artifact kind (``session_secret``) must
+        skip it and complete the restore - not ``KeyError`` and quarantine."""
         import json
         import zipfile as _zip
 

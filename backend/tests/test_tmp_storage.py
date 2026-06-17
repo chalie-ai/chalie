@@ -6,9 +6,6 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Unit tests for services.tmp_storage — the single source of truth for the
-location + guard of Chalie's transient upload/attachment files."""
-
 import os
 
 import pytest

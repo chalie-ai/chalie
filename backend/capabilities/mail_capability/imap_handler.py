@@ -1,8 +1,4 @@
-"""ImapHandler — protocol-specific IMAP logic for MailCapability.
-
-Plain class; no AbstractCapability.  Credentials are passed as parameters
-so the parent MailCapability remains the sole credential owner.
-"""
+"""Protocol-specific IMAP logic for MailCapability."""
 
 from __future__ import annotations
 
@@ -58,7 +54,6 @@ def _find_drafts_folder(client) -> str | None:
 
 
 def _imap_date(iso_str: str) -> str:
-    """ISO YYYY-MM-DD → IMAP DD-Mon-YYYY."""
     from datetime import datetime as _dt
     try:
         return _dt.strptime(iso_str[:10], "%Y-%m-%d").strftime(_IMAP_DATE_FMT)
@@ -81,7 +76,6 @@ def _safe_date(s: str) -> str:
 
 
 def parse_headers(uid: int, header_bytes: bytes) -> dict:
-    """Parse raw email header bytes into a normalized dict."""
     msg = _email_mod.message_from_bytes(header_bytes, policy=_email_mod.policy.default)
     from_name, from_addr = _email_mod.utils.parseaddr(_hdr(msg, "From"))
     return {
@@ -98,7 +92,6 @@ def parse_headers(uid: int, header_bytes: bytes) -> dict:
 
 
 def extract_body(raw_bytes: bytes) -> str:
-    """Extract plain-text body from raw RFC822 bytes."""
     msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
     parts = list(msg.walk()) if msg.is_multipart() else [msg]
     chunks: list[str] = []
@@ -115,15 +108,12 @@ def extract_body(raw_bytes: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 class ImapHandler:
-    """Stateless IMAP/SMTP operations — credentials passed per-call."""
-
     # ------------------------------------------------------------------
     # Connections
     # ------------------------------------------------------------------
 
     def open_client(self, host: str, port: int, tls: bool,
                     email: str, password: str, timeout: int = 30):
-        """Open and return an authenticated IMAPClient, or None on failure."""
         import imapclient
         try:
             c = imapclient.IMAPClient(host, port=port, ssl=tls, timeout=timeout)
@@ -138,11 +128,6 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def ingest(self, client, watermark: int | None) -> tuple[list[dict], int | None]:
-        """Fetch new email headers from INBOX since *watermark* UID.
-
-        Returns (items, new_watermark).  Caller owns the client lifecycle.
-        First run (watermark=None/0) fetches the last _INITIAL_DAYS days.
-        """
         wm = watermark or 0
         try:
             client.select_folder("INBOX", readonly=True)
@@ -167,7 +152,6 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def understand(self, items: list[dict]) -> None:
-        """Classify + index items in place: sets triage, is_thread; indexes senders."""
         if not items:
             return
         from capabilities.contact_resolver import index_person
@@ -183,10 +167,6 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def inject_inbox_hint(self, client, *, owns_client: bool = False) -> None:
-        """Push a compact unseen-inbox summary into the world state singleton.
-
-        If owns_client is True the client is closed in the finally block.
-        """
         from capabilities.mail_capability.email_triage import classify_email
         try:
             client.select_folder("INBOX", readonly=True)
@@ -233,11 +213,6 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def search(self, client, params: dict) -> dict:
-        """Execute IMAP search and return classified header results.
-
-        Supported params: sender, subject, keyword, date_from, date_to,
-        triage (post-filter), unanswered, limit.
-        """
         from capabilities.mail_capability.email_triage import classify_email
         try:
             client.select_folder("INBOX", readonly=True)
@@ -296,7 +271,6 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def read_email(self, client, params: dict) -> dict:
-        """Fetch full plain-text body of an email by UID. Caller owns client."""
         uid = params.get("uid")
         if not uid:
             return {"error": "uid is required"}
@@ -329,11 +303,6 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def draft_email(self, client, *, from_addr: str, params: dict) -> dict:
-        """Create a draft email in the provider's Drafts folder via IMAP APPEND.
-
-        Required params: to, subject, body.
-        Optional params: in_reply_to (Message-ID for threading).
-        """
         from email.mime.text import MIMEText
         to = (params.get("to") or "").strip()
         subject = (params.get("subject") or "").strip()
@@ -363,11 +332,6 @@ class ImapHandler:
     # ------------------------------------------------------------------
 
     def send_email(self, *, creds: SmtpCreds, params: dict) -> dict:
-        """Send an email via SMTP.
-
-        Required params: to, subject, body.
-        Optional params: in_reply_to (Message-ID for threading), cc.
-        """
         import smtplib
         from email.mime.text import MIMEText
 

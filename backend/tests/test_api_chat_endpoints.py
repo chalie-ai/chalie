@@ -1,9 +1,7 @@
-"""Feature tests for api/chat.py HTTP contracts — POST /chat, /chat/interrupt,
-/chat/stop, /action.
+"""Feature tests for api/chat.py HTTP contracts.
 
-Drives the real Flask app (create_app via authed_client) against a real
-SQLite database. Pins the synchronous endpoint contracts; the async
-full-turn path (real UMP + LLM) is out of scope here.
+Drives the real Flask app against a real SQLite database via authed_client.
+Pins synchronous endpoint contracts only; the async full-turn path (real UMP + LLM) is out of scope.
 """
 
 import pytest

@@ -59,13 +59,8 @@ class ToolParamError(Exception):
 
 
 def truncate(text: str, limit: int) -> tuple[str, bool]:
-    """Clip *text* to *limit* characters, reporting whether it was clipped.
-
-    The single sanctioned truncation primitive so every tool reports truncation
+    """The single sanctioned truncation primitive so every tool reports truncation
     the same way (``meta truncated=true``) instead of silently dropping output.
-
-    Returns ``(text, truncated)`` — ``truncated`` is ``True`` iff the text was
-    longer than *limit* and has been clipped.
     """
     if limit < 0:
         raise ValueError("truncate limit must be >= 0")
@@ -124,14 +119,6 @@ class ToolResult:
 
     @classmethod
     def ok(cls, body: str | dict | list, *, rich: dict | None = None, **meta: object) -> "ToolResult":
-        """A successful result.
-
-        *body* is prose (``str``, shown verbatim) or structured data
-        (``dict``/``list``, rendered as compact JSON).  *rich* is an optional
-        rich-media card payload (the dispatcher injects the ordinal + the single
-        card instruction when the invoking channel broadcasts to the user).
-        ``**meta`` becomes the flat tag map.
-        """
         return cls(status="success", body=body, meta=dict(meta), rich=rich)
 
     @classmethod
@@ -144,13 +131,6 @@ class ToolResult:
         valid: tuple[str, ...] = (),
         **meta: object,
     ) -> "ToolResult":
-        """An error result.
-
-        *message* is the human-readable failure shown to the model; *code* is a
-        stable kebab-case machine code; *hint* is a one-line recovery step;
-        *valid* lists acceptable actions/values when the model passed an invalid
-        one.  ``**meta`` becomes the flat tag map.
-        """
         return cls(
             status="error",
             body=message,

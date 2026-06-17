@@ -6,10 +6,7 @@ _CTRL_CHARS_TRANS[127] = None  # DEL
 
 
 def safe(value) -> str:
-    """Strip control characters (newlines, CR, etc.) from a value for safe inclusion in a log line.
-
-    Returns a string. Non-string inputs are coerced via str().
-    """
+    """Non-string inputs are coerced via str()."""
     if value is None:
         return ""
     s = str(value)

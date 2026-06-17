@@ -6,23 +6,16 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""WebSearchConfig — the delegate channel for the ``web_search`` tool.
+"""WebSearchConfig — delegate channel for the ``web_search`` tool.
 
-The typed ``ProcessorConfig`` for the web-research delegate. Paired with
-``WebSearchAbility`` in ``abilities/web_search.py``, whose ``run()`` instantiates
-this config and calls ``MessageProcessor.process()``.
-
-Clean *cross-turn* context (``suppress_history=True``) but a real per-turn
-transcript row on its own ``delegate:web_search`` channel, so the delegate can
-render its own act-trail across ACT iterations. Without that row the turn uid is
-never assigned and ``_render_act_trail`` returns "" — the loop then re-searches
-blind to its own results until it exhausts ``max_iterations``.
-``skip_input_row`` (HiddenInput) is deliberately *not* set: it is the async-return
-mechanism (``deliver_async_result`` / ``with_hidden_input``), not a delegate
-property. A goal-driven system prompt and a finite tool surface
-(search/read/web_download + memory, discoverable=[]) keep the delegate from ever
-spawning another delegate. ``policy_channel`` is inherited from the caller that
-invoked the tool.
+Writes a real per-turn transcript row on its own ``delegate:web_search``
+channel so the delegate can render its own act-trail across ACT iterations.
+Without that row the turn uid is never assigned and ``_render_act_trail``
+returns "" — the loop re-searches blind to its own results until it
+exhausts ``max_iterations``. ``skip_input_row`` (HiddenInput) is
+deliberately *not* set: it is the async-return mechanism
+(``deliver_async_result`` / ``with_hidden_input``), not a delegate property.
+Paired with ``WebSearchAbility`` (abilities/web_search.py).
 """
 
 from __future__ import annotations
@@ -50,13 +43,8 @@ _WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "read", "web_download")
 
 
 class WebSearchConfig(ProcessorConfig):
-    """ProcessorConfig for the web_search delegate.
-
-    Mirrors the other ProcessorConfig subclasses: a typed ``__init__`` that
-    calls ``super().__init__(...)`` against the frozen base.  ``policy_channel``
-    is supplied by the caller (inherited from whoever invoked the tool) rather
-    than hardcoded.
-    """
+    """``policy_channel`` is supplied by the caller (inherited from whoever
+    invoked the tool) rather than hardcoded."""
 
     uses_delegate_provider: ClassVar[bool] = True
 
@@ -81,7 +69,6 @@ class WebSearchConfig(ProcessorConfig):
         return ""
 
     def get_user_prompt(self, mp) -> str:
-        """Goal-driven user prompt: the raw query plus the act-trail so far."""
         parts = [f"Research query:\n{mp._raw_input}"]  # type: ignore[attr-defined]
         trail = render_trail(mp)
         if trail:

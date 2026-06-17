@@ -12,11 +12,8 @@ conversation_bp = Blueprint('conversation', __name__)
 
 
 def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
-    """Fetch all tool_calls rows for a transcript for page-refresh card reconstruction.
-
-    All rows are durable; rows within the 7-day retention window carry the
-    rich-media payloads the parser uses to pair span tags with cards.
-    """
+    """Rows within the 7-day retention window carry the rich-media payloads the
+    parser uses to pair span tags with cards."""
     tc_rows = conn.execute(
         "SELECT tool_name, params, result, created_at FROM tool_calls "
         "WHERE transcript_id = ? ORDER BY created_at",
@@ -34,17 +31,9 @@ def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
 
 
 def _fetch_attachments_for_transcripts(conn, transcript_ids: list[int]) -> dict:
-    """Map each user transcript_id -> its uploaded attachments for refresh render.
-
-    One batch join of transcript_docs -> documents (soft-deleted docs filtered out,
-    so a removed file silently does not render).  Each attachment carries the
-    inline-serving ``/documents/<id>/preview`` URL the renderer uses as the
-    <img>/chip source — the same media the live blob: preview showed before reload.
-    Written by message_processor._seed_upload_attachment.
-
-    Ordered by ``td.rowid`` (insertion order).  Uploads fan out across a thread
-    pool, so for a multi-attachment turn this stable order may differ from the
-    user's original composer order — a cosmetic interleave, never a lost/dup row.
+    """Soft-deleted docs are filtered out, so a removed file silently does not
+    render. Each attachment carries the inline-serving
+    ``/documents/<id>/preview`` URL.
     """
     if not transcript_ids:
         return {}
@@ -70,7 +59,6 @@ def _fetch_attachments_for_transcripts(conn, transcript_ids: list[int]) -> dict:
 
 
 def get_recent_history(limit=12, offset=0):
-    """Fetch recent messages from transcript. Returns (messages, has_more)."""
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()

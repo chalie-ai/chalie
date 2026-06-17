@@ -1,22 +1,14 @@
-"""Feature test: at turn 0 the high-deliberation ``thinking`` pass fires LAST —
-AFTER the attachment uploads (and their vision/OCR extraction) — so the
-deliberation can reason about what vision produced.
+"""Bug fix: ``_seed_turn_zero`` dispatched the ``thinking`` pass BEFORE the
+attachment upload block, so the single-pass thinking dispatch captured a parent
+act-trail without the uploaded image — reasoning in a vacuum about what it could
+not see and fetch (tools disabled). Fix: fire thinking after the upload barrier so
+the trail row is present.
 
-Bug: ``_seed_turn_zero`` dispatched the ``thinking`` pass BEFORE the attachment
-upload block, so the thinking pass — which is single-pass, tools disabled, and
-snapshots ``parent.config.get_user_prompt(parent)`` at dispatch time
-(thinking.py) — captured a parent act-trail that did NOT yet contain the uploaded
-image. The deliberation reasoned in a vacuum about an image it could not see and
-could not fetch (it cannot invoke tools). Fix: fire the thinking dispatch after
-the upload barrier so the upload's trail row is present in the snapshot.
-
-Drives the REAL prod hot path: ``MessageProcessor._seed_turn_zero`` on a real
-``UserConfig`` channel, a real PNG attachment on disk, the real
-``document.upload`` ingest (real vision/OCR extraction — no vision provider, so
-the deterministic OCR fork), and the real ``thinking`` dispatch through the real
-dispatcher. The ONLY stand-in is the external LLM boundary
-(``Providers._resolve``) — the single sanctioned seam — a recording provider that
-captures the EXACT request the thinking pass sends. Zero internal mocks.
+Prod hot path: ``MessageProcessor._seed_turn_zero`` on a real ``UserConfig``
+channel, a real PNG attachment, the real ``document.upload`` ingest (deterministic
+OCR fork with no vision provider), and the real ``thinking`` dispatch through the
+real dispatcher. The ONLY stand-in is ``Providers._resolve`` — captured by
+``_RecordingProvider`` below. Zero internal mocks.
 """
 
 import io
@@ -39,17 +31,9 @@ _PROVIDERS_RESOLVE = "services.providers.Providers._resolve"
 
 
 class _RecordingProvider:
-    """Stand-in for the resolved LLM provider — the single sanctioned boundary.
-
-    Captures every ``send(dto)`` request and returns a one-shot ``NOTHING``
-    ProviderApiResponse (no tool calls) so the thinking ACT loop ends after a
-    single send. ``estimate_request_tokens`` returns 1 so the pre-flight
-    over-cap check always passes (never raises RequestOverCapError).
-
-    Providers._resolve now returns a ProviderClient.
-    Updated from send_messages/build_request_body interface to send(dto)/
-    estimate_request_tokens(dto) interface.
-    """
+    """Stand-in for the resolved LLM provider — captures every ``send(dto)`` and
+    returns a one-shot ``NOTHING`` response, with token estimate of 1 so pre-flight
+    over-cap always passes."""
 
     CONTENT_FIELD_LABEL = "message.content"
 
@@ -60,7 +44,6 @@ class _RecordingProvider:
         return 200000
 
     def estimate_request_tokens(self, dto):
-        """Return 1 so the pre-flight over-cap check never triggers."""
         return 1
 
     def send(self, dto):

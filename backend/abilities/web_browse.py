@@ -98,12 +98,8 @@ class WebBrowseAbility(Ability):
 
     @staticmethod
     def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
-        """Append the run's screenshot doc_ids to a successful answer.
-
-        Mechanical, not prompt-dependent: even when the delegate forgets to
-        mention its screenshots, the caller still receives every doc_id and the
-        tool that views one — so a follow-up "what does it show?" can be
-        answered with vision instead of a re-browse."""
+        """Mechanical, not prompt-dependent: the caller receives every doc_id
+        even when the delegate forgets to mention its screenshots."""
         if tr.status != "success" or not shots:
             return tr
         lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)

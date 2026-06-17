@@ -61,9 +61,7 @@ def query_items(
         "id", "item_type", "message", "due_at", "recurrence", "status",
     ),
 ) -> list[dict]:
-    """Query ``scheduled_items`` with flexible filters.
-
-    This is the single query path for all callers — the schedule ability,
+    """This is the single query path for all callers — the schedule ability,
     the calendar ability, and anything else that reads scheduled_items.
     """
     from services.database_service import get_shared_db_service
@@ -291,7 +289,6 @@ class ScheduleAbility(Ability):
 
 
 def _resolve_place_coords(name: str) -> tuple[float, float] | None:
-    """Look up a saved place by name in data_graph and return (lat, lon) or None."""
     try:
         from services.data_graph_service import get_data_graph_service, KIND_PLACE
         dgs = get_data_graph_service()
@@ -314,11 +311,7 @@ def _resolve_place_coords(name: str) -> tuple[float, float] | None:
 
 
 def _build_destination_metadata(destination: str) -> dict:
-    """Return a metadata fragment for the given destination string.
-
-    Tries to resolve saved place coordinates first. When no matching place
-    is found, stores the destination name as-is (no geocoding).
-    """
+    """When no matching saved place is found, stores the destination name as-is (no geocoding)."""
     coords = _resolve_place_coords(destination)
     meta: dict = {"destination": destination}
     if coords:
@@ -328,7 +321,6 @@ def _build_destination_metadata(destination: str) -> dict:
 
 
 def _validate_message(params: dict) -> tuple[str, ToolResult | None]:
-    """Validate the `message` field. Returns (message, error | None)."""
     message = (params.get(Keys.message) or "").strip()
     if not message:
         return "", ToolResult.err(
@@ -346,14 +338,10 @@ def _validate_message(params: dict) -> tuple[str, ToolResult | None]:
 
 
 def _parse_due_at(due_at_str: str) -> datetime | None:
-    """Resolve a natural-language OR ISO 8601 ``due_at`` to a UTC datetime.
-
-    Natural language ("tomorrow 9am", "in 2 hours", "friday 5pm") is resolved in
-    the user's timezone (read from the telemetry heartbeat via ``locale_service``)
-    so the model never has to compute a UTC offset. ISO 8601 with an offset is
-    parsed too. Returns a tz-aware UTC ``datetime`` on success, or ``None`` when
-    the string is unparseable — the caller maps ``None`` to ``code=invalid-time``
-    and NEVER persists the ``parse_utc`` ``datetime.min`` sentinel.
+    """Natural language is resolved in the user's timezone (read from the telemetry
+    heartbeat via ``locale_service``) so the model never has to compute a UTC offset.
+    Returns ``None`` when the string is unparseable — the caller maps ``None`` to
+    ``code=invalid-time`` and NEVER persists the ``parse_utc`` ``datetime.min`` sentinel.
     """
     import dateparser
     from services.locale_service import get_timezone_name, local_now
@@ -392,7 +380,9 @@ def _normalise_due_at(text: str) -> str:
 
 
 def _resolve_due_at(params: dict, past_due_grace: int) -> tuple[datetime | None, ToolResult | None]:
-    """Resolve due_at (NL or ISO), apply past-due grace, return (due_at, error | None)."""
+    """When destination_location is given without due_at, defaults to now + 30 days.
+    Past-due items within the grace window are bumped to now + 5 seconds.
+    """
     due_at_str = (params.get(Keys.due_at) or "").strip()
     if not due_at_str:
         if (params.get(Keys.destination_location) or "").strip():
@@ -436,7 +426,6 @@ _VALID_RECURRENCES = ("daily", "weekly", "monthly", "weekdays", "hourly")
 
 
 def _validate_recurrence(params: dict) -> tuple[str | None, ToolResult | None]:
-    """Validate `recurrence`. Returns (normalized_recurrence | None, error | None)."""
     recurrence = params.get(Keys.recurrence)
     if not recurrence:
         return None, None
@@ -470,7 +459,6 @@ def _validate_recurrence(params: dict) -> tuple[str | None, ToolResult | None]:
 
 
 def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None, str | None, ToolResult | None]:
-    """Validate window_start/window_end pairing with hourly recurrence."""
     window_start = params.get(Keys.window_start)
     window_end = params.get(Keys.window_end)
 
@@ -512,7 +500,6 @@ def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None,
 
 
 def _validate_item_type(params: dict) -> tuple[str, ToolResult | None]:
-    """Validate the `item_type` field."""
     item_type = (params.get(Keys.item_type) or "notification").lower()
     if item_type not in ("notification", "prompt"):
         return "", ToolResult.err(
@@ -525,8 +512,6 @@ def _validate_item_type(params: dict) -> tuple[str, ToolResult | None]:
 
 
 def _due_at_strings(due_at: datetime) -> tuple[str, str]:
-    """Return (utc_iso, local_iso) for a tz-aware UTC datetime — the resolved
-    instant echoed back so the model can confirm to the user."""
     from services.time_formatter_service import TimeFormatterService
     utc_iso = due_at.astimezone(timezone.utc).isoformat()
     local_iso = TimeFormatterService.local(due_at, fmt=_LOCAL_ISO_FMT) or utc_iso
@@ -649,9 +634,8 @@ def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
 
 
 def _create_result(record: dict) -> ToolResult:
-    """Build the create success ToolResult: a structured body the model reads PLUS
-    a rich scheduler card (the dispatcher injects the ordinal + span instruction
-    only when the invoking channel broadcasts to the user)."""
+    """The dispatcher injects the ordinal + span instruction only when the
+    invoking channel broadcasts to the user."""
     body = {"status": "success", "action_performed": "create", "record": record}
     card = {"action_performed": "create", "record": record}
     same_day = _fetch_same_day_items(record)
@@ -741,8 +725,6 @@ def _list(params: dict) -> ToolResult:
 
 
 def _serialise_item_row(row: dict) -> dict:
-    """Convert a scheduled_items row to the contract row shape: id, message,
-    due_at_utc, due_at_local, item_type, recurrence, status."""
     from services.time_formatter_service import TimeFormatterService
     from services.time_utils import parse_utc
     due_raw = row.get("due_at")
@@ -921,11 +903,8 @@ def _normalize_hhmm(time_str: str) -> str | None:
 
 
 def _fetch_same_day_items(new_record: dict) -> list:
-    """Return other pending items that share the same local calendar day.
-
-    Excludes the just-created item (matched by id). Returns an empty list on
-    any failure — the rich-media card is the only consumer and the missing
-    section degrades gracefully on the client.
+    """Returns an empty list on any failure — the rich-media card is the only
+    consumer and the missing section degrades gracefully on the client.
     """
     new_id = new_record.get("id")
     new_due_utc_str = new_record.get("due_at_utc")

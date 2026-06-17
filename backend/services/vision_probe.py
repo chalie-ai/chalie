@@ -38,7 +38,6 @@ _EXPECTED_TEXT = 'chalie can read!'
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
-    """Best-effort parse of the first JSON object in the model reply."""
     if not text:
         return None
     fenced = re.search(r'```(?:json)?\s*(\{.*\})\s*```', text, re.DOTALL)
@@ -58,12 +57,6 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 
 def score_probe_response(text: str) -> float:
-    """Score a probe reply against the answer key. Max 1.0.
-
-    +0.30 number_of_shapes == 3
-    +0.15 per correct (shape name AND color, case-insensitive), max 3 → 0.45
-    +0.25 text == 'Chalie can read!' (case-insensitive, trimmed)
-    """
     data = _extract_json(text)
     if not data:
         return 0.0
@@ -98,11 +91,6 @@ def score_probe_response(text: str) -> float:
 
 
 def probe_provider(provider: Dict[str, Any]) -> bool:
-    """Return True iff *provider* scores ≥ 0.80 on the vision probe.
-
-    *provider* is a dict with platform/model/api_key/host (plaintext api_key).
-    Any failure (missing asset, network, parse, low score) returns False.
-    """
     try:
         from services.file_mapper_service import FileMapperService
         from services import vision_service

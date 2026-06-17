@@ -1,24 +1,5 @@
-"""
-Feature tests for the openai_compatible LLM platform.
-
-What this tests:
-  A user configures a third-party OpenAI-compatible provider (e.g., MiniMax) by
-  POSTing to /api/providers with platform='openai_compatible' and a custom host.
-  The server stores the provider, lists it back correctly, and the LLM client
-  factory returns an OpenAIClient whose client is wired to the supplied base_url.
-
-Real-stack — no mocks of production code.
-  - Flask test client backed by the real authed_client fixture
-  - Real SQLite database built from schema.sql via SchemaConvergenceService
-  - Real vault (initialized + unlocked) so api_key encryption round-trips
-  - Real build_client() factory and OpenAIClient._get_client()
-  - The openai.OpenAI() constructor never makes network calls on init, so
-    asserting on client.base_url is safe and does not require network access.
-
-Spec change: create_llm_service and OpenAIService
-are deleted; replaced by build_client (factory.py) and OpenAIClient (openai.py
-in llm_clients/). Tests 3 and 4 updated to use the new symbols.
-"""
+# Feature tests for the openai_compatible LLM platform.
+# Real-stack — no mocks of production code.
 
 import secrets
 
@@ -33,7 +14,6 @@ from services.vault_service import _vault_state, get_vault_service
 # ---------------------------------------------------------------------------
 
 def _unlock_vault(password: str = "test-password") -> None:
-    """Initialise and unlock the vault for the current test's DB singleton."""
     vault = get_vault_service()
     vault.initialize(password)
     vault.unlock(password)
@@ -45,11 +25,9 @@ def _unlock_vault(password: str = "test-password") -> None:
 
 @pytest.mark.unit
 class TestOpenAICompatibleProvider:
-    """End-to-end feature tests for the openai_compatible platform."""
 
     @pytest.fixture(autouse=True)
     def _reset_vault_state(self):
-        """Guarantee vault DEK is cleared before and after every test."""
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
         yield
@@ -61,8 +39,6 @@ class TestOpenAICompatibleProvider:
     # ------------------------------------------------------------------
 
     def test_post_openai_compatible_stores_and_lists_provider(self, authed_client):
-        """POST /api/providers with openai_compatible platform stores the row and
-        GET /api/providers lists it back with platform and host intact."""
         client, _, _store = authed_client
         _unlock_vault()
 
@@ -97,8 +73,6 @@ class TestOpenAICompatibleProvider:
     # ------------------------------------------------------------------
 
     def test_api_key_decrypts_correctly_from_db(self, authed_client):
-        """The api_key stored via POST is encrypted in the DB and decrypts to
-        the original plaintext when fetched via ProviderDbService."""
         client, _, _store = authed_client
         _unlock_vault()
 
@@ -129,13 +103,6 @@ class TestOpenAICompatibleProvider:
     # ------------------------------------------------------------------
 
     def test_build_client_returns_openai_client(self):
-        """build_client with platform='openai_compatible' returns an OpenAIClient
-        instance — the platform is handled by the openai thin client, not an
-        unknown-platform error.
-
-        create_llm_service + OpenAIService deleted; replaced by
-        build_client + OpenAIClient in services/llm_clients/factory.py + openai.py.
-        """
         from services.llm_clients.factory import build_client
         from services.llm_clients.openai import OpenAIClient
 
@@ -155,11 +122,6 @@ class TestOpenAICompatibleProvider:
     # ------------------------------------------------------------------
 
     def test_get_client_uses_host_as_base_url(self):
-        """OpenAIClient._get_client() for an openai_compatible config returns
-        an openai.OpenAI client whose base_url points to the configured host.
-
-        OpenAIService → OpenAIClient in services/llm_clients/openai.py.
-        """
         from services.llm_clients.openai import OpenAIClient
 
         config = {

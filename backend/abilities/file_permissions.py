@@ -254,16 +254,10 @@ def _parse_octal(text: str) -> int | None:
 
 
 def _format_octal(st_mode: int) -> str:
-    """Return the low 4 octal digits of ``st_mode`` (suid/sgid/sticky + rwx)."""
     return format(st_mode & 0o7777, "04o")
 
 
 def _format_symbolic(st_mode: int) -> str:
-    """Return the 9-char ``rwxrwxrwx`` string for the low rwx bits of ``st_mode``.
-
-    Plain rwx letters with ``-`` for unset bits; suid/sgid/sticky display
-    refinements are intentionally ignored.
-    """
     bits = st_mode & 0o777
     out = []
     for shift in (6, 3, 0):

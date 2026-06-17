@@ -41,7 +41,6 @@ _DEFAULT_PRETRAINED_DIR = str(FileMapperService.get_pretrained_path())
 
 
 def _real_encoder_sha() -> str:
-    """Return the sha256 of the actual shipped encoder ONNX (computed once)."""
     from pathlib import Path
     return _get_encoder_sha256(
         Path(_DEFAULT_MODELS_DIR) / "gte-modernbert-base" / "onnx" / "model.onnx"
@@ -53,7 +52,6 @@ _PREFIX = "deliberation-score"
 
 
 def _default_arrays(num_outputs: int) -> dict:
-    """Build the default all-zeros W1/b1/W2/b2 array set for ``num_outputs`` head."""
     return {
         "W1": np.zeros((256, 768), dtype=np.float32),
         "b1": np.zeros(256, dtype=np.float32),

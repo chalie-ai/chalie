@@ -15,12 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 def rest_api_worker():
-    """
-    Main entry point for REST API worker.
-
-    Can be run standalone: python -m workers.rest_api_worker
-    Or integrated into run.py as a daemon thread.
-    """
+    # Can be run standalone: python -m workers.rest_api_worker
+    # Or integrated into run.py as a daemon thread.
     try:
         logger.info("[REST API] Starting REST API worker...")
 

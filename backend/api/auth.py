@@ -28,17 +28,6 @@ def require_auth(f):
     """
     @wraps(f)
     def decorated(*args, **kwargs):
-        """Validate the request via cookie or bearer token.
-
-        Args:
-            *args: Positional arguments forwarded to the wrapped view function.
-            **kwargs: Keyword arguments forwarded to the wrapped view function.
-
-        Returns:
-            The return value of the wrapped view function ``f`` on success, or
-            a ``({"error": "Authentication required"}, 401)`` JSON response if
-            both cookie and bearer auth fail.
-        """
         from services.auth_session_service import validate_session
 
         # Try cookie session first

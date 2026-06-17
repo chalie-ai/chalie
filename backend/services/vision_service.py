@@ -1,15 +1,3 @@
-"""Vision service — one-shot multimodal (text + image → text) calls.
-
-Builds a ProviderApiRequest with type=VISION and calls through the factory
-directly (no mp / no Providers facade) since this is a pure infrastructure probe
-with no transcript or act-loop context. Fully defensive: every public function
-returns None on failure so callers never raise.
-
-Depends on: services.provider_api (ProviderApiRequest, ProviderType),
-            services.llm_clients.factory (build_client).
-Consumed by: services.vision_probe (capability probe).
-"""
-
 import base64
 import logging
 from typing import Optional, Dict, Any
@@ -21,12 +9,8 @@ _VISION_SYSTEM = (
 )
 
 
-def build_vision_config(provider: Dict[str, Any]) -> Dict[str, Any]:
-    """Build a client config dict from a provider row for a vision call.
 
-    ``timeout`` bounds Anthropic/OpenAI calls (GeminiClient ignores it).
-    ``max_tokens`` is intentionally omitted — the DTO formula is used.
-    """
+def build_vision_config(provider: Dict[str, Any]) -> Dict[str, Any]:
     config: Dict[str, Any] = {
         'platform': provider.get('platform', ''),
         'model': provider.get('model', ''),

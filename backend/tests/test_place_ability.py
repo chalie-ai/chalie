@@ -29,8 +29,6 @@ pytestmark = pytest.mark.unit
 
 
 def _seed_gps(db, *, lat: float, lon: float, location_name: str) -> None:
-    """Write a real client heartbeat into the telemetry table — the same store the
-    production ``ClientContext.current()`` reads GPS from. No mock."""
     from services.heartbeat_service import heartbeat_service
 
     heartbeat_service._ctx = None
@@ -49,7 +47,6 @@ def _seed_gps(db, *, lat: float, lon: float, location_name: str) -> None:
 
 
 def _clear_gps(db) -> None:
-    """Empty the telemetry store so ``ClientContext`` reports no location."""
     from services.heartbeat_service import heartbeat_service
 
     heartbeat_service._ctx = None
@@ -60,8 +57,6 @@ def _clear_gps(db) -> None:
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor for the act-trail write."""
     return MP(seed_transcript(db, content="save this place"), UserConfig({}))
 
 
@@ -73,9 +68,6 @@ def _parse_body(rendered: str, tool: str = "place") -> object:
 
 
 def test_save_renders_structured_body_with_coords(db, chat_mp):
-    """``save`` with real GPS persists the place AND renders a success envelope
-    whose JSON body echoes the saved record (name + coords + source) — the model
-    sees a meaningful confirmation, not an empty string."""
     _seed_gps(db, lat=35.899, lon=14.514, location_name="Valletta, Malta")
 
     out = ToolDispatcher(chat_mp).dispatch(
@@ -103,8 +95,6 @@ def test_save_renders_structured_body_with_coords(db, chat_mp):
 
 
 def test_list_renders_count_meta_and_place_array(db, chat_mp):
-    """``list`` renders a success envelope with a ``count=`` meta and a JSON list
-    of saved places — each carrying the name + coords the model can read back."""
     _seed_gps(db, lat=10.0, lon=20.0, location_name="Alpha City")
     ToolDispatcher(chat_mp).dispatch(
         "place", {"action": "save", "name": "Office", "act_summary": "x"}
@@ -127,8 +117,6 @@ def test_list_renders_count_meta_and_place_array(db, chat_mp):
 
 
 def test_get_renders_the_single_place_record(db, chat_mp):
-    """``get`` resolves a saved place by name and renders its full record as a
-    parseable JSON body."""
     _seed_gps(db, lat=51.5, lon=-0.12, location_name="London, UK")
     ToolDispatcher(chat_mp).dispatch(
         "place", {"action": "save", "name": "Work", "act_summary": "x"}
@@ -147,8 +135,6 @@ def test_get_renders_the_single_place_record(db, chat_mp):
 
 
 def test_delete_renders_confirmation_and_removes_row(db, chat_mp):
-    """``delete`` removes the saved place AND renders a success envelope confirming
-    the deletion by name — then a follow-up ``get`` errors with ``not-found``."""
     _seed_gps(db, lat=1.0, lon=2.0, location_name="Gym Town")
     ToolDispatcher(chat_mp).dispatch(
         "place", {"action": "save", "name": "Gym", "act_summary": "x"}

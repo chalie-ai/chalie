@@ -1,11 +1,3 @@
-"""
-Behavioural tests for salience_service — pure salience-scoring function.
-
-compute_salience() takes valence, arousal, has_open_loop, novelty and returns
-an integer score clamped to [1, 10].  Pure function with zero collaborators —
-qualifies for unit tests per tester.md.
-"""
-
 import pytest
 
 from services.salience_service import compute_salience

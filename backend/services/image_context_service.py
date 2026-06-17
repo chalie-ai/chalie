@@ -1,11 +1,7 @@
-"""
-Image Context Service — Analyze images attached to chat messages.
+"""Image Context Service — analyze images attached to chat messages via local RapidOCR.
 
-Uses local RapidOCR for text extraction. No external provider APIs required.
-
-Safety invariants applied before OCR:
-  - EXIF metadata stripped (removes GPS, device IDs, timestamps)
-  - Dimensions normalized to max 2048px
+Safety invariants applied before OCR: EXIF stripped (removes GPS, device
+IDs, timestamps); dimensions normalised to max 2048 px.
 """
 
 import io
@@ -22,21 +18,12 @@ _MIN_TEXT_LENGTH = 10
 
 
 def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
-    """
-    Analyze an image for chat context via local OCR.
-
-    Applies safety preprocessing (EXIF strip, dimension normalization) then
+    """Applies safety preprocessing (EXIF strip, dimension normalisation) then
     runs RapidOCR for text extraction. No external providers needed.
 
-    Returns:
-        dict with keys:
-            ocr_text (str): Extracted text (empty string if none)
-            has_text (bool): Whether meaningful text was found
-            analysis_time_ms (int): Total analysis duration
-            error (str | None): Error message if analysis failed
-            vision_used (bool): Always False — analyze is OCR-only; the vision
-                path lives in the vision tool / describe_image() core, for which
-                this function is the no-vision-provider fallback.
+    ``vision_used`` is always False — ``analyze`` is OCR-only; the vision
+    path lives in the vision tool / describe_image() core, for which this
+    is the no-vision-provider fallback.
     """
     start = time.time()
 
@@ -74,11 +61,8 @@ def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
 # ─── Preprocessing ───────────────────────────────────────────────────────────
 
 def _strip_exif(img) -> object:
-    """Return a copy of the PIL Image with EXIF metadata removed.
-
-    Uses a BytesIO PNG round-trip: PNG encoder does not write EXIF by default.
-    Falls back to returning the original image unchanged on any error.
-    """
+    """Uses a BytesIO PNG round-trip: PNG encoder does not write EXIF by
+    default. Falls back to the original image unchanged on any error."""
     try:
         from PIL import Image
         buf = io.BytesIO()

@@ -1,8 +1,3 @@
-"""
-Unit tests for WrapperRateLimiter.
-
-Uses an in-process MemoryStore directly (no external dependencies).
-"""
 
 import time
 import pytest
@@ -16,7 +11,6 @@ from services.wrapper_rate_limiter import WrapperRateLimiter, _KEY_PREFIX
 # ---------------------------------------------------------------------------
 
 def _make_limiter(limit=10, window=60, store=None):
-    """Return a WrapperRateLimiter with a fresh MemoryStore if none provided."""
     if store is None:
         store = MemoryStore()
     return WrapperRateLimiter(limit=limit, window_seconds=window, store=store), store
@@ -45,7 +39,6 @@ class TestWrapperRateLimiterBasic:
         assert limiter.is_allowed("wrp_test") is False
 
     def test_deny_does_not_consume_slot(self):
-        """A denied call should not add to the counter."""
         limiter, store = _make_limiter(limit=2)
         limiter.is_allowed("wrp_x")
         limiter.is_allowed("wrp_x")

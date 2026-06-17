@@ -1,31 +1,14 @@
-"""Feature tests — TKT-922 worker-gate durability across a process restart.
+"""Feature tests for TKT-922 worker-gate durability across a process restart.
 
-Acceptance criterion (RED-first): ``last_user_message_at`` lives only in
-WorldState's in-memory ``_store`` dict today (services/world_state.py), so a
-container restart wipes it and starves the subconscious maintenance worker
+``last_user_message_at`` lives only in WorldState's in-memory ``_store`` dict
+at HEAD, so a container restart wipes it and starves the subconscious worker
 (observed 57 ticks vs 3029 skips). It must be persisted durably next to
 ``subconscious_last_fired_at`` — MemoryStore (fast) + data_graph kind='system'
 (durable) — and hydrated on construction, mirroring
 ``SubconsciousWorker._persist_last_fired`` / ``_load_last_fired_from_storage``.
 
-These tests exercise the REAL production hot path with zero mocks of production
-logic:
-
-  * WRITER:  the same ``world_state.absorb(Signal(kind='user_message'))`` call
-             that ``api/chat.py`` fires on every user turn.
-  * RESTART: a brand-new ``WorldState()`` instance against the SAME database
-             file, with the volatile MemoryStore cache emptied — which is
-             exactly what a ``docker restart`` does (DB volume survives, the
-             in-process dict + MemoryStore die). Building a fresh singleton is
-             the faithful in-process model of a process restart, NOT a mock.
-  * READER:  ``snapshot()`` on the restarted instance (durable read) and the
-             REAL ``SubconsciousWorker._check_gates()`` driven against the
-             restarted singleton — never a reimplementation of the gate.
-
-At current HEAD (memory-only WorldState) the restart wipes the value, so the
-durable-survival and gate-de-starvation tests FAIL. Once persistence+hydrate
-land they pass. The freshness tests assert the value read post-restart is the
-durable copy, not the dead dict.
+At HEAD the durable-survival and gate-de-starvation tests FAIL; they pass once
+persistence+hydrate land.
 """
 
 from contextlib import contextmanager
@@ -51,12 +34,10 @@ from services.world_state import WorldState, Signal
 
 @contextmanager
 def _simulated_restart():
-    """Yield a freshly-constructed WorldState as if the process had restarted.
+    """Yield a freshly-constructed WorldState with a cold (empty) MemoryStore.
 
-    The DB (patched by the `db` fixture) persists. The MemoryStore cache is
-    replaced with an empty one so any hydrate is forced to read the durable
-    store, proving the value survived in the database — not merely in a cache
-    that happened to outlive the test's first WorldState.
+    Forces any hydrate to read from the durable DB store, proving the value
+    survived in the database and not merely in a cache from the first instance.
     """
     from services.memory_store import MemoryStore
 
@@ -73,11 +54,7 @@ def _simulated_restart():
 
 @pytest.fixture
 def warm_store():
-    """Isolated MemoryStore for the pre-restart (warm) process lifetime.
-
-    Mirrors the production fast-cache so ``absorb`` writes through the same
-    MemoryClientService path it uses at runtime.
-    """
+    """Isolated MemoryStore for the pre-restart (warm) process lifetime."""
     from services.memory_store import MemoryStore
 
     _store = MemoryStore()
@@ -92,12 +69,9 @@ class TestWorldStateDurabilityAcrossRestart:
     """The user-message timestamp must outlive a process restart via the DB."""
 
     def test_user_message_timestamp_survives_restart(self, db, warm_store):
-        """absorb(user_message) then restart → durable snapshot equals the write.
+        """absorb(user_message) then restart - durable snapshot equals the write.
 
-        Drives the production writer (the call api/chat.py makes), simulates a
-        restart (fresh WorldState + cold cache, same DB), and asserts the
-        restarted instance reads back the persisted timestamp. RED at HEAD:
-        memory-only WorldState loses the value on restart.
+        RED at HEAD: memory-only WorldState loses the value on restart.
         """
         when = utc_now() - timedelta(minutes=2)
         # Real production writer — identical to api/chat.py:281.
@@ -118,12 +92,10 @@ class TestWorldStateDurabilityAcrossRestart:
         assert abs((survived - when).total_seconds()) < 1.0
 
     def test_durable_value_is_read_from_storage_not_a_live_dict(self, db, warm_store):
-        """The restarted instance is genuinely fresh — proves a real hydrate.
+        """A new WorldState starts with an empty ``_store``; passing proves a real hydrate.
 
-        A new WorldState starts with an empty in-memory ``_store``; the only way
-        its snapshot can return the timestamp is by hydrating from the durable
-        store. This guards against a test that would pass merely because some
-        dict outlived the restart.
+        Guards against a test that would pass merely because some dict outlived
+        the restart rather than because the value was read from durable storage.
         """
         when = utc_now() - timedelta(minutes=1)
         writer = WorldState()
@@ -144,11 +116,7 @@ class TestWorldStateDurabilityAcrossRestart:
         assert abs((survived - when).total_seconds()) < 1.0
 
     def test_latest_user_message_wins_after_restart(self, db, warm_store):
-        """Two user turns then restart → the durable read is the LAST write.
-
-        Persistence must overwrite, never append/stale — the gate compares the
-        most recent user activity.
-        """
+        """Persistence must overwrite, never append/stale - gate compares the most recent write."""
         old = utc_now() - timedelta(hours=3)
         recent = utc_now() - timedelta(minutes=3)
         ws = WorldState()
@@ -173,10 +141,11 @@ class TestSubconsciousGateDeStarvationAfterRestart:
 
     @contextmanager
     def _gate_against(self, world_state_instance):
-        """Point the module-level world_state singleton (which _check_gates
-        imports) at the given instance — modelling that the restarted process
-        rebuilds its singletons. Not a mock of gate logic; the real
-        ``_check_gates`` runs unchanged."""
+        """Point the module-level world_state singleton at the given instance.
+
+        Models the restarted process rebuilding its singletons. The real
+        ``_check_gates`` runs unchanged - no gate logic is mocked.
+        """
         import services.world_state as _ws_mod
         original = _ws_mod.world_state
         _ws_mod.world_state = world_state_instance
@@ -186,11 +155,11 @@ class TestSubconsciousGateDeStarvationAfterRestart:
             _ws_mod.world_state = original
 
     def test_recent_user_message_keeps_gate_user_active_after_restart(self, db, warm_store):
-        """A user who spoke 1 min ago is still 'active' after a restart.
+        """User spoke 1 min ago: gate must return 'user_active' after restart.
 
-        At HEAD the restart wipes last_user_message_at → the user-active gate
-        cannot fire and the worker would (wrongly) treat the user as idle. With
-        durable hydrate, the REAL ``_check_gates`` returns 'user_active'.
+        At HEAD the restart wipes last_user_message_at so the worker wrongly
+        treats the user as idle. With durable hydrate the real ``_check_gates``
+        returns 'user_active'.
         """
         from services.subconscious_worker import SubconsciousWorker
 
@@ -211,12 +180,10 @@ class TestSubconsciousGateDeStarvationAfterRestart:
         )
 
     def test_idle_user_message_lets_gate_run_after_restart(self, db, warm_store):
-        """A user who last spoke 45 min ago (idle) does NOT block the tick.
+        """User last spoke 45 min ago: hydrated-but-old timestamp must not trip the gate.
 
-        The shouldn't-fire side of the gate: with a hydrated-but-old timestamp,
-        the user-active gate must NOT trip, and with no prior fire the tick is
-        allowed (``_check_gates`` returns None). This proves the hydrated value
-        is compared correctly, not merely 'present → skip'.
+        With no prior fire, ``_check_gates`` must return None, proving the
+        hydrated value is compared correctly, not merely 'present, skip'.
         """
         from services.subconscious_worker import SubconsciousWorker
 

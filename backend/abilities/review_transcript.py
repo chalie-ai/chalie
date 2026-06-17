@@ -88,11 +88,6 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
     def _buffer(self, params: dict) -> int | ToolResult:
-        """Parse ``buffer_minutes`` defensively and clamp to [1, 30].
-
-        A non-int / unparseable value is a loud ``invalid-param`` naming the valid
-        range (the old ``int(...)`` crashed the whole dispatch to
-        ``unhandled-exception``)."""
         raw = params.get(Keys.buffer_minutes, _DEFAULT_BUFFER_MINUTES)
         try:
             minutes = int(raw)
@@ -108,8 +103,6 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
         return max(_MIN_BUFFER_MINUTES, min(_MAX_BUFFER_MINUTES, minutes))
 
     def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
-        """Transcript rows in the window from the user channel — plus the subagent
-        channel when ``include_subagent_transcripts`` is truthy — oldest first."""
         from services.database_service import get_shared_db_service
 
         include_subagent = bool(params.get(Keys.include_subagent_transcripts, False))

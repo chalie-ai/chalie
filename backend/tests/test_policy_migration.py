@@ -48,7 +48,6 @@ def legacy_db():
 
 
 def test_upgrade_copies_legacy_rules_one_to_one(legacy_db):
-    """Upgrade path: policy_rules copied verbatim into the flat policy table."""
     _migrate_legacy_policy_rules(_FakeDB(legacy_db))
     # policy table created to hold the copy
     assert legacy_db.execute(

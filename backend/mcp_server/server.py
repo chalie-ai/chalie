@@ -6,16 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-MCP Server implementation using FastMCP.
+"""MCP server using FastMCP — single ``talk_to_chalie`` tool for external agents.
 
-Exposes a single tool ``talk_to_chalie`` that external agents use to
-communicate. Auth is validated via bearer token against the wrapper_tokens
-table (same pattern as the REST API bearer auth).
-
-Transport: Streamable HTTP on a dedicated port (default 8462).
-Auth: Custom ASGI middleware validates Bearer tokens before requests
-reach the MCP protocol layer.
+Streamable HTTP on a dedicated port (default 8462). Bearer tokens validated by
+ASGI middleware against ``wrapper_tokens`` (same as the REST API).
 """
 
 import asyncio
@@ -126,20 +120,6 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
         project_or_task_name: str,
         loop_in_human: bool = False,
     ) -> str:
-        """Communicate with Chalie — your executive assistant.
-
-        Send messages, share updates, ask questions, or request actions.
-        Chalie has full access to memory, documents, schedules, and more.
-
-        Args:
-            message: What you want to say or ask Chalie.
-            agent_name: Your identity (e.g. "Claude Code", "Codex", "CI Bot").
-            project_or_task_name: The project or task context for this conversation.
-            loop_in_human: If true, Chalie will disclose this exchange to the user.
-
-        Returns:
-            Chalie's response.
-        """
         errors = []
         if not message or not message.strip():
             errors.append("'message' is required and cannot be empty.")

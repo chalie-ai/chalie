@@ -60,7 +60,6 @@ _DELETE_ALL_STORE_PATTERNS = (
 
 
 def _serialize_row(row: dict) -> dict:
-    """Convert a database row dict to JSON-serializable form."""
     import uuid
     from decimal import Decimal
     result = {}
@@ -85,7 +84,6 @@ def _serialize_row(row: dict) -> dict:
 @privacy_bp.route('/privacy/data-summary', methods=['GET'])
 @require_session
 def data_summary():
-    """Overview of all stored data — counts by type."""
     try:
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
@@ -133,7 +131,6 @@ def data_summary():
 @privacy_bp.route('/privacy/export', methods=['GET'])
 @require_session
 def export_data():
-    """Export all user data as a streaming JSON download."""
 
     user_data_tables = [
         "episodes",
@@ -152,19 +149,6 @@ def export_data():
     FETCH_BATCH = 500  # Rows fetched per iteration — keeps memory bounded
 
     def generate():
-        """Stream all user data as a single JSON object to the HTTP response.
-
-        Yields successive chunks of JSON text covering every SQLite table listed
-        in ``user_data_tables`` and every MemoryStore key prefix listed in
-        ``store_patterns``.  Rows are fetched in batches of ``FETCH_BATCH`` to
-        keep memory usage bounded, and tables that exceed ``MAX_EXPORT_ROWS``
-        rows are truncated with a ``"truncated": true`` marker in the output.
-
-        Yields:
-            str: Raw JSON text fragments that, when concatenated, form a valid
-            JSON object with ``"exported_at"``, ``"tables"``, and
-            ``"memory_store"`` top-level keys.
-        """
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
 
@@ -253,15 +237,6 @@ def export_data():
 @privacy_bp.route('/privacy/delete-all', methods=['DELETE'])
 @require_session
 def delete_all():
-    """Nuclear option — clear all stored user data.
-
-    Wipes every user-owned table (episodes, transcript, tool_calls,
-    list_items, data_graph_edges, data_graph, lists, scheduled_items,
-    documents, watched_folders, user_tool_preferences, memory_recall_log,
-    llm_call_log, concept_lut_misses) and clears MemoryStore working_memory keys.
-
-    System / auth / config tables are deliberately excluded.
-    """
     confirm = request.headers.get("X-Confirm-Delete", "")
     if confirm != "yes":
         return jsonify({"error": "Requires X-Confirm-Delete: yes header"}), 400

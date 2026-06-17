@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# ── Per-provider system-prompt placeholders ───────────────────────────────────
+
 
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
 
@@ -20,7 +20,7 @@ def substitute_provider_content_field(body: str, mp) -> str:
     return body.replace(_CONTENT_FIELD_PLACEHOLDER, label)
 
 
-# ── Default tool visibility (mirrors MessageProcessor class defaults) ──────────
+
 
 DEFAULT_ALWAYS_AVAILABLE: list[str] = [
     "find_skills",

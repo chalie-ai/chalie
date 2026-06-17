@@ -43,7 +43,7 @@ def embed_list(list_id: str, name: str, db=None) -> None:
 
 
 class ListService:
-    """Manages deterministic user lists. Existing lists addressed by id."""
+    """Deterministic, id-addressed list management."""
 
     def __init__(self, db_service):
         self.db = db_service
@@ -56,19 +56,7 @@ class ListService:
         name: str,
         list_type: str = 'checklist',
     ) -> str:
-        """
-        Create a new list.
-
-        Args:
-            name: List name (e.g. "Shopping List")
-            list_type: List type (default 'checklist')
-
-        Returns:
-            list_id (8-char hex string)
-
-        Raises:
-            ValueError: If a list with that name already exists
-        """
+        """Create a new list; returns its id."""
         existing = self._find_by_name(name)
         if existing:
             raise ValueError(f"A list named '{name}' already exists.")
@@ -98,7 +86,7 @@ class ListService:
             raise
 
     def delete_list(self, list_id: str) -> bool:
-        """Soft-delete a list. Returns True on success, False if not found."""
+        """Soft-delete a list; returns True on success."""
         list_row = self._get_list_row(list_id)
         if not list_row:
             return False
@@ -125,7 +113,7 @@ class ListService:
             return False
 
     def clear_list(self, list_id: str) -> int:
-        """Soft-delete all items in a list. Returns count, or -1 if not found."""
+        """Soft-delete all items in a list; returns count, or -1 if not found."""
         list_row = self._get_list_row(list_id)
         if not list_row:
             return -1
@@ -153,7 +141,7 @@ class ListService:
             return -1
 
     def rename_list(self, list_id: str, new_name: str) -> bool:
-        """Rename a list. Returns True on success, False if not found or name collision."""
+        """Rename a list; returns True on success."""
         list_row = self._get_list_row(list_id)
         if not list_row:
             return False
@@ -187,7 +175,7 @@ class ListService:
             return False
 
     def get_list(self, list_id: str) -> Optional[Dict[str, Any]]:
-        """Get a list with its active items, or None if not found."""
+        """Get a list with its active items; None if not found."""
         list_row = self._get_list_row(list_id)
         if not list_row:
             return None
@@ -223,7 +211,7 @@ class ListService:
             return None
 
     def get_all_lists(self) -> List[Dict[str, Any]]:
-        """Get all active lists with summary counts."""
+        """Get all active lists with summary counts (item_count, checked_count)."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -268,7 +256,7 @@ class ListService:
         items: List[str],
         dedupe: bool = True,
     ) -> int:
-        """Add items to an existing list. Returns count of items actually added."""
+        """Add items to a list; returns count added."""
         list_row = self._get_list_row(list_id)
         if not list_row:
             logger.warning("[LISTS] List '%s' not found", safe(list_id))

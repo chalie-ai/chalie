@@ -65,12 +65,8 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
     def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
-        """All durable tool_calls in the window, excluding narration rows.
-
-        Narration rows (tool_name='narration') are mid-loop LLM text blobs not
-        meaningful as tool activity. Oldest first — created_at then id so ties
-        are deterministic.
-        """
+        """Excludes narration rows (tool_name='narration') — mid-loop LLM text blobs
+        not meaningful as tool activity."""
         from services.database_service import get_shared_db_service
         # Single source of the narration tool_name — the writer
         # (MessageProcessor._record_narration) and this reader must agree.
@@ -114,9 +110,8 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
 
 
 def _result_ok(result: object) -> bool:
-    """Envelope-aware status read: a recorded result is now a dispatcher envelope
-    whose first line is ``[<tool>(status=…)]`` (TKT-882). The call failed iff that
-    first line carries ``status=error``; the stale ``startswith('error')``
-    heuristic predated the envelope and is gone."""
+    """A recorded result is now a dispatcher envelope whose first line is
+    ``[<tool>(status=…)]`` (TKT-882). The call failed iff that first line carries
+    ``status=error``."""
     first_line = str(result or "").splitlines()[0] if result else ""
     return "status=error" not in first_line

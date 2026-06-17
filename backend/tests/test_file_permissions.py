@@ -25,15 +25,6 @@ pytestmark = pytest.mark.unit
 
 
 class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch reads off the live
-    processor: ``config`` (the chat policy channel) and ``uid`` (the act-trail
-    write anchor). Production binds both to the same transcript id; the fixture
-    mirrors that.
-
-    Kept local (not the harness ``MP``) because the read-guard reads ``_uid`` as
-    its transcript anchor — the harness ``MP`` is the minimal ``config``+``uid``
-    form only."""
-
     def __init__(self, uid: int, config) -> None:
         self.config = config
         self.uid = uid
@@ -42,9 +33,6 @@ class _MP:
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat mp bound to the test database: a seeded transcript anchor for
-    the act-trail, and ``file_permissions`` flipped to ``allow`` in the real
-    policy table so the gate passes through to the production run()."""
     allow_policy(db, "file_permissions")
     return _MP(
         seed_transcript(db, "chat", "make this script executable"), UserConfig({})
@@ -109,9 +97,6 @@ def test_format_octal_preserves_special_bits():
 
 
 def _result_payload(result) -> dict:
-    """``run()`` returns a ``ToolResult`` whose success ``body`` is the structured
-    dict the dispatcher renders as compact JSON. The dispatcher adds the
-    ``[file_permissions(...)]`` envelope around it."""
     return result.body
 
 

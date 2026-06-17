@@ -1,7 +1,4 @@
-"""Unit tests for bash.py classification functions."""
-
 import pytest
-
 from abilities.bash import (
     _check_destructive,
     _classify_heuristic,

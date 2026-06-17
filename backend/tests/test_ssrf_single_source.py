@@ -20,7 +20,6 @@ pytestmark = pytest.mark.unit
 
 
 def test_browser_security_imports_the_single_blocklist():
-    """tools/browser/security.py must reference services.ssrf.BLOCKED_NETS itself."""
     from services import ssrf
     from tools.browser import security
 
@@ -33,7 +32,6 @@ def test_browser_security_imports_the_single_blocklist():
 
 
 def test_browser_security_resolve_is_the_single_implementation():
-    """The browser's resolve-and-check must be services.ssrf.resolve_and_check."""
     from services import ssrf
     from tools.browser import security
 
@@ -44,15 +42,6 @@ def test_browser_security_resolve_is_the_single_implementation():
 
 
 def test_read_and_download_share_the_single_guard():
-    """read and web_download both reach the guard through web_fetch — neither
-    imports it directly.
-
-    TKT-899 removed read's direct ``is_private_url`` import; TKT-900 did the same
-    for web_download (its local ``_validate_url`` pre-check is gone, the scheme
-    check is inline, and the SSRF decision is web_fetch's single ``_guard``). The
-    identity anchor stays on ``web_fetch.is_private_url`` — there is no second copy
-    anywhere on either ability's path.
-    """
     from abilities import read, web_download
     from services import ssrf, web_fetch
 
@@ -66,7 +55,6 @@ def test_read_and_download_share_the_single_guard():
 
 
 def test_no_residual_abilities_ssrf_module():
-    """The old abilities/_ssrf.py copy is gone — no zombie second source."""
     import importlib
 
     with pytest.raises(ModuleNotFoundError):

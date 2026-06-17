@@ -1,36 +1,10 @@
 """
-Tests for backend/api/documents.py — Documents API blueprint.
+Tests for the Documents API blueprint.
 
-Scope is deliberately narrow: only the pieces of this module that are
-*deterministic and exercise real code* are unit-tested here —
-
-  * input validation that runs before any service call (unsupported upload
-    extension rejected with 400), and
-  * the pure helper functions (`_sanitize_filename`, `_validate_file_path`).
-
-The end-to-end behaviour of the document endpoints (upload → process →
-list/get/content → confirm/augment → soft-delete, plus RAG search over
-ingested documents) requires the real stack — DocumentService + a real
-DataGraphService DB, the embedding pipeline, and background processing.
-That behaviour is proven by the end-to-end scenario suite, NOT by mocking the
-DB-backed services here:
-
-  * the document lifecycle — upload/confirm/augment/list/get/content/delete
-  * image upload + context recall (search)
-  * pdf upload + context recall (search)
-
-The previous mock-saturated endpoint tests (patching `_get_document_service`,
-`_process_upload`, `get_data_graph_service`) asserted on patched return values
-and mock call counts — they passed even when the feature was broken, so they
-were removed in favour of the end-to-end scenarios above.
-
-`TestDocumentUploadRealStack` closes the gap that deletion
-left in the pre-merge `pytest -m unit` gate: the upload *happy path* was only
-exercised by the end-to-end scenarios, never by a deterministic in-repo test. It
-drives the real POST /documents/upload route through the `authed_client`
-fixture (real Flask app + real SQLite + real MemoryStore, auth bypassed) and
-asserts the real downstream effects — the synchronous ingest persisting a
-`ready` documents row and copying the bytes into the document store on disk.
+Covers only deterministic, real-code paths: extension allowlist validation and
+the pure helpers (_sanitize_filename, _validate_file_path). The full document
+lifecycle (upload/confirm/augment/list/get/content/delete, RAG search) is
+exercised by end-to-end scenarios, not by mocks here.
 """
 
 import hashlib
@@ -50,7 +24,6 @@ class TestDocumentsAPI:
 
     @pytest.fixture
     def client(self):
-        """Create a minimal Flask test client with only the documents blueprint."""
         app = Flask(__name__)
         app.register_blueprint(documents_bp)
         app.config["TESTING"] = True
@@ -58,11 +31,6 @@ class TestDocumentsAPI:
 
     @pytest.fixture(autouse=True)
     def bypass_auth(self):
-        """Bypass session auth so the request reaches the route's own validation.
-
-        This only stubs the session check (a harness concession); no business
-        logic / DB / LLM is faked.
-        """
         with patch("services.auth_session_service.validate_session", return_value=True):
             yield
 
@@ -71,8 +39,7 @@ class TestDocumentsAPI:
     # ------------------------------------------------------------------
 
     def test_upload_unsupported_extension(self, client):
-        """Upload with a disallowed extension is rejected with 400 before any
-        service call (real validation branch, no core-stack mocking)."""
+        """Disallowed extension is rejected with 400 before any service call."""
         data = {"file": (io.BytesIO(b"malicious"), "virus.exe")}
         resp = client.post(
             "/documents/upload",
@@ -85,15 +52,7 @@ class TestDocumentsAPI:
 
 @pytest.mark.unit
 class TestDocumentUploadRealStack:
-    """Real-stack feature test for the upload happy path.
-
-    Drives the real POST /documents/upload route end-to-end via `authed_client`
-    (real Flask app, real SQLite, real MemoryStore — only the session check and
-    secret are bypassed by the fixture's harness concession) and asserts every
-    downstream effect of the synchronous ingest: the HTTP response,
-    the persisted `documents` row, and the bytes copied into the document store
-    on disk. Zero business-logic / service mocking.
-    """
+    """Upload happy path: asserts HTTP response, DB row, and disk bytes with zero mocking."""
 
     def test_upload_text_document_persists_ready_row_and_file(self, authed_client, tmp_path):
         client, db_conn, _store = authed_client
@@ -142,7 +101,6 @@ class TestDocumentUploadRealStack:
 
 @pytest.mark.unit
 class TestHelpers:
-    """Test pure helper functions in the documents API module."""
 
     def test_sanitize_filename_security_and_fallback(self):
         from api.documents import _sanitize_filename

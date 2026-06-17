@@ -86,7 +86,6 @@ def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_fo
 @skills_bp.route("", methods=["GET"])
 @require_session
 def list_skills():
-    """Return all skills from skills.sqlite grouped with associations."""
     if not SKILLS_DB_PATH.exists():
         return jsonify({"skills": [], "associations": []}), 200
 
@@ -112,7 +111,6 @@ def list_skills():
 @skills_bp.route("", methods=["POST"])
 @require_session
 def create_skill():
-    """Create a new user skill."""
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
     use_for = (data.get("use_for") or "").strip()
@@ -175,7 +173,6 @@ def create_skill():
 @skills_bp.route("/<int:skill_id>", methods=["PUT"])
 @require_session
 def update_skill(skill_id: int):
-    """Update a user-created skill."""
     data = request.get_json(silent=True) or {}
 
     if not SKILLS_DB_PATH.exists():
@@ -236,7 +233,6 @@ def update_skill(skill_id: int):
 @skills_bp.route("/<int:skill_id>", methods=["DELETE"])
 @require_session
 def delete_skill(skill_id: int):
-    """Delete a user-created skill."""
     if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
@@ -275,7 +271,6 @@ def delete_skill(skill_id: int):
 @skills_bp.route("/<int:skill_id>/toggle", methods=["PUT"])
 @require_session
 def toggle_skill(skill_id: int):
-    """Toggle the enabled/disabled state of any skill."""
     if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
@@ -304,7 +299,6 @@ def toggle_skill(skill_id: int):
 @skills_bp.route("/<int:skill_id>/copy", methods=["POST"])
 @require_session
 def copy_skill(skill_id: int):
-    """Copy a curated skill as a new user skill and disable the original."""
     if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 

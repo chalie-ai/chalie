@@ -6,10 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""home-specific business-logic tests migrated from the per-ability conformance
-file removed in TKT-975. Drives the real ToolDispatcher end-to-end hot path with
-zero mocks, exercising the HA entity guardrail, control/automation actions,
-and structured response bodies via a real local HTTP stub."""
+
 
 import json
 import threading
@@ -55,9 +52,8 @@ _STATES_BY_ID = {s["entity_id"]: s for s in _STATES}
 
 
 def _make_handler(posts: list):
-    """Build a request handler class that serves the HA endpoints the REST client
-    touches and records every service POST into *posts* (so a test can prove a
-    control call did — or did NOT — reach the wire)."""
+    """Build a real local Home Assistant stub that serves HA endpoints and records
+    every service POST so tests can assert calls reached (or didn't reach) the wire."""
 
     class _HAHandler(BaseHTTPRequestHandler):
         def log_message(self, *_args):  # silence the stub's stderr access log

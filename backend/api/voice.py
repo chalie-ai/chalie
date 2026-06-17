@@ -157,7 +157,6 @@ _stt_lock = threading.Lock()
 
 
 def _ensure_models():
-    """Load Kokoro + Moonshine on first use. Thread-safe."""
     global _kokoro, _moonshine, _models_loaded, _models_loading
 
     if _models_loaded:
@@ -235,9 +234,7 @@ _LI_NEEDS_TERMINATOR_RE = re.compile(
 def _spoken_url(match: "re.Match[str]") -> str:
     """Rewrite ``http://google.com/123`` → ``google dot com``.
 
-    Without this, espeak reads URLs character-by-character ("h t t p
-    slash slash google dot com slash one two three") — fast but unpleasant.
-    Stripping protocol + path and verbalising dots produces a natural read.
+    Without this, espeak reads URLs character-by-character — fast but unpleasant.
     """
     host = match.group(1).lower()
     if host.startswith("www."):
@@ -246,7 +243,6 @@ def _spoken_url(match: "re.Match[str]") -> str:
 
 
 def _clean_for_tts(text: str) -> str:
-    """Markdown/HTML → plaintext; rewrite URLs; collapse whitespace."""
     if not text:
         return ""
     # HTML pre-pass — strip LLM-emitted tags before markdown-it sees them so
@@ -273,7 +269,6 @@ _TTS_SPLIT_RE = re.compile(r"(?<=[.!?,;:—])\s+")
 
 
 def _segment_for_tts(text: str) -> list[str]:
-    """Split text into chunks under ``_MAX_TTS_CHUNK_CHARS`` on punctuation boundaries."""
     if not text:
         return []
     limit = _MAX_TTS_CHUNK_CHARS
@@ -426,7 +421,6 @@ _MULTI_SPACE_RE = re.compile(r" {2,}")
 
 
 def _strip_fillers(text: str) -> str:
-    """Remove spoken filler words (um, uh, hmm, er, ah, erm) from STT output."""
     if not text:
         return text
     return _MULTI_SPACE_RE.sub(" ", _FILLER_RE.sub("", text)).strip()
@@ -500,7 +494,6 @@ def _fix_contractions(text: str) -> str:
 # ── WAV helpers ─────────────────────────────────────────────────────────────
 
 def _wav_duration_seconds(data: bytes) -> float:
-    """Parse a WAV header for duration without decoding the audio payload."""
     try:
         if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
             return 0.0
@@ -619,7 +612,6 @@ def voice_health():
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
 def voice_synthesize():
-    """Synthesise speech and return a single WAV blob."""
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
 
@@ -677,7 +669,6 @@ def voice_synthesize():
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])
 def voice_transcribe():
-    """Transcribe uploaded audio (WAV). Returns ``{"text": "..."}``."""
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
 

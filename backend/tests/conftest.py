@@ -1,12 +1,6 @@
 # Baseline: 2249 passed, 65 failed, 499 errors (2026-03-27)
 # Errors are pre-existing: 15 files excluded (numpy import failure in this env),
 # and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
-"""
-Shared test fixtures — full sandbox isolation.
-
-No real external connections. MemoryStore IS the production implementation.
-"""
-
 import shutil
 from unittest.mock import patch
 

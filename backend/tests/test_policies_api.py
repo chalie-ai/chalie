@@ -1,4 +1,3 @@
-"""api/policies.py flat surface (D4): GET rows excl internal, single-upsert PUT."""
 import contextlib
 import sqlite3
 
@@ -62,8 +61,6 @@ def test_put_single_upsert(client):
 
 @pytest.fixture()
 def mcp_client(monkeypatch):
-    """Same flat policy surface, but with an mcp_client_servers table present so
-    MCP rows get tagged through the real McpClientService.label_mcp_permissions."""
     from flask import Flask
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -98,9 +95,6 @@ def mcp_client(monkeypatch):
 
 
 def test_get_groups_and_humanizes_mcp_rows(mcp_client):
-    """An _mcp_<server>_<tool> policy row comes back grouped by the server's
-    configured title and labeled with the humanized tool name — exercised end
-    to end through the real endpoint, McpClientService, and PolicyManager."""
     from services.database_service import get_shared_db_service
     from services.mcp_client_service import McpClientService
     from services.policy_manager import PolicyManager

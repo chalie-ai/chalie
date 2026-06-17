@@ -136,9 +136,7 @@ class ReviewWindowAbility(Ability, ABC):
     # ── Subclass hooks ────────────────────────────────────────────────────────
 
     def _buffer(self, params: dict) -> int | ToolResult:
-        """Resolve the half-window in minutes. Default: a frozen 5.
-
-        Return an int, or an error ``ToolResult`` when the supplied buffer is
+        """Return an int, or an error ``ToolResult`` when the supplied buffer is
         invalid (``review_transcript`` overrides to parse a clamped param)."""
         return 5
 
@@ -160,7 +158,6 @@ class ReviewWindowAbility(Ability, ABC):
     # ── Shared helpers ────────────────────────────────────────────────────────
 
     def _empty_hint(self, date_time: str, buffer: int) -> str:
-        """One-line guidance shown when the window is empty (overridable)."""
         return (
             f"No records found within ±{buffer} minutes of {date_time}. "
             "Try a different timestamp."
@@ -168,7 +165,6 @@ class ReviewWindowAbility(Ability, ABC):
 
     @staticmethod
     def _ts(created_at: object) -> str:
-        """Display timestamp in the user's local zone, falling back to the raw
-        leading characters when the value is missing / unparseable."""
+        """Falls back to the raw leading characters when the value is missing / unparseable."""
         return TimeFormatterService.local(created_at, fmt="%Y-%m-%d %H:%M:%S") \
             or str(created_at or "")[:19]

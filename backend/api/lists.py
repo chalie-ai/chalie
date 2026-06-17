@@ -1,19 +1,3 @@
-"""
-Lists API — CRUD endpoints over ListService.
-
-Routes (all require session auth):
-  GET    /lists                      — all active lists with summary counts
-  POST   /lists                      — create a new list
-  GET    /lists/<id>                 — get list with items array
-  PUT    /lists/<id>/rename          — rename list
-  DELETE /lists/<id>                 — soft-delete list
-  POST   /lists/<id>/items           — add items (dedup applied)
-  DELETE /lists/<id>/items           — clear all items
-  DELETE /lists/<id>/items/batch     — remove specific items by content
-  PUT    /lists/<id>/items/check     — check items
-  PUT    /lists/<id>/items/uncheck   — uncheck items
-"""
-
 import logging
 from datetime import datetime
 
@@ -46,7 +30,6 @@ def _serialize_dt(val):
 
 
 def _serialize_list(lst: dict) -> dict:
-    """Convert datetime fields to ISO strings for JSON serialisation."""
     out = dict(lst)
     for field in ("updated_at", "created_at"):
         if field in out:
@@ -55,7 +38,6 @@ def _serialize_list(lst: dict) -> dict:
 
 
 def _serialize_item(item: dict) -> dict:
-    """Convert datetime fields to ISO strings for JSON serialisation."""
     out = dict(item)
     for field in ("added_at", "updated_at"):
         if field in out:
@@ -92,7 +74,6 @@ def _validate_items(items) -> tuple:
 @lists_bp.route("/lists", methods=["GET"])
 @require_session
 def get_lists():
-    """Return all active lists with summary counts."""
     try:
         svc = _get_list_service()
         lists = svc.get_all_lists()
@@ -105,7 +86,6 @@ def get_lists():
 @lists_bp.route("/lists", methods=["POST"])
 @require_session
 def create_list():
-    """Create a new list."""
     data = request.get_json(silent=True) or {}
     name, err = _validate_name(data.get("name"))
     if err:
@@ -129,7 +109,6 @@ def create_list():
 @lists_bp.route("/lists/<list_id>", methods=["GET"])
 @require_session
 def get_list(list_id):
-    """Get a list with its active items."""
     try:
         svc = _get_list_service()
         lst = svc.get_list(list_id)
@@ -146,7 +125,6 @@ def get_list(list_id):
 @lists_bp.route("/lists/<list_id>/rename", methods=["PUT"])
 @require_session
 def rename_list(list_id):
-    """Rename a list."""
     data = request.get_json(silent=True) or {}
     name, err = _validate_name(data.get("name"))
     if err:
@@ -166,7 +144,6 @@ def rename_list(list_id):
 @lists_bp.route("/lists/<list_id>", methods=["DELETE"])
 @require_session
 def delete_list(list_id):
-    """Soft-delete a list."""
     try:
         svc = _get_list_service()
         ok = svc.delete_list(list_id)
@@ -181,7 +158,6 @@ def delete_list(list_id):
 @lists_bp.route("/lists/<list_id>/items", methods=["POST"])
 @require_session
 def add_items(list_id):
-    """Add items to a list (dedup applied, list must exist)."""
     data = request.get_json(silent=True) or {}
     items, err = _validate_items(data.get("items"))
     if err:
@@ -201,7 +177,6 @@ def add_items(list_id):
 @lists_bp.route("/lists/<list_id>/items", methods=["DELETE"])
 @require_session
 def clear_items(list_id):
-    """Clear all items from a list."""
     try:
         svc = _get_list_service()
         count = svc.clear_list(list_id)
@@ -216,7 +191,6 @@ def clear_items(list_id):
 @lists_bp.route("/lists/<list_id>/items/batch", methods=["DELETE"])
 @require_session
 def remove_items(list_id):
-    """Remove specific items from a list by content (case-insensitive)."""
     data = request.get_json(silent=True) or {}
     items, err = _validate_items(data.get("items"))
     if err:
@@ -236,7 +210,6 @@ def remove_items(list_id):
 @lists_bp.route("/lists/<list_id>/items/check", methods=["PUT"])
 @require_session
 def check_items(list_id):
-    """Check items in a list."""
     data = request.get_json(silent=True) or {}
     items, err = _validate_items(data.get("items"))
     if err:
@@ -256,7 +229,6 @@ def check_items(list_id):
 @lists_bp.route("/lists/<list_id>/items/uncheck", methods=["PUT"])
 @require_session
 def uncheck_items(list_id):
-    """Uncheck items in a list."""
     data = request.get_json(silent=True) or {}
     items, err = _validate_items(data.get("items"))
     if err:

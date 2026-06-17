@@ -1,4 +1,3 @@
-"""Generate search queries for knowledge entries using doc2query T5 model."""
 
 import logging
 import math
@@ -89,7 +88,6 @@ class Doc2QueryService:
                 self._available = None
 
     def _unload_unlocked(self):
-        """Release all sessions without acquiring the lock (caller must hold it)."""
         self._encoder = None
         self._decoder = None
         self._decoder_past = None

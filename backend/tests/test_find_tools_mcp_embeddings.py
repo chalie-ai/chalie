@@ -1,26 +1,3 @@
-"""Feature tests — real-time MCP tool embeddings + find_tools discovery fixes.
-
-Six TDD tests that MUST FAIL at baseline (no embeddings implementation yet) and
-PASS once the implementation is complete.
-
-Failure modes at baseline:
-1. select advertised name — _run_select has no alias map; bare 'list_tickets' → found=0.
-2. semantic query — McpClientService has no embed_server_tools; AttributeError.
-3. loose multi-word query — FTS AND-collapse; 'ticket document attachment' → 0 rows; vec
-   signal absent (no embed_server_tools yet) → empty result.
-4. embeddings survive heartbeat re-sync — embed_server_tools absent; AttributeError.
-5. add-only trigger — embed_server_tools absent; AttributeError; cannot assert stability.
-6. ambiguous bare name dropped — alias map absent; bare name not dropped; wrong tool activated.
-
-Real prod stack:
-- Real McpClientService against the real conftest `db` fixture (converged chalie.db).
-- Real _open_tools_db() (mcp_tools.sqlite) redirected to tmp_path via FileMapperService._DATA_DIR.
-- Real FindToolsAbility.run() / _run_select() / _run_query() / _query_mcp().
-- Real EmbeddingService (ONNX, offline, deterministic) in tests 2 and 3.
-- Real MessageProcessor stub (object.__new__, no subclass) carrying a make_stub_config.
-- Zero mocks, zero patches of production code, zero hand-rolled DDL.
-"""
-
 import pytest
 
 from abilities.find_tools import FindToolsAbility
@@ -37,8 +14,6 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 def _stub_proc(discoverable: list[str]) -> MessageProcessor:
-    """Flat MessageProcessor (no subclass) carrying a config whose `discoverable`
-    is the find_tools allow-list gate.  Same pattern as test_find_tools_discovery.py."""
     proc = object.__new__(MessageProcessor)
     proc.config = make_stub_config(discoverable=discoverable)
     proc._active_tools = []
@@ -46,21 +21,11 @@ def _stub_proc(discoverable: list[str]) -> MessageProcessor:
 
 
 def _run_find_tools(ability: FindToolsAbility, proc: MessageProcessor, params: dict) -> str:
-    """Bind proc to ability and call the real run() entry point."""
     ability.mp = proc
     return ability.run(params)
 
 
 def _seed_server_online(svc: McpClientService, name: str, tools: list[dict]) -> dict:
-    """Register a server, write its tools, and force status=online in chalie.db.
-
-    Uses only real production methods:
-    - svc.add_server() writes the mcp_client_servers row.
-    - svc._write_tools() writes mcp_tools rows + rebuilds FTS.
-    - Direct SQL UPDATE sets status=online (avoids network call to ping_and_sync).
-
-    Returns the server dict.
-    """
     server = svc.add_server(name=name, host=f"http://fake-{name}.lan:9000",
                              headers={}, enabled=True)
     svc._write_tools(server["id"], name, tools)
@@ -107,15 +72,10 @@ class TestSelectAdvertisedName:
     def test_bare_display_name_resolves_to_prefixed_call_name(
         self, db, tmp_path, monkeypatch
     ):
-        """find_tools(select=['list_tickets']) resolves the bare advertised name to
-        _mcp_taskie_list_tickets and appends it to active_tools.
+        """TDD at baseline: _run_select has no display-alias map → found=0.
 
-        At baseline: _run_select has no display-alias map.  'list_tickets' does
-        NOT appear in effective_allow (which contains '_mcp_taskie_list_tickets').
-        allow_lower maps lowercase prefixed names, not bare display names → found=0.
-
-        After the fix: _run_select builds a display→call alias map from
-        get_online_mcp_tools_index() and resolves the bare name to the prefixed form.
+        After the fix: _run_select resolves bare name to prefixed form via
+        get_online_mcp_tools_index().
         """
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
         # _MCP_DB_PATH is a ClassVar resolved at import time from FileMapperService;
@@ -155,24 +115,10 @@ class TestSemanticQueryViaEmbeddings:
     def test_query_create_task_or_ticket_returns_taskie_tools(
         self, db, tmp_path, monkeypatch
     ):
-        """Real McpClientService.embed_server_tools() generates embeddings via
-        EmbeddingService (ONNX, offline).  find_tools(query='create a task or ticket')
-        returns taskie ticket tools via dual-signal RRF (vec + FTS).
+        """embed_server_tools() generates embeddings via EmbeddingService (ONNX).
 
-        Query choice rationale (evidence from §11 adjudication):
-        - 'create a task or ticket' → create_ticket gets vec rank-1 (distance 0.531)
-          AND a FTS bm25 hit → dual-signal RRF score 0.125, passes the 0.075 floor.
-        - FTS alone would score 0.0625 (single-signal, filtered); the embedding is the
-          second signal that lifts it above the floor — this is the meaningful claim.
-        - 'track a bug ticket' was the original query but has ZERO lexical overlap with
-          any taskie tool summary → FTS 0 rows → single-signal 0.0625 < floor → filtered.
-          That is identical behaviour to the ability index and is correct, not a bug.
-
-        At baseline: embed_server_tools doesn't exist → AttributeError.
-        After the fix: vectors land in mcp_tools_vec; _query_mcp uses hybrid
-        vec+FTS RRF; dual-signal query surfaces list_tickets / create_ticket.
-
-        NOTE: This test calls the real ONNX model — it is intentionally slow.
+        At baseline: AttributeError. After the fix: dual-signal RRF surfaces
+        list_tickets / create_ticket for query 'create a task or ticket'.
         """
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
         monkeypatch.setattr(FindToolsAbility, "_MCP_DB_PATH",
@@ -206,23 +152,10 @@ class TestLooseMultiWordQuery:
     def test_multi_word_query_returns_results_via_vector_signal(
         self, db, tmp_path, monkeypatch
     ):
-        """'ticket document attachment' surfaces add_attachment via dual-signal RRF.
+        """FTS-only scores 0.0625 → below 0.075 floor; embedding is the deciding signal.
 
-        Query rationale (evidence from §11 adjudication):
-        - FTS5 hits exactly 1 row: add_attachment (summary "Attach a file to a ticket
-          or document record." + name add_attachment contain the terms).
-        - That single FTS hit scores 0.0625 RRF (single-signal) — BELOW the 0.075 floor
-          → filtered without the vector.
-        - The vector (ONNX embedding) ranks add_attachment in KNN, supplying the second
-          signal → dual-signal RRF score 0.125 → PASSES the floor.
-        - Embedding is the deciding factor: FTS-only cannot surface this query.
-
-        At baseline: embed_server_tools absent → no vec table → _query_mcp falls back to
-        FTS-only; single-signal 0.0625 < 0.075 floor → result is empty.
-        After the fix: _query_mcp delegates to _hybrid_search with vec+FTS RRF; the
-        embedding provides the second signal lifting add_attachment above the floor.
-
-        NOTE: Calls real ONNX model — intentionally slow.
+        At baseline: no vec table → empty result. After the fix: dual-signal RRF
+        surfaces add_attachment for query 'ticket document attachment'.
         """
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
         monkeypatch.setattr(FindToolsAbility, "_MCP_DB_PATH",

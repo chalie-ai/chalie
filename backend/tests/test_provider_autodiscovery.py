@@ -1,5 +1,3 @@
-"""Unit tests for capabilities.provider_autodiscovery (shim over mail_capability.providers)."""
-
 import pytest
 from capabilities.provider_autodiscovery import (
     ServerSettings, discover_email_settings, list_supported_providers,

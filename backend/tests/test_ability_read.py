@@ -6,10 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""read-specific business-logic tests migrated from the per-ability conformance
-file removed in TKT-975. Covers patch/diff verbatim passthrough, HTML extraction,
-truncation behaviour, content_type meta, and the max_chars floor clamp.
-"""
+
 
 import threading
 

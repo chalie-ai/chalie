@@ -42,10 +42,6 @@ _DELEGATES = [
 
 
 def _delegate_mp(config: ProcessorConfig) -> MessageProcessor:
-    """A real delegate MessageProcessor driven through the REAL ``_setup()`` — the
-    method whose uid assignment is the fix under test. ``_seed_turn_zero`` is a
-    no-op for these configs (memory_seed=False, no attachments, non-user channel),
-    so no provider or network is touched."""
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "current population of Malta", {})
     mp.config = config

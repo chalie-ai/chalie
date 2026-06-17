@@ -34,13 +34,6 @@ pytestmark = pytest.mark.unit
 
 
 def _ocrable_invoice_png_path() -> str:
-    """A PNG rendering the word 'INVOICE' large/high-contrast enough for RapidOCR,
-    written under the Chalie temp prefix and returned as a PATH.
-
-    ``document.upload`` ingests by path, never bytes. RapidOCR's read of
-    this exact fixture was empirically confirmed (analyze().ocr_text == 'INVOICE')
-    before this test relied on it.
-    """
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.new("RGB", (480, 160), "white")

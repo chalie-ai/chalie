@@ -128,11 +128,6 @@ class ReadAbility(Ability):
 
     @classmethod
     def _is_plaintext_path(cls, path: str) -> bool:
-        """True when *path* ends with a known plain-text extension (case-folded).
-
-        A bare URL path is fine — the query/fragment never carry the extension we
-        gate on, and ``urlparse(...).path`` is already stripped of them.
-        """
         return path.lower().endswith(cls._PLAINTEXT_EXTENSIONS)
 
     # ── URL branch ───────────────────────────────────────────────────────────────

@@ -1,14 +1,14 @@
 """Phase C wire-format regression tests.
-
-These tests guard the specific regressions Phase C introduced:
-
-1. transcript_service.append() sets xml_migrated=1 on every new INSERT.
-2. api/conversation.get_recent_history() returns `content` per message and
-   does NOT return a `blocks` key — blocks array was the old wire format.
-
-All tests are @pytest.mark.unit: real SQLite (via `db` fixture), no mocks
-of production code.
-"""
+ 
+ These tests guard the specific regressions Phase C introduced:
+ 
+ 1. transcript_service.append() sets xml_migrated=1 on every new INSERT.
+ 2. api/conversation.get_recent_history() returns content per message and
+    does NOT return a blocks key (blocks array was the old wire format).
+ 
+ All tests are @pytest.mark.unit: real SQLite (via db fixture), no mocks
+ of production code.
+ """
 
 import pytest
 
@@ -86,7 +86,6 @@ class TestConversationHistoryXmlWireFormat:
             )
 
     def test_content_is_passed_through_verbatim(self, db):
-        """The XML string stored in transcript.content is not re-processed."""
         from api.conversation import get_recent_history
 
         db.execute(

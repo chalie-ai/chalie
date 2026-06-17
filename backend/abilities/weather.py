@@ -98,13 +98,6 @@ class WeatherAbility(Ability):
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
     def run(self, params: dict) -> ToolResult:
-        """Get current weather for a location.
-
-        Reads the optional ``location`` param (omit → client coordinates from
-        ``self.telemetry``). Returns ``ToolResult.ok(payload, rich=payload)`` on
-        success — the dispatcher pairs the weather card when this turn broadcasts
-        to the user — or ``ToolResult.err`` when every source is unavailable.
-        """
         location_param = params.get(Keys.location, "").strip()
         lat, lon, location_name = _extract_location(self.telemetry)
 
@@ -147,7 +140,6 @@ class WeatherAbility(Ability):
 
 
 def _extract_location(telemetry: dict | None) -> tuple:
-    """Pull (lat, lon, location_name) from telemetry; all default to None."""
     if not telemetry:
         return None, None, None
     lat = telemetry.get("lat")
@@ -159,7 +151,6 @@ def _extract_location(telemetry: dict | None) -> tuple:
 
 
 def _build_cache_key(location_param: str, lat, lon, location_name: str | None) -> str:
-    """Prefer resolved name, fall back to coords, then to the literal param ('auto' if empty)."""
     if location_name and not location_param:
         return location_name.lower()
     if lat is not None and lon is not None and not location_param:
@@ -168,7 +159,6 @@ def _build_cache_key(location_param: str, lat, lon, location_name: str | None) -
 
 
 def _get_fresh_cache(cache_key: str):
-    """Return the cached result if still within TTL, else None."""
     if cache_key not in WeatherAbility._cache:
         return None
     cached_result, cached_ts = WeatherAbility._cache[cache_key]
@@ -178,9 +168,7 @@ def _get_fresh_cache(cache_key: str):
 
 
 def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key: str) -> tuple:
-    """Try Open-Meteo (coords) → wttr.in (city) → 5s retry of either. Returns (result, om_err, wttr_err).
-
-    Routing:
+    """Routing:
       - No location_param: prefer Open-Meteo with telemetry coords.
       - location_param matches telemetry city/country: prefer Open-Meteo with
         telemetry coords (LLM is just naming the user's home turf).
@@ -218,9 +206,7 @@ def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key
 
 
 def _matches_telemetry(location_param: str, location_name: str | None) -> bool:
-    """True when the LLM-supplied location names the same place as telemetry.
-
-    Case-insensitive substring match in either direction so 'Żabbar' matches
+    """Case-insensitive substring match in either direction so 'Żabbar' matches
     'Iż-Żabbar, Malta' and 'malta' matches the country half. Diacritics are
     not normalised — a partial English/Maltese collision is acceptable.
     """
@@ -232,7 +218,6 @@ def _matches_telemetry(location_param: str, location_name: str | None) -> bool:
 
 
 def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
-    """Return stale-cached result if any, else build a structured error response."""
     if cache_key in WeatherAbility._cache:
         logger.warning(f"[WEATHER] All sources unavailable, returning stale cache for '{cache_key}'")
         return WeatherAbility._cache[cache_key][0]
@@ -250,7 +235,6 @@ def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
 
 
 def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int = 15) -> tuple:
-    """Fetch current weather from Open-Meteo. Returns (result, error_str)."""
     try:
         url = (
             f"{_OPEN_METEO_BASE}/v1/forecast"
@@ -342,7 +326,6 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
 
 
 def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
-    """Fetch current weather from wttr.in j1. Returns (result, error_str)."""
     try:
         url = f"{_WTTR_BASE}/{location}?format=j1"
         resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Chalie/1.0 cognitive-agent"})
@@ -483,7 +466,6 @@ def _degrees_to_compass(degrees: float) -> str:
 
 
 def _estimate_daylight(obs_time: str) -> bool:
-    """Estimate daylight from wttr.in observation time string."""
     try:
         if obs_time:
             parts = obs_time.strip().split(" ")

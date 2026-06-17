@@ -6,51 +6,6 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests — TKT-926 per-source memory profiles + provenance fixes (G).
-
-These drive the per-source memory behaviour end-to-end against the real
-production stack:
-
-  * Cross-pollination recall — a user-turn flashback surfaces episodes from
-    every episode-producing channel (user + dmn + external-agent), not just the
-    turn's own channel.
-  * Fact-extraction per-source provenance — facts the worker extracts carry a
-    channel-tagged ``data_graph.source`` so a dmn / external-agent fact is
-    distinguishable from a user one.
-  * Decay-janitor HEAVY-channel protection — the fossil janitor must NOT
-    tombstone an apex dmn leaf (dmn never consolidates, so its leaves are
-    permanently apex), while a muted/legacy leaf in the same state IS tombstoned.
-  * Scheduled two-stage — a fired scheduled prompt runs its work loop on the
-    muted ``scheduled`` channel (instruction recoverable there) and surfaces the
-    result on the ``user`` channel.
-
-ZERO mocks of in-process code. The single sanctioned seam is the LLM network
-boundary (Pattern H): ``Providers._resolve`` is swapped via a plain try/finally
-context manager — never ``unittest.mock``. Everything else is real: the ``db``
-fixture (schema.sql through SchemaConvergenceService at 256-dim + redesign
-backfill), real ``EpisodicService.store_episode`` (the production write path),
-real ``DataGraphService``, real ``MemoryStore`` (the ``store`` fixture, TKT-922
-dual-store isolation), real ``SubconsciousWorker`` / ``DecayEngineService`` /
-``scheduler`` entry points.
-
-═══════════════════════════════════════════════════════════════════════════════
-RED-FIRST / COORDINATION NOTE (read before "fixing" a failure)
-═══════════════════════════════════════════════════════════════════════════════
-Written alongside the coder. The cross-pollination and scheduled-two-stage tests
-are RED until their anchors land:
-  * cross-pollination : ``turn_zero_flashback.py`` recall must pass channel=None
-                        (currently ``channel=self._mp.config.channel``).
-  * scheduled two-stage: ``scheduler_service._fire_item`` is_prompt branch must
-                        run the ScheduledConfig work loop on channel='scheduled'
-                        before the user return hop (currently a single
-                        ``dispatch_message(source='scheduled')``).
-The fact-extraction-provenance and janitor-protection tests are GREEN on arrival
-(their anchors landed) and stand as regression locks: each would FAIL if the
-provenance tag reverted to the bare default, or if the janitor reverted to
-``channel != 'user'`` (which reaps dmn HEAVY memory wholesale — the cycle-39
-class of silent loss).
-"""
-
 import contextlib
 import json
 import math
@@ -81,9 +36,6 @@ def _unit(index: int, dim: int = _DIM) -> list:
 # ── LLM network-boundary seam (Pattern H — the ONLY sanctioned mock) ───────────
 
 class _FakeLLMService(ProviderClient):
-    """Stand-in for the resolved provider client. A real ProviderClient subclass
-    so Providers.send still runs prompt assembly, tool building and pre-flight."""
-
     CONTENT_FIELD_LABEL = "message.content"
 
     def __init__(self, send_fn):
@@ -101,7 +53,6 @@ class _FakeLLMService(ProviderClient):
 
 @contextlib.contextmanager
 def _inject_fake_client(send_fn):
-    """Swap Providers._resolve at the class level for the block. No unittest.mock."""
     original = Providers._resolve
     Providers._resolve = lambda self, *_a, **_kw: _FakeLLMService(send_fn)
     try:
@@ -111,16 +62,12 @@ def _inject_fake_client(send_fn):
 
 
 def _text_response(text: str) -> ProviderApiResponse:
-    """A plain assistant reply with no tool calls — ends an ACT loop on the first
-    turn (the model decides it is done)."""
     return ProviderApiResponse(
         text=text, model="test-model", provider="mock", tool_calls=None,
     )
 
 
 def _ops_response(ops: list) -> ProviderApiResponse:
-    """A fact-extraction constrained-op batch (configs/channels/fact_extraction.py
-    envelope: ``{"ops": [{op, key, value}, ...]}``)."""
     return ProviderApiResponse(
         text=json.dumps({"ops": ops}), model="test-model", provider="mock",
         tool_calls=None,
@@ -135,11 +82,6 @@ def _db_service():
 
 
 def _seed_episode(db, gist, *, channel, emb_index=3, salience=8):
-    """Seed one episode via the PRODUCTION write path (EpisodicService).
-
-    store_episode writes both the episodes row and the episodes_fts row, and
-    leaves facts_extracted_at NULL — exactly as a freshly-encoded episode would.
-    """
     es = EpisodicService(_db_service())
     return es.store_episode(
         {"gist": gist, "salience": salience, "channel": channel},
@@ -255,19 +197,6 @@ def _episode_gist_from_dto(dto) -> str:
 
 
 def test_fact_extraction_tags_provenance_with_origin_channel(db, store):
-    """Facts the worker extracts must carry channel-tagged provenance in
-    ``data_graph.source`` — ``fact_extraction:user`` for a user-origin fact and
-    ``fact_extraction:dmn`` for a dmn-origin fact — so a fact's source channel is
-    recoverable. Before this, every extracted fact carried one bare
-    ``fact_extraction`` tag and a dmn-derived fact was indistinguishable from a
-    user-stated one.
-
-    Drives the real ``_step_fact_extraction`` over a real two-channel backlog
-    through the sanctioned LLM seam. The fake routes on the gist in the assembled
-    prompt (backlog order is non-deterministic for same-tick episodes), so each
-    episode's op is matched to its own channel. Regression lock: a revert to a
-    single channel-less source string reds one of the assertions.
-    """
     _seed_episode(db, "User lives in Valletta.", channel="user", emb_index=3)
     _seed_episode(db, "Reflection notes the user prefers Mdina above all.",
                   channel="dmn", emb_index=8)

@@ -28,7 +28,6 @@ pytestmark = pytest.mark.unit
 
 
 def _invoice_png_path() -> str:
-    """High-contrast 'INVOICE' PNG under the Chalie tmp prefix (proven OCR fixture)."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.new("RGB", (480, 160), "white")

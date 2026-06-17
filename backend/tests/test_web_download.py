@@ -7,10 +7,6 @@ guard, module hygiene) is pinned in the feature-test file
 real downloads that cannot run offline, guarded by a skip when httpbin is
 unreachable so air-gapped CI, proxied environments, and httpbin outages do not
 produce spurious failures.
-
-TKT-900 changed the success contract: ``run()`` now returns a structured
-``{"path", "bytes", "content_type"}`` body (was a bare path string) with the
-size cap declared in ``meta``; an over-cap download is a ``too-large`` error.
 """
 
 import os
@@ -28,7 +24,6 @@ _HTTPBIN_HOST = "httpbin.org"
 
 
 def _httpbin_reachable() -> bool:
-    """Best-effort TCP probe so integration tests skip (not fail) offline."""
     try:
         with socket.create_connection((_HTTPBIN_HOST, 443), timeout=3):
             return True
@@ -38,12 +33,6 @@ def _httpbin_reachable() -> bool:
 
 @pytest.fixture
 def httpbin():
-    """Skip the requesting test when httpbin.org is unreachable.
-
-    The probe runs lazily inside the fixture (setup time of an integration
-    test) rather than at import — so collecting or running ``-m unit`` makes
-    zero network calls.
-    """
     if not _httpbin_reachable():
         pytest.skip(f"{_HTTPBIN_HOST} unreachable — skip network-dependent download tests.")
 
@@ -108,11 +97,6 @@ def test_http_error_status_is_reported(httpbin):
 
 @pytest.mark.integration
 def test_too_large_download_is_an_error(httpbin):
-    """A body exceeding the 100 MB cap aborts with ``too-large`` and leaves no
-    partial file — the cap is enforced mid-stream, never silently truncated.
-
-    httpbin's ``/bytes/<n>`` streams ``n`` random bytes; request just past the
-    cap so the running byte count trips the abort."""
     over = WebDownloadAbility._MAX_DOWNLOAD_BYTES + 1
     result = _ability.run({"url": f"https://httpbin.org/bytes/{over}"})
     assert result.status == "error"
@@ -138,8 +122,7 @@ from tests._tool_result_harness import seed_transcript  # noqa: E402
 
 
 def _seed_dl_transcript(db) -> int:
-    """Insert the transcript anchor (tool_calls.transcript_id FK) the trail hangs
-    its recorded rows off, and return its id."""
+    """Insert the transcript anchor (tool_calls.transcript_id FK) the trail hangs its recorded rows off."""
     return seed_transcript(db, channel="dmn", content="download this file for me")
 
 
@@ -158,8 +141,6 @@ class _DownloadMP:
 
 @pytest.mark.unit
 def test_file_scheme_is_blocked_url(db):
-    """A ``file://`` URL is refused with ``code=blocked-url`` — the scheme check is
-    network-free and fires before any fetch (was: status=success prose)."""
     mp = _DownloadMP(_seed_dl_transcript(db))
 
     result = ToolDispatcher(mp).dispatch("web_download", {"url": "file:///etc/passwd"})
@@ -170,8 +151,6 @@ def test_file_scheme_is_blocked_url(db):
 
 @pytest.mark.unit
 def test_data_scheme_is_blocked_url(db):
-    """A ``data:`` URL is refused with ``code=blocked-url`` — urlparse-cheap, no
-    network."""
     mp = _DownloadMP(_seed_dl_transcript(db))
 
     result = ToolDispatcher(mp).dispatch(

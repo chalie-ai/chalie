@@ -1,5 +1,4 @@
-"""
-Tests for services.locale_service — the single localisation chokepoint.
+"""Tests for services.locale_service — the single localisation chokepoint.
 
 Uses the real telemetry table via the `db` fixture. No mocks.
 Tests the service's actual behavior: seed telemetry rows, call the service,
@@ -26,8 +25,6 @@ def _seed_telemetry(db, **kwargs):
 
 @pytest.mark.unit
 class TestLocaleServiceReads:
-    """Service reads from telemetry and falls back to defaults."""
-
     def test_reads_stored_values(self, db):
         _seed_telemetry(
             db, timezone="Europe/Malta", locale="en-MT",
@@ -56,8 +53,6 @@ class TestLocaleServiceReads:
 
 @pytest.mark.unit
 class TestFormatDate:
-    """format_date is THE chokepoint — for_ui converts to local, else UTC."""
-
     def test_for_ui_converts_to_user_timezone(self, db):
         _seed_telemetry(db, timezone="Europe/Malta")
         from services.locale_service import format_date

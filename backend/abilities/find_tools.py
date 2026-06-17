@@ -76,17 +76,6 @@ class FindToolsAbility(SearchableAbility):
 
     @staticmethod
     def _config_scope(proc) -> "tuple[list[str], set[str]]":
-        """Return ``(discoverable, blocked)`` for the invoking processor's channel.
-
-        Both are sourced from the per-turn ``ProcessorConfig`` (``config.discoverable``
-        / ``config.blocked``) — the single source of truth introduced by the
-        typed-subclass refactor. This is what keeps raw web tools
-        (``browser`` / ``search``) exclusive to the delegate channels and pattern
-        writes exclusive to the pattern channels: every channel declares its own
-        allow-list and block-list. Returns ``([], set())`` when no config is bound
-        (the action-button path / pre-setup), so discovery degrades to empty
-        rather than leaking a global list.
-        """
         config = getattr(proc, "config", None) if proc is not None else None
         if config is None:
             return [], set()
@@ -95,11 +84,6 @@ class FindToolsAbility(SearchableAbility):
         return discoverable, blocked
 
     def _build_tools_index(self, mp=None) -> str:
-        """Return a formatted tools index string for discoverable tools.
-
-        Includes both registered abilities (from AbilityRegistry) and
-        enabled+online MCP client tools (from McpClientService).
-        """
         from abilities._registry import AbilityRegistry
 
         discoverable, blocked = self._config_scope(mp)
@@ -131,11 +115,6 @@ class FindToolsAbility(SearchableAbility):
 
     @staticmethod
     def _get_online_mcp_names() -> list[str]:
-        """Return names of tools from enabled+online MCP servers.
-
-        Gracefully returns [] when no servers are configured or the service
-        is unavailable — never raises so find_tools always completes.
-        """
         try:
             from services.mcp_client_service import McpClientService
             return McpClientService().get_online_mcp_tool_names()
@@ -145,11 +124,6 @@ class FindToolsAbility(SearchableAbility):
 
     @staticmethod
     def _get_online_mcp_tools_index() -> list[tuple[str, str]]:
-        """Return (call_name, display_name) pairs for enabled+online MCP tools.
-
-        Gracefully returns [] when no servers are configured or the service
-        is unavailable — never raises so find_tools always completes.
-        """
         try:
             from services.mcp_client_service import McpClientService
             return McpClientService().get_online_mcp_tools_index()
@@ -215,21 +189,14 @@ class FindToolsAbility(SearchableAbility):
     def _run_select(
         self, requested: list[str], effective_allow: set[str], blocked: set[str]
     ) -> ToolResult:
-        """Exact case-insensitive match against effective_allow; inject matched names.
-
-        Builds a display.lower()→call_name alias map from get_online_mcp_tools_index()
-        so callers can use the bare server-reported name (e.g. 'list_tickets') in
-        addition to the prefixed call name ('_mcp_taskie_list_tickets').
+        """A name blocked on the invoking channel is NEVER injected; it lands in
+        not_found and, when every requested name is unusable, drives a loud
+        ``blocked-on-channel`` / ``unknown-tool`` error so the model never believes
+        a blocked delegate is now available.
 
         Ambiguity rule: if a bare display name maps to more than one distinct call
         name across servers, the alias is dropped — the caller must use the prefixed
-        form to avoid silent wrong-server selection.
-
-        A name blocked on the invoking channel is NEVER injected (today's silent
-        partial success); it lands in not_found and, when every requested name is
-        unusable, drives a loud ``blocked-on-channel`` / ``unknown-tool`` error so
-        the model never believes a blocked delegate is now available.
-        """
+        form to avoid silent wrong-server selection."""
         allow_lower = {name.lower(): name for name in effective_allow}
         blocked_lower = {name.lower() for name in blocked}
 
@@ -300,7 +267,6 @@ class FindToolsAbility(SearchableAbility):
         return ToolResult.ok(body, **meta)
 
     def _run_query(self, query: str, allow: list[str], mcp_names: list[str]) -> ToolResult:
-        """Hybrid vec+FTS RRF search with relevance floor and top-N cap."""
         effective_allow = list(set(allow) | set(mcp_names))
 
         try:
@@ -326,11 +292,6 @@ class FindToolsAbility(SearchableAbility):
         return ToolResult.ok(self._query_body(names), injected=len(names), query=query)
 
     def _append_active(self, names: list[str]) -> None:
-        """Append newly-discovered tool names to the live processor's active_tools.
-
-        Build_tools resolves active_tools to schemas on the next ACT iteration.
-        No-op when self.mp is None (action-button path) or names is empty.
-        """
         if not names:
             return
         proc = self.mp
@@ -342,24 +303,14 @@ class FindToolsAbility(SearchableAbility):
                 active.append(name)
 
     def _query_body(self, names: list[str]) -> dict:
-        """Structured query/fallback body: the same ``{"injected", "not_found"}``
-        shape the select path emits, so every find_tools success has one body
-        contract. Each injected entry is ``{"name", "summary"}``; the discovered
-        names are already on ``active_tools`` so build_tools resolves their full
-        input_schema on the next ACT iteration."""
         return {
             "injected": [{"name": n, "summary": self._summary_for(n)} for n in names],
             "not_found": [],
         }
 
     def _summary_for(self, name: str) -> str:
-        """Return a one-line summary for a tool name (ability or MCP).
-
-        Never raises — returns an empty string on any failure so the caller can
-        always produce a body. The full input_schema is NOT embedded here: the
-        name is appended to active_tools, and build_tools resolves the live schema
-        on the next ACT iteration.
-        """
+        """Never raises — returns an empty string on any failure so the caller can
+        always produce a body."""
         try:
             if name.startswith("_mcp_"):
                 from services.mcp_client_service import McpClientService
@@ -403,16 +354,6 @@ class FindToolsAbility(SearchableAbility):
         )
 
     def _query_mcp(self, query: str, blob: bytes, limit: int, mcp_names: list[str]) -> list:
-        """Hybrid vec+FTS RRF search against mcp_tools.sqlite for enabled+online tools.
-
-        Delegates entirely to _hybrid_search with the MCP-specific SQL and
-        db_path=_MCP_DB_PATH.  When the vec table is absent (sqlite_vec unavailable)
-        or the blob is empty/invalid, _hybrid_search degrades gracefully to FTS-only
-        via its resilient-vec try/except — no branch needed here.
-
-        Returns rows in the same {key, label, score} format as _query so the caller
-        can merge both lists directly.
-        """
         if not mcp_names:
             return []
         placeholders = ",".join("?" * len(mcp_names))
@@ -442,7 +383,6 @@ class FindToolsAbility(SearchableAbility):
 
     @staticmethod
     def _merge_and_truncate(rows: list[dict]) -> list[dict]:
-        """Deduplicate by key and sort by score descending (no cap — caller applies floor+cap)."""
         seen: set[str] = set()
         merged = []
         for row in rows:
@@ -453,11 +393,6 @@ class FindToolsAbility(SearchableAbility):
         return merged
 
     def _fallback(self, query: str, allow: list[str]) -> ToolResult:
-        """FTS-only fallback for abilities.sqlite when embedding fails.
-
-        No relevance floor applied (single-signal by nature); emits the same
-        structured ``{"injected", "not_found"}`` body the primary query path uses.
-        """
         if not allow:
             return ToolResult.ok({"injected": [], "not_found": []}, injected=0, query=query)
 

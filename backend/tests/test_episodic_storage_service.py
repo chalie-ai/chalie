@@ -1,7 +1,4 @@
-"""Tests for EpisodicService storage — real SQLite via shared db fixture.
-
-All tests use the real production stack. No mocks.
-"""
+"""Tests for EpisodicService storage using the real production stack (no mocks)."""
 
 import uuid
 

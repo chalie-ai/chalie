@@ -1,34 +1,15 @@
-"""Feature tests for TKT-924 — turn-0 flashback + continuation gate + render.
+"""Feature tests for TKT-924 - turn-0 flashback + continuation gate + render.
 
-Driven through the REAL production hot-path entry point that fires the flashback:
-``MessageProcessor._seed_turn_zero()``. That is the method that, in production,
-issues the framework ``memory(action=recall, _auto=True)`` before the first LLM
-turn (message_processor.py:369). TKT-924 wraps it in a *continuation gate*: the
-auto-recall must fire only on session start or topic shift, and be SKIPPED for a
-continuation message ("yes, do that") whose embedding sits close to the running
-conversation centroid.
+The gate (in ``MessageProcessor._seed_turn_zero``) fires the auto memory recall
+only on session start or topic shift, and skips it for continuation messages
+whose embedding sits close to the running conversation centroid.
 
-Zero mocks. Real ``UserConfig`` MessageProcessor, real ``ToolDispatcher`` (called
-from inside ``_seed_turn_zero``), real embedding model (the gate's centroid math
-runs on real 768-dim vectors), real ``DataGraphService`` / ``EpisodicService``,
-real SQLite via the ``db`` fixture, real ``memory_recall_log`` writes.
+Observable: ``memory_recall_log`` rows with ``caller='seed'`` (schema.sql:447).
+Each test drives sequential turns sharing the persisted transcript and counts
+seed rows the gate let through.
 
-The single durable observable for the gate is the ``memory_recall_log`` row the
-seed recall writes under ``caller='seed'`` (frozen by scenario lock, schema.sql
-:447). The gate's decision is "did a NEW caller='seed' row appear for this turn?"
-— so each test drives one or more sequential turns (each a fresh MessageProcessor,
-sharing the persisted conversation transcript exactly as production does) and
-counts the seed rows the gate let through.
-
-Render behaviours (curated flashback block vs JSON) are read back from the
-``tool_calls.result`` the seed dispatch recorded for the ``memory`` call, and from
-the explicit-recall dispatch return — the exact strings production injects.
-
-Status note (RED-first): at the time of writing, ``_seed_turn_zero`` fires the
-seed UNCONDITIONALLY on every turn and renders the recall as JSON for both the
-seed and the explicit path. Tests 2/3/4/5 therefore FAIL against current HEAD
-(they assert the gate and the curated render that the coder is adding). Tests 1
-and 6 are regression pins that may be GREEN now.
+Status (RED-first): ``_seed_turn_zero`` currently fires unconditionally. Tests
+2/3/4/5 FAIL at HEAD; tests 1 and 6 are regression pins that may be GREEN now.
 """
 
 import json
@@ -50,10 +31,6 @@ pytestmark = pytest.mark.unit
 
 
 def _new_turn(text: str) -> MessageProcessor:
-    """A real UserConfig MessageProcessor positioned exactly where the turn-0
-    seed fires in production: input row written (anchors the act-trail FK), config
-    attached, active_tools seeded. This is the same shape the ACT loop's _setup()
-    hands to _seed_turn_zero()."""
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, text, {})
     mp.config = UserConfig()
@@ -63,7 +40,6 @@ def _new_turn(text: str) -> MessageProcessor:
 
 
 def _seed_count(db, caller: str = "seed") -> int:
-    """How many flashback (caller='seed') recall rows the gate has let through."""
     row = db.execute(
         "SELECT COUNT(*) FROM memory_recall_log WHERE caller = ?", (caller,)
     ).fetchone()
@@ -71,9 +47,8 @@ def _seed_count(db, caller: str = "seed") -> int:
 
 
 def _last_seed_result(db) -> str | None:
-    """The exact string the seed's memory dispatch recorded into the act-trail —
-    i.e. the content injected before the model's first turn. None if no memory
-    seed call was recorded (gate skipped)."""
+    """Returns the act-trail result string the seed recall injected, or None if
+    the gate skipped the seed call."""
     row = db.execute(
         "SELECT result FROM tool_calls WHERE tool_name = 'memory' "
         "ORDER BY id DESC LIMIT 1"
@@ -89,19 +64,14 @@ _VEC_DIM = 256
 
 
 def _unit(index: int, dim: int = _VEC_DIM) -> list:
-    """A 256-dim unit basis vector for the fixture's vec tables, matching the
-    conftest convention used across the episodic-retrieval suite."""
     v = [0.0] * dim
     v[index] = 1.0
     return v
 
 
 def _write_compaction(channel: str, body: str) -> None:
-    """Persist a chat-history compaction living-doc exactly as production does — a
-    transcript row with role='compaction' (compaction_persistence.get_compaction
-    reads the newest such row). The terse-message gate reads its '- Now —' section
-    (the bullet living-doc format the chat-history compactor writes, system_message
-    _prompt.py:263-269)."""
+    """Persist a compaction row (role='compaction') so the terse-message gate can
+    read the '- Now -' section when composing the embed text."""
     db = get_shared_db_service()
     with db.connection() as conn:
         conn.execute(
@@ -115,9 +85,8 @@ def _write_compaction(channel: str, body: str) -> None:
 
 
 def test_flashback_fires_on_session_start(db):
-    """Turn 0 of a fresh conversation — no prior turns, no centroid — must fire
-    the flashback: exactly one caller='seed' row appears, written by the seed
-    recall the gate let through."""
+    """Turn 0 with no prior turns and no centroid must fire the flashback:
+    exactly one caller='seed' row appears."""
     assert _seed_count(db) == 0, "fixture leaked a prior seed row"
 
     _new_turn("what's the latest on my Gozo ferry booking")._seed_turn_zero()
@@ -131,10 +100,8 @@ def test_flashback_fires_on_session_start(db):
 
 
 def test_continuation_message_does_not_refire_flashback(db):
-    """A continuation message that stays on the running topic ('yes, do that'
-    after a Gozo-trip turn) embeds close to the conversation centroid, so the gate
-    must SKIP the flashback — no new caller='seed' row beyond the session-start
-    one."""
+    """A continuation on the same topic embeds close to the centroid; the gate
+    must SKIP the flashback - no new caller='seed' row beyond the session-start."""
     # Turn 1: session start — flashback fires (centroid is now established).
     _new_turn(
         "can you help me plan the family trip to Gozo and book the ferry"
@@ -154,9 +121,8 @@ def test_continuation_message_does_not_refire_flashback(db):
 
 
 def test_topic_shift_refires_flashback(db):
-    """A message on a clearly different topic embeds far from the conversation
-    centroid, so the gate must RE-FIRE the flashback — a new caller='seed' row
-    appears for the shifted turn."""
+    """A message on a different topic embeds far from the centroid; the gate
+    must RE-FIRE the flashback - a new caller='seed' row appears."""
     # Establish a centroid firmly about the Gozo trip.
     _new_turn(
         "can you help me plan the family trip to Gozo and book the ferry"
@@ -180,19 +146,10 @@ def test_topic_shift_refires_flashback(db):
 
 
 def test_terse_message_resolves_topic_via_living_doc_now(db):
-    """A terse message (< ~8 tokens) carries no topic on its own, so the gate
-    composes its embed text with the compaction living-doc '## Now' section. Proof
-    that the 'Now' section is actually consulted: the SAME terse message yields
-    DIFFERENT gate decisions depending only on what '## Now' says relative to the
-    conversation centroid.
-
-    Both branches share an identical conversation centroid (one Gozo-trip turn)
-    and an identical terse follow-up ('yes please'). The only difference is the
-    living-doc 'Now':
-      * continuation 'Now' (still about the trip) → composite near centroid → SKIP
-      * shifted 'Now' (about an unrelated work deadline) → composite far → RE-FIRE
-    If the gate ignored 'Now', both branches would decide identically.
-    """
+    """A terse message carries no topic alone; the gate composes its embed with
+    the compaction '- Now -' section. Proof: the same terse message ('yes please')
+    against the same centroid yields DIFFERENT decisions depending only on '- Now -':
+    continuation Now -> SKIP; shifted Now (unrelated deadline) -> RE-FIRE."""
     # --- Branch A: 'Now' continues the established topic → terse should SKIP.
     _new_turn(
         "can you help me plan the family trip to Gozo and book the ferry"
@@ -247,11 +204,8 @@ def test_terse_message_resolves_topic_via_living_doc_now(db):
 
 
 def test_seed_renders_curated_block_not_json(db):
-    """The seed no longer injects the raw recall JSON; it injects a curated bundle
-    (≤5 live facts as bullets + ≤3 episodes as 'On <date>: <one-liner>', supers
-    preferred). We seed FTS-findable facts + an episode, fire the session-start
-    flashback, and read back the exact string the seed recorded into the act-trail.
-    """
+    """The seed injects a curated bundle (live facts as bullets + episodes as
+    'On <date>: <one-liner>') rather than the raw recall JSON envelope."""
     # A live fact (data_graph) and an episode the recall can actually surface.
     get_data_graph_service().store(
         kind="user_specific", key="ferry_provider",
@@ -305,9 +259,8 @@ def test_seed_renders_curated_block_not_json(db):
 
 
 def test_explicit_recall_keeps_json_contract(db):
-    """Regression pin: an explicit, model-invoked memory.recall (NO _auto) still
-    returns the TKT-886 {results, fallback} JSON body unchanged — the curated
-    render is the SEED path only. This may be GREEN at HEAD; it must stay green."""
+    """Regression pin: explicit memory.recall (no _auto) returns the TKT-886
+    {results, fallback} JSON body unchanged - curated render is the seed path only."""
     get_data_graph_service().store(
         kind="user_specific", key="residence", value="Valletta", source="test:seed",
     )

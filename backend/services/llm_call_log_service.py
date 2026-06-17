@@ -55,19 +55,10 @@ def log_call(
 def get_last_chat_request_tokens(job_name: str = 'user:user') -> 'int | None':
     """Return ``tokens_input`` of the most recent main-conversation request.
 
-    Powers the composer's context-size indicator. It MUST key off ``job_name``
-    ('channel:role'), not ``usage_class``: many processors share usage_class
-    'chat' (the thinking pre-pass and every web_search/web_browse delegate
-    iteration all inherit the parent's CHAT policy_channel), so a usage_class
-    filter makes the indicator oscillate between the real user turn (~17-20k)
-    and a delegate's tiny clean-context sub-request (~2k). ``job_name='user:user'``
-    is the UserConfig turn alone (channel='user', role='user'), so the indicator
-    tracks the conversation's own context size and the legitimate within-turn
-    climb (the act-trail grows across ACT iterations, all logged as user:user).
-
-    ``id DESC`` (autoincrement) is the insertion order, so this is the
-    truly-latest row even when two calls share a ``created_at`` second. Returns
-    None when no such call has been logged yet.
+    It MUST key off ``job_name`` ('channel:role'), not ``usage_class``,
+    because many processors share usage_class 'chat' — a usage_class filter
+    makes the indicator oscillate between the real user turn (~17-20k) and
+    a delegate's tiny clean-context sub-request (~2k).
     """
     db = get_shared_db_service()
     rows = db.fetch_all(
@@ -81,16 +72,9 @@ def get_last_chat_request_tokens(job_name: str = 'user:user') -> 'int | None':
 def get_token_usage(window: str, usage_class: str | None = None) -> dict:
     """Return time-bucketed token usage statistics.
 
-    Args:
-        window: One of 'hour', 'day', 'week', 'month', 'lifetime'.
-        usage_class: Optional filter — 'chat', 'subagent', or 'subconscious'.
-
-    Returns:
-        dict with 'window', 'generated_at', 'summary', and 'entries' keys.
-        entries: list of dicts with bucket, tokens_input, tokens_output,
-                 tokens_cache_read, tokens_cache_create, tokens_thinking,
-                 usage_class, model, provider.
-        summary: total_tokens, cache_hit_pct, tokens_today, most_active_model.
+    Returns dict with 'window', 'generated_at', 'summary', and 'entries' keys.
+    entries: list of bucket/token breakdowns by (bucket, usage_class, model, provider).
+    summary: total_tokens, cache_hit_pct, tokens_today, most_active_model.
     """
     db = get_shared_db_service()
     offset = _WINDOW_OFFSETS[window]

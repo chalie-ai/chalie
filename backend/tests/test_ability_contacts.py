@@ -36,9 +36,9 @@ def _seed_contact(
     org: str = "",
     title: str = "",
 ) -> dict:
-    """Index a contact the production way — through
-    ``contact_resolver.index_contact_profile`` (the CardDAV ingest entry point) —
-    so it lands as a ``user_specific`` data_graph row resolvable by the ability."""
+    """Must use ``contact_resolver.index_contact_profile`` (CardDAV ingest entry
+    point) so the contact lands as a ``user_specific`` data_graph row resolvable by
+    the ability."""
     from capabilities.contact_resolver import index_contact_profile
 
     profile = {
@@ -72,14 +72,10 @@ def user_mp(db):
 
 
 def _parse_body(rendered: str, tool: str = "contacts") -> object:
-    """Extract and JSON-parse the body (the JSON head before any card trailer)."""
     return parse_body(rendered, tool, rich=True)
 
 
 def test_list_returns_structured_rows_with_count(db, dmn_mp):
-    """``list`` with seeded contacts serves them from the local index (no
-    connected gate) as JSON rows carrying uid/fn/emails/phones, with a count
-    meta — offline, regardless of mail-capability connection state."""
     _seed_contact(
         fn="John Smith", given_name="John", family_name="Smith",
         emails=[{"value": "john.smith@example.com", "type": "home"}],
@@ -106,8 +102,6 @@ def test_list_returns_structured_rows_with_count(db, dmn_mp):
 
 
 def test_list_with_query_filters_through_resolve(db, dmn_mp):
-    """A ``query`` routes ``list`` through the real ``resolve()`` RRF lookup so the
-    rows are the matched subset, not the whole book."""
     _seed_contact(fn="Mike Borg", given_name="Mike", family_name="Borg")
     _seed_contact(fn="Sarah Vella", given_name="Sarah", family_name="Vella")
 
@@ -123,9 +117,7 @@ def test_list_with_query_filters_through_resolve(db, dmn_mp):
 
 
 def test_get_exact_name_returns_single_contact(db, user_mp):
-    """``get`` for a name that ci-equals exactly one candidate's fn returns that
-    one contact (even when fuzzy resolve also surfaces a same-first-name sibling),
-    and pairs a rich card on the user-broadcast channel."""
+    """Pairs a rich card on the user-broadcast channel."""
     _seed_contact(
         fn="John Smith", given_name="John", family_name="Smith",
         emails=[{"value": "john.smith@example.com", "type": "home"}],
@@ -145,9 +137,8 @@ def test_get_exact_name_returns_single_contact(db, user_mp):
 
 
 def test_get_ambiguous_lists_candidates_picks_nothing(db, dmn_mp):
-    """``get "John"`` with two relevant John candidates returns
-    ``code=ambiguous-match`` with BOTH candidate names in the body — never a
-    silent first-hit pick, and no single ``contact`` payload."""
+    """Returns ``code=ambiguous-match`` with BOTH candidate names — never a
+    silent first-hit pick."""
     _seed_contact(fn="John Smith", given_name="John", family_name="Smith")
     _seed_contact(fn="John Doe", given_name="John", family_name="Doe")
 
@@ -163,9 +154,7 @@ def test_get_ambiguous_lists_candidates_picks_nothing(db, dmn_mp):
 
 
 def test_get_total_miss_returns_not_found_with_closest_match(db, dmn_mp):
-    """``get`` for an identifier with NO relevant candidate but fuzzy hits on a
-    non-empty index errors ``code=not-found`` with a closest-match hint naming a
-    real candidate — the spec's closest-match signal."""
+    """Errors ``code=not-found`` with a closest-match hint naming a real candidate."""
     _seed_contact(fn="John Smith", given_name="John", family_name="Smith")
     _seed_contact(fn="Mike Borg", given_name="Mike", family_name="Borg")
 

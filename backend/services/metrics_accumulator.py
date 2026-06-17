@@ -7,27 +7,8 @@ from dataclasses import dataclass, field
 class MetricsAccumulator:
     """Per-turn token, tool, and timing accounting for one MessageProcessor.send().
 
-    Started at processor entry (before the thinking gate) so exploration and
-    compaction LLM calls are captured. Ends when snapshot() is called at
-    dispatch time. All LLM calls in the turn contribute via accumulate();
-    every handleTool() call contributes via record_tool().
-
-    Timing model
-    ------------
-    Three turn-level buckets, each in milliseconds:
-      * ``llm_ms``   — sum of every LLMResponse.latency_ms recorded via
-        ``record_llm_call`` across the turn (ACT iterations + thinking
-        exploration + compaction).
-      * ``pre_llm_ms`` — sum of all pre-LLM stages, accumulated via
-        ``stage(name)`` context manager. Stages reported as a sub-dict so
-        the worst offender is identifiable without parsing.
-      * ``post_llm_ms`` — derived at snapshot time as
-        ``wall - pre_llm_ms - llm_ms``. Captures everything not in the
-        other two buckets (post-tool records, store, postTurn, etc.).
-
-    Per-iteration breakdown is captured by wrapping each ACT loop body in
-    ``iteration()``. The currently-open iteration is the bucket that
-    ``record_llm_call`` and the iteration-scoped stages append to.
+    Turn-level time splits into three buckets: llm_ms (LLM round-trips),
+    pre_llm_ms (pre-LLM stages via `stage()`), and post_llm_ms (wall - pre - llm).
     """
 
     tokens_input: int = 0
@@ -70,14 +51,7 @@ class MetricsAccumulator:
             tools.append({'name': tool_name})
 
     def merge(self, other: 'MetricsAccumulator') -> None:
-        """Fold a sub-processor's counts into this one.
-
-        Used when a sub-processor (compaction, exploration) runs its own
-        send() inside the parent turn — token/tool counts and LLM time
-        are absorbed so per-turn metrics reflect the full cost.
-        Sub-processor stages and iterations are NOT merged: the parent
-        owns the timeline.
-        """
+        # Sub-processor stages and iterations are NOT merged: the parent owns the timeline.
         if other is None:
             return
         for attr in ('tokens_input', 'tokens_output', 'tokens_thinking',
@@ -95,15 +69,7 @@ class MetricsAccumulator:
 
     @contextmanager
     def stage(self, name: str):
-        """Time a named pre-LLM (or post-LLM) stage.
-
-        Adds the elapsed ms to ``stages[name]`` (cumulative across calls
-        with the same name within the turn). If invoked while an
-        iteration is active, the time is also added to that iteration's
-        per-stage breakdown so per-iter ACT cost is attributable.
-
-        Never raises — timing must not break the request path.
-        """
+        """Never raises — timing must not break the request path."""
         t0 = time.monotonic()
         try:
             yield

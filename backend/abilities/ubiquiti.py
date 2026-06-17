@@ -40,8 +40,6 @@ LOG_PREFIX = "[UBIQUITI ABILITY]"
 class _Spec(NamedTuple):
     """The internal translation from one flat model-facing action to the coarse
     capability handler + the fixed sub-command params that handler expects.
-
-    ``handler`` is the ``ACTION_HANDLERS`` value (the capability tool name).
     ``inject`` is the fixed prose-DSL the OLD schema forced the model to guess —
     now supplied by the ability so the model never sees it.
     """
@@ -295,13 +293,7 @@ _LIST_BODIES = {
 
 
 def _shape_result(action: str, body: dict) -> ToolResult:
-    """Reshape a successful handler dict into the contract body for *action*.
-
-    list_* → the handler's JSON rows + a ``count`` meta (the capability already
-    trims each row to the few fields a model needs). device_status / site_health /
-    control / write echoes → the handler body passed through (already structured).
-
-    A handler that surfaced its own ``error`` key (a backend failure or a target
+    """A handler that surfaced its own ``error`` key (a backend failure or a target
     that the controller did not find, NOT a bad input the pre-gate would catch) is
     passed through as the success body — the contract reserves ``err()`` for
     anticipated input failures the ability itself detects; the dispatcher wraps

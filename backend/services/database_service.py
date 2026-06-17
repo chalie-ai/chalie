@@ -1,9 +1,8 @@
-"""
-Database Service — SQLite connection management with thread-local connections.
+"""SQLite connection management with thread-local connections.
 
-Replaces the PostgreSQL/SQLAlchemy implementation with sqlite3 + sqlite-vec + FTS5.
-Each thread gets its own connection via threading.local(). WAL mode enables
-concurrent reads during writes.
+Replaces the PostgreSQL/SQLAlchemy implementation with sqlite3 +
+sqlite-vec + FTS5. Each thread gets its own connection via
+threading.local(). WAL mode enables concurrent reads during writes.
 """
 
 import logging
@@ -18,36 +17,20 @@ logger = logging.getLogger(__name__)
 
 
 class _TextClause:
-    """Lightweight replacement for sqlalchemy.text().
-    Just wraps a SQL string so SessionProxy.execute(str(obj)) works."""
+    """Wraps a SQL string so ``SessionProxy.execute(str(obj))`` works."""
     __slots__ = ('_sql',)
 
     def __init__(self, sql: str):
-        """Initialize with a raw SQL string.
-
-        Args:
-            sql: The SQL statement to wrap.
-        """
         self._sql = sql
 
     def __str__(self):
-        """Return the underlying SQL string."""
         return self._sql
 
     def __repr__(self):
-        """Return a developer-friendly representation."""
         return f"text({self._sql!r})"
 
 
 def text(sql: str) -> _TextClause:
-    """Wrap a raw SQL string as a text clause (drop-in for sqlalchemy.text()).
-
-    Args:
-        sql: The SQL statement string to wrap.
-
-    Returns:
-        A :class:`_TextClause` instance whose ``str()`` yields the SQL.
-    """
     return _TextClause(sql)
 
 # ── Thread-local storage for connections ────────────────────────
@@ -59,12 +42,7 @@ _shared_lock = threading.Lock()
 
 
 def get_shared_db_service() -> 'DatabaseService':
-    """Return the process-wide shared DatabaseService singleton, creating it if needed.
-
-    Returns:
-        The singleton :class:`DatabaseService` instance.  Thread-safe via a
-        double-checked lock pattern.
-    """
+    """Thread-safe via double-checked lock."""
     global _shared_db_service
     if _shared_db_service is None:
         with _shared_lock:
@@ -75,9 +53,7 @@ def get_shared_db_service() -> 'DatabaseService':
 
 
 class SessionProxy:
-    """
-    Lightweight shim that mimics SQLAlchemy session.execute(text("SQL"), params).
-    Allows code that used get_session() to work with raw SQLite connections.
+    """Lightweight shim that mimics SQLAlchemy session.execute(text("SQL"), params).
 
     Usage:
         with db.get_session() as session:
@@ -86,30 +62,12 @@ class SessionProxy:
     """
 
     def __init__(self, conn: sqlite3.Connection):
-        """Wrap an existing sqlite3.Connection for SQL execution.
-
-        Args:
-            conn: An open sqlite3.Connection to delegate all SQL operations to.
-        """
         self._conn = conn
 
     def execute(self, sql_or_text, params=None):
-        """Execute a SQL statement and return a :class:`ResultProxy`.
-
-        Accepts either a raw SQL string or a :class:`_TextClause` produced by
-        :func:`text`.  Dict-style named parameters (``":name"`` placeholders)
-        are transparently converted to SQLite positional ``"?"`` parameters.
-
-        Args:
-            sql_or_text: SQL string or :class:`_TextClause` instance to execute.
-            params: Optional dict of named bind values (``{"name": value}``) or
-                a sequence for positional binding.  Pass ``None`` for statements
-                with no parameters.
-
-        Returns:
-            A :class:`ResultProxy` wrapping the executed ``sqlite3.Cursor``,
-            supporting ``fetchone()``, ``fetchall()``, and ``scalar()``.
-        """
+        """Accepts a raw SQL string or a :class:`_TextClause` produced by
+        :func:`text`. Dict-style named parameters (``:name``) are
+        transparently converted to SQLite positional ``?`` parameters."""
         # Extract the string from sqlalchemy text() objects
         sql = str(sql_or_text)
 
@@ -118,7 +76,6 @@ class SessionProxy:
             import re
             ordered_params = []
             def _replace(match):
-                """Capture a named placeholder, append its value, return ``?``."""
                 key = match.group(1)
                 ordered_params.append(params[key])
                 return '?'
@@ -155,24 +112,10 @@ class ResultProxy:
         self._cursor = cursor
 
     def fetchone(self):
-        """Fetch the next row from the result set.
-
-        Returns:
-            A ``sqlite3.Row`` that supports both integer index (``row[0]``) and
-            column-name access (``row["col"]``), or ``None`` if no further rows
-            are available.
-        """
         row = self._cursor.fetchone()
         return row  # sqlite3.Row already supports int and key indexing
 
     def fetchall(self):
-        """Fetch all remaining rows from the result set.
-
-        Returns:
-            A list of ``sqlite3.Row`` objects, each supporting both integer
-            index and column-name access.  Returns an empty list when no rows
-            remain.
-        """
         return self._cursor.fetchall()
 
     @property
@@ -186,18 +129,12 @@ class ResultProxy:
         return self._cursor.lastrowid
 
     def scalar(self):
-        """Fetch the first column of the first row, or None if no rows.
-
-        Returns:
-            The scalar value or None.
-        """
         row = self.fetchone()
         if row is None:
             return None
         return row[0]
 
     def close(self):
-        """Close the underlying cursor, releasing its resources."""
         self._cursor.close()
 
 
@@ -205,23 +142,9 @@ class DictCursor:
     """Wraps sqlite3.Cursor to return list[dict] from fetchall()."""
 
     def __init__(self, cursor: sqlite3.Cursor):
-        """Wrap an existing sqlite3.Cursor.
-
-        Args:
-            cursor: An open sqlite3.Cursor to delegate all operations to.
-        """
         self._cursor = cursor
 
     def execute(self, sql, params=None):
-        """Execute a single SQL statement.
-
-        Args:
-            sql: SQL statement string.
-            params: Optional sequence or mapping of bind parameters.
-
-        Returns:
-            self, for chaining.
-        """
         if params is None:
             self._cursor.execute(sql)
         else:
@@ -229,35 +152,16 @@ class DictCursor:
         return self
 
     def executemany(self, sql, params_list):
-        """Execute a SQL statement against a sequence of parameter sets.
-
-        Args:
-            sql: SQL statement string.
-            params_list: Iterable of parameter sequences or mappings.
-
-        Returns:
-            self, for chaining.
-        """
         self._cursor.executemany(sql, params_list)
         return self
 
     def fetchone(self):
-        """Fetch the next row as a dict, or None if no more rows.
-
-        Returns:
-            dict of column→value for the next row, or None.
-        """
         row = self._cursor.fetchone()
         if row is None:
             return None
         return dict(row)
 
     def fetchall(self):
-        """Fetch all remaining rows as a list of dicts.
-
-        Returns:
-            List of column→value dicts.
-        """
         return [dict(row) for row in self._cursor.fetchall()]
 
     @property

@@ -1,13 +1,5 @@
-"""Feature test: the mp's user-message builder attaches an image from
-config.get_image when the metadata carries image_path.
-
-Providers is mp-free.
-The method that builds the user-message list — previously
-Providers._build_user_messages() — moved to MessageProcessor._build_send_messages()
-where it is called when assembling the ProviderApiRequest DTO. This test
-exercises that real production method (the same entry point _loop uses) and
-asserts the image attachment survives into the message dict.
-"""
+"""Test that the message processor's _build_send_messages() correctly
+assembles its ProviderApiRequest DTO with image attachment from config.get_image."""
 
 import base64
 
@@ -25,9 +17,6 @@ def _png_bytes() -> bytes:
 
 
 def test_build_send_messages_attaches_image_from_get_image(tmp_path):
-    """_build_send_messages() on a VisionConfig mp with image_path metadata
-    produces a message whose 'image' dict carries the correct mime_type and
-    base64-encoded data — proving the DTO construction carries vision payloads."""
     from configs.channels.vision import VisionConfig
     from services.processor_config import ProcessorConfig
 
@@ -46,8 +35,6 @@ def test_build_send_messages_attaches_image_from_get_image(tmp_path):
 
 
 def test_build_send_messages_no_image_when_get_image_returns_none(tmp_path):
-    """A VisionConfig with no image_path in metadata attaches no image —
-    the framework hook returns None and the message stays a bare user message."""
     from configs.channels.vision import VisionConfig
     from services.processor_config import ProcessorConfig
 

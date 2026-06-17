@@ -36,7 +36,6 @@ _DEFAULT_UPLOAD_NAME = "snapshot.zip"
 @snapshot_bp.route("/export", methods=["POST"])
 @require_session
 def snapshot_export():
-    """Export the whole instance and stream the resulting zip as a download."""
     try:
         body = request.get_json(silent=True) or {}
         password = body.get("password") or None

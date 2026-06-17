@@ -6,10 +6,9 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""file_write-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. Drives the real ToolDispatcher end-to-end
-hot path with zero mocks, exercising the file_write ability's read-guard,
-empty-contents handling, and structured success/error bodies."""
+"""Tests that drive the real ToolDispatcher end-to-end hot path for file_write
+with zero mocks: read-guard, empty-contents handling, and structured
+success/error bodies."""
 
 import os
 
@@ -25,15 +24,6 @@ pytestmark = pytest.mark.unit
 
 
 class _MP:
-    """Minimal real MP-shaped context — exactly what dispatch + the read-guard
-    read off the live processor: ``config`` (the chat policy channel), ``uid``
-    (the act-trail write anchor) and ``_uid`` (the read-guard's transcript
-    anchor). Production binds all three to the same transcript id; the fixture
-    mirrors that.
-
-    Kept local (not the harness ``MP``) because the read-guard reads ``_uid`` as
-    its transcript anchor — the harness ``MP`` is the minimal ``config``+``uid``
-    form only."""
 
     def __init__(self, uid: int, config) -> None:
         self.config = config
@@ -43,9 +33,6 @@ class _MP:
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat mp bound to the test database: a seeded transcript anchor for
-    the act-trail + read-guard, and ``file_write`` flipped to ``allow`` in the
-    real policy table so the gate passes through to the production run()."""
     allow_policy(db, "file_write")
     return _MP(seed_transcript(db, "chat", "save this to a file"), UserConfig({}))
 
@@ -57,11 +44,8 @@ def _parse_body(rendered: str) -> object:
 # ── 1. THE KILL SHOT: empty contents writes a real 0-byte file ──────────────────
 
 
+
 def test_empty_contents_writes_zero_byte_file(db, chat_mp, tmp_path):
-    """``contents=""`` to a NEW path is VALID user data: a real 0-byte file is
-    written and the body echoes ``{"path", "bytes": 0, "created": true}``. The old
-    ``if not contents:`` truthiness guard rejected this as a ``status=success``
-    "Error: 'contents' is required." prose body and wrote nothing."""
     target = tmp_path / "empty.txt"
 
     out = ToolDispatcher(chat_mp).dispatch(
@@ -82,14 +66,6 @@ def test_empty_contents_writes_zero_byte_file(db, chat_mp, tmp_path):
 
 
 def test_new_file_written_and_round_trips(db, chat_mp, tmp_path):
-    """A non-empty write to a new path returns ``created=true`` and ``bytes`` equal
-    to the encoded length, and the file content round-trips from disk.
-
-    The dispatcher's real ``_sanitize_llm_args`` strips surrounding whitespace off
-    every string arg before run() (a production sentinel-scrub step), so the body
-    used here is whitespace-clean and what lands on disk is byte-identical to it —
-    we assert against the genuine post-sanitisation value, not a pre-sanitisation
-    assumption."""
     target = tmp_path / "sub" / "note.txt"
     text = "hello chalie line one\nand a second line"
 
@@ -195,9 +171,6 @@ def test_relative_path_is_invalid_path(db, chat_mp):
     reason="root bypasses unix file permissions, so the chmod 0o500 dir is writable",
 )
 def test_permission_denied_into_readonly_dir(db, chat_mp, tmp_path):
-    """Writing a NEW file into a 0o500 (read+execute, no write) directory errors
-    ``code=permission-denied`` — the real ``open`` raises ``PermissionError`` and
-    is mapped, not swallowed as success."""
     locked = tmp_path / "locked"
     locked.mkdir()
     locked.chmod(0o500)

@@ -37,12 +37,6 @@ def _make_provider(db, *, name, max_tokens):
 class TestContextUsageEndpoint:
 
     def test_returns_last_user_turn_tokens_and_window(self, authed_client):
-        """GET /system/context-usage = last user-turn tokens_input / selected window.
-
-        The production logger keys the row by ``job_name`` = ``channel:role``; the
-        UserConfig turn is 'user:user' (asserted in
-        ``test_indicator_filter_matches_real_config_jobs``).
-        """
         from services.llm_call_log_service import log_call
         from services.provider_db_service import ProviderDbService
         import services.database_service as _db_mod

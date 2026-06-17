@@ -1,20 +1,4 @@
-"""Feature tests for the FIFO embedding queue.
-
-Verifies that the module-level serialization contract introduced in rc-0.4.0
-holds end-to-end:
-
-1. Concurrent callers get valid results AND take longer than a single call
-   would (proves inference is sequential, not parallel — the OOM-prevention
-   guarantee).
-2. Cache hits bypass the queue entirely (proves the deadlock-prevention contract
-   and that repeated calls are cheap).
-3. All three public methods (generate_embedding, generate_embedding_np,
-   generate_embeddings_batch) route through the same queue and each returns
-   the correct type/shape.
-
-All tests run against the real ONNX model, real queue, real worker.
-Zero mocks, zero patches of production code.
-"""
+"""Feature tests for the FIFO embedding queue — real ONNX model, real queue, real worker. Zero mocks."""
 
 import threading
 import time
@@ -44,7 +28,6 @@ _SKIP = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def emb_svc():
-    """Real EmbeddingService singleton, model loaded once for this module."""
     svc = get_embedding_service()
     # Warm the ONNX session so setup cost doesn't inflate timing measurements.
     svc.generate_embedding("warmup")
@@ -128,11 +111,6 @@ class TestConcurrentCallsSerializeViaQueue:
 @_SKIP
 @pytest.mark.integration
 class TestCacheHitBypassesQueue:
-    """Warming the cache for a text, then calling generate_embedding 100 times
-    in a tight loop, must complete in dramatically less time than 100 × a single
-    cold inference.  This verifies the cache-first contract that also prevents
-    reentrance deadlock if a cached lookup were ever attempted from the worker.
-    """
 
     def test_cached_text_returns_in_fraction_of_cold_inference_time(self, emb_svc):
         # Cold baseline on a unique text.

@@ -1,22 +1,3 @@
-"""Document chunking + artifact-storage engine.
-
-The substance behind document ingestion's "split extracted text into searchable
-fragments and persist them" step. Pure, deterministic packing logic (paragraph →
-sentence → fixed-width fallback) plus the data-graph write that enqueues each
-fragment for embedding + FTS indexing.
-
-Lives in ``services`` (not on the ``document`` ability) because three callers
-need it and two of them are not abilities: the Documents library upload pipeline
-(``api/documents.py``) and the watched-folder ingest (``folder_watcher_service``),
-alongside the ability's own ``create`` action and ``ingest_file`` orchestration.
-Keeping the engine here lets the non-ability callers reach it without importing
-an ability.
-
-The chunk sizing (``min_chars=512``, ``max_chars=1024``, ``overlap=48``) and the
-``KIND_DOCUMENT`` / ``document:<id>`` / ``doc:<id>:<NNN>`` key scheme are the
-established contract — preserved verbatim so existing indexes and search keys
-stay valid.
-"""
 
 import logging
 
@@ -24,7 +5,6 @@ logger = logging.getLogger(__name__)
 
 
 def _split_paragraph_into_sentences(para: str, max_chars: int) -> list:
-    """Greedily split a paragraph at sentence boundaries; fall back to fixed-width slicing."""
     sentences = []
     remaining = para
     while remaining:
@@ -41,7 +21,6 @@ def _split_paragraph_into_sentences(para: str, max_chars: int) -> list:
 
 
 def _absorb_long_para(buffer: str, para: str, chunks: list, min_chars: int, max_chars: int) -> str:
-    """Flush buffer, split the long paragraph, and accumulate sentences back into buffer."""
     if buffer:
         chunks.append(buffer)
     new_buf = ""
@@ -55,7 +34,6 @@ def _absorb_long_para(buffer: str, para: str, chunks: list, min_chars: int, max_
 
 
 def _build_chunks(paragraphs: list, min_chars: int, max_chars: int) -> list:
-    """Pack paragraphs into chunks ≥ ``min_chars``; oversize paragraphs are sentence-split."""
     chunks: list = []
     buffer = ""
     for para in paragraphs:
@@ -72,7 +50,6 @@ def _build_chunks(paragraphs: list, min_chars: int, max_chars: int) -> list:
 
 
 def split_into_artifacts(text: str, min_chars: int = 512, max_chars: int = 1024, overlap: int = 48) -> list:
-    """Split extracted document text into overlapping artifact fragments."""
     if not text:
         return []
     if len(text) <= min_chars:
@@ -90,7 +67,6 @@ def split_into_artifacts(text: str, min_chars: int = 512, max_chars: int = 1024,
 
 
 def create_document_artifacts(doc_id: str, text_content: str) -> int:
-    """Split text into artifacts and store in data_graph. Returns artifact count."""
     artifacts = split_into_artifacts(text_content)
 
     from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT

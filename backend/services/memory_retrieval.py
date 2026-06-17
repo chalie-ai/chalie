@@ -1,43 +1,40 @@
-"""Memory retrieval + mutation engine — the substance behind the `memory` ability.
+"""Memory retrieval + mutation engine — the substance behind the ``memory`` ability.
 
-The `memory` tool (``abilities/memory.py``) is a thin adapter: its ``run()`` reads
-the action and the bound channel, then delegates to the handlers here. This module
-owns everything non-ability — the store/recall/reflect/forget handlers, the
-episode recall engine, the data-graph search, the reflection layer expansion,
-response formatting, and recall telemetry — so the same engine is reachable from
-non-ability callers (e.g. the ``/api/updates/memory`` REST endpoint) without
+The ``memory`` tool (``abilities/memory.py``) is a thin adapter: its
+``run()`` reads the action and the bound channel, then delegates to the
+handlers here. This module owns everything non-ability — the
+store/recall/reflect/forget handlers, the episode recall engine, the
+data-graph search, the reflection layer expansion, response formatting,
+and recall telemetry — so the same engine is reachable from non-ability
+callers (e.g. the ``/api/updates/memory`` REST endpoint) without
 importing an ability.
 
-Every handler returns an ``abilities._result.ToolResult`` — never a string and
-never a legacy dict. ``recall`` returns a STRUCTURED body
-(``{"results": [{id, content, score, kind, created_at}, …]}``, + ``fallback`` on
-explicit recalls) so the model reads machine-parseable rows, and so a dead
-retrieval backend surfaces as ``ToolResult.err(code='memory-backend-error')``
-rather than a silent ``results=0`` — the model must never be told "nothing is
-stored" when the store simply failed. When some (not all) backend lanes error,
-recall succeeds with ``meta degraded=true`` so the partial result is honest.
+Every handler returns an ``abilities._result.ToolResult`` — never a
+string. ``recall`` returns a STRUCTURED body
+(``{"results": [{id, content, score, kind, created_at}, …]}``, +
+``fallback`` on explicit recalls). When some (not all) backend lanes
+error, recall succeeds with ``meta degraded=true`` so the partial result
+is honest. A dead retrieval backend surfaces as
+``ToolResult.err(code='memory-backend-error')`` rather than a silent
+``results=0`` — the model must never be told "nothing is stored" when the
+store simply failed.
 
-Retrieval ranking lives entirely in ``episodic_retrieval_service.retrieve``:
-per-lane min-max normalisation plus a relative score floor (no radius / shrink
-apparatus). This module no longer computes any radius; it only routes queries
-and projects results.
+Episode recall is cross-channel (TKT-926, Decision 1): the read path
+never filters by the caller's own channel, so a memory encoded on any
+episode-producing channel is recallable from any turn — exactly as
+facts already cross-pollinate via the channel-agnostic
+``data_graph.recall``. Muted channels write no episodes, so the
+channel-agnostic read naturally scopes to the set that actually holds
+memories. The caller's channel is recorded only for
+``memory_recall_log`` provenance and the per-channel feeling-of-knowing
+signal, never as a recall scope.
 
-Episode recall is cross-channel (TKT-926, Decision 1): the read path never
-filters episodes by the caller's own channel, so a memory encoded on any
-episode-producing channel (user, dmn, external-agent:*) is recallable from any
-turn — exactly as facts already cross-pollinate via the channel-agnostic
-``data_graph.recall``. Muted channels write no episodes, so the channel-agnostic
-read naturally scopes to the set that actually holds memories. The caller's
-channel is recorded only for ``memory_recall_log`` provenance and the per-channel
-feeling-of-knowing signal, never as a recall scope.
-
-The two recall callers stay distinct only in their side-effects:
-  * ``caller='seed'`` — the silent turn-0 auto-seed: no fallback hint, no
-    fan-out to document/schedule searches, and no user-curated moments lane.
-  * ``caller='llm_recall'`` — the explicit recall: appends
-    ``_RECALL_FALLBACK_HINT`` naming the exact ``document`` (action: search)
-    and ``schedule`` (action: search) tools, and adds the labeled moments lane
-    (``kind='moment'``) so pinned bookmarks surface alongside facts/episodes.
+Two recall callers stay distinct only in their side-effects:
+``caller='seed'`` is the silent turn-0 auto-seed (no fallback hint, no
+fan-out, no user-curated moments lane). ``caller='llm_recall'`` is the
+explicit recall — appends the fallback hint naming ``document`` and
+``schedule`` tools, and adds the labeled moments lane (``kind='moment'``)
+so pinned bookmarks surface alongside facts/episodes.
 """
 
 import hashlib

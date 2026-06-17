@@ -48,13 +48,10 @@ _DELIBERATION_SYSTEM_PROMPT = (
 
 
 class ThinkingConfig(ProcessorConfig):
-    """Single-pass high-deliberation exploration that mirrors the parent turn.
-
-    The user message and tool surface are the parent's, verbatim — the rendered
+    """The user message and tool surface are the parent's, verbatim — the rendered
     user prompt is threaded in via metadata and ``always_available`` is a snapshot
-    of the parent's live ``active_tools``. The only delta is the system prompt: a
-    lean deliberation overlay (no persona, no base template — the parent's full
-    request already carries every bit of context the deliberation needs)."""
+    of the parent's live ``active_tools``. The only delta is the system prompt.
+    """
 
     thinking_mode: ClassVar[str] = "high"
 

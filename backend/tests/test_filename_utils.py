@@ -1,10 +1,3 @@
-"""Unit tests for the shared filename sanitizer (services/filename_utils.py).
-
-``safe_filename`` is a pure function with no collaborators, so a real unit test
-is the right tier here — it exercises the production code path end-to-end with
-no mocks.
-"""
-
 import pytest
 
 from services.filename_utils import safe_filename

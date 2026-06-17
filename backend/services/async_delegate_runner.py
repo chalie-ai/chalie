@@ -10,19 +10,17 @@
 
 When the model opts a tool call into the background (per-call ``async: true``,
 exposed only on ``SUPPORTS_ASYNC`` channels), the ACT iteration must not block.
-``spawn`` registers a cancel event, runs the tool on a daemon thread through the
-shared sync-run primitive, and returns the ``"<NAME> dispatched (id: …)"``
-placeholder immediately (spec §4.0 lever 1).
+``spawn`` registers a cancel event, runs the tool on a daemon thread through
+the shared sync-run primitive, and returns the placeholder immediately
+(spec §4.0 lever 1).
 
-The thread CAPTURES the originating ``mp`` object — never a channel — so on
+The thread captures the originating ``mp`` object — never a channel — so on
 completion it delivers by synthesising a fresh assistant turn through that
-``mp``'s own channel (spec §4.0 lever 2 / §4.4). Because the thread holds the
-live ``mp``, delivery works even after the originating ACT loop has closed.
-
-A single module-level singleton (``async_delegate_runner``) matches the
-codebase's ``heartbeat_service = HeartbeatService()`` convention and preserves
-the old module-dict semantics: a ``cancel`` from ``api/chat`` sees delegates
-spawned by any processor (spec §4.4).
+``mp``'s own channel (spec §4.0 lever 2 / §4.4). Because the thread holds
+the live ``mp``, delivery works even after the originating ACT loop has
+closed. A single module-level singleton preserves the old module-dict
+semantics: ``cancel`` from ``api/chat`` sees delegates spawned by any
+processor (spec §4.4).
 
 Consumers: ``abilities._dispatcher.ToolDispatcher._execute`` (spawn) and
 ``api/chat`` (the task-drawer ``active_ids`` / ``cancel`` endpoints).
@@ -45,13 +43,9 @@ class AsyncDelegateRunner:
         self._active: dict[str, threading.Event] = {}
 
     def spawn(self, ability: object, params: dict, mp: object) -> str:
-        """Run ``ability`` in the background and return the placeholder string.
-
-        Registers a cancel event, copies the calling thread's contextvars so
-        locale/timezone propagate exactly as on the synchronous path, starts the
-        daemon thread, and returns immediately — the ACT iteration is never
-        blocked (spec §4.0).
-        """
+        """Copies the calling thread's contextvars so locale/timezone
+        propagate exactly as on the synchronous path. Returns immediately
+        — the ACT iteration is never blocked (spec §4.0)."""
         name = ability.get_name()
         delegate_id = f"{name}_{uuid4().hex[:8]}"
         cancel_event = threading.Event()
@@ -87,14 +81,9 @@ class AsyncDelegateRunner:
         delegate_id: str,
         cancel_event: threading.Event,
     ) -> None:
-        """Daemon-thread body: run the tool, then deliver via the captured mp.
-
-        The sync-run primitive is ``ToolDispatcher._run`` (the same path the
-        inline dispatch uses), imported lazily to break the mutual deferral with
-        the dispatcher (which imports this runner for its async branch).
-        ``deliver_async_result`` is imported from ``api.chat`` lazily — api.chat
-        imports this module, so a top-level import would be circular.
-        """
+        """Lazy imports break the mutual deferral: the dispatcher imports
+        this runner for its async branch, and api.chat imports this module
+        for the cancel endpoints — neither can be top-level."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
 
         try:

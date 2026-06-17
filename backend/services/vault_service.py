@@ -1,22 +1,4 @@
-"""Vault Service — envelope encryption with password-derived master key.
-
-Implements AES-256-GCM envelope encryption:
-  - A random 256-bit Data Encryption Key (DEK) is generated once on
-    registration and never stored in plaintext.
-  - A Key Encryption Key (KEK) is derived from the user's master password
-    using PBKDF2-HMAC-SHA256 (600 000 iterations, 32-byte random salt).
-  - The DEK is wrapped (encrypted) with the KEK and stored in ``vault_config``
-    alongside the KDF parameters.
-  - All consumer encryption/decryption operations use the cached plaintext DEK
-    which is loaded into memory only after a successful ``unlock()`` call.
-
-Wire format for all secrets (encrypt output / decrypt input):
-    nonce (12 bytes) || AES-256-GCM ciphertext+tag
-
-The service is intentionally single-user: the plaintext DEK lives in a
-module-level singleton that is safe for a single-process, single-account
-architecture.  It is cleared on ``lock()`` or server restart.
-"""
+"""Vault Service — envelope encryption with password-derived master key."""
 
 import json
 import logging

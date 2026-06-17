@@ -14,10 +14,6 @@ def test_thinking_never_discoverable(db):
 
 
 def test_thinking_config_mirrors_parent_tool_surface(db):
-    """ThinkingConfig mirrors the parent's LIVE tool surface: its always_available
-    is the snapshot of the parent's active_tools it is handed, and the parent's
-    blocked set carries over. No discovery — a single deliberation pass never runs
-    find_tools, so discoverable is empty."""
     from abilities.thinking import ThinkingConfig
     from configs.channels import UserConfig
     parent = UserConfig()

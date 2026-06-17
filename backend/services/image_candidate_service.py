@@ -9,11 +9,6 @@ the URL filename or article metadata.
 Public API:
     build_image_candidates(items, top_n=3, og_meta=None) -> list[dict]
 
-``items`` is an iterable of either bare URLs (legacy) or ``(url, source_title)``
-tuples.  ``og_meta`` is an optional ``{url: {"image_url": str, "description": str}}``
-dict from ``og_image_service.resolve_og_images`` — when provided, the
-description for each image source URL is used as the caption.
-
 Each returned dict is ``{"url": str, "source_title": str, "caption": str}``.
 Failed fetches are dropped silently — the LLM only sees viable candidates.
 """
@@ -49,15 +44,10 @@ def build_image_candidates(
     top_n: int = 3,
     og_meta: dict | None = None,
 ) -> list[dict]:
-    """Shortlist up to top_n images, fetch each to validate, return survivors.
+    """Shortlist up to top_n image URLs, validate each via HTTP HEAD, return survivors with captions.
 
-    ``items`` may be bare URL strings or ``(url, source_title)`` tuples.
-    URLs are deduplicated in input order. Fetching is parallel.
-
-    ``og_meta`` maps the *article* URL to its og metadata dict as returned by
-    ``og_image_service.resolve_og_images``.  It is keyed by article URL, not
-    image URL — callers must pass it when they used og:image as the image source
-    so that the article's og:description can be promoted to the caption.
+    ``og_meta`` maps article/image URL to its og metadata (from ``resolve_og_images``);
+    when present, the description for each image source URL is used as the caption.
     """
     pairs: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -101,13 +91,7 @@ def build_image_candidates(
 
 
 def _check_image_url(url: str) -> bool:
-    """Return True when the URL responds with a non-empty image payload.
-
-    The body is never stored, captioned, or forwarded — this is a
-    reachability + content-type probe. A single chunk read is enough
-    to prove the response is non-empty; we close the connection
-    immediately after, so the full image is never streamed.
-    """
+    """Check that the URL returns an image content-type and non-empty body."""
     try:
         with requests.get(
             url,
@@ -129,13 +113,7 @@ def _check_image_url(url: str) -> bool:
 
 
 def _derive_caption(image_url: str, og_meta: dict | None) -> str:
-    """Derive a descriptive caption for an image URL.
-
-    Priority:
-    1. og:description from ``og_meta`` keyed by image URL (≥ 20 chars).
-    2. Filename heuristic (Wikipedia descriptive filenames, etc.).
-    3. Empty string for opaque/hash filenames.
-    """
+    """Derive a caption with priority: 1) og:description (og_meta if key matches image_url and ≥ 20 chars), 2) filename heuristic."""
     # og_meta is keyed by article URL.  The image URL itself won't match, but
     # callers that pass og_meta also key it by image_url for direct lookup.
     if og_meta:
