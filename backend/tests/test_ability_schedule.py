@@ -6,13 +6,6 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""schedule-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. Covers natural-language due_at resolution,
-relative due_at, ISO due_at back-compat, unparseable due_at errors, past due_at
-rejection, schema-declared limit, structured list rows, cancel by message,
-cancel-without-target error, and invalid recurrence error ladder.
-"""
-
 import json
 from datetime import timedelta
 from zoneinfo import ZoneInfo
@@ -30,8 +23,8 @@ _TZ = "Europe/Malta"
 
 
 def _seed_timezone(db, tz_name: str = _TZ) -> None:
-    """Write a real client heartbeat timezone into the telemetry table — the same
-    store the production ``locale_service.get_timezone()`` reads. No mock."""
+    """Write a real heartbeat timezone into the telemetry table — the same store
+    the production ``locale_service.get_timezone()`` reads."""
     from services.heartbeat_service import heartbeat_service
 
     heartbeat_service._ctx = None
@@ -46,18 +39,11 @@ def _seed_timezone(db, tz_name: str = _TZ) -> None:
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor for the act-trail write and a seeded user timezone."""
     _seed_timezone(db)
     return MP(seed_transcript(db, "chat", "remind me to do a thing"), UserConfig({}))
 
 
 def _parse_body(rendered: str, tool: str = "schedule") -> object:
-    """Extract and JSON-parse the body between the open tag and ``[end:<tool>]``.
-
-    On a user-broadcasting channel the dispatcher pairs a rich card: the body is
-    ``<card_json>\\n\\n<span instruction>``. Split on the blank line and parse the
-    JSON head so the same helper works for both plain and card-paired bodies."""
     return parse_body(rendered, tool, rich=True)
 
 
@@ -76,9 +62,6 @@ def _row(db, item_id: str) -> dict | None:
 
 
 def test_create_with_natural_language_due_at_resolves_in_user_tz(db, chat_mp):
-    """``due_at='tomorrow 9am'`` resolves to 09:00 in the user's seeded timezone,
-    persists the UTC instant to the row, and echoes BOTH the resolved UTC and
-    local strings in the success body so the model can confirm to the user."""
     out = ToolDispatcher(chat_mp).dispatch(
         "schedule",
         {"action": "create", "message": "Call the dentist",
@@ -107,8 +90,6 @@ def test_create_with_natural_language_due_at_resolves_in_user_tz(db, chat_mp):
 
 
 def test_create_with_relative_due_at_in_two_hours(db, chat_mp):
-    """``due_at='in 2 hours'`` resolves to a future instant ~2h out in the user's
-    tz, persisted to the row."""
     out = ToolDispatcher(chat_mp).dispatch(
         "schedule",
         {"action": "create", "message": "Stretch break",
@@ -124,7 +105,6 @@ def test_create_with_relative_due_at_in_two_hours(db, chat_mp):
 
 
 def test_create_with_iso_due_at_still_accepted(db, chat_mp):
-    """A hand-authored ISO 8601 with offset still parses (back-compat)."""
     future = (utc_now() + timedelta(days=3)).astimezone(ZoneInfo(_TZ))
     iso = future.replace(microsecond=0).isoformat()
     out = ToolDispatcher(chat_mp).dispatch(
@@ -141,8 +121,6 @@ def test_create_with_iso_due_at_still_accepted(db, chat_mp):
 
 
 def test_unparseable_due_at_errors_invalid_time_and_persists_nothing(db, chat_mp):
-    """An unparseable ``due_at`` errors with ``code=invalid-time`` and a ``hint:``
-    of example forms — and NEVER writes a row (no datetime.min sentinel)."""
     before = db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0]
 
     out = ToolDispatcher(chat_mp).dispatch(

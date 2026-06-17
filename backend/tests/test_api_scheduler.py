@@ -1,10 +1,3 @@
-"""
-Unit tests for the Scheduler API blueprint (api/scheduler.py).
-
-Uses the real `db` fixture (fully-migrated SQLite per test) instead of
-mock_db.  Auth is still bypassed via a mock on validate_session.
-"""
-
 import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
@@ -22,11 +15,7 @@ def _past_iso(hours=1):
 
 
 def _insert_item(db, **overrides):
-    """Insert a scheduled_items row and return the id.
 
-    Provides sensible defaults for every column so callers only need to
-    specify the fields they care about.
-    """
     now = datetime.now(timezone.utc).isoformat()
     defaults = dict(
         id="abc12345",

@@ -6,11 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""search-specific business-logic tests migrated from the per-ability conformance
-file removed in TKT-975. Covers the silent-DDG-masking regression (forced unknown
-provider must error loudly), the real-registry valid ladder, schema enum honesty,
-and blank-query missing-params rejection.
-"""
+
 
 import sqlite3
 
@@ -28,14 +24,10 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor for the act-trail write."""
     return MP(seed_transcript(db, "chat", "search for something"), UserConfig({}))
 
 
 def _configured_providers() -> set[str]:
-    """The REAL set of enabled provider names from the on-disk registry — the same
-    DB ``SearchAbility._load_providers`` reads at runtime. No mock."""
     conn = sqlite3.connect(str(FileMapperService.get_search_providers_db_path()))
     conn.row_factory = sqlite3.Row
     rows = conn.execute("SELECT name FROM providers WHERE enabled = 1").fetchall()
@@ -47,10 +39,6 @@ def _configured_providers() -> set[str]:
 
 
 def test_forced_unknown_provider_errors_not_silent_ddg(db, chat_mp):
-    """Forcing a misspelled/unknown provider (``kagi``) returns a STABLE
-    ``code=unknown-provider`` error with a ``valid:`` ladder of REAL provider
-    names — and crucially NO DDG results are returned masquerading as the named
-    engine. This is the exact silent-masking bug TKT-891 closes."""
     out = ToolDispatcher(chat_mp).dispatch(
         "search", {"query": "rust foundation", "provider": "kagi", "act_summary": "x"}
     )
@@ -70,9 +58,6 @@ def test_forced_unknown_provider_errors_not_silent_ddg(db, chat_mp):
 
 
 def test_unknown_provider_valid_ladder_is_the_real_registry(db, chat_mp):
-    """The ``valid:`` ladder on an unknown-provider error lists EXACTLY the real
-    configured providers (+ ``ddg``) — not the stale ``hackernews``/``stackoverflow``
-    aliases that never existed. Drives the guardrail against the live registry."""
     out = ToolDispatcher(chat_mp).dispatch(
         "search", {"query": "anything", "provider": "stackoverflow", "act_summary": "x"}
     )
@@ -92,9 +77,6 @@ def test_unknown_provider_valid_ladder_is_the_real_registry(db, chat_mp):
 
 
 def test_schema_provider_enum_matches_real_registry(db):
-    """The ``provider`` enum advertised in ``get_parameters`` is EXACTLY the real
-    configured provider names plus ``ddg`` — so a schema-obedient model can never
-    name a provider that silently DDG-fades. Pure introspection, no network."""
     schema = SearchAbility(mp=None).get_parameters()
     enum = set(schema["properties"]["provider"]["enum"])
 
@@ -109,10 +91,6 @@ def test_schema_provider_enum_matches_real_registry(db):
 
 
 def test_blank_query_reports_missing_params(db, chat_mp):
-    """A whitespace-only ``query`` is truthy, so it slips the ACTION_REQUIRED
-    pre-gate and is caught by search's own ``.strip()`` guard inside run()
-    (search.py) — that tool-specific guard is what this test pins, surfacing as
-    ``missing-params`` naming ``query`` with no network call."""
     out = ToolDispatcher(chat_mp).dispatch(
         "search", {"query": "   ", "act_summary": "x"}
     )

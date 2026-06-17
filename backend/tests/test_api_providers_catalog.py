@@ -33,7 +33,6 @@ class TestProviderCatalog:
 
     @pytest.fixture(autouse=True)
     def _reset_vault_state(self):
-        """Clear the vault DEK before and after every test (real vault, no mock)."""
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
         yield
@@ -41,8 +40,6 @@ class TestProviderCatalog:
         _vault_mod._vault_service_instance = None
 
     def test_catalog_is_a_curated_preset_list_not_the_full_dump(self, authed_client):
-        """GET /providers/catalog returns a *list* of curated presets — short
-        and human-picked, not the 111-provider models.dev dump."""
         client, _db, _store = authed_client
 
         resp = client.get('/providers/catalog')
@@ -66,8 +63,6 @@ class TestProviderCatalog:
         assert _NAMED_IDS <= ids, f"missing named providers: {_NAMED_IDS - ids}"
 
     def test_named_presets_prefill_the_right_platform_and_host(self, authed_client):
-        """Selecting a preset must auto-fill the correct platform + host so the
-        wizard can pre-populate the host field (or skip it for native APIs)."""
         client, _db, _store = authed_client
 
         catalog = client.get('/providers/catalog').get_json()['catalog']
@@ -98,11 +93,9 @@ class TestProviderCatalog:
         assert by_id['ollama']['needs_key'] is False
 
     def test_preset_id_is_not_a_runtime_platform(self, authed_client):
-        """The catalog-id-as-platform branch is dead: list-models with a preset
-        id (e.g. 'deepseek') as the platform is rejected, because the wizard sends
-        the real platform ('openai_compatible'), never the preset id. ('deepseek'
-        is a real id in the old catalog dump, so this is red until the branch is
-        removed — it must not resolve to a static model list.)"""
+        """Pins removal of the catalog-id-as-platform branch: 'deepseek' was a
+        real id in the old dump and must be rejected as a platform, not resolved
+        to a static model list."""
         client, _db, _store = authed_client
 
         resp = client.post('/providers/list-models', json={'platform': 'deepseek'})
@@ -113,9 +106,6 @@ class TestProviderCatalog:
         assert "Unsupported platform" in body['error']
 
     def test_preset_save_roundtrips_through_the_existing_create_path(self, authed_client):
-        """A preset selection saves via the ordinary create path — no catalog
-        special-casing. POSTing the preset's platform + host + key + model stores
-        the row, and GET lists it back with the pre-filled host intact."""
         client, _db, _store = authed_client
         _unlock_vault()
 
