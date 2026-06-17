@@ -5,6 +5,9 @@ Folder Watcher Worker - background daemon thread. Registered in run.py as
 
 import logging
 import time
+from typing import Any, Dict, List, cast
+
+from services.folder_watcher_service import FolderWatcherService
 
 logger = logging.getLogger(__name__)
 
@@ -12,9 +15,9 @@ INITIAL_DELAY = 30    # 30 seconds after startup
 CHECK_INTERVAL = 30   # Check for due scans every 30s
 
 
-def _scan_folder_if_due(service, folder: dict) -> None:
+def _scan_folder_if_due(service: FolderWatcherService, folder: dict[str, object]) -> None:
     """Scan folder if its interval is due or a manual scan was requested."""
-    if not (service.is_scan_due(folder) or service.is_scan_requested(folder['id'])):
+    if not (service.is_scan_due(folder) or service.is_scan_requested(cast(str, folder['id']))):
         return
     result = service.scan_folder(folder)
     label = folder.get('label') or folder.get('folder_path', '?')
@@ -28,7 +31,7 @@ def _scan_folder_if_due(service, folder: dict) -> None:
     if result.get('errors'):
         logger.warning(
             "[FOLDER WATCHER] %s: %d errors during scan",
-            label, len(result['errors']),
+            label, len(cast(list[object], result['errors'])),
         )
 
 
@@ -48,7 +51,7 @@ def _run_scan_cycle() -> None:
             )
 
 
-def folder_watcher_worker():
+def folder_watcher_worker() -> None:
     """Daemon thread entry point."""
     logger.info("[FOLDER WATCHER] Starting (initial delay %ds)", INITIAL_DELAY)
     time.sleep(INITIAL_DELAY)

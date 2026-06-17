@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import time
 
 from services.tmp_storage import TMP_DIR as _TMP_DIR
@@ -35,7 +36,7 @@ def _sweep_once() -> int:
     return deleted
 
 
-def tmp_cleanup_worker(stop_event=None) -> None:
+def tmp_cleanup_worker(stop_event: threading.Event | None = None) -> None:
     logger.info('[TMP CLEANUP] Worker started (interval=%ds, max_age=%ds)',
                 _SWEEP_INTERVAL_SECONDS, _MAX_AGE_SECONDS)
     while True:

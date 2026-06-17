@@ -5,6 +5,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import yaml
@@ -89,17 +90,17 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _parse_skill_file(path: Path) -> dict:
+def _parse_skill_file(path: Path) -> dict[str, Any]:
     text = path.read_text()
     if not text.startswith('---'):
         raise ValueError(f"Skill file {path} missing YAML frontmatter")
     _, fm_raw, body = text.split('---', 2)
-    meta = yaml.safe_load(fm_raw)
+    meta: dict[str, Any] = yaml.safe_load(fm_raw)
     meta['content'] = body.strip()
     return meta
 
 
-def _compute_sha(meta: dict) -> str:
+def _compute_sha(meta: dict[str, Any]) -> str:
     raw = json.dumps(
         [meta.get('title', ''), meta.get('use_for', ''), meta.get('tags', '')],
         ensure_ascii=False,
@@ -166,8 +167,8 @@ def index_skill(
 
 def _insert_skill(
     conn: sqlite3.Connection,
-    emb_service: EmbeddingService,
-    meta: dict,
+    emb_service: EmbeddingService | None,
+    meta: dict[str, Any],
     source: str = _SOURCE_CURATED,
 ) -> int:
     title = meta.get('title', '')
@@ -192,7 +193,7 @@ def _insert_skill(
     return index_skill(conn, emb_service, skill_id, title, use_for, tags_str)
 
 
-def _load_skills() -> list[dict]:
+def _load_skills() -> list[dict[str, Any]]:
     if not _SKILLS_DIR.exists():
         return []
     skills = []
@@ -206,7 +207,7 @@ def _load_skills() -> list[dict]:
     return skills
 
 
-def _load_user_skills() -> list[dict]:
+def _load_user_skills() -> list[dict[str, Any]]:
     if not _USER_SKILLS_DIR.exists():
         return []
     skills = []
@@ -220,7 +221,7 @@ def _load_user_skills() -> list[dict]:
     return skills
 
 
-def _build_sha_map(skills: list[dict]) -> dict[str, str]:
+def _build_sha_map(skills: list[dict[str, Any]]) -> dict[str, str]:
     return {m.get('title', m['_path']): _compute_sha(m) for m in skills}
 
 

@@ -7,7 +7,7 @@ import secrets
 import uuid
 from typing import Optional
 
-from services.database_service import get_shared_db_service
+from services.database_service import DatabaseService, get_shared_db_service
 from services.log_utils import safe
 from services.time_utils import utc_now
 
@@ -19,7 +19,7 @@ def _hash_token(raw_token: str) -> str:
 
 
 class WrapperAuthService:
-    def __init__(self, db=None):
+    def __init__(self, db: DatabaseService | None = None) -> None:
         self._db = db or get_shared_db_service()
 
     # ------------------------------------------------------------------

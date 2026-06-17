@@ -9,6 +9,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from abilities._ability import Ability  # noqa: E402
 from abilities._registry import AbilityRegistry  # noqa: E402
 from services.embedding_service import EmbeddingService  # noqa: E402
 from services.embedding_utils import pack_embedding  # noqa: E402
@@ -62,7 +63,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _compute_sha(ability) -> str:
+def _compute_sha(ability: Ability) -> str:
     raw = json.dumps([ability.get_summary(), *ability.get_examples()], ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -85,7 +86,7 @@ def _dedup_entries(
     return kept_entries, kept_embs
 
 
-def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability) -> int:
+def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability: Ability) -> int:
     summary = ability.get_summary()
     conn.execute(
         "INSERT INTO abilities(name, summary) VALUES (?, ?)",

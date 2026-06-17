@@ -14,6 +14,8 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
+from typing import cast
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -23,7 +25,7 @@ from services.data_graph_service import (
     _CONCEPT_LUT_THRESHOLD,
     _l2_dist_to_cosine,
 )
-from services.database_service import get_shared_db_service
+from services.database_service import DatabaseService, get_shared_db_service
 from services.embedding_service import EmbeddingService
 from services.embedding_utils import pack_embedding
 
@@ -118,7 +120,7 @@ def _hard_delete_row(conn: sqlite3.Connection, row_id: int) -> None:
         pass
 
 
-def _fetch_active_row(conn: sqlite3.Connection, canonical_key: str) -> dict | None:
+def _fetch_active_row(conn: sqlite3.Connection, canonical_key: str) -> dict[str, object] | None:
     row = conn.execute(
         "SELECT id, key, value, evidence_count, retrieval_weight, "
         "first_seen_at, last_confirmed_at "
@@ -140,8 +142,8 @@ def _fetch_active_row(conn: sqlite3.Connection, canonical_key: str) -> dict | No
     }
 
 
-def _effective_date(row: dict) -> str:
-    return (row.get('last_confirmed_at') or row.get('first_seen_at') or '')
+def _effective_date(row: dict[str, object]) -> str:
+    return cast(str, row.get('last_confirmed_at') or row.get('first_seen_at') or '')
 
 
 def _add_supersession_edges(conn: sqlite3.Connection, winner_id: int, loser_id: int) -> None:
@@ -164,22 +166,22 @@ def _add_supersession_edges(conn: sqlite3.Connection, winner_id: int, loser_id: 
 
 def _apply_temporal_collision(
     conn: sqlite3.Connection,
-    migrating: dict,
-    existing: dict,
+    migrating: dict[str, object],
+    existing: dict[str, object],
     canonical_key: str,
     dry_run: bool,
 ) -> None:
     migrating_date = _effective_date(migrating)
     existing_date = _effective_date(existing)
     if migrating_date >= existing_date:
-        winner_id, loser_id = migrating['id'], existing['id']
+        winner_id, loser_id = cast(int, migrating['id']), cast(int, existing['id'])
         winner_key = canonical_key
-        loser_rw = existing['retrieval_weight']
+        loser_rw = cast(float, existing['retrieval_weight'])
         action = f"  TEMPORAL collision on '{canonical_key}': migrating id={migrating['id']} wins over existing id={existing['id']}"
     else:
-        winner_id, loser_id = existing['id'], migrating['id']
+        winner_id, loser_id = cast(int, existing['id']), cast(int, migrating['id'])
         winner_key = canonical_key
-        loser_rw = migrating['retrieval_weight']
+        loser_rw = cast(float, migrating['retrieval_weight'])
         action = f"  TEMPORAL collision on '{canonical_key}': existing id={existing['id']} wins over migrating id={migrating['id']}"
 
     print(action)
@@ -200,8 +202,8 @@ def _apply_temporal_collision(
 
 def _apply_coexist_collision(
     conn: sqlite3.Connection,
-    migrating: dict,
-    existing: dict,
+    migrating: dict[str, object],
+    existing: dict[str, object],
     canonical_key: str,
     key: str,
     value: str,
@@ -210,44 +212,44 @@ def _apply_coexist_collision(
     emb_service: EmbeddingService,
     dry_run: bool,
 ) -> str:
-    if (migrating['value'] or '').strip().lower() == (existing['value'] or '').strip().lower():
+    if (cast(str, migrating['value'] or '')).strip().lower() == (cast(str, existing['value'] or '')).strip().lower():
         print(f"  COEXIST same-value merge on '{canonical_key}': hard-deleting id={migrating['id']}, incrementing id={existing['id']} evidence_count")
         if dry_run:
             return 'merged-coexist'
-        merged_count = (existing['evidence_count'] or 1) + (migrating['evidence_count'] or 1)
+        merged_count = cast(int, existing['evidence_count'] or 1) + cast(int, migrating['evidence_count'] or 1)
         conn.execute(
             "UPDATE data_graph SET evidence_count=? WHERE rowid=?",
             (merged_count, existing['id']),
         )
-        _hard_delete_row(conn, migrating['id'])
+        _hard_delete_row(conn, cast(int, migrating['id']))
         return 'merged-coexist'
 
     # Different values — rewrite migrating row's key so both coexist under canonical_key
     print(f"  COEXIST diff-value rewrite on '{canonical_key}': id={migrating['id']} '{key}' → '{canonical_key}'")
     if dry_run:
         return 'updated'
-    _do_rewrite(conn, migrating['id'], key, value, search_queries, canonical_key, canonical_blob, emb_service)
+    _do_rewrite(conn, cast(int, migrating['id']), key, value, search_queries, canonical_key, canonical_blob, emb_service)
     return 'updated'
 
 
 def _apply_immutable_collision(
     conn: sqlite3.Connection,
-    migrating: dict,
-    existing: dict,
+    migrating: dict[str, object],
+    existing: dict[str, object],
     canonical_key: str,
     key: str,
     dry_run: bool,
 ) -> str:
-    if (migrating['value'] or '').strip().lower() == (existing['value'] or '').strip().lower():
+    if (cast(str, migrating['value'] or '')).strip().lower() == (cast(str, existing['value'] or '')).strip().lower():
         print(f"  IMMUTABLE same-value merge on '{canonical_key}': hard-deleting id={migrating['id']}, incrementing id={existing['id']} evidence_count")
         if dry_run:
             return 'merged-immutable'
-        merged_count = (existing['evidence_count'] or 1) + (migrating['evidence_count'] or 1)
+        merged_count = cast(int, existing['evidence_count'] or 1) + cast(int, migrating['evidence_count'] or 1)
         conn.execute(
             "UPDATE data_graph SET evidence_count=? WHERE rowid=?",
             (merged_count, existing['id']),
         )
-        _hard_delete_row(conn, migrating['id'])
+        _hard_delete_row(conn, cast(int, migrating['id']))
         return 'merged-immutable'
 
     print(
@@ -370,11 +372,11 @@ _OUTCOME_COUNTERS = {
 
 
 def _run_row(
-    db,
+    db: DatabaseService,
     lut_conn: sqlite3.Connection,
     emb_service: EmbeddingService,
-    row: tuple,
-    emb,
+    row: tuple[int, str, str, str],
+    emb: np.ndarray,
     dry_run: bool,
 ) -> str:
     """Embed, validate, and process a single row. Returns an outcome string."""

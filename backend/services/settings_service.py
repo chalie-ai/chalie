@@ -4,14 +4,14 @@ import logging
 import secrets
 from typing import Optional
 
-from services.database_service import text
+from services.database_service import DatabaseService, text
 
 logger = logging.getLogger(__name__)
 
 
 class SettingsService:
 
-    def __init__(self, database_service):
+    def __init__(self, database_service: DatabaseService) -> None:
         self.db = database_service
 
     def get(self, key: str) -> Optional[str]:

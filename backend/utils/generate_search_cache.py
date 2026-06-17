@@ -8,7 +8,7 @@ from services.file_mapper_service import FileMapperService
 _DB_PATH = FileMapperService.get_search_providers_db_path()
 
 
-def main():
+def main() -> None:
     if not _DB_PATH.exists():
         print(f"ERROR: {_DB_PATH} not found")
         sys.exit(1)
