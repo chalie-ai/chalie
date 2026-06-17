@@ -1,26 +1,11 @@
-"""Feature test: memory.recall guardrail + silent turn-0 seed + the per-lane
-relative-floor telemetry that replaced the deleted radius columns (TKT-923).
+"""Test memory.recall guardrail behavior, silent turn-0 seed, and per-lane
+relative-floor telemetry (TKT-923). All exercised through the real production
+path via ToolDispatcher.dispatch("memory") with zero mocks.
 
-Driven through the REAL production chokepoint — ``ToolDispatcher(mp).dispatch(
-"memory", …)`` — the single path BOTH the model's explicit recall and the turn-0
-auto-seed take in production. Zero mocks: real ``UserConfig`` MessageProcessor,
-real ``ToolDispatcher``, real embedding model, real DataGraph, real SQLite.
-
-Behaviours pinned (all survive the radius-apparatus deletion):
-
-1. **Fan-out removed → guardrail in.** An EXPLICIT recall carries the fallback
-   guardrail naming the real fallback tools (``document`` / ``schedule``, action
-   ``search``) and fires NO silent ``document.search`` / ``schedule.search``
-   fan-out — proven by the absence of those tool_calls rows on the act-trail.
-
-2. **The turn-0 auto-seed (``_auto=True``) is silent** — no guardrail hint, no
-   fan-out.
-
-3. **Recall-log telemetry is the NEW per-lane shape.** The deleted
-   ``input_radius`` / ``narrow_factor`` / ``effective_radius`` columns are gone;
-   the recall now logs ``floor_cut_count`` (candidates dropped by the relative
-   score floor) and ``final_rrf_count`` (results surfaced) under the right
-   ``caller``. We read these back from the row the recall actually wrote.
+Pinned behaviors:
+1. Explicit recall carries a fallback guardrail naming document/schedule tools but fires no fan-out.
+2. Turn-0 auto-seed (_auto=True) is silent — no guardrail hint, no fan-out.
+3. Recall-log uses floor_cut_count / final_rrf_count fields under the correct caller.
 """
 
 import pytest
@@ -36,9 +21,7 @@ _HINT_LEAD = "If you cannot find the information in memory"
 
 
 def _build_user_mp(text: str) -> MessageProcessor:
-    """A real UserConfig MessageProcessor in the state a recall dispatches from:
-    an input row written (so ``uid`` anchors the act-trail FK) and ``active_tools``
-    seeded — the exact shape the ACT loop and the turn-0 seed fire from."""
+    """Builds a real MessageProcessor with an input row (so uid anchors act-trail FK) and active_tools seeded."""
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, text, {})
     parent.config = UserConfig()
@@ -56,7 +39,6 @@ def _tool_names_recorded(db, transcript_id: int) -> list:
 
 
 def _last_recall_log(db, caller: str = None) -> dict:
-    """Read the newest memory_recall_log row as a dict, optionally by caller."""
     if caller is None:
         row = db.execute(
             "SELECT caller, query, episode_count, floor_cut_count, final_rrf_count "
@@ -80,10 +62,6 @@ def _last_recall_log(db, caller: str = None) -> dict:
 
 
 def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db):
-    """An explicit (model-invoked) recall returns the fallback guardrail naming
-    the real tools, records its own ``memory`` call but NO ``document`` /
-    ``schedule`` fan-out, and writes a per-lane telemetry row under
-    ``caller='llm_recall'`` with the new floor/result fields."""
     mp = _build_user_mp("what is my home wifi password")
 
     out = ToolDispatcher(mp).dispatch(
@@ -113,9 +91,6 @@ def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db):
 
 
 def test_turn0_seed_recall_is_silent_and_logs_seed_telemetry(db):
-    """The turn-0 auto-seed (``_auto=True``) carries NO guardrail, fires no
-    fan-out, and writes its telemetry row under ``caller='seed'`` with the new
-    per-lane floor/result fields."""
     mp = _build_user_mp("what did we talk about at home last week")
 
     out = ToolDispatcher(mp).dispatch(
@@ -140,13 +115,7 @@ def test_turn0_seed_recall_is_silent_and_logs_seed_telemetry(db):
 
 
 def test_invalidated_fact_never_surfaces_in_recall(db):
-    """A data_graph fact whose ``valid_to`` is set (bi-temporally superseded) is
-    invalidated and must NEVER surface in recall — the data_graph lane reads live
-    rows only (``active=1 AND valid_to IS NULL``).
-
-    Producer → reader end-to-end: a REAL fact is stored (surfaces while live),
-    then bi-temporally closed by setting ``valid_to``, and the REAL recall
-    chokepoint is asked again. The invalidated fact must be gone from the body."""
+    """A bi-temporally superseded data_graph fact (valid_to set) must never surface in recall."""
     import json
 
     from services.data_graph_service import get_data_graph_service

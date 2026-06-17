@@ -1,18 +1,4 @@
-"""
-Unit tests for MemoryStore TTL coverage across services.
-
-Every MemoryStore write that represents a queue or coordination key must set a
-TTL so the background reaper can eventually reclaim memory.  These tests verify
-that the TTL is applied at the point of the write — not merely that the
-operation succeeds.
-
-Pattern used throughout:
-- Instantiate the real MemoryStore (no mocking — it IS production).
-- Call the method under test with MemoryClientService.create_connection patched
-  to return the real store instance.
-- Inspect the internal keyspace tuple: (value, expiry_timestamp).
-  A non-None expiry confirms the TTL was set.
-"""
+"""Tests that every MemoryStore write for a queue or coordination key sets a TTL."""
 
 import pytest
 from unittest.mock import patch
@@ -25,7 +11,6 @@ from services.memory_store import MemoryStore
 # ---------------------------------------------------------------------------
 
 def _has_ttl(store: MemoryStore, key: str) -> bool:
-    """Return True if *key* exists in any keyspace and has a non-None expiry."""
     for keyspace in (
         store._strings,
         store._lists,
@@ -105,7 +90,6 @@ class TestIntentServiceQueueTTL:
         assert _has_ttl(store, list_key), f"{list_key} must have a TTL after rpush"
 
     def test_emit_broadcast_sets_ttl_on_broadcast_list(self):
-        """Broadcast intents (target_wrapper=None) must also get a TTL."""
         store = MemoryStore()
         from services.intent_service import IntentService, CognitiveIntent, _BROADCAST_KEY
 

@@ -1,22 +1,6 @@
 """Feature test: leaked markdown in the LLM's final response is rewritten to
-Chalie's HTML subset — but ONLY on the user-facing channel.
-
-The system prompt asks the model to emit HTML directly; in practice it still
-occasionally leaks the most common markdown markers. ``MessageProcessor`` runs a
-best-effort markdown→HTML fallback (``services.markup.markdown_to_html``) at the
-single point the final response leaves the ACT loop
-(``_format_final_response``), before ``_record`` / ``write_assistant_row`` /
-post-turn hooks and the api-layer ``sanitize()``. The pass is gated on
-``broadcast_to == 'user'`` so background channels (DMN, encoders, compaction),
-whose output is JSON or plain text, are never mangled.
-
-Drives the REAL prod hot path: the real ``_loop`` (→ real ``_format_final_response``
-→ real ``markdown_to_html``) followed by the real ``_record`` (→ real
-``write_assistant_row`` → real transcript DB). The ONLY stand-in is the external
-LLM boundary (``Providers._resolve``) — the single sanctioned seam — a recording
-provider that returns one fixed markdown string with no tool calls so the loop
-ends after a single send. Zero internal mocks.
-"""
+Chalie's HTML subset on user-facing channels — background channel output (DMN,
+encoders, compaction) is not mangled."""
 
 import pytest
 from unittest.mock import patch
@@ -33,13 +17,7 @@ _PROVIDERS_RESOLVE = "services.providers.Providers._resolve"
 
 
 class _RecordingProvider:
-    """Stand-in for the resolved LLM provider — the single sanctioned boundary.
-
-    Returns a one-shot ``ProviderApiResponse`` carrying the supplied text and no
-    tool calls, so the ACT loop returns after a single send.
-    ``estimate_request_tokens`` returns 1 so the pre-flight over-cap check never
-    triggers.
-    """
+    """Returns one fixed response and no tool calls."""
 
     CONTENT_FIELD_LABEL = "message.content"
 
@@ -59,9 +37,6 @@ class _RecordingProvider:
 
 
 def _build_mp(config, raw_input: str) -> MessageProcessor:
-    """A real MessageProcessor in the exact state ``_loop`` runs from — mirrors
-    the per-turn attributes ``process()`` sets, minus the env-fragile turn-0
-    seed (memory recall / embeddings), which is a separate concern."""
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, raw_input, {})
     mp.config = config
@@ -74,9 +49,6 @@ def _build_mp(config, raw_input: str) -> MessageProcessor:
 
 
 def test_user_channel_markdown_is_converted_to_html(db):
-    """User-facing response leaking ``**``/``*``/``_``/`` ` `` markers is rewritten
-    to ``<b>``/``<i>``/``<u>``/``<code>`` in BOTH the returned text and the
-    persisted assistant transcript row."""
     leaked = "**bold** then *italic* then _under_ then `code()`"
     expected = "<b>bold</b> then <i>italic</i> then <u>under</u> then <code>code()</code>"
 
@@ -100,9 +72,6 @@ def test_user_channel_markdown_is_converted_to_html(db):
 
 
 def test_dmn_channel_markdown_is_left_verbatim(db):
-    """A background (broadcast_to=None) channel emits plain text — the markdown
-    fallback is gated off, so the markers are persisted verbatim, never rewritten
-    into tags."""
     leaked = "**bold** and _under_ and `code`"
 
     recorder = _RecordingProvider(leaked)

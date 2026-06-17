@@ -1,20 +1,3 @@
-"""
-Pure-logic tests for the flat MessageProcessor — spec §2/§4a.
-
-Only behaviours that are deterministic functions of plain inputs (no mocked
-collaborators) live here:
-
-  * ``_sanitize_llm_args`` — LLM-sentinel stripping (pure string transform).
-  * ProcessorConfig hook surface — frozen-dataclass field contract (§2).
-  * ``get_previous_messages`` under ``suppress_history`` — short-circuits to ''
-    with no DB read (§4a).
-
-The loop-control, transcript-row, thinking-gate, post-turn, and history-read
-orchestration that used to live here was mock-collaborator wiring; that
-behaviour is covered end-to-end by the scenario suite (scheduled-prompt act
-loop, memory pre-act seed, compaction continuity over long history, and
-multi-capability single turn).
-"""
 
 import pytest
 
@@ -36,7 +19,7 @@ def _make_config(
     broadcast_to=None,
     memory_seed=False,
 ):
-    """Return a minimal ProcessorConfig for use in flat-MP tests."""
+
     from services.processor_config import ProcessorConfig
     from tests.helpers import StubProcessorConfig
 
@@ -67,8 +50,9 @@ def _make_config(
 @pytest.mark.unit
 class TestSuppressHistory:
 
+
+
     def test_suppress_history_returns_empty_string(self):
-        """suppress_history short-circuits previous-messages to '' (no DB read). §2/§4a."""
         from services.message_processor import MessageProcessor
         config = _make_config(suppress_history=True)
         mp = object.__new__(MessageProcessor)
