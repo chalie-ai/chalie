@@ -30,11 +30,6 @@ _GPM_CHANNEL = 'test_channel'
 
 
 def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
-    """A flat ProcessorConfig for get_previous_messages() tests.
-
-    Post-§9b there are no MessageProcessor subclasses (P1) — every turn is a
-    single flat MessageProcessor driven by a per-turn ProcessorConfig.
-    """
     from services.processor_config import ProcessorConfig
     from tests.helpers import StubProcessorConfig
 
@@ -58,9 +53,6 @@ def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
 
 
 class _GPMFakeProcessor:
-    """Flat config-carrying MessageProcessor builder for get_previous_messages()
-    tests (no subclass — P1 / §7a)."""
-
     _CHANNEL = _GPM_CHANNEL
     _ROLE = 'test_role'
 
@@ -84,7 +76,6 @@ class _GPMFakeProcessor:
 
 class TestGetPreviousMessagesTranscript:
     def _seed_transcript(self, db, channel=_GPM_CHANNEL):
-        """Insert two transcript rows and one tool_calls row each."""
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES (?, 'user', 'Hello world', '2026-04-10 10:00:00')",
@@ -135,8 +126,6 @@ class TestGetPreviousMessagesTranscript:
 
 
 class TestGetPreviousMessagesChannelIsolation:
-    """Each processor only sees its own CHANNEL's rows."""
-
     def _seed_all_channels(self, db):
         for channel in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
             db.execute(
@@ -189,8 +178,6 @@ class TestGetPreviousMessagesTimestampFormat:
 
 
 class TestGetPreviousMessagesWindowFit:
-    """get_previous_messages() renders every row; drop_oldest param skips oldest."""
-
     def _seed_rows(self, db, n, channel=_GPM_CHANNEL):
         for i in range(n):
             db.execute(
@@ -244,8 +231,6 @@ class TestGetPreviousMessagesWindowFit:
 # _has_trail / _render_act_trail off a uid-bound processor — zero mocks.
 # =============================================================================
 class TestTrailExcludesAutoMemoryRecall:
-    """The automatic memory-recall seed must not count as compactable trail."""
-
     def _seed_turn(self, db, channel=_GPM_CHANNEL):
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -325,8 +310,6 @@ _COMPACT_CHANNEL = 'test_compact_channel'
 
 
 class TestWrapWithCheckpoint:
-    """Module-private _wrap_with_checkpoint function behavior against real DB."""
-
     def test_row_with_content_exact_envelope_format(self, db):
         from services.message_processor import _wrap_with_checkpoint
         from services import transcript_service
