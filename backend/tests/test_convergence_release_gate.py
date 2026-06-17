@@ -1,46 +1,22 @@
 """
-Feature test — TKT-929 self-heal convergence release gate.
+Feature test for TKT-929 self-heal convergence release gate.
 
-ONE question answered: given a pre-redesign ("old-shape") database, does the
-system self-heal end-to-end with NO operator-run migration?
+Verifies that a pre-redesign ("old-shape") DB heals end-to-end with NO
+operator-run migration - the boot sequence (converge + backfill) plus normal
+worker ticks drive the full transition.
 
-The maintenance loop IS the migration: boot sequence (converge + backfill) plus
-normal worker ticks must take an old-shape DB to the fully-redesigned state.
-
-Acceptance items asserted (per doc 140, Ticket J):
-  (A)  Schema backfill — every redesign column populated after boot sequence.
+Acceptance items:
+  (A)  Schema backfill - every redesign column populated after boot sequence.
   (B)  Decay heals floored weights; fossil on a muted channel is tombstoned.
   (D)  Retrieval surfaces a seeded episode via FTS after all ticks.
   (F)  Fact extraction: backlog drains (facts_extracted_at stamped) AND the
        seeded superseded fact gets valid_to set (bi-temporal invariant).
-  (H)  ≥50 apex leaves trigger roll-up: a level-1 super-episode exists, children
+  (H)  >=50 apex leaves trigger roll-up: a level-1 super-episode exists, children
        tombstoned + consolidated_into pointing at the parent.
   (I)  Zero data_graph rows with kind='moment' remain after tick 1.
   (RS) Restart-safety: one tick drains a partial backlog; the progress cursor
        (facts_extracted_at) is durable across a fresh service instance; the
        remainder drains on a second tick; at most one item is re-processed.
-
-Implementation notes
---------------------
-* Uses the standard ``db`` fixture (256-dim) from conftest.  The 768-d vec lane
-  for episode retrieval is NOT verified here — FTS carries recall at 256-d.  The
-  768-d vec lane is exercised by the dedicated 768-d fixture in
-  test_moments_rewrite.py.  This matches the precedent set in the moments and
-  flashback suites.
-* The ONLY sanctioned LLM boundary: ``Providers._resolve`` is swapped at the
-  class level (not via unittest.mock) so the real Providers.send, prompt
-  assembly, and step orchestration all run; only the outbound network call is
-  replaced.  Pattern inherited verbatim from test_super_episode_pipeline.py and
-  test_fact_extraction_worker_step.py.
-* ``_step_synthesis`` self-gates (``_should_synthesise()`` returns False on a
-  fresh DB with no prior trait history) and ``_step_dmn`` self-gates (no
-  user_summary row → skips).  Neither requires an LLM call in these tests.
-* ``_step_pattern_match`` and ``_step_geo_patterns`` skip below their delta
-  thresholds on a fresh test DB — expected; no transcript seeding needed.
-* The janitor protects HEAVY channels (user, dmn, external-agent:*).  To test
-  fossil tombstoning we seed on a truly legacy/muted channel not in the
-  protected allowlist.  We use "legacy_chat" — absent from source_profiles,
-  resolved to _MUTED, unprotected.
 """
 
 import contextlib
@@ -124,8 +100,7 @@ def _inject_fake_client(send_fn):
 
 
 def _super_ep_response(gist: str) -> ProviderApiResponse:
-    """SuperEpisodeEncoder expected JSON envelope.  The worker fills in
-    channel/consolidated_from/salience itself; only gist + affect come from model."""
+    """SuperEpisodeEncoder expected JSON envelope - worker fills channel/consolidated_from/salience; model provides gist + affect."""
     return ProviderApiResponse(
         text=json.dumps({
             "gist": gist,
@@ -140,7 +115,6 @@ def _super_ep_response(gist: str) -> ProviderApiResponse:
 
 
 def _fact_op_response(ops: list) -> ProviderApiResponse:
-    """Constrained Mem0 op-list response envelope."""
     return ProviderApiResponse(
         text=json.dumps({"ops": ops}),
         model="test-model",
@@ -150,18 +124,8 @@ def _fact_op_response(ops: list) -> ProviderApiResponse:
 
 
 def _multiplex_send_fn(super_ep_gist: str, fact_ops_per_call: list):
-    """Return a send_fn that routes:
-    - SuperEpisodeEncoder calls → _super_ep_response
-    - FactExtraction calls      → sequential _fact_op_response draws
-    - All other calls           → _fact_op_response (NOOP is safe for any config)
-
-    Detection: the SuperEpisodeEncoder system prompt (system_message_prompt.py)
-    uniquely contains "super-episode encoder".  FactExtractionConfig prompt
-    contains "Extract the durable".  Any other call (synthesis, dmn, etc.) is
-    handled by the caller's self-gate (synthesis/dmn skip on a fresh test DB with
-    no prior trait history / no user_summary row).  If an unexpected call arrives,
-    returning a NOOP op list is safe — it will not corrupt any data.
-    """
+    """Route LLM calls by detecting "super-episode encoder" in the system prompt;
+    all other calls get sequential fact op draws (NOOP is safe for self-gating steps)."""
     fact_state = {"n": 0}
     ops_list = fact_ops_per_call  # list of op-lists, one per episode
 
@@ -233,7 +197,6 @@ def _insert_episode_raw(
 
 
 def _insert_embedding(db, episode_id: str, emb: list) -> None:
-    """Insert embedding into episodes_vec for the given episode_id."""
     row = db.execute(
         "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
     ).fetchone()
@@ -246,13 +209,8 @@ def _insert_embedding(db, episode_id: str, emb: list) -> None:
 
 
 def _seed_apex_cluster_raw(db, channel, *, count, axis, jitter_axis) -> list:
-    """Seed 'count' apex leaf episodes on one tight topic. Returns episode ids.
-
-    The apex leaves are pre-marked as fact-extracted (facts_extracted_at != NULL)
-    so they do not compete with the convergence test's fact-extraction backlog
-    (ep_for_fact).  Their purpose is to trigger the count-triggered roll-up (H),
-    not to test fact extraction — that has its own dedicated episode.
-    """
+    """Seed apex leaf episodes pre-marked as fact-extracted so they do not
+    compete with the fact-extraction backlog; purpose is to trigger roll-up (H)."""
     ids = []
     vec_ok = _sqlite_vec_available(db)
     already_extracted = utc_now().isoformat()
@@ -459,27 +417,11 @@ def _build_old_shape_db(tmp_path) -> tuple:
 class TestFullJumpConvergence:
     """Old-shape DB → N worker ticks → fully healed new-shape DB.
 
-    Drives the REAL production boot sequence and the REAL SubconsciousWorker.
-    The only non-production seam is the LLM network boundary (Pattern H).
+    Real production boot sequence and SubconsciousWorker; only the LLM network
+    boundary is replaced (Pattern H - class-level swap, no mock library).
     """
 
     def test_old_shape_db_heals_end_to_end(self, db, store, tmp_path):
-        """Acceptance gate: seed a pre-redesign DB, boot + tick, assert every
-        self-heal mechanism produced correct downstream state in the real DB.
-
-        Acceptance items:
-          (A) boot backfill populates level/last_relevant_at and the bi-temporal
-              supersession edge sets valid_to on the old fact.
-          (B) decay step recomputes rw off the floor AND tombstones the fossil on
-              the unprotected legacy channel.
-          (D) episode retrieval returns the seeded episode after the ticks.
-          (F) fact-extraction backlog drains (facts_extracted_at stamped) AND the
-              superseded chain's valid_to is maintained (bi-temporal invariant).
-          (H) ≥50 apex leaves trigger roll-up: level-1 super-episode exists,
-              children tombstoned + back-pointed.  Skipped when sqlite-vec is
-              unavailable (vec lane not present — CI vec-only skip).
-          (I) zero data_graph rows with kind='moment' remain.
-        """
         # ── STEP 1: build the old-shape database ──────────────────────────────
         old_db, seed_meta = _build_old_shape_db(tmp_path)
 
@@ -729,31 +671,15 @@ class TestFullJumpConvergence:
 
 
 class TestRestartSafety:
-    """Interrupting mid-budget and resuming loses ≤1 item.
+    """Interrupting mid-budget and resuming loses <=1 item.
 
-    Seeds a backlog larger than one tick's budget.  Runs ONE tick (partial
-    drain) and asserts the durable cursor (facts_extracted_at) advanced only
-    for processed items.  Then constructs a FRESH service instance (simulating
-    a restart) and runs a second tick — the remainder drains; at most one item
-    is re-processed.
-
-    The cursor being durable is proved by the fresh-service read: the second
-    worker instance has no in-memory state from the first, yet it drains only
-    the remainder because facts_extracted_at is a persistent SQLite column.
+    Proves that facts_extracted_at is a durable SQLite cursor: a fresh worker
+    instance (no in-memory state) drains only the remainder on the second tick.
     """
 
     def test_partial_drain_is_durable_and_remainder_drains_on_restart(
         self, db, store
     ):
-        """Acceptance criterion (RS): interrupting mid-budget and resuming loses
-        ≤1 item — proven by a two-tick, two-instance drain with the budget
-        exposed as the seam.
-
-        Uses the real ``db`` fixture (256-dim, fully converged) so no old-shape
-        seeding is needed — the durable cursor (facts_extracted_at) works
-        identically on a converged DB; the restart-safety property is independent
-        of old-shape state.
-        """
         from services.subconscious_worker import _FACT_EXTRACTION_CALL_BUDGET
         from services.episodic_service import EpisodicService
 

@@ -9,13 +9,6 @@ always a real summary.
 Rows are seeded through the production factory transcript_service.write_input_row
 — the exact path _compact() uses — so this test exercises the real write+read
 seam, not a hand-rolled INSERT.
-
-Invariants tested:
-- Returns None when no compaction row exists for the channel
-- Returns the newest compaction row by id (append-only ordering)
-- Ignores rows from other channels (channel isolation)
-- Result shape: compacted_text, compacted_up_to_id (= the row's own id),
-  tool_call_id (always None — legacy field), created_at
 """
 
 import pytest
@@ -27,8 +20,6 @@ _OTHER_CHANNEL = 'test_cp_other'
 
 
 def _seed_compaction(channel, summary):
-    """Persist a compaction summary the way _compact() does (design §3.6):
-    a transcript row with role='compaction'. Returns its id (the watermark)."""
     from services import transcript_service
     return transcript_service.write_input_row(channel, 'compaction', summary)
 
