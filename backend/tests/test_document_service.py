@@ -1,8 +1,4 @@
-"""
-Tests for DocumentService -- CRUD, chunk storage, soft delete, purge, search.
-
-Migrated from mock_db to real SQLite via the shared `db` fixture.
-"""
+# Tests for DocumentService migrated from mock_db to real SQLite via shared `db` fixture.
 
 import pytest
 

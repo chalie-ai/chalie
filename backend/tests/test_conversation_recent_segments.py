@@ -1,18 +1,5 @@
-"""Integration test: /conversation/recent includes segments on assistant rows.
-
-Seeds transcript + tool_calls rows directly into the DB, then calls
-get_recent_history() and asserts:
-- Assistant rows with a paired weather tool_call get a ``segments`` field with
-  at least one ``type=rich`` segment.
-- User rows do NOT get a ``segments`` field.
-- The refresh path produces the same pairing as the WS live path for the same
-  data.
-- When no tool_calls exist the assistant row still gets a ``type=text``
-  segment containing the content.
-
-All tool_calls rows are now durable (no ephemeral column); the retention janitor
-in DecayEngineService removes rows older than 7 days.
-"""
+# All tool_calls rows are now durable (no ephemeral column); the retention janitor
+# in DecayEngineService removes rows older than 7 days.
 
 import json
 import pytest
@@ -57,11 +44,6 @@ _TOOL_RESULT = (
 class TestConversationRecentSegments:
 
     def _seed_turn(self, conn, user_text: str, assistant_text: str, tool_calls=None):
-        """Insert a user+assistant transcript pair and optional tool_calls.
-
-        Returns (user_transcript_id, assistant_transcript_id).
-        Tool_calls are linked to the user transcript row (matches production).
-        """
         conn.execute(
             "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES ('user', 'user', ?, 1)",
             (user_text,),

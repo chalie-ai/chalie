@@ -1,22 +1,12 @@
 """Feature tests for DecayEngineService — episodic-memory redesign (ticket B).
 
-These exercise the REAL decay engine against the REAL converged SQLite schema
-(the ``db`` fixture builds it from schema.sql via SchemaConvergenceService and
-the boot backfill). No mocks: episodes, episodes_fts and episodes_vec are all
-real tables, so the vec/fts cleanup on hard-delete is verified for real.
+No mocks: episodes, episodes_fts and episodes_vec are all real tables.
 
-What ticket B replaced and why the old tests had to die:
-  * The old compounding law ``rw = rw × (1 + hours)^-exp`` floored ~98% of the
-    corpus at 0.01 and was NOT idempotent — a second tick kept shrinking the
-    weight. The new absolute law ``rw = (salience/10) × exp(-Δt/τ)`` recomputes
-    from a fixed anchor (last_relevant_at), so a settled corpus is a no-op.
-  * ``retrieval_decay_exponent`` no longer exists — the constructor test that
-    asserted it is gone (the attribute it pinned was deleted in the redesign).
-  * The old ``test_decay_episodic_skips_recently_accessed_episodes`` pinned the
-    deleted ``last_accessed_at < now-1h`` WHERE contract; the engine now visits
-    every live row and only writes when the recomputed weight differs.
-  * The two mock-based tests (sub-cycle call-log via patch.object, DB-failure
-    via patch) violated the zero-mock rule and asserted plumbing, not behaviour.
+Ticket B changes:
+  * Absolute law ``rw = (salience/10) × exp(-Δt/τ)`` replaces old compounding
+    law that floored ~98% of the corpus at 0.01 and was NOT idempotent.
+  * ``retrieval_decay_exponent`` removed — constructor test asserts attribute gone.
+  * Zero-mock rule: no patch.object call-log or DB-failure patches.
 """
 
 import math
@@ -48,13 +38,6 @@ _EMBED_DIM = 256  # matches conftest convergence(embedding_dimensions=256)
 def _insert_episode(db, episode_id, *, salience, channel="user", level=0,
                     retrieval_weight, last_relevant_at, tombstoned_at=None,
                     consolidated_into=None, created_at=None, with_shadows=True):
-    """Insert one real episode row (+ optional fts/vec shadow rows) and return rowid.
-
-    ``last_relevant_at`` / ``created_at`` are written verbatim so callers can
-    pin either the space-separated legacy format or isoformat. The shadow rows
-    let the hard-delete cleanup be verified against real episodes_fts /
-    episodes_vec tables.
-    """
     created = created_at or last_relevant_at
     db.execute(
         "INSERT INTO episodes "
@@ -87,12 +70,10 @@ def _iso_ago(**kwargs):
 
 
 def _legacy_ago(**kwargs):
-    """Space-separated 'YYYY-MM-DD HH:MM:SS' — the backfilled-row format."""
     return (utc_now() - timedelta(**kwargs)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _fresh_conn():
-    """Re-open the shared DB after a sub-cycle closed the pool, for assertions."""
     return get_shared_db_service()._get_connection()
 
 
@@ -110,15 +91,9 @@ def _exists(conn, episode_id):
 
 
 class TestAbsoluteDecay:
-    """rw = (salience/10) × exp(-Δt/τ) anchored on last_relevant_at."""
-
     def test_floored_corpus_recovers_on_first_tick(self, db):
-        """An episode floored at 0.01 by the old bug climbs back up on one tick.
-
-        The compounding law left mid-salience, recently-relevant episodes pinned
-        at 0.01. The absolute law recomputes from the anchor: a salience-7
-        episode whose last_relevant_at is ~1 day old should land near
-        0.7 × exp(-24/336) ≈ 0.65, far above the old floor.
+        """A salience-7 episode whose last_relevant_at is ~1 day old should land near
+        0.7 × exp(-24/336) ≈ 0.65 via the absolute law — not stuck at old 0.01 floor.
         """
         _insert_episode(db, "ep-floored", salience=7, retrieval_weight=0.01,
                         last_relevant_at=_iso_ago(hours=24))
@@ -134,11 +109,8 @@ class TestAbsoluteDecay:
         assert new_rw == pytest.approx(expected, abs=0.02)
 
     def test_legacy_space_separated_anchor_is_parsed(self, db):
-        """A backfilled 'YYYY-MM-DD HH:MM:SS' anchor decays correctly.
-
-        Backfilled rows carry the legacy space-separated timestamp; parse_utc
-        must tolerate it. An old (60-day) salience-8 leaf decays well below its
-        salience ceiling but stays positive.
+        """Backfilled 'YYYY-MM-DD HH:MM:SS' anchor must parse correctly; an old
+        salience-8 leaf should decay below its ceiling but stay positive.
         """
         _insert_episode(db, "ep-legacy", salience=8, retrieval_weight=0.01,
                         last_relevant_at=_legacy_ago(days=60))
@@ -151,10 +123,7 @@ class TestAbsoluteDecay:
         assert rw is not None and 0.0 < rw < 0.1
 
     def test_tick_is_idempotent(self, db):
-        """Two consecutive ticks leave retrieval_weight byte-identical.
-
-        The whole point of the redesign: a settled corpus produces zero further
-        change on a repeat tick (no compounding drift).
+        """A settled corpus produces zero further change on a repeat tick.
         """
         _insert_episode(db, "ep-idem", salience=6, retrieval_weight=0.01,
                         last_relevant_at=_iso_ago(hours=10))
