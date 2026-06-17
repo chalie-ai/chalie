@@ -40,10 +40,7 @@ def _load_corpus() -> dict:
 
 @pytest.mark.unit
 class TestPersonalityAPIGet:
-    """GET /settings/personality behaviour."""
-
     def test_get_personality_returns_neutral_when_unset(self, authed_client):
-        """GET /settings/personality with no setting returns neutral tuple + neutral voice."""
         corpus = _load_corpus()
         expected_voice = corpus[(0, 0, 0, 0, 0)]
 
@@ -65,10 +62,7 @@ class TestPersonalityAPIGet:
 
 @pytest.mark.unit
 class TestPersonalityAPIPut:
-    """PUT /settings/personality behaviour — persistence and round-trip."""
-
     def test_put_personality_persists_and_returns_voice(self, authed_client):
-        """PUT with all-cool tuple returns correct voice; subsequent GET round-trips."""
         corpus = _load_corpus()
         target = [-2, -2, -2, -2, -2]
         expected_voice = corpus[tuple(target)]
@@ -103,10 +97,7 @@ class TestPersonalityAPIPut:
 
 @pytest.mark.unit
 class TestPersonalityAPIPutValidation:
-    """PUT /settings/personality rejects invalid payloads with 400."""
-
     def test_put_rejects_out_of_range_step(self, authed_client):
-        """PUT with step +3 (out of range) returns 400."""
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',
@@ -118,7 +109,6 @@ class TestPersonalityAPIPutValidation:
         )
 
     def test_put_rejects_tuple_wrong_length(self, authed_client):
-        """PUT with 4-element tuple returns 400."""
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',
@@ -130,7 +120,6 @@ class TestPersonalityAPIPutValidation:
         )
 
     def test_put_rejects_non_list_tuple(self, authed_client):
-        """PUT with 'tuple' as a string (not a list) returns 400."""
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',
@@ -142,7 +131,6 @@ class TestPersonalityAPIPutValidation:
         )
 
     def test_put_rejects_missing_tuple_field(self, authed_client):
-        """PUT with empty body (no 'tuple' key) returns 400."""
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',
@@ -154,7 +142,6 @@ class TestPersonalityAPIPutValidation:
         )
 
     def test_put_rejects_bools_as_integers(self, authed_client):
-        """``[true, false, 0, 0, 0]`` would satisfy ``isinstance(v, int)`` — reject explicitly."""
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',

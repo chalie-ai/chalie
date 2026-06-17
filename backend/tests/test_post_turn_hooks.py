@@ -28,7 +28,6 @@ pytestmark = pytest.mark.unit
 
 
 class _ExplodingHook(PostTurnHook):
-    """A real hook that records it ran, then raises — the saboteur sibling."""
 
     def __init__(self) -> None:
         self.ran = False
@@ -42,7 +41,6 @@ _SUMMARY_CHANNEL = "test_post_turn_hooks_channel"
 
 
 def _config_with_hooks(hooks):
-    """A flat ProcessorConfig carrying the given post_turn_hooks tuple."""
     return StubProcessorConfig(
         channel=_SUMMARY_CHANNEL,
         role="user_summary",
@@ -101,8 +99,6 @@ def test_exploding_sibling_does_not_block_real_hook(db):
 
 
 def test_isolation_holds_regardless_of_hook_order(db):
-    """Order is undefined by contract: the real hook persists whether the
-    saboteur sits before or after it."""
     saboteur = _ExplodingHook()
     mp = _make_processor((PersistUserSummaryHook(), saboteur))
 

@@ -1,8 +1,3 @@
-"""Unit tests for PolicyManager — flat (channel, permission, setting) gate.
-
-Five tests cover the whole surface: allow/internal run, deny+log, lazy-provision
-+ D2 escalation, interactive CHAT verdict (approve/deny), and the data layer
-(seed → get_all hides internal → upsert → reset → blocked-log roundtrip)."""
 import contextlib
 import sqlite3
 
