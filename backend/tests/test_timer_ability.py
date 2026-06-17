@@ -6,13 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Timer-ability-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975.
-
-Covers the invalid-duration / missing-params error codes, title truncation, the
-max-duration edge, and the full started_at injection chain via the real
-``rich_media_parser.parse`` → ``TimerAbility.enrich_rich_payload`` path.
-"""
+# Timer-ability business-logic tests migrated from the per-ability conformance file (TKT-975).
 
 import json
 
@@ -28,28 +22,19 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def user_mp(db):
-    """A real user-broadcast mp (``broadcast_to == 'user'``). On this channel the
-    dispatcher assigns a rich-media ordinal and renders the timer card trailer."""
     return MP(seed_transcript(db, "chat", "start a timer"), UserConfig({}))
 
 
 @pytest.fixture
 def dmn_mp(db):
-    """A real non-user-broadcast mp (``broadcast_to is None``). On this channel the
-    dispatcher drops the rich card, so the rendered body is the raw model-facing
-    payload dict with no span/instruction trailer."""
     return MP(seed_transcript(db, "subconscious", "start a timer"), DmnConfig())
 
 
 def _body(rendered: str, tool: str = "timer") -> str:
-    """Return the text between the open tag and ``[end:<tool>]``."""
     return body(rendered, tool)
 
 
 def _render_rich(title: str, duration: int, ordinal: int = 1) -> str:
-    """Render a timer result through the ONE production formatter with an ordinal
-    — the exact string production persists to ``tool_calls.result`` on a
-    user-broadcast turn (rich present → card trailer)."""
     tr = TimerAbility().run({"title": title, "duration_seconds": duration})
     return ToolDispatcher._render("timer", tr, ordinal)
 
@@ -58,10 +43,6 @@ def _render_rich(title: str, duration: int, ordinal: int = 1) -> str:
 
 
 def test_invalid_durations_are_invalid_duration_code(db, user_mp):
-    """Out-of-range / wrong-type durations reach run() (title present, so the
-    pre-gate passes) and return ``code=invalid-duration`` — not the banned
-    ``code=error``. Note: ``duration_seconds=0`` is falsy → caught by the pre-gate
-    as ``missing-params`` (documented fleet behaviour, asserted separately)."""
     for bad in (-5, 86401, "30"):
         out = ToolDispatcher(user_mp).dispatch(
             "timer", {"title": "Bad", "duration_seconds": bad, "act_summary": "x"}
@@ -75,7 +56,6 @@ def test_invalid_durations_are_invalid_duration_code(db, user_mp):
 
 
 def test_long_title_truncated_to_80_chars(db, dmn_mp):
-    """A title longer than 80 chars is truncated in the body payload dict."""
     out = ToolDispatcher(dmn_mp).dispatch(
         "timer", {"title": "x" * 200, "duration_seconds": 60, "act_summary": "x"}
     )
@@ -84,7 +64,6 @@ def test_long_title_truncated_to_80_chars(db, dmn_mp):
 
 
 def test_max_duration_accepted(db, dmn_mp):
-    """The 24-hour upper bound (86400) is the documented edge — accepted."""
     out = ToolDispatcher(dmn_mp).dispatch(
         "timer", {"title": "Long", "duration_seconds": 86400, "act_summary": "x"}
     )
@@ -102,10 +81,6 @@ def test_max_duration_accepted(db, dmn_mp):
 
 
 def test_parser_injects_started_at_from_created_at():
-    """The wall-clock anchor lives in the tool_calls row's ``created_at`` and is
-    grafted onto the timer card payload by ``rich_media_parser.parse`` →
-    ``TimerAbility.enrich_rich_payload``. It surfaces on the FE-bound segment as an
-    ISO 8601 string with explicit UTC offset, and NEVER on the LLM-bound result."""
     from services.rich_media_parser import parse
 
     raw = _render_rich("Pasta", 600)
@@ -148,8 +123,6 @@ def test_parser_rejects_unparseable_created_at_sentinel():
 
 
 def test_parser_skips_injection_when_created_at_missing():
-    """No ``created_at`` on the row → no fabricated ``started_at``; the FE hits its
-    guard rather than rendering an undefined countdown."""
     from services.rich_media_parser import parse
 
     raw = _render_rich("Pasta", 600)

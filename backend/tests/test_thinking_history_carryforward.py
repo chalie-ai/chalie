@@ -65,9 +65,6 @@ class _RecordingProvider:
 
 
 def _build_parent(raw_input):
-    """A real UserConfig MessageProcessor in the state ``_seed_turn_zero`` fires
-    the thinking pass from: input row written and ``active_tools`` seeded with the
-    channel's always_available tier (exactly message_processor._setup line 381)."""
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.transcript_service import write_input_row
