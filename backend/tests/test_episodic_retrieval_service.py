@@ -1,26 +1,18 @@
-"""Feature tests for the collapsed-tree episode retrieval engine (TKT-923).
+"""Feature tests for TKT-923: collapsed-tree episode retrieval engine.
 
-These drive the single production retrieval entry point —
-``episodic_retrieval_service.retrieve()`` — through the real ``db`` fixture, with
-episodes seeded the production way (``EpisodicService.store_episode`` against the
-real episodes / episodes_fts / episodes_vec tables). Zero mocks: the FTS lane,
-the sqlite-vec lane, the per-lane min-max normalisation, the relative score floor
-and the collapsed-tree walk all run for real.
+All lanes run real (zero mocks): FTS, sqlite-vec, per-lane min-max normalisation,
+relative score floor, and collapsed-tree walk — via the production retrieve entry point
+and real db fixture with episodes seeded against the actual tables.
 
-The radius apparatus is GONE (TKT-923): ``retrieve()`` no longer takes a
-``radius`` and applies no vector-distance ceiling. What replaced it:
+The radius ceiling was removed (TKT-923). What replaced it:
 
-  * the vector lane is non-empty on a representative query (the radius-0 bug that
-    silently emptied the lane is pinned dead);
-  * lane signals are min-max normalised within the candidate pool and a RELATIVE
-    floor drops the weak tail — survivors only, count may be < k, never padded;
-  * leaves, super-episodes and era digests compete in ONE pool — a super and its
-    leaf can both surface (no apex-walk that discarded the lower levels).
+  * vector lane stays non-empty on representative queries (radius-0 regression pinned dead);
+  * lane signals min-max normalised within candidate pool; RELATIVE floor drops weak tail —
+    survivors only, count may be < k, never padded;
+  * leaves, super-episodes and era digests compete in ONE pool — a super and its leaf can
+    both surface (no apex-walk that discarded the lower levels).
 
-The test DB's vec tables are 256-dim (conftest template), so these seed 256-dim
-embeddings and pass them as ``query_embedding`` — the same code path production
-runs, only the vector width is the fixture's. The lane logic under test is
-identical.
+Test DB vec tables are 256-dim (conftest template), so embeddings are seeded to 256 dimensions.
 """
 
 import pytest
@@ -34,8 +26,6 @@ _DIM = 256
 
 
 def _unit(index: int, dim: int = _DIM) -> list:
-    """A unit basis vector — orthogonal vectors give cosine distance 1.0, an
-    identical vector gives distance 0.0, so similarity is exactly controllable."""
     v = [0.0] * dim
     v[index] = 1.0
     return v
