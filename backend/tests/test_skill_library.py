@@ -1,17 +1,4 @@
-"""Feature tests for the Self-Refining Skill Library pure functions.
 
-Two behaviours under test:
-
-1. rrf_merge() — reciprocal rank fusion of vec + FTS result rows.
-   Verifies: correct merging, dedup, FTS-only path, vec-only path,
-   empty inputs, and score-ordering invariant.
-
-2. _parse_associations() — LLM JSON response parser.
-   Verifies: valid JSON, fenced code blocks, empty array, non-list,
-   empty string, and malformed JSON all handled correctly.
-
-All functions are pure: no IO, no collaborators, no network. Zero mocks.
-"""
 
 import json
 

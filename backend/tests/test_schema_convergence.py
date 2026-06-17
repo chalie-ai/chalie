@@ -1,14 +1,4 @@
-"""
-Tests for SchemaConvergenceService — declarative SQLite schema management.
-
-Covers: fresh DB convergence, idempotency, missing table/column/index recovery,
-virtual table creation, seed data, bidirectional convergence (auto-drop of
-stale tables/columns/indexes/virtual tables), env-flag safety gate,
-embedding dimension override, DDL comment handling, shadow table exclusion,
-and job-assignment convergence (orphan-pruning).
-
-Each test method creates its own temp DB via tmp_path — no shared state.
-"""
+# Tests for SchemaConvergenceService.
 
 import logging
 import sqlite3
@@ -23,12 +13,10 @@ from services.schema_convergence_service import SchemaConvergenceService
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _make_db(tmp_path: Path, name: str = "test.db") -> DatabaseService:
-    """Create a fresh DatabaseService backed by a temp file."""
     return DatabaseService(str(tmp_path / name))
 
 
 def _converge(db: DatabaseService, embedding_dimensions: int = 256) -> SchemaConvergenceService:
-    """Instantiate and run convergence; return the service for further inspection."""
     svc = SchemaConvergenceService(db, embedding_dimensions=embedding_dimensions)
     svc.converge()
     return svc
@@ -68,7 +56,6 @@ class TestSchemaConvergence:
     # ── 1. Fresh DB convergence ───────────────────────────────────────────────
 
     def test_fresh_db_creates_core_tables(self, tmp_path):
-        """All expected core tables exist after converging a blank database."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -98,7 +85,6 @@ class TestSchemaConvergence:
     # ── 2. Idempotency ────────────────────────────────────────────────────────
 
     def test_converge_twice_idempotent(self, tmp_path):
-        """Table and index sets are identical after two convergence passes."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -118,7 +104,6 @@ class TestSchemaConvergence:
     # ── 3. Missing column detection ───────────────────────────────────────────
 
     def test_missing_column_is_restored(self, tmp_path):
-        """A column dropped from an existing table is re-added on the next converge."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -154,7 +139,6 @@ class TestSchemaConvergence:
     # ── 4. Missing table detection ────────────────────────────────────────────
 
     def test_missing_table_is_restored(self, tmp_path):
-        """A table dropped after convergence is recreated on the next converge."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -173,7 +157,6 @@ class TestSchemaConvergence:
     # ── 5. Missing index detection ────────────────────────────────────────────
 
     def test_missing_index_is_restored(self, tmp_path):
-        """An index dropped after convergence is recreated on the next converge."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -191,7 +174,6 @@ class TestSchemaConvergence:
     # ── 6. Index DDL change detection ─────────────────────────────────────────
 
     def test_changed_index_ddl_is_recreated(self, tmp_path):
-        """An index with a stale DDL is dropped and recreated with the correct DDL."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -217,7 +199,6 @@ class TestSchemaConvergence:
     # ── 7. Virtual table creation ─────────────────────────────────────────────
 
     def test_dropped_fts5_table_is_recreated(self, tmp_path):
-        """An FTS5 virtual table dropped after convergence is recreated."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -235,7 +216,6 @@ class TestSchemaConvergence:
     # ── 8. Seed data on fresh DB ──────────────────────────────────────────────
 
     def test_settings_seeded_on_fresh_db(self, tmp_path):
-        """settings table contains the api_key seed row on a fresh DB."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -250,7 +230,6 @@ class TestSchemaConvergence:
     # ── 9. Bidirectional convergence — drop stale schema objects ──────────────
 
     def test_stale_table_is_dropped(self, tmp_path):
-        """A table present in the live DB but not in schema.sql is dropped on converge."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -266,7 +245,6 @@ class TestSchemaConvergence:
             )
 
     def test_fts5_shadow_tables_survive_convergence(self, tmp_path):
-        """FTS5 shadow tables (xxx_data, xxx_idx, etc.) must not be dropped as 'stale'."""
         db = _make_db(tmp_path)
         _converge(db)
         _converge(db)  # second run — would drop shadow tables if filter is broken
@@ -282,7 +260,6 @@ class TestSchemaConvergence:
             )
 
     def test_destructive_disabled_via_env_flag(self, tmp_path, monkeypatch):
-        """Setting CHALIE_SCHEMA_ALLOW_DESTRUCTIVE=0 prevents drops; logs WARNING instead."""
         db = _make_db(tmp_path)
         _converge(db)
 
@@ -298,7 +275,6 @@ class TestSchemaConvergence:
             )
 
     def test_safety_guard_refuses_mass_drop_on_truncated_schema(self, tmp_path, monkeypatch, caplog):
-        """If schema.sql is corrupted to near-empty, convergence refuses to drop the live DB."""
         db = _make_db(tmp_path)
         _converge(db)
 
