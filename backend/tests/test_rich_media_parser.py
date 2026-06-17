@@ -1,10 +1,3 @@
-"""Unit tests for services.rich_media_parser.
-
-parse() is a pure function with no collaborators — no DB, no network, no LLM.
-Covers: single card, multi-card, orphan tag, unclosed span, mismatched ordinal,
-prose-only (no spans), mixed prose+spans, double-quoted id, empty input.
-"""
-
 import pytest
 
 from services.rich_media_parser import parse, _find_payload
@@ -13,7 +6,6 @@ pytestmark = pytest.mark.unit
 
 
 def _tc(tool_name: str, result: str) -> dict:
-    """Minimal tool_call row dict."""
     return {"tool_name": tool_name, "params": "{}", "result": result, "ephemeral": 1}
 
 
@@ -22,9 +14,6 @@ def _tc(tool_name: str, result: str) -> dict:
 # ── _find_payload ─────────────────────────────────────────────────────────────
 
 class TestFindPayload:
-    """``_find_payload`` returns ``(payload, row)`` so the parser can hand the
-    matched row to the ability's ``enrich_rich_payload`` hook."""
-
     def test_matches_single_quote_syntax(self):
         tc = _tc("weather", '{"loc":"London"}\n\n<span id=\'weather_1\'>')
         payload, row = _find_payload("weather_1", [tc])
