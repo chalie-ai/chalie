@@ -1,20 +1,12 @@
 """Feature test: chat attachments survive a page refresh.
 
-Drives the REAL production chain end-to-end with ZERO mocks:
+Drives the REAL production chain end-to-end with ZERO mocks: ``_seed_turn_zero``
+must persist a ``transcript_docs(transcript_id, doc_id)`` link per upload, and
+``get_recent_history`` must return those links as ``msg["attachments"]`` so the
+frontend re-renders from ``/documents/<id>/preview``.
 
-  1. ``MessageProcessor._seed_turn_zero`` — the same method that fires before
-     iteration 0 — uploads the turn's attachments AND must now persist a
-     ``transcript_docs(transcript_id, doc_id)`` link for each one.
-  2. ``api.conversation.get_recent_history`` — the same function that rebuilds the
-     chat on page refresh — must return those links as ``msg["attachments"]`` so
-     the frontend can re-render the image/chip from ``/documents/<id>/preview``.
-
-The bug being guarded: today the live preview is a browser-only ``blob:`` URL that
-dies on refresh, and nothing reconnects the persisted ``documents`` row to the
-user's turn.  This test fails loudly if the link is never written (step 1) OR if
-the history rebuild drops it (step 2) — the regression lives *between* those steps.
-
-NO vision provider is configured -> the deterministic OCR fork, no network.
+Guard bug: today preview is a browser-only ``blob:`` URL that dies on refresh.
+NO vision provider -> deterministic OCR fork, no network.
 """
 
 import io
@@ -35,7 +27,6 @@ pytestmark = pytest.mark.unit
 
 
 def _png_with_text(text: str) -> bytes:
-    """A small high-contrast PNG (image/* attachment)."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.new("RGB", (480, 160), "white")
@@ -56,8 +47,6 @@ def _png_with_text(text: str) -> bytes:
 
 
 def _write_tmp(name: str, data: bytes) -> str:
-    """Write *data* under the Chalie temp prefix (passes ``_read_attachment``'s
-    realpath guard) and return the path."""
     path = new_tmp_path(name)
     with open(path, "wb") as fh:
         fh.write(data)
@@ -65,8 +54,6 @@ def _write_tmp(name: str, data: bytes) -> str:
 
 
 def _build_parent(attachments: "list[str]") -> MessageProcessor:
-    """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
-    fires from (mirrors ``message_processor._setup``)."""
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, "Here is my receipt.", {"attachments": attachments})
     parent.config = UserConfig()
@@ -85,10 +72,6 @@ def _linked_doc_ids(transcript_id: int) -> set:
 
 
 def test_attachments_are_linked_and_served_on_refresh(db):
-    """One image + one non-image attachment -> ``_seed_turn_zero`` persists a
-    ``transcript_docs`` link per upload -> ``get_recent_history`` returns them as
-    ``msg["attachments"]`` with the correct ``is_image`` flag and preview URL,
-    exactly as the refresh path needs to re-render the bubble."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 
     img_path = _write_tmp("refresh_receipt.png", _png_with_text("INVOICE"))
@@ -132,10 +115,8 @@ def test_attachments_are_linked_and_served_on_refresh(db):
 
 
 def test_skipped_upload_writes_no_link(db):
-    """A good image + an unreadable path: the bad attachment is skipped before any
-    upload, so it must NOT create a ``transcript_docs`` link, while the good one
-    still does.  Locks the "link only successful uploads" contract — the rebuilt
-    turn carries exactly one attachment, never a dangling/broken reference."""
+    """Guards the 'link only successful uploads' contract — a skipped attachment
+    must leave no orphan reference."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 
     good = _write_tmp("refresh_only_good.png", _png_with_text("OK"))

@@ -6,21 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Regression guard for ``AbilityRegistry.build_tools`` (NOT a §9a blind-spec
-file).
 
-The ACT-loop refactor once left ``build_tools`` as its T2 stub (``return []``)
-while every caller was rewired to it — the flat loop sent ZERO tools to the
-model on every turn, and every prior unit test mocked ``build_tools`` to ``[]``
-so the suite never saw it (mem 07c8c134). These tests exercise the REAL
-implementation against the REAL registry so the surface can never silently
-collapse again.
-
-Post-redesign ``build_tools`` resolves ``mp.active_tools`` — the live list of
-tool NAMES seeded with ``config.always_available`` by ``_setup`` and appended to
-by ``find_tools``. The collapse-guard now has two halves: the seed (``_setup``)
-and the resolve (``build_tools``); both are pinned below.
-"""
 
 import pytest
 
@@ -32,7 +18,6 @@ pytestmark = pytest.mark.unit
 
 
 def _make_mp(active, config=None):
-    """A flat MP carrying a seeded ACTIVE_TOOLS list (names) — no full __init__."""
     mp = object.__new__(MessageProcessor)
     if config is not None:
         mp.config = config
@@ -41,8 +26,6 @@ def _make_mp(active, config=None):
 
 
 def test_setup_seeds_active_tools_from_always_available(monkeypatch):
-    """THE seed half: _setup must initialise ACTIVE_TOOLS = config.always_available,
-    or the always_available tier never reaches the model (mem 07c8c134, relocated)."""
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "", None)
     mp.config = UserConfig({"channel": "user"})

@@ -28,9 +28,6 @@ pytestmark = pytest.mark.unit
 
 
 class _GatedAbility(Ability):
-    """Real Ability whose run() blocks on a caller-controlled event. _SYNTHETIC
-    keeps it out of the static registry (matches dynamic/MCP abilities)."""
-
     _SYNTHETIC = True
 
     def get_name(self): return "test_runner_gated"

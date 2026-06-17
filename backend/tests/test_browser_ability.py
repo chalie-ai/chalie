@@ -34,7 +34,6 @@ def _browse_mp() -> MessageProcessor:
 
 
 def _dispatch(params: dict) -> str:
-    """The exact rendered string the ACT loop consumes for one browser call."""
     return ToolDispatcher(_browse_mp()).dispatch("browser", params)
 
 
