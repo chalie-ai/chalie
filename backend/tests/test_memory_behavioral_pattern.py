@@ -26,7 +26,6 @@ pytestmark = pytest.mark.unit
 
 
 class TestRenderBehavioralPattern:
-    """_render_behavioral_pattern converts a JSON blob to a readable line."""
 
     def test_valid_json_produces_readable_line(self):
         """Full JSON with all fields renders as 'name (freq @ anchor): summary [confidence=N]'."""
@@ -91,9 +90,6 @@ class TestRenderBehavioralPattern:
 
 
 class TestRecallPayload:
-    """_recall_payload projects recall hits into structured {id, content, score,
-    kind, created_at} rows — the machine-parseable shape the model and the
-    transcript back-reference both read."""
 
     def _make_hit(self, kind, key="some_key", text="some text", relevance="high"):
         return {"id": key, "kind": kind, "text": text, "relevance": relevance}
