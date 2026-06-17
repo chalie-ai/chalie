@@ -1,16 +1,8 @@
 """Feature test: image extraction routes through describe_image().
 
-Drives the REAL public entry point ``extract_text`` against the real test DB and
-real PNG files. Proves the searchability-hinge rewrite of ``_extract_image``:
-
-  1. No vision provider configured -> extract_text returns describe_image's OCR
-     description WITHOUT the legacy 'vision model not configured' note (the old
-     body always appended it; the new describe_image-routed path never does).
-  2. A configured-but-unreachable vision provider makes extraction FAIL LOUD —
-     the provider error bubbles out of extract_text and is NOT swallowed to ''.
-
-Deterministic cross-step proofs only — the unit tier never asserts RapidOCR read
-specific glyphs (that proof lives in the end-to-end evaluation suite).
+Proves the ``_extract_image`` rewrite: no-vision-provider path omits the
+legacy 'vision model not configured' note; configured-but-unreachable provider
+raises rather than swallowing the error to ''.
 """
 
 import base64
@@ -32,8 +24,6 @@ def _png_bytes() -> bytes:
 
 
 def test_image_extraction_routes_through_describe_image_ocr_fork(db, tmp_path):
-    """No vision provider -> extract_text returns describe_image's OCR description,
-    WITHOUT the legacy 'vision model not configured' note (proves the re-route)."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
     p = tmp_path / "x.png"
     p.write_bytes(_png_bytes())
@@ -47,8 +37,6 @@ def test_image_extraction_routes_through_describe_image_ocr_fork(db, tmp_path):
 
 
 def test_image_extraction_provider_error_propagates_never_swallowed(db, tmp_path):
-    """A configured-but-unreachable vision provider must make extraction FAIL LOUD
-    (routes to describe_image's provider fork; error bubbles, not swallowed to '')."""
     svc = ProviderDbService(get_shared_db_service())
     provider = svc.create_provider({
         "name": "broken-vision", "platform": "ollama", "model": "llava",
