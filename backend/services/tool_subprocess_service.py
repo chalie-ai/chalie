@@ -1,18 +1,3 @@
-"""
-Tool Subprocess Service — Trusted tool execution via Python subprocess.
-
-Runs tools as subprocesses. All tools execute as the same OS user.
-
-IPC contract (same as ToolSubprocessService):
-  Input:  base64-encoded JSON as command arg: {"params", "settings", "telemetry"}
-  Output: JSON on stdout: {"text"?, "html"?, "title"?, "error"?}
-  Error:  non-zero exit code + error text on stderr
-
-Interactive protocol (run_interactive):
-  stdout is JSON-protocol ONLY — one JSON object per line.
-  stderr is for tool logging and is surfaced to backend logs.
-  The framework writes {"text": response} + newline to stdin for each "tool" turn.
-"""
 
 import base64
 import json
@@ -31,12 +16,6 @@ _MAX_TURNS = 10                    # Max tool↔Chalie dialog turns
 
 
 def _read_line_with_timeout(proc, timeout: int, turn: int) -> bytes | None:
-    """Read one line from proc.stdout with a thread-based timeout.
-
-    Returns the raw bytes line, or None if stdout closed.
-    Raises TimeoutError if the read exceeds *timeout* seconds.
-    Raises RuntimeError if the read thread itself errors.
-    """
     line_data = [None]
     read_error = [None]
 
@@ -66,10 +45,6 @@ def _read_line_with_timeout(proc, timeout: int, turn: int) -> bytes | None:
 
 
 def _apply_size_limits(raw_line: bytes, total_bytes: int) -> tuple:
-    """Enforce per-line and cumulative byte limits.
-
-    Returns (raw_line, updated_total_bytes, should_stop).
-    """
     if len(raw_line) > _MAX_LINE_BYTES:
         logger.warning(
             f"[SUBPROCESS INTERACTIVE] stdout line exceeds {_MAX_LINE_BYTES}B, truncating"

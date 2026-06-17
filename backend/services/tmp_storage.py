@@ -40,18 +40,9 @@ TMP_PATH_PREFIX = os.path.join(TMP_DIR, TMP_PREFIX)
 
 
 def new_tmp_path(suffix: str = "") -> str:
-    """Return an absolute path under the Chalie temp prefix for a new file.
-
-    ``suffix`` is appended verbatim (typically ``f"{token}{ext}"``).
-    """
     return f"{TMP_PATH_PREFIX}{suffix}"
 
 
 def is_chalie_tmp_file(path: str) -> bool:
-    """True if *path* resolves to an existing file under the Chalie temp prefix.
-
-    Resolves symlinks first (``realpath``) so a symlinked path cannot escape the
-    prefix guard.
-    """
     real = os.path.realpath(path)
     return real.startswith(TMP_PATH_PREFIX) and os.path.isfile(real)

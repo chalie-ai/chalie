@@ -1,11 +1,5 @@
 """
 Transcript Service — persistent conversation record.
-
-Stores every exchange turn (user, assistant, tool, internal) in SQLite.
-
-Key operations:
-- append(): Write a turn to the transcript
-- get_recent(): Retrieve the most recent N entries for a topic
 """
 
 import logging
@@ -33,15 +27,10 @@ _EXTRACTION_OVERLAP = 5
 
 
 def _resolve_location(lat, lon, name, channel):
-    """Return (lat, lon, name) for a transcript row on ``channel``.
-
-    An explicit (non-None) coordinate is always honoured. When all three are
-    None, the user's live location is back-filled ONLY for channels whose source
-    profile permits it (``location_backfill`` — user activity). Muted /
-    non-user-activity channels store NULL location instead, so background work
-    (dmn reflection, delegate research, scheduled loops) never stamps a row with
-    the user's coordinates and corrupts the geo signal. Returns (None, None,
-    None) on any failure.
+    """Back-fill live location ONLY for channels whose source profile permits it
+    (``location_backfill`` — user activity). Muted / non-user-activity channels
+    store NULL location so background work never corrupts the geo signal.
+    Returns (None, None, None) on any failure.
     """
     if lat is not None or lon is not None or name is not None:
         return lat, lon, name
@@ -70,10 +59,6 @@ def append(
     location_lon=None,
     location_name=None,
 ) -> Optional[int]:
-    """Append a turn to the topic transcript.
-
-    Returns the rowid of the inserted entry, or None on failure.
-    """
     if not channel:
         return None
     if not content and role != 'assistant':
@@ -114,15 +99,6 @@ def append(
 
 
 def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=None) -> List[Dict]:
-    """Get the most recent transcript entries for a channel.
-
-    Args:
-        channel: Channel key to retrieve entries for.
-        limit: Maximum entries to return (default 20).
-        since_id: If provided, only return entries with id > since_id.
-
-    Returns list of dicts with: id, role, content, tool_call_id, tool_name, internal, created_at.
-    """
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -178,10 +154,6 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
 
 
 def cleanup_unlinked_entries(channel: str = None) -> int:
-    """Delete transcript entries not linked to any episode and below compaction watermark.
-
-    Returns number of entries deleted.
-    """
     try:
         from services import compaction_persistence
         from services.database_service import get_shared_db_service
@@ -338,10 +310,6 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
 def _trigger_episode_extraction(channel: str, rowid: int) -> None:
     """Fire-and-forget episode extraction for the window ending at rowid.
 
-    Queries the last _EXTRACTION_WINDOW (25) transcript entries up to and
-    including rowid for the given channel — 20 new entries plus a
-    5-entry overlap with the prior window. Runs EpisodeEncoderProcessor,
-    computes novelty + salience in pure code, and stores resulting episodes.
     Never raises — any failure is logged only.
     """
     def _run():
@@ -498,13 +466,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
 
 
 def _aggregate_dominant_location(entries: list) -> dict:
-    """Return the dominant location across a window of transcript entries.
-
-    Selects the location_name appearing most frequently among non-null rows.
-    When all names are unique (every count is 1), uses the most recent
-    non-null row instead. Returns a dict with keys 'lat', 'lon', 'name'
-    (all may be None when no entries carry location data).
-    """
+    """When all location names are unique (no majority), falls back to the most recent non-null row."""
     located = [
         e for e in entries
         if e.get('location_lat') is not None or e.get('location_name') is not None
@@ -538,7 +500,6 @@ def _aggregate_dominant_location(entries: list) -> dict:
 
 
 def _format_window_entries(entries: list) -> str:
-    """Format transcript entries as `[id] (timestamp) role: content` lines."""
     lines = []
     for entry in entries:
         entry_id = entry.get('id', '?')
@@ -556,12 +517,9 @@ def _format_window_entries(entries: list) -> str:
 def _parse_episode_ids_from_results(result_texts: List[str]) -> set:
     """Extract episode IDs from rendered memory recall envelopes.
 
-    Each recall result is ``[memory(status=…, …)]\\n<json>\\n[end:memory]`` whose
-    body is ``{"results": [{"id":…, "kind":"episode", …}, …]}``. We isolate the
-    JSON between the open tag and ``[end:memory]`` and collect the ``id`` of every
-    row whose ``kind`` is ``episode`` — the only rows that back-reference an
-    episodes-table row (data-graph rows are keyed by data-graph key, not an
-    episode id). Malformed / non-recall envelopes are skipped silently.
+    Only rows with ``kind == "episode"`` are collected — data-graph rows are
+    keyed by data-graph key (not an episode id) and are intentionally skipped.
+    Malformed / non-recall envelopes are skipped silently.
     """
     import json as _json
 
@@ -592,12 +550,8 @@ def _parse_episode_ids_from_results(result_texts: List[str]) -> set:
 def _fetch_referenced_episodes(entries: list, db) -> list:
     """Query tool_calls for memory skill invocations within the window.
 
-    Parses each result for episode IDs in the structured recall body
-    (``{"results": [{"id":…, "kind":"episode"}, …]}``). Fetches the matching
-    episodes from the DB and returns them as dicts.
-
-    tool_name='memory' covers both auto-seed (tool_name='memory') and
-    LLM-invoked recall (also dispatched as tool_name='memory').
+    ``tool_name='memory'`` covers both auto-seed and LLM-invoked recall —
+    both are dispatched under the same tool name.
     """
 
     t_ids = [e['id'] for e in entries if e.get('id')]
@@ -649,7 +603,6 @@ def _fetch_referenced_episodes(entries: list, db) -> list:
 
 
 def _format_episodes_for_prompt(episodes: list) -> str:
-    """Format referenced episodes for the EpisodeEncoderProcessor user prompt."""
     if not episodes:
         return ''
     lines = []
@@ -662,7 +615,6 @@ def _format_episodes_for_prompt(episodes: list) -> str:
 
 
 def _strip_code_fence(text: str) -> str:
-    """Remove a single markdown code fence wrapper (```[lang]...```) from text."""
     open_end = text.find("```")
     if open_end == -1:
         return text
@@ -677,7 +629,6 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _safe_json_load(text: str) -> list:
-    """Parse a JSON array from LLM response text. Returns [] on any failure."""
     import json as _json
 
     if not text:
@@ -698,7 +649,6 @@ def _safe_json_load(text: str) -> list:
 
 
 def _is_delete_only(ep: dict) -> bool:
-    """Return True if the snapshot is a delete-only directive (no other data)."""
     if not ep.get('delete_id'):
         return False
     # All other meaningful fields must be absent or null/empty
@@ -707,7 +657,6 @@ def _is_delete_only(ep: dict) -> bool:
 
 
 def write_input_row(channel: str, role: str, content: str) -> int:
-    """Write the input transcript row. Returns the row ID."""
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
@@ -750,7 +699,6 @@ def link_transcript_doc(transcript_id: int, doc_id: str) -> None:
 
 
 def write_assistant_row(channel: str, content: str) -> int:
-    """Write the assistant transcript row and fire the rolling episode extraction trigger."""
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
