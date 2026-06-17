@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
@@ -103,14 +108,14 @@ class DmnConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         """DMN runs as a background process — no human user definition needed."""
         return (
             "The user is 'proactive_thought' — a special background process "
             "that represents your own reflections on recent activity."
         )
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """DMN user-message: user synthesis + filtered recent episodes + ACT trail."""
         parts: list[str] = []
         synthesis = _dmn_fetch_user_synthesis()
@@ -120,14 +125,14 @@ class DmnConfig(ProcessorConfig):
         if episodes_text:
             parts.append(f"## Episodes\n{episodes_text}")
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail and isinstance(trail, str):
                 parts.append(trail)
         except Exception:
             pass
         return "\n\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """DMN system prompt: user_definition prefix + DMNSystemMessagePrompt body.
 
         Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).

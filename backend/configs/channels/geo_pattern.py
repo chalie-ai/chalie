@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from abc import ABC
+from typing import TYPE_CHECKING
+
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
 from configs.channels.pattern import _pattern_existing_patterns_block
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 # ── Geo-pattern prompt builders and post_turn ─────────────────────────────────
 
@@ -61,14 +67,14 @@ class GeoCounterHook(PostTurnHook):
     §3b / §4.8 — no metrics, no decay sweep.
     """
 
-    def run(self, mp, response_text: str) -> None:
+    def run(self, mp: "MessageProcessor", response_text: str) -> None:
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
         try:
             from services.time_utils import utc_now  # noqa: PLC0415
             save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
             save_graph_calls = getattr(mp, "_save_graph_calls", 0)
-            touched_ids = getattr(mp, "_touched_pattern_ids", set()) or set()
+            touched_ids: set[object] = getattr(mp, "_touched_pattern_ids", set()) or set()
             now_iso = utc_now().isoformat()
             _log.info(
                 "[GEO_CONFIG] done save_pattern=%d save_graph=%d "
@@ -92,6 +98,9 @@ class GeoConfig(ProcessorConfig):
     call so the caller does not need to pre-set them.
     """
 
+    _window_start: int
+    _window_end: int
+
     def __init__(self, window_start: int, window_end: int) -> None:
         super().__init__(
             channel="geo_pattern",
@@ -111,38 +120,38 @@ class GeoConfig(ProcessorConfig):
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Geo-pattern user-prompt: cached location transcripts + existing patterns + trail."""
         # Lazy-init per-instance state so SavePattern/SaveGraph find it.
         if not hasattr(mp, "_save_pattern_calls"):
-            mp._save_pattern_calls = 0  # type: ignore[attr-defined]
+            mp._save_pattern_calls = 0
         if not hasattr(mp, "_save_graph_calls"):
-            mp._save_graph_calls = 0  # type: ignore[attr-defined]
+            mp._save_graph_calls = 0
         if not hasattr(mp, "_save_graph_seen"):
-            mp._save_graph_seen = set()  # type: ignore[attr-defined]
+            mp._save_graph_seen = set()
         if not hasattr(mp, "_touched_pattern_ids"):
-            mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
+            mp._touched_pattern_ids = set()
         # Cache the transcript block across multiple iterations (same as GPP).
         cached = getattr(mp, "_cached_transcript_block", None)
         if cached is None:
             block = _geo_pattern_load_transcript_block(self._window_start, self._window_end)
-            mp._cached_transcript_block = block  # type: ignore[attr-defined]
+            mp._cached_transcript_block = block
         else:
             block = cached
         existing = _pattern_existing_patterns_block()
         parts = [f"Existing patterns:\n{existing}", block]
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail:
                 parts.append(trail)
         except Exception:
             pass
         return "\n\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Geo-pattern system prompt (inlined from GeoPatternProcessor.get_system_prompt)."""
         return (
             "You are analysing the user's recent location-tagged transcripts "

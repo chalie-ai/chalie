@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 # ── Fact-extraction config (subconscious worker fact pipeline, TKT-925) ────────
 #
@@ -30,7 +33,7 @@ VALID_OPS = frozenset({OP_ADD, OP_UPDATE, OP_DELETE, OP_NOOP})
 FACT_KIND = "user_specific"
 
 
-def parse_fact_ops(text: str) -> list:
+def parse_fact_ops(text: str) -> list[dict[str, Any]]:
     """Parse the model's constrained output into a list of validated op dicts.
 
     Returns the subset of ops that are structurally valid (known op verb; key
@@ -56,7 +59,7 @@ def parse_fact_ops(text: str) -> list:
     return [op for op in (_clean_op(entry) for entry in raw_ops) if op is not None]
 
 
-def _clean_op(entry: Any) -> dict | None:
+def _clean_op(entry: Any) -> dict[str, object] | None:
     """Validate one op entry; return a normalised dict or None when unusable."""
     if not isinstance(entry, dict):
         return None
@@ -98,6 +101,9 @@ class FactExtractionConfig(ProcessorConfig):
     the retrieval + the DB writes — this config only frames the decision).
     """
 
+    _gist: str
+    _neighbours: list[Any]
+
     def __init__(self, gist: str, neighbours: list[Any]) -> None:
         super().__init__(
             channel="fact_extraction",
@@ -116,14 +122,14 @@ class FactExtractionConfig(ProcessorConfig):
         object.__setattr__(self, "_gist", gist)
         object.__setattr__(self, "_neighbours", neighbours)
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return (
             "The user is 'fact_extraction' — a background process that routes "
             "hard, truth-valued facts out of a single episode into the durable "
             "fact store, reconciling them against what is already known."
         )
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         if self._neighbours:
             known = "\n".join(
                 f"- key={n.get('key')!r} value={n.get('value')!r}"
@@ -136,7 +142,7 @@ class FactExtractionConfig(ProcessorConfig):
             f"Most similar known facts:\n{known}"
         )
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Constrained-op system prompt — identical for every model tier."""
         example = json.dumps(
             {

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
@@ -18,7 +21,7 @@ class ProactiveSuggestionHook(PostTurnHook):
     """Fires only on clean ACT exits with 4+ tool-calling iterations. Non-blocking
     (daemon thread inside the service). §3b / §4e / §6 / §4.8."""
 
-    def run(self, mp, response_text: str) -> None:
+    def run(self, mp: "MessageProcessor", response_text: str) -> None:
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         exited_cleanly = getattr(mp, "loop_exited_cleanly", False)
@@ -26,7 +29,7 @@ class ProactiveSuggestionHook(PostTurnHook):
         if exited_cleanly and iteration >= 4:
             try:
                 from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
-                rendered = mp._render_act_trail()  # type: ignore[attr-defined]
+                rendered = mp._render_act_trail()
                 act_trail = rendered.split("\n") if rendered else []
                 raw_input = getattr(mp, "_raw_input", "")
                 maybe_suggest_skill(act_trail, raw_input)
@@ -64,14 +67,14 @@ class UserConfig(ProcessorConfig):
             post_turn_hooks=(ProactiveSuggestionHook(),),
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         """Per-turn cached on mp._user_definition_cached so each ACT iteration
         is cheap. Prefers user_summary_long when converse mode is strongly
         active; falls back to a static peer-to-peer framing on any failure."""
         _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
         cached = getattr(mp, "_user_definition_cached", None)
         if cached is not None:
-            return cached
+            return cast(str, cached)
 
         try:
             from services.mode_gate_service import STEER_THRESHOLD  # noqa: PLC0415
@@ -93,7 +96,7 @@ class UserConfig(ProcessorConfig):
             if (not entry or not entry.get("value")) and prefer_long:
                 entry = by_key.get("user_summary")
             if entry and entry.get("value"):
-                result = entry["value"]
+                result = cast(str, entry["value"])
                 mp._user_definition_cached = result  # type: ignore[attr-defined]
                 return result
         except Exception:
@@ -102,7 +105,7 @@ class UserConfig(ProcessorConfig):
         mp._user_definition_cached = _FALLBACK  # type: ignore[attr-defined]
         return _FALLBACK
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Voice line sits at the very top for cache warmth. The
         user_definition is NOT emitted here — it lives in the user prompt
         (spec § Prompt Message Definitions). §3b / §6."""
@@ -131,7 +134,7 @@ class UserConfig(ProcessorConfig):
 
         return prompt
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Section order: user_def, World State, Previous Messages, blank,
         input line (BEFORE the trail), ACT trail. The framework _loop wraps
         the body with the ### Checkpoint / ### Current State envelope when a
@@ -160,7 +163,7 @@ class UserConfig(ProcessorConfig):
 
         # 3. Previous Messages
         try:
-            prev = mp.get_previous_messages()  # type: ignore[attr-defined]
+            prev = mp.get_previous_messages()
             if prev:
                 parts.append(f"## Previous Messages\n{prev}")
         except Exception as exc:
@@ -171,7 +174,7 @@ class UserConfig(ProcessorConfig):
 
         # 4. Input line with optional nudge — BEFORE the trail (OLD ordering).
         nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""
-        turn_line = f"user: {mp._raw_input}"  # type: ignore[attr-defined]
+        turn_line = f"user: {mp._raw_input}"
         if nudge_tag:
             turn_line += " " + nudge_tag
         parts.append(turn_line)
@@ -179,7 +182,7 @@ class UserConfig(ProcessorConfig):
         # 5. ACT loop trail (empty before any tools have run; carries the turn-0
         #    memory seed once it has fired).
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail:
                 parts.append(trail)
         except Exception as exc:

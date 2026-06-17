@@ -19,7 +19,11 @@ Vision Provider from the DB instead of the global selected provider;
 from __future__ import annotations
 
 import base64
-from typing import ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, cast
+
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 from services.processor_config import ProcessorConfig
 
@@ -52,16 +56,16 @@ class VisionConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         return _VISION_SYSTEM_PROMPT
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         return mp._raw_input
 
-    def get_image(self, mp) -> "dict | None":
+    def get_image(self, mp: "MessageProcessor") -> "dict[str, object] | None":
         meta = mp._metadata or {}
         path = meta.get("image_path")
         if not path:

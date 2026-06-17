@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 # ── Pattern-match prompt builders and post_turn ───────────────────────────────
 
@@ -49,17 +54,17 @@ class PatternDecayHook(PostTurnHook):
     §3b / §4e / §4.8 — no metrics recorded here (metrics moved to send gateway).
     """
 
-    def run(self, mp, response_text: str) -> None:
+    def run(self, mp: object, response_text: str) -> None:
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
         try:
-            touched_ids: set = getattr(mp, "_touched_pattern_ids", set()) or set()
+            touched_ids: set[int] = getattr(mp, "_touched_pattern_ids", set()) or set()
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             from services.time_utils import utc_now  # noqa: PLC0415
             db = get_shared_db_service()
             with db.connection() as conn:
                 # Decrement confidence on untouched rows.
-                params: list = []
+                params: list[int] = []
                 touched_filter = ""
                 if touched_ids:
                     placeholders = ",".join("?" * len(touched_ids))
@@ -128,6 +133,9 @@ class PatternConfig(ProcessorConfig):
     call so the caller does not need to pre-set them.
     """
 
+    _window_start: int
+    _window_end: int
+
     def __init__(self, window_start: int, window_end: int) -> None:
         super().__init__(
             channel="pattern_match",
@@ -147,10 +155,10 @@ class PatternConfig(ProcessorConfig):
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
         # Lazy-init per-instance state so SavePattern/SaveGraph find it.
         _pattern_init_instance_state(mp)
@@ -191,14 +199,14 @@ class PatternConfig(ProcessorConfig):
         existing = _pattern_existing_patterns_block()
         parts = [f"Existing patterns:\n{existing}", transcript_block]
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail:
                 parts.append(trail)
         except Exception:
             pass
         return "\n\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Pattern-match system prompt (inlined from PatternMatchProcessor.get_system_prompt)."""
         return (
             "You are analysing the user's recent transcripts to detect "

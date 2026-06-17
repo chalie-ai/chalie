@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from services.processor_config import ProcessorConfig
+from services.message_processor import MessageProcessor
 
 
 class SkillSuggestionConfig(ProcessorConfig):
@@ -23,10 +24,10 @@ class SkillSuggestionConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: MessageProcessor) -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: MessageProcessor) -> str:
         """Reads _original_trail, _original_input, _iteration_count from mp
         (set by the caller before MessageProcessor.process())."""
         original_trail = getattr(mp, "_original_trail", []) or []
@@ -39,14 +40,14 @@ class SkillSuggestionConfig(ProcessorConfig):
         for entry in original_trail:
             parts.append(entry)
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail:
                 parts.append(f"\n{trail}")
         except Exception:
             pass
         return "\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: MessageProcessor) -> str:
         """OLD assembly ``f"\n\n{body}"`` — this channel's get_user_definition
         is empty so the leading blank lines are reproduced for parity."""
         from services.system_message_prompt import SkillSuggestionSystemPrompt  # noqa: PLC0415
