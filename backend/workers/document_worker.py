@@ -8,11 +8,6 @@ logger = logging.getLogger(__name__)
 
 
 def document_purge_worker():
-    """
-    Background service that purges expired documents every 6 hours.
-
-    Runs as a registered service in run.py.
-    """
     import time
 
     CYCLE_SECONDS = 6 * 60 * 60  # 6 hours
