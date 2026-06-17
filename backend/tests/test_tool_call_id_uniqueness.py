@@ -30,12 +30,6 @@ def _ollama_response_with(*tool_names):
 
 class TestOllamaToolCallIds:
     def test_same_tool_across_responses_gets_unique_ids(self):
-        """Two ACT iterations each calling find_tools first must not collide.
-
-        ``_parse_chat_response`` runs once per LLM response, so an index-only
-        scheme produces ``ollama_find_tools_0`` both times. That collision is
-        the root cause of the stuck/duplicate ACT pill.
-        """
         from services.llm_clients.ollama import _parse_chat_response
 
         first = _parse_chat_response(_ollama_response_with('find_tools'), 'm')
@@ -57,11 +51,6 @@ class TestOllamaToolCallIds:
 
 class TestGeminiToolCallIds:
     def test_same_tool_twice_gets_unique_ids(self):
-        """Two function_call parts for the same tool must receive distinct ids.
-
-        Gemini mints ids via ``uuid4``, so two accumulations of the same tool
-        name must never collide regardless of how fast they are called.
-        """
         from services.llm_clients.gemini import _accumulate_part as _gemini_accumulate_part
 
         def make_part(name):

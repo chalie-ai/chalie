@@ -46,11 +46,7 @@ def _svc() -> ProviderDbService:
 
 
 def _mk(svc, name, model, host):
-    """Create a provider row via the production factory and return its id.
-
-    Host is an unreachable loopback port — the on-create vision probe fails fast
-    (connection refused → supports_vision=0) and no row creation is blocked.
-    """
+    """Host is an unreachable loopback port to skip the on-create vision probe."""
     return svc.create_provider(
         {"name": name, "platform": "ollama", "model": model, "host": host, "api_key": ""}
     )["id"]
@@ -60,11 +56,6 @@ def _mk(svc, name, model, host):
 
 
 def test_resolve_delegate_falls_back_to_selected_when_unpinned(db):
-    """No delegate pinned → _resolve(DELEGATE) resolves the SELECTED provider.
-
-    This is the "use main provider" default: subagent turns run on the main
-    chat provider until an admin pins a dedicated one.
-    """
     svc = _svc()
     main = _mk(svc, "main-text", "qwen3", "http://127.0.0.1:2")
     svc.set_selected_provider(main)
@@ -79,8 +70,6 @@ def test_resolve_delegate_falls_back_to_selected_when_unpinned(db):
 
 
 def test_resolve_delegate_returns_pinned_provider_not_selected(db):
-    """An explicit delegate pin resolves the PINNED provider — distinct from the
-    selected (main) one. Proves chat and delegate resolve different pools."""
     svc = _svc()
     main = _mk(svc, "main-text", "qwen3", "http://127.0.0.1:2")
     svc.set_selected_provider(main)
@@ -104,8 +93,6 @@ def test_resolve_delegate_returns_pinned_provider_not_selected(db):
 
 
 def test_resolve_delegate_raises_when_no_provider_configured(db):
-    """No delegate pin AND no selected provider → _resolve(DELEGATE) fails loud,
-    never silently resolving to nothing."""
     svc = _svc()
     svc.set_delegate_provider(None)
     svc.set_selected_provider(0)  # 0 → get_provider_by_id miss → no selected
@@ -120,16 +107,8 @@ def test_resolve_delegate_raises_when_no_provider_configured(db):
 
 
 def test_send_routes_delegate_turn_through_delegate_client(db):
-    """End-to-end through the real send chokepoint: a web_search (delegate) turn's
-    DTO — built by the production _build_send_dto() — is resolved by
-    Providers().send() against the DELEGATE provider, never the chat provider.
-
-    With a delegate pinned distinct from the main provider, the pre-flight
-    over-cap guard inside send() fires and the RequestOverCapError carries the
-    DELEGATE provider's model ('llama3'), not the chat provider's ('qwen3'). Had
-    send() resolved the wrong pool, the error would name 'qwen3'. No LLM call is
-    made — the exception is raised at the measurement step before any network I/O.
-    """
+    """Over-cap guard inside send() fires with DELEGATE provider's model ('llama3'), not
+    chat provider's — proving send() resolves the correct pool."""
     from configs.channels.web_search import WebSearchConfig
     from services.provider_api import RequestOverCapError
     from services.provider_cache_service import ProviderCacheService

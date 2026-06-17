@@ -6,15 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the ToolResult contract (TKT-882).
-
-Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint against a real ``mp``-shaped
-context, the real ``AbilityRegistry`` resolution, the real ``PolicyManager.wrap``
-gate, the real ``Ability.run``, and the real ``ActTrail`` write (the ``db``
-fixture binds ``ActTrail()`` to a real SQLite database).
-
-The contract under test:
+"""The ToolResult contract under test:
   * ``run()`` returning anything that is not a ``ToolResult`` hard-fails as
     ``code=non-canonical-result`` (legacy dict / plain str / None).
   * ``ToolResult.ok``/``err`` render the sealed tag envelope (dict body → compact
