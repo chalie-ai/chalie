@@ -1,6 +1,4 @@
-"""
-Tests for IntentService — emit, get_pending, acknowledge, resolve.
-"""
+
 
 import json
 import pytest
@@ -15,13 +13,11 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 def _make_store():
-    """Return a real MemoryStore (in-process, no external deps)."""
     from services.memory_store import MemoryStore
     return MemoryStore()
 
 
 def _make_service(store=None):
-    """Return an IntentService backed by a fresh MemoryStore."""
     store = store or _make_store()
     return IntentService(store=store), store
 

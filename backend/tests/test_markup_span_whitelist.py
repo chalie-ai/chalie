@@ -1,13 +1,4 @@
-"""Unit tests for the span+id whitelist in services.markup.
-
-Asserts that:
-- <span id='weather_N'> tags survive sanitize() so the RichMediaParser can
-  read them at the WS-send boundary.
-- No other span attributes (class, style, onclick, data-*) survive.
-- Existing non-span tags continue to behave as before.
-- The id attribute value is preserved verbatim (structural validation happens
-  in RichMediaParser, not here).
-"""
+"""Test <span id='weather_N'> tags survive sanitize() while other span attrs are stripped."""
 
 import pytest
 
