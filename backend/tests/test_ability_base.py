@@ -1,9 +1,5 @@
 """Feature tests for the Ability ABC contract (abilities/_ability.py).
 
-Asserts the metadata-getter enforcement, the sealed single-assembler
-``get_input_schema()``, and the framework-field injection behave exactly as the
-current design specifies — no mocks, no stubs, no IO.
-
 SPEC CHANGE: the five ``NAME`` / ``SUMMARY`` / ``EXAMPLES`` /
 ``SEARCH_TOOLTIP`` / ``INPUT_SCHEMA`` ClassVars were replaced by five zero-arg
 ``@abstractmethod`` getters (``get_name`` / ``get_summary`` / ``get_examples`` /
@@ -55,8 +51,7 @@ def _getters(
     tooltip="a useful tool",
     parameters=None,
 ):
-    """The five getter methods + run() that make a concrete Ability, as a
-    namespace dict for ``type()``."""
+    """Build the concrete-ability namespace dict."""
     examples = list(_VALID_EXAMPLES) if examples is None else examples
     parameters = {"type": "object", "properties": {}, "required": []} if parameters is None else parameters
     return {

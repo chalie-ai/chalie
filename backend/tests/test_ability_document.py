@@ -30,21 +30,14 @@ def _seed_transcript(db, channel: str) -> int:
 
 
 def _allow_delete(db, channel: str = "chat") -> None:
-    """Flip the REAL ``policy`` table so ``document.delete`` is ``allow`` on the
-    channel — the same row the real ``PolicyManager`` gate reads. ``delete`` ships
-    as ``ask`` by seed; on a headless test channel an ``ask`` would block waiting
-    for a human POST. Flipping the real row to ``allow`` (exactly what a user does
-    when they pick "always allow") lets the gate pass through to the production
-    ``run()`` so the disambiguation guardrail itself can be exercised. No mock —
-    this is the production policy store."""
+    """Flip the real ``policy`` table so ``document.delete`` is ``allow``.
+    Without this, a headless test channel would block on an ``ask`` posture."""
     allow_policy(db, "document.delete", channel=channel)
 
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor for the act-trail write and ``document.delete`` flipped to ``allow`` in
-    the real policy table so the gate passes through to the production run()."""
+    """Real chat-channel MP with a seeded transcript and ``document.delete`` flipped to allow."""
     _allow_delete(db)
     return _MP(_seed_transcript(db, "chat"), UserConfig({}))
 

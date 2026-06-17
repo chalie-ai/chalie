@@ -6,11 +6,9 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Email-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. The full ToolResult wire contract is
-pinned centrally in test_tool_result_contract.py; this file holds only the
-email ability's genuine behaviour tests (in_reply_to schema removal, recipient
-validation, not-connected surface) that have no coverage elsewhere."""
+"""Tests for email ability business logic migrated from test_tool_result_contract.py.
+
+Covers: in_reply_to schema removal, recipient validation, and the not-connected surface."""
 
 import pytest
 
@@ -23,35 +21,19 @@ pytestmark = pytest.mark.unit
 
 
 def _allow_email_actions(db, channel: str = "chat") -> None:
-    """Flip the REAL ``policy`` table so the gated email actions are ``allow`` on
-    the channel — the same rows the real ``PolicyManager`` gate reads.
-
-    ``send`` / ``reply`` / ``forward`` / ``manage`` ship as ``ask`` by seed
-    (outward-facing / mutating), which on a headless test would park the real gate
-    waiting for a human POST. Flipping the real policy row to ``allow`` (exactly
-    what a user does when they pick "always allow") lets the gate pass through to
-    the production ``run()`` so its recipient validation and the base's
-    not-connected path actually execute. No mock — this is the production policy
-    table driving the production gate. This loops EVERY email action (the harness
-    ``allow_policy`` flips a single permission); that per-action breadth is why the
-    local helper is kept."""
+    """Flip the REAL ``policy`` table so gated email actions are ``allow`` — prevents
+    the real gate from parking on a human POST (outward-facing actions ship as ``ask``)."""
     for action in ("search", "read", "draft", "manage", "send", "reply", "forward"):
         allow_policy(db, f"email.{action}", channel)
 
 
 @pytest.fixture
 def chat_mp(db):
-    """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor for the act-trail write and every email action flipped to ``allow`` in
-    the real policy table so the gate passes through to the production run()."""
     _allow_email_actions(db)
     return MP(seed_transcript(db, "chat", "check my email"), UserConfig({}))
 
 
 def test_in_reply_to_absent_from_parameters():
-    """``in_reply_to`` — the "do not pass manually" param — is REMOVED from the
-    schema. Threading is auto-resolved inside the ability; the model never sees a
-    field it must hold but never set."""
     from abilities._registry import AbilityRegistry
 
     schema = AbilityRegistry.get("email").get_parameters()

@@ -30,14 +30,6 @@ def _clear(db, channel):
 
 
 def _seed_offline_provider_cap_zero(db):
-    """Seed + select an offline ollama provider whose declared window forces the
-    compaction cap to 0.
-
-    ``cap = window - max(int(0.10*window), 8000)``; with ``max_tokens=8000`` the
-    cap is ``8000 - 8000 = 0``. ``_fit_compaction_input`` returns on its first
-    loop iteration when ``cap <= 0`` — so the drop loop never calls
-    ``providers.measure`` (zero network), keeping the unit gate offline.
-    """
     cur = db.execute(
         "INSERT INTO providers (name, platform, model, host, max_tokens) "
         "VALUES ('compactor-test', 'ollama', 'cap-model', 'http://localhost:11434', 8000)",
@@ -62,13 +54,7 @@ def _make_mp(raw_input, channel):
 
 
 def test_fit_compaction_input_surfaces_kept_row_count(db):
-    """RED-at-HEAD: ``_fit_compaction_input`` must surface the count of kept
-    transcript rows folded into the checkpoint so the success result can carry an
-    honest ``rows_compacted``. Before this ticket no count was surfaced.
-
-    Offline: provider cap is 0, so the drop loop returns ``combined`` on its first
-    iteration with ``drop=0`` (no measure call). With N rows past the watermark
-    and no prior checkpoint, every row is kept → count == N."""
+    """The compaction result's ``rows_compacted`` must reflect the actual count of kept transcript rows."""
     ch = "user"
     _clear(db, ch)
     _seed_offline_provider_cap_zero(db)
@@ -87,8 +73,7 @@ def test_fit_compaction_input_surfaces_kept_row_count(db):
 
 
 def test_fit_compaction_input_count_is_none_when_nothing_to_compact(db):
-    """RED-at-HEAD: when there is nothing to compact (helper returns None) the
-    surfaced count must be 0 — never a stale value from a prior turn."""
+    """Ensure the surfaced count is never a stale value from a prior turn."""
     ch = "user"
     _clear(db, ch)
     _seed_offline_provider_cap_zero(db)
@@ -113,16 +98,10 @@ def test_compaction_config_never_broadcasts_to_user():
 
 
 def test_empty_tool_chain_result_is_not_a_trail_boundary(db):
-    """The trail-boundary detection (_from_last_compaction) keys off a
-    tool_chain_compactor row whose recorded result is non-empty after strip. The
-    no-op path is UNCHANGED by this ticket (still ``ok("")``, no meta), so its
-    rendered envelope is byte-identical to HEAD and the empty-handover semantics
-    cannot flip. This pin asserts the rendered no-op body is empty so the boundary
-    classifier sees the same string it always has.
-
-    chat_history meta is keyed off a DIFFERENT tool name and is never inspected by
-    the boundary classifier, so the rows_compacted change cannot affect boundaries
-    at all."""
+    """Trail-boundary detection (_from_last_compaction) keys off a tool_chain_compactor row
+    whose recorded result is non-empty after strip. The no-op path produces an empty body so the
+    boundary classifier sees the same string it always has. (chat_history meta uses a DIFFERENT
+    tool name and is never inspected by the boundary classifier.)"""
     noop = ToolResult.ok("")
     rendered = ToolDispatcher._render("tool_chain_compactor", noop, None)
     # The boundary classifier inspects the rendered envelope; the body slot is
