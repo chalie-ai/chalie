@@ -99,7 +99,7 @@ The user has provided with a synthesis about themselves under `About the User` a
 
 ## How to ACT
 
-* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `news`, `search` and `browser` tools for this. Save your findings using the `memory` tool so that you can reference them later.
+* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `web_search` and `web_browse` tools for this. Save your findings using the `memory` tool so that you can reference them later.
 * Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach and store feedback to not repeat the same mistakes or reinforce good behaviour. Use the `memory` tool for this.
 
 ## When to stop

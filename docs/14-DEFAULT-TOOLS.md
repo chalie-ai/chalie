@@ -1,6 +1,6 @@
 # Default Tools
 
-Chalie ships **33 LLM-callable tools**: 3 always available on every turn, and 30 discoverable via `find_tools`. A further 5 abilities are framework-internal (listed at the bottom). How the tiers work is covered in [09-TOOLS.md](09-TOOLS.md).
+Chalie ships **33 LLM-callable tools**: 3 always available on every turn, 27 discoverable via `find_tools`, and 3 raw web tools reachable only inside their delegate agents. A further 5 abilities are framework-internal (listed at the bottom). How visibility works is covered in [09-TOOLS.md](09-TOOLS.md).
 
 ## Always Available
 
@@ -26,7 +26,6 @@ Chalie ships **33 LLM-callable tools**: 3 always available on every turn, and 30
 | `home` | Controls smart-home devices through Home Assistant |
 | `list` | Manages persistent checklists (create, add, check, remove, rename, …) |
 | `mcp_manager` | Connects and manages external MCP tool servers |
-| `news` | Searches news across Google News and curated RSS categories |
 | `place` | Saves and looks up named locations (home, work, gym, …) |
 | `programming_docs_search` | Searches official docs for 12 languages and 11 frameworks |
 | `read` | Reads a URL or local file and returns the extracted text |
@@ -42,10 +41,18 @@ Chalie ships **33 LLM-callable tools**: 3 always available on every turn, and 30
 | `web_browse` | Delegates an interactive browsing task to a focused browser agent |
 | `web_download` | Streams a file from a URL to a temp path (100 MB cap) |
 | `web_search` | Delegates a research task to a focused search agent |
-| `browser` | Step-by-step page driving (Playwright) — *only reachable inside the `web_browse` delegate* |
-| `search` | Multi-provider search: Wikipedia, GitHub, Reddit, arXiv, Stack Exchange, … — *only reachable inside the `web_search` delegate* |
 
 Tools that need an external connection (`email`, `calendar`, `contacts`, `home`, `ubiquiti`) report a `not-connected` error with setup guidance until their capability is configured in Brain.
+
+## Delegate-Internal
+
+These raw web tools are `DISCOVERABLE = False` — absent from the `find_tools` roster on every channel. They reach the model only by being pinned into a delegate config's `always_available`, so they run exclusively inside their delegate agent:
+
+| Tool | What it does |
+|---|---|
+| `browser` | Step-by-step page driving (Playwright) — only inside the `web_browse` delegate |
+| `search` | Multi-provider search: Wikipedia, GitHub, Reddit, arXiv, Stack Exchange, … — only inside the `web_search` delegate |
+| `news` | Searches news across Google News and curated RSS categories — only inside the `web_search` delegate |
 
 ## Sample Outputs
 

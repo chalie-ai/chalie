@@ -825,7 +825,7 @@ class SubconsciousWorker:
         """Step 6 — background DMN reflection via DMNMessageProcessor.
 
         Runs DMNMessageProcessor which reads user synthesis + recent episodes,
-        acts on open threads using news/search/browser/memory tools, and saves
+        acts on open threads using web_search/web_browse/memory tools, and saves
         all findings to data_graph via the memory tool. No UI broadcast.
 
         Prerequisites (checked before constructing the processor):

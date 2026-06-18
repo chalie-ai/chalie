@@ -77,7 +77,7 @@ The config fields that matter most:
 | Field | Effect |
 |---|---|
 | `channel` | Transcript/policy scope; e.g. `"user"`, `"dmn"`, `"delegate:web_search"` |
-| `always_available` / `discoverable` / `blocked` | The turn's tool surface (see [09-TOOLS.md](09-TOOLS.md)) |
+| `always_available` | Tools pre-injected on the turn; everything else is reached via `find_tools` if it is `DISCOVERABLE` (see [09-TOOLS.md](09-TOOLS.md)) |
 | `max_iterations` | ACT-loop cap; `None` = unbounded (the user channel) |
 | `skip_transcript` | `True` = run silently, write no conversation rows |
 | `suppress_history` | `True` = no `## Previous Messages` block (all background channels) |
