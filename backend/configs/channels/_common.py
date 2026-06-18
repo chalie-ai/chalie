@@ -39,10 +39,10 @@ PATTERN_WRITE_TOOLS: frozenset[str] = frozenset({"save_pattern", "save_graph"})
 DELEGATE_TOOLS: frozenset[str] = frozenset({"web_search", "web_browse", "vision"})
 
 # Raw web tools exclusive to the delegate agents (WebSearchConfig drives
-# ``search``, WebBrowseConfig drives ``browser``).  Every discovery-capable loop
-# blocks them so they reach the web only through the delegate tools, never
-# directly via find_tools.
-DELEGATE_INTERNAL_TOOLS: frozenset[str] = frozenset({"browser", "search"})
+# ``search`` and ``news``, WebBrowseConfig drives ``browser``).  Every
+# discovery-capable loop blocks them so they reach the web only through the
+# delegate tools, never directly via find_tools.
+DELEGATE_INTERNAL_TOOLS: frozenset[str] = frozenset({"browser", "search", "news"})
 
 DEFAULT_DISCOVERABLE: list[str] = [
     "bash",

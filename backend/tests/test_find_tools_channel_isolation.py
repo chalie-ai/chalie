@@ -156,10 +156,11 @@ class TestWebBrowseDelegateHasBrowser:
 
 
 # ---------------------------------------------------------------------------
-# Contract guard — the two raw web tools are the ones declared delegate-only.
+# Contract guard — the raw web tools declared delegate-only.
 # ---------------------------------------------------------------------------
 
-def test_delegate_internal_tools_are_browser_and_search():
+def test_delegate_internal_tools_are_browser_search_and_news():
     """Pin the set this whole isolation rests on so a silent edit to the
-    constant trips a test."""
-    assert DELEGATE_INTERNAL_TOOLS == frozenset({"browser", "search"})
+    constant trips a test. TKT-1066 added `news` to the delegate-exclusive web
+    tools (it now reaches the web only through the web_search delegate)."""
+    assert DELEGATE_INTERNAL_TOOLS == frozenset({"browser", "search", "news"})

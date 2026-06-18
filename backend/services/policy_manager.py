@@ -35,9 +35,9 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # they are never user-gated and never appear in the Brain policy surface.
 INTERNAL = frozenset({
     "browser", "chalie_docs", "chat_history_compactor", "find_skills",
-    "find_tools", "memory", "read", "review_tool_calls", "review_transcript",
-    "save_graph", "save_pattern", "search", "skill_manager", "thinking",
-    "tool_chain_compactor", "web_download",
+    "find_tools", "memory", "news", "read", "review_tool_calls",
+    "review_transcript", "save_graph", "save_pattern", "search",
+    "skill_manager", "thinking", "tool_chain_compactor", "web_download",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).

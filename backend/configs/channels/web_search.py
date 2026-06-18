@@ -39,7 +39,7 @@ _WEB_SEARCH_SYSTEM_PROMPT = (
     "conversation history and no user personality — work only from the query."
 )
 
-_WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "read", "web_download")
+_WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "news", "read", "web_download")
 
 
 class WebSearchConfig(ProcessorConfig):
@@ -47,6 +47,12 @@ class WebSearchConfig(ProcessorConfig):
     invoked the tool) rather than hardcoded."""
 
     uses_delegate_provider: ClassVar[bool] = True
+
+    # Pin thinking to LOW (the floor — "no thinking flag" at the provider) so a
+    # user's persisted high/medium override never leaks a thinking turn into the
+    # focused search loop. resolve_thinking_mode() gives this config pin priority
+    # over the override and the gate-computed level.
+    thinking_mode: ClassVar[str] = "low"
 
     def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
         tools = list(_WEB_SEARCH_TOOLS)
