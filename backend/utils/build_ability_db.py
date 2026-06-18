@@ -17,13 +17,6 @@ from services.file_mapper_service import FileMapperService  # noqa: E402
 _DB_PATH = FileMapperService.get_abilities_db_path()
 _SHA_PATH = FileMapperService.get_abilities_sha_path()
 
-# thinking + the two compactors are internal, never-discoverable abilities —
-# excluded from the search index and the SHA drift map so find_tools never
-# surfaces them. They are dispatched programmatically, never model-selected.
-_NON_INDEXED_ABILITIES: frozenset[str] = frozenset({
-    "thinking", "chat_history_compactor", "tool_chain_compactor",
-})
-
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
     conn.enable_load_extension(True)
@@ -122,20 +115,22 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
 
 
 def _build_sha_map() -> dict[str, str]:
-    """SHA map covers every ability indexed in the search DB (thinking excluded)."""
+    """SHA map covers exactly the abilities indexed in the search DB — the
+    DISCOVERABLE ones. Non-discoverable abilities are dispatched programmatically
+    or pinned directly, never model-selected, so they carry no index/SHA entry."""
     return {
         a.get_name(): _compute_sha(a)
         for a in AbilityRegistry.all()
-        if a.get_name() not in _NON_INDEXED_ABILITIES
+        if a.DISCOVERABLE
     }
 
 
 def _build(db_path: Path, sha_path: Path) -> None:
-    # Index every ability — the search DB is the single source of truth for
-    # find_tools. Per-channel scoping (which abilities a given processor
-    # may discover) is gated at find_tools query time via the calling
-    # processor's ``config.discoverable`` / ``config.blocked``.
-    abilities = [a for a in AbilityRegistry.all() if a.get_name() not in _NON_INDEXED_ABILITIES]
+    # Index exactly the DISCOVERABLE abilities — the search DB is the single
+    # source of truth for find_tools' query path, and the discoverable roster is
+    # global (no per-channel scoping). A non-discoverable ability is absent here
+    # by construction, so find_tools can never surface it semantically or by name.
+    abilities = [a for a in AbilityRegistry.all() if a.DISCOVERABLE]
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 
     emb_service = EmbeddingService() if abilities else None

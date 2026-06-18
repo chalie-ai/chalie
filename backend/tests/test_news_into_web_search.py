@@ -50,19 +50,16 @@ class TestNewsBlockedOnUserChannel:
 
     def test_select_news_is_rejected_on_user_channel(self):
         """``find_tools(select=['news'])`` on the user channel must NOT activate
-        news — UserConfig.blocked contains it now, exactly like browser/search.
-        The result reports it as unavailable."""
+        news — it is ``DISCOVERABLE=False``, exactly like browser/search, so it is
+        absent from the global discovery roster and can only be reached inside the
+        web_search delegate. The result reports it as unavailable."""
         mp = _mp_for(UserConfig())
-        assert "news" in mp.config.blocked, (
-            "UserConfig must block news so the raw tool stays exclusive to the "
-            "web_search delegate."
-        )
 
         result = _find_tools_on(mp, {"select": ["news"]})
 
         assert "news" not in mp.active_tools, (
-            "Raw 'news' must never be activatable on the user channel — it is in "
-            f"UserConfig.blocked. active_tools={mp.active_tools}"
+            "Raw 'news' must never be activatable on the user channel — it is "
+            f"DISCOVERABLE=False. active_tools={mp.active_tools}"
         )
         assert "not found or unavailable" in result.lower(), (
             f"find_tools must report blocked news as unavailable. result={result!r}"

@@ -41,8 +41,6 @@ def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
         build_user_definition=lambda _mp: _GPM_USER_DEF,
         build_system_prompt=lambda _mp: '',
         always_available=[],
-        discoverable=[],
-        blocked=frozenset(),
         max_iterations=5,
         skip_transcript=False,
         skip_input_row=False,

@@ -134,8 +134,6 @@ class PatternConfig(ProcessorConfig):
             role="pattern_match",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
-            discoverable=[],
-            blocked=frozenset(),
             max_iterations=100,
             skip_transcript=True,
             skip_input_row=False,

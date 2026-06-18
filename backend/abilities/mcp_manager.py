@@ -5,10 +5,10 @@ Actions: list | add | enable | disable
 
 Policy tier:
   SYSTEM = True   — always-allowed, never shown in Policy Manager.
-  DISCOVERABLE    — listed in each channel's ``ProcessorConfig.discoverable``
-                    (the default surface is ``configs.channels._common.
-                    DEFAULT_DISCOVERABLE``) so find_tools can surface it when
-                    the user asks to connect/manage remote MCP servers.
+  DISCOVERABLE    — the ability leaves ``Ability.DISCOVERABLE`` at its True
+                    default, so it is in the global find_tools roster and any
+                    discovery-capable channel can surface it when the user asks
+                    to connect/manage remote MCP servers.
 
 When `add` runs, it creates the server row AND immediately calls
 ping_and_sync() so remote tools are indexed before the LLM's next turn.

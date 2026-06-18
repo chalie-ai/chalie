@@ -33,6 +33,8 @@ _SNIPPET_LEN = 200
 
 
 class NewsAbility(Ability):
+    DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebSearchConfig only
+
     # Pre-gated by the dispatcher BEFORE run() and BEFORE the policy gate: an
     # action-less tool whose only hard requirement is a non-empty query. The ""
     # key covers action-less tools (see ToolDispatcher._prevalidate); a missing or

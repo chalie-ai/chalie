@@ -160,8 +160,6 @@ class UserSummaryConfig(ProcessorConfig):
             role="user_summary",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
             max_iterations=1,
             skip_transcript=True,
             skip_input_row=False,

@@ -1,21 +1,23 @@
 """Phase 4 dispatch-cutover invariant tests.
 
-Asserts the Phase 4 mechanisms work as designed under the per-processor
-tool-scope spec:
+Asserts the Phase 4 mechanisms work as designed under the single-flag
+tool-scope model:
 
  * SavePattern / SaveGraph are real Ability subclasses living at abilities/
    top-level — registered in AbilityRegistry. Reachable via the registry by
    any processor that lists them in its own ALWAYS_AVAILABLE
    (PatternMatchProcessor today).
- * abilities.sqlite — the find_tools index — contains EVERY ability,
-   including save_pattern + save_graph. find_tools gates discovery via the
-   calling processor's DISCOVERABLE allowlist; the index itself is global.
- * abilities/ disk layout matches the 20 dispatchable abilities the registry
-   walk expects (18 generic + save_pattern + save_graph, including email/calendar/contacts).
- * Each MessageProcessor subclass declares the exact ALWAYS_AVAILABLE +
-   DISCOVERABLE the spec dictates — discoverable externals are NEVER
-   pre-injected; processor-innate abilities live solely on the owning
-   processor.
+ * abilities.sqlite — the find_tools index — contains exactly the
+   DISCOVERABLE=True abilities. save_pattern + save_graph are DISCOVERABLE=False
+   (pattern-write is pinned onto PatternMatchProcessor via always_available),
+   so they are EXCLUDED from the index. Discovery is global: the candidate
+   roster is ``AbilityRegistry.discoverable_names()``, not a per-config list.
+ * abilities/ disk layout matches the dispatchable abilities the registry
+   walk expects (including save_pattern + save_graph + email/calendar/contacts).
+ * Tool scope is the single ``Ability.DISCOVERABLE`` flag plus each
+   processor's ALWAYS_AVAILABLE — a non-discoverable ability is reached ONLY
+   by being pinned into an always_available list; discoverable externals are
+   NEVER pre-injected.
  * No production code calls AbilityRegistry.all() outside an allowlist —
    prevents the bloat regression that broke an end-to-end run.
 """
@@ -63,37 +65,43 @@ def test_save_pattern_save_graph_are_registered_abilities():
 
 
 # ---------------------------------------------------------------------------
-# Test 2 — abilities.sqlite INDEXES every ability, including save_pattern/save_graph
+# Test 2 — abilities.sqlite indexes EXACTLY the DISCOVERABLE=True abilities;
+#          the non-discoverable pattern-write tools are excluded.
 # ---------------------------------------------------------------------------
 
 
-def test_abilities_sqlite_indexes_save_pattern_and_save_graph():
-    """abilities.sqlite MUST contain save_pattern and save_graph alongside
-    every other ability.
-
-    Per the per-processor tool-scope spec: every tool is listed in the
-    abilities sql db with embeddings, etc. Discovery scoping is enforced at
-    query time by ``find_tools`` filtering on the calling processor's
-    DISCOVERABLE list — NOT by selectively excluding rows from the index.
+def test_abilities_sqlite_excludes_non_discoverable_pattern_tools():
+    """abilities.sqlite is the find_tools discovery index, built from the
+    DISCOVERABLE=True abilities only (``build_ability_db`` filters on
+    ``a.DISCOVERABLE``). save_pattern / save_graph are DISCOVERABLE=False —
+    reached solely via PatternMatchProcessor's always_available — so they must
+    be ABSENT from the index. The index must equal the global discoverable roster.
     """
     db_path = _BACKEND_DIR / "abilities" / "assets" / "abilities.sqlite"
     assert db_path.exists(), f"abilities.sqlite not found at {db_path}"
 
     conn = sqlite3.connect(str(db_path))
     try:
-        indexed = {
-            r[0]
-            for r in conn.execute(
-                "SELECT name FROM abilities WHERE name IN ('save_pattern', 'save_graph')"
-            ).fetchall()
-        }
+        indexed = {r[0] for r in conn.execute("SELECT name FROM abilities").fetchall()}
     finally:
         conn.close()
 
-    assert indexed == {"save_pattern", "save_graph"}, (
-        "abilities.sqlite must index save_pattern and save_graph (per-processor "
-        f"tool-scope spec rule 1). Indexed: {sorted(indexed)}. Rebuild via "
+    assert "save_pattern" not in indexed and "save_graph" not in indexed, (
+        "abilities.sqlite must NOT index the non-discoverable pattern-write tools "
+        f"(DISCOVERABLE=False). Indexed pattern tools: "
+        f"{sorted(indexed & {'save_pattern', 'save_graph'})}. Rebuild via "
         "`python -m utils.build_ability_db`."
+    )
+
+    # Every indexed row must be a DISCOVERABLE=True ability — the index can never
+    # carry a non-discoverable tool. (We assert a subset, not equality: when other
+    # test modules register DISCOVERABLE test doubles into the live registry, the
+    # prebuilt static index legitimately lacks those runtime-only rows.)
+    discoverable = _reg_module.AbilityRegistry.discoverable_names()
+    assert indexed <= discoverable, (
+        "abilities.sqlite indexes a non-discoverable tool — rebuild is stale.\n"
+        f"  in index but not discoverable: {sorted(indexed - discoverable)}\n"
+        "Rebuild via `python -m utils.build_ability_db`."
     )
 
 
@@ -137,15 +145,15 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     # thinking: internal never-discoverable ability dispatched at turn 0
     # (added by the compaction redesign, Task 4.1 / commit eaaaf29a, which
     # replaced the old exploration hack with abilities/thinking.py). It lives
-    # at the top level so AbilityRegistry._load() registers it, but it is
-    # excluded from find_tools indexing (build_ability_db _NON_INDEXED_ABILITIES).
+    # at the top level so AbilityRegistry._load() registers it, but it sets
+    # DISCOVERABLE=False so it is excluded from the find_tools index/SHA build.
     "thinking",
     # chat_history_compactor / tool_chain_compactor: internal never-discoverable
     # abilities dispatched programmatically by MessageProcessor._dispatch_compaction()
     # (compaction redesign — compaction now fires via the normal tool-dispatch
     # chokepoint instead of an inline _compact() method). Both register at the top
-    # level but are excluded from find_tools indexing AND the policy gate
-    # (build_ability_db _NON_INDEXED_ABILITIES + policy_manager INTERNAL).
+    # level but are excluded from find_tools indexing (DISCOVERABLE=False) AND
+    # the policy gate (policy_manager INTERNAL).
     "chat_history_compactor",
     "tool_chain_compactor",
     "timer",

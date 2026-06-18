@@ -31,8 +31,6 @@ def _make_config(
         build_user_definition=lambda _mp: "user definition",
         build_system_prompt=lambda _mp: "system",
         always_available=[],
-        discoverable=[],
-        blocked=frozenset(),
         max_iterations=max_iterations,
         skip_transcript=skip_transcript,
         skip_input_row=skip_input_row,

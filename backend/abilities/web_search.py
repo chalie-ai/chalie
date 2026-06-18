@@ -20,10 +20,10 @@ Properties (spec §5b "Properties of every delegate tool"):
     no personality, no history, no world state.
   - Goal-driven system prompt — short, task-specific.
   - Finite tool surface — always_available lists exactly what the delegate needs;
-    discoverable=[] prevents discovery of anything else.
-  - No recursion — with no find_tools and discoverable=[], a delegate can only
-    call what is in always_available; delegate tools are not in that surface, so
-    a delegate can never spawn another delegate.
+    it does NOT pin find_tools, so the delegate cannot discover anything else.
+  - No recursion — with no find_tools pinned, a delegate can only call what is in
+    always_available; delegate tools are not in that surface, so a delegate can
+    never spawn another delegate.
   - Per-call async — the model may pass ``async: true`` (exposed only on
     SUPPORTS_ASYNC channels) to run the search in the background and receive the
     result as a later turn; the framework (Ability.execute) wraps run() in a

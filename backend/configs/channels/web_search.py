@@ -61,8 +61,6 @@ class WebSearchConfig(ProcessorConfig):
             role="web_search",
             policy_channel=policy_channel,
             always_available=[*tools, "memory"],
-            discoverable=[],
-            blocked=frozenset(),
             max_iterations=50,
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs

@@ -11,19 +11,28 @@ These tests are written BEFORE the v2 implementation exists.
 They MUST FAIL on current (v1) code — that is the required failing
 baseline for the feature.
 
+Discovery roster is GLOBAL
+--------------------------
+find_tools no longer reads a per-config discoverable list — its candidate
+universe is the global set of ``DISCOVERABLE=True`` abilities
+(``AbilityRegistry.discoverable_names()``). The stub processor therefore carries
+no synthetic discovery set; every query runs against the real production roster.
+
 Empirically-pinned floor query
 -------------------------------
 Query: 'search the web for news'
-Observed against real abilities.sqlite (2026-06-05):
-  web_search   RRF=0.1213  (dual-signal: vec rank-1 + FTS rank-1)  GOOD
-  news         RRF=0.0625  (single-signal: FTS rank-1 only)         JUNK
-  read         RRF=0.0556  (single-signal)                          JUNK
-  search       RRF=0.0526  (single-signal)                          JUNK
-  web_browse   RRF=0.0500  (single-signal)                          JUNK
+Observed against the real abilities.sqlite + the global discoverable roster:
+  web_search    RRF=0.1250  (dual-signal: vec rank-1 + FTS rank-1)  GOOD
+  read          RRF=0.0588  (single-signal: FTS only)               JUNK
+  web_browse    RRF=0.0556  (single-signal)                         JUNK
+  skill_builder RRF=0.0526  (single-signal)                         JUNK
+  email         RRF=0.0500  (single-signal)                         JUNK
 
-v2 floor MIN_RRF_SCORE=0.075 retains web_search (0.1213 >= 0.075)
-and evicts news (0.0625 <= 0.075). On v1 (no floor), news IS injected
-into active_tools. The floor eviction test catches this regression.
+(``news``/``search`` are DISCOVERABLE=False, so they never enter the roster at
+all.) The v2 floor MIN_RRF_SCORE=0.075 retains web_search (0.1250 >= 0.075) and
+evicts every single-signal hit (read 0.0588 <= 0.075 …). On v1 (no floor), the
+single-signal junk IS injected into active_tools — the floor eviction test
+catches that regression.
 """
 
 import pytest
@@ -40,10 +49,13 @@ pytestmark = pytest.mark.unit
 # Shared stub-processor factory — mirrors test_find_tools_discovery.py pattern
 # ---------------------------------------------------------------------------
 
-def _stub_proc(discoverable: list[str]) -> MessageProcessor:
-    """Partial success must never be silent — unresolved names reported explicitly."""
+def _stub_proc() -> MessageProcessor:
+    """Discovery is global (AbilityRegistry.discoverable_names()); the proc only
+    needs a real config carrying find_tools — there is no per-config discovery
+    set to inject. Partial success must never be silent — unresolved names are
+    reported explicitly."""
     proc = object.__new__(MessageProcessor)
-    proc.config = make_stub_config(discoverable=discoverable)
+    proc.config = make_stub_config()
     proc._active_tools = []
     return proc
 
@@ -62,38 +74,36 @@ def _run(ability: FindToolsAbility, proc: MessageProcessor, params: dict) -> str
 # ---------------------------------------------------------------------------
 # Test 1 — floor eviction (query path)
 #
-# EMPIRICALLY PINNED against real abilities.sqlite 2026-06-05:
+# EMPIRICALLY PINNED against the real abilities.sqlite + global discoverable roster:
 #   query='search the web for news'
-#   web_search  RRF=0.1213  (dual-signal: vec+FTS) → KEPT  by floor >=0.075
-#   news        RRF=0.0625  (single-signal: FTS only) → EVICTED by floor <=0.075
+#   web_search  RRF=0.1250  (dual-signal: vec+FTS) → KEPT  by floor >=0.075
+#   read        RRF=0.0588  (single-signal: FTS only) → EVICTED by floor <=0.075
 #
-# On v1 code: news IS in active_tools (no floor). Test FAILS → failing baseline.
-# On v2 code: news is evicted, web_search stays.     Test PASSES.
+# On v1 code: read IS in active_tools (no floor). Test FAILS → failing baseline.
+# On v2 code: read is evicted, web_search stays.     Test PASSES.
 # ---------------------------------------------------------------------------
 
 class TestFloorEviction:
 
     def test_single_signal_junk_evicted_dual_signal_match_kept(self):
         """The MIN_RRF_SCORE=0.075 floor keeps the dual-signal match (web_search,
-        RRF=0.1213) and evicts the single-signal junk (news, RRF=0.0625).
+        RRF=0.1250) and evicts the single-signal junk (read, RRF=0.0588).
 
-        Current v1 code has no floor — news IS injected → this test FAILS on v1.
+        Current v1 code has no floor — the single-signal hit IS injected → this
+        test FAILS on v1.
         """
         ability = FindToolsAbility()
-        # Include all the tools that appear in the top-5 for this query so
-        # the gate does not filter them away before the floor would act.
-        proc = _stub_proc(discoverable=[
-            "web_search", "news", "read", "search", "web_browse",
-        ])
+        # Discovery is global now: every DISCOVERABLE ability is a candidate.
+        proc = _stub_proc()
 
         _run(ability, proc, {"query": "search the web for news"})
 
         assert "web_search" in proc.active_tools, (
-            "web_search (RRF=0.1213, dual-signal) must survive the floor and "
+            "web_search (RRF=0.1250, dual-signal) must survive the floor and "
             f"appear in active_tools. Got: {proc.active_tools}"
         )
-        assert "news" not in proc.active_tools, (
-            "news (RRF=0.0625, single-signal junk) must be evicted by the "
+        assert "read" not in proc.active_tools, (
+            "read (RRF=0.0588, single-signal junk) must be evicted by the "
             f"MIN_RRF_SCORE=0.075 floor. Got: {proc.active_tools}"
         )
 
@@ -116,7 +126,7 @@ class TestSelectExact:
         appended. Test FAILS on v1.
         """
         ability = FindToolsAbility()
-        proc = _stub_proc(discoverable=["weather", "email", "web_search"])
+        proc = _stub_proc()
 
         result = _run(ability, proc, {"select": ["weather", "email"]})
 
@@ -151,7 +161,7 @@ class TestSelectNotFound:
         v1 returned a query-required error → neither behaviour. Test FAILS on v1.
         """
         ability = FindToolsAbility()
-        proc = _stub_proc(discoverable=["weather", "email"])
+        proc = _stub_proc()
 
         result = _run(ability, proc, {"select": ["weather", "bogus_tool_xyz"]})
 
@@ -200,10 +210,9 @@ class TestBothParamsSelectWins:
         appended. Test FAILS on v1.
         """
         ability = FindToolsAbility()
-        # Allow all candidates so the gate doesn't interfere with what we're testing
-        proc = _stub_proc(discoverable=[
-            "weather", "web_search", "news", "read", "search", "web_browse",
-        ])
+        # Discovery is global now — the candidate roster is the whole
+        # DISCOVERABLE=True set; there is no per-config allow to inject.
+        proc = _stub_proc()
 
         _run(ability, proc, {
             "select": ["weather"],
@@ -255,7 +264,7 @@ class TestNeitherParam:
         exactly 'error=query-required'.
         """
         ability = FindToolsAbility()
-        proc = _stub_proc(discoverable=["weather", "email"])
+        proc = _stub_proc()
 
         result = _run(ability, proc, {})
 
@@ -286,7 +295,7 @@ class TestResultFormat:
         ``summary`` — and drops the legacy prose/schema dump:
           - Contains 'injected'  (v3 structured success body)
           - Contains 'summary'   (each injected row carries the search tooltip)
-          - Names the injected tool 'weather'
+          - Names the injected tool 'web_search'
           - Does NOT contain 'input_schema'  (v2 schema dump, dropped in v3)
           - Does NOT contain 'relevance'     (v1 cosmetic field)
           - Does NOT contain 'added_tools'   (v1 result envelope)
@@ -295,11 +304,12 @@ class TestResultFormat:
         'injected'/'summary' body. The contract assertions fail.
         """
         ability = FindToolsAbility()
-        # Use a single discoverable tool so the result is deterministic.
-        # 'weather' reliably appears in the top-5 for 'weather forecast'.
-        proc = _stub_proc(discoverable=["weather"])
+        # Discovery is global now. 'search the web for news' is the empirically
+        # pinned dual-signal query: web_search (RRF=0.1250) survives the floor,
+        # so the success body is deterministic.
+        proc = _stub_proc()
 
-        result = _run(ability, proc, {"query": "weather forecast"})
+        result = _run(ability, proc, {"query": "search the web for news"})
 
         assert "status=success" in result
         assert "injected" in result, (
@@ -310,8 +320,8 @@ class TestResultFormat:
             "v3 success body must carry each injected tool's 'summary'. "
             f"result={result!r}"
         )
-        assert "weather" in result, (
-            "v3 result must name the injected tool 'weather'. "
+        assert "web_search" in result, (
+            "v3 result must name the injected tool 'web_search'. "
             f"result={result!r}"
         )
         assert "input_schema" not in result, (

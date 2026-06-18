@@ -416,6 +416,9 @@ class SkillManagerAbility(SkillBuilderAbility):
     """
 
     SYSTEM: ClassVar[bool] = True
+    # Override the parent's discoverability: skill_manager is pinned exclusively on
+    # SkillSuggestionConfig.always_available; skill_builder (the parent) stays discoverable.
+    DISCOVERABLE: ClassVar[bool] = False
 
     def get_name(self) -> str:
         return "skill_manager"

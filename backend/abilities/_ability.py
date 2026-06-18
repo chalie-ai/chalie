@@ -57,11 +57,26 @@ class Ability(ABC):
     ``self.mp is None`` — introspection / search-index build — they MUST return
     deterministic base text.
 
-    Tool *scope* (always-available vs discoverable) lives on ProcessorConfig
-    (always_available / discoverable / blocked). Whether a call blocks or runs in
-    the background is a per-call decision (the framework ``async`` flag), not an
-    ability-level trait.
+    Tool *scope* is two flags and nothing else. ``DISCOVERABLE`` (below) decides
+    whether ``find_tools`` may ever surface this ability — it is a single global
+    trait of the ability, not a per-channel list. A MessageProcessor reaches a
+    tool one of exactly two ways: the config injects it directly
+    (``ProcessorConfig.always_available``), or — if the ability is
+    ``DISCOVERABLE`` — the processor discovers it through ``find_tools`` (which
+    the processor only carries when ``find_tools`` is in its always_available).
+    There is no per-config discoverable/blocked allow-list. Whether a call blocks
+    or runs in the background is a per-call decision (the framework ``async``
+    flag), not an ability-level trait.
     """
+
+    # Global discovery flag. True (the default) means find_tools may surface this
+    # ability — semantically via the abilities.sqlite index (query mode) and by
+    # exact name (select mode). False removes it from the index AND the select
+    # roster entirely: it can ONLY reach a processor by being pinned directly in
+    # that processor's ProcessorConfig.always_available. Internal/framework tools
+    # (the compactors, thinking, find_tools itself, the pattern writers, the raw
+    # web tools, memory) set this False; user-facing tools leave it True.
+    DISCOVERABLE: ClassVar[bool] = True
 
     # Constructor-injected, the invoking MessageProcessor (the "parent" of this
     # tool call). A tool reads ALL its context off this — self.mp.config.channel,
@@ -152,9 +167,12 @@ class Ability(ABC):
 
     @abstractmethod
     def get_parameters(self) -> dict:
-        """Override to enrich at runtime (e.g. find_tools folds the
-        discoverable-tools index into the ``select`` description) — gate on
-        ``self.mp`` so the build-time schema stays deterministic."""
+        """Override to enrich at runtime (e.g. bash folds the live cwd into its
+        description). When the enrichment reads live request state, gate on
+        ``self.mp`` so the build-time (mp=None) schema stays deterministic for
+        the search-index/SHA build. (find_tools enriches from the global
+        discoverable roster and is itself DISCOVERABLE=False, so it is never
+        part of that build.)"""
         ...
 
     # ── Instance method — the actual tool logic ───────────────────────────────

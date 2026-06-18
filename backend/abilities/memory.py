@@ -28,6 +28,8 @@ LOG_PREFIX = "[MEMORY]"
 
 
 class MemoryAbility(Ability):
+    DISCOVERABLE: ClassVar[bool] = False  # framework tool; always pinned (DEFAULT_ALWAYS_AVAILABLE), never discovered
+
     def get_name(self) -> str:
         return "memory"
 

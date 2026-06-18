@@ -29,6 +29,8 @@ class ToolChainCompactionConfig(CompactionConfig):
 
 
 class ToolChainCompactor(Ability):
+    DISCOVERABLE: ClassVar[bool] = False  # internal-only compaction tool; pinned, never discovered
+
     def get_name(self) -> str:
         return "tool_chain_compactor"
 

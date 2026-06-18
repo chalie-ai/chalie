@@ -34,6 +34,7 @@ _EXAMPLE_HINT = (
 
 class SavePattern(BudgetCappedAbility):
     SYSTEM = True
+    DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
 
     BUDGET_COUNTER_ATTR: ClassVar[str] = "_save_pattern_calls"
     BUDGET_CAP: ClassVar[int] = 20

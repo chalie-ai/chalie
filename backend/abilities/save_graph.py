@@ -26,6 +26,7 @@ _INVALID_KIND_HINT = "pick one of the allowed kinds, e.g. kind=user_specific key
 
 class SaveGraph(BudgetCappedAbility):
     SYSTEM = True
+    DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
 
     BUDGET_COUNTER_ATTR: ClassVar[str] = "_save_graph_calls"
     BUDGET_CAP: ClassVar[int] = 50

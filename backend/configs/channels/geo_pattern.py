@@ -98,8 +98,6 @@ class GeoConfig(ProcessorConfig):
             role="geo_pattern",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
-            discoverable=[],
-            blocked=frozenset(),
             max_iterations=30,
             skip_transcript=True,
             skip_input_row=False,

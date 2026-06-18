@@ -21,6 +21,8 @@ class FindToolsAbility(SearchableAbility):
     When both are supplied, select takes precedence and query is ignored.
     """
 
+    DISCOVERABLE: ClassVar[bool] = False  # the discovery entry point itself; pinned, never discovered
+
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
@@ -75,23 +77,22 @@ class FindToolsAbility(SearchableAbility):
     MAX_QUERY_RESULTS: ClassVar[int] = 5
 
     @staticmethod
-    def _config_scope(proc) -> "tuple[list[str], set[str]]":
-        config = getattr(proc, "config", None) if proc is not None else None
-        if config is None:
-            return [], set()
-        discoverable = list(getattr(config, "discoverable", None) or [])
-        blocked = set(getattr(config, "blocked", None) or set())
-        return discoverable, blocked
+    def _discoverable_allow() -> set[str]:
+        """The single global discovery roster: every DISCOVERABLE ability.
 
-    def _build_tools_index(self, mp=None) -> str:
+        Discovery scope no longer varies per channel — a tool is reachable here
+        iff its ``Ability.DISCOVERABLE`` is True. Channel isolation is achieved
+        entirely by (a) the flag and (b) whether the invoking processor carries
+        find_tools at all. MCP tools are added separately from the online set."""
         from abilities._registry import AbilityRegistry
 
-        discoverable, blocked = self._config_scope(mp)
+        return AbilityRegistry.discoverable_names()
+
+    def _build_tools_index(self) -> str:
+        from abilities._registry import AbilityRegistry
 
         index = {}
-        for name in discoverable:
-            if name in blocked:
-                continue
+        for name in sorted(self._discoverable_allow()):
             try:
                 ability = AbilityRegistry.get(name)
                 index[name] = ability.get_search_tooltip() or ability.get_summary()
@@ -101,11 +102,8 @@ class FindToolsAbility(SearchableAbility):
         # MCP tools are listed by their bare server-reported name only
         # (e.g. `list_tickets`), no tooltip.  The MCP protocol's per-tool
         # `description` is matched at search time (FTS over mcp_tools.sqlite),
-        # not surfaced in this browse hint.  Gate on the prefixed call name.
-        mcp_display = [
-            display for call_name, display in self._get_online_mcp_tools_index()
-            if call_name not in blocked
-        ]
+        # not surfaced in this browse hint.
+        mcp_display = [display for _call_name, display in self._get_online_mcp_tools_index()]
 
         if not index and not mcp_display:
             return ""
@@ -132,13 +130,14 @@ class FindToolsAbility(SearchableAbility):
             return []
 
     def get_parameters(self) -> dict:
-        # Enrich the `select` description with the live discoverable-tools index.
-        # Gated on self.mp via _config_scope: at build time (mp=None) the scope is
-        # empty, so the base schema is returned unchanged and the search index /
-        # SHA map stay deterministic. The framework fields (act_summary / async)
-        # are injected uniformly afterwards by the final get_input_schema().
+        # Enrich the `select` description with the global discoverable-tools index.
+        # The roster is the same on every channel (AbilityRegistry.discoverable_names);
+        # find_tools is itself DISCOVERABLE=False, so it never lands in the search
+        # index / SHA map and this enrichment never feeds the build. The framework
+        # fields (act_summary / async) are injected uniformly afterwards by the
+        # final get_input_schema().
         params = copy.deepcopy(self._PARAMETERS)
-        tools_index = self._build_tools_index(self.mp)
+        tools_index = self._build_tools_index()
         if tools_index:
             params["properties"][Keys.select]["description"] = (
                 f"Exact tool names to activate directly. Available tools: {tools_index}"
@@ -151,9 +150,9 @@ class FindToolsAbility(SearchableAbility):
         The result is structured so a weak model can tell what it actually got:
         the success body is ``{"injected": [{"name", "summary"}, …], "not_found":
         […]}`` with ``injected``/``not_found`` counts in the meta, and a request
-        that yields nothing usable errors loudly (``unknown-tool`` /
-        ``blocked-on-channel``) with a ``valid:`` ladder of real selectable names
-        — never a prose-only result that hides whether a tool was injected.
+        that yields nothing usable errors loudly (``unknown-tool``) with a
+        ``valid:`` ladder of real selectable names — never a prose-only result
+        that hides whether a tool was injected.
         """
         select_names = params.get(Keys.select)
         query = params.get(Keys.query, "").strip()
@@ -167,18 +166,17 @@ class FindToolsAbility(SearchableAbility):
                 valid=("select", "query"),
             )
 
-        proc = self.mp
-        discoverable, blocked = self._config_scope(proc)
-        # Drop blocked names from BOTH the ability allow-list and the MCP names so
-        # the block holds on every path — select, query, and fallback. (The
-        # descriptive index in _build_tools_index applies the same filter.)
-        allow = [name for name in discoverable if name not in blocked]
-        mcp_names = [name for name in self._get_online_mcp_names() if name not in blocked]
-        effective_allow = set(allow) | set(mcp_names)
+        # The discovery roster is global: every DISCOVERABLE ability plus the
+        # online MCP tools. There is no per-channel block list — a non-discoverable
+        # tool is simply absent from this set, so select reports it unknown and
+        # query never ranks it.
+        allow = self._discoverable_allow()
+        mcp_names = self._get_online_mcp_names()
+        effective_allow = allow | set(mcp_names)
 
         # select wins over query when both are provided.
         if select_names:
-            return self._run_select(select_names, effective_allow, blocked)
+            return self._run_select(select_names, effective_allow)
 
         if not effective_allow:
             return ToolResult.ok({"injected": [], "not_found": []}, injected=0, query=query)
@@ -187,18 +185,17 @@ class FindToolsAbility(SearchableAbility):
         return self._run_query(query, list(allow), list(mcp_names))
 
     def _run_select(
-        self, requested: list[str], effective_allow: set[str], blocked: set[str]
+        self, requested: list[str], effective_allow: set[str]
     ) -> ToolResult:
-        """A name blocked on the invoking channel is NEVER injected; it lands in
-        not_found and, when every requested name is unusable, drives a loud
-        ``blocked-on-channel`` / ``unknown-tool`` error so the model never believes
-        a blocked delegate is now available.
+        """A name absent from the global discoverable roster is NEVER injected; it
+        lands in not_found and, when every requested name is unusable, drives a
+        loud ``unknown-tool`` error so the model never believes a non-discoverable
+        tool was injected.
 
         Ambiguity rule: if a bare display name maps to more than one distinct call
         name across servers, the alias is dropped — the caller must use the prefixed
         form to avoid silent wrong-server selection."""
         allow_lower = {name.lower(): name for name in effective_allow}
-        blocked_lower = {name.lower() for name in blocked}
 
         # Build display → call_name alias map for MCP tools in effective_allow.
         # display_to_calls accumulates all call_names for each bare display name so we
@@ -219,7 +216,6 @@ class FindToolsAbility(SearchableAbility):
 
         matched: list[str] = []
         not_found: list[str] = []
-        any_blocked = False
 
         for name in requested:
             lower = name.lower()
@@ -228,8 +224,6 @@ class FindToolsAbility(SearchableAbility):
                 matched.append(canonical)
             else:
                 not_found.append(name)
-                if lower in blocked_lower:
-                    any_blocked = True
 
         # Two requested aliases (e.g. the bare display name and its prefixed call
         # name) can resolve to the same canonical tool — collapse so the result
@@ -237,18 +231,10 @@ class FindToolsAbility(SearchableAbility):
         matched = list(dict.fromkeys(matched))
 
         # Nothing usable: loud error so the model self-corrects rather than
-        # believing a blocked/unknown tool was injected. blocked-on-channel when
-        # the failure was a real-but-blocked name; unknown-tool otherwise. The
-        # valid ladder is the real selectable names on this channel.
+        # believing a non-discoverable / unknown tool was injected. The valid
+        # ladder is the real selectable names (the global discoverable roster).
         if not matched:
             valid = tuple(sorted(effective_allow))
-            if any_blocked:
-                return ToolResult.err(
-                    f"Tools not found or unavailable on this channel: {', '.join(not_found)}.",
-                    code="blocked-on-channel",
-                    hint="These tools are not offered on this channel; pick one from the valid list.",
-                    valid=valid,
-                )
             return ToolResult.err(
                 f"Tools not found or unavailable: {', '.join(not_found)}.",
                 code="unknown-tool",

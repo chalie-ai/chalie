@@ -40,8 +40,6 @@ class StubProcessorConfig(ProcessorConfig):
 
 def make_stub_config(
     *,
-    discoverable=None,
-    blocked=frozenset(),
     always_available=None,
     channel="user",
     role="user",
@@ -52,8 +50,6 @@ def make_stub_config(
         role=role,
         policy_channel=policy_channel or ProcessorConfig.PolicyChannel.CHAT,
         always_available=list(always_available or []),
-        discoverable=list(discoverable or []),
-        blocked=frozenset(blocked),
         max_iterations=None,
         skip_transcript=False,
         skip_input_row=False,

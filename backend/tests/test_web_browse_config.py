@@ -24,7 +24,6 @@ def test_config_contract():
     cfg = WebBrowseConfig(_CHAT)
     assert cfg.max_iterations == 200
     assert set(cfg.always_available) == {"browser", "read", "vision", "memory"}
-    assert cfg.discoverable == []
     # Both False or the delegate goes act-trail-blind again.
     assert cfg.skip_transcript is False
     assert cfg.skip_input_row is False

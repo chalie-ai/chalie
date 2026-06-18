@@ -62,9 +62,11 @@ def _get_registry() -> dict[str, Ability]:
 class AbilityRegistry:
     """Registry of every dispatchable Ability subclass.
 
-    Tool *scope* (always-available vs discoverable) is owned by each
-    MessageProcessor subclass — the registry just provides the dispatch
-    lookup and the full inventory.
+    Tool *scope* is two flags: an ability is pinned directly on a
+    MessageProcessor (``config.always_available``) or — iff its
+    ``Ability.DISCOVERABLE`` is True — reachable through ``find_tools``. The
+    registry owns the full inventory, the dispatch lookup, and the single global
+    roster of discoverable names that ``find_tools`` searches over.
     """
 
     @staticmethod
@@ -75,6 +77,19 @@ class AbilityRegistry:
     @staticmethod
     def all() -> list[Ability]:
         return list(_get_registry().values())
+
+    @staticmethod
+    def discoverable_names() -> set[str]:
+        """The global set of ability names ``find_tools`` may surface.
+
+        This is the single source of truth for discovery scope: every ability
+        whose ``DISCOVERABLE`` flag is True. ``find_tools`` searches over exactly
+        this set for both the ``query`` (semantic) and ``select`` (by-name)
+        paths; the abilities.sqlite index is built from the same predicate, so
+        the two never drift. MCP proxies (``_mcp_*``) are not in the registry and
+        are handled by find_tools' MCP path separately.
+        """
+        return {name for name, a in _get_registry().items() if a.DISCOVERABLE}
 
     @staticmethod
     def build_tools(mp: "object") -> list[dict]:

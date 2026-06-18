@@ -2,11 +2,12 @@
 
 Strategy: monkeypatch _DB_PATH on FindToolsAbility to a tmp_path
 database populated with real embeddings. Real EmbeddingService is used.
-``FindToolsAbility.execute()`` reads the calling MessageProcessor's
-``DISCOVERABLE`` list via ``self.MessageProcessor``; tests bind a stub
-processor for that lookup. Direct ``_query`` and ``_fallback`` calls
-accept the allowlist as a positional arg so RRF ordering can be verified
-by formula, not by semantic luck.
+``FindToolsAbility.run()`` discovers against the GLOBAL roster of
+``DISCOVERABLE=True`` abilities (``AbilityRegistry.discoverable_names()``) —
+there is no per-config allowlist; tests bind a stub processor only because
+run() needs a config. Direct ``_query`` and ``_fallback`` calls accept the
+allowlist as a positional arg so RRF ordering can be verified by formula,
+not by semantic luck.
 """
 
 import sqlite3
@@ -24,15 +25,17 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# Stub processor — a *flat* MessageProcessor instance (no subclass: §7a / P1)
-# carrying a custom DISCOVERABLE list for the find_tools query gate.
+# Stub processor — a *flat* MessageProcessor instance (no subclass: §7a / P1).
+# Discovery is GLOBAL now: find_tools.run() reads the candidate roster from
+# ``AbilityRegistry.discoverable_names()`` (every DISCOVERABLE=True ability),
+# not from any per-config list. The stub only needs a real config carrying
+# find_tools — there is nothing per-config to inject.
 # ---------------------------------------------------------------------------
 
 
-def _make_stub_processor(discoverable: list[str]) -> MessageProcessor:
-    """find_tools reads ``mp.config.discoverable`` / ``mp.config.blocked``."""
+def _make_stub_processor() -> MessageProcessor:
     proc = object.__new__(MessageProcessor)
-    proc.config = make_stub_config(discoverable=discoverable)
+    proc.config = make_stub_config()
     proc._active_tools = []
     return proc
 
@@ -97,10 +100,11 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     conn.close()
 
 
-def _execute_with_discoverable(ability, query, discoverable):
+def _execute_query(ability, query):
     """The query path caps results at ``MAX_QUERY_RESULTS`` internally - there is no
-    caller 'limit' knob (dropped in the v2 select/query split)."""
-    proc = _make_stub_processor(discoverable=discoverable)
+    caller 'limit' knob (dropped in the v2 select/query split). Discovery filters
+    against the global ``DISCOVERABLE=True`` roster — no per-call allowlist."""
+    proc = _make_stub_processor()
     ability.mp = proc
     result = ability.run({"query": query})
     return result, proc.active_tools
@@ -124,7 +128,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_query(ability, "weather forecast")
 
         assert "weather" in active, (
             f"Expected 'weather' in active, got: {active}"
@@ -152,9 +156,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(
-            ability, "python sandbox", ["weather", "code_eval"]
-        )
+        _, active = _execute_query(ability, "python sandbox")
 
         assert "code_eval" in active, (
             f"Expected 'code_eval' via FTS keyword, got: {active}"
@@ -211,9 +213,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(
-            ability, "weather forecast", ["weather"]
-        )
+        _, active = _execute_query(ability, "weather forecast")
 
         assert active.count("weather") <= 1, (
             f"Duplicate 'weather' in active: {active}"
@@ -224,15 +224,17 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", nonexistent)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_query(ability, "weather forecast")
 
         assert active == []
 
     def test_discoverable_allowlist_filters_results(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """Indexes both 'memory' and 'weather'; processor lists only ['weather'].
-        Even when 'memory' would otherwise rank, the gate excludes it.
+        """Indexes both 'memory' and 'weather'. ``memory`` is DISCOVERABLE=False
+        globally, so even though it is in the tmp index and would otherwise rank,
+        the global discovery roster excludes it. ``weather`` is DISCOVERABLE=True
+        and survives.
         """
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [
@@ -250,30 +252,13 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_query(ability, "weather forecast")
 
         assert "memory" not in active, (
-            f"'memory' should be filtered by DISCOVERABLE allowlist, got: "
-            f"{active}"
+            f"'memory' (DISCOVERABLE=False) must be excluded by the global "
+            f"discovery roster, got: {active}"
         )
         assert "weather" in active
-
-    def test_empty_discoverable_returns_empty_results(
-        self, tmp_path, monkeypatch, _real_embeddings
-    ):
-        """SQL never executes when the allowlist is empty."""
-        new_db_path = tmp_path / "abilities.sqlite"
-        _build_abilities_sqlite(new_db_path, [{
-            "name": "weather",
-            "summary": _real_embeddings["weather_summary_text"],
-            "embedding": _real_embeddings["weather_summary"],
-        }])
-        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
-
-        ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(ability, "weather forecast", [])
-
-        assert active == []
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +359,7 @@ class TestFindToolsPhase3Gaps:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
 
         ability = FindToolsAbility()
-        proc = _make_stub_processor(discoverable=["sandboxer"])
+        proc = _make_stub_processor()
         ability.mp = proc
         ability._fallback("sandbox", ["sandboxer"])
 

@@ -45,6 +45,7 @@ _BROADEN_HINT = "Try broadening the query or describing the task differently."
 
 
 class FindSkillsAbility(SearchableAbility):
+    DISCOVERABLE: ClassVar[bool] = False  # framework discovery tool; always pinned, never discovered
 
     def get_name(self) -> str:
         return "find_skills"

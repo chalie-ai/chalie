@@ -13,9 +13,12 @@ pytestmark = pytest.mark.unit
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _stub_proc(discoverable: list[str]) -> MessageProcessor:
+def _stub_proc() -> MessageProcessor:
+    # The discovery roster is global (AbilityRegistry.discoverable_names()); these
+    # tests seed ONLINE MCP servers, whose tool names enter the effective allow-list
+    # via run()'s _get_online_mcp_names() — independent of any per-config list.
     proc = object.__new__(MessageProcessor)
-    proc.config = make_stub_config(discoverable=discoverable)
+    proc.config = make_stub_config()
     proc._active_tools = []
     return proc
 
@@ -96,7 +99,7 @@ class TestSelectAdvertisedName:
         ability = FindToolsAbility()
         # No ability names in discoverable — MCP names come from get_online_mcp_tool_names()
         # which the real run() calls against the db fixture.
-        proc = _stub_proc(discoverable=[])
+        proc = _stub_proc()
         result = _run_find_tools(ability, proc, {"select": ["list_tickets"]})
 
         assert "_mcp_taskie_list_tickets" in proc.active_tools, (
@@ -131,7 +134,7 @@ class TestSemanticQueryViaEmbeddings:
         svc.embed_server_tools(server["id"])
 
         ability = FindToolsAbility()
-        proc = _stub_proc(discoverable=[])
+        proc = _stub_proc()
         result = _run_find_tools(ability, proc, {"query": "create a task or ticket"})
 
         ticket_tools = {"_mcp_taskie_list_tickets", "_mcp_taskie_create_ticket"}
@@ -183,7 +186,7 @@ class TestLooseMultiWordQuery:
         )
 
         ability = FindToolsAbility()
-        proc = _stub_proc(discoverable=[])
+        proc = _stub_proc()
         result = _run_find_tools(ability, proc, {"query": "ticket document attachment"})
 
         assert len(proc.active_tools) >= 1, (
@@ -283,7 +286,7 @@ class TestEmbeddingsSurviveHeartbeatSync:
         # Vector query must still work despite the id churn — keyed by tool_name.
         # 'create a task or ticket' is dual-signal (vec + FTS) → RRF 0.125 → passes floor.
         ability = FindToolsAbility()
-        proc = _stub_proc(discoverable=[])
+        proc = _stub_proc()
         result = _run_find_tools(ability, proc, {"query": "create a task or ticket"})
 
         assert len(proc.active_tools) >= 1, (
@@ -390,7 +393,7 @@ class TestAmbiguousBareNameDropped:
         ])
 
         ability_a = FindToolsAbility()
-        proc_a = _stub_proc(discoverable=[])
+        proc_a = _stub_proc()
         result_a = _run_find_tools(ability_a, proc_a, {"select": ["ping"]})
 
         assert "_mcp_taskie_ping" in proc_a.active_tools, (
@@ -414,7 +417,7 @@ class TestAmbiguousBareNameDropped:
         assert "_mcp_other_ping" in mcp_names
 
         ability_b = FindToolsAbility()
-        proc_b = _stub_proc(discoverable=[])
+        proc_b = _stub_proc()
         result_b = _run_find_tools(ability_b, proc_b, {"select": ["ping"]})
 
         assert "_mcp_taskie_ping" not in proc_b.active_tools, (
@@ -427,7 +430,7 @@ class TestAmbiguousBareNameDropped:
         )
 
         # The prefixed form must always resolve unambiguously.
-        proc_c = _stub_proc(discoverable=[])
+        proc_c = _stub_proc()
         ability_c = FindToolsAbility()
         _run_find_tools(ability_c, proc_c, {"select": ["_mcp_taskie_ping"]})
         assert "_mcp_taskie_ping" in proc_c.active_tools, (

@@ -5,9 +5,6 @@ from services.processor_config import ProcessorConfig
 
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
-    DEFAULT_DISCOVERABLE,
-    DELEGATE_INTERNAL_TOOLS,
-    PATTERN_WRITE_TOOLS,
     substitute_provider_content_field,
 )
 
@@ -68,8 +65,6 @@ class EAMPConfig(ProcessorConfig):
             role="external_agent",
             policy_channel=ProcessorConfig.PolicyChannel.EXTERNAL_AGENT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
-            discoverable=DEFAULT_DISCOVERABLE,
-            blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
             max_iterations=200,
             skip_transcript=False,
             skip_input_row=False,

@@ -55,16 +55,16 @@ class ThinkingConfig(ProcessorConfig):
 
     thinking_mode: ClassVar[str] = "high"
 
-    def __init__(self, active_tools, blocked, policy_channel) -> None:
+    def __init__(self, active_tools, policy_channel) -> None:
         super().__init__(
             channel="thinking",
             role="thinking",
             policy_channel=policy_channel,
             # Mirror the parent's live tool tier so build_tools resolves the
-            # identical schemas. No discovery: this is a single deliberation pass.
+            # identical schemas. No discovery: this is a single deliberation pass
+            # (no find_tools pinned), so the parent's active_tools snapshot is the
+            # entire surface.
             always_available=list(active_tools or []),
-            discoverable=[],
-            blocked=frozenset(blocked or ()),
             max_iterations=1,
             skip_transcript=True,
             skip_input_row=True,
@@ -87,6 +87,8 @@ class ThinkingConfig(ProcessorConfig):
 
 
 class ThinkingAbility(Ability):
+    DISCOVERABLE: ClassVar[bool] = False  # internal-only; pinned on ThinkingConfig, never discovered
+
     def get_name(self) -> str:
         return "thinking"
 
@@ -123,7 +125,6 @@ class ThinkingAbility(Ability):
             parent._raw_input,
             ThinkingConfig(
                 list(parent.active_tools),
-                parent.config.blocked,
                 parent.config.policy_channel,
             ),
             metadata={"thinking_user_prompt": parent.config.get_user_prompt(parent)},

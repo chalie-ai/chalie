@@ -13,8 +13,6 @@ class SkillSuggestionConfig(ProcessorConfig):
             role="skills_building",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["skill_manager"],
-            discoverable=[],
-            blocked=frozenset(),
             max_iterations=5,
             skip_transcript=False,
             skip_input_row=False,

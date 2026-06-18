@@ -406,8 +406,6 @@ def post_action():
                         role="action_button",
                         policy_channel=ProcessorConfig.PolicyChannel.CHAT,
                         always_available=[],
-                        discoverable=[],
-                        blocked=frozenset(),
                         max_iterations=1,
                         skip_transcript=True,
                         skip_input_row=True,

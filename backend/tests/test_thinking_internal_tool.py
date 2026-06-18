@@ -6,11 +6,12 @@ pytestmark = pytest.mark.integration
 
 
 def test_thinking_never_discoverable(db):
-    # thinking is registered but in no discoverable/always_available list.
+    # thinking is registered but DISCOVERABLE=False, so it never enters the
+    # global find_tools roster, and it is in no always_available list either.
     assert "thinking" in {a.get_name() for a in AbilityRegistry.all()}
+    assert "thinking" not in AbilityRegistry.discoverable_names()
     cfg = UserConfig()
     assert "thinking" not in (cfg.always_available or [])
-    assert "thinking" not in (cfg.discoverable or [])
 
 
 def test_thinking_config_mirrors_parent_tool_surface(db):
@@ -18,10 +19,8 @@ def test_thinking_config_mirrors_parent_tool_surface(db):
     from configs.channels import UserConfig
     parent = UserConfig()
     active_tools_snapshot = list(parent.always_available or [])
-    tc = ThinkingConfig(active_tools_snapshot, parent.blocked, parent.policy_channel)
+    tc = ThinkingConfig(active_tools_snapshot, parent.policy_channel)
     assert tc.always_available == active_tools_snapshot
-    assert tc.discoverable == []
-    assert tc.blocked == frozenset(parent.blocked or ())
     assert tc.thinking_mode == "high"
     assert tc.max_iterations == 1
 

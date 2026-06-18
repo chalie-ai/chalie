@@ -49,8 +49,6 @@ def _config_with_hooks(hooks):
         build_user_definition=lambda _mp: "",
         build_system_prompt=lambda _mp: "",
         always_available=[],
-        discoverable=[],
-        blocked=frozenset(),
         max_iterations=1,
         skip_transcript=True,
         skip_input_row=False,

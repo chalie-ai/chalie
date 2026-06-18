@@ -70,8 +70,6 @@ class WebBrowseConfig(ProcessorConfig):
             role="web_browse",
             policy_channel=policy_channel,
             always_available=[*_WEB_BROWSE_TOOLS, "memory"],
-            discoverable=[],
-            blocked=frozenset(),
             max_iterations=200,
             skip_transcript=False,  # uid + own transcript row, or the
             skip_input_row=False,   # act-trail dies and the loop runs blind

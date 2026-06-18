@@ -4,8 +4,12 @@ Policy defaults seeded by ``policy_defaults.json``:
     (chat, vision) -> allow · (external_agent, vision) -> allow ·
     (subconscious, vision) -> deny.
 
-``vision`` is in ``DELEGATE_TOOLS`` (subtracted on DmnConfig) and in
-``DEFAULT_DISCOVERABLE`` (offered on UserConfig).
+``vision`` is ``DISCOVERABLE=True``, so it lives in the single global discovery
+roster (``AbilityRegistry.discoverable_names()``) and is selectable via
+find_tools on every channel that carries find_tools — including the DMN
+background channel. Channel containment for vision is the policy gate above
+(subconscious → deny), NOT a discovery block. The policy gate and the discovery
+roster are orthogonal.
 """
 
 import sqlite3
@@ -16,7 +20,6 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
 from configs.channels import DmnConfig, UserConfig
-from configs.channels._common import DELEGATE_TOOLS
 from run import _migrate_legacy_policy_rules
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
@@ -82,14 +85,14 @@ class TestVisionPolicyDefaults:
 
 class TestVisionVisibility:
 
-    def test_vision_is_a_delegate_tool(self):
-        """Pin the constant the whole visibility split rests on: a silent edit
-        that drops vision from DELEGATE_TOOLS trips this guard."""
-        assert "vision" in DELEGATE_TOOLS
+    def test_vision_is_globally_discoverable(self):
+        """Pin the flag the whole visibility model now rests on: a silent edit
+        that flips VisionAbility.DISCOVERABLE to False drops it from the global
+        roster and trips this guard."""
+        assert "vision" in AbilityRegistry.discoverable_names()
 
     def test_vision_selectable_on_user_channel(self):
         mp = _mp_for(UserConfig())
-        assert "vision" not in mp.config.blocked  # contract guard
 
         result = _find_tools_on(mp, {"select": ["vision"]})
 
@@ -103,17 +106,22 @@ class TestVisionVisibility:
             f"vision must not be reported unavailable on the user channel. result={result!r}"
         )
 
-    def test_vision_blocked_on_dmn_background_channel(self):
+    def test_vision_selectable_on_dmn_channel(self):
+        """Discovery is global now: the DMN background channel carries find_tools,
+        and vision is DISCOVERABLE=True, so the DMN can discover and spawn the
+        vision delegate. Containing vision away from the subconscious is the policy
+        gate's job (subconscious → deny, asserted above), NOT a discovery block."""
         mp = _mp_for(DmnConfig())
-        assert "vision" in mp.config.blocked  # contract guard
 
         result = _find_tools_on(mp, {"select": ["vision"]})
 
-        assert "vision" not in mp.active_tools, (
-            f"vision must be blocked on the DMN background channel. "
+        assert "vision" in mp.active_tools, (
+            f"vision must be discoverable on the DMN background channel. "
             f"active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" in result.lower()
+        assert result["not_found"] == [], (
+            f"vision must not be reported unavailable on the DMN channel. result={result!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

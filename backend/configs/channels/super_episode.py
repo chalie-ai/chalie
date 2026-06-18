@@ -132,8 +132,6 @@ class SuperEpisodeConfig(ProcessorConfig):
             role="super_episode_encoder",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
             max_iterations=1,
             skip_transcript=True,
             skip_input_row=False,

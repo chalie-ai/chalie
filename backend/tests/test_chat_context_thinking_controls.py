@@ -100,7 +100,7 @@ class TestContextUsageEndpoint:
         chat = ProcessorConfig.PolicyChannel.CHAT
         assert UserConfig().job == 'user:user'
         assert WebSearchConfig(chat).job != 'user:user'
-        assert ThinkingConfig([], frozenset(), chat).job != 'user:user'
+        assert ThinkingConfig([], chat).job != 'user:user'
         # All three share the SAME usage_class — proving why usage_class can't
         # be the discriminator and job_name must be.
         assert UserConfig().usage_class == WebSearchConfig(chat).usage_class == 'chat'

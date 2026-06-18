@@ -82,13 +82,12 @@ class ProcessorConfig(ABC):
     # ── Tool visibility ───────────────────────────────────────────────────────
 
     always_available: list[str]
-    """Tool names pinned in every LLM call (innate tier)."""
+    """Tool names pinned in every LLM call (innate tier).
 
-    discoverable: list[str]
-    """Tool names discoverable via find_tools for this channel."""
-
-    blocked: frozenset[str]
-    """Tool names never offered to the model (e.g. DMN blocks the delegate tools)."""
+    This is the ONLY per-config tool list. Discovery scope is not configured
+    here: a tool is reachable via find_tools iff its ``Ability.DISCOVERABLE`` is
+    True (a global trait) and this config pins ``find_tools`` in
+    ``always_available``. There is no per-channel discoverable/blocked list."""
 
     # ── Loop control ──────────────────────────────────────────────────────────
 
