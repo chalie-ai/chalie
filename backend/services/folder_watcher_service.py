@@ -21,7 +21,12 @@ import os
 import secrets
 from services.log_utils import safe
 from services.time_utils import utc_now, parse_utc
-from typing import Dict, List, Optional, Any
+from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Optional, cast
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
+    from services.document_service import DocumentService
+    from services.memory_store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +47,7 @@ ALLOWED_EXTENSIONS = {
 class FolderWatcherService:
     """Manages watched folder CRUD, directory browsing, and file scanning."""
 
-    def __init__(self, db_service):
+    def __init__(self, db_service: "DatabaseService") -> None:
         """Initialize the service with a DatabaseService instance."""
         self.db = db_service
 
@@ -52,14 +57,14 @@ class FolderWatcherService:
     def create_folder(
         self,
         folder_path: str,
-        label: str = None,
-        file_patterns: list = None,
-        ignore_patterns: list = None,
+        label: Optional[str] = None,
+        file_patterns: Optional[list[str]] = None,
+        ignore_patterns: Optional[list[str]] = None,
         recursive: bool = True,
         scan_interval: int = 60,
         source_type: str = 'filesystem',
-        source_config: dict = None,
-    ) -> Dict[str, Any]:
+        source_config: Optional[dict[str, object]] = None,
+    ) -> Dict[str, object]:
         """Create and persist a new watched folder record."""
         real_path = os.path.realpath(folder_path)
         self._validate_folder_path(real_path)
@@ -89,9 +94,9 @@ class FolderWatcherService:
             cursor.close()
 
         logger.info(f"[WATCHER] Created watched folder '{real_path}' (id={folder_id})")
-        return self.get_folder(folder_id)
+        return cast(Dict[str, object], self.get_folder(folder_id))
 
-    def get_folder(self, folder_id: str) -> Optional[Dict[str, Any]]:
+    def get_folder(self, folder_id: str) -> Optional[Dict[str, object]]:
         """Retrieve a single watched folder record by its ID."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -103,7 +108,7 @@ class FolderWatcherService:
             return None
         return self._row_to_dict(row, cols)
 
-    def get_all_folders(self) -> List[Dict[str, Any]]:
+    def get_all_folders(self) -> List[Dict[str, object]]:
         """Retrieve all watched folder records, newest first."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -113,7 +118,7 @@ class FolderWatcherService:
             cursor.close()
         return [self._row_to_dict(row, cols) for row in rows]
 
-    def get_enabled_folders(self) -> List[Dict[str, Any]]:
+    def get_enabled_folders(self) -> List[Dict[str, object]]:
         """Retrieve only enabled watched folder records."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
@@ -123,7 +128,7 @@ class FolderWatcherService:
             cursor.close()
         return [self._row_to_dict(row, cols) for row in rows]
 
-    def update_folder(self, folder_id: str, **kwargs) -> Optional[Dict[str, Any]]:
+    def update_folder(self, folder_id: str, **kwargs: object) -> Optional[Dict[str, object]]:
         """Update mutable fields of a watched folder."""
         allowed_fields = {
             'folder_path', 'label', 'enabled', 'file_patterns', 'ignore_patterns',
@@ -134,12 +139,12 @@ class FolderWatcherService:
             return self.get_folder(folder_id)
 
         if 'folder_path' in updates:
-            real_path = os.path.realpath(updates['folder_path'])
+            real_path = os.path.realpath(cast(str, updates['folder_path']))
             self._validate_folder_path(real_path)
             updates['folder_path'] = real_path
 
         if 'scan_interval' in updates:
-            updates['scan_interval'] = max(int(updates['scan_interval']), MIN_SCAN_INTERVAL)
+            updates['scan_interval'] = max(int(cast(int, updates['scan_interval'])), MIN_SCAN_INTERVAL)
 
         # JSON-encode list/dict fields
         for field in ('file_patterns', 'ignore_patterns', 'source_config'):
@@ -171,12 +176,12 @@ class FolderWatcherService:
             docs = doc_svc.get_documents_by_watched_folder(folder_id)
             for doc in docs:
                 if not doc.get('deleted_at'):
-                    doc_svc.soft_delete(doc['id'])
+                    doc_svc.soft_delete(cast(str, doc['id']))
 
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM watched_folders WHERE id = ?", (folder_id,))
-            deleted = cursor.rowcount > 0
+            deleted: bool = cursor.rowcount > 0
             cursor.close()
 
         if deleted:
@@ -195,7 +200,7 @@ class FolderWatcherService:
     # Directory browsing
     # ─────────────────────────────────────────────
 
-    def browse_directory(self, path: str = None) -> Dict[str, Any]:
+    def browse_directory(self, path: Optional[str] = None) -> Dict[str, object]:
         """List readable sub-directories at the given filesystem path."""
         if not path:
             path = os.path.expanduser("~")
@@ -236,15 +241,15 @@ class FolderWatcherService:
     # Scanning
     # ─────────────────────────────────────────────
 
-    def is_scan_due(self, folder: Dict) -> bool:
+    def is_scan_due(self, folder: Dict[str, object]) -> bool:
         """Check if enough time has passed since the last scan."""
         last_scan = folder.get('last_scan_at')
         if not last_scan:
             return True
         try:
-            last_dt = parse_utc(last_scan)
+            last_dt = parse_utc(cast(str, last_scan))
             elapsed = (utc_now() - last_dt).total_seconds()
-            return elapsed >= folder.get('scan_interval', 300)
+            return elapsed >= cast(float, folder.get('scan_interval', 300))
         except (ValueError, TypeError):
             return True
 
@@ -258,7 +263,7 @@ class FolderWatcherService:
             return True
         return False
 
-    def scan_folder(self, folder: Dict) -> Dict[str, int]:
+    def scan_folder(self, folder: Dict[str, object]) -> Dict[str, object]:
         """Scan a watched folder for changes."""
         from services.memory_store import MemoryStore
         store = MemoryStore()
@@ -274,89 +279,89 @@ class FolderWatcherService:
         try:
             return self._do_scan(folder, store)
         except Exception as e:
-            self._update_scan_error(folder['id'], str(e)[:500])
+            self._update_scan_error(cast(str, folder['id']), str(e)[:500])
             raise
         finally:
             store.delete(lock_key)
 
-    def _categorize_existing_file(self, doc_svc, folder, abs_path: str, mtime: float,
-                                   existing: dict, cached: dict, scan_cache: dict,
-                                   result: dict, enqueued: int) -> int:
+    def _categorize_existing_file(self, doc_svc: "DocumentService", folder: Dict[str, object], abs_path: str, mtime: float,
+                                   existing: Dict[str, object], cached: Dict[str, object], scan_cache: Dict[str, Dict[str, object]],
+                                   result: Dict[str, object], enqueued: int) -> int:
         """Handle a discovered file that already has a document record."""
         cached_mtime = cached.get('mtime')
 
         if existing.get('status') == 'failed':
-            if cached_mtime is None or abs(mtime - cached_mtime) < 1:
+            if cached_mtime is None or abs(mtime - cast(float, cached_mtime)) < 1:
                 scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
-                result['skipped'] += 1
+                result['skipped'] = cast(int, result['skipped']) + 1
                 return enqueued
 
         elif existing.get('status') in ('pending', 'processing'):
             scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
-            result['skipped'] += 1
+            result['skipped'] = cast(int, result['skipped']) + 1
             return enqueued
 
-        elif cached_mtime and abs(mtime - cached_mtime) < 1:
-            result['skipped'] += 1
+        elif cached_mtime and abs(mtime - cast(float, cached_mtime)) < 1:
+            result['skipped'] = cast(int, result['skipped']) + 1
             cached.pop('missing_count', None)
             scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
             return enqueued
 
         file_hash = self._compute_hash(abs_path)
         if file_hash == existing.get('file_hash'):
-            result['skipped'] += 1
+            result['skipped'] = cast(int, result['skipped']) + 1
             scan_cache[abs_path] = {'mtime': mtime, 'doc_id': existing['id']}
             return enqueued
 
         if enqueued < MAX_ENQUEUE_PER_SCAN:
             new_doc_id = self._create_watched_document(doc_svc, folder, abs_path, file_hash)
-            doc_svc.set_supersedes(new_doc_id, existing['id'])
+            doc_svc.set_supersedes(new_doc_id, cast(str, existing['id']))
             try:
                 from services.data_graph_service import get_data_graph_service
                 get_data_graph_service().hard_delete_by_source_prefix(f'document:{existing["id"]}')
             except Exception as exc:
                 logger.warning("[WATCHER] Failed to cascade-delete old artifacts for %s: %s", existing['id'], exc)
-            doc_svc.soft_delete(existing['id'])
+            doc_svc.soft_delete(cast(str, existing['id']))
             self._process_watched_document(new_doc_id, abs_path)
             scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
-            result['updated'] += 1
+            result['updated'] = cast(int, result['updated']) + 1
             enqueued += 1
         else:
-            result['skipped'] += 1
+            result['skipped'] = cast(int, result['skipped']) + 1
         return enqueued
 
-    def _categorize_new_file(self, doc_svc, folder, abs_path: str, mtime: float,
-                              discovered: dict, existing_by_hash: dict,
-                              scan_cache: dict, result: dict, enqueued: int) -> int:
+    def _categorize_new_file(self, doc_svc: "DocumentService", folder: Dict[str, object], abs_path: str, mtime: float,
+                              discovered: Dict[str, float], existing_by_hash: Dict[str, Dict[str, object]],
+                              scan_cache: Dict[str, Dict[str, object]], result: Dict[str, object], enqueued: int) -> int:
         """Handle a discovered file with no existing document record."""
         file_hash = self._compute_hash(abs_path)
 
         renamed_doc = existing_by_hash.get(file_hash)
         if renamed_doc and renamed_doc['file_path'] not in discovered:
-            doc_svc.update_file_path(renamed_doc['id'], abs_path)
+            doc_svc.update_file_path(cast(str, renamed_doc['id']), abs_path)
             old_path = renamed_doc['file_path']
-            scan_cache.pop(old_path, None)
+            scan_cache.pop(cast(str, old_path), None)
             scan_cache[abs_path] = {'mtime': mtime, 'doc_id': renamed_doc['id']}
-            result['renamed'] += 1
+            result['renamed'] = cast(int, result['renamed']) + 1
             return enqueued
 
         if enqueued < MAX_ENQUEUE_PER_SCAN:
             new_doc_id = self._create_watched_document(doc_svc, folder, abs_path, file_hash)
             self._process_watched_document(new_doc_id, abs_path)
             scan_cache[abs_path] = {'mtime': mtime, 'doc_id': new_doc_id}
-            result['new'] += 1
+            result['new'] = cast(int, result['new']) + 1
             enqueued += 1
         else:
-            result['skipped'] += 1
+            result['skipped'] = cast(int, result['skipped']) + 1
         return enqueued
 
-    def _do_scan(self, folder: Dict, store) -> Dict[str, int]:
+    def _do_scan(self, folder: Dict[str, object], store: "MemoryStore") -> Dict[str, object]:
         """Execute the folder scan against the database."""
         from services.document_service import DocumentService
 
-        folder_path = folder['folder_path']
-        folder_id = folder['id']
-        result = {'new': 0, 'updated': 0, 'deleted': 0, 'renamed': 0, 'skipped': 0, 'errors': []}
+        folder_path = cast(str, folder['folder_path'])
+        folder_id = cast(str, folder['id'])
+        result: Dict[str, object] = {'new': 0, 'updated': 0, 'deleted': 0, 'renamed': 0, 'skipped': 0, 'errors': []}
 
         if not os.path.isdir(folder_path):
             msg = f"Folder no longer accessible: {folder_path}"
@@ -368,21 +373,21 @@ class FolderWatcherService:
         ignore_patterns = self._parse_json_list(folder.get('ignore_patterns', '[]'))
         recursive = bool(folder.get('recursive', 1))
 
-        discovered: dict = {}
+        discovered: Dict[str, float] = {}
         for abs_path, mtime in self._walk_folder(folder_path, recursive, file_patterns, ignore_patterns):
             discovered[abs_path] = mtime
 
         doc_svc = DocumentService(self.db)
         existing_docs = doc_svc.get_documents_by_watched_folder(folder_id)
 
-        existing_by_path: dict = {}
-        existing_by_hash: dict = {}
+        existing_by_path: Dict[str, Dict[str, object]] = {}
+        existing_by_hash: Dict[str, Dict[str, object]] = {}
         for doc in existing_docs:
             if doc.get('deleted_at'):
                 continue
-            existing_by_path[doc['file_path']] = doc
+            existing_by_path[cast(str, doc['file_path'])] = doc
             if doc.get('file_hash'):
-                existing_by_hash[doc['file_hash']] = doc
+                existing_by_hash[cast(str, doc['file_hash'])] = doc
 
         scan_cache = self._load_scan_cache(store, folder_id)
         enqueued = 0
@@ -404,17 +409,17 @@ class FolderWatcherService:
                     )
             except Exception as e:
                 logger.warning(f"[WATCHER] Error processing {abs_path}: {e}")
-                result['errors'].append(f"{os.path.basename(abs_path)}: {e}")
+                cast(list[str], result['errors']).append(f"{os.path.basename(abs_path)}: {e}")
 
         # Check for deleted files
         for abs_path, doc in existing_by_path.items():
             if abs_path not in discovered:
                 cached = scan_cache.get(abs_path, {})
-                missing_count = cached.get('missing_count', 0) + 1
+                missing_count = cast(int, cached.get('missing_count', 0)) + 1
                 if missing_count >= MISSING_THRESHOLD:
-                    doc_svc.soft_delete(doc['id'])
+                    doc_svc.soft_delete(cast(str, doc['id']))
                     scan_cache.pop(abs_path, None)
-                    result['deleted'] += 1
+                    result['deleted'] = cast(int, result['deleted']) + 1
                     logger.info(f"[WATCHER] Soft-deleted missing file: {os.path.basename(abs_path)}")
                 else:
                     cached['missing_count'] = missing_count
@@ -429,10 +434,11 @@ class FolderWatcherService:
     # Scan helpers
     # ─────────────────────────────────────────────
 
-    def _walk_folder(self, folder_path, recursive, file_patterns, ignore_patterns):
+    def _walk_folder(self, folder_path: str, recursive: bool, file_patterns: list[str], ignore_patterns: list[str]) -> Iterator[tuple[str, float]]:
         """Yield matching files from a folder tree as (abs_path, mtime) tuples."""
         real_root = os.path.realpath(folder_path)
 
+        walker: Iterable[tuple[str, list[str], list[str]]]
         if recursive:
             walker = os.walk(folder_path, followlinks=False)
         else:
@@ -482,20 +488,20 @@ class FolderWatcherService:
                 h.update(chunk)
         return h.hexdigest()
 
-    def _create_watched_document(self, doc_svc, folder, abs_path, file_hash):
+    def _create_watched_document(self, doc_svc: "DocumentService", folder: Dict[str, object], abs_path: str, file_hash: str) -> str:
         """Create a document record for a file discovered in a watched folder."""
         original_name = os.path.basename(abs_path)
         mime_type = mimetypes.guess_type(abs_path)[0] or 'application/octet-stream'
         file_size = os.path.getsize(abs_path)
 
-        doc_id = doc_svc.create_document(
+        doc_id: str = doc_svc.create_document(
             original_name=original_name,
             mime_type=mime_type,
             file_size=file_size,
             file_path=abs_path,
             file_hash=file_hash,
             source_type='watched_folder',
-            watched_folder_id=folder['id'],
+            watched_folder_id=cast(str, folder['id']),
         )
 
         # Derive and set environment tags
@@ -505,11 +511,11 @@ class FolderWatcherService:
 
         return doc_id
 
-    def _process_watched_document(self, doc_id: str, abs_path: str):
+    def _process_watched_document(self, doc_id: str, abs_path: str) -> None:
         """Extract text from a watched file and create data_graph artifacts."""
         import threading
 
-        def _run():
+        def _run() -> None:
             try:
                 from services.text_extractor import extract_text
                 from services.document_chunking import create_document_artifacts
@@ -545,16 +551,16 @@ class FolderWatcherService:
 
         threading.Thread(target=_run, daemon=True, name=f"doc-watch-{doc_id[:8]}").start()
 
-    def _derive_environment_tags(self, folder: Dict, abs_path: str) -> list:
+    def _derive_environment_tags(self, folder: Dict[str, object], abs_path: str) -> list[str]:
         """Derive semantic environment tags from the folder label and subfolder path."""
         tags = []
 
         # Folder label is the primary environment
         if folder.get('label'):
-            tags.append(folder['label'])
+            tags.append(cast(str, folder['label']))
 
         # Relative subfolder segments become secondary tags
-        rel_path = os.path.relpath(os.path.dirname(abs_path), folder['folder_path'])
+        rel_path = os.path.relpath(os.path.dirname(abs_path), cast(str, folder['folder_path']))
         if rel_path != '.':
             segments = [s for s in rel_path.split(os.sep) if s and not s.startswith('.')]
             tags.extend(segments)
@@ -565,13 +571,13 @@ class FolderWatcherService:
     # Scan state cache (MemoryStore)
     # ─────────────────────────────────────────────
 
-    def _load_scan_cache(self, store, folder_id: str) -> dict:
+    def _load_scan_cache(self, store: "MemoryStore", folder_id: str) -> Dict[str, Dict[str, object]]:
         """Load the per-folder scan state from MemoryStore."""
         cache_key = f"watcher:state:{folder_id}"
         raw = store.get(cache_key)
         if raw:
             try:
-                return json.loads(raw)
+                return cast(Dict[str, Dict[str, object]], json.loads(raw))
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -579,13 +585,13 @@ class FolderWatcherService:
         from services.document_service import DocumentService
         doc_svc = DocumentService(self.db)
         docs = doc_svc.get_documents_by_watched_folder(folder_id)
-        cache = {}
+        cache: Dict[str, Dict[str, object]] = {}
         for doc in docs:
             if not doc.get('deleted_at') and doc.get('file_path'):
-                cache[doc['file_path']] = {'doc_id': doc['id']}
+                cache[cast(str, doc['file_path'])] = {'doc_id': doc['id']}
         return cache
 
-    def _save_scan_cache(self, store, folder_id: str, cache: dict) -> None:
+    def _save_scan_cache(self, store: "MemoryStore", folder_id: str, cache: Dict[str, Dict[str, object]]) -> None:
         """Persist the per-folder scan state to MemoryStore with a 48-hour TTL."""
         cache_key = f"watcher:state:{folder_id}"
         store.set(cache_key, json.dumps(cache), ex=172800)
@@ -631,7 +637,7 @@ class FolderWatcherService:
         if not os.access(real_path, os.R_OK):
             raise PermissionError(f"Directory is not readable: {real_path}")
 
-    def _parse_json_list(self, val) -> list:
+    def _parse_json_list(self, val: object) -> list[str]:
         """Parse a JSON-encoded list string or pass a list through unchanged."""
         if isinstance(val, list):
             return val
@@ -643,14 +649,14 @@ class FolderWatcherService:
                 return []
         return []
 
-    def _row_to_dict(self, row, cols) -> Dict[str, Any]:
+    def _row_to_dict(self, row: object, cols: list[str]) -> Dict[str, object]:
         """Convert a watched_folders database row to a dict."""
-        d = dict(zip(cols, row))
+        d = dict(zip(cols, cast(Iterable[object], row)))
         # Parse JSON fields
         for field in ('file_patterns', 'ignore_patterns', 'source_config'):
             if field in d and isinstance(d[field], str):
                 try:
-                    d[field] = json.loads(d[field])
+                    d[field] = json.loads(cast(str, d[field]))
                 except (json.JSONDecodeError, TypeError):
                     pass
         return d

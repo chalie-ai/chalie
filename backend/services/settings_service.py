@@ -2,7 +2,7 @@
 
 import logging
 import secrets
-from typing import Optional
+from typing import Optional, cast
 
 from services.database_service import DatabaseService, text
 
@@ -37,9 +37,9 @@ class SettingsService:
                 import base64
                 from services.vault_service import get_vault_service
                 return get_vault_service().decrypt_str(base64.b64decode(row[1]))
-            return row[0]
+            return cast(str | None, row[0])
 
-    def set(self, key: str, value: str, value_type: str = 'string', description: str = None) -> str:
+    def set(self, key: str, value: str, value_type: str = 'string', description: str | None = None) -> str:
         """Sensitive settings are encrypted via the VaultService (AES-256-GCM)
         and stored as base64-encoded blobs in ``encrypted_value``.  Non-sensitive
         settings are stored as plain text in ``value``.

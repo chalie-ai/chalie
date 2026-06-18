@@ -4,7 +4,12 @@ Tool Config Service — SQLite-backed per-tool configuration storage.
 Config values are injected into tool containers at invocation time.
 """
 
+from __future__ import annotations
+
 import logging
+
+from services.database_service import DatabaseService
+
 
 logger = logging.getLogger(__name__)
 
@@ -17,17 +22,17 @@ class ToolConfigService:
     ``_set_source_metadata``, etc.) must be used to update them.
     """
 
-    RESERVED_KEYS = {
+    RESERVED_KEYS: set[str] = {
         "_enabled",
         "_oauth_access_token", "_oauth_refresh_token",
         "_oauth_token_expires_at", "_oauth_connected_at", "_oauth_scopes",
         "_source_type", "_source_url", "_installed_tag",
     }
 
-    def __init__(self, database_service):
-        self.db = database_service
+    def __init__(self, database_service: DatabaseService) -> None:
+        self.db: DatabaseService = database_service
 
-    def get_tool_config(self, tool_name: str) -> dict:
+    def get_tool_config(self, tool_name: str) -> dict[str, str]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -90,7 +95,7 @@ class ToolConfigService:
             logger.exception(f"[TOOL CONFIG] _set_source_metadata('{tool_name}'): {e}")
             return False
 
-    def set_tool_config(self, tool_name: str, config: dict) -> bool:
+    def set_tool_config(self, tool_name: str, config: dict[str, object]) -> bool:
         """
         Raises:
             ValueError: If any key in config is a reserved internal key.

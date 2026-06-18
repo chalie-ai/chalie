@@ -39,7 +39,21 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Optional,
+    cast,
+)
+
+if TYPE_CHECKING:
+    from services.data_graph_service import DataGraphService as _DataGraphService
+    from services.database_service import DatabaseService
+    from services.decay_engine_service import DecayEngineService
+    from services.embedding_service import EmbeddingService as _EmbeddingService
+    from services.episodic_service import EpisodicService as _EpisodicService
+    from services.message_processor import MessageProcessor as _MessageProcessor
+    from services.processor_config import ProcessorConfig as _ProcessorConfig
 
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now
@@ -137,7 +151,7 @@ class SubconsciousWorker:
         self._summarization_budget_remaining = _SUMMARIZATION_CLUSTER_BUDGET
         # Single DecayEngineService instance — shared across ticks.
         # Lazy-built on first use so import failures surface as a step error.
-        self._decay_engine = None
+        self._decay_engine: Optional["DecayEngineService"] = None
         # Hydrate from durable state on construction so the first tick after a
         # restart sees the correct already-fired value. Failure is non-fatal —
         # worst case we run one extra tick on first idle window after a crash.
@@ -148,7 +162,7 @@ class SubconsciousWorker:
 
     # ── Public entry ─────────────────────────────────────────────────────────
 
-    def run_once(self) -> dict:
+    def run_once(self) -> dict[str, object]:
         """Run one full tick. Returns a structured summary.
 
         Summary keys:
@@ -179,14 +193,14 @@ class SubconsciousWorker:
 
     # ── Tick orchestration ───────────────────────────────────────────────────
 
-    def _tick(self) -> dict:
+    def _tick(self) -> dict[str, object]:
         """Body of one tick after gates have been cleared.
 
         Steps are strictly sequential — each step completes before the next
         begins. Synthesis writes the user_summary row that DMN reads; the
         sequential contract ensures DMN always sees the latest synthesis output.
         """
-        steps: dict = {}
+        steps: dict[str, dict[str, object]] = {}
         steps["compaction"] = self._safe_step("compaction", self._step_compaction)
         steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
         steps["fact_extraction"] = self._safe_step("fact_extraction", self._step_fact_extraction)
@@ -220,7 +234,7 @@ class SubconsciousWorker:
         )
         return {"steps": steps, "last_fired_at": last_iso}
 
-    def _safe_step(self, name: str, fn) -> dict:
+    def _safe_step(self, name: str, fn: "Callable[[], object]") -> dict[str, object]:
         """Run a single step under try/except. Returns step status dict."""
         try:
             detail = fn()
@@ -337,7 +351,7 @@ class SubconsciousWorker:
         )
 
     @staticmethod
-    def _consolidating_channels(db) -> list[str]:
+    def _consolidating_channels(db: "DatabaseService") -> list[str]:
         """Return the channels to consolidate: the HEAVY exact channels (user,
         dmn) unioned with each live external-agent channel found in episodes.
 
@@ -368,7 +382,7 @@ class SubconsciousWorker:
             )
         return channels
 
-    def _consolidate_channel(self, channel: str, db, emb_svc) -> tuple[int, int]:
+    def _consolidate_channel(self, channel: str, db: "DatabaseService", emb_svc: "_EmbeddingService") -> tuple[int, int]:
         """Consolidate one channel across both hierarchy rounds. Returns
         (clusters_found, supers_written) summed over the rounds.
 
@@ -430,7 +444,7 @@ class SubconsciousWorker:
         return found, written
 
     def _write_round(
-        self, channel, clusters, level, db, emb_svc, episodic_svc
+        self, channel: str, clusters: list[list[str]], level: int, db: "DatabaseService", emb_svc: "_EmbeddingService", episodic_svc: "_EpisodicService"
     ) -> int:
         """Write one roll-up round's clusters at ``level``. Returns supers written.
 
@@ -465,7 +479,7 @@ class SubconsciousWorker:
 
     @staticmethod
     def _write_super_episode(
-        channel, cluster_ids, level, db, emb_svc, episodic_svc, prior_embeddings
+        channel: str, cluster_ids: list[str], level: int, db: "DatabaseService", emb_svc: "_EmbeddingService", episodic_svc: "_EpisodicService", prior_embeddings: list[bytes]
     ) -> bool:
         """Encode + store one parent episode for a cluster. Returns True on write.
 
@@ -525,12 +539,12 @@ class SubconsciousWorker:
             super_ep["transcript_id_end"] = max(unique_t_ids) if unique_t_ids else None
             super_ep["consolidated_from"] = [ep["id"] for ep in sources]
 
-            gist = super_ep["gist"]
+            gist = cast(str, super_ep["gist"])
             embedding = emb_svc.generate_embedding(gist)
             novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
             super_ep["salience"] = compute_salience(
-                valence=float(super_ep.get("emotional_valence") or 0.0),
-                arousal=float(super_ep.get("emotional_arousal") or 0.0),
+                valence=float(cast(float, super_ep.get("emotional_valence") or 0.0)),
+                arousal=float(cast(float, super_ep.get("emotional_arousal") or 0.0)),
                 has_open_loop=bool(super_ep.get("has_open_loop", False)),
                 novelty=novelty,
             )
@@ -605,8 +619,8 @@ class SubconsciousWorker:
         )
 
     def _extract_facts_for_episode(
-        self, episode, episodic_svc, dg, counters,
-        config_cls, parse_ops, processor_cls,
+        self, episode: dict[str, object], episodic_svc: "_EpisodicService", dg: "_DataGraphService", counters: dict[str, int],
+        config_cls: "Callable[..., object]", parse_ops: "Callable[..., list[dict[str, object]]]", processor_cls: "type[_MessageProcessor]",
     ) -> None:
         """Run the constrained-op pipeline for a single episode and stamp it.
 
@@ -615,10 +629,10 @@ class SubconsciousWorker:
         (counted) so a confused model never corrupts the graph; the episode is
         still stamped so the backlog drains.
         """
-        gist = episode.get("gist") or ""
+        gist = cast(str, episode.get("gist") or "")
         neighbours = dg.recall(gist, limit=_FACT_NEIGHBOUR_LIMIT) if gist else []
 
-        config = config_cls(gist, neighbours)
+        config = cast("_ProcessorConfig", config_cls(gist, neighbours))
         response = processor_cls.process("", config)
 
         try:
@@ -635,14 +649,14 @@ class SubconsciousWorker:
         # specific external agent) is recoverable from data_graph.source. dmn and
         # external-agent facts are wanted, so there is no channel gate here — the
         # backlog feeds every episode-producing channel.
-        source = _fact_source_for(episode.get("channel"))
+        source = _fact_source_for(cast(Optional[str], episode.get("channel")))
         for op in ops:
             self._apply_fact_op(op, dg, counters, source)
 
-        episodic_svc.set_facts_extracted_at(episode["id"])
+        episodic_svc.set_facts_extracted_at(cast(str, episode["id"]))
         counters["episodes"] += 1
 
-    def _apply_fact_op(self, op, dg, counters, source) -> None:
+    def _apply_fact_op(self, op: dict[str, object], dg: "_DataGraphService", counters: dict[str, int], source: str) -> None:
         """Apply one validated constrained op to data_graph and count it.
 
         ``source`` is the channel-tagged provenance for this episode's facts.
@@ -657,14 +671,14 @@ class SubconsciousWorker:
         verb = op["op"]
         try:
             if verb == OP_DELETE:
-                dg.invalidate(op["kind"], op["key"])
+                dg.invalidate(cast(str, op["kind"]), cast(str, op["key"]))
                 counters["delete"] += 1
                 return
-            result = dg.upsert_fact(op["key"], op["value"], source=source)
+            result = dg.upsert_fact(cast(str, op["key"]), cast(str, op["value"]), source=source)
             if result is None:
                 counters["noop"] += 1
                 return
-            counters[_FACT_STATUS_COUNTER.get(result.get("status"), "add")] += 1
+            counters[_FACT_STATUS_COUNTER.get(cast(str, result.get("status")), "add")] += 1
         except Exception as exc:
             counters["failed"] += 1
             logger.warning(
@@ -765,7 +779,7 @@ class SubconsciousWorker:
         pmp._run()
 
         # Layer 2: update skill-personalisation associations for touched patterns
-        touched = getattr(pmp, "_touched_pattern_ids", set())
+        touched: set[int] = getattr(pmp, "_touched_pattern_ids", set())
         if touched:
             try:
                 from services.skill_association_service import SkillAssociationService
@@ -1017,7 +1031,7 @@ def get_subconscious_worker() -> SubconsciousWorker:
     return _DEFAULT_INSTANCE
 
 
-def subconscious_worker():
+def subconscious_worker() -> None:
     """WorkerManager entry point. Tick loop with a stable cadence.
 
     The first tick is delayed by the configured tick interval so the worker

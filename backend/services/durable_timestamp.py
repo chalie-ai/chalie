@@ -1,7 +1,7 @@
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, cast
 
 from services.data_graph_service import KIND_SYSTEM
 from services.time_utils import parse_utc
@@ -96,7 +96,7 @@ class DurableTimestamp:
                     (self._DG_KIND, self._data_graph_key),
                 ).fetchone()
             if row and row[0]:
-                return row[0]
+                return cast(str, row[0])
             return None
         except Exception as exc:
             logger.debug(

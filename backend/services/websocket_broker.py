@@ -9,14 +9,24 @@ does location.reload() and gets full state from the DB.
 import json
 import logging
 import threading
+from typing import TYPE_CHECKING, Optional, cast
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _WebSocket(Protocol):
+        def send(self, data: str) -> None: ...
 
 logger = logging.getLogger(__name__)
 
-class WebSocketBroker:
-    _instance = None
-    _init_lock = threading.Lock()
 
-    def __new__(cls):
+class WebSocketBroker:
+    _instance: Optional["WebSocketBroker"] = None
+    _init_lock: threading.Lock = threading.Lock()
+    _lock: threading.Lock
+    _ws: 'Optional[_WebSocket]'
+
+    def __new__(cls) -> "WebSocketBroker":
         if cls._instance is None:
             with cls._init_lock:
                 if cls._instance is None:
@@ -26,7 +36,7 @@ class WebSocketBroker:
                     cls._instance = instance
         return cls._instance
 
-    def connect(self, ws) -> None:
+    def connect(self, ws: '_WebSocket') -> None:
         with self._lock:
             self._ws = ws
 
@@ -34,7 +44,7 @@ class WebSocketBroker:
         with self._lock:
             self._ws = None
 
-    def broadcast(self, data: dict) -> None:
+    def broadcast(self, data: dict[str, object]) -> None:
         with self._lock:
             ws = self._ws
         if ws is None:

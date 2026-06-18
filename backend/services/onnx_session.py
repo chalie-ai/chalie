@@ -32,7 +32,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
+
+if TYPE_CHECKING:
+    from onnxruntime import InferenceSession
 
 logger = logging.getLogger(__name__)
 
@@ -85,16 +88,20 @@ def choose_providers(model_path: Optional[Union[Path, str]] = None) -> List[str]
 
 def build_session(
     model_path: Union[Path, str],
-    sess_options=None,
+    sess_options: object = None,
     providers: Optional[List[str]] = None,
     *,
     log_prefix: str = "[ONNX]",
-):
+) -> 'InferenceSession':
     import onnxruntime as ort
 
     model_path = Path(model_path)
     chosen = list(providers) if providers is not None else choose_providers(model_path)
-    opts = sess_options if sess_options is not None else ort.SessionOptions()
+    opts = (
+        sess_options
+        if sess_options is not None
+        else ort.SessionOptions()
+    )
 
     try:
         session = ort.InferenceSession(str(model_path), sess_options=opts, providers=chosen)

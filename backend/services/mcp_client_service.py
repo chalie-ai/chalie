@@ -16,7 +16,7 @@ import re
 import sqlite3
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
 from services.database_service import get_shared_db_service
@@ -200,7 +200,7 @@ def _open_tools_db() -> sqlite3.Connection:
 
 # ── Async MCP helpers ────────────────────────────────────────────────────────
 
-async def _async_list_tools(host: str, headers: dict) -> list[dict]:
+async def _async_list_tools(host: str, headers: dict[str, str]) -> list[dict[str, object]]:
     """Connect to a remote MCP server and return its tool list.
 
     Each returned dict has 'name', 'description', and 'inputSchema' keys
@@ -226,8 +226,8 @@ async def _async_list_tools(host: str, headers: dict) -> list[dict]:
 
 
 async def _async_call_tool(
-    host: str, headers: dict, remote_tool: str, params: dict
-) -> Any:
+    host: str, headers: dict[str, str], remote_tool: str, params: dict[str, object]
+) -> object:
     """Connect to a remote MCP server and call a single tool.
 
     Returns the full ``CallToolResult`` so the caller can read ``isError`` and
@@ -260,7 +260,7 @@ class McpClientService:
 
     # ── CRUD ──────────────────────────────────────────────────────────────────
 
-    def list_servers(self) -> list[dict]:
+    def list_servers(self) -> list[dict[str, object]]:
         """Return all mcp_client_servers rows as dicts."""
         with self._db.connection() as conn:
             rows = conn.execute(
@@ -270,7 +270,7 @@ class McpClientService:
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
-    def add_server(self, name: str, host: str, headers: dict, enabled: bool) -> dict:
+    def add_server(self, name: str, host: str, headers: dict[str, str], enabled: bool) -> dict[str, object]:
         """Add a remote server, deduping by normalized host.
 
         If an existing server resolves to the same endpoint (see
@@ -298,16 +298,16 @@ class McpClientService:
         logger.info("%s Added server %r (id=%s)", _LOG_PREFIX, name, server_id)
         return self._get_server(server_id)
 
-    def _find_by_normalized_host(self, host: str) -> dict | None:
+    def _find_by_normalized_host(self, host: str) -> dict[str, object] | None:
         """Return an existing server resolving to the same endpoint, else None."""
         key = _normalize_host(host)
         for server in self.list_servers():
-            if _normalize_host(server["host"]) == key:
+            if _normalize_host(cast(str, server["host"])) == key:
                 return server
         return None
 
-    def _upsert_existing(self, existing: dict, name: str, host: str,
-                         headers: dict) -> dict:
+    def _upsert_existing(self, existing: dict[str, object], name: str, host: str,
+                         headers: dict[str, str]) -> dict[str, object]:
         """Re-add of a known endpoint: update fields and re-enable.
 
         Always purge the existing toolset (rows + vector embeddings) before the
@@ -318,30 +318,30 @@ class McpClientService:
         is derived from the server name, so a name change additionally invalidates
         the old ``_mcp_<oldname>_*`` policy rows.
         """
-        old_prefix = f"_mcp_{_sanitize_name(existing['name'])}_"
+        old_prefix = f"_mcp_{_sanitize_name(cast(str, existing['name']))}_"
         new_prefix = f"_mcp_{_sanitize_name(name)}_"
-        self._delete_tools_for_server(existing["id"])
+        self._delete_tools_for_server(cast(str, existing["id"]))
         if old_prefix != new_prefix:
             self._delete_policy_rows(old_prefix)
         logger.info(
             "%s Re-add of existing endpoint %r → upsert id=%s",
             _LOG_PREFIX, host, existing["id"],
         )
-        return self.update_server(existing["id"], {
+        return self.update_server(cast(str, existing["id"]), {
             "name": name,
             "host": host,
             "headers": headers or {},
             "enabled": True,
         })
 
-    def get_server(self, server_id: str) -> dict | None:
+    def get_server(self, server_id: str) -> dict[str, object] | None:
         """Return a single server dict, or None if not found."""
         try:
             return self._get_server(server_id)
         except LookupError:
             return None
 
-    def update_server(self, server_id: str, updates: dict) -> dict:
+    def update_server(self, server_id: str, updates: dict[str, object]) -> dict[str, object]:
         """Apply a partial update to a server row.
 
         Accepts: name, host, headers (dict or JSON string), enabled (bool|int).
@@ -378,7 +378,7 @@ class McpClientService:
         server = self.get_server(server_id)
         if server is None:
             raise LookupError(f"Server not found: {server_id}")
-        sanitized = _sanitize_name(server["name"])
+        sanitized = _sanitize_name(cast(str, server["name"]))
         prefix = f"_mcp_{sanitized}_"
         self._delete_tools_for_server(server_id)
         self._delete_policy_rows(prefix)
@@ -391,7 +391,7 @@ class McpClientService:
 
     # ── Ping + sync ───────────────────────────────────────────────────────────
 
-    def ping_and_sync(self, server_id: str) -> dict:
+    def ping_and_sync(self, server_id: str) -> dict[str, object]:
         """Connect to the server, sync its tool list, and update status.
 
         Returns ``{status, tool_count, reachable, error}``.  Never raises —
@@ -409,14 +409,14 @@ class McpClientService:
                 "error": "server not found",
             }
 
-        host = server["host"]
+        host = cast(str, server["host"])
         headers = server.get("headers") or {}
         if isinstance(headers, str):
             headers = json.loads(headers) if headers else {}
 
         try:
-            tools = asyncio.run(_async_list_tools(host, headers))
-            self._write_tools(server_id, server["name"], tools)
+            tools = asyncio.run(_async_list_tools(host, cast(dict[str, str], headers)))
+            self._write_tools(server_id, cast(str, server["name"]), tools)
             self._update_status(server_id, _STATUS_ONLINE)
             logger.info(
                 "%s Server %r online — %d tools synced",
@@ -440,7 +440,7 @@ class McpClientService:
                 "error": str(exc),
             }
 
-    def get_server_tools(self, server_id: str) -> list[dict]:
+    def get_server_tools(self, server_id: str) -> list[dict[str, object]]:
         """Return the raw synced tool inventory for a single server."""
         conn = _open_tools_db()
         try:
@@ -460,7 +460,7 @@ class McpClientService:
         finally:
             conn.close()
 
-    def get_tool_schema(self, tool_name: str) -> dict | None:
+    def get_tool_schema(self, tool_name: str) -> dict[str, object] | None:
         """Return the LLM tool spec for a single _mcp_* tool, or None if unknown.
 
         Reads mcp_tools.sqlite by exact tool_name match and returns the
@@ -548,7 +548,7 @@ class McpClientService:
             index.append((call_name, display))
         return index
 
-    def label_mcp_permissions(self, permissions: list[str]) -> dict[str, dict]:
+    def label_mcp_permissions(self, permissions: list[str]) -> dict[str, dict[str, str]]:
         """Map ``_mcp_*`` policy permissions to display ``{group, label}``.
 
         ``group`` is the configured server title (e.g. ``GitHub``); ``label`` is
@@ -561,11 +561,11 @@ class McpClientService:
         One ``list_servers`` read serves the whole batch.
         """
         servers = sorted(
-            ({"slug": _sanitize_name(s["name"]), "title": s["name"]}
+            ({"slug": _sanitize_name(cast(str, s["name"])), "title": cast(str, s["name"])}
              for s in self.list_servers()),
             key=lambda s: len(s["slug"]), reverse=True,  # longest slug wins the prefix race
         )
-        out: dict[str, dict] = {}
+        out: dict[str, dict[str, str]] = {}
         for perm in permissions:
             if not perm.startswith("_mcp_"):
                 continue
@@ -582,7 +582,7 @@ class McpClientService:
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
 
-    def dispatch_mcp_tool(self, tool_name: str, params: dict) -> dict:
+    def dispatch_mcp_tool(self, tool_name: str, params: dict[str, object]) -> dict[str, object]:
         """Dispatch a ``_mcp_*`` tool call to the appropriate remote server.
 
         Resolves the server + remote tool, opens a fresh MCP session, calls the
@@ -606,18 +606,18 @@ class McpClientService:
         except ValueError as exc:
             raise McpToolUnknown(str(exc)) from exc
 
-        host = server["host"]
+        host = cast(str, server["host"])
         headers = server.get("headers") or {}
         if isinstance(headers, str):
             headers = json.loads(headers) if headers else {}
 
         try:
             result = asyncio.run(
-                _async_call_tool(host, headers, remote_tool, params)
+                _async_call_tool(host, cast(dict[str, str], headers), remote_tool, params)
             )
         except Exception as exc:
             logger.warning("%s Tool dispatch failed for %r: %s", _LOG_PREFIX, tool_name, exc)
-            raise McpServerUnreachable(server["name"], str(exc)) from exc
+            raise McpServerUnreachable(cast(str, server["name"]), str(exc)) from exc
 
         logger.info(
             "%s Dispatched %r → server %r", _LOG_PREFIX, tool_name, server["name"]
@@ -700,7 +700,7 @@ class McpClientService:
                 logger.debug("%s embed_server_tools: no tools for server %r", _LOG_PREFIX, server_id)
                 return
 
-            server_name = server["name"]
+            server_name = cast(str, server["name"])
             prefix = f"_mcp_{_sanitize_name(server_name)}_"
             tool_names = [r["tool_name"] for r in rows]
             texts = []
@@ -760,7 +760,7 @@ class McpClientService:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _get_server(self, server_id: str) -> dict:
+    def _get_server(self, server_id: str) -> dict[str, object]:
         """Fetch a single server row; raise LookupError if missing."""
         with self._db.connection() as conn:
             row = conn.execute(
@@ -774,14 +774,14 @@ class McpClientService:
         return self._row_to_dict(row)
 
     @staticmethod
-    def _row_to_dict(row) -> dict:
+    def _row_to_dict(row: "sqlite3.Row | tuple[object, ...]") -> dict[str, object]:
         """Convert a DB row (tuple or sqlite3.Row) to a plain dict."""
         (
             server_id, name, host, headers_raw, enabled,
             status, last_pinged_at, created_at, updated_at,
         ) = row[:9]
         try:
-            headers = json.loads(headers_raw) if headers_raw else {}
+            headers = json.loads(cast(str, headers_raw)) if headers_raw else {}
         except json.JSONDecodeError:
             headers = {}
         return {
@@ -808,7 +808,7 @@ class McpClientService:
             )
             conn.commit()
 
-    def _write_tools(self, server_id: str, server_name: str, tools: list[dict]) -> None:
+    def _write_tools(self, server_id: str, server_name: str, tools: list[dict[str, object]]) -> None:
         """Replace the tool index for one server in mcp_tools.sqlite."""
         conn = _open_tools_db()
         try:
@@ -816,7 +816,7 @@ class McpClientService:
                 "DELETE FROM mcp_tools WHERE server_id = ?", (server_id,)
             )
             for t in tools:
-                name = _tool_name(server_name, t["name"])
+                name = _tool_name(server_name, cast(str, t["name"]))
                 summary = t.get("description", "") or ""
                 schema_json = json.dumps(t.get("inputSchema") or {})
                 conn.execute(
@@ -894,7 +894,7 @@ class McpClientService:
             conn.execute("DELETE FROM policy WHERE permission LIKE ?", (f"{tool_name_prefix}%",))
             conn.commit()
 
-    def _resolve_tool(self, prefixed_name: str) -> tuple[dict, str]:
+    def _resolve_tool(self, prefixed_name: str) -> tuple[dict[str, object], str]:
         """Map a _mcp_<server>_<tool> name to (server_dict, remote_tool_name).
 
         Strategy: iterate all known servers, check whether their sanitized name
@@ -906,11 +906,11 @@ class McpClientService:
         remainder = prefixed_name[5:]  # strip '_mcp_'
 
         servers = self.list_servers()
-        best: tuple[dict, str] | None = None
+        best: tuple[dict[str, object], str] | None = None
         best_len = 0
 
         for srv in servers:
-            prefix = _sanitize_name(srv["name"]) + "_"
+            prefix = _sanitize_name(cast(str, srv["name"])) + "_"
             if remainder.startswith(prefix) and len(prefix) > best_len:
                 best = (srv, remainder[len(prefix):])
                 best_len = len(prefix)
@@ -928,7 +928,7 @@ class McpClientService:
         return server, remote_tool
 
     @staticmethod
-    def _shape_tool_result(result: Any) -> str | dict | list:
+    def _shape_tool_result(result: object) -> str | dict[str, object] | list[object]:
         """Shape an MCP ``CallToolResult`` into a ``str`` (prose) or ``dict``/``list``
         (structured) body for the ToolResult contract.
 

@@ -10,6 +10,7 @@ Called by SubconsciousWorker after every PatternMatchProcessor pass.
 import json
 import logging
 import sqlite3
+from typing import cast
 
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
@@ -60,27 +61,27 @@ class SkillAssociationService:
         db = get_shared_db_service()
         placeholders = ",".join("?" * len(row_ids))
         with db.connection() as conn:
-            return conn.execute(
+            return cast(list[tuple[str, str]], conn.execute(
                 f"SELECT key, value FROM data_graph "
                 f"WHERE id IN ({placeholders}) "
                 f"AND kind='behavioral_pattern' AND active=1 AND deleted_at IS NULL",
                 tuple(row_ids),
-            ).fetchall()
+            ).fetchall())
 
-    def _load_skill_index(self) -> list[tuple]:
+    def _load_skill_index(self) -> list[tuple[str, str, str]]:
         conn = sqlite3.connect(str(_SKILLS_DB))
         try:
-            return conn.execute(
+            return cast(list[tuple[str, str, str]], conn.execute(
                 "SELECT id, title, use_for FROM skills"
-            ).fetchall()
+            ).fetchall())
         finally:
             conn.close()
 
     def _request_associations(
         self,
         patterns: list[tuple[str, str]],
-        skills: list[tuple],
-    ) -> list[dict] | None:
+        skills: list[tuple[str, str, str]],
+    ) -> list[dict[str, object]] | None:
         pattern_list = [
             {key: json.loads(value).get("summary", value) if value else value}
             for key, value in patterns
@@ -113,8 +114,8 @@ class SkillAssociationService:
 
     def _write_associations(
         self,
-        associations: list[dict],
-        valid_skill_ids: set[int],
+        associations: list[dict[str, object]],
+        valid_skill_ids: set[str],
         pattern_names: set[str],
     ) -> int:
         now = utc_now().isoformat()
@@ -147,7 +148,7 @@ class SkillAssociationService:
         return written
 
 
-def _parse_associations(text: str) -> list[dict] | None:
+def _parse_associations(text: str) -> list[dict[str, object]] | None:
     if not text:
         return None
     try:
@@ -169,4 +170,4 @@ def _parse_associations(text: str) -> list[dict] | None:
         logger.warning(f"{LOG_PREFIX} LLM returned non-list: {type(result)}")
         return None
 
-    return result
+    return cast(list[dict[str, object]], result)

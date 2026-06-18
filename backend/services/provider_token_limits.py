@@ -1,10 +1,10 @@
-
 import logging
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
 
-def backfill_one(conn, provider_id: int) -> bool:
+def backfill_one(conn: sqlite3.Connection, provider_id: int) -> bool:
     """Failure leaves the row's previous values intact."""
     from services.providers import MAX_CONTEXT_WINDOW
     from services.config_service import ConfigService
@@ -59,7 +59,7 @@ def backfill_one(conn, provider_id: int) -> bool:
         return False
 
 
-def backfill_all(conn) -> dict:
+def backfill_all(conn: sqlite3.Connection) -> dict[str, int]:
     """Returns {'total': N, 'succeeded': N, 'failed': N}. Caller owns commit."""
     rows = conn.execute("SELECT id FROM providers").fetchall()
     succeeded = 0

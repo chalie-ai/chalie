@@ -4,7 +4,9 @@ import math
 import os
 import threading
 import time
-from typing import List
+from typing import List, Optional, cast
+
+import numpy as np
 
 from services.file_mapper_service import FileMapperService
 
@@ -18,13 +20,15 @@ _IDLE_TIMEOUT = 600  # 10 minutes
 
 class Doc2QueryService:
 
-    def __init__(self):
-        self._encoder = None
-        self._decoder = None
-        self._decoder_past = None
-        self._tokenizer = None
+    def __init__(self) -> None:
+        from onnxruntime import InferenceSession
+        from transformers import PreTrainedTokenizerBase
+        self._encoder: Optional[InferenceSession] = None
+        self._decoder: Optional[InferenceSession] = None
+        self._decoder_past: Optional[InferenceSession] = None
+        self._tokenizer: Optional[PreTrainedTokenizerBase] = None
         self._lock = threading.Lock()
-        self._available = None
+        self._available: Optional[bool] = None
         self._last_used = 0.0
 
     def is_available(self) -> bool:
@@ -32,7 +36,7 @@ class Doc2QueryService:
             self._ensure_loaded()
         return self._available or False
 
-    def _ensure_loaded(self):
+    def _ensure_loaded(self) -> None:
         with self._lock:
             # Check idle timeout under lock to prevent race with generate_queries
             if self._encoder is not None and self._last_used > 0:
@@ -60,7 +64,7 @@ class Doc2QueryService:
                     self._available = False
                     return
 
-                def _opts():
+                def _opts() -> ort.SessionOptions:
                     o = ort.SessionOptions()
                     o.intra_op_num_threads = 1
                     o.inter_op_num_threads = 1
@@ -87,7 +91,7 @@ class Doc2QueryService:
                 self._tokenizer = None
                 self._available = None
 
-    def _unload_unlocked(self):
+    def _unload_unlocked(self) -> None:
         self._encoder = None
         self._decoder = None
         self._decoder_past = None
@@ -96,7 +100,7 @@ class Doc2QueryService:
         self._last_used = 0.0
         logger.info(f"{LOG_PREFIX} Unloaded (idle timeout)")
 
-    def _unload(self):
+    def _unload(self) -> None:
         with self._lock:
             self._unload_unlocked()
 
@@ -106,11 +110,13 @@ class Doc2QueryService:
         self._last_used = time.time()
 
         try:
-            encoded = self._tokenizer(text, max_length=384, truncation=True, return_tensors="np")
+            from onnxruntime import InferenceSession
+            from transformers import PreTrainedTokenizerBase
+            encoded = cast(PreTrainedTokenizerBase, self._tokenizer)(text, max_length=384, truncation=True, return_tensors="np")
             input_ids = encoded["input_ids"]
             attention_mask = encoded["attention_mask"]
 
-            encoder_out = self._encoder.run(None, {
+            encoder_out = cast(InferenceSession, self._encoder).run(None, {
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
             })
@@ -119,7 +125,7 @@ class Doc2QueryService:
             queries = []
             for _ in range(num_queries):
                 tokens = self._generate_one(encoder_hidden, attention_mask)
-                text_out = self._tokenizer.decode(tokens, skip_special_tokens=True).strip()
+                text_out = cast(str, cast(PreTrainedTokenizerBase, self._tokenizer).decode(tokens, skip_special_tokens=True)).strip()
                 if text_out:
                     queries.append(text_out)
 
@@ -135,12 +141,13 @@ class Doc2QueryService:
             logger.warning(f"{LOG_PREFIX} Generation failed: %s", e)
             return []
 
-    def _generate_one(self, encoder_hidden, attention_mask, max_length=64):
+    def _generate_one(self, encoder_hidden: np.ndarray, attention_mask: np.ndarray, max_length: int = 64) -> list[int]:
         import numpy as np
+        from onnxruntime import InferenceSession
 
         decoder_ids = np.array([[0]], dtype=np.int64)
-        past_kv = None
-        generated = []
+        past_kv: "Optional[dict[str, np.ndarray]]" = None
+        generated: list[int] = []
 
         for step in range(max_length):
             if step == 0:
@@ -149,9 +156,9 @@ class Doc2QueryService:
                     "encoder_attention_mask": attention_mask,
                     "encoder_hidden_states": encoder_hidden,
                 }
-                outputs = self._decoder.run(None, feeds)
+                outputs = cast(InferenceSession, self._decoder).run(None, feeds)
                 logits = outputs[0]
-                output_names = [o.name for o in self._decoder.get_outputs()]
+                output_names = [o.name for o in cast(InferenceSession, self._decoder).get_outputs()]
                 past_kv = {}
                 for i, name in enumerate(output_names):
                     if name.startswith(_ONNX_PRESENT_PREFIX):
@@ -162,14 +169,14 @@ class Doc2QueryService:
                     "input_ids": decoder_ids,
                     "encoder_attention_mask": attention_mask,
                 }
-                feeds.update(past_kv)
-                outputs = self._decoder_past.run(None, feeds)
+                feeds.update(cast("dict[str, np.ndarray]", past_kv))
+                outputs = cast(InferenceSession, self._decoder_past).run(None, feeds)
                 logits = outputs[0]
-                output_names = [o.name for o in self._decoder_past.get_outputs()]
+                output_names = [o.name for o in cast(InferenceSession, self._decoder_past).get_outputs()]
                 for i, name in enumerate(output_names):
                     if name.startswith(_ONNX_PRESENT_PREFIX):
                         past_name = name.replace(_ONNX_PRESENT_PREFIX, "past_key_values.", 1)
-                        past_kv[past_name] = outputs[i]
+                        cast("dict[str, np.ndarray]", past_kv)[past_name] = outputs[i]
 
             next_token = self._sample_top_p(logits[0, -1, :], top_p=0.95)
 
@@ -182,7 +189,7 @@ class Doc2QueryService:
         return generated
 
     @staticmethod
-    def _sample_top_p(logits, top_p=0.95, temperature=1.0):
+    def _sample_top_p(logits: np.ndarray, top_p: float = 0.95, temperature: float = 1.0) -> int:
         import numpy as np
 
         if not math.isclose(temperature, 1.0):

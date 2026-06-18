@@ -1,8 +1,16 @@
 """LLM Call Log Service — persistent per-call token usage tracking."""
 
 import logging
+from typing import TYPE_CHECKING, cast
 from services.database_service import get_shared_db_service
 from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from typing import Callable, Protocol, Sequence
+
+    class _DbService(Protocol):
+        def execute(self, sql: str, params: "Sequence[object]" = ...) -> object: ...
+        def fetch_all(self, sql: str, params: "Sequence[object]" = ...) -> list[dict[str, object]]: ...
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +36,10 @@ def log_call(
     tokens_cache_create: int = 0,
     tokens_thinking: int = 0,
     usage_class: str = 'chat',
-):
+) -> None:
     """Record a single LLM call with full token counts and latency."""
     try:
-        db = get_shared_db_service()
+        db = cast("_DbService", get_shared_db_service())
         db.execute(
             """INSERT INTO llm_call_log
                (job_name, provider, model,
@@ -66,24 +74,24 @@ def get_last_chat_request_tokens(job_name: str = 'user:user') -> 'int | None':
         "ORDER BY id DESC LIMIT 1",
         (job_name,),
     )
-    return rows[0]['tokens_input'] if rows else None
+    return cast(int, rows[0]['tokens_input']) if rows else None
 
 
-def get_token_usage(window: str, usage_class: str | None = None) -> dict:
+def get_token_usage(window: str, usage_class: str | None = None) -> dict[str, object]:
     """Return time-bucketed token usage statistics.
 
     Returns dict with 'window', 'generated_at', 'summary', and 'entries' keys.
     entries: list of bucket/token breakdowns by (bucket, usage_class, model, provider).
     summary: total_tokens, cache_hit_pct, tokens_today, most_active_model.
     """
-    db = get_shared_db_service()
+    db = cast("_DbService", get_shared_db_service())
     offset = _WINDOW_OFFSETS[window]
 
     # Bucket width: hour/day → by-hour buckets; week/month/lifetime → by-day.
     bucket_fmt = "%Y-%m-%dT%H:00:00" if window in ('hour', 'day') else "%Y-%m-%d"
 
-    where_clauses = []
-    params: list = []
+    where_clauses: list[str] = []
+    params: list[object] = []
 
     if offset is not None:
         where_clauses.append("created_at >= datetime('now', ?)")
@@ -138,13 +146,13 @@ def get_token_usage(window: str, usage_class: str | None = None) -> dict:
     }
 
 
-def _compute_summary(entries: list) -> dict:
+def _compute_summary(entries: list[dict[str, object]]) -> dict[str, object]:
     """Derive aggregate summary stats from bucketed entries."""
-    total_input = sum(e['tokens_input'] for e in entries)
-    total_output = sum(e['tokens_output'] for e in entries)
-    total_cache_read = sum(e['tokens_cache_read'] for e in entries)
-    total_cache_create = sum(e['tokens_cache_create'] for e in entries)
-    total_thinking = sum(e['tokens_thinking'] for e in entries)
+    total_input = sum(cast(int, e['tokens_input']) for e in entries)
+    total_output = sum(cast(int, e['tokens_output']) for e in entries)
+    total_cache_read = sum(cast(int, e['tokens_cache_read']) for e in entries)
+    total_cache_create = sum(cast(int, e['tokens_cache_create']) for e in entries)
+    total_thinking = sum(cast(int, e['tokens_thinking']) for e in entries)
     total_tokens = total_input + total_output + total_cache_read + total_cache_create + total_thinking
 
     # Cache hit %: null when no provider reported cache data (e.g. Ollama).
@@ -154,7 +162,7 @@ def _compute_summary(entries: list) -> dict:
 
     # Tokens today — re-query the DB for the current UTC day.
     try:
-        db = get_shared_db_service()
+        db = cast("_DbService", get_shared_db_service())
         today_rows = db.fetch_all(
             """SELECT COALESCE(SUM(tokens_input + tokens_output +
                                   tokens_cache_read + tokens_cache_create +
@@ -169,9 +177,9 @@ def _compute_summary(entries: list) -> dict:
     # Most active model within the current window (derived from entries).
     model_totals: dict[str, int] = {}
     for e in entries:
-        m = e.get('model') or 'unknown'
-        model_totals[m] = model_totals.get(m, 0) + e['tokens_input'] + e['tokens_output']
-    most_active_model = max(model_totals, key=model_totals.get) if model_totals else None
+        m = cast(str, e.get('model') or 'unknown')
+        model_totals[m] = model_totals.get(m, 0) + cast(int, e['tokens_input']) + cast(int, e['tokens_output'])
+    most_active_model = max(model_totals, key=cast("Callable[[str], int]", model_totals.get)) if model_totals else None
 
     return {
         'total_tokens': total_tokens,

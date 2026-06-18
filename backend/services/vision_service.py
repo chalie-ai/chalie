@@ -1,6 +1,6 @@
 import base64
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def send_image_with_config(config: Dict[str, Any], image_bytes: bytes,
         }
         dto = ProviderApiRequest(
             system=_VISION_SYSTEM,
-            messages=[message],
+            messages=[cast(dict[str, object], message)],
             type=ProviderType.VISION,
             thinking_mode=ThinkingLevel.LOW,
             cache_prefix=False,

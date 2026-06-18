@@ -1,7 +1,7 @@
 """Provider cache service — in-memory lazy cache with MemoryStore-backed invalidation."""
 
 import logging
-from typing import Dict, Any, Optional
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +16,19 @@ class ProviderCacheService:
     """
 
     # Class-level state (shared across all calls in this process)
-    _providers: Dict[str, Any] = {}  # {name: {platform, model, host, api_key, ...}}
-    _version: Optional[int] = None  # Last seen MemoryStore version
+    _providers: dict[str, dict[str, object]] = {}  # {name: {platform, model, host, api_key, ...}}
+    _version: int | None = None  # Last seen MemoryStore version
 
 
     @staticmethod
-    def get_providers() -> Dict[str, Any]:
+    def get_providers() -> dict[str, dict[str, object]]:
 
         # Check if MemoryStore version has changed (cross-process invalidation)
+        current_version: int
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            current_version = store.get("providers:cache_version")
+            current_version = cast(int, store.get("providers:cache_version"))
             current_version = int(current_version) if current_version else 0
         except Exception as e:
             logger.warning(f"[ProviderCache] MemoryStore version check failed: {e}, using local cache")
@@ -57,7 +58,7 @@ class ProviderCacheService:
             db_providers = service.get_all_providers()
 
             # Convert to providers dict keyed by name
-            providers_dict = {}
+            providers_dict: dict[str, dict[str, object]] = {}
             for p in db_providers:
                 # Include 'name' in the entry so downstream consumers
                 # (Providers.get_compact_at, ProviderCacheService.get_job_assignment,
@@ -66,7 +67,7 @@ class ProviderCacheService:
                 # Without this, the resolved config has no way to identify
                 # which provider row backs it, breaking DB lookups keyed by
                 # provider name (e.g. compact_at threshold queries).
-                entry = {
+                entry: dict[str, object] = {
                     'name': p['name'],
                     'platform': p['platform'],
                     'model': p['model'],
@@ -79,7 +80,7 @@ class ProviderCacheService:
                     entry['dimensions'] = p['dimensions']
                 if p.get('timeout'):
                     entry['timeout'] = p['timeout']
-                providers_dict[p['name']] = entry
+                providers_dict[cast(str, p['name'])] = entry
 
             # Check vault state — api_keys decrypt to None when vault is locked.
             # Caching a vault-locked result would persist null api_keys until
@@ -118,7 +119,7 @@ class ProviderCacheService:
 
 
     @staticmethod
-    def get_selected_provider() -> Optional[Dict[str, Any]]:
+    def get_selected_provider() -> dict[str, object] | None:
 
         try:
             from services.database_service import get_shared_db_service

@@ -1,7 +1,6 @@
 """Tests that every MemoryStore write for a queue or coordination key sets a TTL."""
 
 import pytest
-from unittest.mock import patch
 
 from services.memory_store import MemoryStore
 
@@ -21,48 +20,6 @@ def _has_ttl(store: MemoryStore, key: str) -> bool:
             _, expiry = keyspace[key]
             return expiry is not None
     return False
-
-
-# ---------------------------------------------------------------------------
-# 5. app_update_service — set(IN_PROGRESS_KEY, "1", ex=3600)
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestAppUpdateServiceTTL:
-    """store.set(IN_PROGRESS_KEY, '1', ex=3600) must set a TTL.
-
-    apply_update deletes IN_PROGRESS_KEY when the update succeeds or fails,
-    so we verify the TTL contract by spying on store.set and confirming the
-    ex=3600 argument was passed before the key is deleted.
-    """
-
-    def test_apply_update_in_progress_key_set_with_ex_3600(self):
-        store = MemoryStore()
-        set_calls = []
-        original_set = store.set
-
-        def spy_set(key, value, **kwargs):
-            set_calls.append((key, value, kwargs))
-            return original_set(key, value, **kwargs)
-
-        store.set = spy_set
-
-        with patch("services.app_update_service.MemoryClientService.create_connection",
-                   return_value=store), \
-             patch("services.app_update_service.AppUpdateService.detect_deployment_mode",
-                   return_value="installed"), \
-             patch("services.app_update_service.AppUpdateService.get_current_version",
-                   return_value="0.2.0"), \
-             patch("services.app_update_service.AppUpdateService.download_and_validate",
-                   side_effect=RuntimeError("abort early for test")):
-            from services.app_update_service import AppUpdateService, IN_PROGRESS_KEY
-            svc = AppUpdateService()
-            svc.apply_update("v9.9.9")
-
-        in_progress_calls = [c for c in set_calls if c[0] == IN_PROGRESS_KEY]
-        assert len(in_progress_calls) == 1, "IN_PROGRESS_KEY must be set exactly once"
-        assert in_progress_calls[0][2].get("ex") == 3600, \
-            f"IN_PROGRESS_KEY must be set with ex=3600, got kwargs={in_progress_calls[0][2]}"
 
 
 # ---------------------------------------------------------------------------

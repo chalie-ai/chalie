@@ -18,12 +18,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+import sqlite3
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn) -> list[int]:
+def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn: sqlite3.Connection) -> list[int]:
     """Return the transcript row IDs whose tool_calls feed the parser for one assistant turn.
 
     Tool_calls are stored against the user-input transcript row, not the
@@ -74,12 +75,12 @@ def strip_spans(content: str | None) -> str | None:
     return _TAG_RE.sub(lambda m: m.group(4), content)
 
 
-def parse(content: str, tool_calls: list[dict]) -> list[dict[str, Any]]:
+def parse(content: str, tool_calls: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert sanitised assistant text + tool_calls rows to a segment list."""
     if not content:
         return []
 
-    segments: list[dict] = []
+    segments: list[dict[str, object]] = []
     cursor = 0
 
     for match in _TAG_RE.finditer(content):
@@ -97,14 +98,14 @@ def parse(content: str, tool_calls: list[dict]) -> list[dict[str, Any]]:
     return segments
 
 
-def _append_leading_prose(content: str, cursor: int, match_start: int, segments: list) -> None:
+def _append_leading_prose(content: str, cursor: int, match_start: int, segments: list[dict[str, object]]) -> None:
     if match_start > cursor:
         head = content[cursor:match_start].strip()
         if head:
             segments.append({"type": "text", "content": head})
 
 
-def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: list) -> None:
+def _append_tag_segment(match: re.Match[str], tool_calls: list[dict[str, object]], segments: list[dict[str, object]]) -> None:
     tool_name = match.group(1)
     ordinal = match.group(2)
     chosen_image = (match.group(3) or "").strip()
@@ -128,7 +129,7 @@ def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: lis
             segments.append({"type": "text", "content": synthesis})
 
 
-def _apply_image_choice(payload, chosen_image: str):
+def _apply_image_choice(payload: dict[str, object] | str, chosen_image: str) -> dict[str, object] | str:
     """Validate the LLM's chosen image against the candidate list and finalise.
 
     The tool surfaces ``image_candidates: [{url, source_title, caption}]`` so
@@ -163,7 +164,7 @@ def _apply_image_choice(payload, chosen_image: str):
     return payload
 
 
-def _enrich_payload(tool_name: str, payload, row: dict):
+def _enrich_payload(tool_name: str, payload: dict[str, object] | str, row: dict[str, object]) -> dict[str, object] | str:
     """Hand the payload to the matching ability so it can resolve runtime state.
 
     A non-dict payload (i.e. JSON parse failed and ``_extract_data`` returned
@@ -209,7 +210,7 @@ def _unwrap_skill_tag(result: str) -> str:
     return match.group("body") if match else result
 
 
-def _find_payload(tag: str, tool_calls: list[dict]) -> tuple[dict | str, dict] | None:
+def _find_payload(tag: str, tool_calls: list[dict[str, object]]) -> tuple[dict[str, object] | str, dict[str, object]] | None:
     """Scan tool_calls for the row whose rich-media trailer references this tag."""
     needle_single = f"<span id='{tag}'>"
     needle_double = f'<span id="{tag}">'
@@ -232,7 +233,7 @@ def _find_payload(tag: str, tool_calls: list[dict]) -> tuple[dict | str, dict] |
     return None
 
 
-def _extract_data(result: str) -> dict | str:
+def _extract_data(result: str) -> dict[str, object] | str:
     """Extract the structured data portion from a tool result string.
 
     The tool serialises its payload as JSON, then appends ``\\n\\n`` followed
@@ -250,6 +251,6 @@ def _extract_data(result: str) -> dict | str:
     body = _unwrap_skill_tag(result)
     head = body.split("\n\n", 1)[0].strip()
     try:
-        return json.loads(head)
+        return cast(dict[str, object], json.loads(head))
     except ValueError:
         return head

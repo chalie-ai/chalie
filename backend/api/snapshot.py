@@ -9,7 +9,7 @@ requests an internal restart so the staged restore is applied at the next boot
 Auto-registered by ``api.__init__._register_blueprints`` (top-level
 ``snapshot_bp`` honouring its own ``url_prefix``) — no ``__init__`` edit needed.
 Depends on ``services.snapshot_service.SnapshotService`` (engine) and
-``services.app_update_service.AppUpdateService`` (restart).
+``services.restart_service.request_restart`` (restart).
 """
 
 import logging
@@ -89,6 +89,6 @@ def snapshot_import():
         shutil.rmtree(str(tmp_dir), ignore_errors=True)
 
     # Staging succeeded — restart so apply_pending() runs before the DB opens.
-    from services.app_update_service import AppUpdateService
-    AppUpdateService.request_restart()
+    from services.restart_service import request_restart
+    request_restart()
     return jsonify({"ok": True, "restarting": True}), 200

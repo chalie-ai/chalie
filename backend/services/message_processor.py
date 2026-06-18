@@ -17,13 +17,14 @@ import json
 import logging
 import re
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, List, Optional, Union, cast
 
 from services.metrics_accumulator import MetricsAccumulator
 from services.time_formatter_service import TimeFormatterService
 
 if TYPE_CHECKING:
     from services.processor_config import ProcessorConfig
+    from services.provider_api import ProviderApiRequest, ProviderApiResponse
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ NARRATION_TOOL = "narration"
 _SEED_UPLOAD_ID_RE = re.compile(r'"id":"([0-9a-f]+)"')
 
 
-def _is_auto_memory_recall(row: "dict") -> bool:
+def _is_auto_memory_recall(row: "dict[str, object]") -> bool:
     """True for the framework's turn-0 automatic memory-recall seed.
 
     The seed is dispatched as ``memory(action='recall', _auto=True)`` in
@@ -83,7 +84,7 @@ _LLM_SENTINEL_PATTERNS = (
 )
 
 
-def _sanitize_llm_args(value):
+def _sanitize_llm_args(value: object) -> object:
     if isinstance(value, str):
         for p in _LLM_SENTINEL_PATTERNS:
             value = p.sub('', value)
@@ -109,12 +110,24 @@ def _sanitize_llm_args(value):
 class MessageProcessor:
     """Single flat message processor for every channel — one instance per turn."""
 
-    def __init__(self, raw_input: str, metadata: dict | None = None):
+    current_iteration: int
+    _original_trail: list[str]
+    _original_input: str
+    _iteration_count: int
+    _window: str
+    _referenced: str
+    _save_pattern_calls: int
+    _save_graph_calls: int
+    _save_graph_seen: set[object]
+    _touched_pattern_ids: set[object]
+    _cached_transcript_block: str
+
+    def __init__(self, raw_input: str, metadata: "Dict[str, object] | None" = None):
         self._raw_input = raw_input
         self._metadata = metadata or {}
         # Per-turn config — a plain attribute set by `mp.config = X` in
         # process() / the background workers.  None until attached.
-        self.config: "ProcessorConfig | None" = None
+        self.config: "ProcessorConfig" = cast("ProcessorConfig", None)
         # Tracks the current ACT loop iteration for tool-event emission
         # without thread-local indirection.
         self._current_iteration: int = 0
@@ -167,11 +180,11 @@ class MessageProcessor:
         self._cancel_event = value
 
     @property
-    def active_tools(self) -> list:
+    def active_tools(self) -> List[str]:
         return self._active_tools
 
     @active_tools.setter
-    def active_tools(self, value: list) -> None:
+    def active_tools(self, value: List[str]) -> None:
         self._active_tools = value
 
     def _effective_channel(self) -> str:
@@ -258,7 +271,7 @@ class MessageProcessor:
     def process(
         raw_input: str,
         config: "ProcessorConfig",  # noqa: F821 — deferred import avoids circular dep
-        metadata: "dict | None" = None,
+        metadata: "Dict[str, object] | None" = None,
         cancel_event: "threading.Event | None" = None,
     ) -> str:
         """Single entry point.  Creates an MP, runs the turn, returns text.
@@ -270,16 +283,16 @@ class MessageProcessor:
         MessageProcessor.__init__(mp, raw_input, metadata)
         # New flat-path attributes (spec §4 field list).
         mp.config = config
-        mp.uid: "int | None" = None
-        mp.current_iteration: int = 0
-        mp.cancel_event: "threading.Event" = (
+        mp.uid = None
+        mp.current_iteration = 0
+        mp.cancel_event = (
             cancel_event if cancel_event is not None else threading.Event()
         )
         # Default is 'low' — the deliberation gate must explicitly set medium/high.
         # A 'medium' default would silently apply deliberation pressure to every turn
         # where the gate wasn't run (non-user channels) or crashed — regressing
         # benchmark behaviour on simple recall/chit-chat.
-        mp.thinking_level: str = "low"
+        mp.thinking_level = "low"
         # Resolve the persisted user override once per turn. None = auto (gate
         # decides); 'medium'/'high' bypass the gate on EVERY channel via the
         # Providers.send precedence.
@@ -363,7 +376,7 @@ class MessageProcessor:
         #    WAL layer (single-writer + 15s busy_timeout).  No shared cursor, and
         #    last_insert_rowid is never read cross-connection — doc_id is a
         #    pre-generated random hex, not a rowid.
-        attachments = list(self._metadata.get("attachments") or [])
+        attachments = list(cast(List[str], self._metadata.get("attachments") or []))
         if attachments:
             from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
             with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
@@ -416,7 +429,7 @@ class MessageProcessor:
             if match:
                 link_transcript_doc(self.uid, match.group(1))
 
-    def _build_send_dto(self):
+    def _build_send_dto(self) -> "ProviderApiRequest":
         """Build a ProviderApiRequest from this mp's current state.
 
         Assembles system prompt, user messages (with checkpoint), act-trail,
@@ -467,13 +480,13 @@ class MessageProcessor:
             _caller=type(self).__name__,
         )
 
-    def _build_send_messages(self) -> list[dict]:
+    def _build_send_messages(self) -> List[Dict[str, object]]:
         """Build the single-element user-message list for this mp's turn.
 
         Attaches the checkpoint wrapper and the config's image when present.
         """
         user = _wrap_with_checkpoint(self.config.channel, self.config.get_user_prompt(self))
-        message: dict = {"role": "user", "content": user}
+        message: Dict[str, object] = {"role": "user", "content": user}
         img = self.config.get_image(self)
         if img is not None:
             message["image"] = img
@@ -516,7 +529,7 @@ class MessageProcessor:
             for tc in response.tool_calls:
                 if self.cancel_event.is_set():
                     return ""
-                dispatcher.dispatch(tc["name"], tc["input"])
+                dispatcher.dispatch(cast(str, tc["name"]), cast(Dict[str, object], tc["input"]))
             self._record_narration(response)
             self.current_iteration += 1
 
@@ -539,7 +552,7 @@ class MessageProcessor:
             return markdown_to_html(text)
         return text or ""
 
-    def _force_send(self, dto):
+    def _force_send(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
         """Send without the pre-flight cap check (irreducible path).
 
         Bypasses Providers.send() to skip the over-cap check, but still routes
@@ -570,7 +583,7 @@ class MessageProcessor:
                     wall_ms,
                 )
 
-    def _record_metrics(self, response, wall_ms=None) -> None:
+    def _record_metrics(self, response: "ProviderApiResponse", wall_ms: Optional[int] = None) -> None:
         """Fold per-send telemetry into the turn's MetricsAccumulator.
 
         Called after every successful send (normal and force paths). Best-effort:
@@ -664,7 +677,7 @@ class MessageProcessor:
                 exc,
             )
 
-    def _previous_rows(self) -> list:
+    def _previous_rows(self) -> List[Dict[str, object]]:
         """Watermark-bounded transcript rows for this channel (design §3.7).
 
         SELECT * FROM transcript WHERE channel=? AND id > <watermark> ORDER BY id ASC
@@ -674,7 +687,7 @@ class MessageProcessor:
             return []
         from services import compaction_persistence, transcript_service  # noqa: PLC0415
         compaction = compaction_persistence.get_compaction(self.config.channel)
-        watermark = compaction["compacted_up_to_id"] if compaction else 0
+        watermark = cast(int, compaction["compacted_up_to_id"]) if compaction else 0
         return transcript_service.get_recent(self.config.channel, since_id=watermark)
 
     def get_previous_messages(self, drop_oldest: int = 0) -> str:
@@ -699,10 +712,10 @@ class MessageProcessor:
             return ""
         lines: list[str] = []
         for entry in entries:
-            ts = _format_ts(entry.get("created_at"), row_kind="transcript", row_id=entry.get("id"))
+            ts = _format_ts(cast(Optional[str], entry.get("created_at")), row_kind="transcript", row_id=cast(Optional[int], entry.get("id")))
             raw_role = entry.get("role") or "unknown"
             role_label = "Assistant" if raw_role == "assistant" else raw_role
-            content = (entry.get("content") or "").replace("\n", " ").strip()
+            content = (cast(str, entry.get("content")) or "").replace("\n", " ").strip()
             lines.append(f"[{ts}] {role_label}: {content}")
         return "\n".join(lines)
 
@@ -756,7 +769,7 @@ class MessageProcessor:
             name = r.get("tool_name")
             if name == "chat_history_compactor":
                 continue
-            if name == _TRAIL_BOUNDARY_TOOL and not (r.get("result") or "").strip():
+            if name == _TRAIL_BOUNDARY_TOOL and not (cast(str, r.get("result")) or "").strip():
                 continue
             if for_compaction and _is_auto_memory_recall(r):
                 continue
@@ -809,14 +822,14 @@ class MessageProcessor:
 
         trail_before = self._has_trail()
         before = compaction_persistence.get_compaction(self.config.channel)
-        before_id = before["compacted_up_to_id"] if before else 0
+        before_id = cast(int, before["compacted_up_to_id"]) if before else 0
 
         dispatcher = ToolDispatcher(self)
         dispatcher.dispatch("tool_chain_compactor", {"act_summary": "Compacting tool history"})
         dispatcher.dispatch("chat_history_compactor", {"act_summary": "Compacting conversation"})
 
         after = compaction_persistence.get_compaction(self.config.channel)
-        after_id = after["compacted_up_to_id"] if after else 0
+        after_id = cast(int, after["compacted_up_to_id"]) if after else 0
         # Progress = the act-trail was actually COLLAPSED (a non-empty handover
         # landed a new boundary, so _has_trail flips True→False) OR the chat-history
         # watermark advanced. The trail term is measured AFTER dispatch on purpose:
@@ -829,7 +842,7 @@ class MessageProcessor:
         trail_collapsed = trail_before and not self._has_trail()
         return trail_collapsed or after_id > before_id
 
-    def _record_narration(self, response: "object") -> None:  # type: ignore[override]
+    def _record_narration(self, response: "ProviderApiResponse") -> None:
         """Mid-loop: persist LLM text between iterations as a durable trail row.
 
         Records a tool_calls row with tool_name='narration'.
@@ -883,7 +896,7 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
     row = compaction_persistence.get_compaction(channel)
     if not row:
         return user_body
-    compacted = (row.get('compacted_text') or '').strip()
+    compacted = (cast(str, row.get('compacted_text')) or '').strip()
     if not compacted:
         return user_body
     return (
@@ -896,7 +909,7 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
     )
 
 
-def _from_last_compaction(rows: "list[dict]") -> "list[dict]":
+def _from_last_compaction(rows: "List[Dict[str, object]]") -> "List[Dict[str, object]]":
     """Return the tail of *rows* starting at the LAST non-empty trail boundary
     (a tool_chain_compactor row whose result holds a handover), inclusive.
 
@@ -908,7 +921,7 @@ def _from_last_compaction(rows: "list[dict]") -> "list[dict]":
     """
     last: "int | None" = None
     for i, r in enumerate(rows):
-        if r.get("tool_name") == _TRAIL_BOUNDARY_TOOL and (r.get("result") or "").strip():
+        if r.get("tool_name") == _TRAIL_BOUNDARY_TOOL and (cast(str, r.get("result")) or "").strip():
             last = i
     return rows if last is None else rows[last:]
 

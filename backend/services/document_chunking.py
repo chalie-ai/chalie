@@ -4,7 +4,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def _split_paragraph_into_sentences(para: str, max_chars: int) -> list:
+def _split_paragraph_into_sentences(para: str, max_chars: int) -> list[str]:
     sentences = []
     remaining = para
     while remaining:
@@ -20,7 +20,7 @@ def _split_paragraph_into_sentences(para: str, max_chars: int) -> list:
     return [s for s in sentences if s]
 
 
-def _absorb_long_para(buffer: str, para: str, chunks: list, min_chars: int, max_chars: int) -> str:
+def _absorb_long_para(buffer: str, para: str, chunks: list[str], min_chars: int, max_chars: int) -> str:
     if buffer:
         chunks.append(buffer)
     new_buf = ""
@@ -33,8 +33,8 @@ def _absorb_long_para(buffer: str, para: str, chunks: list, min_chars: int, max_
     return new_buf
 
 
-def _build_chunks(paragraphs: list, min_chars: int, max_chars: int) -> list:
-    chunks: list = []
+def _build_chunks(paragraphs: list[str], min_chars: int, max_chars: int) -> list[str]:
+    chunks: list[str] = []
     buffer = ""
     for para in paragraphs:
         if len(para) > max_chars:
@@ -49,7 +49,7 @@ def _build_chunks(paragraphs: list, min_chars: int, max_chars: int) -> list:
     return chunks
 
 
-def split_into_artifacts(text: str, min_chars: int = 512, max_chars: int = 1024, overlap: int = 48) -> list:
+def split_into_artifacts(text: str, min_chars: int = 512, max_chars: int = 1024, overlap: int = 48) -> list[str]:
     if not text:
         return []
     if len(text) <= min_chars:

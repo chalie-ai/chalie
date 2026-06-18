@@ -5,7 +5,7 @@ Every innate skill must use tag() — no skill builds its own format strings.
 """
 
 
-def tag(name: str, content: str = "", **args) -> str:
+def tag(name: str, content: str = "", **args: object) -> str:
     """Return canonical skill-output block."""
     arg_str = ", ".join(f"{k}={str(v)}" for k, v in args.items())
     opener = f"[{name}({arg_str})]"

@@ -10,7 +10,7 @@ high write concurrency while keeping call-sites simple.
 import logging
 import queue
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +27,11 @@ class _QueueItem:
     def __init__(
         self,
         item_type: str,
-        fn: Optional[Callable] = None,
-        args: tuple = (),
+        fn: Optional[Callable[..., object]] = None,
+        args: tuple[object, ...] = (),
         kwargs: Optional[Dict[str, Any]] = None,
         done_event: Optional[threading.Event] = None,
-        result: Optional[List] = None,
+        result: Optional[List[object]] = None,
     ) -> None:
         self.item_type = item_type
         self.fn = fn
@@ -61,7 +61,7 @@ class WriteQueueService:
         The drain thread is started as a *daemon* so it does not prevent the
         Python interpreter from exiting when the main thread finishes.
         """
-        self._queue: queue.Queue = queue.Queue()
+        self._queue: queue.Queue[_QueueItem] = queue.Queue()
         self._processed: int = 0
         self._errors: int = 0
         self._stats_lock = threading.Lock()
@@ -78,7 +78,7 @@ class WriteQueueService:
     # Public API
     # ------------------------------------------------------------------
 
-    def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> None:
+    def submit(self, fn: Callable[..., object], *args: Any, **kwargs: Any) -> None:
         """Enqueue a callable for fire-and-forget execution in the background.
 
         Returns immediately without blocking.  The callable is executed by the
@@ -98,7 +98,7 @@ class WriteQueueService:
         )
         self._queue.put(item)
 
-    def submit_sync(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+    def submit_sync(self, fn: Callable[..., object], *args: Any, **kwargs: Any) -> Any:
         """Enqueue a callable and block until it completes, returning its result.
 
         The callable is executed by the background drain thread.  If *fn*
@@ -223,7 +223,7 @@ class WriteQueueService:
         exc_caught: Optional[Exception] = None
 
         try:
-            return_value = item.fn(*item.args, **item.kwargs)
+            return_value = cast(Callable[..., object], item.fn)(*item.args, **item.kwargs)
         except Exception as exc:
             logger.error(
                 f"[WriteQueue] Single item failed: {exc}",

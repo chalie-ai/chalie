@@ -30,10 +30,14 @@ import logging
 import math
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, cast
 
+from services.database_service import DatabaseService
 from services.episodic_constants import APEX_TRAVERSAL_MAX_DEPTH
 from services.time_utils import utc_now, parse_utc
+
+if TYPE_CHECKING:
+    import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +74,7 @@ _RELATIVE_SCORE_FLOOR = 0.5
 # ── Apex traversal ────────────────────────────────────────────────────────────
 
 
-def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
+def _get_episode_raw(episode_id: str, db: Optional[DatabaseService] = None) -> Optional[dict[str, object]]:
     """Fetch a single episode row for apex traversal or final-apex surfacing."""
     if db is None:
         from services.database_service import get_shared_db_service
@@ -126,7 +130,7 @@ def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
         return None
 
 
-def walk_up_to_apex(episode_id: str, db=None) -> Optional[dict]:
+def walk_up_to_apex(episode_id: str, db: Optional[DatabaseService] = None) -> Optional[dict[str, object]]:
     """Walk the consolidated_into chain from *episode_id* to its apex."""
     seen: set[str] = set()
     current_id = episode_id
@@ -151,7 +155,7 @@ def walk_up_to_apex(episode_id: str, db=None) -> Optional[dict]:
 # ── Retrieval helpers ─────────────────────────────────────────────────────────
 
 
-def _pack_embedding(embedding) -> Optional[bytes]:
+def _pack_embedding(embedding: object) -> Optional[bytes]:
     """Pack a list of floats into a sqlite-vec binary blob."""
     if embedding is None:
         return None
@@ -188,12 +192,12 @@ def _count_episodes(channel: Optional[str] = None) -> int:
                 cursor = conn.execute(
                     "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
                 )
-            return cursor.fetchone()[0]
+            return cast(int, cast("sqlite3.Row", cursor.fetchone())[0])
     except Exception:
         return 0
 
 
-def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict]:
+def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict[str, object]]:
     """Full-text search against episodes_fts (gist column only).
 
     Args:
@@ -283,10 +287,10 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict]:
 
 
 def _vector_search(
-    query_embedding,
+    query_embedding: object,
     channel: Optional[str],
     k: int,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Cosine KNN search via sqlite-vec.
 
     No distance ceiling is applied here: the relative score floor in
@@ -374,13 +378,13 @@ def _vector_search(
         return []
 
 
-def _dedup_by_id(hits: list[dict]) -> list[dict]:
+def _dedup_by_id(hits: list[dict[str, object]]) -> list[dict[str, object]]:
     """Deduplicate hits preserving first-seen order.  Merges text_rank and
     vector_distance from duplicate entries onto the first occurrence."""
-    seen: dict[str, dict] = {}
-    ordered: list[dict] = []
+    seen: dict[str, dict[str, object]] = {}
+    ordered: list[dict[str, object]] = []
     for hit in hits:
-        eid = hit['id']
+        eid = cast(str, hit['id'])
         if eid not in seen:
             seen[eid] = dict(hit)
             ordered.append(seen[eid])
@@ -392,15 +396,15 @@ def _dedup_by_id(hits: list[dict]) -> list[dict]:
     return ordered
 
 
-def _vector_sim(ep: dict) -> float:
+def _vector_sim(ep: dict[str, object]) -> float:
     """Raw vector-lane similarity (1 - distance), 0 when the lane did not hit."""
     vd = ep.get('vector_distance')
     if vd is None:
         return 0.0
-    return max(0.0, 1.0 - float(vd))
+    return max(0.0, 1.0 - float(cast(float, vd)))
 
 
-def _fts_strength(ep: dict) -> float:
+def _fts_strength(ep: dict[str, object]) -> float:
     """Raw FTS-lane strength from the (negative) FTS5 rank, 0 when no hit.
 
     FTS5 ``rank`` is negative and more negative = better; the magnitude is the
@@ -410,10 +414,10 @@ def _fts_strength(ep: dict) -> float:
     tr = ep.get('text_rank')
     if tr is None:
         return 0.0
-    return abs(float(tr))
+    return abs(float(cast(float, tr)))
 
 
-def _recency(ep: dict, now) -> float:
+def _recency(ep: dict[str, object], now: datetime) -> float:
     """Exponential recency term anchored on ``last_relevant_at`` (half-life 14d).
 
     The clock is the relevance anchor (last write-relevant event), falling back
@@ -423,7 +427,7 @@ def _recency(ep: dict, now) -> float:
     anchor = ep.get('last_relevant_at') or ep.get('created_at')
     if not anchor:
         return _RECENCY_FALLBACK
-    ref_time = parse_utc(anchor)
+    ref_time = parse_utc(cast(str, anchor))
     if ref_time == _PARSE_SENTINEL:
         logger.warning(
             "[RETRIEVAL] unparseable relevance anchor for id=%s: %r",
@@ -434,10 +438,10 @@ def _recency(ep: dict, now) -> float:
     return math.exp(-_RECENCY_DECAY_PER_HOUR * hours)
 
 
-def _importance(ep: dict) -> float:
+def _importance(ep: dict[str, object]) -> float:
     """Importance term: salience/10 × retrieval_weight (spec §4.5)."""
-    salience_norm = float(ep.get('salience') or 5) / _SALIENCE_SCALE
-    retrieval_w = float(ep.get('retrieval_weight') or 1.0)
+    salience_norm = float(cast(float, ep.get('salience') or 5)) / _SALIENCE_SCALE
+    retrieval_w = float(cast(float, ep.get('retrieval_weight') or 1.0))
     return salience_norm * retrieval_w
 
 
@@ -458,7 +462,7 @@ def _min_max_normalise(values: list[float]) -> list[float]:
     return [(v - lo) / span for v in values]
 
 
-def _rerank_composite(episodes: list[dict]) -> list[dict]:
+def _rerank_composite(episodes: list[dict[str, object]]) -> list[dict[str, object]]:
     """Collapsed-tree composite rerank with a relative score floor.
 
     Episodes at all hierarchy levels (leaf, super, era) compete in one pool.
@@ -489,16 +493,16 @@ def _rerank_composite(episodes: list[dict]) -> list[dict]:
         # labels in (composite_score / 100).
         ep['composite_score'] = score * _COMPOSITE_DISPLAY_SCALE
 
-    episodes.sort(key=lambda e: e.get('composite_score', 0.0), reverse=True)
+    episodes.sort(key=lambda e: cast(float, e.get('composite_score', 0.0)), reverse=True)
 
-    top_score = episodes[0].get('composite_score', 0.0)
+    top_score = cast(float, episodes[0].get('composite_score', 0.0))
     if top_score <= 0.0:
         return episodes
     floor = top_score * _RELATIVE_SCORE_FLOOR
-    return [ep for ep in episodes if ep.get('composite_score', 0.0) >= floor]
+    return [ep for ep in episodes if cast(float, ep.get('composite_score', 0.0)) >= floor]
 
 
-def _promote_to_apex(union: list) -> list:
+def _promote_to_apex(union: list[dict[str, object]]) -> list[dict[str, object]]:
     """Hydrate each matched hit into a full episode row for the collapsed tree.
 
     Collapsed-tree retrieval (spec §4.5, RAPTOR collapsed-traversal): episodes
@@ -512,10 +516,10 @@ def _promote_to_apex(union: list) -> list:
     The apex-walk utility (``walk_up_to_apex``) is retained for the hierarchy
     consolidation path; it is intentionally not used here.
     """
-    promoted: list[dict] = []
+    promoted: list[dict[str, object]] = []
     seen: set[str] = set()
     for hit in union:
-        eid = hit['id']
+        eid = cast(str, hit['id'])
         if eid in seen:
             continue
         row = _get_episode_raw(eid)
@@ -529,14 +533,14 @@ def _promote_to_apex(union: list) -> list:
     return promoted
 
 
-def _collect_top_distances(ranked: list) -> list:
+def _collect_top_distances(ranked: list[dict[str, object]]) -> list[float]:
     """Return rounded vector distances for the top-5 ranked episodes."""
     top_dists = []
     for ep in ranked[:5]:
         vd = ep.get('vector_distance')
         if vd is not None:
             try:
-                top_dists.append(round(float(vd), 4))
+                top_dists.append(round(float(cast(float, vd)), 4))
             except (TypeError, ValueError):
                 pass
     return top_dists
@@ -548,11 +552,11 @@ def _collect_top_distances(ranked: list) -> list:
 def retrieve(
     query_text: str,
     *,
-    query_embedding=None,
+    query_embedding: Optional[list[float]] = None,
     channel: Optional[str] = None,
     k: int = 10,
     return_telemetry: bool = False,
-):
+) -> list[dict[str, object]] | tuple[list[dict[str, object]], dict[str, object]]:
     """Hybrid FTS + vector retrieval over the collapsed episode tree.
 
     Single production retrieval entry point for episodes. Both lanes pull their
@@ -574,7 +578,7 @@ def retrieve(
         the relative floor.  When ``return_telemetry`` is True, returns
         ``(list, telemetry)``.
     """
-    telemetry: dict = {
+    telemetry: dict[str, object] = {
         'episode_count': 0,
         'vector_candidates': 0,
         'fts_candidates': 0,

@@ -1,6 +1,7 @@
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Generator, Iterator, Optional, cast
 
 
 @dataclass
@@ -16,20 +17,20 @@ class MetricsAccumulator:
     tokens_thinking: int = 0
     tokens_cache_read: int = 0
     tokens_cache_create: int = 0
-    tool_counts: dict = field(default_factory=dict)
+    tool_counts: dict[str, int] = field(default_factory=dict)
     start_time: float = field(default_factory=time.time)
     tokens_total_complete: bool = True
 
     # Timing
     llm_ms: int = 0
     llm_calls: int = 0
-    stages: dict = field(default_factory=dict)
-    iterations: list = field(default_factory=list)
-    _current_iter: dict = field(default=None, repr=False)
+    stages: dict[str, int] = field(default_factory=dict)
+    iterations: list[dict[str, object]] = field(default_factory=list)
+    _current_iter: Optional[dict[str, object]] = field(default=None, repr=False)
 
     # ── Token / tool accumulation (existing) ────────────────────────────────
 
-    def accumulate(self, response) -> None:
+    def accumulate(self, response: object) -> None:
         if response is None:
             return
         in_ = getattr(response, 'tokens_input', None)
@@ -47,7 +48,7 @@ class MetricsAccumulator:
             return
         self.tool_counts[tool_name] = self.tool_counts.get(tool_name, 0) + 1
         if self._current_iter is not None:
-            tools = self._current_iter.setdefault('tools', [])
+            tools = cast(list[dict[str, str]], self._current_iter.setdefault('tools', []))
             tools.append({'name': tool_name})
 
     def merge(self, other: 'MetricsAccumulator') -> None:
@@ -68,7 +69,7 @@ class MetricsAccumulator:
     # ── Timing API ──────────────────────────────────────────────────────────
 
     @contextmanager
-    def stage(self, name: str):
+    def stage(self, name: str) -> Iterator[None]:
         """Never raises — timing must not break the request path."""
         t0 = time.monotonic()
         try:
@@ -78,7 +79,7 @@ class MetricsAccumulator:
                 elapsed_ms = int((time.monotonic() - t0) * 1000)
                 self.stages[name] = self.stages.get(name, 0) + elapsed_ms
                 if self._current_iter is not None:
-                    iter_stages = self._current_iter.setdefault('stages', {})
+                    iter_stages = cast(dict[str, int], self._current_iter.setdefault('stages', {}))
                     iter_stages[name] = iter_stages.get(name, 0) + elapsed_ms
             except Exception:
                 pass
@@ -93,7 +94,7 @@ class MetricsAccumulator:
             pass
 
     @contextmanager
-    def iteration(self, iter_idx: int):
+    def iteration(self, iter_idx: int) -> Iterator[dict[str, object]]:
         """Open a per-ACT-iteration bucket. Tools / LLM calls / stages
         recorded while this is active are attributed to ``iter_idx``."""
         bucket = {
@@ -132,12 +133,12 @@ class MetricsAccumulator:
         self.llm_ms += ms
         self.llm_calls += 1
         if self._current_iter is not None:
-            self._current_iter['llm_ms'] += ms
-            self._current_iter['llm_calls'] += 1
+            self._current_iter['llm_ms'] = cast(int, self._current_iter['llm_ms']) + ms
+            self._current_iter['llm_calls'] = cast(int, self._current_iter['llm_calls']) + 1
 
     # ── Snapshot ────────────────────────────────────────────────────────────
 
-    def snapshot(self, end_time: float = None) -> dict:
+    def snapshot(self, end_time: Optional[float] = None) -> dict[str, object]:
         end = end_time if end_time is not None else time.time()
         wall_ms = max(0, int((end - self.start_time) * 1000))
         total = (self.tokens_input + self.tokens_output + self.tokens_thinking

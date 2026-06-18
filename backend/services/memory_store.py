@@ -20,7 +20,7 @@ import logging
 import re
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, cast
 
 
 logger = logging.getLogger(__name__)
@@ -28,13 +28,13 @@ logger = logging.getLogger(__name__)
 
 class MemoryStore:
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Keyspaces
-        self._strings: Dict[str, Tuple[Any, Optional[float]]] = {}
-        self._lists: Dict[str, Tuple[list, Optional[float]]] = {}
-        self._sorted_sets: Dict[str, Tuple[Any, Optional[float]]] = {}
+        self._strings: Dict[str, Tuple[str, Optional[float]]] = {}
+        self._lists: Dict[str, Tuple[List[str], Optional[float]]] = {}
+        self._sorted_sets: Dict[str, Tuple[List[Tuple[float, str]], Optional[float]]] = {}
 
-        self._sets: Dict[str, Tuple[set, Optional[float]]] = {}
+        self._sets: Dict[str, Tuple[Set[str], Optional[float]]] = {}
 
         # Locks per keyspace
         self._str_lock = threading.RLock()
@@ -56,22 +56,22 @@ class MemoryStore:
             return None
         return time.time() + seconds
 
-    def _reap_loop(self):
+    def _reap_loop(self) -> None:
         """Background daemon: scan and remove expired keys every 60s."""
         while True:
             time.sleep(60)
             try:
-                self._reap_keyspace(self._strings, self._str_lock)
-                self._reap_keyspace(self._lists, self._list_lock)
-                self._reap_keyspace(self._sorted_sets, self._zset_lock)
-                self._reap_keyspace(self._sets, self._set_lock)
+                self._reap_keyspace(cast(Dict[str, Tuple[object, object]], self._strings), self._str_lock)
+                self._reap_keyspace(cast(Dict[str, Tuple[object, object]], self._lists), self._list_lock)
+                self._reap_keyspace(cast(Dict[str, Tuple[object, object]], self._sorted_sets), self._zset_lock)
+                self._reap_keyspace(cast(Dict[str, Tuple[object, object]], self._sets), self._set_lock)
             except Exception as e:
                 logger.debug(f"[MemoryStore] Reaper error: {e}")
 
-    def _reap_keyspace(self, store: dict, lock: threading.RLock):
+    def _reap_keyspace(self, store: Dict[str, Tuple[object, object]], lock: threading.RLock) -> None:
         now = time.time()
         with lock:
-            expired = [k for k, (_, exp) in store.items() if exp is not None and now > exp]
+            expired = [k for k, (_, exp) in store.items() if exp is not None and now > cast(float, exp)]
             for k in expired:
                 del store[k]
 
@@ -94,7 +94,7 @@ class MemoryStore:
                 return None
             return val
 
-    def set(self, key: str, value: str, ex: Optional[int] = None, nx: bool = False):
+    def set(self, key: str, value: str, ex: Optional[int] = None, nx: bool = False) -> bool:
         with self._str_lock:
             if nx and key in self._strings:
                 _, expiry = self._strings[key]
@@ -103,7 +103,7 @@ class MemoryStore:
             self._strings[key] = (str(value), self._expiry_from_seconds(ex))
             return True
 
-    def setex(self, key: str, seconds: int, value: str):
+    def setex(self, key: str, seconds: int, value: str) -> bool:
         with self._str_lock:
             self._strings[key] = (str(value), self._expiry_from_seconds(seconds))
             return True
@@ -133,7 +133,7 @@ class MemoryStore:
 
     # ── LIST operations ────────────────────────────────────────
 
-    def _get_list(self, key: str) -> Optional[list]:
+    def _get_list(self, key: str) -> Optional[List[str]]:
         """Must be called while ``_list_lock`` is held."""
         entry = self._lists.get(key)
         if entry is None:
@@ -144,7 +144,7 @@ class MemoryStore:
             return None
         return lst
 
-    def rpush(self, key: str, *values) -> int:
+    def rpush(self, key: str, *values: object) -> int:
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
@@ -154,7 +154,7 @@ class MemoryStore:
                 lst.append(str(v))
             return len(lst)
 
-    def lpush(self, key: str, *values) -> int:
+    def lpush(self, key: str, *values: object) -> int:
         """Values are inserted one at a time in argument order, so the last argument ends up at index 0."""
         with self._list_lock:
             lst = self._get_list(key)
@@ -179,7 +179,7 @@ class MemoryStore:
             lst[:] = lst[start:stop + 1]
             return True
 
-    def lrange(self, key: str, start: int, stop: int) -> list:
+    def lrange(self, key: str, start: int, stop: int) -> List[str]:
         with self._list_lock:
             lst = self._get_list(key)
             if lst is None:
@@ -218,7 +218,7 @@ class MemoryStore:
 
     # ── SORTED SET operations ──────────────────────────────────
 
-    def _get_zset(self, key: str) -> Optional[Any]:
+    def _get_zset(self, key: str) -> Optional[List[Tuple[float, str]]]:
         """Must be called while ``_zset_lock`` is held."""
         entry = self._sorted_sets.get(key)
         if entry is None:
@@ -229,7 +229,7 @@ class MemoryStore:
             return None
         return zset
 
-    def zadd(self, key: str, mapping: dict = None, **kwargs):
+    def zadd(self, key: str, mapping: Optional[Dict[str, float]] = None, **kwargs: float) -> int:
         if mapping is None:
             mapping = kwargs
         with self._zset_lock:
@@ -264,7 +264,7 @@ class MemoryStore:
 
     # ── SET operations ─────────────────────────────────────────
 
-    def _get_set(self, key: str) -> Optional[set]:
+    def _get_set(self, key: str) -> Optional[Set[str]]:
         """Must be called while ``_set_lock`` is held."""
         entry = self._sets.get(key)
         if entry is None:
@@ -275,7 +275,7 @@ class MemoryStore:
             return None
         return s
 
-    def sadd(self, key: str, *values) -> int:
+    def sadd(self, key: str, *values: object) -> int:
         """Creates the set if it does not exist. Values already present are silently ignored."""
         with self._set_lock:
             s = self._get_set(key)
@@ -290,7 +290,7 @@ class MemoryStore:
                     added += 1
             return added
 
-    def srem(self, key: str, *values) -> int:
+    def srem(self, key: str, *values: object) -> int:
         with self._set_lock:
             s = self._get_set(key)
             if s is None:
@@ -303,7 +303,7 @@ class MemoryStore:
                     removed += 1
             return removed
 
-    def smembers(self, key: str) -> set:
+    def smembers(self, key: str) -> Set[str]:
         """Returns a shallow copy, not a live reference to the internal set."""
         with self._set_lock:
             s = self._get_set(key)
@@ -311,7 +311,7 @@ class MemoryStore:
 
     # ── KEY operations ─────────────────────────────────────────
 
-    def delete(self, *keys) -> int:
+    def delete(self, *keys: str) -> int:
         """Removes the key from every keyspace where it exists (string, list, sorted-set, set)."""
         count = 0
         for key in keys:
@@ -335,7 +335,7 @@ class MemoryStore:
 
     def exists(self, key: str) -> bool:
         with self._str_lock:
-            entry = self._strings.get(key)
+            entry: Optional[Tuple[object, Optional[float]]] = self._strings.get(key)
             if entry and not self._is_expired(entry[1]):
                 return True
         with self._list_lock:
@@ -355,10 +355,10 @@ class MemoryStore:
     def expire(self, key: str, seconds: int) -> bool:
         new_expiry = self._expiry_from_seconds(seconds)
         for store, lock in [
-            (self._strings, self._str_lock),
-            (self._lists, self._list_lock),
-            (self._sorted_sets, self._zset_lock),
-            (self._sets, self._set_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._strings), self._str_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._lists), self._list_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets), self._zset_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sets), self._set_lock),
         ]:
             with lock:
                 if key in store:
@@ -370,13 +370,13 @@ class MemoryStore:
     def ttl(self, key: str) -> int:
         """Return TTL in seconds. -1 = no expiry, -2 = key doesn't exist."""
         for store, lock in [
-            (self._strings, self._str_lock),
-            (self._lists, self._list_lock),
-            (self._sorted_sets, self._zset_lock),
-            (self._sets, self._set_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._strings), self._str_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._lists), self._list_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets), self._zset_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sets), self._set_lock),
         ]:
             with lock:
-                entry = store.get(key)
+                entry: Optional[Tuple[object, Optional[float]]] = store.get(key)
                 if entry:
                     _, expiry = entry
                     if self._is_expired(expiry):
@@ -387,17 +387,17 @@ class MemoryStore:
                     return max(0, int(expiry - time.time()))
         return -2
 
-    def keys(self, pattern: str = "*") -> list:
+    def keys(self, pattern: str = "*") -> List[str]:
         regex = re.compile(
             pattern.replace("*", ".*").replace("?", ".").replace("[", "[")
         )
-        result = set()
+        result: Set[str] = set()
         now = time.time()
         for store, lock in [
-            (self._strings, self._str_lock),
-            (self._lists, self._list_lock),
-            (self._sorted_sets, self._zset_lock),
-            (self._sets, self._set_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._strings), self._str_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._lists), self._list_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets), self._zset_lock),
+            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sets), self._set_lock),
         ]:
             with lock:
                 for k, (_, expiry) in store.items():
@@ -405,7 +405,7 @@ class MemoryStore:
                         result.add(k)
         return list(result)
 
-    def scan(self, _cursor: int = 0, match: str = "*", _count: int = 100) -> Tuple[int, list]:
+    def scan(self, _cursor: int = 0, match: str = "*", _count: int = 100) -> Tuple[int, List[str]]:
         """Simplified scan — returns all matching keys at once (cursor always 0)."""
         matched = self.keys(match)
         return (0, matched)
@@ -415,7 +415,7 @@ class MemoryStore:
     def pipeline(self, _transaction: bool = True) -> 'PipelineProxy':
         return PipelineProxy(self)
 
-    def export_matching(self, patterns: list) -> dict:
+    def export_matching(self, patterns: List[str]) -> Dict[str, Dict[str, object]]:
         """
         Instead of keys() × type() × get() per key (O(n×m×5) lock acquisitions),
         iterates each keyspace once and applies all patterns simultaneously —
@@ -424,31 +424,31 @@ class MemoryStore:
         import re as _re
         regexes = [_re.compile(p.replace("*", ".*").replace("?", ".")) for p in patterns]
 
-        def _matches(k):
+        def _matches(k: str) -> bool:
             return any(rx.fullmatch(k) for rx in regexes)
 
-        result = {}
+        result: Dict[str, Dict[str, object]] = {}
         now = time.time()
 
         with self._str_lock:
-            for k, (v, expiry) in self._strings.items():
+            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._strings).items():
                 if (expiry is None or now <= expiry) and _matches(k):
                     result[k] = {"type": "string", "value": v}
 
         with self._list_lock:
-            for k, (v, expiry) in self._lists.items():
+            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._lists).items():
                 if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "list", "value": list(v)}
+                    result[k] = {"type": "list", "value": list(cast("List[str]", v))}
 
         with self._zset_lock:
-            for k, (v, expiry) in self._sorted_sets.items():
+            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets).items():
                 if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "zset", "value": [m for m, _ in v]}
+                    result[k] = {"type": "zset", "value": [m for m, _ in cast("List[Tuple[float, str]]", v)]}
 
         with self._set_lock:
-            for k, (v, expiry) in self._sets.items():
+            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._sets).items():
                 if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "set", "value": list(v)}
+                    result[k] = {"type": "set", "value": list(cast("Set[str]", v))}
 
         return result
 
@@ -473,28 +473,28 @@ class MemoryStore:
 class PipelineProxy:
     """Pipeline proxy (Redis-compatible API) — collects operations, executes sequentially on .execute()."""
 
-    def __init__(self, store: MemoryStore):
+    def __init__(self, store: MemoryStore) -> None:
         self._store = store
-        self._commands: list = []
+        self._commands: List[Tuple[str, tuple[object, ...], Dict[str, object]]] = []
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Callable[..., "PipelineProxy"]:
         """Private names (starting with ``_``) raise ``AttributeError`` immediately."""
         if name.startswith('_'):
             raise AttributeError(name)
 
-        def _capture(*args, **kwargs):
+        def _capture(*args: object, **kwargs: object) -> "PipelineProxy":
             self._commands.append((name, args, kwargs))
             return self  # Allow chaining
         return _capture
 
-    def execute(self) -> list:
+    def execute(self) -> List[object]:
         """Exceptions from individual commands are caught and included in results rather than aborting the pipeline."""
         results = []
         for method_name, args, kwargs in self._commands:
             method = getattr(self._store, method_name, None)
             if method:
                 try:
-                    results.append(method(*args, **kwargs))
+                    results.append(cast(Callable[..., object], method)(*args, **kwargs))
                 except Exception as e:
                     results.append(e)
             else:
@@ -502,10 +502,10 @@ class PipelineProxy:
         self._commands.clear()
         return results
 
-    def __enter__(self):
+    def __enter__(self) -> "PipelineProxy":
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: object) -> None:
         """Commands are not automatically executed on context manager exit."""
         pass
 

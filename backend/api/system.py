@@ -491,44 +491,6 @@ def observability_errors():
         return jsonify({"error": "Failed to retrieve error log"}), 500
 
 
-# ──────────────────────────────────────────────
-# In-place update endpoints
-# ──────────────────────────────────────────────
-
-@system_bp.route('/system/update/check', methods=['GET'])
-@require_session
-def update_check():
-    try:
-        from services.app_update_service import AppUpdateService
-        info = AppUpdateService().check_for_update()
-        return jsonify(info), 200
-    except Exception as e:
-        logger.error(f"[REST API] update/check error: {e}")
-        return jsonify({"error": "Failed to check for updates"}), 500
-
-
-@system_bp.route('/system/update/apply', methods=['POST'])
-@require_session
-def update_apply():
-    try:
-        from services.app_update_service import AppUpdateService
-        data = request.get_json(silent=True) or {}
-        tag = data.get('tag')
-        if not tag:
-            return jsonify({"ok": False, "message": "Missing 'tag' parameter"}), 400
-
-        svc = AppUpdateService()
-        result = svc.apply_update(tag)
-
-        if result.get('ok'):
-            svc.request_restart()
-
-        return jsonify(result), 200
-    except Exception as e:
-        logger.error(f"[REST API] update/apply error: {e}")
-        return jsonify({"ok": False, "message": f"Update failed: {e}"}), 500
-
-
 # Settings endpoints
 # ──────────────────────────────────────────────
 

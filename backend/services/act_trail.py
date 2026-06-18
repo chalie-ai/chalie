@@ -43,7 +43,7 @@ class ActTrail:
         self,
         *,
         tool_name: str,
-        params: dict,
+        params: dict[str, object],
         result: str,
         transcript_id: "int | None",
     ) -> None:
@@ -73,7 +73,7 @@ class ActTrail:
                 tool_name, transcript_id, exc,
             )
 
-    def fetch_by_transcript_id(self, transcript_id: int) -> "list[dict]":
+    def fetch_by_transcript_id(self, transcript_id: int) -> "list[dict[str, object]]":
         """Ordered by autoincrement id (not created_at — one-second
         granularity makes created_at ambiguous when several rows land in
         the same second)."""
@@ -91,7 +91,7 @@ class ActTrail:
             return []
 
     @staticmethod
-    def render(row: dict) -> str:
+    def render(row: dict[str, object]) -> str:
         """Invariant shape: '[tool_name] params → result'. Same function for
         the LLM prompt, the UI card, and the audit view."""
         tool_name = row.get("tool_name", "unknown")

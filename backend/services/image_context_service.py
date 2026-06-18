@@ -7,6 +7,10 @@ IDs, timestamps); dimensions normalised to max 2048 px.
 import io
 import logging
 import time
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from PIL.Image import Image as PILImage
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +21,7 @@ _MAX_DIMENSION = 2048
 _MIN_TEXT_LENGTH = 10
 
 
-def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
+def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict[str, object]:
     """Applies safety preprocessing (EXIF strip, dimension normalisation) then
     runs RapidOCR for text extraction. No external providers needed.
 
@@ -38,14 +42,14 @@ def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
     try:
         from PIL import Image
 
-        img = Image.open(io.BytesIO(image_bytes))
+        img = cast("PILImage", Image.open(io.BytesIO(image_bytes)))
         img = _strip_exif(img)
         img = _normalize_dimensions(img)
 
         from services.ocr_service import _extract_text
         ocr_text = _extract_text(img)
         result['ocr_text'] = ocr_text.strip() if ocr_text else ''
-        result['has_text'] = len(result['ocr_text']) >= _MIN_TEXT_LENGTH
+        result['has_text'] = len(cast(str, result['ocr_text'])) >= _MIN_TEXT_LENGTH
 
     except ImportError:
         result['error'] = 'Pillow (PIL) not installed'
@@ -60,7 +64,7 @@ def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
 
 # ─── Preprocessing ───────────────────────────────────────────────────────────
 
-def _strip_exif(img) -> object:
+def _strip_exif(img: "PILImage") -> "PILImage":
     """Uses a BytesIO PNG round-trip: PNG encoder does not write EXIF by
     default. Falls back to the original image unchanged on any error."""
     try:
@@ -76,7 +80,7 @@ def _strip_exif(img) -> object:
         return img
 
 
-def _normalize_dimensions(img) -> object:
+def _normalize_dimensions(img: "PILImage") -> "PILImage":
     """Downscale image so neither dimension exceeds _MAX_DIMENSION."""
     try:
         w, h = img.size

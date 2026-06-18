@@ -9,7 +9,7 @@ never look at it). Fully defensive — any failure returns False / 0.0.
 import json
 import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, SupportsInt, cast
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def score_probe_response(text: str) -> float:
     score = 0.0
 
     try:
-        if int(data.get('number_of_shapes')) == _EXPECTED_COUNT:
+        if int(cast(SupportsInt, data.get('number_of_shapes'))) == _EXPECTED_COUNT:
             score += 0.30
     except (ValueError, TypeError):
         pass

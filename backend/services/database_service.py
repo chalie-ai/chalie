@@ -9,9 +9,14 @@ import logging
 import os
 import sqlite3
 import threading
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
+from typing import TYPE_CHECKING, Optional, Union
 
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    _Params = Union[Sequence[object], Mapping[str, object], None]
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +28,10 @@ class _TextClause:
     def __init__(self, sql: str):
         self._sql = sql
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self._sql
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"text({self._sql!r})"
 
 
@@ -64,7 +69,7 @@ class SessionProxy:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
 
-    def execute(self, sql_or_text, params=None):
+    def execute(self, sql_or_text: object, params: "_Params" = None) -> "ResultProxy":
         """Accepts a raw SQL string or a :class:`_TextClause` produced by
         :func:`text`. Dict-style named parameters (``:name``) are
         transparently converted to SQLite positional ``?`` parameters."""
@@ -74,8 +79,8 @@ class SessionProxy:
         if params and isinstance(params, dict):
             # Convert :name params to ? positional params
             import re
-            ordered_params = []
-            def _replace(match):
+            ordered_params: list[object] = []
+            def _replace(match: "re.Match[str]") -> str:
                 key = match.group(1)
                 ordered_params.append(params[key])
                 return '?'
@@ -91,11 +96,11 @@ class SessionProxy:
 
         return ResultProxy(cursor)
 
-    def commit(self):
+    def commit(self) -> None:
         """Explicit commit (also happens automatically on context-manager exit)."""
         self._conn.commit()
 
-    def rollback(self):
+    def rollback(self) -> None:
         """Explicit rollback."""
         self._conn.rollback()
 
@@ -111,30 +116,30 @@ class ResultProxy:
         """
         self._cursor = cursor
 
-    def fetchone(self):
-        row = self._cursor.fetchone()
+    def fetchone(self) -> sqlite3.Row | None:
+        row: sqlite3.Row | None = self._cursor.fetchone()
         return row  # sqlite3.Row already supports int and key indexing
 
-    def fetchall(self):
+    def fetchall(self) -> list[sqlite3.Row]:
         return self._cursor.fetchall()
 
     @property
-    def rowcount(self):
+    def rowcount(self) -> int:
         """Number of rows affected by the last statement."""
         return self._cursor.rowcount
 
     @property
-    def lastrowid(self):
+    def lastrowid(self) -> int | None:
         """Row ID of the last inserted row."""
         return self._cursor.lastrowid
 
-    def scalar(self):
+    def scalar(self) -> object:
         row = self.fetchone()
         if row is None:
             return None
         return row[0]
 
-    def close(self):
+    def close(self) -> None:
         self._cursor.close()
 
 
@@ -144,46 +149,46 @@ class DictCursor:
     def __init__(self, cursor: sqlite3.Cursor):
         self._cursor = cursor
 
-    def execute(self, sql, params=None):
+    def execute(self, sql: str, params: "_Params" = None) -> "DictCursor":
         if params is None:
             self._cursor.execute(sql)
         else:
             self._cursor.execute(sql, params)
         return self
 
-    def executemany(self, sql, params_list):
+    def executemany(self, sql: str, params_list: "Sequence[Sequence[object]]") -> "DictCursor":
         self._cursor.executemany(sql, params_list)
         return self
 
-    def fetchone(self):
+    def fetchone(self) -> dict[str, object] | None:
         row = self._cursor.fetchone()
         if row is None:
             return None
         return dict(row)
 
-    def fetchall(self):
+    def fetchall(self) -> list[dict[str, object]]:
         return [dict(row) for row in self._cursor.fetchall()]
 
     @property
-    def lastrowid(self):
+    def lastrowid(self) -> int | None:
         """Row ID of the last inserted row."""
         return self._cursor.lastrowid
 
     @property
-    def rowcount(self):
+    def rowcount(self) -> int:
         """Number of rows affected by the last statement."""
         return self._cursor.rowcount
 
     @property
-    def description(self):
+    def description(self) -> object:
         """Sequence of 7-item sequences describing each result column."""
         return self._cursor.description
 
-    def close(self):
+    def close(self) -> None:
         """Close the cursor, releasing database resources."""
         self._cursor.close()
 
-    def __iter__(self):
+    def __iter__(self) -> Generator[dict[str, object], None, None]:
         """Iterate over result rows as dicts."""
         return (dict(row) for row in self._cursor)
 
@@ -191,7 +196,7 @@ class DictCursor:
 class DatabaseService:
     """Manages SQLite connections with thread-local isolation and WAL mode."""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: Optional[str] = None) -> None:
         """Initialize the service and ensure the database directory exists.
 
         Args:
@@ -248,12 +253,12 @@ class DatabaseService:
 
         return conn
 
-    def get_connection(self):
+    def get_connection(self) -> "sqlite3.Connection":
         """Get a connection (thread-local). Compatible with old API."""
         return self._get_connection()
 
     @contextmanager
-    def connection(self):
+    def connection(self) -> Generator[sqlite3.Connection, None, None]:
         """Yield a thread-local connection, committing or rolling back on exit.
 
         Intended for direct cursor operations.  Use :meth:`get_session` when
@@ -274,7 +279,7 @@ class DatabaseService:
             conn.rollback()
             raise
 
-    def execute(self, sql, params=None):
+    def execute(self, sql: str, params: "_Params" = None) -> None:
         """Execute a write statement (INSERT/UPDATE/DELETE) with auto-commit.
 
         Args:
@@ -291,7 +296,7 @@ class DatabaseService:
             finally:
                 cursor.close()
 
-    def fetch_all(self, sql, params=None):
+    def fetch_all(self, sql: str, params: "_Params" = None) -> list[dict[str, object]]:
         """Execute a SELECT statement and return all rows as a list of dicts.
 
         Args:
@@ -310,7 +315,7 @@ class DatabaseService:
                 cursor.close()
 
     @contextmanager
-    def get_session(self):
+    def get_session(self) -> Generator["SessionProxy", None, None]:
         """Yield a :class:`SessionProxy` compatible with SQLAlchemy session usage.
 
         Provides a drop-in shim for callers that previously used
@@ -335,7 +340,7 @@ class DatabaseService:
             conn.rollback()
             raise
 
-    def close_pool(self):
+    def close_pool(self) -> None:
         """Close the calling thread's SQLite connection and clear thread-local state.
 
         Silently ignores errors from ``sqlite3.Connection.close()`` so that

@@ -4,7 +4,10 @@ import threading
 import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
 
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now, parse_utc
@@ -61,7 +64,7 @@ _TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
 _LOCAL_TIME_FORMAT = "%a %d %b %Y %H:%M"
 
 
-def _format_telemetry_value(value) -> str | None:
+def _format_telemetry_value(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -83,7 +86,7 @@ def _is_hidden_telemetry_key(key: str) -> bool:
     return key in _TELEMETRY_HIDDEN_KEYS or key.startswith("_")
 
 
-def _render_dict_subfields(d: dict) -> list[str]:
+def _render_dict_subfields(d: dict[str, object]) -> list[str]:
     sub_fields = []
     for sub_key, sub_value in d.items():
         if _is_hidden_telemetry_key(sub_key):
@@ -94,7 +97,7 @@ def _render_dict_subfields(d: dict) -> list[str]:
     return sub_fields
 
 
-def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
+def _group_telemetry(ctx: dict[str, object]) -> list[tuple[str, list[str]]]:
     user_fields: list[str] = []
     grouped: dict[str, list[str]] = {}
 
@@ -120,7 +123,7 @@ def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
     return out
 
 
-def _schedule_due_field(due_at_str: str, now) -> str:
+def _schedule_due_field(due_at_str: str, now: datetime) -> str:
     try:
         diff_secs = (parse_utc(due_at_str) - now).total_seconds()
     except Exception:
@@ -130,7 +133,7 @@ def _schedule_due_field(due_at_str: str, now) -> str:
     return f"due-in:{TimeFormatterService.duration(abs(diff_secs))} ago"
 
 
-def _schedule_last_fired_field(last_fired_str) -> str | None:
+def _schedule_last_fired_field(last_fired_str: str | None) -> str | None:
     if not last_fired_str:
         return None
     try:
@@ -139,7 +142,7 @@ def _schedule_last_fired_field(last_fired_str) -> str | None:
         return None
 
 
-def _schedule_recurrence_field(recurrence_str) -> str | None:
+def _schedule_recurrence_field(recurrence_str: str | None) -> str | None:
     if not recurrence_str:
         return None
     try:
@@ -150,24 +153,24 @@ def _schedule_recurrence_field(recurrence_str) -> str | None:
     return f"repeats:every {TimeFormatterService.duration(rec_secs)}"
 
 
-def _keep_extreme(bucket: dict, message: str, row: dict, *, ts_key: str, prefer_lower: bool) -> None:
+def _keep_extreme(bucket: dict[str, dict[str, object]], message: str, row: dict[str, object], *, ts_key: str, prefer_lower: bool) -> None:
     """Insert ``row`` into ``bucket[message]`` if it has the more extreme timestamp under ``ts_key``."""
     current = bucket.get(message)
     if current is None:
         bucket[message] = row
         return
-    incoming_ts = row.get(ts_key) or ""
-    current_ts = current.get(ts_key) or ""
+    incoming_ts: str = cast(str, row.get(ts_key)) or ""
+    current_ts: str = cast(str, current.get(ts_key)) or ""
     if (prefer_lower and incoming_ts < current_ts) or (not prefer_lower and incoming_ts > current_ts):
         bucket[message] = row
 
 
-def _bucket_schedule_rows(rows: list) -> tuple[dict, dict]:
+def _bucket_schedule_rows(rows: list[dict[str, object]]) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
     """Split rows into pending-by-message (earliest due_at) and fired-by-message (latest last_fired_at)."""
-    pending_by_msg: dict[str, dict] = {}
-    fired_by_msg: dict[str, dict] = {}
+    pending_by_msg: dict[str, dict[str, object]] = {}
+    fired_by_msg: dict[str, dict[str, object]] = {}
     for row in rows:
-        message = row.get("message") or ""
+        message: str = cast(str, row.get("message")) or ""
         status = row.get("status")
         if status == "pending":
             _keep_extreme(pending_by_msg, message, row, ts_key="due_at", prefer_lower=True)
@@ -176,13 +179,13 @@ def _bucket_schedule_rows(rows: list) -> tuple[dict, dict]:
     return pending_by_msg, fired_by_msg
 
 
-def _order_schedule_messages(pending: dict, fired: dict) -> list[str]:
+def _order_schedule_messages(pending: dict[str, dict[str, object]], fired: dict[str, dict[str, object]]) -> list[str]:
     """Pending entries first (by due_at asc), then fired-only entries (by last_fired_at desc)."""
-    ordered = sorted(pending.keys(), key=lambda m: pending[m].get("due_at") or "")
+    ordered = sorted(pending.keys(), key=lambda m: cast(str, pending[m].get("due_at")) or "")
     seen = set(ordered)
     ordered.extend(sorted(
         (m for m in fired if m not in seen),
-        key=lambda m: fired[m].get("last_fired_at") or "",
+        key=lambda m: cast(str, fired[m].get("last_fired_at")) or "",
         reverse=True,
     ))
     return ordered
@@ -199,13 +202,13 @@ def _compute_local_time() -> str | None:
         return None
 
 
-def _render_schedule_fields(row: dict, now) -> str:
+def _render_schedule_fields(row: dict[str, object], now: datetime) -> str:
     """Build the comma-separated field string for one schedule entry."""
-    fields = [_schedule_due_field(row.get("due_at") or "", now)]
-    last_fired_field = _schedule_last_fired_field(row.get("last_fired_at"))
+    fields = [_schedule_due_field(cast(str, row.get("due_at")) or "", now)]
+    last_fired_field = _schedule_last_fired_field(cast("str | None", row.get("last_fired_at")))
     if last_fired_field:
         fields.append(last_fired_field)
-    recurrence_field = _schedule_recurrence_field(row.get("recurrence"))
+    recurrence_field = _schedule_recurrence_field(cast("str | None", row.get("recurrence")))
     if recurrence_field:
         fields.append(recurrence_field)
     return ",".join(fields)
@@ -225,7 +228,7 @@ class WorldState:
     Thread-safe via a single internal lock protecting ``_store``.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Build a WorldState and hydrate the restart-durable fields.
 
         ``last_user_message_at`` is loaded from the dual-write store at
@@ -233,7 +236,7 @@ class WorldState:
         the persisted value (mirrors ``SubconsciousWorker.__init__``). Hydrate
         failure is non-fatal — the field simply starts unset.
         """
-        self._store: dict = {}           # arbitrary type → dict fragments
+        self._store: dict[str, object] = {}           # arbitrary type → dict fragments
         self._lock = threading.Lock()
         self._user_msg_clock = DurableTimestamp(
             memory_key=_STORE_KEY_LAST_USER_MESSAGE,
@@ -244,16 +247,16 @@ class WorldState:
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    def set(self, type: str, value: dict) -> "WorldState":
+    def set(self, type: str, value: dict[str, object]) -> "WorldState":
         with self._lock:
             self._store[type] = value
         return self
 
-    def get(self, type: str) -> dict:
+    def get(self, type: str) -> dict[str, object]:
         with self._lock:
             if type == "signals":
                 self._prune_signals()
-            return dict(self._store.get(type) or {})
+            return dict(cast("dict[str, object]", self._store.get(type)) or {})
 
     def push_signal(self, source: str, label: str, ttl: int = 3600) -> None:
         """Merge a signal into the signals dict, overwriting the same source.
@@ -264,7 +267,7 @@ class WorldState:
             ttl: Seconds until this signal expires.  Default 3600 (1 hour).
         """
         with self._lock:
-            signals: dict = dict(self._store.get("signals") or {})
+            signals: dict[str, object] = dict(cast("dict[str, object]", self._store.get("signals")) or {})
             signals[source] = {
                 "label": label,
                 "expires_at": _time.time() + ttl,
@@ -336,10 +339,10 @@ class WorldState:
             raw_hb = self._store.get("world_state:last_heartbeat_at")
             raw_lt = self._store.get("world_state:current_local_time")
             return {
-                "last_user_message_at": parse_utc(raw_msg) if raw_msg is not None else None,
-                "last_heartbeat_at": parse_utc(raw_hb) if raw_hb is not None else None,
+                "last_user_message_at": parse_utc(cast("str", raw_msg)) if raw_msg is not None else None,
+                "last_heartbeat_at": parse_utc(cast("str", raw_hb)) if raw_hb is not None else None,
                 "current_device_class": self._store.get("world_state:current_device_class"),
-                "current_local_time": parse_utc(raw_lt) if raw_lt is not None else None,
+                "current_local_time": parse_utc(cast("str", raw_lt)) if raw_lt is not None else None,
             }
 
     def render(self) -> str:
@@ -424,7 +427,7 @@ class WorldState:
         """Produce [signal:{source}] lines from the in-memory signals dict."""
         with self._lock:
             self._prune_signals()
-            signals = dict(self._store.get("signals") or {})
+            signals: dict[str, dict[str, object]] = dict(cast("dict[str, dict[str, object]]", self._store.get("signals")) or {})
         if not signals:
             return []
         lines = []
@@ -435,14 +438,14 @@ class WorldState:
 
     def _prune_signals(self) -> None:
         """Remove expired signals from the store. Must be called under self._lock."""
-        signals = self._store.get("signals")
+        signals: dict[str, dict[str, object]] | None = cast("dict[str, dict[str, object]] | None", self._store.get("signals"))
         if not signals:
             return
         now = _time.time()
         pruned = {
             src: entry
             for src, entry in signals.items()
-            if entry.get("expires_at", 0) > now
+            if cast(float, entry.get("expires_at", 0)) > now
         }
         self._store["signals"] = pruned
 
@@ -450,12 +453,12 @@ class WorldState:
 # ── DB helpers (reused by the Cognition endpoint) ──────────────────────────
 
 
-def _get_db():
+def _get_db() -> "DatabaseService":
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 
 
-def _fetch_schedule_rows() -> list[dict]:
+def _fetch_schedule_rows() -> list[dict[str, object]]:
     """Execute the schedule query and return rows as list of dicts."""
     db = _get_db()
     with db.connection() as conn:

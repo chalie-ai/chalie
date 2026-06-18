@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterable
+from typing import Iterable, TypedDict, cast
 from urllib.parse import urljoin
 
 import requests
@@ -49,13 +49,13 @@ _CONTENT_RE = re.compile(
 
 def resolve_og_images(
     urls: Iterable[str], max_workers: int = 3, timeout: float = _FETCH_TIMEOUT
-) -> dict[str, dict]:
+) -> dict[str, dict[str, str]]:
     """description derived from og:description (≥ 20 chars) → og:title → <title>."""
     targets = [u for u in urls if isinstance(u, str) and u.startswith(("http://", "https://"))]
     if not targets:
         return {}
 
-    out: dict[str, dict] = {}
+    out: dict[str, dict[str, str]] = {}
     with ThreadPoolExecutor(max_workers=min(max_workers, len(targets))) as pool:
         futures = {pool.submit(_extract_one, u, timeout): u for u in targets}
         for future in as_completed(futures):
@@ -70,7 +70,7 @@ def resolve_og_images(
     return out
 
 
-def _extract_one(url: str, timeout: float) -> dict:
+def _extract_one(url: str, timeout: float) -> dict[str, str]:
     try:
         try:
             resp_ctx = requests.get(
@@ -131,7 +131,7 @@ def _extract_image(text: str, final_url: str) -> str:
             continue
         absolute = urljoin(final_url, candidate)
         if absolute.startswith(("http://", "https://")):
-            return absolute
+            return cast(str, absolute)
     return ""
 
 

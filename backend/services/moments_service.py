@@ -19,10 +19,12 @@ Consumers:
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, cast
+
+import sqlite3
 
 from services._fts_delete import fts5_external_delete
-from services.database_service import get_shared_db_service
+from services.database_service import DatabaseService, get_shared_db_service
 from services.embedding_utils import pack_embedding
 from services.time_utils import utc_now
 
@@ -41,15 +43,15 @@ _SEARCH_LIMIT = 10
 _VEC_K = 30
 
 class MomentsService:
-    def __init__(self, db_service=None):
-        self.db = db_service if db_service is not None else get_shared_db_service()
+    def __init__(self, db_service: Optional[DatabaseService] = None) -> None:
+        self.db: DatabaseService = db_service if db_service is not None else get_shared_db_service()
 
     # ── helpers ───────────────────────────────────────────────────────
 
-    def _row_to_dict(self, row) -> Optional[dict]:
+    def _row_to_dict(self, row: Optional[sqlite3.Row]) -> Optional[dict[str, object]]:
         return dict(row) if row is not None else None
 
-    def _generate_embedding(self, text: str):
+    def _generate_embedding(self, text: str) -> object:
         try:
             from services.embedding_service import get_embedding_service
             return get_embedding_service().generate_embedding(text)
@@ -57,7 +59,7 @@ class MomentsService:
             logger.warning("%s embedding generation failed: %s", _LOG_PREFIX, exc)
             return None
 
-    def _sync_fts(self, conn, rowid: int, content: str) -> None:
+    def _sync_fts(self, conn: sqlite3.Connection, rowid: int, content: str) -> None:
         """Insert the content posting into the external-content moments_fts index.
 
         Failure only logs a warning — this is a soft sync against an external index;
@@ -71,7 +73,7 @@ class MomentsService:
         except Exception as exc:
             logger.warning("%s FTS sync failed for rowid=%s: %s", _LOG_PREFIX, rowid, exc)
 
-    def _store_vec(self, conn, rowid: int, embedding) -> None:
+    def _store_vec(self, conn: sqlite3.Connection, rowid: int, embedding: object) -> None:
         if embedding is None:
             return
         blob = pack_embedding(embedding)
@@ -85,12 +87,12 @@ class MomentsService:
         except Exception as exc:
             logger.warning("%s vec write failed for rowid=%s: %s", _LOG_PREFIX, rowid, exc)
 
-    def _delete_fts(self, conn, rowid: int, content: str) -> None:
+    def _delete_fts(self, conn: sqlite3.Connection, rowid: int, content: str) -> None:
         fts5_external_delete(conn, _FTS_TABLE, rowid, {"content": content})
 
     # ── store / read / delete ──────────────────────────────────────────
 
-    def find_by_transcript(self, transcript_id: int) -> Optional[dict]:
+    def find_by_transcript(self, transcript_id: int) -> Optional[dict[str, object]]:
         with self.db.connection() as conn:
             row = conn.execute(
                 "SELECT * FROM moments WHERE transcript_id = ? LIMIT 1",
@@ -98,7 +100,7 @@ class MomentsService:
             ).fetchone()
         return self._row_to_dict(row)
 
-    def store(self, transcript_id: int, content: str, *, note: str = None) -> dict:
+    def store(self, transcript_id: int, content: str, *, note: str | None = None) -> dict[str, object] | None:
         """Dedupe on ``transcript_id`` — re-pin returns existing row instead of inserting.
 
         Embedding failure is non-fatal; the lexical lane still serves the pin.
@@ -117,7 +119,7 @@ class MomentsService:
                 (transcript_id, content, note, now_iso),
             )
             inserted = cursor.rowcount == 1
-            rowid = cursor.lastrowid
+            rowid = cast(int, cursor.lastrowid)
             cursor.close()
             if inserted:
                 self._sync_fts(conn, rowid, content)
@@ -139,7 +141,7 @@ class MomentsService:
             )
         return self._row_to_dict(row)
 
-    def list_all(self) -> List[dict]:
+    def list_all(self) -> List[dict[str, object] | None]:
         with self.db.connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM moments ORDER BY created_at DESC, id DESC"
@@ -150,9 +152,9 @@ class MomentsService:
         row = self.find_by_transcript(transcript_id)
         if row is None:
             return False
-        rowid = row["id"]
+        rowid = cast(int, row["id"])
         with self.db.connection() as conn:
-            self._delete_fts(conn, rowid, row.get("content") or "")
+            self._delete_fts(conn, rowid, cast(str, row.get("content") or ""))
             conn.execute(f"DELETE FROM {_VEC_TABLE} WHERE rowid = ?", (rowid,))
             conn.execute("DELETE FROM moments WHERE id = ?", (rowid,))
         logger.info("%s forgot moment id=%s transcript_id=%s", _LOG_PREFIX, rowid, transcript_id)
@@ -160,7 +162,7 @@ class MomentsService:
 
     # ── search ─────────────────────────────────────────────────────────
 
-    def _search_fts(self, conn, query: str) -> List[int]:
+    def _search_fts(self, conn: sqlite3.Connection, query: str) -> List[int]:
         import re
         terms = re.sub(r"[^\w\s]", " ", query).split()
         if not terms:
@@ -177,7 +179,7 @@ class MomentsService:
             return []
         return [r[0] for r in rows]
 
-    def _search_vec(self, conn, query: str) -> List[int]:
+    def _search_vec(self, conn: sqlite3.Connection, query: str) -> List[int]:
         embedding = self._generate_embedding(query)
         blob = pack_embedding(embedding) if embedding is not None else None
         if blob is None:
@@ -193,7 +195,7 @@ class MomentsService:
             return []
         return [r[0] for r in rows]
 
-    def search(self, query: str, limit: int = _SEARCH_LIMIT) -> List[dict]:
+    def search(self, query: str, limit: int = _SEARCH_LIMIT) -> List[dict[str, object] | None]:
         clean = (query or "").strip()
         if not clean:
             return []

@@ -1,6 +1,15 @@
 """Capability-handler dispatch helper."""
 
-def dispatch_capability_handler(handler: object, params: dict, telemetry: "dict | None") -> dict:
+from typing import TYPE_CHECKING, Protocol, cast
+
+if TYPE_CHECKING:
+    class _CapabilityHandler(Protocol):
+        def __call__(
+            self, *, topic: str, params: dict[str, object], telemetry: "dict[str, object] | None"
+        ) -> dict[str, object]: ...
+
+
+def dispatch_capability_handler(handler: object, params: dict[str, object], telemetry: "dict[str, object] | None") -> dict[str, object]:
     """Invoke *handler* with framework keys stripped from *params*.
 
     Strips leading-underscore keys and the ``action`` selector, then calls
@@ -11,4 +20,4 @@ def dispatch_capability_handler(handler: object, params: dict, telemetry: "dict 
     action_params = {
         k: v for k, v in params.items() if not k.startswith("_") and k != "action"
     }
-    return handler(topic="", params=action_params, telemetry=telemetry)  # type: ignore[operator]
+    return cast("_CapabilityHandler", handler)(topic="", params=action_params, telemetry=telemetry)

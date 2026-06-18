@@ -1,17 +1,22 @@
 
 import logging
+from typing import TYPE_CHECKING, Protocol, cast
 
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[DELIBERATION]"
 
+if TYPE_CHECKING:
+    class _ScalarPredictor(Protocol):
+        def predict_scalar(self, head: str, text: str) -> float: ...
+
 
 class DeliberationScoreService:
 
-    def __init__(self, inference_service=None):
+    def __init__(self, inference_service: object = None) -> None:
         self._inference_service = inference_service
 
-    def _get_svc(self):
+    def _get_svc(self) -> object:
         if self._inference_service is not None:
             return self._inference_service
         from services.onnx_inference_service import get_onnx_inference_service
@@ -22,7 +27,7 @@ class DeliberationScoreService:
             return None
         try:
             svc = self._get_svc()
-            result = svc.predict_scalar("deliberation_score", user_turn)
+            result = cast("_ScalarPredictor", svc).predict_scalar("deliberation_score", user_turn)
             return result
         except Exception as exc:
             logger.info("%s classify failed: %s", LOG_PREFIX, exc)

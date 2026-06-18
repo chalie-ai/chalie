@@ -3,6 +3,7 @@ News Sources — static registry of 56 public RSS/Atom feeds across 8 categories
 """
 
 from collections import namedtuple
+from typing import Optional
 
 Source = namedtuple("Source", "id name category feed_url country")
 
@@ -81,14 +82,14 @@ SOURCES = (
 )
 
 _BY_ID = {s.id: s for s in SOURCES}
-_BY_CATEGORY = {}
+_BY_CATEGORY: dict[str, list[Source]] = {}
 for _s in SOURCES:
     _BY_CATEGORY.setdefault(_s.category, []).append(_s)
 
 
-def get_source_by_id(source_id: str):
+def get_source_by_id(source_id: str) -> Optional[Source]:
     return _BY_ID.get(source_id)
 
 
-def get_sources_by_category(category: str) -> list:
+def get_sources_by_category(category: str) -> list[Source]:
     return list(_BY_CATEGORY.get(category, []))

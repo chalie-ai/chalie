@@ -20,7 +20,7 @@ import json
 import logging
 import re
 import time
-from typing import ClassVar, Optional
+from typing import ClassVar, Optional, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -46,7 +46,7 @@ _MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9._:\-/]+$")
 _ALLOWED_HOST_SCHEMES = frozenset({"http", "https"})
 
 
-def _validate_model(raw_model) -> str:
+def _validate_model(raw_model: object) -> str:
     """Reject Ollama model identifiers that contain anything but the canonical
     name characters. Raising here acts as a CodeQL sanitisation barrier so
     ``self.model`` is no longer treated as derived-from-config-dict tainted
@@ -60,7 +60,7 @@ def _validate_model(raw_model) -> str:
     return text
 
 
-def _validate_host(raw_host) -> str:
+def _validate_host(raw_host: object) -> str:
     """Validate the Ollama host URL via ``urllib.parse.urlparse`` + scheme +
     netloc gates. Same CodeQL-barrier rationale as ``_validate_model``.
     """
@@ -73,17 +73,17 @@ def _validate_host(raw_host) -> str:
     return text
 
 
-def _ollama_convert_messages(messages: list) -> list:
+def _ollama_convert_messages(messages: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert normalised messages to Ollama format (OpenAI-compatible)."""
-    result = []
+    result: list[dict[str, object]] = []
     for msg in messages:
         if msg['role'] == 'assistant' and msg.get('tool_calls'):
             result.append({
                 "role": "assistant",
                 "content": msg.get('content', ''),
                 "tool_calls": [
-                    {"function": {"name": tc['name'], "arguments": tc['input']}}
-                    for tc in msg['tool_calls']
+                    {"function": {"name": cast(dict[str, object], tc)['name'], "arguments": cast(dict[str, object], tc)['input']}}
+                    for tc in cast(list[object], msg['tool_calls'])
                 ],
             })
         elif msg['role'] == 'tool':
@@ -94,34 +94,34 @@ def _ollama_convert_messages(messages: list) -> list:
                 result.append({
                     "role": msg['role'],
                     "content": msg.get('content', ''),
-                    "images": [img['data']],
+                    "images": [cast(dict[str, object], img)['data']],
                 })
             else:
                 result.append(msg)
     return result
 
 
-def _parse_chat_response(data: dict, default_model: str) -> ProviderApiResponse:
+def _parse_chat_response(data: dict[str, object], default_model: str) -> ProviderApiResponse:
     """Build a ProviderApiResponse from a raw Ollama /api/chat response dict."""
-    msg = data.get('message', {})
-    text = msg.get('content', '')
+    msg = cast(dict[str, object], data.get('message', {}))
+    text = cast(str, msg.get('content', ''))
     tool_calls = None
     raw_tool_calls = msg.get('tool_calls')
     if raw_tool_calls:
         tool_calls = [
             {
-                'id': f"ollama_{tc.get('function', {}).get('name', 'unknown')}_{uuid4().hex[:8]}",
-                'name': tc.get('function', {}).get('name', ''),
-                'input': tc.get('function', {}).get('arguments', {}),
+                'id': f"ollama_{cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('name', 'unknown')}_{uuid4().hex[:8]}",
+                'name': cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('name', ''),
+                'input': cast(dict[str, object], cast(dict[str, object], tc).get('function', {})).get('arguments', {}),
             }
-            for tc in raw_tool_calls
+            for tc in cast(list[object], raw_tool_calls)
         ]
     return ProviderApiResponse(
         text=text,
-        model=data.get('model', default_model),
+        model=cast(str, data.get('model', default_model)),
         provider='ollama',
-        tokens_input=data.get('prompt_eval_count'),
-        tokens_output=data.get('eval_count'),
+        tokens_input=cast(Optional[int], data.get('prompt_eval_count')),
+        tokens_output=cast(Optional[int], data.get('eval_count')),
         tool_calls=tool_calls,
         stop_reason='tool_use' if tool_calls else 'end_turn',
         response_code=200,
@@ -131,17 +131,17 @@ def _parse_chat_response(data: dict, default_model: str) -> ProviderApiResponse:
 class OllamaClient(ProviderClient):
     CONTENT_FIELD_LABEL: ClassVar[str] = "message.content"
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         self._config = config
         self.host: str = _validate_host(config.get('host'))
         self.model: str = _validate_model(config.get('model'))
-        self._keep_alive: str = config.get('keep_alive', '0')
-        self._timeout: int = config.get('timeout', 60)
-        self._max_retries: int = config.get('max_retries', 2)
+        self._keep_alive: str = cast(str, config.get('keep_alive', '0'))
+        self._timeout: int = cast(int, config.get('timeout', 60))
+        self._max_retries: int = cast(int, config.get('max_retries', 2))
         # Cached result of _model_supports_thinking(). None = not yet checked.
         self._thinking_supported: Optional[bool] = None
 
-    def _user_agent(self) -> dict:
+    def _user_agent(self) -> dict[str, str]:
         from services.llm_service import _app_user_agent  # noqa: PLC0415
         return {"User-Agent": _app_user_agent()}
 
@@ -172,10 +172,10 @@ class OllamaClient(ProviderClient):
         self._thinking_supported = False
         return False
 
-    def _build_payload(self, system: str, api_messages: list, tools: Optional[list],
-                       thinking_mode: ThinkingLevel) -> dict:
+    def _build_payload(self, system: str, api_messages: list[dict[str, object]], tools: Optional[list[dict[str, object]]],
+                       thinking_mode: ThinkingLevel) -> dict[str, object]:
         """Build the /api/chat payload dict."""
-        payload: dict = {
+        payload: dict[str, object] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}] + api_messages,
             "stream": False,
@@ -279,7 +279,7 @@ class OllamaClient(ProviderClient):
     def get_context_limit(self) -> int:
         """Query Ollama for model's context window size, cached per-instance."""
         if hasattr(self, '_cached_context_limit'):
-            return self._cached_context_limit  # type: ignore[attr-defined]
+            return self._cached_context_limit
         raw_limit: Optional[int] = None
         try:
             resp = requests.post(

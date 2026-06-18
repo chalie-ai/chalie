@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, cast
 from urllib.parse import quote_plus, urlparse
 
 # feedparser: tolerant RSS/Atom/RDF parsing + media/date normalisation,
@@ -29,6 +29,8 @@ import requests
 
 from services.time_utils import utc_now
 from services import news_sources
+from services.memory_store import MemoryStore
+from services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -81,35 +83,35 @@ class NewsArticle:
     category: str
     image_url: str = ""
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
 class NewsService:
-    def __init__(self):
-        self._embedding_svc = None
-        self._store = None
+    def __init__(self) -> None:
+        self._embedding_svc: EmbeddingService | None = None
+        self._store: MemoryStore | None = None
 
     # ── Lazy accessors ────────────────────────────────────────
 
-    def _get_embedding_service(self):
+    def _get_embedding_service(self) -> EmbeddingService:
         if self._embedding_svc is None:
             from services.embedding_service import get_embedding_service
             self._embedding_svc = get_embedding_service()
         return self._embedding_svc
 
-    def _get_store(self):
+    def _get_store(self) -> MemoryStore:
         from services.memory_client import MemoryClientService
         return MemoryClientService.create_connection()
 
     # ── Feed fetching ─────────────────────────────────────────
 
-    def fetch_feeds(self, source_ids: list, timeout_per_feed: float = PER_FEED_TIMEOUT,
-                    total_budget: float = TOTAL_BUDGET) -> list:
+    def fetch_feeds(self, source_ids: list[str], timeout_per_feed: float = PER_FEED_TIMEOUT,
+                    total_budget: float = TOTAL_BUDGET) -> list[NewsArticle]:
         if not source_ids:
             return []
 
-        sources = []
+        sources: list[news_sources.Source] = []
         for sid in source_ids:
             src = news_sources.get_source_by_id(sid)
             if src:
@@ -120,8 +122,8 @@ class NewsService:
 
         # Check cache first, collect misses
         store = self._get_store()
-        all_articles = []
-        to_fetch = []
+        all_articles: list[NewsArticle] = []
+        to_fetch: list[news_sources.Source] = []
 
         for src in sources:
             cache_key = f"news:feed:{src.id}"
@@ -129,7 +131,7 @@ class NewsService:
             if cached:
                 try:
                     for item in json.loads(cached):
-                        all_articles.append(NewsArticle(**item))
+                        all_articles.append(NewsArticle(**cast(dict[str, str], item)))
                     continue
                 except Exception:
                     pass
@@ -141,7 +143,7 @@ class NewsService:
         # Parallel fetch with budget
         deadline = time.monotonic() + total_budget
 
-        def _fetch_one(src):
+        def _fetch_one(src: news_sources.Source) -> tuple[news_sources.Source, list[NewsArticle]]:
             remaining = max(0.5, deadline - time.monotonic())
             timeout = min(timeout_per_feed, remaining)
             return src, self._parse_feed(src, timeout)
@@ -164,7 +166,7 @@ class NewsService:
 
         return all_articles
 
-    def _parse_feed(self, src, timeout: float) -> list:
+    def _parse_feed(self, src: news_sources.Source, timeout: float) -> list[NewsArticle]:
         try:
             resp = requests.get(
                 src.feed_url,
@@ -183,24 +185,24 @@ class NewsService:
         # We return [] only when feedparser yields zero usable entries, not on bozo alone.
         feed = feedparser.parse(resp.content)
         feed_image = getattr(getattr(feed, "feed", None), "image", None)
-        feed_image_url = getattr(feed_image, "href", "") if feed_image else ""
+        feed_image_url = cast(str, getattr(feed_image, "href", "") if feed_image else "")
         return [
             article
             for entry in feed.entries
-            if (article := _entry_to_article(entry, src, feed_image_url)) is not None
+            if (article := _entry_to_article(cast(dict[str, object], entry), src, feed_image_url)) is not None
         ]
 
     # ── Google News ───────────────────────────────────────────
 
     def fetch_google_news(self, query: str, country_code: str = "US",
-                          timeout: float = PER_FEED_TIMEOUT) -> list:
+                          timeout: float = PER_FEED_TIMEOUT) -> list[NewsArticle]:
         store = self._get_store()
         full_query = query
         cache_key = f"news:google:{hashlib.sha256((full_query + country_code).encode()).hexdigest()[:16]}"
         cached = store.get(cache_key)
         if cached:
             try:
-                return [NewsArticle(**a) for a in json.loads(cached)]
+                return [NewsArticle(**cast(dict[str, str], a)) for a in json.loads(cached)]
             except Exception:
                 pass
 
@@ -220,7 +222,7 @@ class NewsService:
         articles = [
             article
             for entry in feed.entries
-            if (article := _entry_to_article(entry, dummy_src, "")) is not None
+            if (article := _entry_to_article(cast(dict[str, object], entry), dummy_src, "")) is not None
         ]
 
         if articles:
@@ -229,11 +231,11 @@ class NewsService:
 
     # ── Deduplication ─────────────────────────────────────────
 
-    def deduplicate(self, articles: list) -> list:
+    def deduplicate(self, articles: list[NewsArticle]) -> list[NewsArticle]:
         if len(articles) <= 1:
             return articles
 
-        seen = []
+        seen: list[str] = []
         result = []
         for article in articles:
             norm = _normalize_title(article.title)
@@ -248,7 +250,7 @@ class NewsService:
 
     # ── Relevance ranking ─────────────────────────────────────
 
-    def rank_by_relevance(self, articles: list, query: str) -> list:
+    def rank_by_relevance(self, articles: list[NewsArticle], query: str) -> list[NewsArticle]:
         if not articles or not query:
             return sorted(articles, key=lambda a: a.published_at, reverse=True)
 
@@ -260,7 +262,7 @@ class NewsService:
             logger.warning(f"{LOG_PREFIX} Embedding failed, falling back to date sort: {e}")
             return sorted(articles, key=lambda a: a.published_at, reverse=True)
 
-        scored = []
+        scored: list[tuple[NewsArticle, float]] = []
         for article, title_emb in zip(articles, title_embs):
             score = float(np.dot(query_emb, title_emb))
             scored.append((article, score))
@@ -277,7 +279,7 @@ class NewsService:
 
     # ── Convenience methods ───────────────────────────────────
 
-    def search(self, query: str, source_ids: list = None, limit: int = 10, country_code: str = "US") -> list:
+    def search(self, query: str, source_ids: list[str] | None = None, limit: int = 10, country_code: str = "US") -> list[NewsArticle]:
         """Search news: fetch + Google News → deduplicate → rank → slice."""
         if source_ids:
             articles = self.fetch_feeds(source_ids)
@@ -298,7 +300,7 @@ def _strip_html(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", _html.unescape(cleaned).replace("\xa0", " ")).strip()
 
 
-def _feedparser_date_to_utc_str(parsed) -> str:
+def _feedparser_date_to_utc_str(parsed: object) -> str:
     """Convert feedparser's UTC struct_time to an ISO 8601 UTC string.
 
     feedparser normalises all date formats (RFC 2822, ISO 8601, W3CDTF, POSIX)
@@ -306,55 +308,55 @@ def _feedparser_date_to_utc_str(parsed) -> str:
     """
     if parsed is None:
         return utc_now().isoformat()
-    ts = calendar.timegm(parsed)  # treats struct_time as UTC (not local)
+    ts = calendar.timegm(cast(time.struct_time, parsed))  # treats struct_time as UTC (not local)
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
-def _feedparser_image(entry, feed_image_url: str = "") -> str:
+def _feedparser_image(entry: dict[str, object], feed_image_url: str = "") -> str:
     """Extract a thumbnail URL from a feedparser entry (RSS or Atom unified).
 
     Priority: media:thumbnail → media:content (image/* or medium=image)
     → enclosures (image/*, feedparser key is 'href' not 'url')
     → feed-level channel image fallback.
     """
-    thumbs = entry.get("media_thumbnail") or []
+    thumbs = cast(list[dict[str, object]], entry.get("media_thumbnail") or [])
     if thumbs:
-        url = thumbs[0].get("url", "")
+        url = cast(str, thumbs[0].get("url", ""))
         if url:
             return url.strip()
 
-    for media in (entry.get("media_content") or []):
-        t = (media.get("type") or "").lower()
-        m = (media.get("medium") or "").lower()
+    for media in cast(list[dict[str, object]], entry.get("media_content") or []):
+        t = cast(str, (media.get("type") or "")).lower()
+        m = cast(str, (media.get("medium") or "")).lower()
         if t.startswith("image/") or m == "image":
-            url = media.get("url", "")
+            url = cast(str, media.get("url", ""))
             if url:
                 return url.strip()
 
-    for enc in (entry.get("enclosures") or []):
-        t = (enc.get("type") or "").lower()
+    for enc in cast(list[dict[str, object]], entry.get("enclosures") or []):
+        t = cast(str, (enc.get("type") or "")).lower()
         if t.startswith("image/"):
-            href = enc.get("href", "")
+            href = cast(str, enc.get("href", ""))
             if href:
                 return href.strip()
 
     return feed_image_url.strip() if feed_image_url else ""
 
 
-def _entry_to_article(entry, src, feed_image_url: str) -> Optional[NewsArticle]:
+def _entry_to_article(entry: dict[str, object], src: news_sources.Source, feed_image_url: str) -> Optional[NewsArticle]:
     """Build a NewsArticle from a feedparser entry.
 
     Shared by _parse_feed and fetch_google_news so there is one parsing path.
     Returns None when the entry has no usable title.
     """
-    title = (entry.get("title") or "").strip()
+    title = cast(str, (entry.get("title") or "")).strip()
     if not title:
         return None
 
-    content = entry.get("content") or []
-    raw_desc = entry.get("summary") or (content[0].get("value", "") if content else "")
+    content = cast(list[dict[str, object]], entry.get("content") or [])
+    raw_desc = cast(str, entry.get("summary") or (cast(str, content[0].get("value", "")) if content else ""))
     desc = _strip_html(raw_desc)[:400]
-    url = (entry.get("link") or entry.get("id") or "").strip()
+    url = cast(str, (entry.get("link") or entry.get("id") or "")).strip()
     published_at = _feedparser_date_to_utc_str(
         entry.get("published_parsed") or entry.get("updated_parsed")
     )

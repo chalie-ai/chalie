@@ -38,6 +38,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from typing import Callable
+
 # ── Channel keys (exact) ──────────────────────────────────────────────────────
 # Named constants so no consumer hard-codes a channel literal.
 CHANNEL_USER = "user"
@@ -159,15 +161,15 @@ def profile_for(channel: str) -> Profile:
     return _MUTED
 
 
-def _exact_channels(predicate) -> list[str]:
+def _exact_channels(predicate: Callable[[Profile], bool]) -> list[str]:
     return [ch for ch, profile in _EXACT_PROFILES.items() if predicate(profile)]
 
 
-def _prefix_patterns(predicate) -> list[str]:
+def _prefix_patterns(predicate: Callable[[Profile], bool]) -> list[str]:
     return [pat for pat, profile in _PREFIX_PROFILES if predicate(profile)]
 
 
-def _allowlist_sql(column: str, predicate) -> str:
+def _allowlist_sql(column: str, predicate: Callable[[Profile], bool]) -> str:
     """Build an allowlist SQL fragment for ``column`` over the profiles passing
     ``predicate``.
 

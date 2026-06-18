@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[COMPACTION]"
 
 
-def get_compaction(channel: str) -> Optional[Dict]:
+def get_compaction(channel: str) -> Optional[Dict[str, object]]:
     """Latest history-compaction summary for a channel, or None. Never raises
     — DB errors are logged and treated as 'no compaction'."""
     try:
@@ -48,7 +48,7 @@ def get_compaction(channel: str) -> Optional[Dict]:
         return None
 
 
-def get_entries_since(channel: str, watermark: int = 0, limit: int = 2000) -> List[Dict]:
+def get_entries_since(channel: str, watermark: int = 0, limit: int = 2000) -> List[Dict[str, object]]:
     """Returns entries in chronological order (oldest first)."""
     from services import transcript_service
     return transcript_service.get_recent(channel, limit=limit, since_id=watermark)

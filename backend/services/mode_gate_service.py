@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple, cast
 
 from services.file_mapper_service import FileMapperService as _FMS
 
@@ -84,17 +84,17 @@ _DEFAULT_CONFIG = {
     },
 }
 
-_config_loaded: Optional[Dict] = None
+_config_loaded: Optional[dict[str, object]] = None
 
 
-def _load_config() -> dict:
+def _load_config() -> dict[str, object]:
     """Load mode_gate.yaml once; return defaults on missing/malformed file."""
     global _config_loaded
     if _config_loaded is not None:
         return _config_loaded
 
     try:
-        import yaml  # type: ignore[import]
+        import yaml
         with open(_CONFIG_PATH) as f:
             raw = yaml.safe_load(f)
         if not isinstance(raw, dict):
@@ -111,7 +111,7 @@ def _load_config() -> dict:
             )
         _config_loaded = {**_DEFAULT_CONFIG, **raw}
         # Merge fire_threshold_overrides carefully
-        overrides = _DEFAULT_CONFIG["fire_threshold_overrides"].copy()
+        overrides = cast(dict[str, object], _DEFAULT_CONFIG["fire_threshold_overrides"]).copy()
         overrides.update(raw.get("fire_threshold_overrides") or {})
         _config_loaded["fire_threshold_overrides"] = overrides
         logger.info("%s config loaded from %s", LOG_PREFIX, _CONFIG_PATH)
@@ -130,7 +130,7 @@ def _load_config() -> dict:
 _fire_thresholds_cache: Optional[Dict[str, float]] = None
 
 
-def _resolve_fire_thresholds(modes: Tuple[str, ...], config: Dict) -> Dict[str, float]:
+def _resolve_fire_thresholds(modes: Tuple[str, ...], config: dict[str, object]) -> Dict[str, float]:
     """Build per-mode fire threshold dict using precedence rules.
 
     Priority:
@@ -158,12 +158,12 @@ def _resolve_fire_thresholds(modes: Tuple[str, ...], config: Dict) -> Dict[str, 
             "falling back to 0.5 per head", LOG_PREFIX, exc
         )
 
-    overrides = config.get("fire_threshold_overrides", {}) or {}
+    overrides: dict[str, object] = cast(dict[str, object], config.get("fire_threshold_overrides", {}) or {})
     thresholds: Dict[str, float] = {}
     for m in modes:
         yaml_override = overrides.get(m)
         if yaml_override is not None:
-            thresholds[m] = float(yaml_override)
+            thresholds[m] = float(cast(float, yaml_override))
         elif m in meta_thresholds:
             thresholds[m] = float(meta_thresholds[m])
         else:
@@ -198,10 +198,10 @@ class ModeGateService:
 
     def __init__(self) -> None:
         cfg = _load_config()
-        self._decay_factor: float = float(cfg.get("decay_factor", 0.75))
-        self._activation_threshold: float = float(cfg.get("activation_threshold", 0.30))
-        self._state_floor: float = float(cfg.get("state_floor", 0.01))
-        self._state_ceiling: float = float(cfg.get("state_ceiling", 1.0))
+        self._decay_factor: float = float(cast(float, cfg.get("decay_factor", 0.75)))
+        self._activation_threshold: float = float(cast(float, cfg.get("activation_threshold", 0.30)))
+        self._state_floor: float = float(cast(float, cfg.get("state_floor", 0.01)))
+        self._state_ceiling: float = float(cast(float, cfg.get("state_ceiling", 1.0)))
         self._bootstrap_on_cold_start: bool = bool(cfg.get("bootstrap_on_cold_start", True))
         self._fire_thresholds: dict[str, float] = _resolve_fire_thresholds(self.MODES, cfg)
 
@@ -384,7 +384,7 @@ class ModeGateService:
                 return state
 
             last_content = user_rows[0]['content']
-            probs = self._classify(last_content)
+            probs = self._classify(cast(str, last_content))
             if not probs:
                 logger.debug("%s bootstrap: classifier returned empty — skipping", LOG_PREFIX)
                 return state

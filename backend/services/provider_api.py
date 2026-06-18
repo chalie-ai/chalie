@@ -40,13 +40,13 @@ class ProviderApiRequest:
 
     # Required: message content
     system: str
-    messages: list[dict]
+    messages: list[dict[str, object]]
 
     # Provider routing
     type: ProviderType = field(default=ProviderType.CHAT)
 
     # Optional request shaping
-    tools: Optional[list[dict]] = field(default=None)
+    tools: Optional[list[dict[str, object]]] = field(default=None)
     thinking_mode: ThinkingLevel = field(default=ThinkingLevel.MEDIUM)
     format: str = field(default="text")
     cache_prefix: bool = field(default=True)
@@ -95,7 +95,7 @@ class ProviderApiResponse:
     tokens_thinking: Optional[int] = None
     tokens_cache_read: Optional[int] = None
     tokens_cache_create: Optional[int] = None
-    tool_calls: Optional[list] = None
+    tool_calls: Optional[list[dict[str, object]]] = None
     stop_reason: Optional[str] = None
     latency_ms: Optional[int] = None
     thinking_block: Optional[str] = None

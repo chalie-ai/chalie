@@ -9,7 +9,10 @@ import dataclasses
 import json
 import logging
 import uuid
-from typing import Optional
+from typing import Optional, cast, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from services.memory_store import MemoryStore
 
 from services.time_utils import utc_now, parse_utc
 
@@ -26,7 +29,7 @@ class CognitiveIntent:
     intent_id: str
     intent_type: str
     target_wrapper: Optional[str]
-    payload: dict
+    payload: dict[str, object]
     urgency: str = "normal"
     confidence: float = 0.5
     expires_at: Optional[str] = None
@@ -36,7 +39,7 @@ class CognitiveIntent:
     )
     status: str = "pending"
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """Serialize the intent to a plain dict for JSON storage."""
         return dataclasses.asdict(self)
 
@@ -53,7 +56,7 @@ def _make_intent_id() -> str:
 class IntentService:
     """Broker for cognitive intents between Chalie and external wrappers."""
 
-    def __init__(self, store=None):
+    def __init__(self, store: "Optional[MemoryStore]" = None) -> None:
         """Initialize with an optional MemoryStore (uses shared singleton when None)."""
         if store is None:
             from services.memory_client import MemoryClientService
@@ -103,7 +106,7 @@ class IntentService:
     # Retrieval
     # ------------------------------------------------------------------
 
-    def get_pending(self, wrapper_id: str, limit: int = 10) -> list[dict]:
+    def get_pending(self, wrapper_id: str, limit: int = 10) -> list[dict[str, object]]:
         """Fetch undelivered pending intents for ``wrapper_id`` from both its list and the broadcast list, mark them delivered."""
         results = []
         seen_ids: set[str] = set()
@@ -151,13 +154,13 @@ class IntentService:
 
         return results
 
-    def get_intent(self, intent_id: str) -> Optional[dict]:
+    def get_intent(self, intent_id: str) -> Optional[dict[str, object]]:
         """Retrieve a single intent by its ID; ``None`` when not found or expired."""
         raw = self._store.get(f"intent:{intent_id}")
         if not raw:
             return None
         try:
-            return json.loads(raw)
+            return cast(dict[str, object], json.loads(raw))
         except (json.JSONDecodeError, TypeError):
             return None
 
@@ -179,7 +182,7 @@ class IntentService:
         )
         return True
 
-    def resolve(self, intent_id: str, result: dict) -> bool:
+    def resolve(self, intent_id: str, result: dict[str, object]) -> bool:
         """Record execution status reported by a wrapper. The ``result`` dict should contain
         ``status`` (``"executed"``, ``"failed"``, or ``"skipped"``) plus any type-specific fields."""
         intent = self.get_intent(intent_id)
@@ -203,7 +206,7 @@ class IntentService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _persist_intent(self, intent_dict: dict) -> None:
+    def _persist_intent(self, intent_dict: dict[str, object]) -> None:
         """Persist an intent to its ``intent:{id}`` key."""
         intent_id = intent_dict.get("intent_id")
         if not intent_id:
@@ -212,13 +215,13 @@ class IntentService:
         self._store.setex(f"intent:{intent_id}", _INTENT_TTL_SECONDS, serialized)
 
     @staticmethod
-    def _is_expired(intent_dict: dict) -> bool:
+    def _is_expired(intent_dict: dict[str, object]) -> bool:
         """Check whether an intent has passed its ``expires_at`` deadline."""
         expires_at = intent_dict.get("expires_at")
         if not expires_at:
             return False
         try:
-            expiry_dt = parse_utc(expires_at)
+            expiry_dt = parse_utc(cast(str, expires_at))
             return utc_now() > expiry_dt
         except Exception:
             return False

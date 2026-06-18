@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Iterable
+from typing import Iterable, cast
 from urllib.parse import unquote, urlparse
 
 import requests
@@ -40,10 +40,10 @@ _HEX_RE = re.compile(r"^[0-9a-fA-F]+$")
 
 
 def build_image_candidates(
-    items: Iterable,
+    items: Iterable[object],
     top_n: int = 3,
-    og_meta: dict | None = None,
-) -> list[dict]:
+    og_meta: dict[str, object] | None = None,
+) -> list[dict[str, str]]:
     """Shortlist up to top_n image URLs, validate each via HTTP HEAD, return survivors with captions.
 
     ``og_meta`` maps article/image URL to its og metadata (from ``resolve_og_images``);
@@ -81,7 +81,7 @@ def build_image_candidates(
             if ok:
                 fetched.add(url)
 
-    out: list[dict] = []
+    out: list[dict[str, str]] = []
     for url, source_title in pairs:
         if url not in fetched:
             continue
@@ -112,14 +112,14 @@ def _check_image_url(url: str) -> bool:
         return False
 
 
-def _derive_caption(image_url: str, og_meta: dict | None) -> str:
+def _derive_caption(image_url: str, og_meta: dict[str, object] | None) -> str:
     """Derive a caption with priority: 1) og:description (og_meta if key matches image_url and ≥ 20 chars), 2) filename heuristic."""
     # og_meta is keyed by article URL.  The image URL itself won't match, but
     # callers that pass og_meta also key it by image_url for direct lookup.
     if og_meta:
         meta = og_meta.get(image_url)
         if meta:
-            desc = (meta.get("description") or "").strip()
+            desc = (cast("str | None", cast(dict[str, object], meta).get("description")) or "").strip()
             if len(desc) >= 20:
                 return desc
 

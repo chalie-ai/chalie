@@ -5,13 +5,14 @@ import json
 import uuid
 from typing import Dict, Any
 from services.memory_client import MemoryClientService
+from services.memory_store import MemoryStore
 
 
 class MetricsService:
     """Manages metrics collection with MemoryStore counters and timing records."""
 
-    def __init__(self):
-        self.store = MemoryClientService.create_connection()
+    def __init__(self) -> None:
+        self.store: MemoryStore = MemoryClientService.create_connection()
 
     def start_trace(self) -> str:
         trace_id = str(uuid.uuid4())[:8]
@@ -25,7 +26,7 @@ class MetricsService:
         self.store.setex(trace_key, 3600, json.dumps(trace_data))
         return trace_id
 
-    def record_timing(self, trace_id: str, operation: str, duration_ms: float):
+    def record_timing(self, trace_id: str, operation: str, duration_ms: float) -> None:
         trace_key = f"trace:{trace_id}"
         trace_json = self.store.get(trace_key)
         if trace_json:
@@ -40,7 +41,7 @@ class MetricsService:
         pipe.expire(rollup_key, 86400 * 7)
         pipe.execute()
 
-    def record_counter(self, metric_name: str, value: int = 1):
+    def record_counter(self, metric_name: str, value: int = 1) -> None:
         day_key = time.strftime('%Y-%m-%d')
         counter_key = f"metrics:counter:{metric_name}:{day_key}"
         pipe = self.store.pipeline()

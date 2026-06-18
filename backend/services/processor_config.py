@@ -143,7 +143,7 @@ class ProcessorConfig(ABC):
 
     # ── Per-turn image attachment (concrete hook — default: no image) ──────────
 
-    def get_image(self, mp: "MessageProcessor") -> "dict | None":
+    def get_image(self, mp: "MessageProcessor") -> dict[str, str] | None:
         """VisionConfig overrides this to return
         ``{"data": <base64>, "mime_type": <str>}`` — the shape every converter
         consumes."""

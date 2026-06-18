@@ -69,7 +69,7 @@ def sanitize(html: str | None) -> str:
     )
 
 
-def actions_to_xml(actions: list[dict]) -> str:
+def actions_to_xml(actions: list[dict[str, object]]) -> str:
     """Action dicts are built by the harness which bypasses the LLM, so
     output feeds straight to ``sanitize()`` alongside any LLM body."""
     if not actions:
@@ -136,7 +136,7 @@ def markdown_to_html(text: str | None) -> str:
     # 1. Mask inline code so emphasis markers inside it are preserved verbatim.
     code_spans: list[str] = []
 
-    def _stash(m: re.Match) -> str:
+    def _stash(m: re.Match[str]) -> str:
         code_spans.append(m.group(1))
         return f"\x00C{len(code_spans) - 1}\x00"
 

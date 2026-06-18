@@ -9,6 +9,7 @@ user's local wall-clock time, never raw UTC.
 """
 
 import logging
+from datetime import datetime
 
 from services.time_utils import utc_now, parse_utc
 from services.locale_service import format_date
@@ -34,7 +35,7 @@ class TimeFormatterService:
         return f"{d}d {h}h"
 
     @staticmethod
-    def ago(past) -> str:
+    def ago(past: datetime | str | int | float) -> str:
         """Return '{duration} ago' for *past*.
 
         Accepts either a past datetime (aware or naive — parsed via
@@ -63,7 +64,7 @@ class TimeFormatterService:
         return f"{TimeFormatterService.duration(secs)} ago"
 
     @staticmethod
-    def local(value, fmt: str = "%Y-%m-%d %H:%M") -> str | None:
+    def local(value: datetime | str | None, fmt: str = "%Y-%m-%d %H:%M") -> str | None:
         """Format *value* in the user's local timezone.
 
         Delegates to locale_service.format_date(for_ui=True) — the single

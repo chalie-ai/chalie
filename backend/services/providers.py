@@ -4,6 +4,11 @@ import json
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from services.llm_clients.base import ProviderClient
+    from services.provider_api import ProviderApiRequest, ProviderApiResponse, ProviderType
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +22,11 @@ _log_call_warn_lock = threading.Lock()
 MAX_CONTEXT_WINDOW = 200_000
 
 
-def resolve_thinking_mode(config_thinking_mode, override, level):
+def resolve_thinking_mode(
+    config_thinking_mode: str | None,
+    override: str | None,
+    level: str | None,
+) -> str | None:
     """Single precedence rule for a send's thinking level.
 
     1. config_thinking_mode — a config that hard-pins a level (thinking ability
@@ -37,7 +46,7 @@ class Providers:
 
     # ── Resolution ──────────────────────────────────────────────────────────
 
-    def _resolve(self, provider_type=None):
+    def _resolve(self, provider_type: object = None) -> "ProviderClient":
         """Return the ProviderClient for the given ProviderType.
 
         CHAT → globally selected provider (ProviderCacheService).
@@ -80,7 +89,7 @@ class Providers:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def send(self, dto):
+    def send(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
         """Pre-flight check, call, telemetry — the single chokepoint.
 
         Steps:
@@ -114,7 +123,7 @@ class Providers:
         self._log_after_call(dto, response, wall_ms)
         return response
 
-    def measure(self, dto) -> int:
+    def measure(self, dto: "ProviderApiRequest") -> int:
         """Return the estimated token cost of dto without sending.
 
         Used by ChatHistoryCompactor to size a candidate request before
@@ -123,7 +132,7 @@ class Providers:
         client = self._resolve(dto.type)
         return client.estimate_request_tokens(dto)
 
-    def get_context_limit(self, provider_type=None) -> int:
+    def get_context_limit(self, provider_type: "ProviderType | None" = None) -> int:
         """Declared context window for the active provider/model, hard-capped at MAX_CONTEXT_WINDOW.
 
         Reads the backfilled providers.max_tokens first (fast path; set by
@@ -137,12 +146,12 @@ class Providers:
             from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
             config = ProviderCacheService.get_selected_provider() or {}
             declared = config.get("max_tokens")
-            if declared and int(declared) > 0:
-                return min(int(declared), MAX_CONTEXT_WINDOW)
+            if declared and int(cast(int, declared)) > 0:
+                return min(int(cast(int, declared)), MAX_CONTEXT_WINDOW)
 
         return min(self._resolve(pt).get_context_limit(), MAX_CONTEXT_WINDOW)
 
-    def selected_provider(self):
+    def selected_provider(self) -> "ProviderClient":
         """Return the resolved CHAT provider client.
 
         Consumed by configs/channels/_common.py:15 for CONTENT_FIELD_LABEL
@@ -152,7 +161,7 @@ class Providers:
 
     # ── Telemetry ────────────────────────────────────────────────────────────
 
-    def _log_after_call(self, dto, response, wall_ms=None):
+    def _log_after_call(self, dto: "ProviderApiRequest", response: "ProviderApiResponse", wall_ms: int | None = None) -> None:
         """Write the LLM request log file and persist per-call token accounting.
 
         Single logging chokepoint every LLM request flows through.
@@ -202,13 +211,13 @@ class Providers:
                 model=getattr(response, 'model', 'unknown'),
                 system_message=dto.system or '',
                 user_message=self._render_messages_for_log(dto.messages),
-                tools=dto.tools,
+                tools=cast("list[object] | None", dto.tools),
             )
         except Exception as exc:
             logger.debug("[LLM LOG] log_llm_request failed: %s", exc, exc_info=True)
 
     @staticmethod
-    def _record_send_counters(proc) -> None:
+    def _record_send_counters(proc: object) -> None:
         """Record per-send, per-channel turn counters (spec §4e).
 
         Called by MessageProcessor._record_metrics after every send.
@@ -228,11 +237,11 @@ class Providers:
             logger.debug("[LLM LOG] send-counter record failed: %s", exc)
 
     @staticmethod
-    def _render_messages_for_log(messages) -> str:
+    def _render_messages_for_log(messages: list[dict[str, object]]) -> str:
         """Render the messages array verbatim for a log file."""
-        msgs = messages or []
+        msgs: list[dict[str, object]] = messages or []
 
-        def _content_to_str(content):
+        def _content_to_str(content: object) -> str:
             if isinstance(content, str):
                 return content
             return json.dumps(content, ensure_ascii=False)
