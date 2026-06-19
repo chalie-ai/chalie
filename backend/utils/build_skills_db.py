@@ -5,7 +5,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 import yaml
@@ -90,17 +90,17 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _parse_skill_file(path: Path) -> dict[str, Any]:
+def _parse_skill_file(path: Path) -> dict[str, object]:
     text = path.read_text()
     if not text.startswith('---'):
         raise ValueError(f"Skill file {path} missing YAML frontmatter")
     _, fm_raw, body = text.split('---', 2)
-    meta: dict[str, Any] = yaml.safe_load(fm_raw)
+    meta: dict[str, object] = yaml.safe_load(fm_raw)
     meta['content'] = body.strip()
     return meta
 
 
-def _compute_sha(meta: dict[str, Any]) -> str:
+def _compute_sha(meta: dict[str, object]) -> str:
     raw = json.dumps(
         [meta.get('title', ''), meta.get('use_for', ''), meta.get('tags', '')],
         ensure_ascii=False,
@@ -168,13 +168,13 @@ def index_skill(
 def _insert_skill(
     conn: sqlite3.Connection,
     emb_service: EmbeddingService | None,
-    meta: dict[str, Any],
+    meta: dict[str, object],
     source: str = _SOURCE_CURATED,
 ) -> int:
     title = meta.get('title', '')
     use_for = meta.get('use_for', '')
     tags_raw = meta.get('tags', '')
-    tags_str = tags_raw if isinstance(tags_raw, str) else ', '.join(tags_raw)
+    tags_str = tags_raw if isinstance(tags_raw, str) else ', '.join(cast(list[str], tags_raw))
 
     conn.execute(
         "INSERT INTO skills(title, use_for, content, tags, version, source) "
@@ -190,10 +190,10 @@ def _insert_skill(
     )
     skill_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    return index_skill(conn, cast("EmbeddingService", emb_service), skill_id, title, use_for, tags_str)
+    return index_skill(conn, cast("EmbeddingService", emb_service), skill_id, cast(str, title), cast(str, use_for), tags_str)
 
 
-def _load_skills() -> list[dict[str, Any]]:
+def _load_skills() -> list[dict[str, object]]:
     if not _SKILLS_DIR.exists():
         return []
     skills = []
@@ -207,7 +207,7 @@ def _load_skills() -> list[dict[str, Any]]:
     return skills
 
 
-def _load_user_skills() -> list[dict[str, Any]]:
+def _load_user_skills() -> list[dict[str, object]]:
     if not _USER_SKILLS_DIR.exists():
         return []
     skills = []
@@ -221,8 +221,8 @@ def _load_user_skills() -> list[dict[str, Any]]:
     return skills
 
 
-def _build_sha_map(skills: list[dict[str, Any]]) -> dict[str, str]:
-    return {m.get('title', m['_path']): _compute_sha(m) for m in skills}
+def _build_sha_map(skills: list[dict[str, object]]) -> dict[str, str]:
+    return {cast(str, m.get('title', m['_path'])): _compute_sha(m) for m in skills}
 
 
 def _build(db_path: Path, sha_path: Path) -> None:

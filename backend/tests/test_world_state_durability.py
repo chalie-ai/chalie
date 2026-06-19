@@ -14,7 +14,8 @@ persistence+hydrate land.
 import sqlite3
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -80,7 +81,7 @@ class TestWorldStateDurabilityAcrossRestart:
         )
 
         with _simulated_restart() as restarted:
-            survived = restarted.snapshot()["last_user_message_at"]
+            survived = cast("datetime | None", restarted.snapshot()["last_user_message_at"])
 
         assert survived is not None, (
             "last_user_message_at did not survive the restart — it must be "
@@ -109,7 +110,7 @@ class TestWorldStateDurabilityAcrossRestart:
             # to reach it is the durable store. A pass here therefore proves a
             # real hydrate, not a surviving dict.
             assert restarted is not writer
-            survived = restarted.snapshot()["last_user_message_at"]
+            survived = cast("datetime | None", restarted.snapshot()["last_user_message_at"])
 
         assert survived is not None
         assert abs((survived - when).total_seconds()) < 1.0
@@ -125,7 +126,7 @@ class TestWorldStateDurabilityAcrossRestart:
                          payload={"text": "second"}, received_at=recent))
 
         with _simulated_restart() as restarted:
-            survived = restarted.snapshot()["last_user_message_at"]
+            survived = cast("datetime | None", restarted.snapshot()["last_user_message_at"])
 
         assert survived is not None
         assert abs((survived - recent).total_seconds()) < 1.0, (

@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 
-def parse_json_column(raw: Any, *, default: Any = None) -> Any:
+def parse_json_column(raw: object, *, default: object = None) -> object:
     if default is None:
         default = {}
     if not raw:

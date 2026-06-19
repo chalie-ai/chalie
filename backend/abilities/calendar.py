@@ -397,7 +397,7 @@ def _resolve_window(params: dict[str, object]) -> tuple[str, str]:
 
 
 def _format_event(row: dict[str, object]) -> dict[str, object]:
-    meta = parse_json_column(row.get("metadata"))
+    meta = cast("dict[str, object]", parse_json_column(row.get("metadata")))
     ext_uid = cast(str, row.get("external_uid", ""))
     uid = ext_uid.removeprefix("caldav:") if ext_uid else cast(str, meta.get("uid", ""))
     return {

@@ -20,7 +20,7 @@ import logging
 import re
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, cast
+from typing import Callable, Dict, List, Optional, Set, Tuple, cast
 
 
 logger = logging.getLogger(__name__)

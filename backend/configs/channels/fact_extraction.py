@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
 from services.processor_config import ProcessorConfig
 
@@ -33,7 +33,7 @@ VALID_OPS = frozenset({OP_ADD, OP_UPDATE, OP_DELETE, OP_NOOP})
 FACT_KIND = "user_specific"
 
 
-def parse_fact_ops(text: str) -> list[dict[str, Any]]:
+def parse_fact_ops(text: str) -> list[dict[str, object]]:
     """Parse the model's constrained output into a list of validated op dicts.
 
     Returns the subset of ops that are structurally valid (known op verb; key
@@ -59,17 +59,17 @@ def parse_fact_ops(text: str) -> list[dict[str, Any]]:
     return [op for op in (_clean_op(entry) for entry in raw_ops) if op is not None]
 
 
-def _clean_op(entry: Any) -> dict[str, object] | None:
+def _clean_op(entry: object) -> dict[str, object] | None:
     """Validate one op entry; return a normalised dict or None when unusable."""
     if not isinstance(entry, dict):
         return None
-    op = str(entry.get("op", "")).strip().upper()
+    op = str(cast("dict[str, object]", entry).get("op", "")).strip().upper()
     if op not in VALID_OPS or op == OP_NOOP:
         return None
-    key = (entry.get("key") or "").strip()
+    key = (cast(str, cast("dict[str, object]", entry).get("key")) or "").strip()
     if not key:
         return None
-    value = (entry.get("value") or "").strip()
+    value = (cast(str, cast("dict[str, object]", entry).get("value")) or "").strip()
     if op in (OP_ADD, OP_UPDATE) and not value:
         return None
     return {"op": op, "kind": FACT_KIND, "key": key, "value": value}
@@ -102,9 +102,9 @@ class FactExtractionConfig(ProcessorConfig):
     """
 
     _gist: str
-    _neighbours: list[Any]
+    _neighbours: list[object]
 
-    def __init__(self, gist: str, neighbours: list[Any]) -> None:
+    def __init__(self, gist: str, neighbours: list[object]) -> None:
         super().__init__(
             channel="fact_extraction",
             role="fact_extraction",
@@ -132,7 +132,7 @@ class FactExtractionConfig(ProcessorConfig):
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
         if self._neighbours:
             known = "\n".join(
-                f"- key={n.get('key')!r} value={n.get('value')!r}"
+                f"- key={cast('dict[str, object]', n).get('key')!r} value={cast('dict[str, object]', n).get('value')!r}"
                 for n in self._neighbours
             )
         else:

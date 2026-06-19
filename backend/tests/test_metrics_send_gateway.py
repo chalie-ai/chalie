@@ -9,6 +9,7 @@
 """user_messages_total counts — dashboard derives on demand from transcript COUNT."""
 
 import sqlite3
+from typing import cast
 
 import pytest
 
@@ -32,7 +33,7 @@ def test_stored_counter_does_not_affect_user_messages(db: sqlite3.Connection, st
     m = MetricsService()
     m.record_counter('user_messages_total', 999)  # stale / ignored
     dash = m.get_dashboard_data()
-    assert dash['counters']['user_messages_total'] == 1
+    assert cast("dict[str, object]", dash['counters'])['user_messages_total'] == 1
 
 
 # ── one user turn = exactly one user/user transcript row ───────────────────────
@@ -56,4 +57,4 @@ def test_count_exactness_n_turns(db: sqlite3.Connection, store: MemoryStore) -> 
     db.commit()
 
     dash = MetricsService().get_dashboard_data()
-    assert dash['counters']['user_messages_total'] == 5
+    assert cast("dict[str, object]", dash['counters'])['user_messages_total'] == 5

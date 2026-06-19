@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
@@ -49,7 +49,7 @@ class UserConfig(ProcessorConfig):
 
     SUPPORTS_ASYNC = True
 
-    def __init__(self, metadata: dict[str, Any] | None = None) -> None:
+    def __init__(self, metadata: dict[str, object] | None = None) -> None:
         _metadata = metadata or {}
         super().__init__(
             channel="user",

@@ -219,10 +219,10 @@ def _update_existing_pattern(
     existing_id, existing_value = cast(int, existing[0]), existing[1]
     old_strength = float(cast(float, existing[2])) if existing[2] is not None else 0.5
     old_evidence = int(cast(int, existing[3])) if existing[3] is not None else 1
-    prev = parse_json_column(existing_value)
+    prev = cast("dict[str, object]", parse_json_column(existing_value))
     prev_conf = float(cast(float, prev.get("confidence") or 0.0))
     new_conf = min(10.0, prev_conf + 7.0)
-    merged_evidence = list(dict.fromkeys([*(prev.get("evidence_transcript_ids") or []), *cast(list[object], validated["evidence"])]))
+    merged_evidence = list(dict.fromkeys([*cast("list[object]", prev.get("evidence_transcript_ids") or []), *cast(list[object], validated["evidence"])]))
     new_value = {
         "name": validated["name"],
         "frequency": validated["frequency"],

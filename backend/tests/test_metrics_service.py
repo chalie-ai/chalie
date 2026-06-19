@@ -50,19 +50,19 @@ class TestRecordTiming:
 class TestDashboardData:
     def test_dashboard_defaults_counters_to_zero(self, metrics: MetricsService) -> None:
         dash = metrics.get_dashboard_data()
-        assert dash["counters"]["requests_total"] == 0
-        assert dash["counters"]["errors_total"] == 0
+        assert cast("dict[str, object]", dash["counters"])["requests_total"] == 0
+        assert cast("dict[str, object]", dash["counters"])["errors_total"] == 0
 
     def test_dashboard_reflects_recorded_counter(self, metrics: MetricsService) -> None:
         metrics.record_counter("requests_total", 5)
         dash = metrics.get_dashboard_data()
-        assert dash["counters"]["requests_total"] == 5
+        assert cast("dict[str, object]", dash["counters"])["requests_total"] == 5
 
     def test_dashboard_includes_timing_averages_for_recorded_ops(self, metrics: MetricsService) -> None:
         metrics.record_timing("t1", "embedding", 100.0)
         metrics.record_timing("t1", "embedding", 200.0)
         dash = metrics.get_dashboard_data()
-        emb = dash["timing_averages"].get("embedding")
+        emb = cast("dict[str, dict[str, object]]", dash["timing_averages"]).get("embedding")
         # Timing rollup key differs between record_timing (uses daily key) and
         # get_dashboard_data (also uses today's key), so they match if same day.
         if emb:

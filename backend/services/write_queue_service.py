@@ -10,7 +10,7 @@ high write concurrency while keeping call-sites simple.
 import logging
 import queue
 import threading
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Callable, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ class _QueueItem:
         item_type: str,
         fn: Optional[Callable[..., object]] = None,
         args: tuple[object, ...] = (),
-        kwargs: Optional[Dict[str, Any]] = None,
+        kwargs: Optional[Dict[str, object]] = None,
         done_event: Optional[threading.Event] = None,
         result: Optional[List[object]] = None,
     ) -> None:
@@ -78,7 +78,7 @@ class WriteQueueService:
     # Public API
     # ------------------------------------------------------------------
 
-    def submit(self, fn: Callable[..., object], *args: Any, **kwargs: Any) -> None:
+    def submit(self, fn: Callable[..., object], *args: object, **kwargs: object) -> None:
         """Enqueue a callable for fire-and-forget execution in the background.
 
         Returns immediately without blocking.  The callable is executed by the
@@ -98,7 +98,7 @@ class WriteQueueService:
         )
         self._queue.put(item)
 
-    def submit_sync(self, fn: Callable[..., object], *args: Any, **kwargs: Any) -> Any:
+    def submit_sync(self, fn: Callable[..., object], *args: object, **kwargs: object) -> object:
         """Enqueue a callable and block until it completes, returning its result.
 
         The callable is executed by the background drain thread.  If *fn*
@@ -117,7 +117,7 @@ class WriteQueueService:
                 calling thread verbatim.
         """
         done_event = threading.Event()
-        result: List[Any] = [None]  # index 0 holds the return value or a propagated exception
+        result: List[object] = [None]  # index 0 holds the return value or a propagated exception
 
         item = _QueueItem(
             item_type=_TYPE_SINGLE,
@@ -219,7 +219,7 @@ class WriteQueueService:
         Args:
             item: A :class:`_QueueItem` with ``item_type == _TYPE_SINGLE``.
         """
-        return_value: Any = None
+        return_value: object = None
         exc_caught: Optional[Exception] = None
 
         try:

@@ -4,7 +4,7 @@ import threading
 import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from services.database_service import DatabaseService
@@ -218,7 +218,7 @@ def _render_schedule_fields(row: dict[str, object], now: datetime) -> str:
 class Signal:
     source: str
     kind: str
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, object] = field(default_factory=dict)
     received_at: datetime = field(default_factory=utc_now)
 
 
@@ -300,7 +300,7 @@ class WorldState:
                 lt = signal.payload.get("local_time")
                 if lt:
                     self._store["world_state:current_local_time"] = (
-                        lt if isinstance(lt, str) else lt.isoformat()
+                        lt if isinstance(lt, str) else cast("datetime", lt).isoformat()
                     )
 
         # Durable write happens outside the lock — the dual-write touches
@@ -326,7 +326,7 @@ class WorldState:
             with self._lock:
                 self._store[_STORE_KEY_LAST_USER_MESSAGE] = hydrated.isoformat()
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self) -> dict[str, object]:
         """Read-only snapshot of the four typed ambient fields. Caller treats as immutable.
 
         Datetime fields are ``None`` when not yet set; once set they return a

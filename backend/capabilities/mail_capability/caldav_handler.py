@@ -692,7 +692,7 @@ class CaldavHandler:
 
             busy: list[tuple[_dt_module.datetime, _dt_module.datetime]] = []
             for due_at_str, meta_raw in rows:
-                meta = parse_json_column(meta_raw)
+                meta = cast("dict[str, object]", parse_json_column(meta_raw))
                 start = parse_utc(due_at_str)
                 end_str = cast("str | None", meta.get("dtend"))
                 end = parse_utc(end_str) if end_str else start + timedelta(hours=1)
@@ -764,7 +764,7 @@ class CaldavHandler:
                 return {"error": f"Event '{uid}' not found"}
 
             title, meta_raw = row
-            meta = parse_json_column(meta_raw)
+            meta = cast("dict[str, object]", parse_json_column(meta_raw))
             resolved: list[dict[str, object]] = []
             for email in cast("list[str]", meta.get("attendees", [])):
                 matches = resolve(email, limit=1)

@@ -260,7 +260,7 @@ class MailCapability(AbstractCapability):
             logger.warning("[mail] connect(): credentials missing.")
             return False
 
-        protocols: list[str] = parse_json_column(protocols_raw, default=[])
+        protocols: list[str] = cast("list[str]", parse_json_column(protocols_raw, default=[]))
 
         if not protocols:
             logger.warning("[mail] connect(): no active protocols stored.")
