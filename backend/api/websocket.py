@@ -86,7 +86,7 @@ def _ws_handler(ws) -> None:
     except Exception as exc:
         logger.debug("[WS] Connection closed: %s", exc)
     finally:
-        broker.disconnect()
+        broker.disconnect(ws)
 
 
 def register_websocket(sock):

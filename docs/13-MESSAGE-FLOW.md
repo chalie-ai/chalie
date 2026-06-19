@@ -6,7 +6,7 @@ Every message — whatever triggered it — runs the same **ACT loop** through t
  
  | Path | Trigger | Result |
  |---|---|---|
-| **User** | `POST /chat` from the web UI | Reply pushed to the browser over WebSocket |
+| **User** | `POST /chat` from the web UI | Reply pushed to every open surface over WebSocket |
 | **Subconscious** | 5-minute background tick (idle-gated) | Memory updates only — nothing pushed to chat |
 | **Scheduled** | A due reminder or scheduled prompt | Runs the task in the background, then relays the result through a user-channel turn pushed to the client |
 | **Delegate** | The model calls `web_search` / `web_browse` / `vision` mid-turn | A synthesized answer returned to the calling turn (async on the user channel) |
@@ -15,7 +15,7 @@ Every message — whatever triggered it — runs the same **ACT loop** through t
  
  ## User Path
  
-The client sends messages over **HTTP** (`POST /chat`, multipart form-data with text + optional file attachments). The WebSocket at `/ws` is push-only — the server uses it to stream status, tool activity, and the final reply back to the browser.
+The client sends messages over **HTTP** (`POST /chat`, multipart form-data with text + optional file attachments). The WebSocket at `/ws` is push-only — the server uses it to stream status, tool activity, and the final reply back to the client, and to echo every received user message on the same channel so all open surfaces stay in sync.
  
  ```
 POST /chat
@@ -38,6 +38,15 @@ POST /chat
 **Interrupt & cancel.** `POST /chat/interrupt` stops the active turn; a cancelled turn deletes its transcript and tool-call rows, leaving no trace. Sending a new message mid-turn cancels the active turn and starts a fresh one with the original + new text combined.
  
 **Connection resilience.** Because replies arrive only over the push channel, the client guards the socket on two fronts. A socket that closes cleanly (`onclose`) triggers exponential-backoff reconnection. A *half-open* socket — one a reverse proxy idle-drops at the TCP layer without sending a close frame, so `onclose` never fires and `readyState` stays `OPEN` — is caught by a liveness watchdog: the client stamps the arrival time of every inbound frame and, if none arrives for longer than 1.5× the server's keep-alive ping interval, tears the dead socket down and reconnects. A tab regaining focus re-runs the same staleness check on demand, so a backgrounded tab heals the moment the user returns instead of silently swallowing the next reply.
+
+### Multi-surface sync
+
+A Chalie instance belongs to **one user**, but that user may have it open on several surfaces at once — phone, laptop, multiple tabs. There is one conversation, and every surface mirrors it. Two rules keep them aligned, both riding the single `/ws` broadcast channel that every surface subscribes to:
+
+1. **User messages.** When a surface sends a message, the server stores it and broadcasts a `user_message` echo to every connection. The sending surface already rendered the bubble optimistically, so it recognises its own echo — by a client-minted `echo_id` round-tripped through `POST /chat` — and drops it; every other surface has no such bubble and renders one. The echo carries the text verbatim.
+2. **Assistant messages.** The final reply is broadcast as a `message` event to every connection. The surface that started the turn renders it through its turn callbacks; peer surfaces render a plain assistant bubble from the broadcast. Either way the reply shows on all surfaces.
+
+What is *not* mirrored is the live per-turn ACT trail (status, tool activity, narration): those events are bound to the surface that started the turn and are deliberately device-local — ephemeral turn scaffolding, not durable conversation. A surface that joins mid-turn simply shows the user and assistant bubbles once they broadcast. The broker fans each frame out to all live connections and prunes any socket whose send fails, so one stale connection can neither block delivery nor accumulate.
  
  ---
  

@@ -342,6 +342,30 @@ def _stage_chat_uploads(files: list) -> list:
     return paths
 
 
+def _broadcast_user_echo(text: str, echo_id: str) -> None:
+    """Echo a just-received user message to every open surface.
+
+    Single user, many surfaces: the user may have Chalie open on several
+    devices/tabs at once, all of which must show the same conversation. The
+    surface that sent the message has already rendered it optimistically and
+    recognises its own ``echo_id`` to ignore this frame; every OTHER open
+    surface has no such bubble yet and renders one from this broadcast — so all
+    surfaces stay in sync.
+
+    The text is sent verbatim (the client renders a user bubble as escaped
+    plain text), so the echoed bubble matches exactly what the sender typed.
+    Only user-typed messages enter through ``post_chat`` and reach this echo —
+    scheduled / external / async-synthesis turns do not, so no synthetic user
+    bubble is ever broadcast.
+    """
+    WebSocketBroker().broadcast({
+        "type": "user_message",
+        "content": text or "",
+        "echo_id": echo_id,
+        "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
+    })
+
+
 @chat_bp.route("/chat", methods=["POST"])
 @require_auth
 def post_chat():
@@ -360,6 +384,7 @@ def post_chat():
     """
     text = (request.form.get("text") or "").strip()
     source = request.form.get("source") or "text"
+    echo_id = request.form.get("echo_id") or ""
     attachments = _stage_chat_uploads(request.files.getlist("files")[:10])
 
     if not text and not attachments:
@@ -367,6 +392,10 @@ def post_chat():
 
     if not text and attachments:
         text = "[File attached]"
+
+    # Echo the user message to every open surface so they all show it (the
+    # sender ignores its own echo via echo_id; peers render the bubble).
+    _broadcast_user_echo(text, echo_id)
 
     dispatch_message(text, source=source, attachments=attachments)
     return jsonify({"status": "accepted"}), 202

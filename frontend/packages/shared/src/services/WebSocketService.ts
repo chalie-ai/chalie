@@ -49,7 +49,11 @@ export type WsPushType =
   | 'subagent_start'
   | 'subagent_end'
   | 'thought'
-  | 'response';
+  | 'response'
+  // User-message echo: the server re-broadcasts every received user message on
+  // the channel so all open surfaces stay in sync (the sender ignores its own
+  // echo via echo_id; other surfaces render the bubble).
+  | 'user_message';
 export interface WsPushEvent {
   type: WsPushType;
   [k: string]: unknown;
@@ -102,6 +106,13 @@ export class WebSocketService {
   private connectHandler: (() => void) | null = null;
   private connected = false;
   private intentionallyClosed = false;
+
+  // Echo ids this surface has sent. The server re-broadcasts every user message
+  // on the shared channel; this surface already rendered its own optimistically,
+  // so it drops any echo whose id it minted (and other surfaces, which never saw
+  // this id, render the bubble). Bounded so a missed echo cannot grow it forever.
+  private readonly ownEchoIds = new Set<string>();
+  private readonly maxOwnEchoIds = 64;
 
   // Liveness watchdog (half-open detection). Backend pings every 60s of client
   // silence (backend/api/websocket.py); fire only on full silence past 90s.
@@ -276,7 +287,26 @@ export class WebSocketService {
       this.chatCallbacks = null;
       return;
     }
-    this.postChat(text, source, files);
+    this.postChat(text, source, files, this.mintEchoId());
+  }
+
+  /**
+   * Mint a globally-unique echo id for an outgoing user message and remember it
+   * so this surface ignores its own broadcast echo. Uniqueness must be global
+   * (every surface checks incoming echoes against its own set), so this prefers
+   * crypto.randomUUID and falls back to a random token when it is unavailable
+   * (e.g. a non-secure context).
+   */
+  private mintEchoId(): string {
+    const id =
+      globalThis.crypto?.randomUUID?.() ??
+      `echo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    this.ownEchoIds.add(id);
+    if (this.ownEchoIds.size > this.maxOwnEchoIds) {
+      const oldest = this.ownEchoIds.values().next().value;
+      if (oldest !== undefined) this.ownEchoIds.delete(oldest);
+    }
+    return id;
   }
 
   sendAction(payload: unknown, callbacks: ActionCallbacks = {}): void {
@@ -300,10 +330,11 @@ export class WebSocketService {
     });
   }
 
-  private postChat(text: string, source: string, files: File[]): void {
+  private postChat(text: string, source: string, files: File[], echoId: string): void {
     const form = new FormData();
     form.append('text', text);
     form.append('source', source);
+    form.append('echo_id', echoId);
     for (const file of files) form.append('files', file, file.name);
     fetch(this.buildHttpUrl('/chat'), {
       method: 'POST',
@@ -326,6 +357,18 @@ export class WebSocketService {
     }
     if (data.type === 'ping') {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'pong' }));
+      return;
+    }
+    // User-message echo (multi-surface sync). If this surface minted the id it
+    // already rendered the bubble optimistically — drop it. Otherwise a peer
+    // surface sent it, so route it to the drift handler to render here too.
+    if (data.type === 'user_message') {
+      const echoId = (data as { echo_id?: string }).echo_id;
+      if (echoId && this.ownEchoIds.has(echoId)) {
+        this.ownEchoIds.delete(echoId);
+        return;
+      }
+      this.driftHandler?.(data as WsPushEvent);
       return;
     }
     if (this.chatCallbacks) {

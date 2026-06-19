@@ -13,6 +13,8 @@ The stack:
 - **Vue 3 + Vite 5** — two SPA builds (`apps/interface` and `apps/brain`) in a pnpm workspace under `frontend/`; TypeScript strict, Pinia, Vue Router, SCSS; Flask serves the compiled `dist/` trees verbatim
  
 Everything runs in one process. Workers are daemon threads supervised by a `WorkerManager` that health-checks and restarts them every 5 seconds. Threads communicate through SQLite, MemoryStore, and the WebSocket broker — there are no queues and no inter-process messaging.
+
+**One user, many surfaces.** A Chalie instance serves a single user, but that user may have it open on several devices or tabs at once. There is one conversation; every surface mirrors it. The WebSocket broker (`backend/services/websocket_broker.py`) holds every live connection and fans each event out to all of them, so a message sent or received on any surface appears on all of them. A dropped socket reconnects on its own and rebuilds durable state from the database; missed in-flight events are tolerated because the conversation is reconstructed from persistence, not replayed. See [13-MESSAGE-FLOW.md](13-MESSAGE-FLOW.md#multi-surface-sync) for the user/assistant echo rules.
  
  ---
  
@@ -58,7 +60,7 @@ A turn has three phases:
 2. **ACT loop** — assembles one user message (conversation history as literal text, world state, the input, the accumulated tool trail) and calls the LLM. Tool calls are dispatched and their results fed back; the loop repeats until the model answers in plain text, the cancel event fires, or `config.max_iterations` is hit. If the request outgrows the context window, compaction fires transparently inside the loop and the request is rebuilt.
 3. **Record** — writes the assistant transcript row, then runs `config.post_turn_hooks` in a failure-isolated loop.
  
-On the user channel, tool activity is streamed live to the browser via WebSocket events (`act_tool_start`, `act_tool_end`, `act_narration`); the final `message`/`done` events are sent by the caller once `process()` returns.
+On the user channel, tool activity is streamed live via WebSocket events (`act_tool_start`, `act_tool_end`, `act_narration`) to the surface that started the turn; the final `message`/`done` events are sent by the caller once `process()` returns. The `message` event — like the `user_message` echo broadcast when the message first arrives — fans out to every open surface, so both sides of the conversation appear everywhere. The live ACT trail is per-turn and bound to the initiating surface; it is deliberately *not* mirrored, being ephemeral turn scaffolding rather than durable conversation.
  
 ### Defining a new channel
  

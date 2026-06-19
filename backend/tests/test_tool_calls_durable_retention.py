@@ -179,13 +179,14 @@ def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db):
     from services.websocket_broker import WebSocketBroker
 
     broker = WebSocketBroker()
-    broker.connect(_Receiver())
+    receiver = _Receiver()
+    broker.connect(receiver)
     try:
         from api.chat import _broadcast_turn_result
 
         _broadcast_turn_result(assistant_content, "req-test", time.time())
     finally:
-        broker.disconnect()
+        broker.disconnect(receiver)
 
     messages = [m for m in received if m.get("type") == "message"]
     assert len(messages) == 1, f"Expected 1 message event, got: {received}"

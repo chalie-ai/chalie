@@ -547,6 +547,44 @@ export const useSessionStore = defineStore('session', {
       const content = (data as { content?: string }).content ?? '';
       if (!content) return;
 
+      // Multi-surface sync — user message echoed from another device/tab.
+      // This surface's own echo was already dropped in WebSocketService (by
+      // echo_id), so anything reaching here was sent from a DIFFERENT surface
+      // and has no bubble yet. Render the user bubble so all surfaces match.
+      if ((data.type as string) === 'user_message') {
+        const convo = useConversationStore();
+        convo.appendUser(content, [], { inWorkingMemory: true });
+        return;
+      }
+
+      // Multi-surface sync — assistant reply. On the surface that sent the turn
+      // this arrives through the chat callbacks (ACT trail) and never reaches
+      // routeDrift; on every OTHER surface it lands here and renders a plain
+      // Chalie bubble (carrying any rich-media segments), so the reply shows on
+      // all surfaces. This is rule 2 of the user-echo + assistant-render model.
+      if ((data.type as string) === 'message') {
+        const convo = useConversationStore();
+        const d = data as {
+          topic?: string;
+          exchange_id?: string;
+          mode?: string;
+          confidence?: number;
+          segments?: ConversationSegment[];
+          timestamp?: string;
+        };
+        this._notifyBackground(content);
+        convo.appendChalie(content, {
+          topic: d.topic,
+          exchange_id: d.exchange_id,
+          mode: d.mode ?? '',
+          confidence: d.confidence ?? 0,
+          segments: d.segments,
+          ts: d.timestamp || new Date().toISOString(),
+          type: 'message',
+        });
+        return;
+      }
+
       // Step 2: thought bypasses the send-guard
       if ((data.type as string) === 'thought') {
         const convo = useConversationStore();
