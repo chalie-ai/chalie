@@ -9,8 +9,16 @@ import mimetypes
 import pkgutil
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask_cors import CORS
+
+if TYPE_CHECKING:
+    from typing import Protocol
+    from flask.typing import ResponseReturnValue
+
+    class _WrappedApp(Protocol):
+        wsgi_app: object
 
 from services.file_mapper_service import FileMapperService
 from .auth import require_session as require_session
@@ -113,12 +121,12 @@ def _inject_version_into_url(url: str) -> str:
 
 def _strip_version_from_path(path: str) -> str:
     match = _VERSION_SUFFIX_RE.match(path)
-    return f"{match.group(1)}{match.group(2)}" if match else path
+    return f"{cast(str, match.group(1))}{cast(str, match.group(2))}" if match else path
 
 
 def _version_html(html: str, base_dir: Path) -> str:
-    def repl(match: re.Match) -> str:
-        prefix, quote, url = match.group(1), match.group(2), match.group(3)
+    def repl(match: re.Match[str]) -> str:
+        prefix, quote, url = cast(str, match.group(1)), cast(str, match.group(2)), cast(str, match.group(3))
         if '?' in url:
             return match.group(0)
         asset = _resolve_same_origin_asset(url, base_dir)
@@ -184,7 +192,7 @@ def _configure_app(app: Flask) -> None:
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
     from werkzeug.middleware.proxy_fix import ProxyFix
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+    cast("_WrappedApp", app).wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
     CORS(app)
 
@@ -193,21 +201,21 @@ def _register_static_routes(app: Flask) -> None:
     """Register all static-file and SPA routes on the Flask app."""
 
     @app.route('/shared/<path:filename>', methods=["GET"])
-    def shared_static(filename):
+    def shared_static(filename: str) -> Response:
         real = _strip_version_from_path(filename)
         return send_from_directory(str(_SHARED_DIR), real)
 
     @app.route('/brain/<path:filename>', methods=["GET"])
-    def brain_static(filename):
+    def brain_static(filename: str) -> Response:
         return _serve_spa(_BRAIN_DIR, filename)
 
     @app.route('/brain', methods=["GET"])
-    def brain_index_no_slash():
+    def brain_index_no_slash() -> "ResponseReturnValue":
         """Canonicalize /brain → /brain/ so relative asset paths resolve correctly."""
         return redirect('/brain/', code=301)
 
     @app.route('/brain/', methods=["GET"])
-    def brain_index():
+    def brain_index() -> "ResponseReturnValue":
         """Redirects to login if unauthenticated."""
         from services.auth_session_service import validate_session
         from flask import request
@@ -216,42 +224,42 @@ def _register_static_routes(app: Flask) -> None:
         return _serve_versioned_html(_BRAIN_DIR)
 
     @app.route('/on-boarding/<path:filename>', methods=["GET"])
-    def onboarding_static(filename):
+    def onboarding_static(filename: str) -> Response:
         return _serve_spa(_ONBOARDING_DIR, filename)
 
     @app.route('/on-boarding', methods=["GET"])
-    def onboarding_index_no_slash():
+    def onboarding_index_no_slash() -> "ResponseReturnValue":
         """Canonicalize /on-boarding → /on-boarding/ so relative asset paths resolve correctly."""
         return redirect('/on-boarding/', code=301)
 
     @app.route('/on-boarding/', methods=["GET"])
-    def onboarding_index():
+    def onboarding_index() -> Response:
         return _serve_versioned_html(_ONBOARDING_DIR)
 
     @app.route('/login/<path:filename>', methods=["GET"])
-    def login_static(filename):
+    def login_static(filename: str) -> Response:
         return _serve_spa(_LOGIN_DIR, filename)
 
     @app.route('/login', methods=["GET"])
-    def login_index_no_slash():
+    def login_index_no_slash() -> "ResponseReturnValue":
         """Canonicalize /login → /login/ so relative asset paths resolve correctly."""
         return redirect('/login/', code=301)
 
     @app.route('/login/', methods=["GET"])
-    def login_index():
+    def login_index() -> Response:
         return _serve_versioned_html(_LOGIN_DIR)
 
     # Main interface SPA — catch-all (must be last)
     @app.route('/<path:filename>', methods=["GET"])
-    def interface_static(filename):
+    def interface_static(filename: str) -> Response:
         return _serve_spa(_INTERFACE_DIR, filename)
 
     @app.route('/', methods=["GET"])
-    def interface_index():
+    def interface_index() -> Response:
         return _serve_versioned_html(_INTERFACE_DIR)
 
 
-def create_app():
+def create_app() -> Flask:
     app = Flask(__name__)
 
     _configure_app(app)

@@ -3,17 +3,21 @@ Policies blueprint — per-action permission control (allow / ask / deny).
 """
 
 import logging
+from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
 policies_bp = Blueprint('policies', __name__, url_prefix='/api/policies')
 
 
-def _tag_display_rows(rows: list[dict]) -> None:
+def _tag_display_rows(rows: "list[dict[str, str]]") -> None:
     """Annotate every row in place with a display ``label`` (and ``group`` for
     MCP rows) so the Brain UI renders friendly names instead of raw permissions.
 
@@ -25,9 +29,11 @@ def _tag_display_rows(rows: list[dict]) -> None:
     the page — MCP rows then fall through to the native branch.
     """
     from services.mcp_client_service import McpClientService, humanize_segment
-    mcp_labels: dict = {}
+    mcp_labels: dict[str, dict[str, str]] = {}
     try:
-        mcp_labels = McpClientService().label_mcp_permissions([r['permission'] for r in rows])
+        mcp_labels = McpClientService().label_mcp_permissions(
+            [r['permission'] for r in rows]
+        )
     except Exception as exc:  # noqa: BLE001 — display enrichment must not 500 the page
         logger.warning("[POLICIES API] MCP row tagging skipped: %s", exc)
     for r in rows:
@@ -42,7 +48,7 @@ def _tag_display_rows(rows: list[dict]) -> None:
 
 @policies_bp.route('', methods=['GET'])
 @require_session
-def get_policies():
+def get_policies() -> "ResponseReturnValue":
     try:
         from services.database_service import get_shared_db_service
         from services.policy_manager import PolicyManager
@@ -56,7 +62,7 @@ def get_policies():
 
 @policies_bp.route('', methods=['PUT'])
 @require_session
-def update_policies():
+def update_policies() -> "ResponseReturnValue":
     try:
         data = request.get_json(silent=True) or {}
         if not all(k in data for k in ('channel', 'permission', 'setting')):
@@ -73,7 +79,7 @@ def update_policies():
 
 @policies_bp.route('/reset', methods=['POST'])
 @require_session
-def reset_policies():
+def reset_policies() -> "ResponseReturnValue":
     """Re-apply the static seed (wipe + reseed)."""
     try:
         from services.database_service import get_shared_db_service
@@ -87,7 +93,7 @@ def reset_policies():
 
 @policies_bp.route('/respond', methods=['POST'])
 @require_session
-def respond_permission():
+def respond_permission() -> "ResponseReturnValue":
     """Wake the blocked ACT dispatch thread with the user's allow/deny decision.
 
     The ACT loop thread is parked on threading.Event.wait() inside
@@ -116,7 +122,7 @@ def respond_permission():
 
 @policies_bp.route('/blocked', methods=['GET'])
 @require_session
-def get_blocked_log():
+def get_blocked_log() -> "ResponseReturnValue":
     try:
         limit = request.args.get('limit', 50, type=int)
         from services.database_service import get_shared_db_service
@@ -131,7 +137,7 @@ def get_blocked_log():
 
 @policies_bp.route('/blocked', methods=['DELETE'])
 @require_session
-def clear_blocked_log():
+def clear_blocked_log() -> "ResponseReturnValue":
     """Clear all entries from the blocked log."""
     try:
         from services.database_service import get_shared_db_service

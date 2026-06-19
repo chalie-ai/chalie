@@ -1,10 +1,14 @@
 """Context API -- returns ambient context (location, timezone, device data)."""
 
 import logging
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, jsonify
 
 from api.auth import require_auth
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +17,9 @@ context_bp = Blueprint("context", __name__)
 
 @context_bp.route("/api/context", methods=["GET"])
 @require_auth
-def get_context():
+def get_context() -> "ResponseReturnValue":
     """Location is city-level, never raw GPS."""
-    result = {}
+    result: dict[str, object] = {}
 
     try:
         from services.locale_service import (
@@ -40,7 +44,7 @@ def get_context():
         from services.client_context_service import ClientContextService
         raw_ctx = ClientContextService().get()
         if raw_ctx:
-            device = raw_ctx.get("device") or {}
+            device = cast("dict[str, object]", raw_ctx.get("device")) or {}
             device_class = device.get("class")
             platform = device.get("platform")
             if device_class or platform:

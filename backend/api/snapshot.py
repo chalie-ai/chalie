@@ -15,11 +15,15 @@ Depends on ``services.snapshot_service.SnapshotService`` (engine) and
 import logging
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +39,7 @@ _DEFAULT_UPLOAD_NAME = "snapshot.zip"
 
 @snapshot_bp.route("/export", methods=["POST"])
 @require_session
-def snapshot_export():
+def snapshot_export() -> "ResponseReturnValue":
     try:
         body = request.get_json(silent=True) or {}
         password = body.get("password") or None
@@ -56,7 +60,7 @@ def snapshot_export():
 
 @snapshot_bp.route("/import", methods=["POST"])
 @require_session
-def snapshot_import():
+def snapshot_import() -> "ResponseReturnValue":
     """Stage an uploaded snapshot and request a restart to apply it.
 
     Restore is destructive (full wipe-and-replace at next boot); the staging

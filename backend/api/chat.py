@@ -32,8 +32,10 @@ import logging
 import threading
 import time
 import uuid
+from typing import TYPE_CHECKING, Sequence, cast
 
 from flask import Blueprint, jsonify, request
+from werkzeug.datastructures import FileStorage
 
 from .auth import require_auth
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
@@ -43,28 +45,32 @@ from services.time_utils import utc_now
 from services.websocket_broker import WebSocketBroker
 from services.segment_service import SegmentService
 
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+    from services.processor_config import ProcessorConfig
+
 logger = logging.getLogger(__name__)
 
 chat_bp = Blueprint("chat", __name__)
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
 
-_active_ump = None
+_active_ump: "_ActiveTurn | None" = None
 _ump_lock = threading.Lock()
 
 
-def _get_active_ump():
+def _get_active_ump() -> "_ActiveTurn | None":
     with _ump_lock:
         return _active_ump
 
 
-def _set_active_ump(proc) -> None:
+def _set_active_ump(proc: "_ActiveTurn") -> None:
     global _active_ump
     with _ump_lock:
         _active_ump = proc
 
 
-def _clear_active_ump(turn) -> None:
+def _clear_active_ump(turn: "_ActiveTurn") -> None:
     global _active_ump
     with _ump_lock:
         if _active_ump is turn:
@@ -94,8 +100,8 @@ def _run_chat_background(
     turn: _ActiveTurn,
     cancel_event: threading.Event,
     raw_input: str,
-    config: object,
-    metadata: dict,
+    config: "ProcessorConfig",
+    metadata: "dict[str, object]",
     request_id: str,
     turn_start: float,
 ) -> None:
@@ -155,17 +161,17 @@ def _broadcast_turn_result(response: str, request_id: str, turn_start: float) ->
         if rows:
             last = rows[-1]
             if last.get("role") in ("user", "subagent_return"):
-                transcript_ids = [last["id"]]
+                transcript_ids = [cast(int, last["id"])]
             else:
                 from services.database_service import get_shared_db_service  # noqa: PLC0415
                 from services.rich_media_parser import resolve_tool_call_transcript_ids  # noqa: PLC0415
                 with get_shared_db_service().connection() as conn:
-                    transcript_ids = resolve_tool_call_transcript_ids(last["id"], conn)
+                    transcript_ids = resolve_tool_call_transcript_ids(cast(int, last["id"]), conn)
     except Exception as exc:
         logger.debug("[Chat API] transcript_id lookup failed: %s", exc)
 
     content = sanitize(response or "")
-    message_evt = {
+    message_evt: dict[str, object] = {
         "type": "message",
         "content": content,
         "topic": "user",
@@ -198,7 +204,7 @@ def deliver_async_result(mp: object, result_text: str) -> None:
     # Clone the originating metadata but suppress the input row and drop
     # attachments — they were already ingested on the originating turn and must
     # not re-upload on the synthesis turn.
-    metadata = dict(getattr(mp, "_metadata", None) or {})
+    metadata: dict[str, object] = dict(getattr(mp, "_metadata", None) or {})
     metadata["hidden_input"] = True
     metadata["attachments"] = []
     request_id = str(uuid.uuid4())
@@ -211,7 +217,7 @@ def deliver_async_result(mp: object, result_text: str) -> None:
 def dispatch_message(
     text: str,
     source: str = "text",
-    attachments: list | None = None,
+    attachments: "Sequence[str] | None" = None,
     hidden_input: bool = False,
 ) -> None:
     """If an ACT loop is already in-flight, cancels it, concatenates the original
@@ -231,7 +237,7 @@ def dispatch_message(
     _start_turn(text, source, attachments, hidden_input)
 
 
-def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = False) -> str:
+def _start_turn(text: str, source: str, attachments: "Sequence[str]", hidden_input: bool = False) -> str:
     from configs.channels import UserConfig  # noqa: PLC0415
 
     request_id = str(uuid.uuid4())
@@ -246,7 +252,7 @@ def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = 
     broker = WebSocketBroker()
     broker.broadcast({"type": "status", "stage": "processing"})
 
-    metadata = {
+    metadata: dict[str, object] = {
         "uuid": request_id,
         "exchange_id": request_id,
         "source": source,
@@ -273,14 +279,14 @@ def _start_turn(text: str, source: str, attachments: list, hidden_input: bool = 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
 
 
-def _stage_chat_uploads(files: list) -> list:
+def _stage_chat_uploads(files: "list[FileStorage]") -> "list[str]":
     """Returns temp paths that _seed_turn_zero feeds to document.upload — which
     ingests by PATH, never bytes, so no file blob ever reaches the act-trail.
     """
     from services.filename_utils import safe_filename  # noqa: PLC0415
     from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 
-    paths = []
+    paths: list[str] = []
     for f in files:
         if not f or not f.filename:
             continue
@@ -293,7 +299,7 @@ def _stage_chat_uploads(files: list) -> list:
 
 @chat_bp.route("/chat", methods=["POST"])
 @require_auth
-def post_chat():
+def post_chat() -> "ResponseReturnValue":
     """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0.
 
     Response arrives asynchronously via WebSocketBroker.broadcast().
@@ -314,7 +320,7 @@ def post_chat():
 
 @chat_bp.route("/chat/interrupt", methods=["POST"])
 @require_auth
-def post_chat_interrupt():
+def post_chat_interrupt() -> "ResponseReturnValue":
     """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
 
     Always returns HTTP 200.
@@ -329,14 +335,14 @@ def post_chat_interrupt():
 
 @chat_bp.route("/chat/stop", methods=["POST"])
 @require_auth
-def post_chat_stop():
+def post_chat_stop() -> "ResponseReturnValue":
     """Deprecated alias for POST /chat/interrupt. New callers should use POST /chat/interrupt instead."""
     return post_chat_interrupt()
 
 
 @chat_bp.route("/chat/subagents/active", methods=["GET"])
 @require_auth
-def get_active_subagents():
+def get_active_subagents() -> "ResponseReturnValue":
     """Used by the frontend to hydrate the task drawer on page load/reconnect,
     since WS push events are missed if the client was disconnected.
 
@@ -351,7 +357,7 @@ def get_active_subagents():
 
 @chat_bp.route("/chat/subagent/<sub_id>/stop", methods=["POST"])
 @require_auth
-def post_subagent_stop(sub_id: str):
+def post_subagent_stop(sub_id: str) -> "ResponseReturnValue":
     """Cooperatively cancel a running async delegate.
 
     Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
@@ -373,7 +379,7 @@ def post_subagent_stop(sub_id: str):
 
 @chat_bp.route("/action", methods=["POST"])
 @require_auth
-def post_action():
+def post_action() -> "ResponseReturnValue":
     """Response arrives asynchronously via WebSocketBroker.broadcast()."""
     body = request.get_json(silent=True) or {}
     skill = body.get("skill") or ""
@@ -382,11 +388,12 @@ def post_action():
 
     action_start = time.time()
 
-    def _run_action():
+    def _run_action() -> None:
         broker = WebSocketBroker()
         try:
             from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
             from services.processor_config import ProcessorConfig  # noqa: PLC0415
+            from services.message_processor import MessageProcessor as _MsgProc  # noqa: PLC0415
 
             params = {k: v for k, v in body.items() if k != "skill"}
 
@@ -416,13 +423,13 @@ def post_action():
                         memory_seed=False,
                     )
 
-                def get_user_definition(self, mp) -> str:
+                def get_user_definition(self, mp: "_MsgProc") -> str:
                     return ""
 
-                def get_user_prompt(self, mp) -> str:
+                def get_user_prompt(self, mp: "_MsgProc") -> str:
                     return ""
 
-                def get_system_prompt(self, mp) -> str:
+                def get_system_prompt(self, mp: "_MsgProc") -> str:
                     return ""
 
             _action_config = _ActionButtonConfig()
@@ -433,7 +440,7 @@ def post_action():
                 cancel_event = threading.Event()
 
             ctx = _ActionCtx()
-            result_text = ToolDispatcher(ctx).dispatch(skill, params)
+            result_text = ToolDispatcher(ctx).dispatch(cast(str, skill), params)
 
             if result_text.startswith("Unknown tool:"):
                 broker.broadcast({
@@ -447,7 +454,7 @@ def post_action():
             elapsed_ms = int((time.time() - action_start) * 1000)
             content = sanitize(result_text or "Done.")
 
-            message_evt = {
+            message_evt: dict[str, object] = {
                 "type": "message",
                 "content": content,
                 "topic": "",

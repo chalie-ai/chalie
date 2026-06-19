@@ -3,9 +3,14 @@ User authentication blueprint — /auth endpoints for master account.
 """
 
 import logging
+from typing import TYPE_CHECKING, cast
+
 from flask import Blueprint, request, jsonify
 from services.database_service import text
 from werkzeug.security import generate_password_hash, check_password_hash
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +59,7 @@ def _get_vault_state() -> str:
 
 
 @user_auth_bp.route('/auth/status', methods=['GET'])
-def auth_status():
+def auth_status() -> "ResponseReturnValue":
     """Check whether master account exists, providers are configured, and
     user has session.
 
@@ -74,15 +79,15 @@ def auth_status():
 
         # Check master account
         with db.get_session() as session:
-            account_count = session.execute(
+            account_count = cast("tuple[int, ...]", session.execute(
                 text("SELECT COUNT(*) FROM master_account")
-            ).fetchone()[0]
+            ).fetchone())[0]
 
         # Check providers (count only — avoids decryption which can fail if key changed)
         with db.get_session() as session:
-            provider_count = session.execute(
+            provider_count = cast("tuple[int, ...]", session.execute(
                 text("SELECT COUNT(*) FROM providers")
-            ).fetchone()[0]
+            ).fetchone())[0]
 
         # Check session — if the vault is sealed (server restarted while
         # session cookie survived), treat the session as invalid so every
@@ -116,7 +121,7 @@ def auth_status():
 
 
 @user_auth_bp.route('/auth/register', methods=['POST'])
-def register():
+def register() -> "ResponseReturnValue":
     """Create master account. Fails (409) if one exists. Sets session cookie on success.
 
     On success the vault is initialised with the master password and immediately
@@ -145,9 +150,9 @@ def register():
 
         # Check if master account already exists
         with db.get_session() as session:
-            existing = session.execute(
+            existing = cast("tuple[int, ...]", session.execute(
                 text("SELECT COUNT(*) FROM master_account")
-            ).fetchone()[0]
+            ).fetchone())[0]
 
             if existing > 0:
                 return jsonify({"error": "Master account already exists"}), 409
@@ -189,7 +194,7 @@ def register():
 
 
 @user_auth_bp.route('/auth/login', methods=['POST'])
-def login():
+def login() -> "ResponseReturnValue":
     """Verify credentials and set session cookie. Returns 401 on invalid credentials.
 
     After the password is verified against the account hash, the vault is opened
@@ -293,7 +298,7 @@ def login():
 
 
 @user_auth_bp.route('/auth/logout', methods=['POST'])
-def logout():
+def logout() -> "ResponseReturnValue":
     """Invalidate the current session and clear the cookie.
 
     Seals the vault by clearing the in-memory DEK before destroying the session

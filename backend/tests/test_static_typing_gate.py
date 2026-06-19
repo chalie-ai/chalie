@@ -74,18 +74,19 @@ _TOP_LEVEL_MODULES = [
 # into not-yet-migrated packages (cross-package cascade residuals). The ceiling
 # reaches 0 at TKT-1055 (final flip) when this check reverts to returncode == 0.
 #
-# Current residuals (TKT-1047 + TKT-1048):
-#   TKT-1047 residuals (clear at TKT-1049/1051):
-#   - 3 × no-untyped-call in workers/* → unmigrated services/* / api/*
-#     (document_worker→DocumentService, rest_api_worker→create_app,
-#      folder_watcher_worker→FolderWatcherService)
-#   - 2 × arg-type in utils/* (EmbeddingService|None passed where EmbeddingService
-#     expected in build_ability_db / build_skills_db; needs logic fix)
-#   TKT-1048 residuals (clear at TKT-1049):
-#   - 1 × no-untyped-call in configs/* → unmigrated selected_provider() in services/*
-#   - 5 × attr-defined in configs/geo_pattern.py on lazily-set mp.* attributes
-#     (mp._save_pattern_calls etc. are not declared on MessageProcessor in services)
-_MAX_RESIDUAL_ERRORS: int = 11
+# Current residuals (after TKT-1046..1051: foundation + utils/workers/mcp_server,
+# configs, services, abilities, api all migrated to strict). The remaining 9 live
+# in already-strict packages and do NOT depend on the still-relaxed packages
+# (capabilities/tools/vision/...), so they survive their migrations and clear at
+# TKT-1055 (final flip):
+#   - 6 × configs/channels/* — `dict[str, object] | None` narrowing
+#     (union-attr/index in user.py / user_summary.py / external_agent.py) plus the
+#     get_image override + open() overload in vision.py against
+#     services.processor_config.ProcessorConfig
+#   - 2 × arg-type in utils/* (EmbeddingService | None passed where
+#     EmbeddingService is expected in build_ability_db / build_skills_db)
+#   - 1 × operator in workers/folder_watcher_worker.py (object operand on `+`)
+_MAX_RESIDUAL_ERRORS: int = 9
 
 
 def test_first_party_source_is_strict_clean() -> None:

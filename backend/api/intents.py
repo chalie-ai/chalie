@@ -5,11 +5,15 @@ Authentication:
 """
 
 import logging
+from typing import TYPE_CHECKING
 
 from flask import Blueprint, g, jsonify, request
 
 from .auth import require_session
 from services.intent_service import IntentService
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +31,7 @@ def _effective_wrapper_id() -> str:
     return wid if wid else "__chat_ui__"
 
 
-def _get_intent_service():
+def _get_intent_service() -> IntentService:
     return IntentService()
 
 
@@ -37,7 +41,7 @@ def _get_intent_service():
 
 @intents_bp.route("", methods=["GET"])
 @require_session
-def list_intents():
+def list_intents() -> "ResponseReturnValue":
     wrapper_id = _effective_wrapper_id()
 
     try:
@@ -59,7 +63,7 @@ def list_intents():
 
 @intents_bp.route("/<intent_id>", methods=["GET"])
 @require_session
-def get_intent(intent_id: str):
+def get_intent(intent_id: str) -> "ResponseReturnValue":
     """Returns 404 if the intent does not exist or has expired from the store."""
     svc = _get_intent_service()
     intent = svc.get_intent(intent_id)
@@ -76,7 +80,7 @@ def get_intent(intent_id: str):
 
 @intents_bp.route("/<intent_id>/ack", methods=["POST"])
 @require_session
-def acknowledge_intent(intent_id: str):
+def acknowledge_intent(intent_id: str) -> "ResponseReturnValue":
     """Returns 404 if the intent does not exist."""
     wrapper_id = _effective_wrapper_id()
     svc = _get_intent_service()
@@ -94,7 +98,7 @@ def acknowledge_intent(intent_id: str):
 
 @intents_bp.route("/<intent_id>/resolve", methods=["POST"])
 @require_session
-def resolve_intent(intent_id: str):
+def resolve_intent(intent_id: str) -> "ResponseReturnValue":
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({"error": "request body must be a JSON object"}), 400

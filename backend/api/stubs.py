@@ -2,9 +2,14 @@
 Stub blueprint — future endpoints that return 501 Not Implemented.
 """
 
+from typing import TYPE_CHECKING
+
 from flask import Blueprint, jsonify
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 stubs_bp = Blueprint('stubs', __name__)
 
@@ -14,7 +19,7 @@ _NOT_IMPLEMENTED = ({"error": "Not implemented", "planned": True}, 501)
 @stubs_bp.route('/calendar', methods=['GET'])
 @stubs_bp.route('/calendar/<path:subpath>', methods=['GET'])
 @require_session
-def calendar_stub(_subpath=None):
+def calendar_stub(_subpath: str | None = None) -> "ResponseReturnValue":
     """Return 501 Not Implemented for all calendar endpoints.
 
     Placeholder for future calendar integration.  Accepts an optional
@@ -34,7 +39,7 @@ def calendar_stub(_subpath=None):
 
 @stubs_bp.route('/notifications/digest', methods=['GET'])
 @require_session
-def notifications_digest_stub():
+def notifications_digest_stub() -> "ResponseReturnValue":
     """Return 501 Not Implemented for the notifications digest endpoint.
 
     Placeholder for a future aggregated notifications digest feed.
@@ -49,7 +54,7 @@ def notifications_digest_stub():
 @stubs_bp.route('/integrations/messages', methods=['GET'])
 @stubs_bp.route('/integrations/messages/<path:subpath>', methods=['GET'])
 @require_session
-def integrations_messages_stub(_subpath=None):
+def integrations_messages_stub(_subpath: str | None = None) -> "ResponseReturnValue":
     """Return 501 Not Implemented for all integrations message-listing endpoints.
 
     Placeholder for future third-party messaging integration.  Accepts an
@@ -68,7 +73,7 @@ def integrations_messages_stub(_subpath=None):
 
 @stubs_bp.route('/integrations/messages/reply', methods=['POST'])
 @require_session
-def integrations_reply_stub():
+def integrations_reply_stub() -> "ResponseReturnValue":
     """Return 501 Not Implemented for the integrations message-reply endpoint.
 
     Placeholder for a future API to send replies via integrated messaging
@@ -83,7 +88,7 @@ def integrations_reply_stub():
 
 @stubs_bp.route('/permissions', methods=['GET'])
 @require_session
-def permissions_stub():
+def permissions_stub() -> "ResponseReturnValue":
     """Return 501 Not Implemented for the permissions endpoint.
 
     Placeholder for a future fine-grained permissions / capability query API.

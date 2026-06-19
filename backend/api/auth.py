@@ -10,13 +10,18 @@ Sessions are stored in MemoryStore via services.auth_session_service.
 """
 
 import logging
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 from functools import wraps
 from flask import request, jsonify, g
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
 
-def require_auth(f):
+def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
     """Decorator that enforces authentication via cookie session or bearer token.
 
     Tries the cookie session first (existing path).  If that fails, tries
@@ -27,7 +32,7 @@ def require_auth(f):
     Returns 401 only when both methods fail.
     """
     @wraps(f)
-    def decorated(*args, **kwargs):
+    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
         from services.auth_session_service import validate_session
 
         # Try cookie session first

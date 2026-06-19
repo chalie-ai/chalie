@@ -1,9 +1,14 @@
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+    from services.list_service import ListService
 
 logger = logging.getLogger(__name__)
 
@@ -17,19 +22,19 @@ lists_bp = Blueprint("lists", __name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_list_service():
+def _get_list_service() -> "ListService":
     from services.database_service import get_shared_db_service
     from services.list_service import ListService
     return ListService(get_shared_db_service())
 
 
-def _serialize_dt(val):
+def _serialize_dt(val: object) -> object:
     if isinstance(val, datetime):
         return val.isoformat()
     return val
 
 
-def _serialize_list(lst: dict) -> dict:
+def _serialize_list(lst: "dict[str, object]") -> "dict[str, object]":
     out = dict(lst)
     for field in ("updated_at", "created_at"):
         if field in out:
@@ -37,7 +42,7 @@ def _serialize_list(lst: dict) -> dict:
     return out
 
 
-def _serialize_item(item: dict) -> dict:
+def _serialize_item(item: "dict[str, object]") -> "dict[str, object]":
     out = dict(item)
     for field in ("added_at", "updated_at"):
         if field in out:
@@ -45,7 +50,7 @@ def _serialize_item(item: dict) -> dict:
     return out
 
 
-def _validate_name(name) -> tuple:
+def _validate_name(name: "str | None") -> "tuple[str | None, str | None]":
     name = (name or "").strip()
     if not name:
         return None, "name is required"
@@ -54,7 +59,7 @@ def _validate_name(name) -> tuple:
     return name, None
 
 
-def _validate_items(items) -> tuple:
+def _validate_items(items: object) -> "tuple[list[str] | None, str | None]":
     if not isinstance(items, list) or not items:
         return None, "items must be a non-empty array"
     cleaned = []
@@ -73,7 +78,7 @@ def _validate_items(items) -> tuple:
 
 @lists_bp.route("/lists", methods=["GET"])
 @require_session
-def get_lists():
+def get_lists() -> "ResponseReturnValue":
     try:
         svc = _get_list_service()
         lists = svc.get_all_lists()
@@ -85,7 +90,7 @@ def get_lists():
 
 @lists_bp.route("/lists", methods=["POST"])
 @require_session
-def create_list():
+def create_list() -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     name, err = _validate_name(data.get("name"))
     if err:
@@ -95,10 +100,10 @@ def create_list():
 
     try:
         svc = _get_list_service()
-        list_id = svc.create_list(name, list_type=list_type)
+        list_id = svc.create_list(cast(str, name), list_type=list_type)
         lst = svc.get_list(list_id)
-        lst["items"] = [_serialize_item(i) for i in lst.get("items", [])]
-        return jsonify({"item": _serialize_list(lst)}), 201
+        cast("dict[str, object]", lst)["items"] = [_serialize_item(cast("dict[str, object]", i)) for i in cast("list[object]", cast("dict[str, object]", lst).get("items", []))]
+        return jsonify({"item": _serialize_list(cast("dict[str, object]", lst))}), 201
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
     except Exception as e:
@@ -108,14 +113,14 @@ def create_list():
 
 @lists_bp.route("/lists/<list_id>", methods=["GET"])
 @require_session
-def get_list(list_id):
+def get_list(list_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_list_service()
         lst = svc.get_list(list_id)
         if lst is None:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
         lst = dict(lst)
-        lst["items"] = [_serialize_item(i) for i in lst.get("items", [])]
+        lst["items"] = [_serialize_item(cast("dict[str, object]", i)) for i in cast("list[object]", lst.get("items", []))]
         return jsonify({"item": _serialize_list(lst)})
     except Exception as e:
         logger.error(f"[LISTS API] get_list error: {e}")
@@ -124,7 +129,7 @@ def get_list(list_id):
 
 @lists_bp.route("/lists/<list_id>/rename", methods=["PUT"])
 @require_session
-def rename_list(list_id):
+def rename_list(list_id: str) -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     name, err = _validate_name(data.get("name"))
     if err:
@@ -132,7 +137,7 @@ def rename_list(list_id):
 
     try:
         svc = _get_list_service()
-        ok = svc.rename_list(list_id, name)
+        ok = svc.rename_list(list_id, cast(str, name))
         if not ok:
             return jsonify({"error": "Not found or name already in use"}), 404
         return jsonify({"ok": True})
@@ -143,7 +148,7 @@ def rename_list(list_id):
 
 @lists_bp.route("/lists/<list_id>", methods=["DELETE"])
 @require_session
-def delete_list(list_id):
+def delete_list(list_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_list_service()
         ok = svc.delete_list(list_id)
@@ -157,7 +162,7 @@ def delete_list(list_id):
 
 @lists_bp.route("/lists/<list_id>/items", methods=["POST"])
 @require_session
-def add_items(list_id):
+def add_items(list_id: str) -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     items, err = _validate_items(data.get("items"))
     if err:
@@ -167,7 +172,7 @@ def add_items(list_id):
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
-        added = svc.add_items(list_id, items)
+        added = svc.add_items(list_id, cast("list[str]", items))
         return jsonify({"added": added})
     except Exception as e:
         logger.error(f"[LISTS API] add_items error: {e}")
@@ -176,7 +181,7 @@ def add_items(list_id):
 
 @lists_bp.route("/lists/<list_id>/items", methods=["DELETE"])
 @require_session
-def clear_items(list_id):
+def clear_items(list_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_list_service()
         count = svc.clear_list(list_id)
@@ -190,7 +195,7 @@ def clear_items(list_id):
 
 @lists_bp.route("/lists/<list_id>/items/batch", methods=["DELETE"])
 @require_session
-def remove_items(list_id):
+def remove_items(list_id: str) -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     items, err = _validate_items(data.get("items"))
     if err:
@@ -200,7 +205,7 @@ def remove_items(list_id):
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
-        removed = svc.remove_items(list_id, items)
+        removed = svc.remove_items(list_id, cast("list[str]", items))
         return jsonify({"removed": removed})
     except Exception as e:
         logger.error(f"[LISTS API] remove_items error: {e}")
@@ -209,7 +214,7 @@ def remove_items(list_id):
 
 @lists_bp.route("/lists/<list_id>/items/check", methods=["PUT"])
 @require_session
-def check_items(list_id):
+def check_items(list_id: str) -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     items, err = _validate_items(data.get("items"))
     if err:
@@ -219,7 +224,7 @@ def check_items(list_id):
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
-        checked = svc.check_items(list_id, items)
+        checked = svc.check_items(list_id, cast("list[str]", items))
         return jsonify({"checked": checked})
     except Exception as e:
         logger.error(f"[LISTS API] check_items error: {e}")
@@ -228,7 +233,7 @@ def check_items(list_id):
 
 @lists_bp.route("/lists/<list_id>/items/uncheck", methods=["PUT"])
 @require_session
-def uncheck_items(list_id):
+def uncheck_items(list_id: str) -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     items, err = _validate_items(data.get("items"))
     if err:
@@ -238,7 +243,7 @@ def uncheck_items(list_id):
         svc = _get_list_service()
         if svc.get_list(list_id) is None:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
-        unchecked = svc.uncheck_items(list_id, items)
+        unchecked = svc.uncheck_items(list_id, cast("list[str]", items))
         return jsonify({"unchecked": unchecked})
     except Exception as e:
         logger.error(f"[LISTS API] uncheck_items error: {e}")

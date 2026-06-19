@@ -1,14 +1,29 @@
 import json
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 from utils.logger import set_correlation_id
+from services.memory_store import MemoryStore
 from services.websocket_broker import WebSocketBroker
+
+if TYPE_CHECKING:
+    from typing import Callable, Protocol, TypeVar
+
+    _F = TypeVar("_F")
+
+    class _WebSocket(Protocol):
+        def send(self, data: str) -> None: ...
+        def close(self) -> None: ...
+        def receive(self, timeout: float = ...) -> "str | None": ...
+
+    class Sock(Protocol):
+        def route(self, rule: str) -> "Callable[[_F], _F]": ...
 
 logger = logging.getLogger(__name__)
 
 
-def _drain_capability_alerts(store) -> None:
+def _drain_capability_alerts(store: MemoryStore) -> None:
     try:
         broker = WebSocketBroker()
         alert_keys = store.keys('capability:alert:*')
@@ -25,7 +40,7 @@ def _drain_capability_alerts(store) -> None:
         logger.debug("[WS] Failed to scan capability alerts: %s", exc)
 
 
-def _ws_handler(ws) -> None:
+def _ws_handler(ws: "_WebSocket") -> None:
     from flask import request as flask_request
     from services.auth_session_service import validate_session
 
@@ -65,7 +80,7 @@ def _ws_handler(ws) -> None:
         broker.disconnect()
 
 
-def register_websocket(sock):
+def register_websocket(sock: "Sock") -> None:
     @sock.route('/ws')
-    def ws_handler(ws):
+    def ws_handler(ws: "_WebSocket") -> None:
         _ws_handler(ws)

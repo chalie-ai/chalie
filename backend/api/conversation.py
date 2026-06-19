@@ -1,17 +1,23 @@
 """Conversation blueprint — GET /conversation/recent."""
 
 import logging
+import sqlite3
+from typing import TYPE_CHECKING
+
 from flask import Blueprint, request, jsonify
 
 from .auth import require_session
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_call_transcript_ids as _resolve_ids
 
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+
 logger = logging.getLogger(__name__)
 conversation_bp = Blueprint('conversation', __name__)
 
 
-def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
+def _fetch_tool_calls_for_transcript(conn: sqlite3.Connection, transcript_id: int) -> "list[dict[str, object]]":
     """Rows within the 7-day retention window carry the rich-media payloads the
     parser uses to pair span tags with cards."""
     tc_rows = conn.execute(
@@ -30,7 +36,7 @@ def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
     ]
 
 
-def _fetch_attachments_for_transcripts(conn, transcript_ids: list[int]) -> dict:
+def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids: "list[int]") -> "dict[int, list[dict[str, object]]]":
     """Soft-deleted docs are filtered out, so a removed file silently does not
     render. Each attachment carries the inline-serving
     ``/documents/<id>/preview`` URL.
@@ -45,7 +51,7 @@ def _fetch_attachments_for_transcripts(conn, transcript_ids: list[int]) -> dict:
         f"ORDER BY td.rowid",
         tuple(transcript_ids),
     ).fetchall()
-    by_id: dict = {}
+    by_id: dict[int, list[dict[str, object]]] = {}
     for tid, doc_id, name, mime in rows:
         mime = mime or ""
         by_id.setdefault(tid, []).append({
@@ -58,7 +64,7 @@ def _fetch_attachments_for_transcripts(conn, transcript_ids: list[int]) -> dict:
     return by_id
 
 
-def get_recent_history(limit=12, offset=0):
+def get_recent_history(limit: int = 12, offset: int = 0) -> "tuple[list[dict[str, object]], bool]":
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
@@ -74,7 +80,7 @@ def get_recent_history(limit=12, offset=0):
         # _resolve_ids() queries the DB for the user-input transcript row that
         # precedes each assistant row — the same lookup used by the WS-send path.
         # Both paths call the same helper so they can never silently diverge.
-        messages = []
+        messages: list[dict[str, object]] = []
 
         # Re-render uploaded attachments on refresh: batch-fetch the doc links for
         # every user row in this page (the live blob: preview is gone after reload).
@@ -88,7 +94,7 @@ def get_recent_history(limit=12, offset=0):
             ts = format_date(created_at, CHAT_TIMESTAMP_FMT, for_ui=True) or ""
 
             if role == 'user':
-                msg = {
+                msg: dict[str, object] = {
                     "id": str(transcript_id),
                     "role": role,
                     "content": content,
@@ -123,7 +129,7 @@ def get_recent_history(limit=12, offset=0):
 
 @conversation_bp.route('/conversation/recent', methods=['GET'])
 @require_session
-def conversation_recent():
+def conversation_recent() -> "ResponseReturnValue":
     try:
         limit = max(1, min(120, int(request.args.get("limit", 12))))
     except (ValueError, TypeError):

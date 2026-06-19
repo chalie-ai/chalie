@@ -28,8 +28,16 @@ import re
 import struct
 import tempfile
 import threading
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, Response, request, jsonify
+
+if TYPE_CHECKING:
+    from typing import Protocol
+    from flask.typing import ResponseReturnValue
+
+    class _KokoroModel(Protocol):
+        def create(self, text: str, voice: str, speed: float, lang: str) -> "tuple[object, int]": ...
 
 from markdown_it import MarkdownIt
 
@@ -104,7 +112,7 @@ _VOICE_INSTALL_HINT = (
 )
 
 
-def _voice_unavailable_payload() -> dict:
+def _voice_unavailable_payload() -> "dict[str, object]":
     return {
         "error": "Voice dependencies not installed",
         "reason": "deps_missing",
@@ -113,7 +121,7 @@ def _voice_unavailable_payload() -> dict:
     }
 
 
-def _loading_or_missing_response():
+def _loading_or_missing_response() -> "ResponseReturnValue":
     """503 with a precise ``reason`` and ``Retry-After`` so the client can decide
     whether to auto-retry (transient cold-start) or give up (missing files)."""
     missing = _missing_model_files()
@@ -142,8 +150,8 @@ def _missing_model_files() -> list[str]:
 
 # ── Lazy model state ────────────────────────────────────────────────────────
 
-_kokoro = None
-_moonshine = None
+_kokoro: object = None
+_moonshine: object = None
 _load_lock = threading.Lock()
 _models_loaded = False
 _models_loading = False
@@ -156,7 +164,7 @@ _tts_lock = threading.Lock()
 _stt_lock = threading.Lock()
 
 
-def _ensure_models():
+def _ensure_models() -> bool:
     global _kokoro, _moonshine, _models_loaded, _models_loading
 
     if _models_loaded:
@@ -339,7 +347,7 @@ def _dedup_repetitions(text: str) -> str:
 
 # ── STT audio preprocessing ─────────────────────────────────────────────────
 
-def _extract_speech(audio, sr: int):
+def _extract_speech(audio: object, sr: int) -> object:
     """Strip non-speech regions using Silero VAD.
 
     Returns a float32 array containing only the detected speech segments
@@ -392,13 +400,13 @@ def _extract_speech(audio, sr: int):
         return audio
 
 
-def _denoise(audio, sr: int):
+def _denoise(audio: object, sr: int) -> object:
     """Apply spectral noise reduction to a float32 audio array.
 
     Skips clips shorter than n_fft=2048 samples (128 ms at 16 kHz) to avoid
     STFT boundary errors. Returns original audio on any error (fail-safe).
     """
-    if len(audio) < 2048:
+    if len(cast("list[object]", audio)) < 2048:
         return audio
     try:
         import numpy as np
@@ -497,15 +505,15 @@ def _wav_duration_seconds(data: bytes) -> float:
     try:
         if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
             return 0.0
-        channels = struct.unpack_from("<H", data, 22)[0]
-        sample_rate = struct.unpack_from("<I", data, 24)[0]
-        bits_per_sample = struct.unpack_from("<H", data, 34)[0]
+        channels = cast(int, struct.unpack_from("<H", data, 22)[0])
+        sample_rate = cast(int, struct.unpack_from("<I", data, 24)[0])
+        bits_per_sample = cast(int, struct.unpack_from("<H", data, 34)[0])
         if sample_rate == 0 or channels == 0 or bits_per_sample == 0:
             return 0.0
         offset = 12
         while offset < len(data) - 8:
             chunk_id = data[offset:offset + 4]
-            chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
+            chunk_size = cast(int, struct.unpack_from("<I", data, offset + 4)[0])
             if chunk_id == b"data":
                 bytes_per_sample = bits_per_sample // 8
                 return chunk_size / (sample_rate * channels * bytes_per_sample)
@@ -515,7 +523,7 @@ def _wav_duration_seconds(data: bytes) -> float:
         return 0.0
 
 
-def _audio_to_wav_bytes(samples, sample_rate: int) -> bytes:
+def _audio_to_wav_bytes(samples: object, sample_rate: int) -> bytes:
     import soundfile as sf
     buf = io.BytesIO()
     sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
@@ -542,8 +550,9 @@ def _transcribe_sync(data: bytes) -> str:
         # we hand the samples back to transcribe (or slice them).
         audio = mo.load_audio(tmp.name)[0]  # → float32 [N] @ 16 kHz
 
-    audio = _extract_speech(audio, MOONSHINE_SAMPLE_RATE)
-    audio = _denoise(audio, MOONSHINE_SAMPLE_RATE)
+    import numpy as np
+    audio = cast("np.ndarray[tuple[int], np.dtype[np.float32]]", _extract_speech(audio, MOONSHINE_SAMPLE_RATE))
+    audio = cast("np.ndarray[tuple[int], np.dtype[np.float32]]", _denoise(audio, MOONSHINE_SAMPLE_RATE))
 
     if audio.shape[0] < _MIN_CHUNK_SAMPLES:
         return ""
@@ -577,7 +586,7 @@ def _transcribe_sync(data: bytes) -> str:
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 @voice_bp.route("/voice/health", methods=["GET"])
-def voice_health():
+def voice_health() -> "ResponseReturnValue":
     """Voice service health check.
 
     Returns ``status`` ∈ {``ok``, ``loading``, ``unavailable``}. When models
@@ -611,7 +620,7 @@ def voice_health():
 
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
-def voice_synthesize():
+def voice_synthesize() -> "ResponseReturnValue":
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
 
@@ -633,16 +642,16 @@ def voice_synthesize():
     try:
         if len(chunks) == 1:
             with _tts_lock:
-                samples, sr = _kokoro.create(
+                samples, sr = cast("_KokoroModel", _kokoro).create(
                     chunks[0], voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
                 )
         else:
             import numpy as np
-            all_samples: list = []
+            all_samples: list[object] = []
             sr = None
             with _tts_lock:
                 for i, chunk in enumerate(chunks):
-                    chunk_samples, chunk_sr = _kokoro.create(
+                    chunk_samples, chunk_sr = cast("_KokoroModel", _kokoro).create(
                         chunk, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
                     )
                     if sr is None:
@@ -650,13 +659,13 @@ def voice_synthesize():
                     all_samples.append(chunk_samples)
                     if i < len(chunks) - 1:
                         pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
-                        all_samples.append(np.zeros(pad_len, dtype=chunk_samples.dtype))
-            samples = np.concatenate(all_samples)
+                        all_samples.append(np.zeros(pad_len, dtype=cast("np.ndarray[tuple[int], np.dtype[np.float32]]", chunk_samples).dtype))
+            samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
     except Exception as e:
         logger.error("[Voice] TTS synthesis failed: %s", e)
         return jsonify({"error": "TTS synthesis failed"}), 500
 
-    wav_bytes = _audio_to_wav_bytes(samples, sr)
+    wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
     return Response(
         wav_bytes,
         mimetype="audio/wav",
@@ -668,7 +677,7 @@ def voice_synthesize():
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])
-def voice_transcribe():
+def voice_transcribe() -> "ResponseReturnValue":
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
 
