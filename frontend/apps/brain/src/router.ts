@@ -5,6 +5,7 @@ import { system } from './api/system';
 // ── Views ────────────────────────────────────────────────────────────────────
 import ProvidersView from './views/ProvidersView.vue';
 import VisionView from './views/VisionView.vue';
+import DelegateView from './views/DelegateView.vue';
 import CognitionView from './views/CognitionView.vue';
 import SchedulerView from './views/SchedulerView.vue';
 import ListsView from './views/ListsView.vue';
@@ -50,6 +51,7 @@ export const router = createRouter({
 
     { path: '/providers', name: 'providers', component: ProvidersView },
     { path: '/vision', name: 'vision', component: VisionView },
+    { path: '/delegate', name: 'delegate', component: DelegateView },
 
     {
       path: '/cognition',

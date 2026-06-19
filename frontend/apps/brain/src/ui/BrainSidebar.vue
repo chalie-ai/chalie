@@ -38,6 +38,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { id: 'providers', label: 'Providers', icon: 'Providers', group: 'cognition' },
   { id: 'vision', label: 'Vision', icon: 'Eye', group: 'cognition' },
+  { id: 'delegate', label: 'Delegate', icon: 'Globe', group: 'cognition' },
   {
     id: 'cognition', label: 'Cognition', icon: 'Brain', group: 'cognition',
     sub: [

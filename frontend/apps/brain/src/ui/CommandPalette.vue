@@ -27,6 +27,7 @@ interface CPItem {
 const ALL_ITEMS: CPItem[] = [
   { kind: 'Jump', label: 'Providers', icon: 'Providers', path: '/providers' },
   { kind: 'Jump', label: 'Vision', icon: 'Eye', path: '/vision' },
+  { kind: 'Jump', label: 'Delegate', icon: 'Globe', path: '/delegate' },
   { kind: 'Jump', label: 'Cognition · Memory', icon: 'Memory', path: '/cognition/memory' },
   { kind: 'Jump', label: 'Cognition · Tools', icon: 'Tool', path: '/cognition/tools' },
   { kind: 'Jump', label: 'Cognition · World state', icon: 'Globe', path: '/cognition/world' },

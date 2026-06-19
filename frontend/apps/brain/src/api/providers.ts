@@ -7,6 +7,8 @@
  * GET  /providers/catalog       → get the provider catalog
  * GET  /providers/vision        → get the vision provider
  * PUT  /providers/vision        → set vision provider { provider_id }
+ * GET  /providers/delegate      → get the delegate provider
+ * PUT  /providers/delegate      → set delegate provider { provider_id } (null = use main)
  * POST /providers               → create provider
  * PUT  /providers/:id           → update provider
  * DELETE /providers/:id         → delete provider
@@ -69,6 +71,16 @@ export const providers = {
 
   setVision(providerId: number): Promise<unknown> {
     return api.put('/providers/vision', { provider_id: providerId });
+  },
+
+  getDelegate(): Promise<{ provider: Provider | null; source: string }> {
+    return api.get('/providers/delegate');
+  },
+
+  // provider_id null clears the explicit pin → subagent work falls back to the
+  // main provider (no "disabled" state). Backend returns the resolved status.
+  setDelegate(providerId: number | null): Promise<{ provider: Provider | null; source: string }> {
+    return api.put('/providers/delegate', { provider_id: providerId });
   },
 
   create(input: ProviderInput): Promise<{ provider: Provider }> {

@@ -14,7 +14,7 @@ const route = useRoute();
 const LABELS: Record<string, string> = {
   providers: 'Providers', cognition: 'Cognition', scheduler: 'Scheduler',
   lists: 'Lists', documents: 'Documents', capabilities: 'Capabilities',
-  vision: 'Vision', policies: 'Policies', skills: 'Skills', mcp: 'MCP', brain: 'Brain',
+  vision: 'Vision', delegate: 'Delegate', policies: 'Policies', skills: 'Skills', mcp: 'MCP', brain: 'Brain',
   memory: 'Memory', tools: 'Tools', world: 'World state',
   personality: 'Personality', errors: 'Errors', usage: 'Usage',
   compaction: 'Compacted Summary',
