@@ -9,6 +9,7 @@ Regenerate embeddings with:  cd backend && python -m utils.generate_search_cache
 
 import logging
 import sqlite3
+from typing import cast
 
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
@@ -25,7 +26,7 @@ _MIN_SCORE = 0.50   # below this = routing miss
 _WEAK_SCORE = 0.60  # below this (but >= _MIN_SCORE) = DDG supplement fires
 
 
-def route_query(query: str) -> list[dict]:
+def route_query(query: str) -> list[dict[str, object]]:
     """Route query to best providers. Returns [{"name", "score"}, ...] or []."""
     try:
         from services.embedding_service import EmbeddingService
@@ -79,14 +80,14 @@ def route_query(query: str) -> list[dict]:
     ranked = sorted(
         [{'name': n, 'score': round(sum(sorted(s, reverse=True)[:_TOP_N]) / min(len(s), _TOP_N), 4)}
          for n, s in scores.items()],
-        key=lambda p: p['score'], reverse=True,
+        key=lambda p: cast(float, p['score']), reverse=True,
     )
 
-    top = ranked[0]['score']
+    top = cast(float, ranked[0]['score'])
     if top < _MIN_SCORE:
         logger.info('[SEARCH] routing_miss query="%s" top=%.3f', query, top)
         return []
 
-    selected = [p for p in ranked if p['score'] >= top - _GAP][:_MAX]
+    selected = [p for p in ranked if cast(float, p['score']) >= top - _GAP][:_MAX]
     logger.info('[SEARCH] routed "%s" → %s', query, [(p['name'], p['score']) for p in selected])
     return selected

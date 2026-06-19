@@ -15,6 +15,7 @@ import json
 import logging
 import re
 import xml.etree.ElementTree as ET
+from typing import cast
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ── Field mappings per provider ──────────────────────────────────────────────
 
-FIELD_MAPS = {
+FIELD_MAPS: dict[str, dict[str, object]] = {
     'wikipedia': {
         'results_path': 'query.search',
         'title': 'title',
@@ -101,7 +102,7 @@ FIELD_MAPS = {
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-def transform(provider_name: str, response_format: str, raw_data, limit: int = 5) -> list:
+def transform(provider_name: str, response_format: str, raw_data: object, limit: int = 5) -> list[dict[str, object]]:
     """
     Transform a raw provider response into standardized results.
 
@@ -124,9 +125,9 @@ def transform(provider_name: str, response_format: str, raw_data, limit: int = 5
             # requests auto-decompresses gzip, so raw_data is already a dict
             if isinstance(raw_data, bytes):
                 return _transform_json_gzip(provider_name, raw_data, limit)
-            return _transform_json(provider_name, raw_data, limit)
+            return _transform_json(provider_name, cast("dict[str, object]", raw_data), limit)
         else:  # json
-            return _transform_json(provider_name, raw_data, limit)
+            return _transform_json(provider_name, cast("dict[str, object]", raw_data), limit)
     except Exception as e:
         logger.warning(f'[SEARCH] transform failed for {provider_name}: {e}')
         return []
@@ -134,7 +135,7 @@ def transform(provider_name: str, response_format: str, raw_data, limit: int = 5
 
 # ── JSON transform ───────────────────────────────────────────────────────────
 
-def _transform_json(provider_name: str, data: dict, limit: int) -> list:
+def _transform_json(provider_name: str, data: dict[str, object], limit: int) -> list[dict[str, object]]:
     """Transform a JSON response using field mappings."""
     field_map = FIELD_MAPS.get(provider_name)
     if not field_map:
@@ -142,22 +143,22 @@ def _transform_json(provider_name: str, data: dict, limit: int) -> list:
         return []
 
     # Navigate to results array
-    items = _resolve_path(data, field_map.get('results_path', ''))
+    items = _resolve_path(data, cast(str, field_map.get('results_path', '')))
     if not isinstance(items, list):
         return []
 
-    results = []
+    results: list[dict[str, object]] = []
     for item in items[:limit]:
         # Some providers wrap items (e.g. Reddit: each child has a 'data' key)
         unwrap = field_map.get('unwrap_key')
         if unwrap and isinstance(item, dict):
-            item = item.get(unwrap, item)
+            item = cast("dict[str, object]", item).get(cast(str, unwrap), item)
 
-        title = _extract_field(item, field_map.get('title', ''))
-        snippet = _extract_snippet(item, field_map)
-        url = _extract_url(item, field_map)
-        date = _extract_date(item, field_map)
-        image = _extract_image(item, field_map)
+        title = _extract_field(cast("dict[str, object]", item), cast(str, field_map.get('title', '')))
+        snippet = _extract_snippet(cast("dict[str, object]", item), field_map)
+        url = _extract_url(cast("dict[str, object]", item), field_map)
+        date = _extract_date(cast("dict[str, object]", item), field_map)
+        image = _extract_image(cast("dict[str, object]", item), field_map)
 
         if not title and not snippet:
             continue
@@ -179,15 +180,15 @@ def _transform_json(provider_name: str, data: dict, limit: int) -> list:
 _ATOM_NS = {'atom': 'http://www.w3.org/2005/Atom'}
 
 
-def _transform_atom(provider_name: str, raw_data, limit: int) -> list:
+def _transform_atom(provider_name: str, raw_data: object, limit: int) -> list[dict[str, object]]:
     """Transform Atom XML (ArXiv) into standard results."""
     if isinstance(raw_data, bytes):
         raw_data = raw_data.decode('utf-8', errors='replace')
 
-    root = ET.fromstring(raw_data)
+    root = ET.fromstring(cast(str, raw_data))
     entries = root.findall('atom:entry', _ATOM_NS)
 
-    results = []
+    results: list[dict[str, object]] = []
     for entry in entries[:limit]:
         title = _xml_text(entry, 'atom:title', _ATOM_NS)
         summary = _xml_text(entry, 'atom:summary', _ATOM_NS)
@@ -212,15 +213,15 @@ def _transform_atom(provider_name: str, raw_data, limit: int) -> list:
 
 # ── RSS XML transform (Google News) ──────────────────────────────────────────
 
-def _transform_rss(provider_name: str, raw_data, limit: int) -> list:
+def _transform_rss(provider_name: str, raw_data: object, limit: int) -> list[dict[str, object]]:
     """Transform RSS XML (Google News) into standard results."""
     if isinstance(raw_data, bytes):
         raw_data = raw_data.decode('utf-8', errors='replace')
 
-    root = ET.fromstring(raw_data)
+    root = ET.fromstring(cast(str, raw_data))
     items = root.findall('.//item')
 
-    results = []
+    results: list[dict[str, object]] = []
     for item in items[:limit]:
         title = _xml_text_plain(item, 'title')
         link = _xml_text_plain(item, 'link')
@@ -248,7 +249,7 @@ def _transform_rss(provider_name: str, raw_data, limit: int) -> list:
 
 # ── Gzip JSON transform (Stack Exchange) ─────────────────────────────────────
 
-def _transform_json_gzip(provider_name: str, raw_data: bytes, limit: int) -> list:
+def _transform_json_gzip(provider_name: str, raw_data: bytes, limit: int) -> list[dict[str, object]]:
     """Decompress gzip, parse JSON, delegate to JSON transform."""
     try:
         decompressed = gzip.decompress(raw_data)
@@ -262,7 +263,7 @@ def _transform_json_gzip(provider_name: str, raw_data: bytes, limit: int) -> lis
 
 # ── Field extraction helpers ─────────────────────────────────────────────────
 
-def _resolve_path(data, path: str):
+def _resolve_path(data: object, path: str) -> object:
     """Navigate a dotted path like 'query.search' into a nested dict."""
     if not path:
         return data
@@ -274,7 +275,7 @@ def _resolve_path(data, path: str):
     return data
 
 
-def _extract_field(item: dict, field_spec: str) -> str:
+def _extract_field(item: dict[str, object], field_spec: str) -> str:
     """
     Extract a field value using a field spec.
 
@@ -295,32 +296,32 @@ def _extract_field(item: dict, field_spec: str) -> str:
     return ''
 
 
-def _extract_snippet(item: dict, field_map: dict) -> str:
+def _extract_snippet(item: dict[str, object], field_map: dict[str, object]) -> str:
     """Extract snippet with provider-specific special handling."""
-    snippet_spec = field_map.get('snippet', '')
+    snippet_spec = cast(str, field_map.get('snippet', ''))
 
     # Special: MusicBrainz artist credit
     if snippet_spec == '_artist_credit':
-        credits = item.get('artist-credit', [])
+        credits = cast(list[object], item.get('artist-credit', []))
         if credits:
-            artists = [c.get('name', '') for c in credits if isinstance(c, dict)]
-            return ', '.join(a for a in artists if a)
+            artists = [cast("dict[str, object]", c).get('name', '') for c in credits if isinstance(c, dict)]
+            return ', '.join(cast(str, a) for a in artists if a)
         return ''
 
     return _extract_field(item, snippet_spec)
 
 
-def _extract_url(item: dict, field_map: dict) -> str:
+def _extract_url(item: dict[str, object], field_map: dict[str, object]) -> str:
     """Extract URL, falling back to template if needed."""
     # Try direct field first
-    url_spec = field_map.get('url', '')
+    url_spec = cast(str, field_map.get('url', ''))
     if url_spec:
         url = _extract_field(item, url_spec)
         if url:
             return url
 
     # Try fallback template (e.g. HN: construct URL from objectID)
-    fallback = field_map.get('url_fallback_template', '')
+    fallback = cast(str, field_map.get('url_fallback_template', ''))
     if fallback:
         try:
             return fallback.format(**item)
@@ -328,7 +329,7 @@ def _extract_url(item: dict, field_map: dict) -> str:
             pass
 
     # Try url_template
-    template = field_map.get('url_template', '')
+    template = cast(str, field_map.get('url_template', ''))
     if template:
         try:
             # URL-encode title for Wikipedia-style URLs
@@ -344,33 +345,33 @@ def _extract_url(item: dict, field_map: dict) -> str:
     return ''
 
 
-def _extract_image(item: dict, field_map: dict) -> str:
+def _extract_image(item: dict[str, object], field_map: dict[str, object]) -> str:
     """Extract a thumbnail/image URL from a result item.
 
     Most providers use a simple field path; a few need provider-specific
     handling (Reddit preview vs thumbnail, GitHub owner avatar, Open Library
     cover_i convention).
     """
-    spec = field_map.get('image', '')
+    spec = cast(str, field_map.get('image', ''))
     if not spec:
         return ''
 
     if spec == '_github_avatar':
         owner = item.get('owner') if isinstance(item, dict) else None
         if isinstance(owner, dict):
-            return owner.get('avatar_url') or ''
+            return cast(str, cast("dict[str, object]", owner).get('avatar_url') or '')
         return ''
 
     if spec == '_reddit_image':
         preview = item.get('preview') if isinstance(item, dict) else None
         if isinstance(preview, dict):
-            images = preview.get('images') or []
+            images = cast("list[object]", cast("dict[str, object]", preview).get('images') or [])
             if images and isinstance(images[0], dict):
-                source = images[0].get('source')
+                source = cast("dict[str, object]", images[0]).get('source')
                 if isinstance(source, dict):
-                    src_url = source.get('url')
+                    src_url = cast("dict[str, object]", source).get('url')
                     if src_url:
-                        return html.unescape(src_url)
+                        return html.unescape(cast(str, src_url))
         thumb = item.get('thumbnail')
         if isinstance(thumb, str) and thumb.startswith('http'):
             return thumb
@@ -388,9 +389,9 @@ def _extract_image(item: dict, field_map: dict) -> str:
     return ''
 
 
-def _extract_date(item: dict, field_map: dict) -> str | None:
+def _extract_date(item: dict[str, object], field_map: dict[str, object]) -> str | None:
     """Extract and normalize date from item."""
-    date_spec = field_map.get('date', '')
+    date_spec = cast(str, field_map.get('date', ''))
     if not date_spec:
         return None
 
@@ -439,32 +440,32 @@ def _clean_whitespace(text: str) -> str:
 _MEDIA_NS = '{http://search.yahoo.com/mrss/}'
 
 
-def _rss_item_image(item) -> str:
+def _rss_item_image(item: object) -> str:
     """Extract a thumbnail URL from an RSS <item>.
 
     Looks at media:thumbnail, media:content (when type starts with image/),
     enclosure (image/*), and the item's <image><url> child — in that order.
     """
-    thumb = item.find(f'{_MEDIA_NS}thumbnail')
+    thumb = cast(ET.Element, item).find(f'{_MEDIA_NS}thumbnail')
     if thumb is not None:
         url = thumb.get('url')
         if url:
             return url
-    for media in item.findall(f'{_MEDIA_NS}content'):
+    for media in cast(ET.Element, item).findall(f'{_MEDIA_NS}content'):
         media_type = (media.get('type') or '').lower()
         medium = (media.get('medium') or '').lower()
         if media_type.startswith('image/') or medium == 'image':
             url = media.get('url')
             if url:
                 return url
-    enc = item.find('enclosure')
+    enc = cast(ET.Element, item).find('enclosure')
     if enc is not None:
         enc_type = (enc.get('type') or '').lower()
         if enc_type.startswith('image/'):
             url = enc.get('url')
             if url:
                 return url
-    image_el = item.find('image')
+    image_el = cast(ET.Element, item).find('image')
     if image_el is not None:
         url_el = image_el.find('url')
         if url_el is not None and url_el.text:
@@ -472,15 +473,15 @@ def _rss_item_image(item) -> str:
     return ''
 
 
-def _xml_text(element, tag: str, namespaces: dict) -> str | None:
+def _xml_text(element: object, tag: str, namespaces: dict[str, str]) -> str | None:
     """Get text content of an XML sub-element with namespace."""
-    el = element.find(tag, namespaces)
+    el = cast(ET.Element, element).find(tag, namespaces)
     return el.text.strip() if el is not None and el.text else None
 
 
-def _xml_text_plain(element, tag: str) -> str | None:
+def _xml_text_plain(element: object, tag: str) -> str | None:
     """Get text content of an XML sub-element without namespace."""
-    el = element.find(tag)
+    el = cast(ET.Element, element).find(tag)
     return el.text.strip() if el is not None and el.text else None
 
 

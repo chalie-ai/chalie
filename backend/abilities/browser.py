@@ -171,7 +171,7 @@ class BrowserAbility(Ability):
 
     def _run_verb(self, verb: str, kwargs: dict[str, str]) -> dict[str, object]:
         try:
-            return run_verb(self._session_key(), verb, kwargs)
+            return run_verb(self._session_key(), verb, cast("dict[str, object]", kwargs))
         except TimeoutError:
             return {"_code": "browser-timeout",
                     "_hint": "Retry, or simplify the action (a busy page can take >90s).",

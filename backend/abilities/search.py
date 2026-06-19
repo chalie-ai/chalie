@@ -110,7 +110,7 @@ class SearchAbility(Ability):
         }
 
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
-    _providers: ClassVar[dict[str, object] | None] = None
+    _providers: ClassVar[dict[str, dict[str, object]] | None] = None
 
     def run(self, params: dict[str, object]) -> ToolResult:
         # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
@@ -156,10 +156,10 @@ class SearchAbility(Ability):
 
         structured = [
             {
-                "title": cast("dict[str, object]", r).get("title", ""),
-                "url": cast("dict[str, object]", r).get("url", ""),
-                "snippet": cast("dict[str, object]", r).get("snippet", ""),
-                "source": cast("dict[str, object]", r).get("provider", "") or _DDG,
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("snippet", ""),
+                "source": r.get("provider", "") or _DDG,
             }
             for r in results
         ]
@@ -185,7 +185,7 @@ class SearchAbility(Ability):
     # ── Provider registry ──────────────────────────────────────────────────────
 
     @classmethod
-    def _load_providers(cls) -> dict[str, object]:
+    def _load_providers(cls) -> dict[str, dict[str, object]]:
         if cls._providers is not None:
             return cls._providers
 
@@ -223,7 +223,7 @@ class SearchAbility(Ability):
 
     def _search_forced(
         self, query: str, provider_name: str, limit: int
-    ) -> "tuple[list[object], list[str], dict[str, object]]":
+    ) -> "tuple[list[dict[str, object]], list[str], dict[str, object]]":
         if provider_name == _DDG:
             return fetch_ddg_fallback(query, limit), [_DDG], {"routing_method": "forced"}
 
@@ -240,15 +240,15 @@ class SearchAbility(Ability):
 
     def _search_routed(
         self, query: str, limit: int
-    ) -> "tuple[list[object], list[str], dict[str, object]]":
+    ) -> "tuple[list[dict[str, object]], list[str], dict[str, object]]":
         try:
             from tools.search.router import route_query, _WEAK_SCORE
             ranked = route_query(query)
             if ranked:
                 providers = self._load_providers()
-                provider_dicts = [providers[cast(str, p["name"])] for p in ranked if p["name"] in providers]
+                provider_dicts = [providers[p["name"]] for p in ranked if p["name"] in providers]
                 results = fetch_providers(provider_dicts, query, limit)
-                used = [cast(str, cast("dict[str, object]", p)["name"]) for p in provider_dicts]
+                used = [cast(str, p["name"]) for p in provider_dicts]
                 meta: dict[str, object] = {"routing_method": "auto"}
 
                 top_score = cast(float, ranked[0]["score"])

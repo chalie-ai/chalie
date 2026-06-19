@@ -14,6 +14,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import cast
 from urllib.parse import quote_plus
 
 import requests
@@ -34,14 +35,14 @@ _DDG_TIME_RANGE_MAP = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
 # ── Circuit Breaker ──────────────────────────────────────────────────────────
 
-_breakers: dict = {}  # provider_name → breaker state
+_breakers: dict[str, dict[str, int | str | float | None]] = {}  # provider_name → breaker state
 _breaker_lock = threading.RLock()
 
 _BREAKER_THRESHOLD = 3     # consecutive failures to trip
 _BREAKER_RECOVERY_S = 60   # seconds before probe attempt
 
 
-def _get_breaker(name: str) -> dict:
+def _get_breaker(name: str) -> dict[str, int | str | float | None]:
     """Get or create breaker state for a provider."""
     with _breaker_lock:
         if name not in _breakers:
@@ -59,7 +60,7 @@ def _is_breaker_open(name: str) -> bool:
         b = _get_breaker(name)
         if b['state'] == 'closed':
             return False
-        if b['opened_at'] and (time.time() - b['opened_at']) >= _BREAKER_RECOVERY_S:
+        if b['opened_at'] and (time.time() - cast(float, b['opened_at'])) >= _BREAKER_RECOVERY_S:
             return False  # allow one probe
         return True
 
@@ -77,8 +78,8 @@ def _record_failure(name: str) -> None:
     """Record a failed fetch — increment failures, trip if threshold met."""
     with _breaker_lock:
         b = _get_breaker(name)
-        b['consecutive_failures'] += 1
-        if b['consecutive_failures'] >= _BREAKER_THRESHOLD:
+        b['consecutive_failures'] = cast(int, b['consecutive_failures']) + 1
+        if cast(int, b['consecutive_failures']) >= _BREAKER_THRESHOLD:
             b['state'] = 'open'
             b['opened_at'] = time.time()
             logger.warning(
@@ -89,19 +90,19 @@ def _record_failure(name: str) -> None:
 
 # ── Rate limit tracking ─────────────────────────────────────────────────────
 
-_last_call_times: dict = {}  # provider_name → timestamp
+_last_call_times: dict[str, float] = {}  # provider_name → timestamp
 _rate_lock = threading.RLock()
 
 
-def _enforce_rate_limit(provider: dict) -> None:
+def _enforce_rate_limit(provider: dict[str, object]) -> None:
     """Sleep if needed to respect provider rate limits."""
-    name = provider['name']
+    name = cast(str, provider['name'])
 
     # Mandatory delay (e.g. ArXiv 3s)
-    delay = provider.get('request_delay_seconds', 0)
+    delay = cast(float, provider.get('request_delay_seconds', 0))
 
     # Rate limit based delay
-    rate = provider.get('rate_limit_per_second')
+    rate = cast("float | None", provider.get('rate_limit_per_second'))
     if rate and rate > 0:
         min_interval = 1.0 / rate
         delay = max(delay, min_interval)
@@ -119,13 +120,13 @@ def _enforce_rate_limit(provider: dict) -> None:
 
 # ── Single provider fetch ────────────────────────────────────────────────────
 
-def _fetch_one(provider: dict, query: str, limit: int) -> list:
+def _fetch_one(provider: dict[str, object], query: str, limit: int) -> list[dict[str, object]]:
     """
     Fetch results from a single provider.
 
     Returns list of standardized result dicts, or empty list on error.
     """
-    name = provider['name']
+    name = cast(str, provider['name'])
 
     if _is_breaker_open(name):
         logger.info(f'[SEARCH] skipping {name} — circuit breaker open')
@@ -134,23 +135,23 @@ def _fetch_one(provider: dict, query: str, limit: int) -> list:
     _enforce_rate_limit(provider)
 
     # Build URL
-    url = provider['endpoint_template'].format(
+    url = cast(str, provider['endpoint_template']).format(
         query=quote_plus(query),
         limit=min(limit, 10),
     )
 
     # Build headers
-    headers = {'User-Agent': 'Chalie/1.0 (cognitive-agent)'}
+    headers: dict[str, str] = {'User-Agent': 'Chalie/1.0 (cognitive-agent)'}
     if provider.get('headers_json'):
         import json
         try:
-            extra = json.loads(provider['headers_json'])
+            extra = json.loads(cast(str, provider['headers_json']))
             headers.update(extra)
         except (json.JSONDecodeError, TypeError):
             pass
 
-    timeout = provider.get('timeout_seconds', 8)
-    fmt = provider['response_format']
+    timeout = cast("float | None", provider.get('timeout_seconds', 8))
+    fmt = cast(str, provider['response_format'])
 
     t0 = time.time()
     try:
@@ -223,7 +224,7 @@ def _fetch_one(provider: dict, query: str, limit: int) -> list:
 
 # ── Parallel fetch ───────────────────────────────────────────────────────────
 
-def fetch_providers(providers: list, query: str, limit: int = 5) -> list:
+def fetch_providers(providers: list[dict[str, object]], query: str, limit: int = 5) -> list[dict[str, object]]:
     """
     Fetch results from multiple providers in parallel.
 
@@ -273,18 +274,18 @@ def _enforce_ddg_cooldown() -> None:
         _ddg_last_call = time.time()
 
 
-def _transform_ddg_results(raw: list) -> list:
+def _transform_ddg_results(raw: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert raw DDG result dicts to the standard result format."""
-    results = []
-    seen: set = set()
+    results: list[dict[str, object]] = []
+    seen: set[str] = set()
     for r in raw:
-        url = (r.get("href") or "").strip()
+        url = cast(str, r.get("href") or "").strip()
         if not url or url in seen:
             continue
         seen.add(url)
-        snippet = re.sub(r"\s{2,}", " ", (r.get("body") or "").strip())[:300]
+        snippet = re.sub(r"\s{2,}", " ", cast(str, r.get("body") or "").strip())[:300]
         results.append({
-            'title': (r.get('title') or '').strip(),
+            'title': cast(str, r.get('title') or '').strip(),
             'snippet': snippet,
             'url': url,
             'provider': 'ddg',
@@ -293,7 +294,7 @@ def _transform_ddg_results(raw: list) -> list:
     return results
 
 
-def fetch_ddg_fallback(query: str, limit: int = 5) -> list:
+def fetch_ddg_fallback(query: str, limit: int = 5) -> list[dict[str, object]]:
     """Fall back to DDG web search. Returns results in standard format."""
     try:
         from ddgs import DDGS
