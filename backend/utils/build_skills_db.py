@@ -16,13 +16,11 @@ from services.embedding_utils import pack_embedding  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
 
 _SKILLS_DIR = FileMapperService.get_abilities_skills_path()
-_USER_SKILLS_DIR = FileMapperService.get_user_skills_path()
 _DB_PATH = FileMapperService.get_skills_db_path()
 _SHA_PATH = FileMapperService.get_skills_sha_path()
 
 _DEDUP_THRESHOLD = 0.95
 _SOURCE_CURATED = "curated"
-_SOURCE_USER = "user"
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
@@ -206,34 +204,25 @@ def _load_skills() -> list[dict]:
     return skills
 
 
-def _load_user_skills() -> list[dict]:
-    if not _USER_SKILLS_DIR.exists():
-        return []
-    skills = []
-    for path in sorted(_USER_SKILLS_DIR.glob("*.yaml")):
-        try:
-            meta = _parse_skill_file(path)
-            meta['_path'] = path.name
-            skills.append(meta)
-        except Exception as exc:
-            print(f"  WARNING: skipping user skill {path.name}: {exc}")
-    return skills
-
-
 def _build_sha_map(skills: list[dict]) -> dict[str, str]:
     return {m.get('title', m['_path']): _compute_sha(m) for m in skills}
 
 
 def _build(db_path: Path, sha_path: Path) -> None:
-    curated_skills = _load_skills()
-    user_skills = _load_user_skills()
-    all_skills = curated_skills + user_skills
-    print(f"Found {len(curated_skills)} curated + {len(user_skills)} user skills — building {db_path.name}...")
+    """Build the shipped, committed skills index — curated skills ONLY.
 
-    emb_service = EmbeddingService() if all_skills else None
+    User skills (``data/skills/user/*.yaml``) are per-user runtime state, never
+    baked into the committed artifact. They are indexed individually into the
+    local DB via ``index_skill`` from ``skill_builder``/``api.skills`` on
+    create/edit. Do NOT re-add ``_load_user_skills`` here — it leaks the
+    machine's personal skills into the shipped ``skills.sqlite``.
+    """
+    curated_skills = _load_skills()
+    print(f"Found {len(curated_skills)} curated skills — building {db_path.name}...")
+
+    emb_service = EmbeddingService() if curated_skills else None
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -246,18 +235,13 @@ def _build(db_path: Path, sha_path: Path) -> None:
             n = _insert_skill(conn, emb_service, meta, source=_SOURCE_CURATED)
             print(f"  [curated] {meta.get('title', meta['_path'])}: {n} entries")
             total_entries += n
-
-        for meta in user_skills:
-            n = _insert_skill(conn, emb_service, meta, source=_SOURCE_USER)
-            print(f"  [user] {meta.get('title', meta['_path'])}: {n} entries")
-            total_entries += n
     finally:
         conn.close()
 
-    sha_map = _build_sha_map(all_skills)
+    sha_map = _build_sha_map(curated_skills)
     sha_path.write_text(json.dumps(sha_map, indent=2, sort_keys=True) + "\n")
 
-    print(f"\nDone. {len(curated_skills)} curated + {len(user_skills)} user skills, {total_entries} entries total.")
+    print(f"\nDone. {len(curated_skills)} curated skills, {total_entries} entries total.")
     print(f"SHA sidecar written to {sha_path.name}")
 
 
@@ -267,8 +251,7 @@ def _check(sha_path: Path) -> None:
         sys.exit(1)
 
     existing = json.loads(sha_path.read_text())
-    all_skills = _load_skills() + _load_user_skills()
-    current = _build_sha_map(all_skills)
+    current = _build_sha_map(_load_skills())
 
     if existing == current:
         print("OK")
