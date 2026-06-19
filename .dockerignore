@@ -1,11 +1,4 @@
-# The runtime stage fetches ALL source via install.sh (from the GitHub
-# tarball), so the build context only needs frontend/ source for the Vite
-# builder stage. Exclude everything else, plus the heavy/stale frontend
-# artifacts, to keep the context small and the builder reproducible.
+# The runtime stage fetches ALL source (including the committed Vue dist) via
+# install.sh from the GitHub tarball — nothing is COPYed from the build context,
+# so exclude everything and keep the context empty.
 *
-!frontend
-frontend/node_modules
-frontend/**/node_modules
-frontend/**/dist
-frontend/.turbo
-**/.DS_Store
