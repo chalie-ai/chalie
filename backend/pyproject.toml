@@ -111,19 +111,7 @@ ignore_missing_imports = true
 # Relax ratchet: every unmigrated first-party package is listed here.
 # To migrate a package: remove its glob, run the gate, fix all surfaced errors.
 # When ALL globs are removed, delete this entire block (final-flip ticket).
-module = [
-    "vision.*",
-    "migrations.*",
-    "scripts.*",
-    "tests.*",
-    "consumer",
-    "run",
-    "runtime_config",
-    "migrate_transcript_rebuild",
-    "optimize_models",
-    "reset_db",
-    "migration_001_drop_compactions",
-]
+module = ["tests.*",]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 disallow_untyped_calls = false

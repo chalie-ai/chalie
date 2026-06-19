@@ -27,6 +27,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, TypedDict
 
 # Add backend/ to sys.path so services.* imports resolve when invoked standalone.
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -69,6 +70,19 @@ _PLAIN_TEXT_MAX = 10_000
 
 # Roles that are background/internal — skip entirely
 _SKIP_ROLES = {"proactive_thought", "subagent", "subagent_return", "scheduled", "tool"}
+
+if TYPE_CHECKING:
+    class _Stats(TypedDict):
+        channel: str
+        rows_read: int
+        skipped_role: int
+        skipped_unrecoverable_user: int
+        skipped_empty_assistant: int
+        skipped_unpaired: int
+        skipped_dedup: int
+        pairs_inserted: int
+        orphaned_tool_calls_deleted: int
+        unrecoverable_details: list[str]
 
 
 def extract_user_message(content: str) -> str | None:
@@ -122,7 +136,7 @@ def _pair_key(user_content: str, assistant_content: str) -> str:
 
 # ── Core migration ──────────────────────────────────────────────────────────
 
-def run_migration(db_path: str, channel: str, limit: int, dry_run: bool):
+def run_migration(db_path: str, channel: str, limit: int, dry_run: bool) -> "_Stats":
 
     if not Path(db_path).exists():
         print(f"  ERROR: DB not found at {db_path}", file=sys.stderr)
@@ -139,7 +153,7 @@ def run_migration(db_path: str, channel: str, limit: int, dry_run: bool):
         conn.close()
 
 
-def _build_pairs(rows: list, stats: dict) -> list:
+def _build_pairs(rows: list[sqlite3.Row], stats: "_Stats") -> list[tuple[sqlite3.Row, sqlite3.Row]]:
     """Walk rows chronologically and build (user, assistant) exchange pairs."""
     pairs = []
     pending_user = None
@@ -171,7 +185,7 @@ def _build_pairs(rows: list, stats: dict) -> list:
     return pairs
 
 
-def _clean_and_dedup(pairs: list, stats: dict) -> list:
+def _clean_and_dedup(pairs: list[tuple[sqlite3.Row, sqlite3.Row]], stats: "_Stats") -> list[dict[str, str]]:
     """Extract raw user messages, validate assistant content, and deduplicate."""
     clean_pairs = []
     seen_keys: set[str] = set()
@@ -207,7 +221,7 @@ def _clean_and_dedup(pairs: list, stats: dict) -> list:
     return clean_pairs
 
 
-def _print_stats(stats: dict, clean_count: int) -> None:
+def _print_stats(stats: "_Stats", clean_count: int) -> None:
     """Print migration statistics."""
     print(f"\n  Channel: {stats['channel']!r}")
     print(f"  Rows read            : {stats['rows_read']}")
@@ -227,8 +241,8 @@ def _print_stats(stats: dict, clean_count: int) -> None:
             print(d)
 
 
-def _write_pairs(conn: sqlite3.Connection, channel: str, rows: list,
-                 clean_pairs: list, stats: dict) -> None:
+def _write_pairs(conn: sqlite3.Connection, channel: str, rows: list[sqlite3.Row],
+                 clean_pairs: list[dict[str, str]], stats: "_Stats") -> None:
     """Delete old transcript data and re-insert clean pairs."""
     old_ids = [r["id"] for r in rows]
 
@@ -270,8 +284,8 @@ def _write_pairs(conn: sqlite3.Connection, channel: str, rows: list,
     print("  NOTE: build_messages() is unaffected — it reads by ID range.")
 
 
-def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: bool) -> dict:
-    stats = {
+def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: bool) -> "_Stats":
+    stats: "_Stats" = {
         "channel": channel,
         "rows_read": 0,
         "skipped_role": 0,
@@ -319,7 +333,7 @@ def _do_migration(conn: sqlite3.Connection, channel: str, limit: int, dry_run: b
     return stats
 
 
-def _print_pair_preview(pairs: list):
+def _print_pair_preview(pairs: list[dict[str, str]]) -> None:
     print("\n  Preview (first 3 pairs):")
     for i, pair in enumerate(pairs):
         u_preview = pair["user_content"][:120].replace("\n", " ")
@@ -432,7 +446,7 @@ def _write_flag(flag: Path) -> None:
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Rebuild transcript table with clean north-star-aligned exchange pairs."
     )

@@ -5,7 +5,7 @@ Folder Watcher Worker - background daemon thread. Registered in run.py as
 
 import logging
 import time
-from typing import Any, Dict, List, cast
+from typing import cast
 
 from services.folder_watcher_service import FolderWatcherService
 
@@ -21,7 +21,7 @@ def _scan_folder_if_due(service: FolderWatcherService, folder: dict[str, object]
         return
     result = service.scan_folder(folder)
     label = folder.get('label') or folder.get('folder_path', '?')
-    total = result['new'] + result['updated'] + result['deleted'] + result['renamed']
+    total = cast("int", result['new']) + cast("int", result['updated']) + cast("int", result['deleted']) + cast("int", result['renamed'])
     if total > 0:
         logger.info(
             "[FOLDER WATCHER] %s: +%d new, ~%d updated, -%d deleted, ≈%d renamed",

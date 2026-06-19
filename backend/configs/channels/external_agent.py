@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
@@ -118,7 +118,7 @@ class EAMPConfig(ProcessorConfig):
                     key = row.get("key") if isinstance(row, dict) else getattr(row, "key", None)
                     val = row.get("value") if isinstance(row, dict) else getattr(row, "value", None)
                     if key == "user_summary" and val:
-                        first_word = val.split()[0] if val else ""
+                        first_word = cast("str", val).split()[0] if val else ""
                         if first_word:
                             user_name = first_word
                         break

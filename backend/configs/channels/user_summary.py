@@ -200,7 +200,7 @@ class UserSummaryConfig(ProcessorConfig):
         else:
             lines = [
                 f"{r['key']}: {r['value']}"
-                for r in rows
+                for r in cast("list[dict[str, object]]", rows)
                 if r.get("key") and r.get("value")
             ]
             facts_section = "Facts:\n" + "\n".join(lines) if lines else "Facts:\n(no facts available)"

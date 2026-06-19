@@ -74,19 +74,15 @@ _TOP_LEVEL_MODULES = [
 # into not-yet-migrated packages (cross-package cascade residuals). The ceiling
 # reaches 0 at TKT-1055 (final flip) when this check reverts to returncode == 0.
 #
-# Current residuals (after TKT-1046..1053: foundation + utils/workers/mcp_server,
-# configs, services, abilities, api, capabilities, tools all migrated to strict).
-# The remaining 9 live in already-strict packages and do NOT depend on the
-# still-relaxed packages (vision/...), so they survive their migrations and
-# clear at TKT-1055 (final flip):
-#   - 6 × configs/channels/* — `dict[str, object] | None` narrowing
-#     (union-attr/index in user.py / user_summary.py / external_agent.py) plus the
-#     get_image override + open() overload in vision.py against
-#     services.processor_config.ProcessorConfig
-#   - 2 × arg-type in utils/* (EmbeddingService | None passed where
-#     EmbeddingService is expected in build_ability_db / build_skills_db)
-#   - 1 × operator in workers/folder_watcher_worker.py (object operand on `+`)
-_MAX_RESIDUAL_ERRORS: int = 9
+# After TKT-1046..1053 plus the non-tests final-flip cleanup (migrations, scripts
+# and the consumer/run/runtime_config/migrate_transcript_rebuild top-level modules
+# migrated, and the last configs/utils/workers residuals cleared) EVERY first-party
+# package and module is strict-clean EXCEPT `tests.*`, which is the only remaining
+# entry in the pyproject relax block. With tests relaxed the gate sees zero errors,
+# so the ceiling is 0. TKT-1054 hard-types tests/; TKT-1055 then removes the final
+# `tests.*` glob, deletes the relax block entirely, and reverts the assertion below
+# to ``proc.returncode == 0``.
+_MAX_RESIDUAL_ERRORS: int = 0
 
 
 def test_first_party_source_is_strict_clean() -> None:

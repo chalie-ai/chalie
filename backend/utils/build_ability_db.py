@@ -4,6 +4,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -154,7 +155,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
 
         total_entries = 0
         for ability in abilities:
-            n = _insert_ability(conn, emb_service, ability)
+            n = _insert_ability(conn, cast("EmbeddingService", emb_service), ability)
             print(f"  {ability.get_name()}: {n} entries")
             total_entries += n
     finally:

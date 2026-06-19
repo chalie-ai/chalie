@@ -5,7 +5,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import yaml
@@ -190,7 +190,7 @@ def _insert_skill(
     )
     skill_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    return index_skill(conn, emb_service, skill_id, title, use_for, tags_str)
+    return index_skill(conn, cast("EmbeddingService", emb_service), skill_id, title, use_for, tags_str)
 
 
 def _load_skills() -> list[dict[str, Any]]:

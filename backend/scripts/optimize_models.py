@@ -81,7 +81,7 @@ def optimize_model(onnx_path: Path, optimized_path: Path,
     return True
 
 
-def main():
+def main() -> None:
     print(f"onnxruntime {ort.__version__}")
     print(f"Models dir: {MODELS_DIR}\n")
 

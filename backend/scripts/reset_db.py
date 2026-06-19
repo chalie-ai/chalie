@@ -25,7 +25,7 @@ DATA_TABLES = [
 ]
 
 
-def clear_database():
+def clear_database() -> None:
     """Delete all rows from cognitive data tables."""
     db = get_shared_db_service()
 

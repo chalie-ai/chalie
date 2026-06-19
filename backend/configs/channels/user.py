@@ -89,7 +89,7 @@ class UserConfig(ProcessorConfig):
             from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
             dgs = get_data_graph_service()
             rows = dgs.fetch(kinds=["system"], order_by="retrieval_weight DESC")
-            by_key = {r.get("key"): r for r in rows if r.get("key")}
+            by_key = {r.get("key"): r for r in cast("list[dict[str, object]]", rows) if r.get("key")}
 
             preferred_key = "user_summary_long" if prefer_long else "user_summary"
             entry = by_key.get(preferred_key)

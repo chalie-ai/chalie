@@ -19,7 +19,7 @@ Vision Provider from the DB instead of the global selected provider;
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 
 if TYPE_CHECKING:
@@ -65,11 +65,11 @@ class VisionConfig(ProcessorConfig):
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
         return mp._raw_input
 
-    def get_image(self, mp: "MessageProcessor") -> "dict[str, object] | None":
+    def get_image(self, mp: "MessageProcessor") -> "dict[str, str] | None":
         meta = mp._metadata or {}
         path = meta.get("image_path")
         if not path:
             return None
-        with open(path, "rb") as fh:
+        with open(cast("str", path), "rb") as fh:
             data = base64.b64encode(fh.read()).decode()
-        return {"data": data, "mime_type": meta.get("mime_type") or "image/png"}
+        return cast("dict[str, str]", {"data": data, "mime_type": meta.get("mime_type") or "image/png"})

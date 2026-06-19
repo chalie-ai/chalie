@@ -16,11 +16,11 @@ import logging
 import time
 import signal
 import threading
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, cast
 
 from utils.logger import Logger
 
-def _read_version():
+def _read_version() -> str:
     try:
         from services.file_mapper_service import FileMapperService
         return FileMapperService.get_version_path().read_text().strip()
@@ -30,12 +30,12 @@ def _read_version():
 APP_VERSION = _read_version()
 
 
-def _thread_excepthook(args):
+def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
     """Threads die silently by default — log uncaught exceptions globally."""
     logging.error(
-        f"[ThreadException] Uncaught exception in thread '{args.thread.name}': "
+        f"[ThreadException] Uncaught exception in thread '{cast(threading.Thread, args.thread).name}': "
         f"{args.exc_type.__name__}: {args.exc_value}",
-        exc_info=(args.exc_type, args.exc_value, args.exc_traceback)
+        exc_info=(args.exc_type, cast("BaseException", args.exc_value), args.exc_traceback)
     )
 
 
@@ -46,21 +46,21 @@ threading.excepthook = _thread_excepthook
 class WorkerManager:
     """Master supervisor for managing worker threads."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.threads: Dict[str, threading.Thread] = {}
-        self.service_definitions: List[Tuple[str, callable]] = []
+        self.service_definitions: List[Tuple[str, Callable[[], None]]] = []
         self.running = True
 
-    def register_service(self, worker_id: str, worker_func):
+    def register_service(self, worker_id: str, worker_func: Callable[[], None]) -> None:
         self.service_definitions.append((worker_id, worker_func))
         logging.info(f"[Manager] Registered service definition: {worker_id}")
 
-    def spawn_service(self, worker_id: str, worker_func):
+    def spawn_service(self, worker_id: str, worker_func: Callable[[], None]) -> None:
         """Skip if a thread with the given worker_id is already alive."""
         if worker_id in self.threads and self.threads[worker_id].is_alive():
             return
 
-        def _run():
+        def _run() -> None:
             try:
                 worker_func()
             except Exception:
@@ -71,7 +71,7 @@ class WorkerManager:
         self.threads[worker_id] = t
         logging.info(f"[Manager] Spawned service: {worker_id} (thread)")
 
-    def spawn_all_services(self):
+    def spawn_all_services(self) -> None:
         """Individual spawn failures are logged but do not abort subsequent
         spawns."""
         logging.info("[Manager] Spawning all services...")
@@ -81,7 +81,7 @@ class WorkerManager:
             except Exception as e:
                 logging.error(f"[Manager] Failed to spawn service '{worker_id}': {e}")
 
-    def check_health(self):
+    def check_health(self) -> None:
         """Check service thread health and restart dead threads."""
         for worker_id, worker_func in self.service_definitions:
             try:
@@ -93,7 +93,7 @@ class WorkerManager:
                 logging.error(f"[Manager] Health check failed for service {worker_id}: {e}")
 
 
-    def shutdown_all(self):
+    def shutdown_all(self) -> None:
         """Daemon threads are terminated automatically when the main thread
         finishes."""
         logging.info("\n[Manager] Initiating graceful shutdown...")
@@ -101,7 +101,7 @@ class WorkerManager:
         # Daemon threads will be killed when main thread exits
         logging.info("[Manager] All services stopped")
 
-    def run(self):
+    def run(self) -> None:
         """Installs SIGINT/SIGTERM handlers, spawns all services, then polls
         every 5 s to restart dead threads. Logs a summary every 5 minutes.
         Blocks until shutdown_all() or KeyboardInterrupt."""
