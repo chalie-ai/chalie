@@ -110,12 +110,15 @@ and is not equivalent to a normal assignment.
 
 ---
 
-## Type primitives
+## Shared shapes
 
-`services/typing_primitives.py` is the canonical home for recurring shape
-aliases (`JSONDict`, `JSONList`) and shared `TypedDict`s / `Protocol`s. Prefer
-importing a named alias over re-spelling `dict[str, object]` in many places,
-and graduate a hot shape to a precise `TypedDict` once it is well understood.
+When a structural shape recurs across packages, give it a named alias or — once
+the keys are well understood — a precise `TypedDict` / `Protocol`, and import
+that instead of re-spelling `dict[str, object]` everywhere. Keep such shared
+definitions in one module so the precise type can be tightened in a single
+place. Never reach for `Any` as the alias's value: a JSON-decoded blob whose
+shape is genuinely unknown is `object` (narrow at the read site with an inline
+`cast`), not `Any`.
 
 ---
 
