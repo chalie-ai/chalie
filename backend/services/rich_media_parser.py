@@ -24,29 +24,27 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn) -> list[int]:
-    """Return the transcript row IDs whose tool_calls feed the parser for one assistant turn.
+    """Return every transcript row ID of the turn that owns ``assistant_transcript_id``.
 
-    Tool_calls are stored against the user-input transcript row, not the
-    assistant output row.  Both the live broadcast path and the refresh path
-    use this function, so they are guaranteed to resolve the same transcript
-    IDs.
+    Under the chain model a turn is many rows (input → step rows that each
+    emitted the tool calls → final synthesis row), all sharing one turn_id. A
+    rich-media span lives on the FINAL row, but the tool that produced the card
+    ran on a STEP row, so pairing needs the WHOLE turn's transcript ids, not just
+    the row's own. Both the live broadcast path and the refresh path call this,
+    so they resolve the same id set. Falls back to ``[assistant_transcript_id]``
+    when the row has no turn (skip_transcript channels) or is unknown.
     """
     row = conn.execute(
-        "SELECT t2.id FROM transcript t1 "
-        "JOIN transcript t2 ON t2.channel = t1.channel "
-        "  AND t2.id < t1.id "
-        "  AND t2.role IN ('user', 'subagent_return') "
-        "WHERE t1.id = ? "
-        "ORDER BY t2.id DESC LIMIT 1",
+        "SELECT channel, turn_id FROM transcript WHERE id = ?",
         (assistant_transcript_id,),
     ).fetchone()
-    if row is None:
-        logger.warning(
-            "resolve_tool_call_transcript_ids: no preceding user row for assistant_id=%s",
-            assistant_transcript_id,
-        )
-        return []
-    return [row[0]]
+    if row is None or row[1] is None:
+        return [assistant_transcript_id]
+    ids = conn.execute(
+        "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id",
+        (row[0], row[1]),
+    ).fetchall()
+    return [r[0] for r in ids] or [assistant_transcript_id]
 
 # Matches <span id='tool_name_N'>…</span> or <span id="tool_name_N">…</span>,
 # optionally with a single ``data-image='url'`` attribute that lets the LLM

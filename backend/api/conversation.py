@@ -11,20 +11,30 @@ logger = logging.getLogger(__name__)
 conversation_bp = Blueprint('conversation', __name__)
 
 
-def _fetch_tool_calls_for_transcript(conn, transcript_id: int) -> list[dict]:
-    """Rows within the 7-day retention window carry the rich-media payloads the
-    parser uses to pair span tags with cards."""
+def _fetch_tool_calls_for_transcripts(conn, transcript_ids: list[int]) -> list[dict]:
+    """Tool-call rows anchored to any of the given transcript ids, ordered by id.
+
+    Rows within the 7-day retention window carry the rich-media payloads the
+    parser uses to pair span tags with cards, and the act_summary the frontend
+    prints as the blue box under each tool chip. Ordered by ``id`` (not
+    ``created_at``, which is 1-second granular and ambiguous within a batch) so
+    multiple calls on one row keep their emission order.
+    """
+    if not transcript_ids:
+        return []
+    placeholders = ",".join("?" * len(transcript_ids))
     tc_rows = conn.execute(
-        "SELECT tool_name, params, result, created_at FROM tool_calls "
-        "WHERE transcript_id = ? ORDER BY created_at",
-        (transcript_id,),
+        f"SELECT tool_name, params, result, summary, created_at FROM tool_calls "
+        f"WHERE transcript_id IN ({placeholders}) ORDER BY id",
+        tuple(transcript_ids),
     ).fetchall()
     return [
         {
             "tool_name": r[0],
             "params": r[1],
             "result": r[2] or "",
-            "created_at": r[3],
+            "summary": r[3] or "",
+            "created_at": r[4],
         }
         for r in tc_rows
     ]
@@ -71,9 +81,12 @@ def get_recent_history(limit=12, offset=0):
         ).fetchall()
 
         # Build messages and attach rich-media segments for assistant rows.
-        # _resolve_ids() queries the DB for the user-input transcript row that
-        # precedes each assistant row — the same lookup used by the WS-send path.
-        # Both paths call the same helper so they can never silently diverge.
+        # Under the chain model a tool turn is many rows (input → step rows that
+        # emitted the tools → final synthesis row). Each assistant row shows its
+        # OWN tool chips (anchored to that row), while rich-media spans resolve
+        # TURN-WIDE via _resolve_ids() — the span sits on the final row but the
+        # tool ran on a step row. The WS-send path calls the same helper, so the
+        # two paths can never silently diverge.
         messages = []
 
         # Re-render uploaded attachments on refresh: batch-fetch the doc links for
@@ -105,15 +118,25 @@ def get_recent_history(limit=12, offset=0):
                     "content": content,
                     "timestamp": ts,
                 }
-                # Attach segments for assistant rows so the frontend can
-                # reconstruct rich-media cards on page refresh.
-                input_ids = _resolve_ids(transcript_id, conn)
-                if input_ids:
-                    tool_calls = _fetch_tool_calls_for_transcript(conn, input_ids[0])
-                else:
-                    tool_calls = []
-                segments = _parse_rich_media(content, tool_calls)
-                if not segments:
+                # Per-row chips: the tools THIS row emitted (anchored to its own
+                # id), each with the ability's persisted act_summary — the blue
+                # box the frontend prints. Set only when the row drove tools; the
+                # framework compaction marker never surfaces as a chip.
+                own_calls = _fetch_tool_calls_for_transcripts(conn, [transcript_id])
+                chips = [
+                    {"tool_name": c["tool_name"], "summary": c["summary"]}
+                    for c in own_calls
+                    if c["tool_name"] != "chat_history_compactor"
+                ]
+                if chips:
+                    msg["tool_calls"] = chips
+                # Segments: rich-media spans live on the final row but the tool
+                # ran on a step row, so pair TURN-WIDE — gather every tool call
+                # across the turn's transcript rows, then parse THIS row's content.
+                turn_ids = _resolve_ids(transcript_id, conn)
+                turn_calls = _fetch_tool_calls_for_transcripts(conn, turn_ids)
+                segments = _parse_rich_media(content, turn_calls)
+                if not segments and content:
                     segments = [{"type": "text", "content": content}]
                 msg["segments"] = segments
                 messages.append(msg)

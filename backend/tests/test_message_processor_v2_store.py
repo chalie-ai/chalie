@@ -41,7 +41,6 @@ def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
         build_user_definition=lambda _mp: _GPM_USER_DEF,
         build_system_prompt=lambda _mp: '',
         always_available=[],
-        max_iterations=5,
         skip_transcript=False,
         skip_input_row=False,
         suppress_history=suppress_history,
@@ -74,16 +73,17 @@ class _GPMFakeProcessor:
 
 class TestGetPreviousMessagesTranscript:
     def _seed_transcript(self, db, channel=_GPM_CHANNEL):
+        # created_at defaults to now() — recent rows that survive the 6h age cut-off.
         db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Hello world', '2026-04-10 10:00:00')",
+            "INSERT INTO transcript (channel, role, content) "
+            "VALUES (?, 'user', 'Hello world')",
             (channel,)
         )
         uid1 = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'assistant', 'Hi there', '2026-04-10 10:01:00')",
+            "INSERT INTO transcript (channel, role, content) "
+            "VALUES (?, 'assistant', 'Hi there')",
             (channel,)
         )
         uid2 = db.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -127,8 +127,8 @@ class TestGetPreviousMessagesChannelIsolation:
     def _seed_all_channels(self, db):
         for channel in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
             db.execute(
-                "INSERT INTO transcript (channel, role, content, created_at) "
-                "VALUES (?, 'user', ?, '2026-04-10 10:00:00')",
+                "INSERT INTO transcript (channel, role, content) "
+                "VALUES (?, 'user', ?)",
                 (channel, f"Content from {channel}")
             )
         db.commit()
@@ -149,17 +149,24 @@ class TestGetPreviousMessagesChannelIsolation:
 
 class TestGetPreviousMessagesTimestampFormat:
     def test_iso_timestamp_with_offset_formatted_correctly(self, db):
+        from datetime import timedelta
+
+        from services.time_utils import utc_now
+
         channel = _GPM_CHANNEL
+        # A recent ISO-8601 created_at with a UTC offset (within the 6h window) must
+        # render minute-precision as [YYYY-MM-DD HH:MM].
+        recent = utc_now() - timedelta(minutes=5)
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Timestamp test', '2026-04-10T14:03:27+00:00')",
-            (channel,)
+            "VALUES (?, 'user', 'Timestamp test', ?)",
+            (channel, recent.isoformat())
         )
         db.commit()
 
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
-        assert '[2026-04-10 14:03]' in result
+        assert f"[{recent.strftime('%Y-%m-%d %H:%M')}]" in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -179,8 +186,8 @@ class TestGetPreviousMessagesWindowFit:
     def _seed_rows(self, db, n, channel=_GPM_CHANNEL):
         for i in range(n):
             db.execute(
-                "INSERT INTO transcript (channel, role, content, created_at) "
-                "VALUES (?, 'user', ?, '2026-04-10 10:00:00')",
+                "INSERT INTO transcript (channel, role, content) "
+                "VALUES (?, 'user', ?)",
                 (channel, f"line-{i:04d}-end"),
             )
         db.commit()
@@ -216,82 +223,6 @@ class TestGetPreviousMessagesWindowFit:
         p = _GPMFakeProcessor.make()
         assert p.get_previous_messages(drop_oldest=2) == ""
         assert p.get_previous_messages(drop_oldest=5) == ""
-
-
-# =============================================================================
-# Trail compaction excludes the automatic memory-recall seed
-#
-# Canonical design §2-3: ToolChainCompactor no-ops when there are no tool calls
-# "excluding internal ones (compaction + automatic memory recall)", and when it
-# DOES compact it excludes the automatic memory recall from the act-trail. The
-# seed is the turn-0 memory(action=recall, _auto=True) dispatch; a model-issued
-# memory call has no _auto flag and stays real trail. Real DB rows, real
-# _has_trail / _render_act_trail off a uid-bound processor — zero mocks.
-# =============================================================================
-class TestTrailExcludesAutoMemoryRecall:
-    def _seed_turn(self, db, channel=_GPM_CHANNEL):
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'turn input', '2026-04-10 10:00:00')",
-            (channel,),
-        )
-        tid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-        return tid
-
-    def _add_tool_call(self, db, tid, tool_name, params_json, result, when):
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (tid, tool_name, params_json, result, when),
-        )
-        db.commit()
-
-    def test_auto_memory_only_trail_is_no_op(self, db):
-        # Only the turn-0 auto memory seed fired — nothing real to compact.
-        tid = self._seed_turn(db)
-        self._add_tool_call(
-            db, tid, "memory",
-            '{"action": "recall", "query": "who is boss", "_auto": true}',
-            "recalled: boss is Alex", "2026-04-10 10:00:05",
-        )
-        p = _GPMFakeProcessor.make(uid=tid)
-        assert p._has_trail() is False
-        # Default render (per-turn display) still shows the auto-recall...
-        assert "recalled: boss is Alex" in p._render_act_trail()
-        # ...but the compaction input drops it, leaving nothing to compact.
-        assert p._render_act_trail(for_compaction=True) == ""
-
-    def test_auto_memory_plus_real_call_compacts_only_real(self, db):
-        tid = self._seed_turn(db)
-        self._add_tool_call(
-            db, tid, "memory",
-            '{"action": "recall", "query": "q", "_auto": true}',
-            "auto recalled facts", "2026-04-10 10:00:05",
-        )
-        self._add_tool_call(
-            db, tid, "search", '{"query": "weather"}',
-            "sunny 24C", "2026-04-10 10:00:10",
-        )
-        p = _GPMFakeProcessor.make(uid=tid)
-        assert p._has_trail() is True
-        compaction_input = p._render_act_trail(for_compaction=True)
-        assert "sunny 24C" in compaction_input            # real call compacted
-        assert "auto recalled facts" not in compaction_input  # auto seed excluded
-        # Default per-turn render keeps both.
-        assert "auto recalled facts" in p._render_act_trail()
-
-    def test_model_initiated_memory_counts_as_real_trail(self, db):
-        # A model-issued memory call has NO _auto flag — it is genuine activity.
-        tid = self._seed_turn(db)
-        self._add_tool_call(
-            db, tid, "memory",
-            '{"action": "recall", "query": "remind me"}',
-            "model recalled X", "2026-04-10 10:00:05",
-        )
-        p = _GPMFakeProcessor.make(uid=tid)
-        assert p._has_trail() is True
-        assert "model recalled X" in p._render_act_trail(for_compaction=True)
 
 
 # =============================================================================

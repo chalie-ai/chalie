@@ -49,7 +49,6 @@ class ScheduledConfig(ProcessorConfig):
             role="scheduled_worker",
             policy_channel=policy_channel,
             always_available=list(DEFAULT_ALWAYS_AVAILABLE),
-            max_iterations=100,
             skip_transcript=False,  # persist the instruction (recoverability)
             skip_input_row=False,   # and give the act-trail a uid to key on
             suppress_history=True,

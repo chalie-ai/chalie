@@ -126,23 +126,28 @@ def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db):
     shared function the refresh path uses.
     """
     import time
+    from services import transcript_service as ts
 
-    uid = _seed_transcript(db, content="What's the weather in Valletta?")
-    db.commit()
-
-    # Tool call recorded against the user row via the real production write path
+    # Chain model: the tool anchors to the assistant STEP row, the synthesis span
+    # lands on the FINAL row, and all three rows share the turn_id the input row
+    # opened. _broadcast_turn_result resolves TURN-WIDE from the newest channel
+    # row (the final assistant row) so the final-row span pairs with the step
+    # row's tool. Seeded through the production writers + ActTrail.record — the
+    # same path the live chain takes.
+    uid = ts.write_input_row("user", "user", "What's the weather in Valletta?")
+    turn = ts.turn_id_of_row(uid)
+    step_id = ts.write_assistant_row("user", "Let me check the weather.", turn_id=turn)
     ActTrail().record(
         tool_name="weather",
         params={"location": "Valletta"},
         result=_RICH_RESULT,
-        transcript_id=uid,
+        transcript_id=step_id,
     )
 
-    # Assistant reply persisted BEFORE the broadcast runs — reproducing the live
-    # ordering where the newest channel row is the assistant's, not the user's.
+    # Final synthesis row persisted BEFORE the broadcast runs — reproducing the
+    # live ordering where the newest channel row is the turn's final assistant row.
     assistant_content = "<span id='weather_1'>Sunny, 27°C.</span>"
-    _seed_transcript(db, role="assistant", content=assistant_content)
-    db.commit()
+    ts.write_assistant_row("user", assistant_content, turn_id=turn)
 
     # Real consumer at the WS boundary: the broker pushes JSON strings to the
     # connected object exactly as it does to the browser connection.

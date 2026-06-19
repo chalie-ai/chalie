@@ -3,7 +3,7 @@ from __future__ import annotations
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
-from configs.channels.pattern import _pattern_existing_patterns_block
+from configs.channels.pattern import PATTERN_TURN_STATE, _pattern_existing_patterns_block
 
 # ── Geo-pattern prompt builders and post_turn ─────────────────────────────────
 
@@ -85,7 +85,7 @@ class GeoCounterHook(PostTurnHook):
 class GeoConfig(ProcessorConfig):
     """Geo-pattern config — per-window background geo recognition.
 
-    channel/role='geo_pattern', suppress_history=True, max_iterations=30.
+    channel/role='geo_pattern', suppress_history=True.
     post_turn_hooks = (GeoCounterHook(),) — log counters only (§3b).
 
     Counter/state attrs are lazily initialised by get_user_prompt on the first
@@ -98,7 +98,6 @@ class GeoConfig(ProcessorConfig):
             role="geo_pattern",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
-            max_iterations=30,
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
@@ -108,6 +107,9 @@ class GeoConfig(ProcessorConfig):
         )
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
+
+    def turn_scoped_state(self) -> tuple[str, ...]:
+        return PATTERN_TURN_STATE
 
     def get_user_definition(self, mp) -> str:
         return ""

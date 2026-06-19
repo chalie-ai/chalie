@@ -11,8 +11,8 @@
 Writes a real per-turn transcript row on its own ``delegate:web_search``
 channel so the delegate can render its own act-trail across ACT iterations.
 Without that row the turn uid is never assigned and ``_render_act_trail``
-returns "" — the loop re-searches blind to its own results until it
-exhausts ``max_iterations``. ``skip_input_row`` (HiddenInput) is
+returns "" — the loop would re-search blind to its own results with no way to
+converge. ``skip_input_row`` (HiddenInput) is
 deliberately *not* set: it is the async-return mechanism
 (``deliver_async_result`` / ``with_hidden_input``), not a delegate property.
 Paired with ``WebSearchAbility`` (abilities/web_search.py).
@@ -61,7 +61,6 @@ class WebSearchConfig(ProcessorConfig):
             role="web_search",
             policy_channel=policy_channel,
             always_available=[*tools, "memory"],
-            max_iterations=50,
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,

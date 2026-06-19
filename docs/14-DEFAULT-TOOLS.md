@@ -98,7 +98,6 @@ These exist as abilities so they ride the same dispatch, audit, and rendering pi
 |---|---|
 | `thinking` | The framework, at turn zero when the deliberation gate scores *high* |
 | `chat_history_compactor` | The ACT loop, when the request outgrows the context window |
-| `tool_chain_compactor` | Same — compacts the current turn's tool trail |
 | `save_pattern` / `save_graph` | The background pattern-match and geo passes only (budget-capped per turn) |
 
 (`skill_manager` is a system-channel variant of `skill_builder` used by the background skill-suggestion pass.)

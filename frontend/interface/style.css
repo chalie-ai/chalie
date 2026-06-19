@@ -594,13 +594,6 @@ body.speaker-user   #ambientBloom {
   animation: blink 1.5s infinite;
 }
 
-/* Narrating — shimmer between violet and cyan (live ACT loop) */
-.presence-dot[data-state="narrating"] .presence-dot__inner {
-  background: linear-gradient(90deg, var(--violet), var(--dusk-blue), var(--violet));
-  background-size: 200% 100%;
-  animation: shimmer 3s ease-in-out infinite;
-}
-
 /* --------------------------------------------------------------------------
    7. Conversation Spine
    -------------------------------------------------------------------------- */
@@ -1264,7 +1257,6 @@ body.voice-loading .speech-form__speak-btn { display: none; }
      .act-cycle
        .act-row
          .act-logo        (blinking violet disc — IS the placeholder)
-         .act-narrative   (italic, replaces in-place each iteration)
        .act-tools         (cumulative MONO list across the whole ACT loop)
    No background, no border, no padding. Replaced wholesale by the final
    .speech-form--chalie bubble on act_done. */
@@ -1292,19 +1284,6 @@ body.voice-loading .speech-form__speak-btn { display: none; }
   background: var(--violet);
   flex-shrink: 0;
   animation: act-logo-pulse 1.4s ease-in-out infinite;
-}
-
-.act-narrative {
-  font-style: italic;
-  color: var(--text-primary);
-  opacity: 0.75;
-  line-height: 1.5;
-  font-size: 0.95rem;
-  letter-spacing: -0.005em;
-}
-
-.act-narrative:empty {
-  display: none;
 }
 
 /* Stop button — embedded in .act-row, disappears automatically when actEl is removed */

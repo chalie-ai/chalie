@@ -258,10 +258,6 @@ export class Chat {
 
     this._ws.send(text, source, {
       onStatus: (stage) => this._presence.setState(stage),
-      onNarration: (data) => {
-        this._presence.setState('narrating');
-        this._renderer.setActNarrative(actEl, data.text, data.step);
-      },
       onToolStart: (msg) => {
         // Backend (abilities/_base.py) emits the act_tool_start event with
         // keys `id` and `summary`; align to that contract (was call_id /

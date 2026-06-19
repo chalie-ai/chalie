@@ -9,8 +9,8 @@ Covers the two never-switched forks of describe_image:
   * vision provider configured-but-unreachable -> the provider error is
     SURFACED, never swallowed into a fake success.
 
-Real no-swallow surface (verified from message_processor._loop): a provider
-send_messages exception PROPAGATES out of MessageProcessor.process() — _loop
+Real no-swallow surface (verified from message_processor._step): a provider
+send_messages exception PROPAGATES out of MessageProcessor.process() — _step
 calls self.providers.send() with no try/except and _run/process do not wrap it.
 So describe_image() RAISES on the provider path, and VisionAbility.run() — whose
 single styled-error except wraps describe_image — returns status='error' with
@@ -43,7 +43,6 @@ def _make_user_mp() -> MessageProcessor:
     MessageProcessor.__init__(mp, "x", {})
     mp.config = UserConfig()
     mp.uid = None
-    mp.current_iteration = 0
     mp.cancel_event = threading.Event()
     mp.thinking_level = "low"
     mp.thinking_override = None

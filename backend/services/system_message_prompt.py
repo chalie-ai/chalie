@@ -219,26 +219,6 @@ Rules:
 """
 
 
-class ToolChainCompactionSystemPrompt(SystemMessagePrompt):
-    """Wired to ToolChainCompactor (process with ToolChainCompactionConfig). Input is the rendered act-trail of the current turn; output is a dense handover for later steps."""
-
-    _SYSTEM_PROMPT = """\
-You are compacting this turn's tool-call trail — the tools you have already run and what each returned. Your output replaces the raw trail: from the next step forward it is the ONLY record of what you did and learned this turn.
-
-Keep: every concrete value a tool returned that a later step might need — ids, paths, numbers, answers, exact names.
-
-Drop: repeated headers, raw formatting noise, and any fact already stated once.
-
-Write the handover in exactly four parts:
-- Goal — what this turn is trying to accomplish. 1 line.
-- Done — what you ran and the facts each call returned. Bullets.
-- Failed — what failed and why, so you do not retry it blindly. Bullets, or "none".
-- Next — where you got to / what remains. 1 line.
-
-Never state a value a tool did not return. No preamble, no commentary.\
-"""
-
-
 class ExternalAgentSystemMessagePrompt(SystemMessagePrompt):
     """Wired to ExternalAgentMessageProcessor. Runtime template variables:
 

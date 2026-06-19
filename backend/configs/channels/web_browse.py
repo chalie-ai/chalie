@@ -70,7 +70,6 @@ class WebBrowseConfig(ProcessorConfig):
             role="web_browse",
             policy_channel=policy_channel,
             always_available=[*_WEB_BROWSE_TOOLS, "memory"],
-            max_iterations=200,
             skip_transcript=False,  # uid + own transcript row, or the
             skip_input_row=False,   # act-trail dies and the loop runs blind
             suppress_history=True,
@@ -90,9 +89,10 @@ class WebBrowseConfig(ProcessorConfig):
         return ""
 
     def get_user_prompt(self, mp) -> str:
-        """Ledger is rebuilt from session state on every iteration so a
-        mid-run act-trail compaction can never lose a screenshot doc_id
-        (the compactor handover is LLM-written and probabilistic; this isn't)."""
+        """Ledger is rebuilt from session state on every iteration so it can never
+        lose a screenshot doc_id — it is derived deterministically from what was
+        captured this run, not from anything the model carries forward in its own
+        text."""
         parts = [f"Browsing goal:\n{mp._raw_input}"]  # type: ignore[attr-defined]
         shots = screenshot_ledger(getattr(mp, "uid", None) or 0)
         if shots:

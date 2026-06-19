@@ -23,7 +23,7 @@ from services.provider_api import ProviderApiResponse, ThinkingLevel
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-from services.transcript_service import write_input_row
+from services.transcript_service import turn_id_of_row, write_input_row
 
 pytestmark = pytest.mark.unit
 
@@ -88,12 +88,19 @@ def _write_attachment(label: str) -> str:
 
 def _build_parent(attachments: "list[str]") -> MessageProcessor:
     """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
-    fires from: input row written, ``active_tools`` seeded, attachments on
-    metadata, and the thinking gate already resolved to 'high'."""
+    fires from: turn boundary allocated, input row written ON that turn,
+    ``active_tools`` seeded, attachments on metadata, and the thinking gate already
+    resolved to 'high'."""
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, "What is in this image?", {"attachments": attachments})
     parent.config = UserConfig()
+    # Mirror production _setup() exactly: write_input_row opens the next turn for
+    # the channel ATOMICALLY inside the INSERT; read the allocated turn_id back by
+    # row id. That (channel, turn_id) boundary is what the upload's act-trail row
+    # and the thinking pass's _render_act_trail snapshot both key off — without it
+    # the snapshot is blind to the upload.
     parent.uid = write_input_row("user", "user", "What is in this image?")
+    parent.turn_id = turn_id_of_row(parent.uid)
     parent.active_tools = list(parent.config.always_available or [])
     # The gate (user channel only) would set this before _seed_turn_zero fires.
     parent.thinking_level = "high"

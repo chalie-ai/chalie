@@ -12,23 +12,38 @@ from configs.channels._common import (
 
 
 class ProactiveSuggestionHook(PostTurnHook):
-    """Fires only on clean ACT exits with 4+ tool-calling iterations. Non-blocking
-    (daemon thread inside the service). §3b / §4e / §6 / §4.8."""
+    """Fires on a turn that ran 4+ tool calls. Non-blocking (daemon thread inside
+    the service). §3b / §4e / §6 / §4.8.
+
+    Post-turn hooks only run on a clean turn completion — ``_end_turn`` returns
+    early (firing no hooks) on cancellation and ``_run`` deletes the cancelled
+    turn — so the old ``loop_exited_cleanly`` guard is implicit here. The
+    iteration counter is gone with the loop's state machine; the gate now counts
+    the turn's durable ``tool_calls`` rows (the framework compaction marker
+    excluded), which is the real measure of how much tool activity the turn
+    drove."""
 
     def run(self, mp, response_text: str) -> None:
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
-        exited_cleanly = getattr(mp, "loop_exited_cleanly", False)
-        iteration = getattr(mp, "current_iteration", 0)
-        if exited_cleanly and iteration >= 4:
-            try:
-                from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
-                rendered = mp._render_act_trail()  # type: ignore[attr-defined]
-                act_trail = rendered.split("\n") if rendered else []
-                raw_input = getattr(mp, "_raw_input", "")
-                maybe_suggest_skill(act_trail, raw_input)
-            except Exception as exc:
-                _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
+        turn_id = getattr(mp, "turn_id", None)
+        if turn_id is None:
+            return
+        try:
+            from services.act_trail import ActTrail  # noqa: PLC0415
+            rows = ActTrail().fetch_by_turn(mp.config.channel, turn_id)
+            tool_call_count = sum(
+                1 for r in rows if r.get("tool_name") != "chat_history_compactor"
+            )
+            if tool_call_count < 4:
+                return
+            from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
+            rendered = mp._render_act_trail()  # type: ignore[attr-defined]
+            act_trail = rendered.split("\n") if rendered else []
+            raw_input = getattr(mp, "_raw_input", "")
+            maybe_suggest_skill(act_trail, raw_input)
+        except Exception as exc:
+            _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
 
 
 class UserConfig(ProcessorConfig):
@@ -50,7 +65,6 @@ class UserConfig(ProcessorConfig):
             role="user",
             policy_channel=ProcessorConfig.PolicyChannel.CHAT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
-            max_iterations=None,
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
             suppress_history=False,
@@ -128,9 +142,10 @@ class UserConfig(ProcessorConfig):
 
     def get_user_prompt(self, mp) -> str:
         """Section order: user_def, World State, Previous Messages, blank,
-        input line (BEFORE the trail), ACT trail. The framework _loop wraps
-        the body with the ### Checkpoint / ### Current State envelope when a
-        compaction row exists. §3b / §6 / spec §4."""
+        post-compaction continuity banner (continuation only), input line
+        (BEFORE the trail), ACT trail. The framework wraps the body with the
+        ### Checkpoint / ### Current State envelope when a compaction row
+        exists. §3b / §6 / spec §4."""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []
@@ -163,6 +178,23 @@ class UserConfig(ProcessorConfig):
 
         # Blank separator
         parts.append("")
+
+        # 3b. Post-compaction continuity banner — only on the continuation MP
+        #     spawned right after a mid-turn compaction. The collapse cost the
+        #     model its working context, so the current-state block opens by
+        #     restating the user's request and pointing at the Checkpoint section
+        #     (the compacted summary, prepended by the framework envelope) and the
+        #     transcript-reading tool, mirroring how a fresh post-compaction agent
+        #     recovers continuity. Sits ABOVE the input line.
+        if getattr(mp, "post_compaction_continuation", False):
+            query = getattr(mp, "continuation_user_query", None) or mp._raw_input  # type: ignore[attr-defined]
+            parts.append(
+                "You are continuing after a mid-turn compaction. "
+                f"The user query was: {query}. "
+                "Read the Checkpoint section above to recover what you were "
+                "working on, and use the review_transcript tool to read the "
+                "previous turns of this conversation."
+            )
 
         # 4. Input line with optional nudge — BEFORE the trail (OLD ordering).
         nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""

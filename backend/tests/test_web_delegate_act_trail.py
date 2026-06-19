@@ -8,7 +8,7 @@ async-only HiddenInput flag (``skip_input_row`` belongs to ``deliver_async_resul
 ``mp.uid`` stayed ``None``, ``_render_act_trail`` short-circuited to ``""``, and the
 delegate's ``get_user_prompt`` was a constant, results-blind prompt on EVERY ACT
 iteration. The loop never saw what it had already gathered, so it re-issued the
-same searches until it exhausted ``max_iterations=50`` — minutes per delegate.
+same searches turn after turn — minutes per delegate.
 
 This drives the REAL production path with zero mocks: the real
 ``MessageProcessor._setup()`` (whose uid assignment from the config flags is the

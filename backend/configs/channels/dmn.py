@@ -90,7 +90,6 @@ class DmnConfig(ProcessorConfig):
             role="proactive_thought",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
-            max_iterations=100,
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=True,

@@ -6,7 +6,6 @@
 const LABELS = {
   processing:       'Working...',
   thinking:         'Thinking...',
-  narrating:        'Researching...',
   retrieving_memory:'Remembering...',
   planning:         'Planning...',
   responding:       'Speaking...',

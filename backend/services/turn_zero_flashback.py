@@ -33,9 +33,10 @@ Three responsibilities, in order:
 
 The recall it runs uses ``caller='seed'`` so the ``memory_recall_log`` seed row
 and its telemetry stay exactly as the retrieval rework left them, and it records
-its own ``memory(action='recall', _auto=True)`` act-trail row so the rest of the
-trail machinery (``_is_auto_memory_recall``) still recognises it as the
-framework seed. Moments never appear here (§4.7).
+its own ``memory(action='recall', _auto=True)`` act-trail row so the seed recall
+and its curated result are visible in the turn's act-trail, marked ``_auto`` as
+the framework seed (distinct from a model-invoked recall). Moments never appear
+here (§4.7).
 """
 
 import logging
@@ -44,10 +45,10 @@ from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
-#: The tool name + params the framework records for the turn-0 seed. The name and
-#: the ``_auto`` flag are load-bearing: ``_is_auto_memory_recall`` keys the
-#: trail-compaction exclusion on exactly this shape, and the persisted
-#: ``caller='seed'`` recall_log row is frozen by the scenario lock.
+#: The tool name + params the framework records for the turn-0 seed. The
+#: ``_auto`` flag marks the recorded act-trail row as the framework seed (vs a
+#: model-invoked recall); the persisted ``caller='seed'`` recall_log row is
+#: frozen by the scenario lock.
 _SEED_TOOL_NAME = "memory"
 _SEED_ACTION = "recall"
 
@@ -494,14 +495,17 @@ class TurnZeroFlashback:
         """Record the framework seed row so the model sees the curated block.
 
         Writes a ``memory(action='recall', _auto=True)`` ``tool_calls`` row whose
-        ``result`` is the curated block. The ``_auto`` flag keeps
-        ``_is_auto_memory_recall`` recognising it as the framework seed (excluded
-        from trail compaction); the result is the curated bundle, NOT recall JSON
-        — that JSON contract belongs to the explicit, model-invoked recall only.
+        ``result`` is the curated block, so the seed recall is visible in the
+        turn's act-trail. The ``_auto`` flag marks it as the framework seed; the
+        result is the curated bundle, NOT recall JSON — that JSON contract belongs
+        to the explicit, model-invoked recall only.
         """
         from services.act_trail import ActTrail  # noqa: PLC0415
 
         params = {"action": _SEED_ACTION, "query": query, "_auto": True}
+        # Anchors to this turn's input row: _render_act_trail's
+        # turn-keyed fetch and the cancel cleanup both reach it by joining
+        # transcript on (channel, turn_id), so no turn column is stamped here.
         ActTrail().record(
             tool_name=_SEED_TOOL_NAME,
             params=params,

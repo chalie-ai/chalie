@@ -207,9 +207,8 @@ export class Renderer {
    *
    * Structure:
    *   .act-cycle
-   *     .act-row          (logo + narrative + stop button)
+   *     .act-row          (logo + stop button)
    *       .act-logo       (blinking violet disc, always present)
-   *       .act-narrative  (italic text, mutated in-place by setActNarrative)
    *       .act-stop-btn   (cancel button; wired in Chat._startTurn)
    *     .act-tools        (cumulative tool list, populated by appendToolPill)
    *
@@ -222,13 +221,11 @@ export class Renderer {
 
     const row = this._createEl('div', 'act-row');
     const logo = this._createEl('span', 'act-logo');
-    const narrative = this._createEl('span', 'act-narrative');
     const stopBtn = this._createEl('button', 'act-stop-btn');
     stopBtn.setAttribute('aria-label', 'Stop and undo');
     stopBtn.title = 'Stop & undo';
     stopBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4.5 2L1 5.5L4.5 9V6.5H10a3.5 3.5 0 0 1 0 7H7v2h3a5.5 5.5 0 0 0 0-11H4.5V2Z"/></svg>`;
     row.appendChild(logo);
-    row.appendChild(narrative);
     row.appendChild(stopBtn);
     el.appendChild(row);
 
@@ -241,29 +238,8 @@ export class Renderer {
   }
 
   /**
-   * Set the active narration text inside an ACT cycle.
-   * Replaces the previous narrative — the spec is one-line-at-a-time, not
-   * a stack of iterations. The logo stays put; only the text mutates.
-   *
-   * @param {HTMLElement} actEl — the .act-cycle element
-   * @param {string} text — narration line from the LLM
-   * @param {number} [step] — iteration number (stored as data attribute)
-   */
-  setActNarrative(actEl, text, step) {
-    if (!actEl) return;
-    const slot = actEl.querySelector(':scope > .act-row > .act-narrative');
-    if (!slot) return;
-    // Trust the backend chokepoint (services.markup.sanitize → nh3) — same
-    // path chat bubbles use. textContent would render any LLM-emitted tags
-    // (e.g. <p>) as literal characters in the inline status line.
-    renderMarkupTo(slot, text || '');
-    if (step != null) slot.dataset.step = String(step);
-    this._scrollToBottom();
-  }
-
-  /**
    * Append a tool row to an ACT cycle's cumulative tool list.
-   * Tool rows span the entire ACT loop — they are NOT nested under narrations.
+   * Tool rows span the entire ACT loop as one flat, cumulative list.
    *
    * @param {HTMLElement} actEl — the .act-cycle element
    * @param {string} callId — server-assigned id for resolveToolPill lookup
