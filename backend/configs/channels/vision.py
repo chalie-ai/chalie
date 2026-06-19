@@ -42,7 +42,6 @@ class VisionConfig(ProcessorConfig):
             role="vision",
             policy_channel=policy_channel,
             always_available=[],
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=True,
             suppress_history=True,

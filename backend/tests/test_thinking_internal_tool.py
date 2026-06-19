@@ -22,7 +22,6 @@ def test_thinking_config_mirrors_parent_tool_surface(db):
     tc = ThinkingConfig(active_tools_snapshot, parent.policy_channel)
     assert tc.always_available == active_tools_snapshot
     assert tc.thinking_mode == "high"
-    assert tc.max_iterations == 1
 
 
 def test_thinking_gate_writes_the_public_thinking_level_attr(db):

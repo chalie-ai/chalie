@@ -9,12 +9,36 @@
 
 
 import pytest
+from unittest.mock import patch
 
 from abilities._registry import AbilityRegistry
 from configs.channels import DEFAULT_ALWAYS_AVAILABLE, UserConfig
+from services.database_service import get_shared_db_service
 from services.message_processor import MessageProcessor
+from services.provider_api import ProviderApiResponse
+from services.provider_db_service import ProviderDbService
 
 pytestmark = pytest.mark.unit
+
+
+class _RecordingProvider:
+    """The sanctioned external-boundary stand-in: captures each send and returns a
+    one-shot ``NOTHING`` with a token estimate of 1 so the pre-flight cap check
+    always passes. The only thing _setup's thinking gate / seed-0 cannot reach for
+    real in a test — everything else (db, config, transcript writes) is real."""
+
+    def __init__(self):
+        self.sends = []
+
+    def get_context_limit(self):
+        return 200000
+
+    def estimate_request_tokens(self, dto):
+        return 1
+
+    def send(self, dto):
+        self.sends.append(dto)
+        return ProviderApiResponse(text="NOTHING", model="recorder", tool_calls=None)
 
 
 def _make_mp(active, config=None):
@@ -25,19 +49,37 @@ def _make_mp(active, config=None):
     return mp
 
 
-def test_setup_seeds_active_tools_from_always_available(monkeypatch):
+def test_setup_seeds_active_tools_and_opens_a_turn(db):
+    """The real production pre-loop on the user channel: ``_setup`` seeds
+    active_tools from the channel's always_available tier AND opens the turn by
+    writing a turn_id-stamped input row (atomic COALESCE allocation, read back).
+
+    Drives the real ``MessageProcessor._setup`` against the real db with a real
+    ``UserConfig``; the only stand-in is ``Providers._resolve`` — the LLM boundary
+    the thinking gate and seed-0 fire through. Zero internal mocks."""
+    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
+
     mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "", None)
+    MessageProcessor.__init__(mp, "hello", None)
     mp.config = UserConfig({"channel": "user"})
-    mp.uid = None
-    # Stub the heavy bits _setup runs AFTER the seed (DB write, thinking gate, seed-0).
-    monkeypatch.setattr("services.transcript_service.write_input_row", lambda *a, **k: 1)
-    monkeypatch.setattr(mp, "_run_thinking_gate", lambda: None)
-    monkeypatch.setattr(mp, "_seed_turn_zero", lambda: None)
 
-    mp._setup()
+    recorder = _RecordingProvider()
+    with patch("services.providers.Providers._resolve", return_value=recorder):
+        mp._setup()
 
+    # active_tools seeded from the channel's always_available tier.
     assert set(mp.active_tools) == set(DEFAULT_ALWAYS_AVAILABLE)
+
+    # The turn was really opened: the input row exists on the user channel tagged
+    # with the turn_id _setup resolved — proof the atomic allocation wired through.
+    assert mp.turn_id >= 1
+    with get_shared_db_service().connection() as conn:
+        row = conn.execute(
+            "SELECT turn_id, role FROM transcript WHERE id = ?", (mp.uid,)
+        ).fetchone()
+    assert row is not None
+    assert row[0] == mp.turn_id
+    assert row[1] == "user"
 
 
 def test_active_tools_resolve_to_always_available_surface():

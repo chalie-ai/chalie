@@ -7,7 +7,7 @@
  *   POST /action         — action button click
  *
  * The WebSocket delivers server-pushed events:
- *   ← status, message, act_narration, act_tool_start, act_tool_end,
+ *   ← status, message, act_tool_start, act_tool_end,
  *     done, error, ping, drift/task/reminder/escalation/notification,
  *     permission_request, intent, capability_alert
  *
@@ -265,7 +265,6 @@ export class WSClient {
    * @param {{
    *   onStatus?:    (stage: string) => void,
    *   onMessage?:   (data: object) => void,
-   *   onNarration?: (data: object) => void,
    *   onError?:     (data: object) => void,
    *   onDone?:      (data: object) => void,
    *   onToolStart?: (data: object) => void,
@@ -360,9 +359,6 @@ export class WSClient {
       switch (type) {
         case 'status':
           this._chatCallbacks.onStatus?.(data.stage);
-          return;
-        case 'act_narration':
-          this._chatCallbacks.onNarration?.(data);
           return;
         case 'act_tool_start':
           this._chatCallbacks.onToolStart?.(data);

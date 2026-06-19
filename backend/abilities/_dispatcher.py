@@ -1,10 +1,10 @@
-"""``ToolDispatcher`` — the single chokepoint for every ACT-loop tool call.
+"""``ToolDispatcher`` — the single chokepoint for every tool call in a turn.
 
-Every tool call from the ACT loop enters through ``ToolDispatcher(mp).dispatch()``:
+Every tool call in the turn chain enters through ``ToolDispatcher(mp).dispatch()``:
 match the handler → bind a fresh per-call instance to the invoking ``mp`` →
 gate it through ``PolicyManager.wrap`` → run it via ``_execute`` → render the
 sealed wire envelope → record the outcome on the act-trail → return a STRING.
-This is the ONLY path from ``MessageProcessor._loop()`` to ability execution,
+This is the ONLY path from ``MessageProcessor._step()`` to ability execution,
 and the ONLY place the ``[<tool>(status=…)]\n…\n[end:<tool>]`` envelope is
 formatted (``_render``).
 
@@ -128,7 +128,15 @@ class ToolDispatcher:
             tool_name=tool_name,
             params=params,
             result=result_text,
-            transcript_id=getattr(self._mp, "uid", None),
+            # Anchors to the assistant step row that emitted this call (mp.anchor,
+            # set by _store_row before the step's tools dispatch); its turn is
+            # derived by joining transcript on (channel, turn_id) at read time.
+            # Falls back to the input row (mp.uid) for framework / turn-zero /
+            # compaction calls that fire before any step row exists.
+            transcript_id=getattr(self._mp, "anchor", None) or getattr(self._mp, "uid", None),
+            # The live blue-box summary, persisted so the chat refresh can
+            # re-render the chip's summary instead of dropping it on reload.
+            summary=act_summary,
         )
         return result_text
 

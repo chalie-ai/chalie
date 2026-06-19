@@ -23,9 +23,11 @@ Design:
 
   User-channel messages flow through MessageProcessor.process() with the
   UserConfig ProcessorConfig subclass — no MessageProcessor subclass.
-  Live output (narration, tool events) is gated by broadcast_to='user' on
-  the config; the flat _loop() and ToolDispatcher.dispatch() call WS.emit() which
-  broadcasts when broadcast_to is set (AC-28).
+  Live output is gated by broadcast_to='user' on the config: each chain step
+  broadcasts its interim assistant text via _broadcast_interim() and
+  ToolDispatcher.dispatch() emits live tool events, both fired only when
+  broadcast_to is set; the turn's end message is broadcast by
+  _broadcast_turn_result() once the chain returns (AC-28).
 """
 
 import logging
@@ -137,30 +139,55 @@ def _run_chat_background(
         _clear_active_ump(turn)
 
 
+def _broadcast_interim(metadata: dict, content: str) -> None:
+    """Broadcast a chain step's interim assistant text on the user channel.
+
+    Fired from MessageProcessor._emit_interim the moment the model emits a
+    tool-bearing step, so the surface shows assistant prose and tool batches
+    interleaved live within the turn. The text is already markdown→HTML
+    normalised; we sanitise and emit a ``message`` event identical in shape to
+    the final turn result but flagged ``interim`` and WITHOUT a trailing
+    ``done`` — the chain is still running. The step's tools have not been
+    dispatched yet, so the segment is plain text (no rich-media pairing here;
+    that lands on the final row, resolved turn-wide).
+    """
+    broker = WebSocketBroker()
+    safe_content = sanitize(content or "")
+    exchange_id = (metadata or {}).get("exchange_id") or (metadata or {}).get("uuid") or ""
+    broker.broadcast({
+        "type": "message",
+        "content": safe_content,
+        "topic": "user",
+        "mode": "UNIFIED",
+        "confidence": 1.0,
+        "exchange_id": exchange_id,
+        "metrics": {},
+        "interim": True,
+        "segments": [{"type": "text", "content": safe_content}],
+        "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
+    })
+
+
 def _broadcast_turn_result(response: str, request_id: str, turn_start: float) -> None:
     """Shared by the foreground user turn and the background async-result synthesis
     so both surface a turn through the exact same WS event shape."""
     broker = WebSocketBroker()
 
-    # Resolve the transcript id this turn's tool_calls are keyed to (the
-    # user-input row, not the assistant row). By broadcast time the assistant
-    # reply is already persisted, so the newest channel row is the assistant's —
-    # resolve backwards from it via the same shared function the
-    # /conversation/recent refresh path uses, so both paths pair span tags
-    # with tool_calls identically.
+    # Pair the final row's rich-media spans with the tools that produced them.
+    # By broadcast time the assistant reply is persisted, so the newest channel
+    # row is the turn's final assistant row. Resolve TURN-WIDE from it — the span
+    # sits on the final row but the tool ran on a step row — via the same shared
+    # function the /conversation/recent refresh path uses, so both paths pair
+    # span tags with tool_calls identically.
     transcript_ids: list[int] = []
     try:
         from services.transcript_service import get_recent  # noqa: PLC0415
         rows = get_recent("user", limit=1)
         if rows:
-            last = rows[-1]
-            if last.get("role") in ("user", "subagent_return"):
-                transcript_ids = [last["id"]]
-            else:
-                from services.database_service import get_shared_db_service  # noqa: PLC0415
-                from services.rich_media_parser import resolve_tool_call_transcript_ids  # noqa: PLC0415
-                with get_shared_db_service().connection() as conn:
-                    transcript_ids = resolve_tool_call_transcript_ids(last["id"], conn)
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            from services.rich_media_parser import resolve_tool_call_transcript_ids  # noqa: PLC0415
+            with get_shared_db_service().connection() as conn:
+                transcript_ids = resolve_tool_call_transcript_ids(rows[-1]["id"], conn)
     except Exception as exc:
         logger.debug("[Chat API] transcript_id lookup failed: %s", exc)
 
@@ -204,6 +231,11 @@ def deliver_async_result(mp: object, result_text: str) -> None:
     request_id = str(uuid.uuid4())
     turn_start = time.time()
 
+    # The backgrounded result lands as a NEW turn on the channel: the
+    # MessageProcessor advances the turn cursor itself. With skip_input_row set
+    # (hidden_input), _setup writes no input row and the synthesised reply is the
+    # turn's end message — write_assistant_row allocates its own turn_id at write
+    # time. Broadcast through the same pipeline as a foreground reply.
     response = MessageProcessor.process(result_text, synth_config, metadata)
     _broadcast_turn_result(response, request_id, turn_start)
 
@@ -406,7 +438,6 @@ def post_action():
                         role="action_button",
                         policy_channel=ProcessorConfig.PolicyChannel.CHAT,
                         always_available=[],
-                        max_iterations=1,
                         skip_transcript=True,
                         skip_input_row=True,
                         suppress_history=True,

@@ -65,7 +65,6 @@ class ThinkingConfig(ProcessorConfig):
             # (no find_tools pinned), so the parent's active_tools snapshot is the
             # entire surface.
             always_available=list(active_tools or []),
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=True,
             suppress_history=True,

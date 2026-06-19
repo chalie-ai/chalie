@@ -16,7 +16,7 @@ bounced on a spurious required-field error — TKT-963 (``read`` returning
 ``source-required`` for every URL/file a model passed under ``url``/``path``).
 
 These are ZERO-MOCK feature tests: each drives the live
-``ToolDispatcher(mp).dispatch()`` chokepoint exactly as ``MessageProcessor._loop``
+``ToolDispatcher(mp).dispatch()`` chokepoint exactly as ``MessageProcessor._step``
 does — real ``AbilityRegistry`` resolution, the real ``PolicyManager.wrap`` gate
 (reading the real ``policy`` table the ``db`` fixture binds), the real
 ``Ability.run`` with real file I/O / the real SSRF guard, and the real

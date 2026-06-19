@@ -41,7 +41,6 @@ def _build_mp(config, raw_input: str) -> MessageProcessor:
     MessageProcessor.__init__(mp, raw_input, {})
     mp.config = config
     mp.uid = write_input_row(config.channel, config.role, raw_input)
-    mp.current_iteration = 0
     mp.thinking_level = "low"
     mp.thinking_override = None
     mp.active_tools = list(config.always_available or [])
@@ -55,10 +54,9 @@ def test_user_channel_markdown_is_converted_to_html(db):
     recorder = _RecordingProvider(leaked)
     mp = _build_mp(UserConfig(), "format this")
     with patch(_PROVIDERS_RESOLVE, return_value=recorder):
-        result = mp._loop()
-    mp._record(result)
+        result = mp._step()
 
-    # The loop's final response is the converted HTML.
+    # The chain's final response is the converted HTML.
     assert result == expected
 
     # The same converted HTML is what got persisted — no marker survives.
@@ -77,8 +75,7 @@ def test_dmn_channel_markdown_is_left_verbatim(db):
     recorder = _RecordingProvider(leaked)
     mp = _build_mp(DmnConfig(), "reflect")
     with patch(_PROVIDERS_RESOLVE, return_value=recorder):
-        result = mp._loop()
-    mp._record(result)
+        result = mp._step()
 
     # Gated off: returned text is the raw markdown, untouched.
     assert result == leaked
@@ -102,8 +99,7 @@ def test_inline_code_protects_emphasis_markers(db):
     recorder = _RecordingProvider(leaked)
     mp = _build_mp(UserConfig(), "show code")
     with patch(_PROVIDERS_RESOLVE, return_value=recorder):
-        result = mp._loop()
-    mp._record(result)
+        result = mp._step()
 
     assert result == expected
     content = [r for r in get_recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
@@ -118,8 +114,7 @@ def test_snake_case_identifiers_are_not_underlined(db):
     recorder = _RecordingProvider(leaked)
     mp = _build_mp(UserConfig(), "explain")
     with patch(_PROVIDERS_RESOLVE, return_value=recorder):
-        result = mp._loop()
-    mp._record(result)
+        result = mp._step()
 
     assert result == leaked
     assert "<u>" not in result

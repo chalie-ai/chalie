@@ -214,7 +214,8 @@ def _inject_fake_client(send_fn):
 def _super_ep_envelope(gist: str) -> ProviderApiResponse:
     """The SuperEpisodeEncoder's expected JSON object envelope. The worker
     overwrites 'channel'/'consolidated_from'/'salience' itself; the model owns
-    only the gist + affect. max_iterations=1, so this ends the ACT loop."""
+    only the gist + affect. The response carries no tool calls, so this ends the
+    ACT loop."""
     return ProviderApiResponse(
         text=json.dumps({
             "gist": gist,

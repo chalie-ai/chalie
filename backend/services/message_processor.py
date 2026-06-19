@@ -13,7 +13,6 @@ Every channel calls the static ``process()`` entry point with a per-turn
 ``ProcessorConfig`` carrying all channel-specific behaviour.
 """
 
-import json
 import logging
 import re
 import threading
@@ -27,27 +26,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── Trail-compaction boundary markers ───────────────────────────────────────────
+# ── Per-channel turn serialisation ─────────────────────────────────────────────
 #
-# The two compaction abilities are dispatched programmatically (never
-# model-selected) by _dispatch_compaction(). ChatHistoryCompactor writes the
-# durable transcript watermark; ToolChainCompactor's recorded tool_calls row is
-# the act-trail boundary. Both names are framework markers, not real tool
-# activity, so the trail helpers below treat them specially.
+# Every turn on a channel runs while holding that channel's lock (see _run), so
+# two turns on the same channel can never both advance the channel's turn cursor
+# or both fire a compaction at once — e.g. a delegate finishing into the user
+# channel while the user's own turn is still synthesising. Turns on different
+# channels hold different locks and run in parallel. Ordering between two
+# same-channel turns is deliberately NOT guaranteed: which one runs first is
+# unimportant; not corrupting the shared channel state is.
+_channel_locks: "dict[str, threading.Lock]" = {}
+_channel_locks_guard = threading.Lock()
 
-#: The act-trail boundary tool. The LAST non-empty row with this name marks the
-#: start of the live (un-compacted) trail slice — see _from_last_compaction.
-_TRAIL_BOUNDARY_TOOL = "tool_chain_compactor"
 
-#: Both compactors are framework markers: they never count as real trail content
-#: (_has_trail) and the chat-history marker is never rendered to the model (its
-#: compacted output reaches the model through the checkpoint prepend instead).
-_COMPACTOR_TOOLS: "frozenset[str]" = frozenset({"chat_history_compactor", "tool_chain_compactor"})
+def _channel_lock(channel: str) -> threading.Lock:
+    """Return the process-wide lock for ``channel``, creating it once."""
+    lock = _channel_locks.get(channel)
+    if lock is None:
+        with _channel_locks_guard:
+            lock = _channel_locks.get(channel)
+            if lock is None:
+                lock = threading.Lock()
+                _channel_locks[channel] = lock
+    return lock
 
-#: tool_name under which _record_narration persists mid-loop narration text.
-#: Imported by abilities/review_tool_calls.py to exclude these rows — keep the
-#: writer and that reader on the same name via this constant.
-NARRATION_TOOL = "narration"
+# ── Compaction marker ────────────────────────────────────────────────────────
+#
+# ChatHistoryCompactor is dispatched programmatically (never model-selected) by
+# _dispatch_compaction(); it writes the durable transcript watermark. Its
+# recorded tool_calls row is a framework marker, not real tool activity, so
+# _render_act_trail drops it from the trail the model sees (the compacted output
+# reaches the model through the checkpoint prepend instead).
 
 #: Parses the document id out of a rendered ``document.upload`` success envelope so
 #: the turn-0 attachment seed can build the transcript<->doc link. The upload body
@@ -55,26 +64,6 @@ NARRATION_TOOL = "narration"
 #: ``secrets.token_hex`` value, so the capture is hex-only. A failed upload renders
 #: ``status=error`` with no ``"id":`` key and therefore links nothing.
 _SEED_UPLOAD_ID_RE = re.compile(r'"id":"([0-9a-f]+)"')
-
-
-def _is_auto_memory_recall(row: "dict") -> bool:
-    """True for the framework's turn-0 automatic memory-recall seed.
-
-    The seed is dispatched as ``memory(action='recall', _auto=True)`` in
-    ``_seed_turn_zero``; a model-initiated ``memory`` call carries no ``_auto``
-    flag. Identified off the persisted params (stored as a JSON string by
-    ``ActTrail.record``) so the canonical design's "excluding internal:
-    compaction + automatic memory recall" rule (§2-3) drops ONLY the framework
-    seed from the trail-compaction path — genuine agent ``memory`` calls still
-    count as real trail and are compacted normally."""
-    if row.get("tool_name") != "memory":
-        return False
-    raw = row.get("params") or "{}"
-    try:
-        params = json.loads(raw) if isinstance(raw, str) else raw
-    except (ValueError, TypeError):
-        return False
-    return bool(isinstance(params, dict) and params.get("_auto"))
 
 
 _LLM_SENTINEL_PATTERNS = (
@@ -115,12 +104,16 @@ class MessageProcessor:
         # Per-turn config — a plain attribute set by `mp.config = X` in
         # process() / the background workers.  None until attached.
         self.config: "ProcessorConfig | None" = None
-        # Tracks the current ACT loop iteration for tool-event emission
-        # without thread-local indirection.
-        self._current_iteration: int = 0
-        self._loop_exited_cleanly: bool = False
         self._active_tools: list[str] = []
         self._uid: int | None = None
+        # Per-channel monotonic turn boundary. None until _setup()
+        # opens this turn: writing the input row allocates the next turn_id for
+        # the channel atomically, and _setup reads it back. Every call opens its
+        # OWN turn — an async tool result or a delegate return is a NEW turn, not
+        # a continuation. It is the single boundary the act-trail and the
+        # previous-messages history render by (tool_calls derive it via a join on
+        # the transcript input row).
+        self.turn_id: int | None = None
         self._deliberation_scalar: float | None = None   # raw sigmoid for this turn
         self._deliberation_ema: float | None = None      # EMA after this turn's update
         # User thinking-level override (None = auto, gate decides). When set to
@@ -134,9 +127,24 @@ class MessageProcessor:
         from services.providers import Providers  # noqa: PLC0415
         self.providers = Providers()
         # Cooperative cancellation flag. Set by stop endpoints to signal the
-        # ACT loop to exit at the next iteration boundary. Never raises —
-        # the loop checks is_set() at the top of each iteration.
+        # chain to stop at the next step boundary. Never raises — _step checks
+        # is_set() before each send and between tool dispatches.
         self._cancel_event: threading.Event = threading.Event()
+        # ── Recursive-chain state ────────────────────────────────────────────
+        # The transcript row this step's tool calls anchor to. Defaults to the
+        # input row (uid); a tool-bearing step resets it to its OWN step row in
+        # _store_row before dispatching, so each step's tools attach to the
+        # assistant row that emitted them.
+        self.anchor: int | None = None
+        # Every turn_id this chain opened. A mid-turn compaction splits the turn
+        # (a fresh turn_id for the continuation), so cancellation cleanup must
+        # sweep them all. Shared by reference down the chain via _continue.
+        self._chain_turn_ids: set[int] = set()
+        # Set on a continuation MP spawned AFTER a mid-turn compaction: the model
+        # lost its working context, so the user prompt prepends a recovery banner
+        # restating the request and pointing at the checkpoint + review_transcript.
+        self.post_compaction_continuation: bool = False
+        self.continuation_user_query: str | None = None
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -263,7 +271,10 @@ class MessageProcessor:
     ) -> str:
         """Single entry point.  Creates an MP, runs the turn, returns text.
 
-        Spec §4 / AC-1 / L1.
+        Every call opens its OWN per-channel turn: _setup() allocates
+        the next turn_id when it writes the input row. Fresh user / external
+        input, an async tool result and a delegate return are each a new turn —
+        none re-enters a prior turn.
         """
         mp = object.__new__(MessageProcessor)
         # Initialise old-path attributes (metrics, cancel, etc.) via old __init__.
@@ -271,7 +282,6 @@ class MessageProcessor:
         # New flat-path attributes (spec §4 field list).
         mp.config = config
         mp.uid: "int | None" = None
-        mp.current_iteration: int = 0
         mp.cancel_event: "threading.Event" = (
             cancel_event if cancel_event is not None else threading.Event()
         )
@@ -288,36 +298,58 @@ class MessageProcessor:
         return mp._run()
 
     def _run(self) -> str:
-        """Lifecycle wrapper — run setup→loop→record.
+        """Lifecycle wrapper — run the whole turn under the channel lock.
 
-        Spec §4.
+        Setup, the recursive step chain, and finalisation all run while holding
+        this channel's lock, so a second turn on the same channel waits here
+        until this one finishes: it cannot open its turn, advance the channel's
+        turn cursor, or start a second compaction concurrently. Different
+        channels hold different locks and run fully in parallel. On cooperative
+        cancellation the chain unwinds to here returning '', and every turn it
+        opened is deleted.
         """
-        self._setup()
-        result = self._loop()
-        self._record(result)
-        return result
+        with _channel_lock(self.config.channel):
+            self._setup()
+            result = self._step()
+            if self.cancel_event.is_set():
+                self._cleanup_cancelled()
+                return ""
+            return result
 
     def _setup(self) -> None:
-        """Pre-loop.  Executes once per turn.
+        """Pre-chain.  Executes once per turn, before the first step.
 
         1. Seed ACTIVE_TOOLS with this channel's always_available tier.
-        2. Write input row to transcript (unless skip_transcript / skip_input_row).
+        2. Open this turn by writing the input row.
         3. Run thinking gate (user channel only).
         4. Seed turn 0 — framework tool calls before the first LLM turn.
-
-        Spec §4.
         """
         # ACTIVE_TOOLS is live from iteration 0; find_tools appends to it and
         # build_tools resolves it each turn. Empty for compaction / encoder
         # channels whose always_available is empty by design.
         self.active_tools = list(self.config.always_available or [])
 
-        from services.transcript_service import write_input_row
+        from services.transcript_service import turn_id_of_row, write_input_row
 
+        # Open this turn. Writing the input row allocates the next
+        # turn_id for the channel ATOMICALLY (a COALESCE subquery inside the
+        # INSERT, under the writer lock) and we read the value back — never
+        # pre-compute max+1 in Python, which would race two concurrent
+        # same-channel turns (e.g. parallel scheduled tasks on their own threads)
+        # onto one turn_id and merge their act-trails. Channels with no input row
+        # (skip_input_row / skip_transcript) leave turn_id None: they record no
+        # tool calls and their end message allocates its own turn at write time.
         if not self.config.skip_transcript and not self.config.skip_input_row:
             self.uid = write_input_row(
-                self.config.channel, self.config.role, self._raw_input
+                self.config.channel, self.config.role, self._raw_input,
             )
+            self.turn_id = turn_id_of_row(self.uid)
+            # The first step's tools anchor to the input row until _store_row
+            # advances the anchor to the step's own assistant row. Track this turn
+            # so cancellation cleanup sweeps it (and any split-off continuation).
+            self.anchor = self.uid
+            if self.turn_id is not None:
+                self._chain_turn_ids.add(self.turn_id)
 
         if self.config.channel == "user":
             self._run_thinking_gate()
@@ -331,8 +363,6 @@ class MessageProcessor:
         ToolDispatcher.dispatch() so it BLOCKS, records a tool_calls row, and is
         rendered into the trail exactly like an LLM-issued call.  The model's
         first turn already sees memory matches and uploaded documents.
-
-        Spec §4 / §4d / AC-30 / AC-31.
         """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
 
@@ -421,7 +451,7 @@ class MessageProcessor:
 
         Assembles system prompt, user messages (with checkpoint), act-trail,
         tools, and thinking level. Called by both the normal and force-send paths
-        in _loop(). The DTO carries _job_name and _usage_class as attributes for
+        in _step(). The DTO carries _job_name and _usage_class as attributes for
         the telemetry chokepoint in Providers._log_after_call.
         """
         from services.provider_api import ProviderApiRequest, ThinkingLevel, ProviderType  # noqa: PLC0415
@@ -479,56 +509,146 @@ class MessageProcessor:
             message["image"] = img
         return [message]
 
-    def _loop(self) -> str:
-        """ACT game loop — compact-first (canonical design).
+    def _step(self) -> str:
+        """One link in the recursive turn chain — exactly one LLM API call.
 
-        Every iteration rebuilds the request from the DB and measures it.
-        Providers.send(dto) raises RequestOverCapError when the FULL request
-        reaches the cap. On that signal the loop fires both compactors FIRST —
-        normal tool calls, so the loop pauses and the act-trail WS events emit
-        for free — which advance the watermark and collapse the act-trail. The
-        next iteration re-reads a collapsed history from the DB: no partial-view
-        turn. If compaction made no progress the request is irreducible, so it is
-        sent as-is (force path) and the provider is the source of truth — an
-        over-budget request fails loudly rather than looping forever.
+        An over-cap / over-limit signal fires chat-history compaction (a normal
+        tool dispatch, so its act-trail WS events emit for free) and the chain
+        continues on the fresh post-compaction turn. Otherwise the response's
+        assistant row is stored; if it carries tool calls they dispatch and BLOCK
+        against that row and the chain recurses for the next API call, else the
+        row is the turn's end. No loop, no iteration cap — depth is bounded only
+        by when the model stops emitting tool calls (a runaway turn is a
+        hard-restart condition; Python's recursion limit is the backstop).
+        """
+        from services.provider_api import RequestOverCapError, ResponseOverLimitError  # noqa: PLC0415
 
-        ResponseOverLimitError (server-side 413) triggers the same compact-and-retry
-        path: both over-limit types drive the same recovery.
+        if self.cancel_event.is_set():
+            return ""
+        try:
+            response = self.providers.send(self._build_send_dto())
+        except (RequestOverCapError, ResponseOverLimitError):
+            self._dispatch_compaction()
+            return self._continue(post_compaction=True)._step()
+        self._record_metrics(response, getattr(response, 'latency_ms', None))
+
+        formatted = self._store_row(response.text)
+        if not response.tool_calls:
+            return self._end_turn(formatted)
+        self._emit_interim(formatted)
+        self._dispatch_tools(response.tool_calls)
+        return self._continue()._step()
+
+    def _store_row(self, text: "str | None") -> str:
+        """Persist this step's assistant row and anchor its tool calls to it.
+
+        Every step writes its OWN assistant transcript row — the row the model
+        emitted — so the chat renders assistant prose and tool batches
+        interleaved down the turn (the row's tools anchor here, never on the
+        input row). The dispatcher reads ``self.anchor`` for the transcript_id it
+        records each tool call against, so the anchor advances to this row before
+        any tools dispatch. ``skip_transcript`` channels persist nothing and keep
+        ``anchor == uid``. A hidden-input continuation whose input row was never
+        written carries turn_id None until the first row it writes adopts that
+        row's turn, so the rest of the chain shares one cursor. Returns the
+        formatted text for the caller to emit and propagate.
+        """
+        formatted = self._format_response(text or "")
+        if self.config.skip_transcript:
+            return formatted
+        from services.transcript_service import turn_id_of_row, write_assistant_row  # noqa: PLC0415
+
+        row_id = write_assistant_row(self.config.channel, formatted, turn_id=self.turn_id)
+        if self.turn_id is None:
+            self.turn_id = turn_id_of_row(row_id)
+            if self.turn_id is not None:
+                self._chain_turn_ids.add(self.turn_id)
+        self.anchor = row_id
+        return formatted
+
+    def _emit_interim(self, formatted: str) -> None:
+        """Push a mid-turn assistant row live on the user channel.
+
+        The turn's final row is emitted by the api layer once the chain returns;
+        only mid-turn prose is broadcast here so the surface updates within the
+        turn. Empty text and non-user channels are no-ops.
+        """
+        if self.config.broadcast_to == "user" and formatted.strip():
+            from api.chat import _broadcast_interim  # noqa: PLC0415
+            _broadcast_interim(self._metadata, formatted)
+
+    def _dispatch_tools(self, tool_calls: list) -> None:
+        """Dispatch every tool call of one step through the chokepoint, in order.
+
+        Each dispatch BLOCKS and records its tool_calls row against ``self.anchor``
+        (this step's row). Stops early if cancellation fires between calls; the
+        chain then unwinds at the next step's cancel guard.
         """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services.provider_api import RequestOverCapError, ResponseOverLimitError  # noqa: PLC0415
-        while True:
-            if self._should_stop():
-                return ""
-            dto = self._build_send_dto()
-            try:
-                response = self.providers.send(dto)
-                self._record_metrics(response, getattr(response, 'latency_ms', None))
-            except (RequestOverCapError, ResponseOverLimitError):
-                if self._dispatch_compaction():
-                    continue                              # rebuild from the collapsed DB
-                # Irreducible — rebuild dto and send without the cap check.
-                force_dto = self._build_send_dto()
-                response = self._force_send(force_dto)
-            if not response.tool_calls:
-                return self._format_final_response(response.text)
-            dispatcher = ToolDispatcher(self)
-            for tc in response.tool_calls:
-                if self.cancel_event.is_set():
-                    return ""
-                dispatcher.dispatch(tc["name"], tc["input"])
-            self._record_narration(response)
-            self.current_iteration += 1
 
-    def _format_final_response(self, text: "str | None") -> str:
-        """Final user-visible text leaving the loop, before any other pipeline.
+        dispatcher = ToolDispatcher(self)
+        for tc in tool_calls:
+            if self.cancel_event.is_set():
+                return
+            dispatcher.dispatch(tc["name"], tc["input"])
+
+    def _continue(self, *, post_compaction: bool = False) -> "MessageProcessor":
+        """Spawn the next link in the chain — a hidden-input continuation MP.
+
+        Same turn, same channel: the model just emitted tool calls (or the turn
+        was just compacted), so a fresh MP rebuilds the request from the collapsed
+        DB for the next API call. It inherits the turn's identity (uid, turn_id)
+        and SHARES the chain's mutable state by reference — the cancel Event, the
+        metrics accumulator, the active-tools list, the chain's turn-id set, and
+        the rich-media ordinal counter — so cancellation, cleanup, telemetry, and
+        monotonic media ordinals all see the whole chain as one unit. The config
+        is flipped to hidden-input (skip_input_row) so the continuation opens no
+        new input row, and the anchor resets to the input row until this link's
+        own step row (if any) advances it.
+
+        When ``post_compaction`` is set the prior step lost its working context to
+        a compaction, so the continuation carries the recovery banner: the latest
+        user input is restated and the transcript-reading tool is surfaced.
+        """
+        child = object.__new__(MessageProcessor)
+        MessageProcessor.__init__(child, self._raw_input, self._metadata)
+        child.config = self.config.with_hidden_input()
+        child.uid = self.uid
+        child.turn_id = self.turn_id
+        child.anchor = self.uid
+        child.active_tools = self.active_tools            # SAME list
+        child._metrics = self._metrics                    # SAME accumulator
+        child._chain_turn_ids = self._chain_turn_ids      # SAME set
+        child._rich_media_ordinals = getattr(self, "_rich_media_ordinals", None)
+        child.cancel_event = self.cancel_event            # SAME Event
+        # Turn-scoped accumulators/snapshots (pattern touched-ids, save counters,
+        # the skill-suggestion request snapshot) span the whole turn, not one link.
+        # Carry each forward by reference so a continuation does not reset them and
+        # the final step's post-turn hooks see the turn's full state. The configs'
+        # own lazy-init guards (if not hasattr) then leave the inherited value be.
+        for _name in self.config.turn_scoped_state():
+            if hasattr(self, _name):
+                setattr(child, _name, getattr(self, _name))
+        child.thinking_level = getattr(self, "thinking_level", "low")
+        child.thinking_override = self.thinking_override
+        child.providers = self.providers
+        if post_compaction:
+            from services.transcript_service import latest_input_content  # noqa: PLC0415
+            child.post_compaction_continuation = True
+            child.continuation_user_query = latest_input_content(self.config.channel)
+            if "review_transcript" not in child.active_tools:
+                child.active_tools.append("review_transcript")
+        return child
+
+    def _format_response(self, text: "str | None") -> str:
+        """Normalise assistant text before it is persisted or broadcast.
 
         On the user-facing channel the LLM is asked to emit Chalie's HTML subset,
         but models still occasionally leak the most common markdown markers
         (``**bold**``, ``_under_``, `` `code` ``). Run a best-effort
-        markdown→HTML fallback here — the single point the final response leaves
-        the loop, ahead of ``_record`` / ``write_assistant_row`` / post-turn
-        hooks and the api-layer ``sanitize()``.
+        markdown→HTML fallback here — the single point every assistant row (each
+        mid-turn step row AND the final end message) is normalised, ahead of
+        ``write_assistant_row`` / post-turn hooks and the api-layer ``sanitize()``.
 
         Gated on ``broadcast_to == 'user'``: every other channel emits JSON or
         plain text (DMN summaries, encoders, compaction) that must not have
@@ -539,42 +659,11 @@ class MessageProcessor:
             return markdown_to_html(text)
         return text or ""
 
-    def _force_send(self, dto):
-        """Send without the pre-flight cap check (irreducible path).
-
-        Bypasses Providers.send() to skip the over-cap check, but still routes
-        through the client and telemetry so the call is logged correctly.
-
-        Telemetry (_log_after_call + _record_metrics) fires only on success — a
-        failed send writes NO accounting row, matching the pre-refactor success-
-        only logging.  Writing a sentinel under the real job_name would corrupt
-        get_last_chat_request_tokens (context indicator → 0).  On failure the
-        attempt is surfaced via logger.warning with wall-time, then the exception
-        propagates to kill the turn.
-        """
-        import time  # noqa: PLC0415
-        client = self.providers._resolve(dto.type)
-        t0 = time.monotonic()
-        response = None
-        try:
-            response = client.send(dto)
-            return response
-        finally:
-            wall_ms = int((time.monotonic() - t0) * 1000)
-            if response is not None:
-                self.providers._log_after_call(dto, response, wall_ms)
-                self._record_metrics(response, wall_ms)
-            else:
-                logger.warning(
-                    "[FORCE-SEND] provider send failed after %dms; no telemetry row written",
-                    wall_ms,
-                )
-
     def _record_metrics(self, response, wall_ms=None) -> None:
         """Fold per-send telemetry into the turn's MetricsAccumulator.
 
-        Called after every successful send (normal and force paths). Best-effort:
-        failures must never break the send path.
+        Called after every successful send. Best-effort: failures must never
+        break the send path.
         """
         from services.providers import Providers  # noqa: PLC0415
         latency_ms = wall_ms if wall_ms is not None else getattr(response, 'latency_ms', None)
@@ -592,90 +681,93 @@ class MessageProcessor:
         except Exception as exc:
             logger.debug("[LLM LOG] send-counter record failed: %s", exc)
 
-    def _should_stop(self) -> bool:
-        """Single stop check: cancel OR iteration cap.
+    def _end_turn(self, formatted: str) -> str:
+        """End the turn: fan-out the after-turn side-effects, return the text up.
 
-        Spec §4 / L3-L6.
+        Reached when a step's response carries no tool calls — that row, already
+        stored by ``_store_row``, is the turn's end message. The api layer emits
+        the final message once the chain returns, so this only runs the post-turn
+        hooks and propagates the text. All tool_calls rows are durable; the 7-day
+        retention janitor in DecayEngineService handles cleanup — no per-turn purge.
         """
         if self.cancel_event.is_set():
-            return True
-        if self.config.max_iterations is not None:
-            if self.current_iteration >= self.config.max_iterations:
-                return True
-        return False
-
-    def _record(self, response_text: str) -> None:
-        """Post-loop.  Persist turn + fan-out side-effects.
-
-        All tool_calls rows are durable; the 7-day retention janitor in
-        DecayEngineService handles cleanup. No per-turn purge.
-
-        Spec §4 / M4-M5 / C3-C4.
-        """
-        from services.transcript_service import write_assistant_row
-
-        if self.cancel_event.is_set():
-            self._cleanup_cancelled()
-            return
-
-        if not self.config.skip_transcript:
-            write_assistant_row(self.config.channel, response_text)
-
-        # After-turn hooks: mutually independent, failure-isolated (§4.8).  One
-        # hook raising is a non-event for the others — the order is undefined and
-        # may become concurrent, so each call is isolated (log + continue).
+            return ""
+        # After-turn hooks: mutually independent, failure-isolated.  One hook
+        # raising is a non-event for the others — the order is undefined and may
+        # become concurrent, so each call is isolated (log + continue).
         for hook in self.config.post_turn_hooks:
             try:
-                hook.run(self, response_text)
+                hook.run(self, formatted)
             except Exception as exc:  # noqa: BLE001 — failure isolation contract
                 logger.warning(
                     "[post_turn] hook %s failed (isolated): %s",
                     type(hook).__name__,
                     exc,
                 )
+        return formatted
 
     def _cleanup_cancelled(self) -> None:
-        """Delete DB rows created during a cancelled turn.
+        """Delete every DB row of the cancelled chain — both tables, every turn.
 
-        Spec §4 / M5.
+        A chain may span more than one turn_id (a mid-turn compaction splits it),
+        so cleanup sweeps every turn the chain opened, not just the latest. For
+        each, the tool calls anchored to that turn's transcript rows are deleted
+        BEFORE the transcript rows — tool_calls carries no turn column, so its rows
+        are scoped through the turn's transcript ids (a subquery), and the FK from
+        tool_calls.transcript_id has no ON DELETE CASCADE, so removing the
+        transcript rows first would raise FOREIGN KEY constraint. Only the
+        turn-owning foreground MP is cancellable.
         """
-        if self.uid is None:
+        turn_ids = {t for t in (self._chain_turn_ids or {self.turn_id}) if t is not None}
+        if not turn_ids:
             return
+        channel = self.config.channel
         try:
-            from services.database_service import get_shared_db_service
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
             db = get_shared_db_service()
             with db.connection() as conn:
-                conn.execute(
-                    "DELETE FROM tool_calls WHERE transcript_id = ?", (self.uid,)
-                )
-                conn.execute(
-                    "DELETE FROM transcript WHERE id = ?", (self.uid,)
-                )
+                for tid in sorted(turn_ids):
+                    conn.execute(
+                        "DELETE FROM tool_calls WHERE transcript_id IN "
+                        "(SELECT id FROM transcript WHERE channel = ? AND turn_id = ?)",
+                        (channel, tid),
+                    )
+                    conn.execute(
+                        "DELETE FROM transcript WHERE channel = ? AND turn_id = ?",
+                        (channel, tid),
+                    )
             logger.info(
-                "[MessageProcessor] %s: cleaned up cancelled turn (uid=%s)",
-                self.config.channel,
-                self.uid,
+                "[MessageProcessor] %s: cleaned up cancelled chain (turn_ids=%s)",
+                channel,
+                sorted(turn_ids),
             )
         except Exception as exc:
             logger.warning(
-                "[MessageProcessor] %s: failed to clean up cancelled turn (uid=%s): %s",
-                self.config.channel,
-                self.uid,
+                "[MessageProcessor] %s: failed to clean up cancelled chain (turn_ids=%s): %s",
+                channel,
+                sorted(turn_ids),
                 exc,
             )
 
     def _previous_rows(self) -> list:
-        """Watermark-bounded transcript rows for this channel (design §3.7).
+        """Watermark-bounded transcript rows for this channel, EXCLUDING the
+        current turn.
 
         SELECT * FROM transcript WHERE channel=? AND id > <watermark> ORDER BY id ASC
-        No LIMIT (fixes the 20-row bug). Empty for suppress_history channels and
-        post-compaction turns (the compaction row's own id IS the watermark)."""
+        No LIMIT (fixes the 20-row bug). Rows of the current turn (turn_id ==
+        self.turn_id) are dropped: the live input is rendered separately and the
+        turn's end message is not written until the loop finishes. Empty for
+        suppress_history channels and post-compaction turns (the compaction row's
+        own id IS the watermark)."""
         if self.config.suppress_history:
             return []
         from services import compaction_persistence, transcript_service  # noqa: PLC0415
         compaction = compaction_persistence.get_compaction(self.config.channel)
         watermark = compaction["compacted_up_to_id"] if compaction else 0
-        return transcript_service.get_recent(self.config.channel, since_id=watermark)
+        rows = transcript_service.get_recent(self.config.channel, since_id=watermark)
+        if self.turn_id is None:
+            return rows
+        return [r for r in rows if (r.get("turn_id") or 0) < self.turn_id]
 
     def get_previous_messages(self, drop_oldest: int = 0) -> str:
         """Render the ## Previous Messages block from _previous_rows().
@@ -706,156 +798,68 @@ class MessageProcessor:
             lines.append(f"[{ts}] {role_label}: {content}")
         return "\n".join(lines)
 
-    # ── Trail API (T4: act-trail-as-a-query) ─────────────────────────────────
+    # ── Trail API: act-trail-as-a-query, keyed on (channel, turn_id) ─────────
 
-    def _has_trail(self) -> bool:
-        """True when real (non-internal) tool activity exists since the last
-        trail boundary.
+    def _render_act_trail(self) -> str:
+        """Assemble the current turn's act-trail — its tool calls.
 
-        Slices from the last tool_chain_compactor boundary and returns True only
-        when at least one row in that slice is genuine agent activity — i.e. NOT
-        a framework compactor marker and NOT the automatic turn-0 memory-recall
-        seed (canonical design §2: ToolChainCompactor no-ops when there are no
-        tool calls "excluding internal ones (compaction + automatic memory
-        recall)"). Used by ToolChainCompactor to silently no-op when there is
-        nothing to compact.
+        The turn's tool calls are fetched by joining transcript on (channel,
+        turn_id) and rendered in id order — the order the dispatcher recorded
+        them. Mid-turn assistant text is no longer persisted (one input, one end
+        message per turn), so there is nothing to interleave. The
+        chat_history_compactor marker is dropped — its compacted output reaches
+        the model through the checkpoint prepend, not the trail. Returns '' when
+        this MP has no turn.
         """
-        if self.uid is None:
-            return False
-        from services.act_trail import ActTrail  # noqa: PLC0415
-        rows = _from_last_compaction(ActTrail().fetch_by_transcript_id(self.uid))
-        return any(
-            r["tool_name"] not in _COMPACTOR_TOOLS and not _is_auto_memory_recall(r)
-            for r in rows
-        )
-
-    def _render_act_trail(self, for_compaction: bool = False) -> str:
-        """Assemble the ACT trail string for the current turn.
-
-        Fetches all tool_calls rows for self.uid ordered by id and slices from
-        the last tool_chain_compactor boundary (inclusive); the boundary row's
-        handover renders in place of the pre-compacted calls. Framework markers
-        are filtered: chat_history_compactor rows never reach the model (their
-        compacted history arrives via the checkpoint prepend), and an empty
-        tool_chain_compactor no-op row is dropped. Returns '' when uid is None.
-
-        ``for_compaction=True`` additionally drops the automatic turn-0
-        memory-recall seed (canonical design §3: ToolChainCompactor compacts the
-        act-trail "excluding internal: compaction + automatic memory recall").
-        The default (False) keeps the seed so the per-turn act-trail the model
-        sees still shows what was auto-recalled — only the compaction INPUT is
-        filtered, matching the spec's narrow exclusion.
-        """
-        if self.uid is None:
+        if self.turn_id is None:
             return ""
         from services.act_trail import ActTrail  # noqa: PLC0415
+
         trail = ActTrail()
-        rows = _from_last_compaction(trail.fetch_by_transcript_id(self.uid))
-        out: list[str] = []
-        for r in rows:
-            name = r.get("tool_name")
-            if name == "chat_history_compactor":
+        lines: list[str] = []
+        for row in trail.fetch_by_turn(self.config.channel, self.turn_id):
+            if row.get("tool_name") == "chat_history_compactor":
                 continue
-            if name == _TRAIL_BOUNDARY_TOOL and not (r.get("result") or "").strip():
-                continue
-            if for_compaction and _is_auto_memory_recall(r):
-                continue
-            out.append(trail.render(r))
-        return "\n".join(out)
+            lines.append(trail.render(row))
+        return "\n".join(lines)
 
-    def compact(self) -> bool:
-        """Public entry point — fire this channel's compactors once, no turn.
-
-        Runs ONLY the compaction tool calls (tool_chain + chat_history) through
-        the real dispatch chokepoint — no ``_setup``, no ACT loop, no LLM turn.
-        Intended for proactive idle-time compaction: a caller builds a
-        channel-bound MP (``mp = MessageProcessor("", None); mp.config = X``) and
-        calls this to fold accumulated history into the durable watermark while
-        the user is away.
-
-        Returns True when compaction advanced the state (the watermark moved or
-        the act-trail collapsed), False when there was nothing to compact — a pure
-        no-op with zero side effects (no LLM call, no DB write), so re-running on
-        an idle tick with no new messages costs nothing.
-        """
-        return self._dispatch_compaction()
-
-    def _dispatch_compaction(self) -> bool:
-        """Fire both compactors through the normal tool-dispatch chokepoint and
-        report whether they made progress.
+    def _dispatch_compaction(self) -> None:
+        """Fire chat-history compaction through the normal tool-dispatch chokepoint.
 
         No alternative path: this is the SAME machinery as the turn-0
-        memory/thinking seeds. Each compactor goes through ToolDispatcher.dispatch
-        so it auto-records its tool_calls row AND auto-emits the act-trail WS
-        events (act_tool_start/act_tool_end) — that is how compaction shows up in
-        the frontend act-trail without any hand-rolled emit.
+        memory/thinking seeds. ChatHistoryCompactor goes through
+        ToolDispatcher.dispatch so it auto-records its tool_calls row AND
+        auto-emits the act-trail WS events (act_tool_start/act_tool_end) — that is
+        how compaction shows up in the frontend act-trail without any hand-rolled
+        emit. It reads get_previous_messages() off this mp and advances the
+        durable transcript watermark. INTERNAL (policy gate bypassed) and
+        never-discoverable.
 
-        - ToolChainCompactor reads the act-trail off this mp and compacts it
-          (silent no-op when empty); its recorded row is the new trail boundary.
-        - ChatHistoryCompactor reads get_previous_messages() off this mp and
-          advances the durable transcript watermark.
-
-        Fired tool_chain first so its handover summarises the real trail before
-        the chat-history marker lands. Both are INTERNAL (policy gate bypassed)
-        and never-discoverable.
-
-        Returns True when compaction advanced the state — the act-trail was
-        collapsed OR the chat-history watermark moved forward. The ACT loop uses a
-        False return (nothing left to compact) to detect an irreducible request and
-        stop compacting (send as-is, force) instead of looping forever.
+        When the watermark moves forward the compactor wrote a fresh
+        role='compaction' row on its OWN new turn; this method adopts that turn so
+        the post-compaction continuation MP, and everything it writes, lives on the
+        new turn — the mid-turn turn_id split. The pre-compaction tool calls stay
+        anchored to the original turn's rows.
         """
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
         from services import compaction_persistence  # noqa: PLC0415
+        from services.transcript_service import turn_id_of_row  # noqa: PLC0415
 
-        trail_before = self._has_trail()
         before = compaction_persistence.get_compaction(self.config.channel)
         before_id = before["compacted_up_to_id"] if before else 0
 
-        dispatcher = ToolDispatcher(self)
-        dispatcher.dispatch("tool_chain_compactor", {"act_summary": "Compacting tool history"})
-        dispatcher.dispatch("chat_history_compactor", {"act_summary": "Compacting conversation"})
+        ToolDispatcher(self).dispatch(
+            "chat_history_compactor", {"act_summary": "Compacting conversation"}
+        )
 
         after = compaction_persistence.get_compaction(self.config.channel)
         after_id = after["compacted_up_to_id"] if after else 0
-        # Progress = the act-trail was actually COLLAPSED (a non-empty handover
-        # landed a new boundary, so _has_trail flips True→False) OR the chat-history
-        # watermark advanced. The trail term is measured AFTER dispatch on purpose:
-        # ToolChainCompactor records a no-op row (no boundary) when the handover
-        # summariser returns an empty string, leaving _has_trail True. Counting that
-        # as progress would spin the over-cap compaction loop forever (that branch
-        # has no iteration cap). Returning False instead falls through to send(force=True),
-        # letting the provider be the source of truth and fail loud on an
-        # irreducible request rather than hang.
-        trail_collapsed = trail_before and not self._has_trail()
-        return trail_collapsed or after_id > before_id
-
-    def _record_narration(self, response: "object") -> None:  # type: ignore[override]
-        """Mid-loop: persist LLM text between iterations as a durable trail row.
-
-        Records a tool_calls row with tool_name='narration'.
-        Emits an act_narration WS event gated on config.broadcast_to.
-        No-op when response.text is falsy.
-
-        Spec §4 / F14 / F15 / N3.
-        """
-        text = getattr(response, "text", None)
-        if not text:
+        if after_id <= before_id:
             return
-        from abilities._event_emitter import ActEventEmitter  # noqa: PLC0415
-        from services.act_trail import ActTrail  # noqa: PLC0415
-        ActTrail().record(
-            tool_name=NARRATION_TOOL,
-            params={},
-            result=text,
-            transcript_id=self.uid,
-        )
-        # The emitter owns the broadcast_to gate — background loops
-        # (broadcast_to=None) never emit (N1/N5).
-        ActEventEmitter(self.config).emit({
-            "type": "act_narration",
-            "text": _sanitize_llm_args(text),
-            "step": self.current_iteration,
-        })
+        new_turn = turn_id_of_row(after_id)
+        if new_turn is not None:
+            self.turn_id = new_turn
+            self._chain_turn_ids.add(new_turn)
 
 
 # ── Module-private helpers ────────────────────────────────────────────────────
@@ -894,23 +898,6 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
         "### Current State - What's happening in the current turn\n"
         f"{user_body}"
     )
-
-
-def _from_last_compaction(rows: "list[dict]") -> "list[dict]":
-    """Return the tail of *rows* starting at the LAST non-empty trail boundary
-    (a tool_chain_compactor row whose result holds a handover), inclusive.
-
-    When no such boundary exists, return all rows. An empty-result
-    tool_chain_compactor row (the no-trail no-op) is NOT a boundary — it carries
-    no handover, so slicing at it would drop real calls behind a blank marker.
-    The chat_history_compactor marker is never a boundary either; only the
-    act-trail compactor bounds the trail.
-    """
-    last: "int | None" = None
-    for i, r in enumerate(rows):
-        if r.get("tool_name") == _TRAIL_BOUNDARY_TOOL and (r.get("result") or "").strip():
-            last = i
-    return rows if last is None else rows[last:]
 
 
 def _format_ts(

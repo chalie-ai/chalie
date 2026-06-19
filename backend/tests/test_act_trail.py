@@ -35,7 +35,7 @@ def test_round_trips_a_real_tool_calls_row(db):
         transcript_id=transcript_id,
     )
     trail.record(
-        tool_name="tool_chain_compactor",
+        tool_name="chat_history_compactor",
         params={},
         result="summarised the trail",
         transcript_id=transcript_id,
@@ -44,12 +44,12 @@ def test_round_trips_a_real_tool_calls_row(db):
     rows = trail.fetch_by_transcript_id(transcript_id)
 
     # Oldest→newest by autoincrement id, raw params/result preserved.
-    assert [r["tool_name"] for r in rows] == ["weather", "tool_chain_compactor"]
+    assert [r["tool_name"] for r in rows] == ["weather", "chat_history_compactor"]
     assert rows[0]["result"] == "sunny, 27°C"
 
     # render() emits the invariant "[tool_name] params → result" shape.
     assert ActTrail.render(rows[0]) == '[weather] {"location": "Malta"} → sunny, 27°C'
-    assert ActTrail.render(rows[1]) == "[tool_chain_compactor] {} → summarised the trail"
+    assert ActTrail.render(rows[1]) == "[chat_history_compactor] {} → summarised the trail"
 
 
 def test_record_is_a_silent_noop_without_a_transcript_id(db):

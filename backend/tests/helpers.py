@@ -50,7 +50,6 @@ def make_stub_config(
         role=role,
         policy_channel=policy_channel or ProcessorConfig.PolicyChannel.CHAT,
         always_available=list(always_available or []),
-        max_iterations=None,
         skip_transcript=False,
         skip_input_row=False,
         suppress_history=False,

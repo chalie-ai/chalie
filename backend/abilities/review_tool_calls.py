@@ -65,12 +65,14 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
     def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
-        """Excludes narration rows (tool_name='narration') — mid-loop LLM text blobs
-        not meaningful as tool activity."""
+        """Excludes legacy ``tool_name='narration'`` rows.
+
+        Narration as a separate tool_calls row was removed — mid-turn assistant
+        text is no longer persisted at all (a turn emits one end message), so no
+        new narration rows are written. The literal filter stays only to hide any
+        such rows left in an existing DB from before that change; it is not a
+        live tool name."""
         from services.database_service import get_shared_db_service
-        # Single source of the narration tool_name — the writer
-        # (MessageProcessor._record_narration) and this reader must agree.
-        from services.message_processor import NARRATION_TOOL
 
         db = get_shared_db_service()
         with db.connection() as conn:
@@ -80,10 +82,10 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
                 SELECT tool_name, params, result, created_at
                 FROM tool_calls
                 WHERE created_at BETWEEN ? AND ?
-                  AND tool_name != ?
+                  AND tool_name != 'narration'
                 ORDER BY created_at ASC, id ASC
                 """,
-                (lo, hi, NARRATION_TOOL),
+                (lo, hi),
             )
             columns = ("tool_name", "params", "result", "created_at")
             rows = [dict(zip(columns, r)) for r in cursor.fetchall()]

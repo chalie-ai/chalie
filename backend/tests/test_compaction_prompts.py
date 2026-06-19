@@ -1,22 +1,15 @@
-"""Feature tests for the two compaction system-prompt contracts.
+"""Feature test for the chat-history compaction system-prompt contract.
 
-Drive the exact production entry point — ``*CompactionConfig().get_system_prompt(mp)``,
+Drives the exact production entry point — ``ChatHistoryCompactionConfig().get_system_prompt(mp)``,
 the same call ``_build_send_dto`` makes when a compactor turn assembles its
-request — and pin the slimmed prompt shape:
-
-- History prompt: carries the full contract — ``## Previous Summary`` / ``## New Turns``
-  input markers, the six living-document sections in order, the 200-400 token
-  target, and no legacy ``<analysis>``/``<summary>`` tag machinery.
-- Trail prompt: fixed four-part handover structure (Goal / Done / Failed / Next)
-  plus the never-state-a-value-a-tool-did-not-return guard.
+request — and pins the slimmed prompt shape: the ``## Previous Summary`` /
+``## New Turns`` input markers, the six living-document sections in order, the
+200-400 token target, and no legacy ``<analysis>``/``<summary>`` tag machinery.
 """
-
-import re
 
 import pytest
 
 from abilities.chat_history_compactor import ChatHistoryCompactionConfig
-from abilities.tool_chain_compactor import ToolChainCompactionConfig
 
 pytestmark = pytest.mark.unit
 
@@ -56,31 +49,5 @@ def test_history_compaction_prompt_contract():
     assert "200-400 tokens" in prompt
 
     # The legacy tag/parser machinery must never come back: output is verbatim.
-    assert "<analysis>" not in prompt
-    assert "<summary>" not in prompt
-
-
-def test_trail_compaction_prompt_contract():
-    prompt = ToolChainCompactionConfig().get_system_prompt(None)
-
-    # The trail rewrite changed structure, not size (the pre-rewrite body
-    # measured 164 words; the rewrite is 148): guard against regrowth only.
-    assert len(prompt.split()) <= 160, (
-        f"trail compaction prompt is {len(prompt.split())} words — "
-        "the contract caps it at 160"
-    )
-
-    # Fixed four-part handover structure, in order, replacing free-form output.
-    # (The bare-turns input path — no "## New Turns" header — is covered by the
-    # compactor integration tests, not here.)
-    assert _ordered(prompt, ["- Goal", "- Done", "- Failed", "- Next"])
-
-    # Hallucination guard for weak models.
-    assert re.search(r"Never state a value a tool did not return", prompt)
-
-    # Keep-clause still names the concrete artefacts a later step needs.
-    for token in ("ids", "paths"):
-        assert token in prompt
-
     assert "<analysis>" not in prompt
     assert "<summary>" not in prompt

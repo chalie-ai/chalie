@@ -1,14 +1,11 @@
-"""Shared base for the two single-pass compaction ProcessorConfigs.
+"""Shared base for the single-pass compaction ProcessorConfig.
 
-``ToolChainCompactionConfig`` and ``ChatHistoryCompactionConfig`` were
-line-for-line identical apart from which system-prompt class they return. Both
-describe the same processor shape: one iteration, no tools, no transcript writes,
-subconscious policy channel, thinking forced high, history suppressed.
+``ChatHistoryCompactionConfig`` describes a fixed processor shape: no tools, no
+transcript writes, subconscious policy channel, thinking forced high, history
+suppressed.
 
-``CompactionConfig`` owns that shared shape once. Each concrete config sets a
-single ``ClassVar`` — :attr:`SYSTEM_PROMPT_CLASS` — and inherits everything else,
-so the two keep their distinct names and behaviours while the duplication is
-gone.
+``CompactionConfig`` owns that shape once. The concrete config sets a single
+``ClassVar`` — :attr:`SYSTEM_PROMPT_CLASS` — and inherits everything else.
 """
 
 from __future__ import annotations
@@ -23,7 +20,8 @@ class CompactionConfig(ProcessorConfig):
     thinking forced high so no fact a later step needs is dropped.
 
     Subclasses set :attr:`SYSTEM_PROMPT_CLASS` to the system-prompt class whose
-    ``get_prompt()`` supplies the compaction instructions.
+    ``get_prompt()`` supplies the compaction instructions. A compaction request
+    carries no tools, so the loop completes in a single send with no iteration.
     """
 
     thinking_mode: ClassVar[str] = "high"
@@ -37,7 +35,6 @@ class CompactionConfig(ProcessorConfig):
             role="compaction",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=True,
             suppress_history=True,

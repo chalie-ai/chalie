@@ -65,7 +65,6 @@ class EAMPConfig(ProcessorConfig):
             role="external_agent",
             policy_channel=ProcessorConfig.PolicyChannel.EXTERNAL_AGENT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
-            max_iterations=200,
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,

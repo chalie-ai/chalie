@@ -1,19 +1,14 @@
-"""Compactor-specific business-logic tests migrated from the per-ability
+"""Chat-history-compactor business-logic tests migrated from the per-ability
 conformance file removed in TKT-975. The full ToolResult wire contract is
 pinned centrally in test_tool_result_contract.py; this file holds only the
-compactor abilities' genuine behaviour tests (rows_compacted surface, broadcast
-guard, trail-boundary invariant) that have no coverage elsewhere."""
+compactor's genuine behaviour tests (rows_compacted surface, broadcast guard)
+that have no coverage elsewhere."""
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
-from abilities._result import ToolResult
 from abilities.chat_history_compactor import (
     ChatHistoryCompactionConfig,
     ChatHistoryCompactor,
-)
-from abilities.tool_chain_compactor import (
-    ToolChainCompactionConfig,
 )
 from abilities._compaction_config import CompactionConfig
 from configs.channels import UserConfig
@@ -94,22 +89,3 @@ def test_compaction_config_never_broadcasts_to_user():
     compactor result can never be paired to a user-facing card."""
     assert CompactionConfig().broadcast_to is None
     assert ChatHistoryCompactionConfig().broadcast_to is None
-    assert ToolChainCompactionConfig().broadcast_to is None
-
-
-def test_empty_tool_chain_result_is_not_a_trail_boundary(db):
-    """Trail-boundary detection (_from_last_compaction) keys off a tool_chain_compactor row
-    whose recorded result is non-empty after strip. The no-op path produces an empty body so the
-    boundary classifier sees the same string it always has. (chat_history meta uses a DIFFERENT
-    tool name and is never inspected by the boundary classifier.)"""
-    noop = ToolResult.ok("")
-    rendered = ToolDispatcher._render("tool_chain_compactor", noop, None)
-    # The boundary classifier inspects the rendered envelope; the body slot is
-    # empty for a no-op (only the envelope tags surround it). The meta head is
-    # absent — proving the no-op path added no meta that would change the head.
-    assert "(status=success)" in rendered  # no extra meta in the head
-    # And the success-with-handover path DOES carry a non-empty body (boundary).
-    handover = ToolResult.ok("dense handover text", trail_chars=42)
-    rendered_boundary = ToolDispatcher._render("tool_chain_compactor", handover, None)
-    assert "dense handover text" in rendered_boundary
-    assert "trail_chars=42" in rendered_boundary

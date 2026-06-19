@@ -13,13 +13,18 @@ class SkillSuggestionConfig(ProcessorConfig):
             role="skills_building",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["skill_manager"],
-            max_iterations=5,
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
         )
+
+    def turn_scoped_state(self) -> tuple[str, ...]:
+        # The caller snapshots the original request onto the root MP before the
+        # turn runs; a skill_manager call spawns a continuation MP that must still
+        # see it, so carry it across the chain (see MessageProcessor._continue).
+        return ("_original_trail", "_original_input", "_iteration_count")
 
     def get_user_definition(self, mp) -> str:
         return ""

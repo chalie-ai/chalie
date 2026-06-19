@@ -20,7 +20,7 @@ from services.document_service import DocumentService
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-from services.transcript_service import write_input_row
+from services.transcript_service import turn_id_of_row, write_input_row
 from api.conversation import get_recent_history
 
 pytestmark = pytest.mark.unit
@@ -57,7 +57,12 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, "Here is my receipt.", {"attachments": attachments})
     parent.config = UserConfig()
+    # Mirror production _setup() exactly: write_input_row opens the next turn for
+    # the channel atomically inside the INSERT; read the allocated turn_id back by
+    # row id. The turn's seeded tool calls and its _cleanup_cancelled delete both
+    # key off the same (channel, turn_id) boundary.
     parent.uid = write_input_row("user", "user", "Here is my receipt.")
+    parent.turn_id = turn_id_of_row(parent.uid)
     parent.active_tools = list(parent.config.always_available or [])
     return parent
 

@@ -8,7 +8,7 @@
 
 """Feature test for the PostTurnHook failure-isolation contract (§4.8).
 
-Drives the real production after-turn path — ``MessageProcessor._record`` —
+Drives the real production after-turn path — ``MessageProcessor._end_turn`` —
 against the real test database with the real production hook
 ``PersistUserSummaryHook``.  A sibling hook that raises MUST NOT stop the real
 hook from doing its downstream work (writing user_summary rows to data_graph).
@@ -49,7 +49,6 @@ def _config_with_hooks(hooks):
         build_user_definition=lambda _mp: "",
         build_system_prompt=lambda _mp: "",
         always_available=[],
-        max_iterations=1,
         skip_transcript=True,
         skip_input_row=False,
         suppress_history=True,
@@ -88,7 +87,7 @@ def test_exploding_sibling_does_not_block_real_hook(db):
     mp = _make_processor((saboteur, PersistUserSummaryHook()))
 
     # Real production after-turn entry point — runs the hook loop.
-    mp._record(_SUMMARY_JSON)
+    mp._end_turn(_SUMMARY_JSON)
 
     assert saboteur.ran, "saboteur hook should have been invoked"
     summary = _read_summary(db)
@@ -100,7 +99,7 @@ def test_isolation_holds_regardless_of_hook_order(db):
     saboteur = _ExplodingHook()
     mp = _make_processor((PersistUserSummaryHook(), saboteur))
 
-    mp._record(_SUMMARY_JSON)
+    mp._end_turn(_SUMMARY_JSON)
 
     assert saboteur.ran
     summary = _read_summary(db)

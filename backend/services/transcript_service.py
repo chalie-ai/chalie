@@ -108,7 +108,7 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
             if since_id is not None:
                 cursor.execute(
                     """
-                    SELECT id, role, content, tool_call_id, tool_name, internal, created_at
+                    SELECT id, role, content, tool_call_id, tool_name, internal, created_at, turn_id
                     FROM transcript
                     WHERE channel = ? AND id > ?
                     ORDER BY id ASC
@@ -118,7 +118,7 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
             else:
                 cursor.execute(
                     """
-                    SELECT id, role, content, tool_call_id, tool_name, internal, created_at
+                    SELECT id, role, content, tool_call_id, tool_name, internal, created_at, turn_id
                     FROM transcript
                     WHERE channel = ?
                     ORDER BY id DESC
@@ -138,6 +138,7 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
                 'tool_name': r[4],
                 'internal': bool(r[5]),
                 'created_at': r[6],
+                'turn_id': r[7],
             }
             for r in rows
         ]
@@ -376,7 +377,6 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             MessageProcessor.__init__(emp, "", None)
             emp.config = EpisodeEncoderConfig()
             emp.uid = None
-            emp.current_iteration = 0
             emp.cancel_event = threading.Event()
             emp.thinking_level = "low"
             emp._window = window_str
@@ -657,6 +657,16 @@ def _is_delete_only(ep: dict) -> bool:
 
 
 def write_input_row(channel: str, role: str, content: str) -> int:
+    """Write a turn's anchoring input row, opening the next turn.
+
+    turn_id is the per-channel monotonic turn boundary. Every input row opens a
+    fresh turn — there is no caller-supplied turn_id: fresh user / external
+    input, an async re-entry and a compaction checkpoint each open their OWN
+    turn. The next value, ``MAX(turn_id)+1`` for the channel, is computed inside
+    the INSERT so the allocation is atomic with the write — no read-then-insert
+    race when two same-channel turns open concurrently. Read it back with
+    :func:`turn_id_of_row`.
+    """
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
@@ -666,10 +676,12 @@ def write_input_row(channel: str, role: str, content: str) -> int:
         cursor.execute(
             """
             INSERT INTO transcript (channel, role, content, xml_migrated,
-                                    location_lat, location_lon, location_name)
-            VALUES (?, ?, ?, 1, ?, ?, ?)
+                                    location_lat, location_lon, location_name, turn_id)
+            VALUES (?, ?, ?, 1, ?, ?, ?,
+                    (SELECT COALESCE(MAX(turn_id), 0) + 1
+                     FROM transcript WHERE channel = ?))
             """,
-            (channel, role, content, lat, lon, loc_name),
+            (channel, role, content, lat, lon, loc_name, channel),
         )
         row_id = cursor.lastrowid
         cursor.close()
@@ -677,6 +689,24 @@ def write_input_row(channel: str, role: str, content: str) -> int:
     _maybe_trigger_extraction(channel, row_id)
 
     return row_id
+
+
+def turn_id_of_row(row_id: int) -> int:
+    """The turn_id the INSERT's COALESCE subquery opened for a transcript row.
+
+    write_input_row allocates the next turn atomically inside the write (under
+    the SQLite writer lock), so the caller cannot know the value up front — it
+    reads it back here by row id. Reading MAX(turn_id) instead would race: a
+    concurrent same-channel turn could advance the max between the write and the
+    read. Returns 0 if the row is gone or still unnumbered."""
+    from services.database_service import get_shared_db_service
+
+    db = get_shared_db_service()
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT turn_id FROM transcript WHERE id = ?", (row_id,)
+        ).fetchone()
+    return row[0] if row and row[0] is not None else 0
 
 
 def link_transcript_doc(transcript_id: int, doc_id: str) -> None:
@@ -698,7 +728,39 @@ def link_transcript_doc(transcript_id: int, doc_id: str) -> None:
         )
 
 
-def write_assistant_row(channel: str, content: str) -> int:
+def latest_input_content(channel: str) -> "str | None":
+    """The most recent input-row content on a channel — the post-compaction
+    continuation's "the user query was: …".
+
+    An input row is any NON-assistant, NON-compaction row: there are many input
+    roles (user / proactive_thought / external_agent / vision / …), so we exclude
+    the two output-shaped roles rather than hardcode role='user'. Compaction
+    checkpoints are written via write_input_row(channel, 'compaction', …) so they
+    ARE non-assistant rows and must be excluded explicitly. Ordered by monotonic
+    id (not created_at — one-second granularity ties). Returns None on an empty
+    channel."""
+    from services.database_service import get_shared_db_service
+
+    db = get_shared_db_service()
+    with db.connection() as conn:
+        row = conn.execute(
+            "SELECT content FROM transcript "
+            "WHERE channel = ? AND role != 'assistant' AND role != 'compaction' "
+            "ORDER BY id DESC LIMIT 1",
+            (channel,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def write_assistant_row(channel: str, content: str, turn_id: "int | None" = None) -> int:
+    """Write a turn's end-message assistant row, grounded to its turn.
+
+    Every turn produces exactly ONE assistant row — the final chat text the MP
+    settles on (mid-turn interim text is no longer persisted). The MP supplies
+    its current ``turn_id`` so the end message shares the boundary of its input
+    row. A ``None`` turn_id falls back to the same fresh-turn allocation as
+    write_input_row — the path an anchorless re-entry (no input row) takes to
+    open its own turn."""
     from services.database_service import get_shared_db_service
 
     db = get_shared_db_service()
@@ -708,10 +770,12 @@ def write_assistant_row(channel: str, content: str) -> int:
         cursor.execute(
             """
             INSERT INTO transcript (channel, role, content, xml_migrated,
-                                    location_lat, location_lon, location_name)
-            VALUES (?, ?, ?, 1, ?, ?, ?)
+                                    location_lat, location_lon, location_name, turn_id)
+            VALUES (?, ?, ?, 1, ?, ?, ?,
+                    COALESCE(?, (SELECT COALESCE(MAX(turn_id), 0) + 1
+                                 FROM transcript WHERE channel = ?)))
             """,
-            (channel, 'assistant', content, lat, lon, loc_name),
+            (channel, 'assistant', content, lat, lon, loc_name, turn_id, channel),
         )
         row_id = cursor.lastrowid
         cursor.close()

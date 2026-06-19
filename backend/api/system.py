@@ -292,7 +292,7 @@ def observability_tools():
             "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
             "FROM tool_calls "
             "WHERE tool_name NOT IN ('compaction', 'tool_compaction', 'trail_compaction', "
-            "'chat_history_compactor', 'tool_chain_compactor', 'thinking') "
+            "'chat_history_compactor', 'thinking') "
             "GROUP BY tool_name "
             "ORDER BY last_used_at DESC"
         )

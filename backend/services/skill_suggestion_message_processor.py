@@ -46,7 +46,6 @@ def _run_suggestion_processor(
         MessageProcessor.__init__(mp, "", None)
         mp.config = SkillSuggestionConfig()
         mp.uid = None
-        mp.current_iteration = 0
         mp.cancel_event = threading.Event()
         mp.thinking_level = "low"
         mp._original_trail = act_trail

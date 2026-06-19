@@ -7,6 +7,18 @@ from services.processor_config import ProcessorConfig
 
 _TOP_PATTERN_CAP = 50
 
+# Per-turn accumulators the save_pattern/save_graph abilities mutate and the
+# decay hook consumes. They span the whole turn, so PatternConfig/GeoConfig
+# declare them via turn_scoped_state() and MessageProcessor._continue carries
+# them across a mid-turn chain continuation (otherwise a freshly-saved pattern
+# would be decayed by the post-turn hook that runs on the final step).
+PATTERN_TURN_STATE: tuple[str, ...] = (
+    "_save_pattern_calls",
+    "_save_graph_calls",
+    "_save_graph_seen",
+    "_touched_pattern_ids",
+)
+
 
 def _pattern_existing_patterns_block() -> str:
     """Return the top-confidence active behavioral_pattern rows as JSON."""
@@ -121,7 +133,7 @@ def _pattern_init_instance_state(mp: object) -> None:
 class PatternConfig(ProcessorConfig):
     """Pattern-match config — per-window background pattern recognition.
 
-    channel/role='pattern_match', suppress_history=True, max_iterations=100.
+    channel/role='pattern_match', suppress_history=True.
     post_turn_hooks = (PatternDecayHook(),) — confidence decay sweep (§3b).
 
     Counter/state attrs are lazily initialised by get_user_prompt on the first
@@ -134,7 +146,6 @@ class PatternConfig(ProcessorConfig):
             role="pattern_match",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
-            max_iterations=100,
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
@@ -144,6 +155,9 @@ class PatternConfig(ProcessorConfig):
         )
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
+
+    def turn_scoped_state(self) -> tuple[str, ...]:
+        return PATTERN_TURN_STATE
 
     def get_user_definition(self, mp) -> str:
         return ""

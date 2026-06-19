@@ -530,11 +530,19 @@ CREATE TABLE IF NOT EXISTS transcript (
     xml_migrated INTEGER NOT NULL DEFAULT 0,
     location_lat  REAL,
     location_lon  REAL,
-    location_name TEXT
+    location_name TEXT,
+    -- Per-channel monotonic turn counter. The single conversation
+    -- boundary: every row written during one logical turn shares one turn_id,
+    -- so context, act-trail and cancellation cleanup all key on (channel,
+    -- turn_id) rather than a transcript row id. Nullable + no DEFAULT keeps it
+    -- convergence-safe (ADD COLUMN) on existing databases; the value is computed
+    -- at insert time by transcript_service.
+    turn_id     INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
 CREATE INDEX IF NOT EXISTS idx_transcript_channel_created_desc ON transcript(channel, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transcript_channel_turn ON transcript(channel, turn_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- TOOL CALLS — audit log of every tool invocation per transcript turn
@@ -545,7 +553,16 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     tool_name     TEXT NOT NULL,
     params        TEXT DEFAULT '{}',
     result        TEXT DEFAULT '',
+    -- The ability's act_summary — the one-line "what I'm doing" the dispatcher
+    -- already streams live (act_tool_start). Persisting it lets the chat refresh
+    -- re-render each tool chip's blue summary box instead of dropping it on reload.
+    summary       TEXT DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    -- A tool call anchors ONLY to the transcript input row that drove it
+    -- (transcript_id); its turn is derived by joining transcript on
+    -- (channel, turn_id). An async / delegate re-entry writes its
+    -- own input row but shares the turn_id, so the join still gathers the whole
+    -- turn — no turn column is duplicated here.
     FOREIGN KEY (transcript_id) REFERENCES transcript(id)
 );
 

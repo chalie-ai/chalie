@@ -15,7 +15,7 @@ Every page calls `/auth/status` before booting and redirects as needed: no accou
 
 ## The Chat Surface
 
-**ACT cycle.** While a turn runs, the UI shows a chrome-less working state — a pulsing violet logo, a one-line narration that updates in place, and a cumulative list of tool calls (name, optional `act_summary`, then duration or error). When the turn finishes, the whole ACT UI is replaced by the final reply bubble. The data comes from WebSocket events: `act_tool_start`, `act_tool_end`, `act_narration`, then `message` + `done`.
+**ACT cycle.** While a turn runs, the UI shows a chrome-less working state — a pulsing violet logo and a cumulative list of tool calls (name, optional `act_summary`, then duration or error). When the turn finishes, the whole ACT UI is replaced by the final reply bubble. The data comes from WebSocket events: `act_tool_start`, `act_tool_end`, then `message` + `done`.
 
 **Rich-media cards.** Tools can return a structured payload that renders as an inline card instead of prose. The registry (`frontend/interface/rich_media/registry.js`) maps tag prefixes to card modules:
 

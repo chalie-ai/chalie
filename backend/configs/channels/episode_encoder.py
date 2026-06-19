@@ -12,7 +12,6 @@ class EpisodeEncoderConfig(ProcessorConfig):
             role="episode_encoder",
             policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,

@@ -148,14 +148,13 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
     # at the top level so AbilityRegistry._load() registers it, but it sets
     # DISCOVERABLE=False so it is excluded from the find_tools index/SHA build.
     "thinking",
-    # chat_history_compactor / tool_chain_compactor: internal never-discoverable
-    # abilities dispatched programmatically by MessageProcessor._dispatch_compaction()
-    # (compaction redesign — compaction now fires via the normal tool-dispatch
-    # chokepoint instead of an inline _compact() method). Both register at the top
-    # level but are excluded from find_tools indexing (DISCOVERABLE=False) AND
-    # the policy gate (policy_manager INTERNAL).
+    # chat_history_compactor: internal never-discoverable ability dispatched
+    # programmatically by MessageProcessor._dispatch_compaction() (compaction
+    # now fires via the normal tool-dispatch chokepoint instead of an inline
+    # _compact() method). It registers at the top level but is excluded from
+    # find_tools indexing (DISCOVERABLE=False) AND the policy gate
+    # (policy_manager INTERNAL). The act-trail compactor was removed.
     "chat_history_compactor",
-    "tool_chain_compactor",
     "timer",
     # vision: image-description delegate ability (TKT-838) — registered at the
     # top level like every dispatchable tool.

@@ -90,9 +90,10 @@ class ProcessorConfig(ABC):
     ``always_available``. There is no per-channel discoverable/blocked list."""
 
     # ── Loop control ──────────────────────────────────────────────────────────
-
-    max_iterations: int | None
-    """ACT loop iteration cap.  None = unbounded (UMP, ExternalAgent)."""
+    #
+    # There is no iteration cap. The loop runs until the model stops
+    # emitting tool calls or cooperative cancellation fires; a runaway turn is a
+    # hard-restart condition, not a silently-capped one.
 
     skip_transcript: bool
     """True → no transcript row written at all (background processors)."""
@@ -107,8 +108,9 @@ class ProcessorConfig(ABC):
     # ── Live output (declarative, not a hook) ─────────────────────────────────
 
     broadcast_to: str | None
-    """None = silent.  Non-None = stream narration + tool events to this channel.
-    Only UserConfig sets this ('user'); all others leave it None (AC-28)."""
+    """None = silent.  Non-None = stream live tool events to this channel and
+    deliver the turn's end message there.  Only UserConfig sets this ('user');
+    all others leave it None (AC-28)."""
 
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 
@@ -123,7 +125,7 @@ class ProcessorConfig(ABC):
     """Independent units of after-turn work, each ``hook.run(mp, response_text)``,
     run once after the assistant row is persisted.  Empty tuple = no-op.  Hooks
     are mutually independent and failure-isolated — see services/post_turn_hook.py
-    and MessageProcessor._record.  This is the ONLY hook surface on
+    and MessageProcessor._end_turn.  This is the ONLY hook surface on
     ProcessorConfig (AC-32 / §4.8)."""
 
     # ── Prompt builders (abstract — one implementation per channel) ───────────
@@ -147,6 +149,24 @@ class ProcessorConfig(ABC):
         ``{"data": <base64>, "mime_type": <str>}`` — the shape every converter
         consumes."""
         return None
+
+    # ── Turn-scoped instance state (concrete hook — default: none) ─────────────
+
+    def turn_scoped_state(self) -> tuple[str, ...]:
+        """Names of per-instance ``mp`` attributes that belong to the WHOLE turn,
+        not a single chain link.
+
+        A turn can span several MessageProcessors: each tool-bearing step spawns a
+        hidden-input continuation MP that rebuilds the request from the DB (see
+        ``MessageProcessor._continue``). Accumulators a tool mutates across steps
+        (counters, dedup/touched sets) and snapshots the prompt reads each step
+        live on the MP instance — a fresh continuation would otherwise reset them,
+        so a pattern saved in step 1 would be wrongly decayed by the post-turn hook
+        that runs on the final step. ``_continue`` carries every name listed here
+        forward by reference, so the whole chain shares one turn-scoped value.
+
+        Default ``()`` — channels with no cross-step state need no override."""
+        return ()
 
     # ── Derived properties ────────────────────────────────────────────────────
 
