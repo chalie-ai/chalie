@@ -793,7 +793,10 @@ def recall_episodes(
             conf = min(1.0, ep.get("composite_score", 0) / 100.0)
             hits.append({
                 "id": str(ep.get("id", "")),
-                "text": gist[:200],
+                # Full gist verbatim — NO truncation (TKT-821). The recall block
+                # is bounded by the result limit + the request-level cap, not by
+                # clipping the text the model reads mid-sentence.
+                "text": gist,
                 "relevance": _relevance_label(conf),
                 "confidence": conf,
                 "location": ep.get("location_name"),
@@ -923,7 +926,8 @@ def _search_episodes_by_location(
             ep_id, gist, loc_name, created_at = row
             hits.append({
                 "id": str(ep_id),
-                "text": (gist or "")[:200],
+                # Full gist verbatim — NO truncation (TKT-821).
+                "text": gist or "",
                 "relevance": _LOCATION_SEARCH_RELEVANCE,
                 "confidence": _LOCATION_SEARCH_CONFIDENCE,
                 "location": loc_name,
