@@ -20,7 +20,7 @@ Rich-media rendering:
 
 import logging
 import time
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import requests
 
@@ -77,7 +77,7 @@ class WeatherAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "weather forecasts"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.location: {
@@ -91,14 +91,14 @@ class WeatherAbility(Ability):
         "required": [],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _cache: ClassVar[dict] = {}
+    _cache: ClassVar[dict[str, tuple[dict[str, object], float]]] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
-    def run(self, params: dict) -> ToolResult:
-        location_param = params.get(Keys.location, "").strip()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        location_param = cast(str, params.get(Keys.location, "")).strip()
         lat, lon, location_name = _extract_location(self.telemetry)
 
         # Guardrail: with no device coordinates AND no location param there is no
@@ -127,10 +127,10 @@ class WeatherAbility(Ability):
         payload = _stale_or_error(cache_key, open_meteo_err, wttr_err)
         if "error" in payload:
             return ToolResult.err(
-                payload["error"],
+                cast(str, payload["error"]),
                 code="provider-unreachable",
                 hint="try again shortly or name a specific city.",
-                details=payload.get("details", ""),
+                details=cast(str, payload.get("details", "")),
             )
         # Stale-but-real cached data — still a usable card, but mark it loudly so
         # the model can distinguish degraded data from a fresh observation
@@ -139,18 +139,18 @@ class WeatherAbility(Ability):
         return ToolResult.ok(payload, rich=payload, stale=True)
 
 
-def _extract_location(telemetry: dict | None) -> tuple:
+def _extract_location(telemetry: dict[str, object] | None) -> tuple[float | None, float | None, str | None]:
     if not telemetry:
         return None, None, None
     lat = telemetry.get("lat")
     lon = telemetry.get("lon")
     city = telemetry.get("city", "")
     country = telemetry.get("country", "")
-    location_name = f"{city}, {country}" if city and country else city or country or None
-    return lat, lon, location_name
+    location_name: str | None = f"{city}, {country}" if city and country else cast(str | None, city or country or None)
+    return cast(float | None, lat), cast(float | None, lon), location_name
 
 
-def _build_cache_key(location_param: str, lat, lon, location_name: str | None) -> str:
+def _build_cache_key(location_param: str, lat: float | None, lon: float | None, location_name: str | None) -> str:
     if location_name and not location_param:
         return location_name.lower()
     if lat is not None and lon is not None and not location_param:
@@ -158,7 +158,7 @@ def _build_cache_key(location_param: str, lat, lon, location_name: str | None) -
     return location_param.lower() if location_param else "auto"
 
 
-def _get_fresh_cache(cache_key: str):
+def _get_fresh_cache(cache_key: str) -> dict[str, object] | None:
     if cache_key not in WeatherAbility._cache:
         return None
     cached_result, cached_ts = WeatherAbility._cache[cache_key]
@@ -167,7 +167,7 @@ def _get_fresh_cache(cache_key: str):
     return None
 
 
-def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key: str) -> tuple:
+def _fetch_with_fallback(location_param: str, lat: float | None, lon: float | None, location_name: str | None, cache_key: str) -> tuple[dict[str, object] | None, str, str]:
     """Routing:
       - No location_param: prefer Open-Meteo with telemetry coords.
       - location_param matches telemetry city/country: prefer Open-Meteo with
@@ -186,7 +186,7 @@ def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key
     use_telemetry_coords = have_coords and (not location_param or _matches_telemetry(location_param, location_name))
 
     if use_telemetry_coords:
-        result, open_meteo_err = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}")
+        result, open_meteo_err = _fetch_open_meteo(cast(float, lat), cast(float, lon), location_name or f"{cast(float, lat):.4f}, {cast(float, lon):.4f}")
 
     if result is None and location_param:
         result, wttr_err = _fetch_wttr(location_param)
@@ -196,7 +196,7 @@ def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key
     if result is None:
         logger.warning(f"[WEATHER] Both sources failed, retrying with 5s timeout for '{cache_key}'")
         if use_telemetry_coords:
-            result, _ = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}", timeout=5)
+            result, _ = _fetch_open_meteo(cast(float, lat), cast(float, lon), location_name or f"{cast(float, lat):.4f}, {cast(float, lon):.4f}", timeout=5)
         if result is None and location_param:
             result, _ = _fetch_wttr(location_param, timeout=5)
             if result is not None and use_telemetry_coords and location_name:
@@ -217,7 +217,7 @@ def _matches_telemetry(location_param: str, location_name: str | None) -> bool:
     return p in n or n in p
 
 
-def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
+def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict[str, object]:
     if cache_key in WeatherAbility._cache:
         logger.warning(f"[WEATHER] All sources unavailable, returning stale cache for '{cache_key}'")
         return WeatherAbility._cache[cache_key][0]
@@ -234,7 +234,7 @@ def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
     }
 
 
-def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int = 15) -> tuple:
+def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int = 15) -> tuple[dict[str, object] | None, str]:
     try:
         url = (
             f"{_OPEN_METEO_BASE}/v1/forecast"
@@ -325,7 +325,7 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
         return None, str(e)
 
 
-def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
+def _fetch_wttr(location: str, timeout: int = 15) -> tuple[dict[str, object] | None, str]:
     try:
         url = f"{_WTTR_BASE}/{location}?format=j1"
         resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Chalie/1.0 cognitive-agent"})
@@ -413,7 +413,7 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
         return None, str(e)
 
 
-def _extract_hourly_strip(hourly: dict, current_iso: str) -> list:
+def _extract_hourly_strip(hourly: dict[str, object], current_iso: str) -> list[dict[str, object]]:
     """Pick the next 8 hourly readings starting from the slot containing current_iso.
 
     Open-Meteo returns ``hourly.time`` as ``["2026-05-03T09:00", ...]`` aligned
@@ -423,9 +423,9 @@ def _extract_hourly_strip(hourly: dict, current_iso: str) -> list:
     """
     if not hourly:
         return []
-    times = hourly.get("time", [])
-    temps = hourly.get("temperature_2m", [])
-    codes = hourly.get("weather_code", [])
+    times = cast(list[object], hourly.get("time", []))
+    temps = cast(list[object], hourly.get("temperature_2m", []))
+    codes = cast(list[object], hourly.get("weather_code", []))
     if not times or not temps:
         return []
 
@@ -433,25 +433,25 @@ def _extract_hourly_strip(hourly: dict, current_iso: str) -> list:
     if current_iso:
         prefix = current_iso[:13]  # "YYYY-MM-DDTHH"
         for i, t in enumerate(times):
-            if t.startswith(prefix):
+            if cast(str, t).startswith(prefix):
                 start_idx = i
                 break
 
-    out = []
+    out: list[dict[str, object]] = []
     end_idx = min(start_idx + 8, len(times))
     for i in range(start_idx, end_idx):
         try:
-            hour = int(times[i][11:13])
+            hour: int | None = int(cast(str, times[i])[11:13])
         except (ValueError, IndexError):
             hour = None
         try:
-            temp = round(float(temps[i]))
+            temp: int | None = round(float(cast(float, temps[i])))
         except (TypeError, ValueError, IndexError):
             temp = None
-        code = None
+        code: int | None = None
         if i < len(codes):
             try:
-                code = int(codes[i])
+                code = int(cast(int, codes[i]))
             except (TypeError, ValueError):
                 code = None
         if hour is not None and temp is not None:

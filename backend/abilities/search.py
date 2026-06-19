@@ -35,7 +35,7 @@ tools/search/ until Phase 4 — this ability imports them from there.
 import logging
 import sqlite3
 import time
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -79,7 +79,7 @@ class SearchAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "web and knowledge search"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         """The ``provider`` enum is sourced LIVE from the real registry (+ ``ddg``),
         so the schema can never advertise a provider that the guardrail then rejects.
         """
@@ -110,12 +110,12 @@ class SearchAbility(Ability):
         }
 
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
-    _providers: ClassVar[dict | None] = None
+    _providers: ClassVar[dict[str, object] | None] = None
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
         # whitespace-only value that the truthiness pre-gate lets through.
-        query = (params.get(Keys.query) or "").strip()
+        query = cast(str, params.get(Keys.query) or "").strip()
         if not query:
             return ToolResult.err(
                 "query is required and cannot be blank.",
@@ -124,8 +124,8 @@ class SearchAbility(Ability):
                 valid=("query",),
             )
 
-        limit = self.param(params, Keys.limit, default=5, clamp=(1, 10))
-        forced = (params.get(Keys.provider) or "").strip().lower()
+        limit = cast(int, self.param(params, Keys.limit, default=5, clamp=(1, 10)))
+        forced = cast(str, params.get(Keys.provider) or "").strip().lower()
 
         if forced:
             guard = self._reject_unknown_forced(forced)
@@ -156,15 +156,15 @@ class SearchAbility(Ability):
 
         structured = [
             {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": r.get("snippet", ""),
-                "source": r.get("provider", "") or _DDG,
+                "title": cast("dict[str, object]", r).get("title", ""),
+                "url": cast("dict[str, object]", r).get("url", ""),
+                "snippet": cast("dict[str, object]", r).get("snippet", ""),
+                "source": cast("dict[str, object]", r).get("provider", "") or _DDG,
             }
             for r in results
         ]
 
-        result_meta: dict = {"count": len(structured)}
+        result_meta: dict[str, object] = {"count": len(structured)}
         if fell_back:
             result_meta["fallback"] = _DDG
         elif meta.get("ddg_supplement"):
@@ -185,7 +185,7 @@ class SearchAbility(Ability):
     # ── Provider registry ──────────────────────────────────────────────────────
 
     @classmethod
-    def _load_providers(cls) -> dict:
+    def _load_providers(cls) -> dict[str, object]:
         if cls._providers is not None:
             return cls._providers
 
@@ -221,7 +221,9 @@ class SearchAbility(Ability):
             valid=tuple(sorted(known)),
         )
 
-    def _search_forced(self, query: str, provider_name: str, limit: int):
+    def _search_forced(
+        self, query: str, provider_name: str, limit: int
+    ) -> "tuple[list[object], list[str], dict[str, object]]":
         if provider_name == _DDG:
             return fetch_ddg_fallback(query, limit), [_DDG], {"routing_method": "forced"}
 
@@ -236,18 +238,20 @@ class SearchAbility(Ability):
 
         return fetch_providers([provider], query, limit), [provider_name], {"routing_method": "forced"}
 
-    def _search_routed(self, query: str, limit: int):
+    def _search_routed(
+        self, query: str, limit: int
+    ) -> "tuple[list[object], list[str], dict[str, object]]":
         try:
             from tools.search.router import route_query, _WEAK_SCORE
             ranked = route_query(query)
             if ranked:
                 providers = self._load_providers()
-                provider_dicts = [providers[p["name"]] for p in ranked if p["name"] in providers]
+                provider_dicts = [providers[cast(str, p["name"])] for p in ranked if p["name"] in providers]
                 results = fetch_providers(provider_dicts, query, limit)
-                used = [p["name"] for p in provider_dicts]
-                meta: dict = {"routing_method": "auto"}
+                used = [cast(str, cast("dict[str, object]", p)["name"]) for p in provider_dicts]
+                meta: dict[str, object] = {"routing_method": "auto"}
 
-                top_score = ranked[0]["score"]
+                top_score = cast(float, ranked[0]["score"])
                 if top_score < _WEAK_SCORE:
                     ddg_results = fetch_ddg_fallback(query, limit)
                     if ddg_results:
@@ -268,7 +272,7 @@ class SearchAbility(Ability):
     # ── Rich article card (via ToolResult.rich) ─────────────────────────────────
 
     @staticmethod
-    def _build_rich_card(results: list) -> dict:
+    def _build_rich_card(results: list[object]) -> dict[str, object]:
         """Build the rich article-card payload: the structured hits plus up to three
         image candidates the frontend can render as a thumbnail.
 
@@ -279,27 +283,27 @@ class SearchAbility(Ability):
         """
         structured = [
             {
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "snippet": r.get("snippet", ""),
-                "source": r.get("provider", "") or _DDG,
+                "title": cast("dict[str, object]", r).get("title", ""),
+                "url": cast("dict[str, object]", r).get("url", ""),
+                "snippet": cast("dict[str, object]", r).get("snippet", ""),
+                "source": cast("dict[str, object]", r).get("provider", "") or _DDG,
             }
             for r in results
         ]
-        payload: dict = {"results": structured}
+        payload: dict[str, object] = {"results": structured}
 
         image_items: list[tuple[str, str]] = []
         og_targets: list[tuple[str, str]] = []
         for r in results:
-            title = r.get("title", "")
-            url = r.get("url", "")
-            img = r.get("image", "")
+            title = cast(str, cast("dict[str, object]", r).get("title", ""))
+            url = cast(str, cast("dict[str, object]", r).get("url", ""))
+            img = cast(str, cast("dict[str, object]", r).get("image", ""))
             if img:
                 image_items.append((img, title))
             elif url:
                 og_targets.append((url, title))
 
-        og_meta: dict = {}
+        og_meta: dict[str, object] = {}
         if len(image_items) < 3 and og_targets:
             from services.og_image_service import resolve_og_images
             try:

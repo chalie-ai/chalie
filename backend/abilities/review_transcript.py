@@ -15,7 +15,7 @@ declares only the clamped buffer, the windowed ``transcript`` SELECT, and the
 structured row shape.
 """
 
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._params import Keys
 from abilities._result import ToolResult
@@ -52,7 +52,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
     def get_search_tooltip(self) -> str:
         return "review conversation history"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: "ClassVar[dict[str, object]]" = {
         "type": "object",
         "properties": {
             Keys.date_time: {
@@ -82,15 +82,15 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
         "required": [Keys.date_time],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> "dict[str, object]":
         return self._PARAMETERS
 
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
-    def _buffer(self, params: dict) -> int | ToolResult:
+    def _buffer(self, params: "dict[str, object]") -> "int | ToolResult":
         raw = params.get(Keys.buffer_minutes, _DEFAULT_BUFFER_MINUTES)
         try:
-            minutes = int(raw)
+            minutes = int(cast(float, raw))
         except (TypeError, ValueError):
             return ToolResult.err(
                 f"buffer_minutes must be a whole number of minutes, got {raw!r}.",
@@ -102,7 +102,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
             )
         return max(_MIN_BUFFER_MINUTES, min(_MAX_BUFFER_MINUTES, minutes))
 
-    def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
+    def _fetch(self, lo: str, hi: str, params: "dict[str, object]") -> "list[dict[str, object]]":
         from services.database_service import get_shared_db_service
 
         include_subagent = bool(params.get(Keys.include_subagent_transcripts, False))
@@ -127,13 +127,13 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
             cursor.close()
         return rows
 
-    def _row(self, rec: dict, ordinal: int) -> dict:
+    def _row(self, rec: "dict[str, object]", ordinal: int) -> "dict[str, object]":
         # Content is NOT clipped: this tool exists so the model can re-read EXACT
         # wording lost to compaction (a drafted email, a quoted price, approved
         # phrasing). Clipping would defeat that purpose, and the window is already
         # bounded (±30 min max). Only newlines are flattened so each row stays a
         # single structured line.
-        content = (rec.get("content") or "").replace("\n", " ")
+        content = cast(str, rec.get("content") or "").replace("\n", " ")
         return {
             "iter": ordinal,
             "ts": self._ts(rec.get("created_at")),

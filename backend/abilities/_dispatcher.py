@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 # AbilityRegistry resolves native tool names; PolicyManager gates the allow path.
@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     # Annotation-only: dispatch resolves abilities through the registry, never
     # by constructing Ability directly.
     from abilities._ability import Ability
+    from services.policy_manager import CHANNEL as _PolicyChannel
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ class ToolDispatcher:
 
     # ── The single tool-call entry point ──────────────────────────────────────
 
-    def dispatch(self, tool_name: str, params: dict) -> str:
+    def dispatch(self, tool_name: str, params: "dict[str, object]") -> str:
         """The one path every ACT-loop tool call takes.
 
         match → bind → ACTION_REQUIRED pre-gate → resolve permission (inline) →
@@ -79,8 +80,8 @@ class ToolDispatcher:
         """
         from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
 
-        params = _sanitize_llm_args(dict(params))
-        act_summary = params.pop("act_summary", None)
+        params = cast("dict[str, object]", _sanitize_llm_args(dict(params)))
+        act_summary: "str | None" = cast("str | None", params.pop("act_summary", None))
         config = getattr(self._mp, "config", None)
 
         ability = self._bind(tool_name)
@@ -117,11 +118,11 @@ class ToolDispatcher:
                 classified = ability.classify_action(params)
                 action = classified if classified is not None else params.get("action")
                 permission = f"{tool_name}.{action}" if action else tool_name
-                result_text = PolicyManager.wrap(
-                    channel=getattr(config, "policy_channel", None),
+                result_text = cast(str, PolicyManager.wrap(
+                    channel=cast("_PolicyChannel", getattr(config, "policy_channel", None)),
                     permission=permission,
                     callback=lambda: self._execute(ability, params, act_summary),
-                )
+                ))
 
         from services.act_trail import ActTrail  # noqa: PLC0415
         ActTrail().record(
@@ -156,7 +157,7 @@ class ToolDispatcher:
 
     # ── Self-scaffolding executor — the allow-path callback dispatch() hands to wrap ──
 
-    def _execute(self, ability: "Ability", params: dict, act_summary: "str | None" = None) -> str:
+    def _execute(self, ability: "Ability", params: "dict[str, object]", act_summary: "str | None" = None) -> str:
         """Emit → (action pre-validation) → (async-decision) → run → render →
         emit. Called ONLY on the allow path (dispatch() passes this as wrap's
         callback). The per-call ``async`` flag — popped here, a framework key
@@ -208,7 +209,7 @@ class ToolDispatcher:
     # ── Action pre-validation (ACTION_REQUIRED) ────────────────────────────────
 
     @staticmethod
-    def _prevalidate(ability: "Ability", params: dict) -> "ToolResult | None":
+    def _prevalidate(ability: "Ability", params: "dict[str, object]") -> "ToolResult | None":
         """Validate the ability's ACTION_REQUIRED map BEFORE the policy gate.
 
         An empty map (the default) means no pre-validation — unmigrated tools are
@@ -246,7 +247,7 @@ class ToolDispatcher:
     # ── Synchronous run primitive (shared by inline dispatch + AsyncDelegateRunner) ──
 
     @staticmethod
-    def _run(ability: "Ability", params: dict) -> ToolResult:
+    def _run(ability: "Ability", params: "dict[str, object]") -> ToolResult:
         """Execute ability.run() synchronously and enforce the ToolResult contract.
 
         Loads the flattened client telemetry onto ``ability.telemetry`` just
@@ -317,8 +318,8 @@ class ToolDispatcher:
         if counters is None:
             counters = {}
             setattr(self._mp, "_rich_media_ordinals", counters)
-        counters[tool_name] = counters.get(tool_name, 0) + 1
-        return counters[tool_name]
+        cast("dict[str, int]", counters)[tool_name] = cast("dict[str, int]", counters).get(tool_name, 0) + 1
+        return cast("dict[str, int]", counters)[tool_name]
 
     @staticmethod
     def _render(tool_name: str, tr: ToolResult, ordinal: "int | None" = None) -> str:

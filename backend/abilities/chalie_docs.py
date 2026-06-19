@@ -21,7 +21,16 @@ with a ``valid=`` ladder and a closest-match hint, and a total fetch outage is
 from __future__ import annotations
 
 import difflib
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from typing import TypedDict
+
+    class _DocsMeta(TypedDict, total=False):
+        source: str
+        version: str
+        truncated: bool
+        failed_sources: str
 
 import requests
 
@@ -81,7 +90,7 @@ class ChalieDocsAbility(Ability):
     #: Action-less tool: the canonical ``query`` is the one required input. The
     #: dispatcher's ACTION_REQUIRED pre-gate rejects a call with no query as
     #: ``code=missing-params`` BEFORE run() (and before the policy gate).
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.query,)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
 
     def get_name(self) -> str:
         return "chalie_docs"
@@ -102,10 +111,10 @@ class ChalieDocsAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "chalie documentation and self-reference"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.query: {
@@ -122,7 +131,7 @@ class ChalieDocsAbility(Ability):
         "required": [Keys.query],
     }
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         raw = self.param(params, Keys.query, required=True)
         query = str(raw).strip().lower()
         urls = _QUERY_URLS.get(query)
@@ -169,7 +178,7 @@ class ChalieDocsAbility(Ability):
 
         body = "\n\n".join(sections)
         clipped, was_clipped = truncate(body, _MAX_CHARS)
-        meta: dict = {
+        meta: "_DocsMeta" = {
             "source": " & ".join(urls),
             "version": _read_version(),
         }

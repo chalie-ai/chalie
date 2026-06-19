@@ -19,7 +19,7 @@ from __future__ import annotations
 import copy
 import typing
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._result import ToolParamError, ToolResult
 
@@ -32,7 +32,7 @@ _MISSING = object()
 # the one place either is declared. act_summary is the per-call act-trail tooltip
 # (always present, required); async is the per-call backgrounding flag, injected
 # only on channels whose config sets SUPPORTS_ASYNC.
-_ACT_SUMMARY_PROPERTY: dict = {
+_ACT_SUMMARY_PROPERTY: "dict[str, object]" = {
     "type": "string",
     "description": (
         "A ~3-10 word summary of what this specific tool call does, shown to"
@@ -40,7 +40,7 @@ _ACT_SUMMARY_PROPERTY: dict = {
         ' "Looking up the weather in London").'
     ),
 }
-_ASYNC_PROPERTY: dict = {
+_ASYNC_PROPERTY: "dict[str, object]" = {
     "type": "boolean",
     "default": False,
     "description": (
@@ -80,7 +80,7 @@ class Ability(ABC):
         # Set by ToolDispatcher._run() immediately before run(): the flattened
         # client telemetry dict (location / locale / time / currency …) or None
         # when no client context is stored yet (fresh boot, no heartbeat).
-        self.telemetry: "dict | None" = None
+        self.telemetry: "dict[str, object] | None" = None
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
@@ -151,7 +151,7 @@ class Ability(ABC):
         ...
 
     @abstractmethod
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> "dict[str, object]":
         """Override to enrich at runtime (e.g. find_tools folds the
         discoverable-tools index into the ``select`` description) — gate on
         ``self.mp`` so the build-time schema stays deterministic."""
@@ -160,7 +160,7 @@ class Ability(ABC):
     # ── Instance method — the actual tool logic ───────────────────────────────
 
     @abstractmethod
-    def run(self, params: dict) -> "ToolResult":
+    def run(self, params: "dict[str, object]") -> "ToolResult":
         """MUST return a :class:`abilities._result.ToolResult` — anything else
         HARD-FAILS as ``code=non-canonical-result``. Raise ``ToolParamError``
         (via ``self.param``) for bad inputs; the dispatcher renders it
@@ -171,7 +171,7 @@ class Ability(ABC):
     # ── The single, final tool-descriptor assembler ───────────────────────────
 
     @typing.final
-    def get_input_schema(self) -> dict:
+    def get_input_schema(self) -> "dict[str, object]":
         """This is the ONE place a tool schema is built and the ONE place
         ``act_summary`` + ``async`` are declared. ``final`` — sealed at import
         by ``__init_subclass__``."""
@@ -181,11 +181,11 @@ class Ability(ABC):
             "input_schema": self._inject_framework_fields(self.get_parameters()),
         }
 
-    def _inject_framework_fields(self, params: dict) -> dict:
+    def _inject_framework_fields(self, params: "dict[str, object]") -> "dict[str, object]":
         """Deep-copies so a getter that returns a shared dict is never mutated."""
         schema = copy.deepcopy(params)
-        properties = schema.setdefault("properties", {})
-        required = schema.setdefault("required", [])
+        properties = cast("dict[str, object]", schema.setdefault("properties", {}))
+        required = cast("list[str]", schema.setdefault("required", []))
 
         properties["act_summary"] = dict(_ACT_SUMMARY_PROPERTY)
         if "act_summary" not in required:
@@ -201,12 +201,12 @@ class Ability(ABC):
     @typing.final
     def param(
         self,
-        params: dict,
+        params: "dict[str, object]",
         name: str,
         *,
         default: object = _MISSING,
-        choices: "tuple | None" = None,
-        clamp: "tuple | None" = None,
+        choices: "tuple[object, ...] | None" = None,
+        clamp: "tuple[object, ...] | None" = None,
         required: bool = False,
     ) -> object:
         """All failures raise ``ToolParamError`` — the dispatcher catches it and
@@ -236,18 +236,18 @@ class Ability(ABC):
         if clamp is not None:
             lo, hi = clamp
             try:
-                numeric = type(lo)(value)
+                numeric: float = type(cast(float, lo))(cast(float, value))
             except (TypeError, ValueError):
                 raise ToolParamError(
                     f"'{name}' must be a number.",
                     code="invalid-param",
                     hint=f"pass a number between {lo} and {hi}.",
                 ) from None
-            value = max(lo, min(hi, numeric))
+            value = max(cast(float, lo), min(cast(float, hi), numeric))
 
         return value
 
-    def classify_action(self, params: dict) -> "str | None":
+    def classify_action(self, params: "dict[str, object]") -> "str | None":
         """Derive the risk class the policy gate keys on, from the inputs alone.
 
         The dispatcher calls this ONCE, BEFORE ``PolicyManager.wrap``, and prefers
@@ -265,7 +265,7 @@ class Ability(ABC):
         return None
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
+    def enrich_rich_payload(cls, payload: "dict[str, object]", row: "dict[str, object]") -> "dict[str, object]":
         """Resolve a rich-media payload's runtime state at parse time.
 
         The default implementation returns the payload unchanged. Override on

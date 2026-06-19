@@ -27,7 +27,7 @@ never imports the skill-tag formatter.
 """
 
 import logging
-from typing import ClassVar, NamedTuple
+from typing import ClassVar, NamedTuple, cast
 
 from abilities._capability import CapabilityAbility
 from abilities._params import Keys
@@ -45,7 +45,7 @@ class _Spec(NamedTuple):
     """
 
     handler: str
-    inject: dict
+    inject: dict[str, object]
 
 
 # The single source of truth: flat action → (capability handler, injected DSL).
@@ -159,10 +159,10 @@ class UbiquitiAbility(CapabilityAbility):
     def get_search_tooltip(self) -> str:
         return "UniFi network control"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -250,7 +250,7 @@ class UbiquitiAbility(CapabilityAbility):
 
     # ── Entry point — translate the flat action, then delegate to the base ─────
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
         params[Keys.action] = action
 
@@ -263,7 +263,7 @@ class UbiquitiAbility(CapabilityAbility):
             # so it never leaks into a REST body; ``device_status`` keeps it because
             # its handler (get_info) reads ``target`` directly.
             if action in _TARGET_TO_MAC:
-                target = (params.get(Keys.target) or "").strip()
+                target = (cast(str, params.get(Keys.target)) or "").strip()
                 if target and action != "device_status":
                     params["mac"] = target
                     params.pop(Keys.target, None)
@@ -292,7 +292,7 @@ _LIST_BODIES = {
 }
 
 
-def _shape_result(action: str, body: dict) -> ToolResult:
+def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
     """A handler that surfaced its own ``error`` key (a backend failure or a target
     that the controller did not find, NOT a bad input the pre-gate would catch) is
     passed through as the success body — the contract reserves ``err()`` for
@@ -306,7 +306,7 @@ def _shape_result(action: str, body: dict) -> ToolResult:
             return ToolResult.ok(
                 {row_key: body[row_key]},
                 action=action,
-                count=body.get("count", len(body[row_key])),
+                count=body.get("count", len(cast(list[object], body[row_key]))),
             )
 
     # device_status / site_health / control / write echoes: structured already.

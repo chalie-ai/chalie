@@ -25,7 +25,14 @@ the caller, not a hardcoded value.  The user-facing permission check still
 happens at the outer ``web_browse`` tool.
 """
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from typing import Protocol
+    from services.processor_config import ProcessorConfig
+
+    class _MpWithConfig(Protocol):
+        config: "ProcessorConfig"
 
 from abilities._ability import Ability
 from abilities._delegate import delegate_goal, delegate_result
@@ -62,7 +69,7 @@ class WebBrowseAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "delegate an interactive web-browsing task"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.goal: {
@@ -81,15 +88,15 @@ class WebBrowseAbility(Ability):
     # ``""`` key covers action-less tools) rejects a missing/empty ``goal`` with
     # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
     # goal never spawns an expensive browser delegate on nothing.
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.goal,)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.goal,)}
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        cfg = WebBrowseConfig(self.mp.config.policy_channel)
+        cfg = WebBrowseConfig(cast("_MpWithConfig", self.mp).config.policy_channel)
         result = MessageProcessor.process(delegate_goal(params), cfg)
         tr = delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."

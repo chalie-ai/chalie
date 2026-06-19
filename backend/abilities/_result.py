@@ -30,6 +30,10 @@ its ``code``/``hint``/``valid``.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
 
 # Scalar types permitted in the flat ``meta`` map (rendered into the open tag).
 _SCALAR = (str, int, float, bool)
@@ -79,12 +83,12 @@ class ToolResult:
     """
 
     status: str
-    body: str | dict | list
-    meta: dict = field(default_factory=dict)
+    body: "str | Mapping[str, object] | Sequence[object]"
+    meta: "dict[str, object]" = field(default_factory=dict)
     code: str | None = None
     hint: str | None = None
     valid: tuple[str, ...] = ()
-    rich: dict | None = None
+    rich: "dict[str, object] | None" = None
 
     def __post_init__(self) -> None:
         if self.status not in ("success", "error"):
@@ -118,7 +122,7 @@ class ToolResult:
     # ── Construction — the only two sanctioned entry points ────────────────────
 
     @classmethod
-    def ok(cls, body: str | dict | list, *, rich: dict | None = None, **meta: object) -> "ToolResult":
+    def ok(cls, body: "str | Mapping[str, object] | Sequence[object]", *, rich: "dict[str, object] | None" = None, **meta: object) -> "ToolResult":
         return cls(status="success", body=body, meta=dict(meta), rich=rich)
 
     @classmethod

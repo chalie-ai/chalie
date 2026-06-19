@@ -20,11 +20,14 @@ snapshots the parent's live active_tools. Firing `thinking` from ANY parent
 channel therefore works out of the box — there is no per-channel branch and no
 reference to a specific config class."""
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 # The deliberation overlay — the SOLE thing the thinking pass changes about the
 # parent's request. It lives in the system prompt (not the user turn) because the
@@ -55,7 +58,7 @@ class ThinkingConfig(ProcessorConfig):
 
     thinking_mode: ClassVar[str] = "high"
 
-    def __init__(self, active_tools, blocked, policy_channel) -> None:
+    def __init__(self, active_tools: "list[str]", blocked: "frozenset[str]", policy_channel: "ProcessorConfig.PolicyChannel") -> None:
         super().__init__(
             channel="thinking",
             role="thinking",
@@ -73,16 +76,16 @@ class ThinkingConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         # Not consumed by the request builder — the parent's user definition is
         # already embedded inside the threaded user prompt below.
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         # The parent's exact rendered body, threaded in by ThinkingAbility.run.
-        return (getattr(mp, "_metadata", None) or {}).get("thinking_user_prompt") or ""
+        return cast(str, (getattr(mp, "_metadata", None) or {}).get("thinking_user_prompt") or "")
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         return _DELIBERATION_SYSTEM_PROMPT
 
 
@@ -106,14 +109,14 @@ class ThinkingAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "internal deliberation pass"
 
-    _PARAMETERS: ClassVar[dict] = {"type": "object", "properties": {}}
+    _PARAMETERS: ClassVar[dict[str, object]] = {"type": "object", "properties": {}}
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
-        parent = self.mp
+        parent = cast("MessageProcessor", self.mp)
         # Mirror the parent's about-to-be-sent request EXACTLY: its rendered user
         # message (user definition + world state + ## Previous Messages + input +
         # act-trail) and its live tool surface. Delegating to parent.config.* keeps

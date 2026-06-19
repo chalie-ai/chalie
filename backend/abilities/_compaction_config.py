@@ -13,9 +13,12 @@ gone.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 
 class CompactionConfig(ProcessorConfig):
@@ -47,11 +50,11 @@ class CompactionConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         return mp._raw_input
 
-    def get_system_prompt(self, mp) -> str:
-        return self.SYSTEM_PROMPT_CLASS().get_prompt()
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
+        return cast(str, cast(type, self.SYSTEM_PROMPT_CLASS)().get_prompt())

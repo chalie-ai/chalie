@@ -13,7 +13,7 @@ Supported formats (heavy-library imports are lazy):
 import logging
 import mimetypes
 import re
-from typing import Optional
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -249,4 +249,4 @@ def _extract_image(path: str) -> str:
     mime_type = mimetypes.guess_type(path)[0] or 'image/png'
     out = describe_image(path, mime_type, RICH_INDEX_PROMPT,
                          policy_channel=ProcessorConfig.PolicyChannel.CHAT)
-    return out['description'] or ''
+    return cast(str, out['description']) or ''

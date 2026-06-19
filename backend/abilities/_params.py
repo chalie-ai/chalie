@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ class KeyHealer:
         self._variants = variants
         self._normalizer = normalizer or KeyNormalizer()
 
-    def heal(self, params: dict, schema: dict) -> dict:
+    def heal(self, params: "dict[str, object]", schema: "dict[str, object]") -> "dict[str, object]":
         """Return *params* with its keys healed against a tool's declared *schema*.
 
         For each incoming key, in order:
@@ -246,7 +247,7 @@ class KeyHealer:
         is the bare ``get_parameters()`` body (no framework fields); an
         empty/parameterless schema or empty params is returned unchanged.
         """
-        properties = schema.get("properties") if schema else None
+        properties = cast("dict[str, object] | None", schema.get("properties") if schema else None)
         if not properties or not params:
             return dict(params)
 
@@ -255,8 +256,8 @@ class KeyHealer:
         by_squeeze = {squeeze(k): k for k in declared}     # squeezed form → canonical key
         variant_map = self._variant_map(declared, by_squeeze)  # squeezed variant → canonical key
 
-        healed: dict = {}
-        source_key: dict = {}                              # canonical → the raw key that filled it
+        healed: "dict[str, object]" = {}
+        source_key: "dict[str, str]" = {}                              # canonical → the raw key that filled it
         for key, value in params.items():
             sq = squeeze(key)
             canonical = by_squeeze.get(sq) or variant_map.get(sq) or key

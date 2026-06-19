@@ -38,6 +38,8 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import ClassVar
 
+from typing import cast
+
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from services.time_formatter_service import TimeFormatterService
@@ -68,11 +70,11 @@ class ReviewWindowAbility(Ability, ABC):
     # BEFORE the policy gate. Inherited unchanged by both subclasses.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": ("date_time",)}
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: "dict[str, object]") -> ToolResult:
         # 1. Residue guard — defends the direct-caller path. The dispatch path is
         #    already caught by the ACTION_REQUIRED pre-gate, but a direct call
         #    (or a non-dispatch caller) must not reach parse_utc with nothing.
-        date_time = (params.get("date_time") or "").strip()
+        date_time = cast(str, params.get("date_time") or "").strip()
         if not date_time:
             return ToolResult.err(
                 "A date_time anchor is required.",
@@ -130,25 +132,25 @@ class ReviewWindowAbility(Ability, ABC):
 
         # 7. Rows → structured list, one dict per record via the subclass hook;
         #    the dispatcher renders the list as compact JSON.
-        rows = [self._row(rec, i) for i, rec in enumerate(records, start=1)]
+        rows: "list[object]" = [self._row(rec, i) for i, rec in enumerate(records, start=1)]
         return ToolResult.ok(rows, count=len(rows), anchor=date_time, buffer=buffer)
 
     # ── Subclass hooks ────────────────────────────────────────────────────────
 
-    def _buffer(self, params: dict) -> int | ToolResult:
+    def _buffer(self, params: "dict[str, object]") -> "int | ToolResult":
         """Return an int, or an error ``ToolResult`` when the supplied buffer is
         invalid (``review_transcript`` overrides to parse a clamped param)."""
         return 5
 
     @abstractmethod
-    def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
+    def _fetch(self, lo: str, hi: str, params: "dict[str, object]") -> "list[dict[str, object]]":
         """Run the ONE windowed SELECT over ``get_shared_db_service()`` and return
         the rows whose ``created_at`` falls in ``[lo, hi]``. Raise only
         ``sqlite3.Error`` (the base catches it loudly); no other exception."""
         ...
 
     @abstractmethod
-    def _row(self, rec: dict, ordinal: int) -> dict:
+    def _row(self, rec: "dict[str, object]", ordinal: int) -> "dict[str, object]":
         """Format one fetched record into the structured row the model sees.
 
         ``ordinal`` is the 1-based position of the row within the returned window
@@ -166,5 +168,5 @@ class ReviewWindowAbility(Ability, ABC):
     @staticmethod
     def _ts(created_at: object) -> str:
         """Falls back to the raw leading characters when the value is missing / unparseable."""
-        return TimeFormatterService.local(created_at, fmt="%Y-%m-%d %H:%M:%S") \
+        return TimeFormatterService.local(cast("str | None", created_at), fmt="%Y-%m-%d %H:%M:%S") \
             or str(created_at or "")[:19]

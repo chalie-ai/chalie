@@ -19,7 +19,7 @@ wire envelope; this ability never formats one.
 
 import json
 import logging
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -82,7 +82,7 @@ class PlaceAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "place and location lookup"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -106,12 +106,12 @@ class PlaceAbility(Ability):
         "required": [Keys.action],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
-        action = (params.get(Keys.action) or "").lower()
-        name = (params.get(Keys.name) or "").strip().lower()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        action = cast(str, params.get(Keys.action) or "").lower()
+        name = cast(str, params.get(Keys.name) or "").strip().lower()
 
         if action == _ACTION_SAVE:
             return self._handle_save(name, self.telemetry)
@@ -133,7 +133,7 @@ class PlaceAbility(Ability):
 
     # ── Action handlers ───────────────────────────────────────────────────────
 
-    def _handle_save(self, name: str, telemetry: dict | None) -> ToolResult:
+    def _handle_save(self, name: str, telemetry: dict[str, object] | None) -> ToolResult:
         lat, lon, location_name = _extract_location(telemetry)
         if lat is None or lon is None:
             return ToolResult.err(_ERR_NO_LOCATION, code="no-location", hint=_HINT_NO_LOCATION)
@@ -173,14 +173,14 @@ class PlaceAbility(Ability):
 
     def _handle_get(self, name: str) -> ToolResult:
         rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
-        matched = next((r for r in rows if r and r.get("key", "").lower() == name), None)
+        matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name), None)
         if matched is None:
             return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)
         return ToolResult.ok(_row_to_place(matched))
 
     def _handle_delete(self, name: str) -> ToolResult:
         rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
-        matched = next((r for r in rows if r and r.get("key", "").lower() == name), None)
+        matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name), None)
         if matched is None:
             return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)
 
@@ -192,7 +192,7 @@ class PlaceAbility(Ability):
                 name=name,
             )
 
-        deleted = get_data_graph_service().soft_delete_by_id(row_id)
+        deleted = get_data_graph_service().soft_delete_by_id(cast(int, row_id))
         if not deleted:
             return ToolResult.err(
                 f"Could not delete the place {name!r}.",
@@ -210,23 +210,23 @@ class PlaceAbility(Ability):
 _DEFAULT_RADIUS_M = 200
 
 
-def _extract_location(telemetry: dict | None) -> tuple[float | None, float | None, str | None]:
+def _extract_location(telemetry: dict[str, object] | None) -> tuple[float | None, float | None, str | None]:
     if not telemetry:
         return None, None, None
     lat = telemetry.get("lat")
     lon = telemetry.get("lon")
-    location_name = telemetry.get("location_name") or None
+    location_name = cast(str | None, telemetry.get("location_name") or None)
     if lat is None or lon is None:
         return None, None, location_name
     try:
-        return float(lat), float(lon), location_name
+        return float(cast(float, lat)), float(cast(float, lon)), location_name
     except (TypeError, ValueError):
         return None, None, location_name
 
 
-def _row_to_place(row: dict) -> dict:
+def _row_to_place(row: dict[str, object]) -> dict[str, object]:
     key = row.get("key", "")
-    raw_value = row.get("value") or "{}"
+    raw_value = cast(str, row.get("value") or "{}")
     try:
         payload = json.loads(raw_value)
     except (json.JSONDecodeError, TypeError):

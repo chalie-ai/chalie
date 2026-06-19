@@ -22,9 +22,10 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 import os
 import re
 import time
+from collections.abc import Generator
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -81,7 +82,7 @@ class SearchFilesAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "Find files by name or content"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -132,13 +133,13 @@ class SearchFilesAbility(Ability):
         "required": [Keys.action, Keys.query],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
-        action = params.get(Keys.action, "")
-        query = (params.get(Keys.query) or "").strip()
-        directory = (params.get(Keys.directory) or "").strip()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        action = cast(str, params.get(Keys.action, ""))
+        query = cast(str, params.get(Keys.query) or "").strip()
+        directory = cast(str, params.get(Keys.directory) or "").strip()
 
         # The dispatcher's ACTION_REQUIRED pre-gate has already rejected an
         # unknown action and a missing 'query'; this guards the residue it lets
@@ -160,7 +161,7 @@ class SearchFilesAbility(Ability):
         max_files_raw = params.get(Keys.max_files)
         if max_files_raw is not None:
             try:
-                max_files = int(max_files_raw)
+                max_files = int(cast("str | int", max_files_raw))
             except (TypeError, ValueError):
                 return ToolResult.err(
                     f"max_files must be an integer, got {max_files_raw!r}.",
@@ -181,7 +182,7 @@ class SearchFilesAbility(Ability):
             cl_raw = params.get(Keys.context_lines)
             if cl_raw is not None:
                 try:
-                    context_lines = int(cl_raw)
+                    context_lines = int(cast("str | int", cl_raw))
                 except (TypeError, ValueError):
                     return ToolResult.err(
                         f"context_lines must be an integer, got {cl_raw!r}.",
@@ -245,19 +246,19 @@ def _glob_result(files: list[str], exhausted: bool, max_files: int) -> ToolResul
     shown = files[:max_files] if truncated else files
     capped = truncated or exhausted
 
-    body: dict = {"files": shown}
+    body: dict[str, object] = {"files": shown}
     if not shown:
         body["note"] = f"No files matched. {_BROADEN_HINT}"
     elif capped:
         body["note"] = _NARROW_HINT
 
-    meta: dict = {"count": len(shown)}
+    meta: dict[str, object] = {"count": len(shown)}
     if capped:
         meta["truncated"] = True
-    return ToolResult.ok(body, **meta)
+    return ToolResult.ok(body, **cast("dict[str, dict[str, object] | None]", meta))
 
 
-def _grep_result(rows: list[dict], exhausted: bool, capped: bool) -> ToolResult:
+def _grep_result(rows: list[dict[str, object]], exhausted: bool, capped: bool) -> ToolResult:
     """*capped* is True when the max_files file cap stopped the walk early;
     *exhausted* is True when the walk budget expired. Either signal surfaces as
     ``meta truncated=true``.
@@ -269,14 +270,14 @@ def _grep_result(rows: list[dict], exhausted: bool, capped: bool) -> ToolResult:
             count=0,
         )
 
-    meta: dict = {"count": len(rows)}
+    meta: dict[str, object] = {"count": len(rows)}
     if truncated:
         meta["truncated"] = True
-        return ToolResult.ok({"matches": rows, "note": _NARROW_HINT}, **meta)
-    return ToolResult.ok(rows, **meta)
+        return ToolResult.ok({"matches": rows, "note": _NARROW_HINT}, **cast("dict[str, dict[str, object] | None]", meta))
+    return ToolResult.ok(rows, **cast("dict[str, dict[str, object] | None]", meta))
 
 
-def _iter_files(root: Path, deadline: float):
+def _iter_files(root: Path, deadline: float) -> "Generator[str, None, None]":
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
             if time.monotonic() > deadline:
@@ -315,7 +316,7 @@ def _do_glob(root: Path, pattern: str, max_files: int, deadline: float) -> tuple
 
 def _do_grep(
     root: Path, query: str, max_files: int, context_lines: int, deadline: float
-) -> tuple[list[dict], bool, bool]:
+) -> tuple[list[dict[str, object]], bool, bool]:
     """*capped* is True when the max_files file cap stopped the walk before the
     tree was exhausted; *exhausted* is True when the walk budget expired. Files
     are visited newest-first so the rows favour recent files.
@@ -346,20 +347,20 @@ def _do_grep(
 
     files_with_hits.sort(key=lambda t: t[0], reverse=True)
 
-    rows: list[dict] = []
+    rows: list[dict[str, object]] = []
     for _mtime, fp, lines in files_with_hits:
         rows.extend(_match_rows(fp, lines, pattern, context_lines))
     return rows, exhausted, capped
 
 
 def _match_rows(
-    fp: str, lines: list[str], pattern: re.Pattern, context_lines: int
-) -> list[dict]:
-    rows: list[dict] = []
+    fp: str, lines: list[str], pattern: re.Pattern[str], context_lines: int
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
     for i, line in enumerate(lines):
         if not pattern.search(line):
             continue
-        row: dict = {"file": fp, "line": i + 1, "text": line.rstrip()}
+        row: dict[str, object] = {"file": fp, "line": i + 1, "text": line.rstrip()}
         if context_lines > 0:
             start = max(0, i - context_lines)
             end = min(len(lines), i + context_lines + 1)

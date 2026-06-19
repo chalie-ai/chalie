@@ -8,7 +8,13 @@ Budget state lives on the calling processor (read via
 ``__init__``; this Ability uses ``getattr`` defaults so it remains usable
 from any processor that opts it in.
 """
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _HasGraphSeen(Protocol):
+        _save_graph_seen: set[tuple[str, str, str]]
 
 from abilities._budget import BudgetCappedAbility
 from abilities._params import Keys
@@ -34,7 +40,7 @@ class SaveGraph(BudgetCappedAbility):
     # or empty kind/key/value as code=missing-params before run() is reached
     # (precedent: _delegate.py, file_permissions.py). The pre-gate is
     # truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.kind, Keys.key, Keys.value)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.kind, Keys.key, Keys.value)}
 
     def get_name(self) -> str:
         return "save_graph"
@@ -61,7 +67,7 @@ class SaveGraph(BudgetCappedAbility):
     def get_search_tooltip(self) -> str:
         return "store user facts to knowledge graph"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.kind: {"type": "string", "enum": ALLOWED_KINDS},
@@ -71,10 +77,10 @@ class SaveGraph(BudgetCappedAbility):
         "required": [Keys.kind, Keys.key, Keys.value],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         capped = self.budget_exceeded()
         if capped is not None:
             return capped
@@ -92,8 +98,8 @@ class SaveGraph(BudgetCappedAbility):
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only key/value slips past it and must be rejected here
         # (precedent: file_permissions.py).
-        key = params.get(Keys.key, "").strip()
-        value = params.get(Keys.value, "").strip()
+        key = cast(str, params.get(Keys.key, "")).strip()
+        value = cast(str, params.get(Keys.value, "")).strip()
         if not key or not value:
             missing = ", ".join(
                 name for name, val in (("key", key), ("value", value)) if not val
@@ -105,7 +111,7 @@ class SaveGraph(BudgetCappedAbility):
             )
 
         dedup_key = (kind, key.lower(), value.lower())
-        seen: set | None = getattr(proc, "_save_graph_seen", None) if proc else None
+        seen: set[tuple[str, str, str]] | None = getattr(proc, "_save_graph_seen", None) if proc else None
         if seen is not None and dedup_key in seen:
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})
 
@@ -129,8 +135,8 @@ class SaveGraph(BudgetCappedAbility):
         self.bump_budget()
         if proc is not None:
             if seen is None:
-                proc._save_graph_seen = set()
-            proc._save_graph_seen.add(dedup_key)
+                cast("_HasGraphSeen", proc)._save_graph_seen = set()
+            cast("_HasGraphSeen", proc)._save_graph_seen.add(dedup_key)
 
         if result.get("status") == "reinforced":
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})

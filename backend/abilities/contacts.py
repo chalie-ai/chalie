@@ -31,7 +31,12 @@ envelope.
 """
 
 import json
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from typing import SupportsInt
+
+    from services.data_graph_service import DataGraphService
 
 from abilities._capability import CapabilityAbility
 from abilities._params import Keys
@@ -80,10 +85,10 @@ class ContactsAbility(CapabilityAbility):
     def get_search_tooltip(self) -> str:
         return "contact book"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -113,7 +118,7 @@ class ContactsAbility(CapabilityAbility):
 
     # ── Entry point — both actions are inline reads against the local index ─────
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
 
         if action == "list":
@@ -130,11 +135,11 @@ class ContactsAbility(CapabilityAbility):
 
     # ── list ────────────────────────────────────────────────────────────────
 
-    def _list(self, params: dict) -> ToolResult:
+    def _list(self, params: dict[str, object]) -> ToolResult:
         from capabilities.contact_resolver import _parse_contact_row, resolve
 
-        limit = int(self.param(params, Keys.limit, default=20, clamp=(1, 50)))
-        query = (params.get(Keys.query) or "").strip()
+        limit = int(cast("SupportsInt", self.param(params, Keys.limit, default=20, clamp=(1, 50))))
+        query = (cast(str, params.get(Keys.query)) or "").strip()
 
         if query:
             contacts = resolve(query, limit=limit)
@@ -145,7 +150,7 @@ class ContactsAbility(CapabilityAbility):
             contacts = [
                 c
                 for c in (
-                    _parse_contact_row(r.get("key", ""), r.get("value", ""))
+                    _parse_contact_row(cast(str, cast("dict[str, object]", r).get("key", "")), cast(str, cast("dict[str, object]", r).get("value", "")))
                     for r in rows
                 )
                 if c is not None
@@ -170,10 +175,10 @@ class ContactsAbility(CapabilityAbility):
 
     # ── get — three-outcome precision contract ────────────────────────────────
 
-    def _get(self, params: dict) -> ToolResult:
+    def _get(self, params: dict[str, object]) -> ToolResult:
         from capabilities.contact_resolver import resolve
 
-        identifier = (params.get(Keys.identifier) or "").strip()
+        identifier = (cast(str, params.get(Keys.identifier)) or "").strip()
         candidates = resolve(identifier, limit=5)
 
         if not candidates:
@@ -231,7 +236,7 @@ class ContactsAbility(CapabilityAbility):
         return None
 
     @staticmethod
-    def _dgs():
+    def _dgs() -> "DataGraphService":
         from services.data_graph_service import get_data_graph_service
 
         return get_data_graph_service()
@@ -242,7 +247,7 @@ class ContactsAbility(CapabilityAbility):
 # ---------------------------------------------------------------------------
 
 
-def _is_relevant(identifier: str, contact: dict) -> bool:
+def _is_relevant(identifier: str, contact: dict[str, object]) -> bool:
     """A fuzzy candidate is *relevant* to *identifier* when the identifier
     ci-equals the contact's fn / name / nickname or any email value, OR when every
     word of the identifier appears as a ci word-prefix in the contact's fn (so
@@ -256,15 +261,15 @@ def _is_relevant(identifier: str, contact: dict) -> bool:
         return False
 
     name = _contact_name(contact).strip().lower()
-    nickname = (contact.get("nickname") or "").strip().lower()
+    nickname = (cast(str, contact.get("nickname")) or "").strip().lower()
     if needle in {name, nickname}:
         return True
 
-    for email in contact.get("emails") or []:
-        value = (email.get("value") or "").strip().lower()
+    for email in cast("list[dict[str, object]]", contact.get("emails") or []):
+        value = (cast(str, email.get("value")) or "").strip().lower()
         if value and needle == value:
             return True
-    legacy_email = (contact.get("email") or "").strip().lower()
+    legacy_email = (cast(str, contact.get("email")) or "").strip().lower()
     if legacy_email and needle == legacy_email:
         return True
 
@@ -277,13 +282,13 @@ def _is_relevant(identifier: str, contact: dict) -> bool:
     return False
 
 
-def _contact_name(contact: dict) -> str:
-    return (contact.get("fn") or contact.get("name") or "").strip()
+def _contact_name(contact: dict[str, object]) -> str:
+    return (cast(str, contact.get("fn")) or cast(str, contact.get("name")) or "").strip()
 
 
-def _contact_id(contact: dict) -> str:
+def _contact_id(contact: dict[str, object]) -> str:
     return (
-        contact.get("uid")
+        cast(str, contact.get("uid"))
         or _contact_name(contact)
-        or (contact.get("email") or "")
+        or cast(str, contact.get("email") or "")
     )

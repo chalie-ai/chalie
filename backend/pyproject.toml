@@ -112,7 +112,6 @@ ignore_missing_imports = true
 # To migrate a package: remove its glob, run the gate, fix all surfaced errors.
 # When ALL globs are removed, delete this entire block (final-flip ticket).
 module = [
-    "abilities.*",
     "api.*",
     "capabilities.*",
     "tools.*",

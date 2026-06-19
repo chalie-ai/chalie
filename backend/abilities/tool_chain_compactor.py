@@ -13,12 +13,20 @@ row — that row is the new trail boundary: ``_from_last_compaction`` slices fro
 so pre-compacted tool calls drop out of the rendered trail without a DELETE. When
 the trail is empty the ability silently returns nothing (no boundary, no LLM call)."""
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
 from services.system_message_prompt import ToolChainCompactionSystemPrompt
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _TrailParent(Protocol):
+        """Structural interface for the mp attributes used by ToolChainCompactor.run()."""
+        def _has_trail(self) -> bool: ...
+        def _render_act_trail(self, *, for_compaction: bool = False) -> str: ...
 
 
 class ToolChainCompactionConfig(CompactionConfig):
@@ -48,15 +56,15 @@ class ToolChainCompactor(Ability):
     def get_search_tooltip(self) -> str:
         return "internal act-trail compaction"
 
-    _PARAMETERS: ClassVar[dict] = {"type": "object", "properties": {}}
+    _PARAMETERS: "ClassVar[dict[str, object]]" = {"type": "object", "properties": {}}
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> "dict[str, object]":
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: "dict[str, object]") -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        parent = self.mp
+        parent = cast("_TrailParent", self.mp)
         if not parent._has_trail():
             # No non-compactor trail since the last boundary — nothing to do.
             return ToolResult.ok("")

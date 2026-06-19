@@ -29,7 +29,7 @@ list from those helpers means genuinely-no-matches, not a broken index.
 import logging
 import sqlite3
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._params import Keys
 from abilities._result import ToolResult
@@ -68,7 +68,7 @@ class FindSkillsAbility(SearchableAbility):
     def get_search_tooltip(self) -> str:
         return "discover procedural skill playbooks for complex tasks"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.query: {
@@ -83,15 +83,15 @@ class FindSkillsAbility(SearchableAbility):
         "required": [Keys.query],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
     _DB_PATH: ClassVar[Path] = FileMapperService.get_skills_db_path()
     _LOG_PREFIX = "[FIND_SKILLS]"
 
-    def run(self, params: dict) -> ToolResult:
-        query = params.get(Keys.query, "").strip()
-        limit = min(params.get(Keys.limit, _DEFAULT_LIMIT) or _DEFAULT_LIMIT, _MAX_LIMIT)
+    def run(self, params: dict[str, object]) -> ToolResult:
+        query = cast(str, params.get(Keys.query, "")).strip()
+        limit = min(cast(int, params.get(Keys.limit, _DEFAULT_LIMIT) or _DEFAULT_LIMIT), _MAX_LIMIT)
         logger.info(f"{self._LOG_PREFIX} query='{query}' limit={limit}")
 
         if not query:
@@ -123,7 +123,7 @@ class FindSkillsAbility(SearchableAbility):
             logger.warning(f"{self._LOG_PREFIX} embedding failed, degrading to FTS: {exc}")
             return self._fallback(query, limit)
 
-        blob = pack_embedding(query_embedding)
+        blob = cast(bytes, pack_embedding(query_embedding))
         rows = self._query(query, blob, limit)
         return self._result(query, rows)
 
@@ -147,7 +147,7 @@ class FindSkillsAbility(SearchableAbility):
             )
         return None
 
-    def _result(self, query: str, rows: list, *, degraded: bool = False) -> ToolResult:
+    def _result(self, query: str, rows: list[object], *, degraded: bool = False) -> ToolResult:
         """Build the success ToolResult from RRF rows (or the degraded fallback).
 
         Zero hits past a healthy probe is a genuine no-match SUCCESS, never an
@@ -159,19 +159,19 @@ class FindSkillsAbility(SearchableAbility):
                 "matches": [],
                 "note": f'No skill playbooks found for "{query}". {_BROADEN_HINT}',
             }
-            meta: dict = {"query": query, "count": 0}
+            meta: dict[str, object] = {"query": query, "count": 0}
             if degraded:
                 meta["degraded"] = True
-            return ToolResult.ok(body, **meta)
+            return ToolResult.ok(body, **cast("dict[str, dict[str, object] | None]", meta))
 
-        skill_rows = [self._row(r) for r in rows]
+        skill_rows = [self._row(cast("dict[str, object]", r)) for r in rows]
         meta = {"query": query, "count": len(skill_rows)}
         if degraded:
             meta["degraded"] = True
-        return ToolResult.ok(skill_rows, **meta)
+        return ToolResult.ok(skill_rows, **cast("dict[str, dict[str, object] | None]", meta))
 
-    def _row(self, merged: dict) -> dict:
-        content, rules = self._fetch_detail(merged["key"])
+    def _row(self, merged: dict[str, object]) -> dict[str, object]:
+        content, rules = self._fetch_detail(cast(int, merged["key"]))
         return {
             "name": merged["label"],
             "score": merged["score"],
@@ -179,8 +179,8 @@ class FindSkillsAbility(SearchableAbility):
             "rules": rules,
         }
 
-    def _query(self, query: str, blob: bytes, limit: int) -> list:
-        return self._hybrid_search(
+    def _query(self, query: str, blob: bytes, limit: int) -> list[object]:
+        return cast("list[object]", self._hybrid_search(
             query, blob, limit,
             vec_sql="""
                 SELECT s.id, s.title, v.distance
@@ -202,9 +202,9 @@ class FindSkillsAbility(SearchableAbility):
             """,
             vec_params=(blob, KNN_DEPTH),
             fts_params=(query,),
-        )
+        ))
 
-    def _fetch_detail(self, skill_id: int) -> tuple[str, list[dict]]:
+    def _fetch_detail(self, skill_id: int) -> tuple[str, list[dict[str, object]]]:
         conn = sqlite3.connect(str(self._DB_PATH))
         try:
             row = conn.execute(
@@ -238,4 +238,4 @@ class FindSkillsAbility(SearchableAbility):
         )
 
         merged = [{"key": r[0], "label": r[1], "score": 0.5} for r in rows]
-        return self._result(query, merged, degraded=True)
+        return self._result(query, cast("list[object]", merged), degraded=True)

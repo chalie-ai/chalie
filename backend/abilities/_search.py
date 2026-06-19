@@ -5,7 +5,7 @@ import sqlite3
 from abc import ABC
 from collections import defaultdict
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 
@@ -30,21 +30,21 @@ class SearchableAbility(Ability, ABC):
             conn.load_extension("vec0")
 
     @staticmethod
-    def rrf_merge(vec_rows: list, fts_rows: list, k: int) -> list[dict]:
-        label_by_key: dict = {}
-        vec_best: dict = {}
+    def rrf_merge(vec_rows: "list[tuple[object, ...]]", fts_rows: "list[tuple[object, ...]]", k: int) -> "list[dict[str, object]]":
+        label_by_key: "dict[object, object]" = {}
+        vec_best: "dict[object, float]" = {}
         for key, label, distance in vec_rows:
             label_by_key[key] = label
-            if key not in vec_best or distance < vec_best[key]:
-                vec_best[key] = distance
+            if key not in vec_best or cast(float, distance) < vec_best[key]:
+                vec_best[key] = cast(float, distance)
 
-        fts_best: dict = {}
+        fts_best: "dict[object, float]" = {}
         for key, label, score in fts_rows:
             label_by_key.setdefault(key, label)
-            if key not in fts_best or score < fts_best[key]:
-                fts_best[key] = score
+            if key not in fts_best or cast(float, score) < fts_best[key]:
+                fts_best[key] = cast(float, score)
 
-        rrf_scores: dict = defaultdict(float)
+        rrf_scores: "dict[object, float]" = defaultdict(float)
         for rank, (key, _) in enumerate(sorted(vec_best.items(), key=lambda x: x[1]), start=1):
             rrf_scores[key] += 1.0 / (RRF_K + rank)
         for rank, (key, _) in enumerate(sorted(fts_best.items(), key=lambda x: x[1]), start=1):
@@ -66,10 +66,10 @@ class SearchableAbility(Ability, ABC):
         k: int,
         vec_sql: str,
         fts_sql: str,
-        vec_params: tuple,
-        fts_params: tuple,
-        db_path: Path | None = None,
-    ) -> list[dict]:
+        vec_params: "tuple[object, ...]",
+        fts_params: "tuple[object, ...]",
+        db_path: "Path | None" = None,
+    ) -> "list[dict[str, object]]":
         """The vec query is wrapped in its own try/except so a missing vec table or
         invalid blob degrades gracefully to FTS-only — never fewer results, never
         raises.  Callers may pass any sqlite DB that shares the vec+FTS schema
@@ -104,9 +104,9 @@ class SearchableAbility(Ability, ABC):
     def _fts_only_search(
         self,
         fts_sql: str,
-        fts_params: tuple,
-        db_path: Path | None = None,
-    ) -> list:
+        fts_params: "tuple[object, ...]",
+        db_path: "Path | None" = None,
+    ) -> "list[sqlite3.Row]":
         """Callers may pass any sqlite DB that exposes the FTS5 schema.
         """
         target = db_path if db_path is not None else self._DB_PATH

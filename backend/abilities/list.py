@@ -28,11 +28,14 @@ Rich-media rendering:
 
 import json
 import logging
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
+
+if TYPE_CHECKING:
+    from services.list_service import ListService as _ListService
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +52,7 @@ class ListAbility(Ability):
     # it is resolved ability-side (by name or the ``id`` alias) so the frontend
     # silent-action and old id-addressed transcripts survive the pre-gate. The
     # handlers raise the precise missing-target error.
-    ACTION_REQUIRED: ClassVar[dict] = {
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list_all": (),
         "create": (Keys.name,),
         "view": (),
@@ -81,7 +84,7 @@ class ListAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "list and checklist manager"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -126,11 +129,11 @@ class ListAbility(Ability):
         "required": [Keys.action],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
-        action = self.param(params, Keys.action, default="list_all")
+    def run(self, params: dict[str, object]) -> ToolResult:
+        action = cast(str, self.param(params, Keys.action, default="list_all"))
 
         from services.database_service import get_shared_db_service
         from services.list_service import ListService
@@ -139,7 +142,7 @@ class ListAbility(Ability):
         return _dispatch(self, service, action, params)
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
+    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
         """Re-fetch the live list so checkbox state mutated via the silent-action
         channel is visible on conversation refresh.
 
@@ -157,11 +160,11 @@ class ListAbility(Ability):
         from services.list_service import ListService
 
         service = ListService(get_shared_db_service())
-        fresh = _fe_payload(service, list_id)
+        fresh = _fe_payload(service, cast(str, list_id))
         return fresh if fresh else payload
 
 
-def _dispatch(ability: "ListAbility", service, action: str, params: dict) -> ToolResult:
+def _dispatch(ability: "ListAbility", service: "_ListService", action: str, params: dict[str, object]) -> ToolResult:
     if action == "list_all":
         return _handle_list_all(service)
     if action == "create":
@@ -190,7 +193,7 @@ def _dispatch(ability: "ListAbility", service, action: str, params: dict) -> Too
 # ── Target resolution (by name or id) ───────────────────────────────────────────
 
 
-def _resolve_list(ability: "ListAbility", service, params: dict) -> "dict | ToolResult":
+def _resolve_list(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> "dict[str, object] | ToolResult":
     """Resolve the addressed list for view/add/check/remove/clear/rename/delete.
 
     Returns the service list row dict on an unambiguous resolution, or an error
@@ -218,13 +221,13 @@ def _resolve_list(ability: "ListAbility", service, params: dict) -> "dict | Tool
 
     lists = service.get_all_lists()
     lowered = target.lower()
-    exact = [lst for lst in lists if lst["name"].lower() == lowered]
+    exact = [lst for lst in lists if cast(str, lst["name"]).lower() == lowered]
     if len(exact) == 1:
-        return service.get_list(exact[0]["id"])
+        return cast("dict[str, object]", service.get_list(cast(str, exact[0]["id"])))
 
-    substring = [lst for lst in lists if lowered in lst["name"].lower()]
+    substring = [lst for lst in lists if lowered in cast(str, lst["name"]).lower()]
     if len(substring) == 1:
-        return service.get_list(substring[0]["id"])
+        return cast("dict[str, object]", service.get_list(cast(str, substring[0]["id"])))
     if len(substring) > 1:
         return ToolResult.err(
             f"{target!r} matches {len(substring)} list(s); re-call with the exact id. "
@@ -240,7 +243,7 @@ def _resolve_list(ability: "ListAbility", service, params: dict) -> "dict | Tool
     )
 
 
-def _candidate_json(lists: list) -> str:
+def _candidate_json(lists: list[dict[str, object]]) -> str:
     rows = [{"id": lst["id"], "name": lst["name"]} for lst in lists]
     return json.dumps(rows, ensure_ascii=False, separators=(",", ":"))
 
@@ -248,7 +251,7 @@ def _candidate_json(lists: list) -> str:
 # ── Item resolution (check / remove) ────────────────────────────────────────────
 
 
-def _resolve_items(lst: dict, terms: list) -> "list | ToolResult":
+def _resolve_items(lst: dict[str, object], terms: list[str]) -> "list[str] | ToolResult":
     """Resolve each requested item *term* against the list's active contents.
 
     For each term: exact (case-insensitive) match → kept as-is; else a single
@@ -257,8 +260,8 @@ def _resolve_items(lst: dict, terms: list) -> "list | ToolResult":
     call aborts); zero → ``item-not-found``. Returns the resolved exact contents
     in request order, or an error ``ToolResult``.
     """
-    contents = [item["content"] for item in lst.get("items", [])]
-    resolved = []
+    contents = [cast(str, item["content"]) for item in cast(list[dict[str, object]], lst.get("items", []))]
+    resolved: list[str] = []
     for term in terms:
         lowered = term.strip().lower()
         exact = [c for c in contents if c.lower() == lowered]
@@ -289,7 +292,7 @@ def _resolve_items(lst: dict, terms: list) -> "list | ToolResult":
 # ── Body / rich shaping ─────────────────────────────────────────────────────────
 
 
-def _rows(lst: dict) -> list:
+def _rows(lst: dict[str, object]) -> list[dict[str, object]]:
     return [
         {
             "id": item["id"],
@@ -297,32 +300,32 @@ def _rows(lst: dict) -> list:
             "done": bool(item["checked"]),
             "position": item["position"],
         }
-        for item in lst.get("items", [])
+        for item in cast(list[dict[str, object]], lst.get("items", []))
     ]
 
 
-def _body(lst: dict) -> dict:
+def _body(lst: dict[str, object]) -> dict[str, object]:
     return {"id": lst["id"], "name": lst["name"], "items": _rows(lst)}
 
 
-def _fe_card(lst: dict) -> dict:
+def _fe_card(lst: dict[str, object]) -> dict[str, object]:
     return {
         "id": lst["id"],
         "name": lst["name"],
         "items": [
             {"content": item["content"], "checked": bool(item["checked"])}
-            for item in lst.get("items", [])
+            for item in cast(list[dict[str, object]], lst.get("items", []))
         ],
     }
 
 
-def _fe_payload(service, list_id: str) -> Optional[dict]:
+def _fe_payload(service: "_ListService", list_id: str) -> Optional[dict[str, object]]:
     """Re-fetch a list and shape it as the FE card payload (refresh-hook path)."""
     lst = service.get_list(list_id)
     return _fe_card(lst) if lst else None
 
 
-def _ok_list(service, list_id: str) -> ToolResult:
+def _ok_list(service: "_ListService", list_id: str) -> ToolResult:
     """Fetch the live list and return a success result with rows + the FE card."""
     lst = service.get_list(list_id)
     if lst is None:
@@ -331,10 +334,10 @@ def _ok_list(service, list_id: str) -> ToolResult:
             code="list-not-found",
             hint="use action=list_all to see available lists.",
         )
-    return ToolResult.ok(_body(lst), rich=_fe_card(lst), count=len(lst.get("items", [])))
+    return ToolResult.ok(_body(lst), rich=_fe_card(lst), count=len(cast(list[object], lst.get("items", []))))
 
 
-def _normalize_string_items(params: dict) -> list:
+def _normalize_string_items(params: dict[str, object]) -> list[str]:
     items = params.get(Keys.items, [])
     if isinstance(items, str):
         try:
@@ -342,10 +345,12 @@ def _normalize_string_items(params: dict) -> list:
             items = parsed if isinstance(parsed, list) else [items]
         except ValueError:
             items = [items]
-    return [i.strip() for i in items if isinstance(i, str) and i.strip()]
+    return [i.strip() for i in cast(list[object], items) if isinstance(i, str) and i.strip()]
 
 
-def _split_check_items(raw_items: list) -> tuple[list, list]:
+def _split_check_items(raw_items: list[object]) -> tuple[list[str], list[str]]:
+    to_check: list[str]
+    to_uncheck: list[str]
     to_check, to_uncheck = [], []
     for item in raw_items:
         if not isinstance(item, dict):
@@ -362,8 +367,8 @@ def _split_check_items(raw_items: list) -> tuple[list, list]:
 # ── Handlers ─────────────────────────────────────────────────────────────────────
 
 
-def _handle_list_all(service) -> ToolResult:
-    rows = [
+def _handle_list_all(service: "_ListService") -> ToolResult:
+    rows: list[dict[str, object]] = [
         {
             "id": lst["id"],
             "name": lst["name"],
@@ -375,7 +380,7 @@ def _handle_list_all(service) -> ToolResult:
     return ToolResult.ok(rows, count=len(rows))
 
 
-def _handle_create(ability: "ListAbility", service, params: dict) -> ToolResult:
+def _handle_create(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
     name = str(ability.param(params, Keys.name, default="")).strip()
     if not name:
         return ToolResult.err("'name' is required.", code="missing-name")
@@ -396,14 +401,14 @@ def _handle_create(ability: "ListAbility", service, params: dict) -> ToolResult:
     return _ok_list(service, list_id)
 
 
-def _handle_view(ability: "ListAbility", service, params: dict) -> ToolResult:
+def _handle_view(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
     lst = _resolve_list(ability, service, params)
     if isinstance(lst, ToolResult):
         return lst
-    return _ok_list(service, lst["id"])
+    return _ok_list(service, cast(str, lst["id"]))
 
 
-def _handle_add(ability: "ListAbility", service, params: dict) -> ToolResult:
+def _handle_add(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
     lst = _resolve_list(ability, service, params)
     if isinstance(lst, ToolResult):
         return lst
@@ -416,17 +421,17 @@ def _handle_add(ability: "ListAbility", service, params: dict) -> ToolResult:
             hint="pass a JSON array of item strings, e.g. [\"milk\",\"eggs\"].",
         )
 
-    added = service.add_items(lst["id"], cleaned)
+    added = service.add_items(cast(str, lst["id"]), cleaned)
     if added == 0:
         return ToolResult.err(
             "No items added (all duplicates or empty).",
             code="no-items-added",
             hint="the items are already on the list.",
         )
-    return _ok_list(service, lst["id"])
+    return _ok_list(service, cast(str, lst["id"]))
 
 
-def _handle_check(ability: "ListAbility", service, params: dict) -> ToolResult:
+def _handle_check(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
     lst = _resolve_list(ability, service, params)
     if isinstance(lst, ToolResult):
         return lst
@@ -455,13 +460,13 @@ def _handle_check(ability: "ListAbility", service, params: dict) -> ToolResult:
         return resolved_uncheck
 
     if resolved_check:
-        service.check_items(lst["id"], resolved_check)
+        service.check_items(cast(str, lst["id"]), resolved_check)
     if resolved_uncheck:
-        service.uncheck_items(lst["id"], resolved_uncheck)
-    return _ok_list(service, lst["id"])
+        service.uncheck_items(cast(str, lst["id"]), resolved_uncheck)
+    return _ok_list(service, cast(str, lst["id"]))
 
 
-def _handle_remove(ability: "ListAbility", service, params: dict) -> ToolResult:
+def _handle_remove(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
     lst = _resolve_list(ability, service, params)
     if isinstance(lst, ToolResult):
         return lst
@@ -478,19 +483,19 @@ def _handle_remove(ability: "ListAbility", service, params: dict) -> ToolResult:
     if isinstance(resolved, ToolResult):
         return resolved
 
-    service.remove_items(lst["id"], resolved)
-    return _ok_list(service, lst["id"])
+    service.remove_items(cast(str, lst["id"]), resolved)
+    return _ok_list(service, cast(str, lst["id"]))
 
 
-def _handle_clear(ability: "ListAbility", service, params: dict) -> ToolResult:
+def _handle_clear(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
     lst = _resolve_list(ability, service, params)
     if isinstance(lst, ToolResult):
         return lst
-    service.clear_list(lst["id"])
-    return _ok_list(service, lst["id"])
+    service.clear_list(cast(str, lst["id"]))
+    return _ok_list(service, cast(str, lst["id"]))
 
 
-def _handle_rename(ability: "ListAbility", service, params: dict) -> ToolResult:
+def _handle_rename(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
     lst = _resolve_list(ability, service, params)
     if isinstance(lst, ToolResult):
         return lst
@@ -499,21 +504,21 @@ def _handle_rename(ability: "ListAbility", service, params: dict) -> ToolResult:
     if not new_name:
         return ToolResult.err("'name' is required.", code="missing-name")
 
-    if not service.rename_list(lst["id"], new_name):
+    if not service.rename_list(cast(str, lst["id"]), new_name):
         return ToolResult.err(
             f"Rename failed — name {new_name!r} is already in use.",
             code="duplicate-name",
             hint="choose a different name.",
         )
-    return _ok_list(service, lst["id"])
+    return _ok_list(service, cast(str, lst["id"]))
 
 
-def _handle_delete(ability: "ListAbility", service, params: dict) -> ToolResult:
+def _handle_delete(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
     lst = _resolve_list(ability, service, params)
     if isinstance(lst, ToolResult):
         return lst
 
-    if not service.delete_list(lst["id"]):
+    if not service.delete_list(cast(str, lst["id"])):
         return ToolResult.err(
             f"Failed to delete {lst['name']!r}.",
             code="delete-failed",

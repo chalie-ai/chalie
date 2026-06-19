@@ -48,7 +48,7 @@ class CapabilityAbility(Ability, ABC):
     #: Remediation sentence appended to the not-connected error.
     NOT_CONNECTED_HINT: ClassVar[str] = "Configure it in the Brain dashboard."
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: "dict[str, object]") -> ToolResult:
         action = str(params.get("action", self.DEFAULT_ACTION)).lower()
 
         from capabilities import load_capabilities

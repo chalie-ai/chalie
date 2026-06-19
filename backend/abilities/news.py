@@ -23,7 +23,10 @@ Result contract (TKT-904):
 """
 
 import logging
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional, cast
+
+if TYPE_CHECKING:
+    from services.news_service import NewsArticle
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -66,7 +69,7 @@ class NewsAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "news article search"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.query: {
@@ -82,12 +85,12 @@ class NewsAbility(Ability):
         "required": [Keys.query],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
     _service: ClassVar[Optional[NewsService]] = None
 
-    _COUNTRY_CODE_MAP: ClassVar[dict] = {
+    _COUNTRY_CODE_MAP: ClassVar[dict[str, str]] = {
         "united states": "US", "united kingdom": "GB", "malta": "MT",
         "germany": "DE", "france": "FR", "japan": "JP", "canada": "CA",
         "australia": "AU", "italy": "IT", "spain": "ES", "netherlands": "NL",
@@ -100,10 +103,10 @@ class NewsAbility(Ability):
         "united arab emirates": "AE", "saudi arabia": "SA",
     }
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
         # whitespace-only value that the truthiness pre-gate lets through.
-        query = (params.get(Keys.query) or "").strip()
+        query = (cast(str, params.get(Keys.query)) or "").strip()
         if not query:
             return ToolResult.err(
                 "query is required and cannot be blank.",
@@ -119,11 +122,11 @@ class NewsAbility(Ability):
         telemetry = self.telemetry or {}
 
         svc = self._get_service()
-        country_code = self._resolve_country_code(telemetry.get("country"))
+        country_code = self._resolve_country_code(cast("str | None", telemetry.get("country")))
 
         degraded = False
         if category:
-            source_ids = [s.id for s in news_sources.get_sources_by_category(category)]
+            source_ids = [s.id for s in news_sources.get_sources_by_category(cast(str, category))]
             articles = svc.fetch_feeds(source_ids)
             try:
                 articles.extend(svc.fetch_google_news(query, country_code=country_code))
@@ -155,7 +158,7 @@ class NewsAbility(Ability):
             for a in top
         ]
 
-        meta: dict = {"count": len(rows)}
+        meta: dict[str, object] = {"count": len(rows)}
         if degraded:
             meta["degraded"] = True
 
@@ -171,13 +174,13 @@ class NewsAbility(Ability):
         )
 
     @classmethod
-    def _get_service(cls):
+    def _get_service(cls) -> "NewsService":
         if cls._service is None:
             cls._service = NewsService()
         return cls._service
 
     @classmethod
-    def _resolve_country_code(cls, country) -> str:
+    def _resolve_country_code(cls, country: "str | None") -> str:
         if not country:
             return "US"
         return cls._COUNTRY_CODE_MAP.get(country.lower().strip(), "US")
@@ -185,7 +188,7 @@ class NewsAbility(Ability):
     # ── Rich article card (via ToolResult.rich) ─────────────────────────────────
 
     @staticmethod
-    def _build_rich_card(articles) -> dict:
+    def _build_rich_card(articles: "list[NewsArticle]") -> dict[str, object]:
         """Returned as the ``rich`` payload of the success ToolResult; the dispatcher
         serialises it as the card JSON head and appends the single span
         instruction (and the ordinal-keyed tag) ONLY when the invoking channel
@@ -215,7 +218,7 @@ class NewsAbility(Ability):
 
         # og_meta maps the resolved image_url → its og metadata so the caption can
         # be derived (mirrors search.py's keying by image URL).
-        og_meta: dict = {}
+        og_meta: dict[str, object] = {}
         if len(image_items) < 3 and og_targets:
             from services.og_image_service import resolve_og_images
             try:
@@ -232,7 +235,7 @@ class NewsAbility(Ability):
                 if len(image_items) >= 3:
                     break
 
-        payload: dict = {"results": results}
+        payload: dict[str, object] = {"results": results}
         if image_items:
             from services.image_candidate_service import build_image_candidates
             try:

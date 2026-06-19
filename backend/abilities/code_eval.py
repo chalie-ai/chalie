@@ -25,7 +25,16 @@ import statistics
 import time
 import traceback
 from queue import Empty
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from typing import Protocol, TypedDict
+
+    class _TruncMeta(TypedDict, total=False):
+        truncated: bool
+
+    class _Callable(Protocol):
+        def __call__(self) -> str: ...
 
 from RestrictedPython import compile_restricted, safe_builtins, safe_globals
 from RestrictedPython.PrintCollector import PrintCollector
@@ -46,7 +55,7 @@ _FILENAME = "<scratchpad>"
 _PRINT_VAR = "_print"
 
 
-def _guarded_getattr(obj, name):
+def _guarded_getattr(obj: object, name: str) -> object:
     if name.startswith("_"):
         raise AttributeError(f"Access to '{name}' is not permitted in the sandbox")
     return getattr(obj, name)
@@ -56,7 +65,7 @@ class CodeEvalAbility(Ability):
     # Action-less tool: the dispatcher's ACTION_REQUIRED pre-gate rejects a
     # missing/empty ``code`` as ``code=missing-params`` BEFORE the policy gate or
     # run(). The ``""`` key covers action-less tools (precedent: vision).
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.code,)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.code,)}
 
     def get_name(self) -> str:
         return "code_eval"
@@ -79,10 +88,10 @@ class CodeEvalAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "Python code execution"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.code: {
@@ -121,7 +130,7 @@ class CodeEvalAbility(Ability):
     _POLL_INTERVAL_S = 2.0
 
     # Pre-built restricted globals — assembled once at import time.
-    _RESTRICTED_GLOBALS: ClassVar[dict] = {
+    _RESTRICTED_GLOBALS: ClassVar[dict[str, object]] = {
         **safe_globals,
         "__builtins__": safe_builtins,
         "_print_": PrintCollector,
@@ -138,7 +147,7 @@ class CodeEvalAbility(Ability):
         "collections": collections,
     }
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         """Run the supplied Python under a hard 10-minute cap and return a
         CPython-faithful run result: anything that RAN comes back as ``ok`` with a
         branchable ``exit_code`` (exactly how ``python script.py`` behaves), so the
@@ -151,7 +160,7 @@ class CodeEvalAbility(Ability):
         ACTION_REQUIRED pre-gate, which rejects it. The guard covers direct
         callers the same way the pre-gate would have.
         """
-        code = (params.get(Keys.code) or "").strip()
+        code = (cast(str, params.get(Keys.code)) or "").strip()
         if not code:
             return ToolResult.err(
                 self._ERR_NO_CODE,
@@ -210,15 +219,15 @@ class CodeEvalAbility(Ability):
             hint="retry, or simplify the code so it runs within the sandbox.",
         )
 
-    def _assemble(self, raw: dict, duration_ms: int) -> ToolResult:
+    def _assemble(self, raw: dict[str, object], duration_ms: int) -> ToolResult:
         """Turn the worker's raw ``{stdout, stderr, exit_code}`` dict into the
         sealed ToolResult: clip each stream via the shared truncate primitive
         (``meta truncated=true`` when either was clipped), enforce the no-output
         guardrail (ran cleanly but printed nothing → an actionable error, not a
         silent empty success), and otherwise return a branchable run result."""
-        stdout, clipped_out = truncate(raw["stdout"], _MAX_OUTPUT_CHARS)
-        stderr, clipped_err = truncate(raw["stderr"], _MAX_OUTPUT_CHARS)
-        exit_code = raw["exit_code"]
+        stdout, clipped_out = truncate(cast(str, raw["stdout"]), _MAX_OUTPUT_CHARS)
+        stderr, clipped_err = truncate(cast(str, raw["stderr"]), _MAX_OUTPUT_CHARS)
+        exit_code = cast(int, raw["exit_code"])
 
         # Ran to completion with a clean exit but emitted nothing: the model would
         # read empty success as 'done' and retry the identical call until the
@@ -230,7 +239,7 @@ class CodeEvalAbility(Ability):
                 hint="use print() on whatever you want returned.",
             )
 
-        meta = {"truncated": True} if (clipped_out or clipped_err) else {}
+        meta: "_TruncMeta" = {"truncated": True} if (clipped_out or clipped_err) else {}
         return ToolResult.ok(
             {
                 "stdout": stdout,
@@ -242,7 +251,7 @@ class CodeEvalAbility(Ability):
         )
 
 
-def _compile_and_run(code: str) -> dict:
+def _compile_and_run(code: str) -> dict[str, object]:
     """Compile and execute *code* in fresh restricted globals, returning a raw
     ``{stdout, stderr, exit_code}`` dict (no ToolResult — the parent assembles
     that). A syntax error or a runtime exception is a CPython-faithful
@@ -255,7 +264,7 @@ def _compile_and_run(code: str) -> dict:
 
     # Fresh globals copy per call so state never leaks between executions.
     exec_globals = dict(CodeEvalAbility._RESTRICTED_GLOBALS)
-    exec_locals: dict = {}
+    exec_locals: dict[str, object] = {}
 
     try:
         exec(byte_code, exec_globals, exec_locals)
@@ -272,12 +281,12 @@ def _compile_and_run(code: str) -> dict:
     return {"stdout": _captured(exec_locals), "stderr": "", "exit_code": 0}
 
 
-def _captured(exec_locals: dict) -> str:
+def _captured(exec_locals: dict[str, object]) -> str:
     collector = exec_locals.get(_PRINT_VAR)
-    return collector() if collector is not None else ""
+    return cast("_Callable", collector)() if collector is not None else ""
 
 
-def _sandbox_worker(code: str, result_queue) -> None:
+def _sandbox_worker(code: str, result_queue: "multiprocessing.Queue[dict[str, object]]") -> None:
     """Entry point for the sandbox subprocess: compile and execute *code*, then
     put the raw ``{stdout, stderr, exit_code}`` dict on *result_queue*. Module-level
     so it is picklable under the ``spawn`` start method, and a plain dict (not a

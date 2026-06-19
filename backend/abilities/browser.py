@@ -20,7 +20,14 @@ gate and BEFORE ``run()`` — so they never reach this module.
 import logging
 import os
 from secrets import token_hex
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from typing import TypedDict
+
+    class _ReplyMeta(TypedDict, total=False):
+        url: str
+        title: str
 from urllib.parse import urlparse
 
 from abilities._ability import Ability
@@ -59,7 +66,7 @@ class BrowserAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "interactive web browser"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -106,7 +113,7 @@ class BrowserAbility(Ability):
         "required": [Keys.action],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
     # Required params per action — consumed by the dispatcher's ACTION_REQUIRED
@@ -114,7 +121,7 @@ class BrowserAbility(Ability):
     # code=unknown-action whose valid= names all nine verbs; a known action
     # missing a required param → one code=missing-params naming it. run() never
     # sees either case.
-    ACTION_REQUIRED: ClassVar[dict] = {
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "open": (Keys.url,),
         "read": (),
         "find": (Keys.query,),
@@ -128,7 +135,7 @@ class BrowserAbility(Ability):
 
     # verb -> params forwarded to the session layer (the required half is the
     # dispatcher pre-gate's job, above).
-    _FORWARDED: ClassVar[dict] = {
+    _FORWARDED: ClassVar[dict[str, tuple[str, ...]]] = {
         "open": (Keys.url,),
         "read": (Keys.section,),
         "find": (Keys.query,),
@@ -140,8 +147,8 @@ class BrowserAbility(Ability):
         "screenshot": (),
     }
 
-    def run(self, params: dict) -> ToolResult:
-        action = (params.get(Keys.action) or "").strip().lower()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        action = cast(str, params.get(Keys.action) or "").strip().lower()
         if action == "open":
             from tools.browser.security import validate_url  # noqa: PLC0415
             ok, reason = validate_url(str(params[Keys.url]).strip())
@@ -162,7 +169,7 @@ class BrowserAbility(Ability):
         envelope = self._run_verb(action, kwargs)
         return self._reply(envelope)
 
-    def _run_verb(self, verb: str, kwargs: dict) -> dict:
+    def _run_verb(self, verb: str, kwargs: dict[str, str]) -> dict[str, object]:
         try:
             return run_verb(self._session_key(), verb, kwargs)
         except TimeoutError:
@@ -195,12 +202,12 @@ class BrowserAbility(Ability):
         from services.document_service import DocumentService  # noqa: PLC0415
         from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 
-        page = grabbed["page"]
-        host = urlparse(page["url"]).hostname or "page"
+        page = cast(dict[str, object], grabbed["page"])
+        host = urlparse(cast(str, page["url"])).hostname or "page"
         tmp = new_tmp_path(f"{token_hex(4)}.png")
         try:
             with open(tmp, "wb") as fh:
-                fh.write(grabbed["png"])
+                fh.write(cast(bytes, grabbed["png"]))
             ingested = ingest_file(
                 DocumentService(get_shared_db_service()),
                 tmp,
@@ -217,10 +224,10 @@ class BrowserAbility(Ability):
                 code="screenshot-ingest-failed",
                 hint="The page was captured but could not be stored; retry the "
                      "screenshot.",
-                url=page["url"],
+                url=cast(str, page["url"]),
             )
 
-        record_screenshot(self._session_key(), ingested["id"], page["url"])
+        record_screenshot(self._session_key(), cast(str, ingested["id"]), cast(str, page["url"]))
         return ToolResult.ok({
             "page": page,
             "data": {
@@ -237,7 +244,7 @@ class BrowserAbility(Ability):
         return getattr(self.mp, "uid", None) or 0
 
     @staticmethod
-    def _reply(envelope: dict) -> ToolResult:
+    def _reply(envelope: dict[str, object]) -> ToolResult:
         """A successful envelope (``error`` is None) becomes ``ok`` with the DICT
         body — the dispatcher renders compact JSON. An error envelope becomes
         ``err`` with the plain human-readable message string and a stable kebab
@@ -249,10 +256,10 @@ class BrowserAbility(Ability):
         if not error:
             return ToolResult.ok(envelope)
 
-        code = envelope.get("_code") or _classify_error(error)
-        hint = envelope.get("_hint") or _HINTS.get(code)
-        meta: dict = {}
-        page = envelope.get("page") or {}
+        code = cast(str, envelope.get("_code")) or _classify_error(cast(str, error))
+        hint = cast(str | None, envelope.get("_hint")) or _HINTS.get(code)
+        meta: "_ReplyMeta" = {}
+        page = cast(dict[str, object], envelope.get("page") or {})
         if page.get("url"):
             meta["url"] = str(page["url"])
         if page.get("title"):

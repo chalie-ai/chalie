@@ -49,7 +49,7 @@ class MemoryAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "personal memory store"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -116,7 +116,7 @@ class MemoryAbility(Ability):
         "required": [Keys.action],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
     # SYSTEM tool: always allowed in every context and never shown in the Policy
@@ -138,7 +138,7 @@ class MemoryAbility(Ability):
         "forget": (Keys.key,),
     }
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         action = params.get(Keys.action, "recall")
         mp = self.mp
         channel = getattr(getattr(mp, "config", None), "channel", "") or ""

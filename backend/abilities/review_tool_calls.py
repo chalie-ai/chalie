@@ -44,7 +44,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
     def get_search_tooltip(self) -> str:
         return "inspect past tool calls"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: "ClassVar[dict[str, object]]" = {
         "type": "object",
         "properties": {
             Keys.date_time: {
@@ -59,12 +59,12 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
         "required": [Keys.date_time],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> "dict[str, object]":
         return self._PARAMETERS
 
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
-    def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
+    def _fetch(self, lo: str, hi: str, params: "dict[str, object]") -> "list[dict[str, object]]":
         """Excludes narration rows (tool_name='narration') — mid-loop LLM text blobs
         not meaningful as tool activity."""
         from services.database_service import get_shared_db_service
@@ -90,7 +90,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
             cursor.close()
         return rows
 
-    def _row(self, rec: dict, ordinal: int) -> dict:
+    def _row(self, rec: "dict[str, object]", ordinal: int) -> "dict[str, object]":
         params_str = str(rec.get("params") or "{}")
         if len(params_str) > _PARAMS_SUMMARY_CHARS:
             params_str = params_str[:_PARAMS_SUMMARY_CHARS]

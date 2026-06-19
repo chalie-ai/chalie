@@ -6,7 +6,13 @@ import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from typing import TypedDict
+
+    class _TruncMeta(TypedDict, total=False):
+        truncated: bool
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -145,7 +151,7 @@ class BashAbility(Ability):
             "count the total lines of Python code under /app",
         ]
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.command: {
@@ -169,10 +175,10 @@ class BashAbility(Ability):
         "required": [Keys.command],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def classify_action(self, params: dict) -> str:
+    def classify_action(self, params: dict[str, object]) -> str:
         """Derive the policy risk class from the COMMAND itself.
 
         The dispatcher calls this before the policy gate and keys the
@@ -181,13 +187,13 @@ class BashAbility(Ability):
         no model-supplied action to trust. Returns ``read`` (the benign
         inspection floor) when no heavier pattern matches.
         """
-        command = (params.get(Keys.command) or "").strip()
+        command = (cast(str, params.get(Keys.command)) or "").strip()
         if not command:
             return _DEFAULT_ACTION
         return _classify_heuristic(command) or _DEFAULT_ACTION
 
-    def run(self, params: dict) -> ToolResult:
-        command = (params.get(Keys.command) or "").strip()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        command = (cast(str, params.get(Keys.command)) or "").strip()
         if not command:
             return ToolResult.err(
                 "command is required.",
@@ -203,7 +209,7 @@ class BashAbility(Ability):
                 hint="this command is blocked outright; it cannot be run.",
             )
 
-        timeout_s = _resolve_timeout(params.get(Keys.timeout_s))
+        timeout_s = _resolve_timeout(cast("int | None", params.get(Keys.timeout_s)))
         safe_env = _build_safe_env()
 
         return _run_command(command, timeout_s, safe_env)
@@ -303,7 +309,7 @@ def _resolve_timeout(timeout_param: int | None) -> int:
 # ── Subprocess execution ──────────────────────────────────────────────────
 
 
-def _run_command(command: str, timeout_s: int, env: dict) -> ToolResult:
+def _run_command(command: str, timeout_s: int, env: dict[str, str]) -> ToolResult:
     try:
         proc = subprocess.run(
             ["bash", "-c", command],
@@ -358,7 +364,7 @@ def _run_command(command: str, timeout_s: int, env: dict) -> ToolResult:
     if not stdout_str and not stderr_str and proc.returncode == 0:
         stdout_str = _EMPTY_SUCCESS_MSG
 
-    meta = {"truncated": True} if truncated else {}
+    meta: "_TruncMeta" = {"truncated": True} if truncated else {}
     return ToolResult.ok(
         {
             "exit_code": proc.returncode,
@@ -385,8 +391,8 @@ def _is_binary(data: bytes) -> bool:
     return (non_printable / len(sample)) > _NONPRINTABLE_THRESHOLD
 
 
-def _build_safe_env() -> dict:
-    safe = {}
+def _build_safe_env() -> dict[str, str]:
+    safe: dict[str, str] = {}
     for key, value in os.environ.items():
         upper = key.upper()
         if any(upper.startswith(p) for p in _SECRET_PREFIXES):

@@ -17,19 +17,23 @@ factory — only these small shared primitives.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, cast
 
 from abilities._result import ToolResult
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 
 
-def delegate_goal(params: dict) -> str:
+def delegate_goal(params: "dict[str, object]") -> str:
     """Extract the delegate's goal/query from the tool params.
 
     Delegates accept either ``goal`` (web_browse) or ``query`` (web_search) —
     normalise to a single string.
     """
-    return params.get("goal") or params.get("query") or ""
+    return cast(str, params.get("goal") or params.get("query") or "")
 
 
 def delegate_result(result: str, *, hint: str) -> ToolResult:
@@ -48,7 +52,7 @@ def delegate_result(result: str, *, hint: str) -> ToolResult:
 def render_trail(mp: object) -> str:
     """Render the current act-trail for a delegate's user prompt, or '' on miss."""
     try:
-        trail = mp._render_act_trail()  # type: ignore[attr-defined]
+        trail = cast("MessageProcessor", mp)._render_act_trail()
         return trail or ""
     except Exception:
         logger.warning("[DELEGATE] act-trail render failed", exc_info=True)

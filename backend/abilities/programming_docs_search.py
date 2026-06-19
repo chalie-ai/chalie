@@ -25,7 +25,7 @@ import re
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import requests
 
@@ -68,14 +68,14 @@ def _abs_url(href: str, base: str) -> str:
 def _templates(
     *patterns: str,
     title: str = "{q}",
-) -> Callable[[str], list[dict]]:
+) -> Callable[[str], list[dict[str, object]]]:
     """Templates are tried cheapest-first WITHOUT a separate HEAD probe — the
     fetch IS the validation (a dead URL falls through to the next candidate or
     to ``source-unavailable``)."""
 
-    def resolve(query: str) -> list[dict]:
+    def resolve(query: str) -> list[dict[str, object]]:
         vars_ = _query_vars(query)
-        out: list[dict] = []
+        out: list[dict[str, object]] = []
         seen: set[str] = set()
         for pat in patterns:
             try:
@@ -98,14 +98,14 @@ def _json_api(
     url_field: str,
     title_field: str,
     url_prefix: str = "",
-) -> Callable[[str], list[dict]]:
+) -> Callable[[str], list[dict[str, object]]]:
     """A request failure bubbles to the engine, which surfaces
     ``source-unavailable`` — it never fabricates a fallback URL."""
 
-    def resolve(query: str) -> list[dict]:
+    def resolve(query: str) -> list[dict[str, object]]:
         url = endpoint.format(q=urllib.parse.quote(query))
         data = json.loads(_fetch(url))
-        out: list[dict] = []
+        out: list[dict[str, object]] = []
         for item in data.get(results_key, []):
             item_url = item.get(url_field, "")
             if not item_url:
@@ -124,14 +124,14 @@ def _html_search(
     link_pattern: str,
     base: str,
     skip_self: bool = True,
-) -> Callable[[str], list[dict]]:
+) -> Callable[[str], list[dict[str, object]]]:
     """A request failure bubbles to the engine."""
     rx = re.compile(link_pattern, re.DOTALL | re.IGNORECASE)
 
-    def resolve(query: str) -> list[dict]:
+    def resolve(query: str) -> list[dict[str, object]]:
         url = endpoint.format(q=urllib.parse.quote(query))
         html = _fetch(url)
-        out: list[dict] = []
+        out: list[dict[str, object]] = []
         seen: set[str] = set()
         for m in rx.finditer(html):
             href = m.group(1)
@@ -152,7 +152,7 @@ def _html_search(
     return resolve
 
 
-def _query_vars(query: str) -> dict:
+def _query_vars(query: str) -> dict[str, str]:
     q = query.strip()
     lower = q.lower()
     last = re.split(r"[.\\/:#]+", q)[-1] or q
@@ -184,7 +184,7 @@ class Source:
     name: str
     aliases: tuple[str, ...]
     base_url: str
-    resolve: Callable[[str], list[dict]] = field(repr=False)
+    resolve: Callable[[str], list[dict[str, object]]] = field(repr=False)
 
 
 SOURCES: list[Source] = [
@@ -448,16 +448,16 @@ def lookup(language: str, query: str) -> ToolResult:
     # back to the source's real base/landing page (a TRUE page) marked degraded.
     degraded = False
     ordered = list(candidates)
-    base_row = {"url": source.base_url, "title": source.name}
+    base_row: dict[str, object] = {"url": source.base_url, "title": source.name}
     if base_row["url"] and base_row["url"] not in {c["url"] for c in ordered}:
         ordered.append(base_row)
 
     for index, candidate in enumerate(ordered):
         try:
-            html = _fetch(candidate["url"])
+            html = _fetch(cast(str, candidate["url"]))
         except (requests.RequestException, FetchBlocked):
             continue
-        excerpt = extract_html(html, url=candidate["url"])
+        excerpt = extract_html(html, url=cast(str, candidate["url"]))
         if not excerpt:
             continue
         excerpt, _ = truncate(excerpt, _MAX_CHARS)
@@ -482,10 +482,10 @@ def lookup(language: str, query: str) -> ToolResult:
             })
             if len(rows) >= _MAX_RESULTS:
                 break
-        meta: dict = {"source": source.id, "count": len(rows)}
+        meta: dict[str, object] = {"source": source.id, "count": len(rows)}
         if degraded:
             meta["degraded"] = True
-        return ToolResult.ok(rows, **meta)
+        return ToolResult.ok(rows, **cast("dict[str, dict[str, object] | None]", meta))
 
     return ToolResult.err(
         f"Could not reach {source.name} documentation for '{query}'.",
@@ -529,7 +529,7 @@ class ProgrammingDocsSearchAbility(Ability):
         )
     )
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.language: {
@@ -545,10 +545,10 @@ class ProgrammingDocsSearchAbility(Ability):
         "required": [Keys.language, Keys.query],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         language = self.param(params, Keys.language, required=True)
         query = self.param(params, Keys.query, required=True)
         language = str(language).strip()

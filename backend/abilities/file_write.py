@@ -18,9 +18,13 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 import json
 import logging
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
+
+if TYPE_CHECKING:
+    class _DbProto:
+        def fetch_all(self, sql: str, params: object = None) -> list[dict[str, object]]: ...
 from abilities._params import Keys
 from abilities._result import ToolResult
 
@@ -33,7 +37,7 @@ class FileWriteAbility(Ability):
     #: BEFORE run(). ``contents`` is deliberately NOT listed: the pre-gate check
     #: is truthiness-based, so an empty-string ``contents`` (valid user data)
     #: would be falsely rejected there. run() guards a MISSING contents key.
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.path,)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.path,)}
 
     def get_name(self) -> str:
         return "file_write"
@@ -54,7 +58,7 @@ class FileWriteAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "File writing and creation"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.path: {
@@ -72,11 +76,11 @@ class FileWriteAbility(Ability):
         "required": [Keys.path, Keys.contents],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
-        path_str = params.get(Keys.path, "")
+    def run(self, params: dict[str, object]) -> ToolResult:
+        path_str = cast(str, params.get(Keys.path, ""))
 
         # 'contents' is NOT pre-gated (an empty string is valid), so a MISSING
         # key is guarded here; a present "" proceeds to write a 0-byte file.
@@ -106,7 +110,7 @@ class FileWriteAbility(Ability):
         existed = target.exists()
         if existed:
             from services.database_service import get_shared_db_service
-            if not self._read_called_first(get_shared_db_service(), target):
+            if not self._read_called_first(cast("_DbProto", get_shared_db_service()), target):
                 return ToolResult.err(
                     f"You must read {target} before overwriting it.",
                     code="read-required",
@@ -135,7 +139,7 @@ class FileWriteAbility(Ability):
             {"path": str(target), "bytes": bytes_written, "created": not existed}
         )
 
-    def _read_called_first(self, db, target: Path) -> bool:
+    def _read_called_first(self, db: "_DbProto", target: Path) -> bool:
         proc = self.mp
         if proc is None:
             return True
@@ -153,7 +157,7 @@ class FileWriteAbility(Ability):
         )
         for row in rows:
             try:
-                p = json.loads(row["params"])
+                p = json.loads(cast(str, row["params"]))
             except (json.JSONDecodeError, TypeError):
                 continue
             source = p.get("source") or p.get("path") or p.get("url", "")
