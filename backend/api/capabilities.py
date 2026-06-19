@@ -27,6 +27,7 @@ from services.vault_service import VaultLockedError
 from .auth import require_auth
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from flask.typing import ResponseReturnValue
     from typing import Protocol
 
@@ -49,7 +50,7 @@ capabilities_bp = Blueprint("capabilities", __name__, url_prefix="/api/capabilit
 # ---------------------------------------------------------------------------
 
 
-def _load_caps() -> dict[str, object]:
+def _load_caps() -> "Mapping[str, object]":
     """Imported lazily to avoid circular imports during application boot."""
     from capabilities import load_capabilities
     return load_capabilities()

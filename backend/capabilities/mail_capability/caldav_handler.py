@@ -8,9 +8,71 @@ import logging
 import uuid
 from datetime import timedelta
 from itertools import combinations
+from typing import TYPE_CHECKING, cast
 
 from services.time_utils import utc_now, parse_utc
 from utils.data_utils import parse_json_column
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+    from typing import Protocol
+
+    class _ICalProp(Protocol):
+        dt: object
+        def to_ical(self) -> bytes: ...
+
+    class _ICalComponent(Protocol):
+        name: str
+        def get(self, key: str) -> object: ...
+        def pop(self, key: str, default: object = None) -> object: ...
+        def add(self, name: str, value: object) -> None: ...
+
+    class _ICalEvent(Protocol):
+        icalendar_instance: object
+        icalendar_component: object
+        data: str | bytes
+        def save(self) -> None: ...
+
+    class _ICalObj(Protocol):
+        """A constructed Calendar or Event object from the icalendar library."""
+        def add(self, name: str, value: object) -> None: ...
+        def add_component(self, component: "_ICalObj") -> None: ...
+        def to_ical(self) -> bytes: ...
+        def walk(self) -> "Iterable[_ICalComponent]": ...
+
+    class _ICalCalendar(Protocol):
+        def walk(self) -> "Iterable[_ICalComponent]": ...
+        def add_component(self, component: object) -> None: ...
+        def to_ical(self) -> bytes: ...
+
+    class _ICalFactory(Protocol):
+        """A Calendar or Event class from icalendar — callable as a constructor, with from_ical."""
+        def __call__(self) -> "_ICalObj": ...
+        def from_ical(self, ical_string: str) -> "_ICalObj": ...
+
+    class _ICalLib(Protocol):
+        """Structural type for the icalendar module."""
+        Calendar: "_ICalFactory"
+        Event: "_ICalFactory"
+
+    class _ICalEventMutable(Protocol):
+        icalendar_instance: object
+        icalendar_component: object
+        data: str | bytes
+        def save(self) -> None: ...
+        def delete(self) -> None: ...
+
+    class _CalendarObj(Protocol):
+        name: str
+        def date_search(self, start: object, end: object, expand: bool) -> "Iterable[object]": ...
+        def search(self, uid: str) -> "list[_ICalEventMutable]": ...
+        def save_event(self, ical_str: str) -> None: ...
+
+    class _Principal(Protocol):
+        def calendars(self) -> list["_CalendarObj"]: ...
+
+    class _CalDAVClient(Protocol):
+        def principal(self) -> "_Principal": ...
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +81,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    import caldav as _caldav_lib  # type: ignore
+    import caldav as _caldav_lib
     _CALDAV_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _caldav_lib = None  # type: ignore
     _CALDAV_AVAILABLE = False
 
 try:
-    import icalendar as _icalendar_lib  # type: ignore
+    import icalendar as _icalendar_lib
     _ICALENDAR_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _icalendar_lib = None  # type: ignore
@@ -60,45 +122,49 @@ def _make_date_utc(d: object) -> _dt_module.datetime:
         return parse_utc(d)
     if isinstance(d, _dt_module.date):
         return parse_utc(_dt_module.datetime(d.year, d.month, d.day, 0, 0, 0))
-    return parse_utc(d)
+    return parse_utc(cast("_dt_module.datetime | str", d))
 
 
-def _events_overlap(a: dict, b: dict) -> bool:
-    return max(a["dtstart"], b["dtstart"]) < min(a["dtend"], b["dtend"])
+def _events_overlap(a: dict[str, object], b: dict[str, object]) -> bool:
+    return max(cast(_dt_module.datetime, a["dtstart"]), cast(_dt_module.datetime, b["dtstart"])) < min(cast(_dt_module.datetime, a["dtend"]), cast(_dt_module.datetime, b["dtend"]))
 
 
-def _find_overlap_pairs(events: list, now: _dt_module.datetime) -> list:
+def _find_overlap_pairs(
+    events: list[dict[str, object]], now: _dt_module.datetime
+) -> list[tuple[dict[str, object], dict[str, object], str]]:
     upcoming = [
         e for e in events
         if e.get("dtstart") and e.get("uid")
-        and e["dtstart"] >= now
+        and cast(_dt_module.datetime, e["dtstart"]) >= now
         and not e.get("all_day")
     ]
     return [
-        (a, b, ":".join(sorted([a["uid"], b["uid"]])))
+        (a, b, ":".join(sorted([cast(str, a["uid"]), cast(str, b["uid"])])))
         for a, b in combinations(upcoming, 2)
         if a["uid"] != b["uid"] and _events_overlap(a, b)
     ]
 
 
-def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
+def _find_back_to_back_pairs(
+    events: list[dict[str, object]], now: _dt_module.datetime
+) -> list[tuple[dict[str, object], dict[str, object], int, str]]:
     threshold = _BACK_TO_BACK_GAP.total_seconds() / 60
     upcoming = sorted(
         [e for e in events
          if e.get("dtstart") and e.get("dtend") and e.get("uid")
-         and e["dtstart"] >= now and not e.get("all_day")],
-        key=lambda e: e["dtstart"],
+         and cast(_dt_module.datetime, e["dtstart"]) >= now and not e.get("all_day")],
+        key=lambda e: cast(_dt_module.datetime, e["dtstart"]),
     )
-    pairs = []
+    pairs: list[tuple[dict[str, object], dict[str, object], int, str]] = []
     for i in range(len(upcoming) - 1):
         a, b = upcoming[i], upcoming[i + 1]
-        gap = (b["dtstart"] - a["dtend"]).total_seconds() / 60
+        gap = (cast(_dt_module.datetime, b["dtstart"]) - cast(_dt_module.datetime, a["dtend"])).total_seconds() / 60
         if a["uid"] != b["uid"] and 0 <= gap < threshold:
-            pairs.append((a, b, round(gap), ":".join(sorted([a["uid"], b["uid"]]))))
+            pairs.append((a, b, round(gap), ":".join(sorted([cast(str, a["uid"]), cast(str, b["uid"])]))))
     return pairs
 
 
-def _get_user_tz():
+def _get_user_tz() -> object:
     from services.locale_service import get_timezone
     tz = get_timezone()
     if tz.key == "UTC":
@@ -126,12 +192,12 @@ class CaldavHandler:
     # Server connection
     # ------------------------------------------------------------------
 
-    def open_client(self, url: str, username: str, password: str):
+    def open_client(self, url: str, username: str, password: str) -> "_CalDAVClient":
         if not _CALDAV_AVAILABLE:
             raise RuntimeError(_ERR_CALDAV_NOT_INSTALLED)
-        return _caldav_lib.DAVClient(
+        return cast("_CalDAVClient", cast("Callable[..., object]", _caldav_lib.DAVClient)(
             url=url, username=username, password=password, timeout=_CONNECT_TIMEOUT
-        )
+        ))
 
     # ------------------------------------------------------------------
     # Ingest
@@ -139,10 +205,10 @@ class CaldavHandler:
 
     def ingest(
         self,
-        client,
+        client: "_CalDAVClient",
         past_days: int = _DEFAULT_PAST_DAYS,
         future_days: int = _DEFAULT_FUTURE_DAYS,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         if not _CALDAV_AVAILABLE:
             logger.error("[caldav_handler] ingest: 'caldav' package unavailable.")
             return []
@@ -161,7 +227,7 @@ class CaldavHandler:
             logger.error("[caldav_handler] ingest: failed to list calendars: %s", exc)
             return []
 
-        all_events: list[dict] = []
+        all_events: list[dict[str, object]] = []
         for calendar in calendars:
             cal_name = "Unknown"
             try:
@@ -183,7 +249,7 @@ class CaldavHandler:
         try:
             from capabilities.contact_resolver import index_person
             for event in all_events:
-                for attendee in event.get("attendees", []):
+                for attendee in cast("list[str]", event.get("attendees", [])):
                     index_person(attendee, source="caldav")
         except Exception as exc:
             logger.debug("[caldav_handler] contact indexing skipped: %s", exc)
@@ -195,28 +261,28 @@ class CaldavHandler:
     # Event parsing
     # ------------------------------------------------------------------
 
-    def parse_event(self, raw_event: object, calendar_name: str) -> list[dict]:
-        results: list[dict] = []
+    def parse_event(self, raw_event: object, calendar_name: str) -> list[dict[str, object]]:
+        results: list[dict[str, object]] = []
 
         try:
-            ical_instance = raw_event.icalendar_instance
+            ical_instance = cast("_ICalEvent", raw_event).icalendar_instance
         except AttributeError:
             try:
-                component = raw_event.icalendar_component
-                ical_instance = _icalendar_lib.Calendar()
-                ical_instance.add_component(component)
+                component = cast("_ICalEvent", raw_event).icalendar_component
+                ical_instance = cast("_ICalLib", _icalendar_lib).Calendar()
+                ical_instance.add_component(cast("_ICalObj", component))
             except Exception as exc:
                 logger.warning("[caldav_handler] ical instance unavailable: %s", exc)
                 return results
 
-        for component in ical_instance.walk():
+        for component in cast("_ICalObj", ical_instance).walk():
             if component.name != "VEVENT":
                 continue
             dtstart_prop = component.get("DTSTART")
             if dtstart_prop is None:
                 continue
 
-            dt_raw = dtstart_prop.dt
+            dt_raw = cast("_ICalProp", dtstart_prop).dt
             all_day: bool = (
                 isinstance(dt_raw, _dt_module.date)
                 and not isinstance(dt_raw, _dt_module.datetime)
@@ -225,12 +291,12 @@ class CaldavHandler:
 
             dtend_prop = component.get("DTEND")
             if dtend_prop is not None:
-                dtend = _make_date_utc(dtend_prop.dt)
+                dtend = _make_date_utc(cast("_ICalProp", dtend_prop).dt)
             else:
                 dur_prop = component.get("DURATION")
                 if dur_prop is not None:
                     try:
-                        dtend = dtstart + dur_prop.dt
+                        dtend = dtstart + cast(_dt_module.timedelta, cast("_ICalProp", dur_prop).dt)
                     except Exception:
                         dtend = dtstart
                 else:
@@ -247,7 +313,7 @@ class CaldavHandler:
 
             attendees_raw = component.get("ATTENDEE")
             if attendees_raw is None:
-                attendees: list = []
+                attendees: list[str] = []
             elif isinstance(attendees_raw, list):
                 attendees = [str(a).removeprefix("mailto:") for a in attendees_raw]
             else:
@@ -257,7 +323,7 @@ class CaldavHandler:
             recurrence: str | None = None
             if rrule_prop is not None:
                 try:
-                    recurrence = rrule_prop.to_ical().decode("utf-8")
+                    recurrence = cast("_ICalProp", rrule_prop).to_ical().decode("utf-8")
                 except Exception:
                     pass
 
@@ -279,7 +345,7 @@ class CaldavHandler:
     # Upsert (mark-sweep delta sync)
     # ------------------------------------------------------------------
 
-    def upsert_events(self, events: list[dict], now: _dt_module.datetime) -> None:
+    def upsert_events(self, events: list[dict[str, object]], now: _dt_module.datetime) -> None:
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
@@ -295,17 +361,17 @@ class CaldavHandler:
 
                 # Upsert each event
                 for ev in events:
-                    uid = ev.get("uid")
+                    uid = cast(str, ev.get("uid"))
                     if not uid:
                         continue
                     external_uid = f"caldav:{uid}"
-                    summary = ev.get("summary", "Event")
-                    cal_name = ev.get("calendar_name", "")
-                    location = ev.get("location") or ""
-                    dtstart = ev.get("dtstart")
-                    dtend = ev.get("dtend")
+                    summary = cast(str, ev.get("summary", "Event"))
+                    cal_name = cast(str, ev.get("calendar_name", ""))
+                    location = cast(str, ev.get("location") or "")
+                    dtstart = cast("_dt_module.datetime | None", ev.get("dtstart"))
+                    dtend = cast("_dt_module.datetime | None", ev.get("dtend"))
 
-                    parts = [summary]
+                    parts: list[str] = [summary]
                     if cal_name:
                         parts.append(f"[{cal_name}]")
                     if location:
@@ -349,8 +415,8 @@ class CaldavHandler:
                 # 15-min alerts for upcoming non-all-day events within 24h
                 upcoming_cutoff = now + timedelta(hours=24)
                 for ev in events:
-                    dtstart = ev.get("dtstart")
-                    uid = ev.get("uid")
+                    dtstart = cast("_dt_module.datetime | None", ev.get("dtstart"))
+                    uid = cast(str, ev.get("uid"))
                     if (not dtstart or not uid or dtstart < now
                             or dtstart > upcoming_cutoff or ev.get("all_day")):
                         continue
@@ -385,7 +451,7 @@ class CaldavHandler:
                     c.execute(
                         _SQL_INSERT_NOTIFICATION,
                         (uuid.uuid4().hex[:8], b2b_msg,
-                         ev_a.get("dtend", now).isoformat(),
+                         cast(_dt_module.datetime, ev_a.get("dtend", now)).isoformat(),
                          f"caldav:b2b:{canon_key}", now.isoformat()),
                     )
 
@@ -434,15 +500,15 @@ class CaldavHandler:
     # Tool handlers — server mutations (client passed in)
     # ------------------------------------------------------------------
 
-    def create_event(self, client, params: dict) -> dict:
+    def create_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
             return {"error": "'icalendar' package is not installed."}
 
-        summary = (params.get("summary") or "").strip()
-        dtstart_raw = (params.get("dtstart") or "").strip()
-        dtend_raw = (params.get("dtend") or "").strip()
+        summary = (cast(str, params.get("summary")) or "").strip()
+        dtstart_raw = (cast(str, params.get("dtstart")) or "").strip()
+        dtend_raw = (cast(str, params.get("dtend")) or "").strip()
 
         if not summary:
             return {"error": "Parameter 'summary' is required."}
@@ -454,9 +520,9 @@ class CaldavHandler:
         try:
             dtstart = parse_utc(dtstart_raw)
             dtend = parse_utc(dtend_raw)
-            location = params.get("location") or ""
-            description = params.get("description") or ""
-            cal_pref = params.get("calendar_name") or ""
+            location = cast(str, params.get("location")) or ""
+            description = cast(str, params.get("description")) or ""
+            cal_pref = cast(str, params.get("calendar_name")) or ""
 
             principal = client.principal()
             calendars = principal.calendars()
@@ -469,11 +535,11 @@ class CaldavHandler:
             )
 
             event_uid = str(uuid.uuid4())
-            ical = _icalendar_lib.Calendar()
+            ical = cast("_ICalLib", _icalendar_lib).Calendar()
             ical.add("prodid", "-//CaldavHandler//EN")
             ical.add("version", "2.0")
 
-            vevent = _icalendar_lib.Event()
+            vevent = cast("_ICalLib", _icalendar_lib).Event()
             vevent.add("uid", event_uid)
             vevent.add("summary", summary)
             vevent.add("dtstart", dtstart)
@@ -504,7 +570,7 @@ class CaldavHandler:
             return {"error": str(exc)}
 
     @staticmethod
-    def _find_event_by_uid(client, uid: str):
+    def _find_event_by_uid(client: "_CalDAVClient", uid: str) -> "_ICalEventMutable | None":
         principal = client.principal()
         for calendar in principal.calendars():
             try:
@@ -516,18 +582,18 @@ class CaldavHandler:
         return None
 
     @staticmethod
-    def _parse_ical_from_event(found_event):
+    def _parse_ical_from_event(found_event: "_ICalEventMutable") -> "_ICalObj":
         try:
             ical_data = (
                 found_event.data if isinstance(found_event.data, str)
                 else found_event.data.decode("utf-8")
             )
-            return _icalendar_lib.Calendar.from_ical(ical_data)
+            return cast("_ICalLib", _icalendar_lib).Calendar.from_ical(ical_data)
         except AttributeError:
-            return found_event.icalendar_instance
+            return cast("_ICalObj", found_event.icalendar_instance)
 
     @staticmethod
-    def _apply_event_updates(ical, params: dict) -> None:
+    def _apply_event_updates(ical: "_ICalObj", params: dict[str, object]) -> None:
         for component in ical.walk():
             if component.name != "VEVENT":
                 continue
@@ -536,10 +602,10 @@ class CaldavHandler:
                 component.add("summary", str(params["summary"]))
             if "dtstart" in params and params["dtstart"] is not None:
                 component.pop("DTSTART", None)
-                component.add("dtstart", parse_utc(params["dtstart"]))
+                component.add("dtstart", parse_utc(cast("str", params["dtstart"])))
             if "dtend" in params and params["dtend"] is not None:
                 component.pop("DTEND", None)
-                component.add("dtend", parse_utc(params["dtend"]))
+                component.add("dtend", parse_utc(cast("str", params["dtend"])))
             if "location" in params:
                 component.pop("LOCATION", None)
                 if params["location"]:
@@ -550,13 +616,13 @@ class CaldavHandler:
                     component.add("description", str(params["description"]))
             break
 
-    def update_event(self, client, params: dict) -> dict:
+    def update_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
             return {"error": "'icalendar' package is not installed."}
 
-        uid = (params.get("uid") or "").strip()
+        uid = (cast(str, params.get("uid")) or "").strip()
         if not uid:
             return {"error": "Parameter 'uid' is required."}
 
@@ -576,11 +642,11 @@ class CaldavHandler:
             logger.error("[caldav_handler] update_event failed: %s", exc)
             return {"error": str(exc)}
 
-    def delete_event(self, client, params: dict) -> dict:
+    def delete_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
 
-        uid = (params.get("uid") or "").strip()
+        uid = (cast(str, params.get("uid")) or "").strip()
         if not uid:
             return {"error": "Parameter 'uid' is required."}
 
@@ -604,17 +670,17 @@ class CaldavHandler:
     # Tool handlers — DB queries continued
     # ------------------------------------------------------------------
 
-    def find_free_slots(self, params: dict) -> dict:
+    def find_free_slots(self, params: dict[str, object]) -> dict[str, object]:
         try:
             from datetime import timezone as _tz
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
 
-            date_from = params.get("date_from", utc_now().isoformat())
-            date_to = params.get("date_to", (utc_now() + timedelta(days=7)).isoformat())
-            min_minutes = int(params.get("min_duration_minutes", 30))
-            wh_start = int(params.get("working_hours_start", 8))
-            wh_end = int(params.get("working_hours_end", 18))
+            date_from = cast(str, params.get("date_from", utc_now().isoformat()))
+            date_to = cast(str, params.get("date_to", (utc_now() + timedelta(days=7)).isoformat()))
+            min_minutes = int(cast(int, params.get("min_duration_minutes", 30)))
+            wh_start = int(cast(int, params.get("working_hours_start", 8)))
+            wh_end = int(cast(int, params.get("working_hours_end", 18)))
 
             with db.connection() as conn:
                 rows = conn.execute(
@@ -624,20 +690,20 @@ class CaldavHandler:
                     (date_from, date_to),
                 ).fetchall()
 
-            busy = []
+            busy: list[tuple[_dt_module.datetime, _dt_module.datetime]] = []
             for due_at_str, meta_raw in rows:
                 meta = parse_json_column(meta_raw)
                 start = parse_utc(due_at_str)
-                end_str = meta.get("dtend")
+                end_str = cast("str | None", meta.get("dtend"))
                 end = parse_utc(end_str) if end_str else start + timedelta(hours=1)
                 if not meta.get("all_day", False):
                     busy.append((start, end))
             busy.sort(key=lambda x: x[0])
 
-            tz = _get_user_tz() or _tz.utc
+            tz = cast("_dt_module.tzinfo", _get_user_tz() or _tz.utc)
             window_start = parse_utc(date_from)
             window_end = parse_utc(date_to)
-            work_windows: list[tuple] = []
+            work_windows: list[tuple[_dt_module.datetime, _dt_module.datetime]] = []
             day = window_start.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
             last_day = window_end.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
             while day <= last_day:
@@ -678,8 +744,8 @@ class CaldavHandler:
         except Exception as exc:
             return {"error": f"Failed to find free slots: {exc}"}
 
-    def get_attendees(self, params: dict) -> dict:
-        uid = params.get("uid") or params.get("event_uid")
+    def get_attendees(self, params: dict[str, object]) -> dict[str, object]:
+        uid = cast(str, params.get("uid") or params.get("event_uid"))
         if not uid:
             return {"error": "uid is required"}
         try:
@@ -699,12 +765,12 @@ class CaldavHandler:
 
             title, meta_raw = row
             meta = parse_json_column(meta_raw)
-            resolved = []
-            for email in meta.get("attendees", []):
+            resolved: list[dict[str, object]] = []
+            for email in cast("list[str]", meta.get("attendees", [])):
                 matches = resolve(email, limit=1)
                 resolved.append({
                     "email": email,
-                    "name": matches[0].get("name", "") if matches else "",
+                    "name": cast(str, matches[0].get("name", "")) if matches else "",
                 })
 
             return {"event_title": title, "attendees": resolved, "count": len(resolved)}

@@ -74,11 +74,11 @@ _TOP_LEVEL_MODULES = [
 # into not-yet-migrated packages (cross-package cascade residuals). The ceiling
 # reaches 0 at TKT-1055 (final flip) when this check reverts to returncode == 0.
 #
-# Current residuals (after TKT-1046..1051: foundation + utils/workers/mcp_server,
-# configs, services, abilities, api all migrated to strict). The remaining 9 live
-# in already-strict packages and do NOT depend on the still-relaxed packages
-# (capabilities/tools/vision/...), so they survive their migrations and clear at
-# TKT-1055 (final flip):
+# Current residuals (after TKT-1046..1052: foundation + utils/workers/mcp_server,
+# configs, services, abilities, api, capabilities all migrated to strict). The
+# remaining 9 live in already-strict packages and do NOT depend on the
+# still-relaxed packages (tools/vision/...), so they survive their migrations and
+# clear at TKT-1055 (final flip):
 #   - 6 × configs/channels/* — `dict[str, object] | None` narrowing
 #     (union-attr/index in user.py / user_summary.py / external_agent.py) plus the
 #     get_image override + open() overload in vision.py against

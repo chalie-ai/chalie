@@ -7,6 +7,7 @@ broadcasts matching entity changes to the Chalie WebSocket via WebSocketBroker.
 import json
 import logging
 import threading
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -122,23 +123,23 @@ class HaWebSocketHandler:
             except Exception:
                 pass
 
-    def _handle_event(self, msg: dict) -> None:
-        event = msg.get("event", {})
-        data = event.get("data", {})
-        entity_id = data.get("entity_id", "")
+    def _handle_event(self, msg: dict[str, object]) -> None:
+        event = cast("dict[str, object]", msg.get("event", {}))
+        data = cast("dict[str, object]", event.get("data", {}))
+        entity_id = cast(str, data.get("entity_id", ""))
 
         with self._lock:
             if entity_id not in self._subscriptions:
                 return
 
-        new_state = data.get("new_state", {})
+        new_state = cast("dict[str, object]", data.get("new_state", {}))
         try:
             from services.websocket_broker import WebSocketBroker
             WebSocketBroker().broadcast({
                 "type": "home_state_changed",
                 "entity_id": entity_id,
                 "state": new_state.get("state"),
-                "friendly_name": new_state.get("attributes", {}).get("friendly_name", entity_id),
+                "friendly_name": cast("dict[str, object]", new_state.get("attributes", {})).get("friendly_name", entity_id),
                 "attributes": new_state.get("attributes", {}),
             })
         except Exception as exc:
