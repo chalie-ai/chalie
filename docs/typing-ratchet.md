@@ -3,9 +3,15 @@
 The backend type-checks clean under `mypy --strict` — every first-party
 package, the top-level modules, **and the test suite**. Strict mode is enabled
 globally in `pyproject.toml` and there is **no relax/override block**: new code
-is held to the same bar from the first line. The gate test
+is held to the same bar from the first line. The gate test module
 `tests/test_static_typing_gate.py` runs `mypy --strict` over the whole
 first-party source tree on every CI run and fails the build on any error.
+
+`mypy --strict` alone is **not** a hard-typed wall: even with no overrides it
+still permits explicit `Any`, *used* `# type:` suppression comments, and only
+checks the packages it is explicitly handed. Those escape hatches are closed by
+companion gate tests so loosely-typed code hard-breaks the build rather than
+slipping through — see [Enforcement gates](#enforcement-gates) below.
 
 This document records how the codebase reached full strict and — more
 importantly — the supported patterns for keeping it there without weakening a
@@ -32,18 +38,20 @@ cd backend
 python3 -m pytest tests/test_static_typing_gate.py -q
 ```
 
-Two absolutes, no exceptions:
+Two absolutes, no exceptions — **both machine-enforced** (see
+[Enforcement gates](#enforcement-gates)), not merely convention:
 
 - **Never `Any`.** Reach for the most primitive concrete type that fits:
   `None`, `bool`, `int`, `str`, `bytes`, `float`, then `object`,
   `dict[str, object]`, `list[object]`, `tuple[object, ...]`, `sqlite3.Row`,
   and covariant `Mapping` / `Sequence` for read-only parameters. Promote to a
   precise `TypedDict` / `Protocol` once the shape is fully understood.
-- **Never `# type: ignore`.** Resolve the underlying type problem instead. A
-  default-level correctness error (`arg-type`, `attr-defined`, `assignment`,
-  `return-value`, …) is often a real latent bug — fix the code, don't silence
-  the checker. The only acceptable suppression is removing an existing
-  *unused* ignore that mypy itself flags.
+- **Never a `type:` suppression comment.** Resolve the underlying type problem
+  instead. A default-level correctness error (`arg-type`, `attr-defined`,
+  `assignment`, `return-value`, …) is often a real latent bug — fix the code,
+  don't silence the checker. (`mypy --strict` only flags *unused* suppressions;
+  a used one is invisible to it, which is why a separate gate bans them
+  outright.)
 
 ---
 
@@ -122,9 +130,29 @@ shape is genuinely unknown is `object` (narrow at the read site with an inline
 
 ---
 
-## Gate test reference
+## Enforcement gates
 
-The gate test is `tests/test_static_typing_gate.py`. Its `_PACKAGES` and
-`_TOP_LEVEL_MODULES` lists are the source of truth for what is checked. When
-you add a new top-level package or module to the backend, add it to those
-lists so the strict gate covers it.
+`tests/test_static_typing_gate.py` holds four tests; together they make the
+wall hard rather than advisory. All run under `pytest -m unit`:
+
+| Test | Guarantees |
+| --- | --- |
+| `test_first_party_source_is_strict_clean` | `mypy --strict` reports **zero** errors over every package + top-level module + the test suite. |
+| `test_no_explicit_any_in_annotations` | The literal `Any` token appears in **no** parameter, return, or variable annotation. AST-based, so `Any` in a docstring, comment, or identifier is not a false positive. This is the single largest hole `--strict` leaves open. |
+| `test_no_type_ignore_comments_in_first_party_source` | **Zero** `type:` suppression comments tree-wide — a *used* one is invisible to `--strict`. |
+| `test_typing_gate_covers_every_first_party_package_and_module` | The on-disk top-level layout matches the `_PACKAGES` / `_TOP_LEVEL_MODULES` roster exactly, so a new source package can never appear *outside* the type-checked set unnoticed. Py-free artifact dirs are listed in `_PY_FREE_DIRS`. |
+
+`pyproject.toml` also sets `strict_bytes = true` on top of `--strict` (it is
+not implied), forbidding the implicit `str` / `bytes` / `bytearray`
+promiscuity mypy otherwise tolerates.
+
+> **Note on `warn_unreachable`.** It is deliberately **not** enabled. It is a
+> dead-code linter, not a type-soundness check, and on this codebase it fires
+> almost entirely on *intentional* guards — double-checked-locking re-checks
+> (reachable across threads, which mypy can't model) and defensive `isinstance`
+> branches against real runtime input. Enabling it would force removing or
+> obfuscating those guards for no type-safety gain.
+
+When you add a new top-level package or module to the backend, add it to
+`_PACKAGES` / `_TOP_LEVEL_MODULES` (or `_PY_FREE_DIRS` if it carries no `.py`) —
+the completeness gate fails until you do.
