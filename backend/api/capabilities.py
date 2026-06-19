@@ -36,28 +36,13 @@ capabilities_bp = Blueprint("capabilities", __name__, url_prefix="/api/capabilit
 
 
 def _load_caps() -> dict:
-    """Return a fresh dict of all discovered capability instances.
-
-    Delegates to :func:`capabilities.load_capabilities`.  Imported lazily to
-    avoid circular imports during application boot.
-
-    Returns:
-        dict[str, AbstractCapability]: Capability ``id`` → instance mapping.
-    """
+    """Imported lazily to avoid circular imports during application boot."""
     from capabilities import load_capabilities
     return load_capabilities()
 
 
 def _get_last_sync_at(cap_id: str) -> str | None:
-    """Read the ``last_sync_at`` timestamp for a capability from ``tool_configs``.
-
-    Args:
-        cap_id: The capability identifier, e.g. ``"caldav"``.
-
-    Returns:
-        str | None: ISO 8601 UTC string stored under key
-        ``"{cap_id}:last_sync_at"``, or ``None`` if not yet set.
-    """
+    """Returns ``None`` on any read error."""
     try:
         from services.database_service import get_shared_db_service
         from services.tool_config_service import ToolConfigService
@@ -79,30 +64,6 @@ def _get_last_sync_at(cap_id: str) -> str | None:
 @capabilities_bp.route("", methods=["GET"])
 @require_auth
 def list_capabilities():
-    """List all discovered capabilities with their current connection status.
-
-    Returns a JSON array of objects, one per discovered capability.  Each
-    object contains enough information for a UI to render a connection card.
-
-    Returns:
-        Response: ``200`` with JSON body::
-
-            {
-                "capabilities": [
-                    {
-                        "id":          str,
-                        "name":        str,
-                        "version":     str,
-                        "connected":   bool,
-                        "last_sync_at": str | null,
-                        "providers":   list[str]
-                    },
-                    ...
-                ]
-            }
-
-        ``500`` on unexpected errors.
-    """
     try:
         caps = _load_caps()
         result = []
@@ -127,14 +88,7 @@ def list_capabilities():
 @capabilities_bp.route("/<cap_id>", methods=["GET"])
 @require_auth
 def get_capability(cap_id: str):
-    """Return capability details with non-sensitive config for editing.
-
-    Password fields are excluded — only non-secret fields (e.g. email
-    address) are returned so the UI can pre-fill the edit form.
-
-    Returns:
-        Response: ``200`` with JSON body, ``404`` if not found.
-    """
+    """Password fields are excluded — only non-secret fields are returned so the UI can pre-fill the edit form."""
     try:
         caps = _load_caps()
         if cap_id not in caps:
@@ -171,31 +125,11 @@ def get_capability(cap_id: str):
 @capabilities_bp.route("/<cap_id>/setup", methods=["POST"])
 @require_auth
 def setup_capability(cap_id: str):
-    """Configure and connect a capability.
+    """On success, triggers an immediate first sync in a background daemon thread.
 
-    Parses a JSON body with credential fields, calls
-    :meth:`~capabilities.base.AbstractCapability.configure` to validate and
-    persist credentials, then calls
-    :meth:`~capabilities.base.AbstractCapability.connect` to establish the
-    connection. On success, triggers an immediate first sync and starts a
-    background monitor thread. Capability tools are surfaced to the LLM via
-    Ability subclasses (email, calendar, contacts) discovered by AbilityRegistry.
-
-    Args (URL):
-        cap_id: Capability identifier, e.g. ``"caldav"``.
-
-    Request body (JSON):
-        ``{"provider": str, "username": str, "password": str}`` — exact fields
-        depend on the capability.
-
-    Returns:
-        Response:
-            - ``200`` ``{"status": "connected"}`` on success.
-            - ``400`` ``{"error": "<message>"}`` if credentials are rejected
-              (:exc:`ValueError` raised by :meth:`configure`).
-            - ``404`` ``{"error": "Capability not found: <cap_id>"}`` for an
-              unknown identifier.
-            - ``500`` on unexpected errors.
+    Raises:
+        ValueError: Caught and returned as 400.
+        VaultLockedError: Caught and returned as 401.
     """
     try:
         caps = _load_caps()
@@ -243,23 +177,7 @@ def setup_capability(cap_id: str):
 @capabilities_bp.route("/<cap_id>/disconnect", methods=["POST"])
 @require_auth
 def disconnect_capability(cap_id: str):
-    """Disconnect a capability.
-
-    Calls :meth:`~capabilities.base.AbstractCapability.disconnect` to tear
-    down active connections. Capability tools (email, calendar, contacts) are
-    surfaced via Ability subclasses and will gracefully report "not connected"
-    after disconnect.
-
-    Args (URL):
-        cap_id: Capability identifier, e.g. ``"caldav"``.
-
-    Returns:
-        Response:
-            - ``200`` ``{"status": "disconnected"}`` on success.
-            - ``404`` ``{"error": "Capability not found: <cap_id>"}`` for an
-              unknown identifier.
-            - ``500`` on unexpected errors.
-    """
+    """Capability tools (email, calendar, contacts) will gracefully report "not connected" after disconnect."""
     try:
         caps = _load_caps()
         if cap_id not in caps:
@@ -278,30 +196,7 @@ def disconnect_capability(cap_id: str):
 @capabilities_bp.route("/<cap_id>/status", methods=["GET"])
 @require_auth
 def capability_status(cap_id: str):
-    """Return the current status of a specific capability.
-
-    Provides connection state, last synchronisation timestamp, and an error
-    count (currently always ``0`` — a future scheduler revision will persist
-    per-capability error counts).
-
-    Args (URL):
-        cap_id: Capability identifier, e.g. ``"caldav"``.
-
-    Returns:
-        Response:
-            - ``200`` with JSON body::
-
-                {
-                    "id":          str,
-                    "connected":   bool,
-                    "last_sync_at": str | null,
-                    "error_count": int
-                }
-
-            - ``404`` ``{"error": "Capability not found: <cap_id>"}`` for an
-              unknown identifier.
-            - ``500`` on unexpected errors.
-    """
+    """Error count is currently always ``0`` — a future scheduler revision will persist per-capability error counts."""
     try:
         caps = _load_caps()
         if cap_id not in caps:

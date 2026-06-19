@@ -1,7 +1,3 @@
-"""
-Memory blueprint — /memory/search.
-"""
-
 import logging
 from flask import Blueprint, request, jsonify
 
@@ -15,7 +11,6 @@ memory_bp = Blueprint('memory', __name__)
 @memory_bp.route('/memory/search', methods=['GET'])
 @require_session
 def memory_search():
-    """Semantic search across all memory layers."""
     query = request.args.get("q", "").strip()
     if not query:
         return jsonify({"error": "Missing 'q' query parameter"}), 400

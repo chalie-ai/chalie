@@ -1,18 +1,4 @@
-"""
-Providers — standalone orchestrator facade for all provider API communication.
-
-Single chokepoint for every LLM call. Resolves the concrete client by
-ProviderType, pre-flight checks, calls, folds telemetry, returns.
-
-No mp is ever passed in. Every caller builds its own ProviderApiRequest and
-calls Providers().send(dto). The three DTO-creation points are:
-  1. MessageProcessor.send()
-  2. api/providers.py _test_api_provider (test-connection)
-  3. services/vision_service.py send_image_with_config (vision probe)
-
-Consumed by: services.message_processor, api.providers,
-             services.vision_service, abilities.chat_history_compactor.
-"""
+"""Providers — standalone orchestrator facade for all provider API communication."""
 
 import json
 import logging
@@ -32,33 +18,17 @@ MAX_CONTEXT_WINDOW = 200_000
 
 
 def resolve_thinking_mode(config_thinking_mode, override, level):
-    """Single precedence rule for a send's thinking level.
-
-    1. config_thinking_mode — a config that hard-pins a level (thinking ability
-       and both compactors pin "high"). Wins over everything.
-    2. override — the persisted user override ('medium' | 'high' | None).
-    3. level — the gate-computed mp.thinking_level (auto behaviour).
-    """
+    """Single precedence rule for a send's thinking level."""
     return config_thinking_mode or override or level
 
 
 class Providers:
-    """Standalone orchestrator facade — no mp, no scaffolding.
-
-    Each caller builds a ProviderApiRequest from its own state and calls
-    send(dto). Provider resolution is driven entirely by dto.type.
-    """
+    """Standalone orchestrator facade — no mp, no scaffolding."""
 
     # ── Resolution ──────────────────────────────────────────────────────────
 
     def _resolve(self, provider_type=None):
-        """Return the ProviderClient for the given ProviderType.
-
-        CHAT → globally selected provider (ProviderCacheService).
-        VISION → DB vision provider (ProviderDbService).
-        Any other type (e.g. the reserved VISUAL_OUTPUT) raises ProviderError
-        rather than silently resolving to the CHAT provider.
-        """
+        """Return the ProviderClient for the given ProviderType."""
         from services.provider_api import ProviderType, ProviderError  # noqa: PLC0415
         from services.llm_clients.factory import build_client  # noqa: PLC0415
 
@@ -71,6 +41,14 @@ class Providers:
             if not vp:
                 raise RuntimeError("VISION type requested but no vision provider configured")
             return build_client(dict(vp))
+
+        if pt == ProviderType.DELEGATE:
+            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            dp = ProviderDbService(get_shared_db_service()).get_delegate_provider()
+            if not dp:
+                raise RuntimeError("DELEGATE type requested but no delegate or selected provider configured")
+            return build_client(dict(dp))
 
         if pt != ProviderType.CHAT:
             raise ProviderError(f"Unsupported provider type for send: {pt}")
@@ -85,16 +63,7 @@ class Providers:
     # ── Public API ──────────────────────────────────────────────────────────
 
     def send(self, dto):
-        """Pre-flight check, call, telemetry — the single chokepoint.
-
-        Steps:
-          1. Resolve client by dto.type.
-          2. Get context window (capped at MAX_CONTEXT_WINDOW).
-          3. Pre-flight: estimate tokens; raise RequestOverCapError if over cap.
-          4. client.send(dto) — may raise ResponseOverLimitError / ProviderResponseError.
-          5. Fold telemetry.
-          6. Return ProviderApiResponse.
-        """
+        """Pre-flight check, call, telemetry — the single chokepoint."""
         from services.provider_api import RequestOverCapError  # noqa: PLC0415
 
         client = self._resolve(dto.type)
@@ -119,21 +88,12 @@ class Providers:
         return response
 
     def measure(self, dto) -> int:
-        """Return the estimated token cost of dto without sending.
-
-        Used by ChatHistoryCompactor to size a candidate request before
-        deciding whether to compact further.
-        """
+        """Return the estimated token cost of dto without sending."""
         client = self._resolve(dto.type)
         return client.estimate_request_tokens(dto)
 
     def get_context_limit(self, provider_type=None) -> int:
-        """Declared context window for the active provider/model, hard-capped at MAX_CONTEXT_WINDOW.
-
-        Reads the backfilled providers.max_tokens first (fast path; set by
-        provider_token_limits.backfill_one). Falls back to the live client
-        method if the column is unset (before first backfill).
-        """
+        """Declared context window for the active provider/model, hard-capped at MAX_CONTEXT_WINDOW."""
         from services.provider_api import ProviderType  # noqa: PLC0415
         pt = provider_type or ProviderType.CHAT
 
@@ -147,25 +107,13 @@ class Providers:
         return min(self._resolve(pt).get_context_limit(), MAX_CONTEXT_WINDOW)
 
     def selected_provider(self):
-        """Return the resolved CHAT provider client.
-
-        Consumed by configs/channels/_common.py:15 for CONTENT_FIELD_LABEL
-        system-prompt placeholder substitution. Preserved per design resolution #3.
-        """
+        """Return the resolved CHAT provider client."""
         return self._resolve()
 
     # ── Telemetry ────────────────────────────────────────────────────────────
 
     def _log_after_call(self, dto, response, wall_ms=None):
-        """Write the LLM request log file and persist per-call token accounting.
-
-        Single logging chokepoint every LLM request flows through.
-        Absorbs LoggingLLMService (deleted) — including log_call (resolution #4).
-        """
-        # Metrics (record_llm_call, accumulate) are the CALLER's responsibility —
-        # the mp calls _record_metrics() after send() returns. For standalone
-        # calls (test-connection, vision-probe) no accumulator is available.
-
+        """Write the LLM request log file and persist per-call token accounting."""
         # Per-call token accounting (was LoggingLLMService._log_llm_call).
         # job_name is carried on the DTO via the _job_name metadata key (set
         # by MessageProcessor.send() and the probe callers).
@@ -213,12 +161,7 @@ class Providers:
 
     @staticmethod
     def _record_send_counters(proc) -> None:
-        """Record per-send, per-channel turn counters (spec §4e).
-
-        Called by MessageProcessor._record_metrics after every send.
-        Every send increments requests_total; the channel-specific turn counter
-        is selected from the bound processor's config.channel.
-        """
+        """Record per-send, per-channel turn counters (spec §4e)."""
         try:
             channel = getattr(getattr(proc, 'config', None), 'channel', '') or ''
             from services.metrics_service import MetricsService  # noqa: PLC0415

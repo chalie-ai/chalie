@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 import requests
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult, truncate
 from services.web_fetch import BROWSER, FetchBlocked, fetch_page
 
@@ -64,29 +65,26 @@ class ReadAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "source": {
+            Keys.source: {
                 "type": "string",
                 "description": "URL (e.g. 'https://example.com/article') or filesystem path (e.g. '/home/user/doc.pdf'). Aliases 'url' and 'path' are also accepted.",
             },
-            "max_chars": {
+            Keys.max_chars: {
                 "type": "integer",
                 "description": "Max characters to return (default 20000).",
             },
         },
-        "required": ["source"],
+        "required": [Keys.source],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
-    #: The keys a model naturally emits for the read target. ``source`` is the
-    #: canonical key; the rest are honoured as aliases via ``Ability.param`` so a
-    #: call like ``read({"url": …})`` or ``read({"path": …})`` resolves instead of
-    #: bouncing on ``source-required``.
-    _SOURCE_ALIASES: ClassVar[tuple[str, ...]] = (
-        "url", "uri", "link", "href", "path", "file", "filepath", "file_path",
-    )
-
+    #: The keys a model naturally emits for the read target — ``url``, ``path``,
+    #: ``link`` … — are healed to the canonical ``source`` upstream at the dispatch
+    #: seam via the shared ``abilities._params.VARIANTS[Keys.source]`` ladder, so a
+    #: call like ``read({"url": …})`` resolves instead of bouncing on
+    #: ``source-required``. No per-tool alias list lives here anymore.
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15
 
     _BLOCKED_PATH_PREFIXES: ClassVar[tuple] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
@@ -100,7 +98,7 @@ class ReadAbility(Ability):
     )
 
     def run(self, params: dict) -> ToolResult:
-        source = self.param(params, "source", aliases=self._SOURCE_ALIASES)
+        source = self.param(params, Keys.source)
         if not isinstance(source, str) or not source.strip():
             # No usable target under any accepted key. Echo what the model DID send
             # so it self-corrects instead of looping on the same opaque error
@@ -116,7 +114,7 @@ class ReadAbility(Ability):
             )
         source = source.strip()
 
-        max_chars = self.param(params, "max_chars", default=20000, clamp=(100, 100000))
+        max_chars = self.param(params, Keys.max_chars, default=20000, clamp=(100, 100000))
 
         if self._is_url(source):
             return self._read_url(source, max_chars)
@@ -130,11 +128,6 @@ class ReadAbility(Ability):
 
     @classmethod
     def _is_plaintext_path(cls, path: str) -> bool:
-        """True when *path* ends with a known plain-text extension (case-folded).
-
-        A bare URL path is fine — the query/fragment never carry the extension we
-        gate on, and ``urlparse(...).path`` is already stripped of them.
-        """
         return path.lower().endswith(cls._PLAINTEXT_EXTENSIONS)
 
     # ── URL branch ───────────────────────────────────────────────────────────────

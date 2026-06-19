@@ -1,12 +1,14 @@
 """ActEventEmitter — the single gate for ACT-loop WebSocket events.
 
 A MessageProcessor whose config carries a ``broadcast_to`` target streams live
-ACT events (tool start/end, narration) to the UI; a background loop
-(``broadcast_to=None``) stays silent. This object encapsulates that one gate so
-every emit site shares the same rule and a dead socket never breaks the loop.
+ACT tool start/end events to the UI; a background loop (``broadcast_to=None``)
+stays silent. This object encapsulates that one gate so every emit site shares
+the same rule and a dead socket never breaks the loop.
 
-Constructed per-config by the tool dispatcher (tool start/end) and by
-MessageProcessor._record_narration (narration).
+Constructed per-config by the tool dispatcher (tool start/end). Mid-turn
+assistant text is no longer a separate WS event (narration was removed) and is
+no longer persisted at all: a turn emits exactly one end message, written once
+the loop settles.
 """
 
 from __future__ import annotations

@@ -1,17 +1,3 @@
-"""
-Decay Engine Service — unified decay across all memory types.
-
-Triggered once per :class:`SubconsciousWorker` tick (v0.5.0 §5).  The engine
-is stateless; cadence is owned by the caller.
-
-Episodic relevance follows an *absolute* exponential law anchored on
-``episodes.last_relevant_at`` (the timestamp of the last write-relevant
-event).  Because the weight is recomputed from a fixed anchor each tick rather
-than multiplied into the previous value, the cycle is idempotent: ticking
-twice in a row leaves ``retrieval_weight`` unchanged.  This replaces the old
-compounding ``rw = rw * (1 + hours)^-exp`` law, which re-multiplied the
-current weight on every pass and floored almost the whole corpus at 0.01.
-"""
 
 import math
 import logging
@@ -68,6 +54,16 @@ _RW_EPSILON = 0.0001
 # salience_service.compute_salience), so the salience→weight ratio divides by 10.
 _MAX_SALIENCE = 10
 
+# Legacy data_graph ``kind='moment'`` rows left by the now-deleted 6h moment
+# worker. Moments moved to the dedicated ``moments`` table, so these are wiped on
+# every cycle. Standing (not one-shot): after the wipe no producer remains, so
+# subsequent passes match zero rows and the step is a no-op.
+_LEGACY_MOMENT_KIND = "moment"
+# Legacy moment rows were indexed in data_graph_fts (external-content over
+# data_graph) with the column order (key, value, kind, search_queries); the
+# FTS5 external-delete idiom needs those values, read BEFORE the base row goes.
+_DG_FTS_TABLE = "data_graph_fts"
+
 # parse_utc returns this exact value when an anchor string is unparseable; we
 # detect it to skip corrupt rows loudly instead of decaying them to 0.0.
 _PARSE_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
@@ -79,11 +75,6 @@ _LEVEL_1 = 1
 
 @dataclass(frozen=True)
 class _EpisodeDecayRow:
-    """One episode's decay inputs, built positionally from the decay SELECT.
-
-    Groups the row fields so weight recomputation stays under the 5-parameter
-    ceiling; field order MUST match the SELECT in ``_decay_episodic``.
-    """
 
     episode_id: str
     retrieval_weight: float
@@ -94,33 +85,19 @@ class _EpisodeDecayRow:
 
 
 class DecayEngineService:
-    """Applies absolute decay, hard-deletion and fossil-janitor in one cycle."""
 
     def __init__(self):
-        """Initialize the stateless engine."""
         logger.info("[DECAY ENGINE] Initialized (absolute exponential decay)")
 
     def run_once(self) -> None:
-        """Single tick for SubconsciousWorker. Delegates to run_decay_cycle."""
         self.run_decay_cycle()
 
     def run_decay_cycle(self):
-        """Run one full decay cycle across all memory types.
-
-        Sub-cycles (run unconditionally, in order):
-        1. ``_janitor_fossil_episodes()`` — tombstone stranded muted/legacy leaves.
-        2. ``_decay_episodic()`` — absolute exponential decay on
-           ``episodes.retrieval_weight`` anchored on ``last_relevant_at``.
-        3. ``_delete_expired_episodes()`` — hard-delete tombstoned and weak-leaf
-           rows with vec/fts cleanup.
-        4. ``_decay_data_graph()`` — ``DataGraphService.decay_cycle()``.
-        5. ``_cleanup_transcript()`` — old transcript row cleanup.
-        6. ``_purge_tool_calls()`` — 7-day durable retention janitor.
-        """
         fossils_tombstoned = self._janitor_fossil_episodes()
         episodic_count = self._decay_episodic()
         episodes_deleted = self._delete_expired_episodes()
         data_graph_count = self._decay_data_graph()
+        legacy_moments_wiped = self._wipe_legacy_data_graph_moments()
         transcript_cleaned = self._cleanup_transcript()
         tool_calls_purged = self._purge_tool_calls()
 
@@ -130,17 +107,13 @@ class DecayEngineService:
             f"episodic={episodic_count} updated, "
             f"episodes_deleted={episodes_deleted}, "
             f"data_graph={data_graph_count} updated, "
+            f"legacy_moments_wiped={legacy_moments_wiped}, "
             f"transcript_cleaned={transcript_cleaned}, "
             f"tool_calls_purged={tool_calls_purged}"
         )
 
     @staticmethod
     def _tau_hours_for(level: int, tombstoned_at) -> float:
-        """Return the decay time-constant (hours) for an episode.
-
-        A tombstoned row always uses the fast tombstone τ regardless of level;
-        otherwise τ is selected by hierarchy level (leaf / super / era).
-        """
         if tombstoned_at:
             return _TAU_HOURS_TOMBSTONED
         if level >= _LEVEL_1 + 1:
@@ -150,18 +123,6 @@ class DecayEngineService:
         return _TAU_HOURS_LEAF
 
     def _decay_episodic(self) -> int:
-        """Recompute ``retrieval_weight`` for every live episode from its anchor.
-
-        Formula: ``rw = (salience / 10) × exp(−Δt_hours / τ_level)`` where Δt is
-        measured from ``last_relevant_at``.  The weight is set absolutely (not
-        multiplied), so re-running the cycle on a settled corpus is a no-op.
-
-        ``storage_strength`` is never modified by decay.  No row is deleted here —
-        hard-deletion is a separate, explicit sub-cycle.
-
-        Returns:
-            Number of episodes whose weight changed.
-        """
         try:
             from .database_service import get_shared_db_service
 
@@ -205,14 +166,6 @@ class DecayEngineService:
             return 0
 
     def _absolute_weight(self, row, now):
-        """Return the absolute retrieval weight for one episode, or None on bad data.
-
-        Returning None (rather than a sentinel weight) skips the row without
-        corrupting it. A corrupt anchor must never be silently decayed to 0.0:
-        parse_utc returns the datetime.min UTC sentinel on unparseable input, and
-        a tiny weight can satisfy the leaf-delete predicate and silently destroy
-        the row. We detect the sentinel explicitly, log loudly, and skip.
-        """
         if row.anchor is None:
             return None
         anchor_dt = parse_utc(row.anchor)
@@ -229,17 +182,6 @@ class DecayEngineService:
         return salience_ratio * math.exp(-dt_hours / tau_hours)
 
     def _delete_expired_episodes(self) -> int:
-        """Hard-delete episodes that have aged out, with vec/fts cleanup.
-
-        Two branches fire:
-        - tombstoned longer than ``_TOMBSTONE_DELETE_AFTER_DAYS``;
-        - never-consolidated leaves that are simultaneously below the weight
-          floor, older than the age window, and at or below the junk-salience
-          threshold.
-
-        Returns:
-            Number of episode rows hard-deleted.
-        """
         try:
             from .database_service import get_shared_db_service
 
@@ -293,17 +235,6 @@ class DecayEngineService:
 
     @staticmethod
     def _hard_delete_episode(conn, episode_id: str) -> None:
-        """Delete one episode row and its FTS / vector shadow rows.
-
-        ``episodes_fts`` is an external-content FTS5 table (schema.sql: the
-        ``content='episodes'`` form), so its postings must be removed with the
-        FTS5 'delete' command using the gist read BEFORE the base row goes away
-        — a plain DELETE would re-read the now-missing source row and strand or
-        corrupt postings. This routes through services._fts_delete, the shared
-        idiom also used by DataGraphService._delete_fts. ``episodes_vec`` is a
-        standalone vec0 table (no content= binding), so a plain rowid DELETE is
-        the correct idiom there.
-        """
         row = conn.execute(
             "SELECT rowid, gist FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()
@@ -314,19 +245,6 @@ class DecayEngineService:
         conn.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
 
     def _janitor_fossil_episodes(self) -> int:
-        """Tombstone stranded MUTED/legacy leaf episodes so they enter deletion.
-
-        Only leaves on channels that are NOT HEAVY (i.e. not episode-producing)
-        are fossils: muted/transient/legacy channels can strand leaves that never
-        consolidate or re-confirm. HEAVY channels (user, dmn, external-agent:*)
-        are protected — dmn in particular never consolidates, so its leaves are
-        permanently apex and would otherwise be reaped wholesale once past the
-        fossil cutoff. Tombstoning (rather than deleting outright) routes a fossil
-        through the normal fast-decay-then-delete path with full vec/fts cleanup.
-
-        Returns:
-            Number of fossil episodes tombstoned this tick.
-        """
         # Bidirectional dependency: the per-source allowlist lives in
         # services/source_profiles.py; this is the janitor-protection consumer.
         from .source_profiles import janitor_protected_sql
@@ -363,7 +281,6 @@ class DecayEngineService:
             return 0
 
     def _decay_data_graph(self) -> int:
-        """Apply decay to data_graph via DataGraphService."""
         try:
             from .database_service import get_shared_db_service
             from .data_graph_service import DataGraphService
@@ -377,8 +294,39 @@ class DecayEngineService:
             logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}")
             return 0
 
+    def _wipe_legacy_data_graph_moments(self) -> int:
+        try:
+            from .database_service import get_shared_db_service
+
+            db_service = get_shared_db_service()
+            try:
+                with db_service.connection() as conn:
+                    rows = conn.execute(
+                        "SELECT rowid, key, value, kind, search_queries FROM data_graph "
+                        "WHERE kind = ?",
+                        (_LEGACY_MOMENT_KIND,),
+                    ).fetchall()
+                    for rowid, key, value, kind, search_queries in rows:
+                        fts5_external_delete(conn, _DG_FTS_TABLE, rowid, {
+                            "key": key,
+                            "value": value,
+                            "kind": kind,
+                            "search_queries": search_queries,
+                        })
+                        conn.execute("DELETE FROM data_graph WHERE rowid = ?", (rowid,))
+                        conn.execute("DELETE FROM data_graph_key_vec WHERE rowid = ?", (rowid,))
+                        conn.execute("DELETE FROM data_graph_value_vec WHERE rowid = ?", (rowid,))
+                    deleted = len(rows)
+                if deleted:
+                    logger.info(f"[DECAY ENGINE] Wiped {deleted} legacy data_graph kind='moment' rows")
+                return deleted
+            finally:
+                db_service.close_pool()
+        except Exception as e:
+            logger.exception(f"[DECAY ENGINE] Legacy moment wipe failed: {e}")
+            return 0
+
     def _cleanup_transcript(self) -> int:
-        """Delete unlinked transcript entries below compaction watermark."""
         try:
             from services import transcript_service
             return transcript_service.cleanup_unlinked_entries()
@@ -387,13 +335,6 @@ class DecayEngineService:
             return 0
 
     def _purge_tool_calls(self) -> int:
-        """Delete tool_calls rows older than 7 days (durable-retention janitor).
-
-        All tool_calls rows are now durable; this time-based purge replaces the
-        old count-based (25 k) cap. The 7-day window matches the fossil-episode
-        janitor cadence. Compaction watermarks live in the transcript table, so
-        deleting any tool_name here is safe.
-        """
         cutoff = (utc_now() - timedelta(days=_TOOL_CALLS_RETENTION_DAYS)).isoformat()
         try:
             from services.database_service import get_shared_db_service

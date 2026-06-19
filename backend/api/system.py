@@ -292,7 +292,7 @@ def observability_tools():
             "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
             "FROM tool_calls "
             "WHERE tool_name NOT IN ('compaction', 'tool_compaction', 'trail_compaction', "
-            "'chat_history_compactor', 'tool_chain_compactor', 'thinking') "
+            "'chat_history_compactor', 'thinking') "
             "GROUP BY tool_name "
             "ORDER BY last_used_at DESC"
         )
@@ -498,7 +498,6 @@ def observability_errors():
 @system_bp.route('/system/update/check', methods=['GET'])
 @require_session
 def update_check():
-    """Check GitHub for a newer Chalie release."""
     try:
         from services.app_update_service import AppUpdateService
         info = AppUpdateService().check_for_update()
@@ -511,7 +510,6 @@ def update_check():
 @system_bp.route('/system/update/apply', methods=['POST'])
 @require_session
 def update_apply():
-    """Apply an in-place update (installed mode only)."""
     try:
         from services.app_update_service import AppUpdateService
         data = request.get_json(silent=True) or {}
@@ -560,7 +558,6 @@ def get_context_usage():
 @system_bp.route('/system/settings/<key>', methods=['GET'])
 @require_session
 def get_setting(key):
-    """Get a single setting value."""
     from services.settings_service import SettingsService
     from services.database_service import get_shared_db_service
     try:
@@ -575,7 +572,6 @@ def get_setting(key):
 @system_bp.route('/system/settings/<key>', methods=['PUT'])
 @require_session
 def set_setting(key):
-    """Set a single setting value."""
     from services.settings_service import SettingsService
     from services.database_service import get_shared_db_service
     data = request.get_json(silent=True) or {}

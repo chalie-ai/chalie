@@ -1,15 +1,7 @@
 """
-Feature tests for WorldState — the singleton that renders ambient world context
-into the literal block consumed by prompt assembly.
-
-Real WorldState class, real in-memory SQLite (built from schema.sql via the
-``db`` fixture), zero mocks. Each test uses a fresh WorldState instance to
-avoid cross-test contamination from the module singleton.
-
-Per tester.md: every test asserts a real-world behaviour someone depends on —
-no plumbing, no shape checks, no "did we store the dict" tests. The render
-output is the only contract that matters; everything observable flows through
-``WorldState.render()``.
+Feature tests for WorldState using real in-memory SQLite (built from schema.sql
+via the ``db`` fixture), zero mocks. Each test uses a fresh WorldState instance
+to avoid cross-test contamination from the module singleton.
 """
 
 
@@ -30,7 +22,6 @@ _HEADER = "### Background Telemetry,Processes & Signals"
 # ---------------------------------------------------------------------------
 
 def _fresh() -> WorldState:
-    """Create a fresh WorldState instance (not the module singleton)."""
     return WorldState()
 
 
@@ -43,7 +34,6 @@ def _past_iso(minutes: int) -> str:
 
 
 def _seed_telemetry(db, ctx: dict) -> None:
-    """Persist a heartbeat-shaped dict into the telemetry table via HeartbeatService."""
     from services.heartbeat_service import heartbeat_service
     heartbeat_service._ctx = None
     flat = heartbeat_service._flatten(ctx)
@@ -118,6 +108,29 @@ class TestRenderTelemetry:
         )
 
         assert _fresh().render() == expected
+
+    def test_location_surfaces_placename_not_raw_coordinates(self, db):
+        # Privacy posture (TKT-557): the chat/system telemetry block surfaces the
+        # human-readable place name only. The raw GPS coordinates the frontend
+        # sends in the nested ``location`` dict stay out of this block — backend
+        # consumers (departure advisory, weather, locale_service) read them
+        # directly instead. The heartbeat below mirrors what
+        # ClientContextService.save() persists after Nominatim resolution: a
+        # nested ``location`` dict AND a top-level resolved ``location_name``.
+        _seed_telemetry(db, {
+            "timezone": "Europe/Malta",
+            "location": {"lat": 35.8989, "lon": 14.5146},
+            "location_name": "Valletta, Malta",
+        })
+
+        result = _fresh().render()
+
+        # The place name reaches the LLM …
+        assert "location_name:Valletta, Malta" in result
+        # … but the raw coordinates never do.
+        assert "**location**" not in result
+        assert "35.8989" not in result
+        assert "14.5146" not in result
 
 
 # ---------------------------------------------------------------------------

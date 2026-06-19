@@ -6,21 +6,14 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""ActTrail — the repository for the ACT-loop tool-call trail (``tool_calls``).
+"""ActTrail — read/write/render the ``tool_calls`` trail for one ACT loop.
 
-record / fetch_by_transcript_id / render are raw SQL over the ``tool_calls``
-table: writing a row per tool call, reading a transcript's rows oldest→newest,
-and rendering one row to its invariant ``[tool_name] params → result`` form.
-This is a repository, not an Ability concern — it was lifted out of the
-``Ability`` god-class (spec §4.3 / the _base.py elimination).
-
-Consumers: ``services.message_processor`` (trail assembly, compaction,
-narration, thinking persistence) and the tool-dispatch chokepoint
-(``ToolDispatcher.dispatch``), which records every tool
-outcome so the rendered trail tells the model what happened.
-
-It holds a real dependency — the shared DB service — so it is a constructed
-object, not a static dumping ground.
+A tool call anchors ONLY to the transcript input row that drove it
+(``transcript_id``); its turn is derived by joining transcript on
+(channel, turn_id), so ``tool_calls`` carries no turn_id / channel column of
+its own. Consumed by ``services.message_processor`` (trail assembly
+and compaction) and the tool-dispatch chokepoint (``ToolDispatcher.dispatch``),
+which records every tool outcome.
 """
 
 from __future__ import annotations
@@ -55,16 +48,16 @@ class ActTrail:
         params: dict,
         result: str,
         transcript_id: "int | None",
+        summary: "str | None" = None,
     ) -> None:
-        """The ONLY write path. One INSERT, raw params/result, no render.
-
-        Skips silently when transcript_id is None (delegates with skip_transcript
-        have no anchor row; the FK column is NOT NULL so we never attempt the
-        insert). A write failure logs and is non-fatal — the turn continues.
-
-        All rows are durable; the retention janitor in DecayEngineService removes
-        rows older than 7 days.
-        """
+        """Skips silently when transcript_id is None (delegates with
+        skip_transcript have no anchor row; the FK is NOT NULL). The tool call
+        anchors to that input row alone — its turn is derived later by joining
+        transcript on (channel, turn_id). ``summary`` is the ability's
+        act_summary (the live blue box) persisted so the chat refresh can
+        re-render it. A write failure logs and is non-fatal — the turn
+        continues. Retention janitor in DecayEngineService removes rows older
+        than 7 days."""
         if transcript_id is None:
             logger.debug(
                 "[ActTrail.record] skipping record (no transcript_id): tool=%s",
@@ -77,9 +70,9 @@ class ActTrail:
             with self._db.connection() as conn:
                 conn.execute(
                     "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (transcript_id, tool_name, params_json, result, now),
+                    "(transcript_id, tool_name, params, result, summary, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (transcript_id, tool_name, params_json, result, summary or "", now),
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -87,17 +80,41 @@ class ActTrail:
                 tool_name, transcript_id, exc,
             )
 
-    def fetch_by_transcript_id(self, transcript_id: int) -> "list[dict]":
-        """Every ``tool_calls`` row for an ACT loop, oldest→newest.
+    def fetch_by_turn(self, channel: str, turn_id: int) -> "list[dict]":
+        """Every tool call of one logical turn, ordered by autoincrement id.
 
-        Ordered by autoincrement id (not created_at — one-second granularity
-        makes created_at ambiguous when several rows land in the same second).
-
-        Spec §4c / F3.
-        """
+        tool_calls carries no turn column; a turn's calls are derived by joining
+        transcript on (channel, turn_id). Each turn has exactly one input row —
+        the one that opened it; an async result or delegate re-entry is a NEW turn
+        with its own turn_id, never a continuation of this one, so the join
+        gathers only this turn's calls. Ordered by tc.id, not created_at —
+        one-second granularity makes created_at ambiguous when rows land in the
+        same second."""
         try:
             return self._db.fetch_all(
-                "SELECT id, tool_name, params, result, created_at "
+                "SELECT tc.id, tc.tool_name, tc.params, tc.result, tc.summary, tc.created_at "
+                "FROM tool_calls tc JOIN transcript t ON tc.transcript_id = t.id "
+                "WHERE t.channel = ? AND t.turn_id = ? ORDER BY tc.id",
+                (channel, turn_id),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[ActTrail.fetch_by_turn] query failed for channel=%s turn_id=%s: %s",
+                channel, turn_id, exc,
+            )
+            return []
+
+    def fetch_by_transcript_id(self, transcript_id: int) -> "list[dict]":
+        """All tool calls anchored to one input row, ordered by autoincrement id.
+
+        The narrow single-anchor read — every tool call the dispatcher recorded
+        against a given input row (``transcript_id``). Equivalent to
+        :meth:`fetch_by_turn` for a turn with a single input row; the turn-keyed
+        read is preferred in the loop because it also spans async / delegate
+        re-entries."""
+        try:
+            return self._db.fetch_all(
+                "SELECT id, tool_name, params, result, summary, created_at "
                 "FROM tool_calls WHERE transcript_id = ? ORDER BY id",
                 (transcript_id,),
             )
@@ -110,13 +127,8 @@ class ActTrail:
 
     @staticmethod
     def render(row: dict) -> str:
-        """The ONLY render path. One row → its representation.
-
-        Invariant shape: '[tool_name] params → result'. Same function for the
-        LLM prompt, the UI card, and the audit view.
-
-        Spec §4c / F4.
-        """
+        """Invariant shape: '[tool_name] params → result'. Same function for
+        the LLM prompt, the UI card, and the audit view."""
         tool_name = row.get("tool_name", "unknown")
         params_raw = row.get("params") or "{}"
         result = row.get("result") or ""

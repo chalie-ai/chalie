@@ -24,6 +24,7 @@ from typing import ClassVar
 from urllib.parse import urlparse
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from tools.browser.session import record_screenshot, run_verb
 
@@ -31,6 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 class BrowserAbility(Ability):
+    DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebBrowseConfig only
+
     def get_name(self) -> str:
         return "browser"
 
@@ -61,7 +64,7 @@ class BrowserAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": [
                     "open", "read", "find", "click", "fill",
@@ -72,11 +75,11 @@ class BrowserAbility(Ability):
                     "the page that is already open."
                 ),
             },
-            "url": {
+            Keys.url: {
                 "type": "string",
                 "description": "Absolute http(s) URL. Only used by 'open'.",
             },
-            "target": {
+            Keys.target: {
                 "type": "string",
                 "description": (
                     "Visible text of the element to act on — a button or link "
@@ -84,25 +87,25 @@ class BrowserAbility(Ability):
                     "'Email'). Used by click/fill/select."
                 ),
             },
-            "value": {
+            Keys.value: {
                 "type": "string",
                 "description": "Text to type ('fill') or option to choose ('select').",
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "Text to search for on the page. Only used by 'find'.",
             },
-            "section": {
+            Keys.section: {
                 "type": "string",
                 "description": "Optional heading text — 'read' returns only that section.",
             },
-            "direction": {
+            Keys.direction: {
                 "type": "string",
                 "enum": ["down", "up"],
                 "description": "Scroll direction. Only used by 'scroll'.",
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     def get_parameters(self) -> dict:
@@ -114,13 +117,13 @@ class BrowserAbility(Ability):
     # missing a required param → one code=missing-params naming it. run() never
     # sees either case.
     ACTION_REQUIRED: ClassVar[dict] = {
-        "open": ("url",),
+        "open": (Keys.url,),
         "read": (),
-        "find": ("query",),
-        "click": ("target",),
-        "fill": ("target", "value"),
-        "select": ("target", "value"),
-        "scroll": ("direction",),
+        "find": (Keys.query,),
+        "click": (Keys.target,),
+        "fill": (Keys.target, Keys.value),
+        "select": (Keys.target, Keys.value),
+        "scroll": (Keys.direction,),
         "back": (),
         "screenshot": (),
     }
@@ -128,22 +131,22 @@ class BrowserAbility(Ability):
     # verb -> params forwarded to the session layer (the required half is the
     # dispatcher pre-gate's job, above).
     _FORWARDED: ClassVar[dict] = {
-        "open": ("url",),
-        "read": ("section",),
-        "find": ("query",),
-        "click": ("target",),
-        "fill": ("target", "value"),
-        "select": ("target", "value"),
-        "scroll": ("direction",),
+        "open": (Keys.url,),
+        "read": (Keys.section,),
+        "find": (Keys.query,),
+        "click": (Keys.target,),
+        "fill": (Keys.target, Keys.value),
+        "select": (Keys.target, Keys.value),
+        "scroll": (Keys.direction,),
         "back": (),
         "screenshot": (),
     }
 
     def run(self, params: dict) -> ToolResult:
-        action = (params.get("action") or "").strip().lower()
+        action = (params.get(Keys.action) or "").strip().lower()
         if action == "open":
             from tools.browser.security import validate_url  # noqa: PLC0415
-            ok, reason = validate_url(str(params["url"]).strip())
+            ok, reason = validate_url(str(params[Keys.url]).strip())
             if not ok:
                 return ToolResult.err(
                     f"URL blocked: {reason}",
@@ -237,9 +240,7 @@ class BrowserAbility(Ability):
 
     @staticmethod
     def _reply(envelope: dict) -> ToolResult:
-        """Map a session-layer envelope onto a canonical ToolResult.
-
-        A successful envelope (``error`` is None) becomes ``ok`` with the DICT
+        """A successful envelope (``error`` is None) becomes ``ok`` with the DICT
         body — the dispatcher renders compact JSON. An error envelope becomes
         ``err`` with the plain human-readable message string and a stable kebab
         ``code`` derived from the failure (carrying any internal ``_code`` /
@@ -262,9 +263,7 @@ class BrowserAbility(Ability):
 
 
 def _classify_error(message: str) -> str:
-    """Derive a stable kebab code from a session-layer error message.
-
-    The session layer (tools/browser/session.py) returns its failures as the
+    """The session layer (tools/browser/session.py) returns its failures as the
     envelope ``error`` string; this is the single place those strings are mapped
     to a self-correction code. Anything unrecognised falls back to the generic —
     but still stable, never ``code=error`` — ``browser-action-failed``.

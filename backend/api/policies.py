@@ -43,14 +43,6 @@ def _tag_display_rows(rows: list[dict]) -> None:
 @policies_bp.route('', methods=['GET'])
 @require_session
 def get_policies():
-    """Return all policy rows (flat triples), excluding internal rows.
-
-    Response 200:: {"policies": [{"channel","permission","setting"}, ...]}
-
-    Every row carries a display ``label`` (humanized); ``_mcp_*`` rows also carry
-    a ``group`` (server title) so the Brain UI groups them by MCP server instead
-    of showing one raw ``_mcp_<server>_<tool>`` group per tool.
-    """
     try:
         from services.database_service import get_shared_db_service
         from services.policy_manager import PolicyManager
@@ -65,7 +57,6 @@ def get_policies():
 @policies_bp.route('', methods=['PUT'])
 @require_session
 def update_policies():
-    """Single-cell upsert.  Body:: {"channel","permission","setting"}  ->  {"updated": 1}"""
     try:
         data = request.get_json(silent=True) or {}
         if not all(k in data for k in ('channel', 'permission', 'setting')):
@@ -83,7 +74,7 @@ def update_policies():
 @policies_bp.route('/reset', methods=['POST'])
 @require_session
 def reset_policies():
-    """Re-apply the static seed (wipe + reseed).  -> {"reset": N}"""
+    """Re-apply the static seed (wipe + reseed)."""
     try:
         from services.database_service import get_shared_db_service
         from services.policy_manager import PolicyManager
@@ -126,12 +117,6 @@ def respond_permission():
 @policies_bp.route('/blocked', methods=['GET'])
 @require_session
 def get_blocked_log():
-    """Return recent blocked-action entries.
-
-    Query params: limit (default 50).
-
-    Response 200:: {"entries": [...], "count": 42}
-    """
     try:
         limit = request.args.get('limit', 50, type=int)
         from services.database_service import get_shared_db_service
@@ -147,12 +132,7 @@ def get_blocked_log():
 @policies_bp.route('/blocked', methods=['DELETE'])
 @require_session
 def clear_blocked_log():
-    """Clear all entries from the blocked log.
-
-    Response 200::
-
-        {"cleared": 12}
-    """
+    """Clear all entries from the blocked log."""
     try:
         from services.database_service import get_shared_db_service
         from services.policy_manager import PolicyManager

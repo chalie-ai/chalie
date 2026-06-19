@@ -6,30 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-ProcessorConfig — frozen dataclass for per-channel MessageProcessor behaviour.
-
-Spec: ACT Loop Orchestrator Refactor §2.
-
-Every channel's behavioural surface is expressed through a single
-ProcessorConfig instance.  The dataclass is frozen so that a config created
-for one turn can never be mutated mid-loop (AC-5 / §2).
-
-Usage
------
-Every channel is a named ``ProcessorConfig`` subclass with a typed ``__init__``.
-The caller instantiates the subclass directly::
-
-    from configs.channels import DmnConfig
-    mp = MessageProcessor.process(raw_input, DmnConfig())
-
-    from configs.channels import UserConfig
-    mp = MessageProcessor.process(raw_input, UserConfig(metadata=request_metadata))
-
-The ``job`` property — ``f"{channel}:{role}"`` — is the telemetry label passed
-through ``Providers.send`` to the resolved provider and ``_log_after_call``.
-There is no separate ``LOG_LABEL`` field; ``config.job`` IS the label (§2, AC-13).
-"""
+"""ProcessorConfig — frozen dataclass for per-channel MessageProcessor behaviour."""
 
 from __future__ import annotations
 
@@ -45,18 +22,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ProcessorConfig(ABC):
-    """Everything that varies between channels.  Immutable per-turn.
-
-    See spec §2 for field-by-field rationale.
-
-    The three prompt builders are **abstract methods** — every channel is a
-    concrete subclass that implements ``get_system_prompt`` /
-    ``get_user_prompt`` / ``get_user_definition``.  The base class is abstract
-    (ABC) so a subclass that forgets any of the three cannot be instantiated.
-    Each method receives the turn's ``MessageProcessor`` as an explicit ``mp``
-    argument; the config holds no reference to the processor and stays a pure,
-    fully-immutable frozen dataclass.
-    """
+    """Everything that varies between channels.  Immutable per-turn."""
 
     # ── Async capability (ClassVar — not a dataclass field) ────────────────────
     SUPPORTS_ASYNC: ClassVar[bool] = False
@@ -70,8 +36,15 @@ class ProcessorConfig(ABC):
     """True -> Providers._resolve reads the brain's Vision Provider from the DB
     instead of the global selected provider. Only VisionConfig sets it."""
 
+    uses_delegate_provider: ClassVar[bool] = False
+    """True -> Providers._resolve reads the brain's Delegate Provider from the DB
+    (falling back to the selected provider when none is pinned) instead of the
+    global selected provider. Set by the subagent channels (web_search,
+    web_browse). Vision takes precedence: VisionConfig keeps uses_vision_provider
+    and never sets this (vision > delegate > chat)."""
+
     # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
-    class POLICY_CHANNEL(str, Enum):
+    class PolicyChannel(str, Enum):
         CHAT           = "chat"
         SUBCONSCIOUS   = "subconscious"
         EXTERNAL_AGENT = "external_agent"
@@ -86,25 +59,25 @@ class ProcessorConfig(ABC):
     """Transcript role for the input row.  E.g. 'user', 'proactive_thought',
     'external_agent', 'pattern_match'."""
 
-    policy_channel: "ProcessorConfig.POLICY_CHANNEL"
+    policy_channel: "ProcessorConfig.PolicyChannel"
     """Which policy channel this processor's tool calls are gated under.
     usage_class (the llm_call_log string) is derived from it."""
 
     # ── Tool visibility ───────────────────────────────────────────────────────
 
     always_available: list[str]
-    """Tool names pinned in every LLM call (innate tier)."""
+    """Tool names pinned in every LLM call (innate tier).
 
-    discoverable: list[str]
-    """Tool names discoverable via find_tools for this channel."""
-
-    blocked: frozenset[str]
-    """Tool names never offered to the model (e.g. DMN blocks the delegate tools)."""
+    This is the ONLY per-config tool list. Discovery scope is not configured
+    here: a tool is reachable via find_tools iff its ``Ability.DISCOVERABLE`` is
+    True (a global trait) and this config pins ``find_tools`` in
+    ``always_available``. There is no per-channel discoverable/blocked list."""
 
     # ── Loop control ──────────────────────────────────────────────────────────
-
-    max_iterations: int | None
-    """ACT loop iteration cap.  None = unbounded (UMP, ExternalAgent)."""
+    #
+    # There is no iteration cap. The loop runs until the model stops
+    # emitting tool calls or cooperative cancellation fires; a runaway turn is a
+    # hard-restart condition, not a silently-capped one.
 
     skip_transcript: bool
     """True → no transcript row written at all (background processors)."""
@@ -119,8 +92,9 @@ class ProcessorConfig(ABC):
     # ── Live output (declarative, not a hook) ─────────────────────────────────
 
     broadcast_to: str | None
-    """None = silent.  Non-None = stream narration + tool events to this channel.
-    Only UserConfig sets this ('user'); all others leave it None (AC-28)."""
+    """None = silent.  Non-None = stream live tool events to this channel and
+    deliver the turn's end message there.  Only UserConfig sets this ('user');
+    all others leave it None (AC-28)."""
 
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 
@@ -135,75 +109,45 @@ class ProcessorConfig(ABC):
     """Independent units of after-turn work, each ``hook.run(mp, response_text)``,
     run once after the assistant row is persisted.  Empty tuple = no-op.  Hooks
     are mutually independent and failure-isolated — see services/post_turn_hook.py
-    and MessageProcessor._record.  This is the ONLY hook surface on
+    and MessageProcessor._end_turn.  This is the ONLY hook surface on
     ProcessorConfig (AC-32 / §4.8)."""
 
     # ── Prompt builders (abstract — one implementation per channel) ───────────
 
     @abstractmethod
     def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        """The system instruction block for this channel's turn.
-
-        Receives the turn's MessageProcessor.  Every concrete config MUST
-        implement this; the returned string is byte-identical to the
-        pre-refactor builder output."""
+        """System instruction block for this channel's turn."""
 
     @abstractmethod
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """The user-turn body (world state, history, input, ACT trail).
-
-        Receives the turn's MessageProcessor.  Every concrete config MUST
-        implement this."""
+        """User-turn body (world state, history, input, ACT trail)."""
 
     @abstractmethod
     def get_user_definition(self, mp: "MessageProcessor") -> str:
-        """The user/persona preamble.  Receives the turn's MessageProcessor.
-
-        Every concrete config MUST implement this (return ``""`` when the
-        channel has no user definition)."""
+        """User/persona preamble. Return ``""`` when the channel has none."""
 
     # ── Per-turn image attachment (concrete hook — default: no image) ──────────
 
     def get_image(self, mp: "MessageProcessor") -> "dict | None":
-        """The image to attach to this turn's single user message, or None.
-        Default: no image. VisionConfig overrides this to return
-        {"data": <base64>, "mime_type": <str>} — the shape every converter
-        consumes."""
+        """VisionConfig overrides this to return"""
         return None
 
     # ── Derived properties ────────────────────────────────────────────────────
 
     @property
     def job(self) -> str:
-        """Telemetry label for Provider calls: ``channel:role``.
-
-        Passed as the ``job`` argument through ``Providers.send()`` to the
-        resolved provider's ``send_messages()`` and the ``_log_after_call``
-        telemetry.  Replaces the per-subclass ``LOG_LABEL`` class attribute
-        (§2 / AC-13).
-        """
+        """Telemetry label passed through ``Providers.send()`` to the resolved"""
         return f"{self.channel}:{self.role}"
 
     @property
     def usage_class(self) -> str:
-        """LLM usage class string for llm_call_log / telemetry — the value of
-        policy_channel ('chat' | 'subconscious' | 'external_agent')."""
+        """LLM usage class written to llm_call_log."""
         return self.policy_channel.value
 
     # ── Cloning ───────────────────────────────────────────────────────────────
 
     def with_hidden_input(self) -> "ProcessorConfig":
-        """Return a copy of this frozen config with the input row suppressed.
-
-        Used to synthesise a background turn whose 'input' is a tool result, not
-        a user message — the assistant row is still written, the input row is not
-        (skip_input_row=True).  ``copy.copy`` preserves the concrete subclass and
-        every field without re-running the typed ``__init__``; frozen dataclasses
-        forbid field mutation, so the one override goes through
-        ``object.__setattr__``.
-
-        Spec §4.4 — captured-``mp`` async delivery.
-        """
+        """Return a shallow copy with ``skip_input_row=True``."""
         import copy  # noqa: PLC0415
         clone = copy.copy(self)
         object.__setattr__(clone, "skip_input_row", True)

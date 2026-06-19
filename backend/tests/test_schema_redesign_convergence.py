@@ -1,25 +1,3 @@
-"""
-Feature tests for the episodic-memory redesign schema convergence (TKT-920, ticket A).
-
-These drive the REAL SchemaConvergenceService + REAL DatabaseService against a
-REAL on-disk SQLite file in tmp_path. Zero mocks. The scenario under test is the
-production boot path: a deployed instance carrying a PRE-redesign database boots
-on redesign code, runs ``converge()`` then ``backfill_redesign_columns()`` (the
-exact two calls run.py and consumer.py make at startup), and must self-heal to
-the new shape without losing data.
-
-The "old-shape" database is built by converging the current schema and then
-degrading the three affected tables back to their pre-redesign form:
-  * episodes WITHOUT level/last_relevant_at/tombstoned_at/facts_extracted_at
-  * data_graph WITHOUT valid_from/valid_to and WITH the legacy
-    ``CHECK(kind IN (...))`` constraint (so the constraint-strip rebuild runs)
-  * memory_recall_log WITH the 8 legacy radius columns and WITHOUT
-    floor_cut_count / final_rrf_count
-Realistic rows are seeded — including a superseded (active=0) data_graph fact
-linked to its superseder via a ``superseded_by`` edge — so the backfill's
-derived values can be asserted against known inputs.
-"""
-
 import sqlite3
 from pathlib import Path
 
@@ -37,7 +15,6 @@ def _make_db(tmp_path: Path, name: str = "redesign.db") -> DatabaseService:
 
 
 def _converge_and_backfill(db: DatabaseService) -> None:
-    """The exact production boot sequence (run.py / consumer.py)."""
     svc = SchemaConvergenceService(db, embedding_dimensions=256)
     svc.converge()
     svc.backfill_redesign_columns()
@@ -103,10 +80,6 @@ _RADIUS_COLUMNS = {
 
 
 def _build_legacy_db(tmp_path: Path) -> tuple[DatabaseService, dict]:
-    """Converge fresh, then degrade the three affected tables to pre-redesign shape
-    and seed realistic rows. Returns the DatabaseService and a dict of the seeded
-    timestamps / ids that the post-boot assertions check derived values against.
-    """
     db = _make_db(tmp_path)
     # First converge to get the full, correct schema for every OTHER table; then
     # we mutate only the three tables the redesign touches back to legacy shape.
@@ -220,9 +193,7 @@ def _build_legacy_db(tmp_path: Path) -> tuple[DatabaseService, dict]:
 class TestSchemaRedesignConvergence:
 
     def test_old_shape_db_self_heals_to_redesign_shape(self, tmp_path):
-        """A pre-redesign DB boots on redesign code → converge() + backfill heal
-        the schema, populate every derived value, hold the bi-temporal invariant,
-        strip the legacy CHECK constraint, and lose no data."""
+        """A pre-redesign DB must self-heal to redesign shape after converge() + backfill()."""
         db, seeded = _build_legacy_db(tmp_path)
 
         # Pre-condition snapshot: legacy shape + row data, to prove no loss later.

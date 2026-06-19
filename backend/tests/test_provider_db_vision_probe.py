@@ -1,4 +1,3 @@
-"""Unit tests for probe-on-save wiring in ProviderDbService (probe mocked)."""
 from unittest.mock import patch
 
 import pytest
@@ -37,9 +36,8 @@ def test_infer_vision_support_is_gone():
 
 
 def test_create_keyless_key_requiring_provider_skips_probe(db):
-    """A key-requiring platform (openai/anthropic/gemini/openai_compatible) with
-    no api_key cannot be probed: the probe is skipped (no guaranteed-to-fail
-    network call) and supports_vision defaults to 0. Mirrors the update guard."""
+    # Key-requiring platforms (openai/anthropic/gemini/openai_compatible) with no
+    # api_key cannot be probed — probe is skipped to avoid guaranteed-to-fail network call.
     svc = _svc(db)
     with patch("services.vision_probe.probe_provider", return_value=True) as pp:
         p = svc.create_provider(
@@ -75,10 +73,8 @@ def test_update_model_reprobes(db):
 
 
 def test_delete_is_permanent_and_frees_the_name(db):
-    """Delete physically removes the row — no soft-delete flag survives — so the
-    name is immediately reusable (regression: soft-deleted rows held the UNIQUE
-    name and caused 'A provider with that name already exists' on re-create)."""
     svc = _svc(db)
+    _make(db, svc, name="anchor-main", vision=0)  # auto-selected as main
     p = _make(db, svc, name="reusable", vision=0)
     assert svc.delete_provider(p["id"]) is True
     # row is gone

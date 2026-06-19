@@ -1,11 +1,3 @@
-"""
-Unit tests for ListService.
-
-Strict id-only addressing: existing lists are looked up by 8-char hex id;
-``name`` is used only for ``create_list`` and ``rename_list``. Uses real
-SQLite via the shared ``db`` fixture — no mocked database connections.
-"""
-
 import pytest
 from services.time_utils import utc_now
 

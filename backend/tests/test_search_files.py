@@ -1,12 +1,3 @@
-"""Unit tests for SearchFilesAbility — glob and grep on the real filesystem.
-
-These exercise ``SearchFilesAbility.run()`` directly and assert on the sealed
-``ToolResult`` it returns (the dispatcher, not the ability, formats the wire
-envelope). Success bodies are structured (``{"files": [...]}`` for glob, match
-rows ``{"file", "line", "text"[, "context"]}`` for grep); bad inputs return
-``status='error'`` with a stable kebab ``code``.
-"""
-
 import os
 from pathlib import Path
 
@@ -19,7 +10,6 @@ pytestmark = pytest.mark.unit
 
 
 def _run(action: str, query: str, directory: str | None = None, **extra) -> ToolResult:
-    """Execute SearchFilesAbility and return the ``ToolResult``."""
     params: dict = {"action": action, "query": query, **extra}
     if directory is not None:
         params["directory"] = directory

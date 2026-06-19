@@ -2,13 +2,7 @@ from __future__ import annotations
 
 from services.processor_config import ProcessorConfig
 
-from configs.channels._common import (
-    DEFAULT_ALWAYS_AVAILABLE,
-    DEFAULT_DISCOVERABLE,
-    DELEGATE_INTERNAL_TOOLS,
-    DELEGATE_TOOLS,
-    PATTERN_WRITE_TOOLS,
-)
+from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 
 # ── DMN prompt builders ───────────────────────────────────────────────────────
 
@@ -82,20 +76,20 @@ def _dmn_fetch_recent_episodes() -> str:
 class DmnConfig(ProcessorConfig):
     """DMN background channel.  §3a / §8b.  No after-turn hooks (metrics moved to gateway §4e).
 
-    DMN is a background reflection loop — it must never spawn delegate work
-    (the old single ``subagent`` tool was retired in favour of the delegate
-    tools; block all of them to preserve that intent).
+    DMN carries the framework discovery tools (DEFAULT_ALWAYS_AVAILABLE includes
+    find_tools), so it can discover and spawn any DISCOVERABLE tool — including
+    the web_search / web_browse / vision delegates — when a reflection genuinely
+    needs the web. The raw web tools (browser/search/news) and the pattern
+    writers stay non-discoverable globally, so DMN reaches the web only through
+    the delegates, never directly.
     """
 
     def __init__(self) -> None:
         super().__init__(
             channel="dmn",
             role="proactive_thought",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
-            discoverable=DEFAULT_DISCOVERABLE,
-            blocked=DELEGATE_TOOLS | PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
-            max_iterations=100,
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=True,

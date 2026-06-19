@@ -23,13 +23,16 @@ logger = logging.getLogger(__name__)
 KIND_USER_SPECIFIC = 'user_specific'
 KIND_SYSTEM = 'system'
 KIND_MISC = 'misc'
-KIND_MOMENT = 'moment'
 KIND_DOCUMENT = 'document'
 KIND_BEHAVIORAL_PATTERN = 'behavioral_pattern'
 KIND_PLACE = 'place'
+# 'moment' is deliberately absent: moments are a dedicated user-curated store
+# (services/moments_service.py), not a data_graph kind. With it gone from
+# VALID_KINDS the store() guard below rejects any kind='moment' write — closing
+# the hole where any channel could write any kind.
 VALID_KINDS = frozenset({
     KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
-    KIND_MOMENT, KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE,
+    KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE,
 })
 
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
@@ -67,7 +70,6 @@ _KIND_POLICY = {
     KIND_USER_SPECIFIC:      {'ttl_days': 30,    'reinforce': True,  'contradiction': 'lut_canonicalize', 'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
     KIND_SYSTEM:             {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.7},
     KIND_MISC:               {'ttl_days': 2,     'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 1.5,  'salience_floor': 0.0},
-    KIND_MOMENT:             {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'soft',     'd_base': 0.3,  'salience_floor': 0.0},
     KIND_DOCUMENT:           {'ttl_days': None,  'reinforce': False, 'contradiction': None,               'deletion': 'hard',     'd_base': 0.0,  'salience_floor': 0.0},
     # behavioral_pattern: written exclusively by abilities.pattern_match.save_pattern.SavePattern
     # via raw SQL UPSERT (one-active-row-per-(kind, key)). Decay (-0.005/pass with
@@ -200,7 +202,6 @@ class DataGraphService:
     KIND_USER_SPECIFIC = KIND_USER_SPECIFIC
     KIND_SYSTEM = KIND_SYSTEM
     KIND_MISC = KIND_MISC
-    KIND_MOMENT = KIND_MOMENT
 
     def __init__(self, db_service=None):
         if db_service is None:
@@ -255,12 +256,10 @@ class DataGraphService:
 
     def _sync_fts(self, conn, rowid: int, key: str = None, value: str = None,
                   kind: str = None, search_queries: str = None):
-        """Insert a row into the FTS index. Reads from data_graph if values not provided.
-
-        For external content FTS5 tables, callers must remove old FTS entries
-        via _delete_fts BEFORE updating the content table — regular DELETE
-        reads from the content table and corrupts the index on mismatch.
-        """
+        """For external content FTS5 tables, callers must remove old FTS
+        entries via _delete_fts BEFORE updating the content table — a
+        regular DELETE reads from the content table and corrupts the index
+        on mismatch."""
         try:
             cursor = conn.cursor()
             if key is None:
@@ -285,12 +284,10 @@ class DataGraphService:
 
     def _delete_fts(self, conn, rowid: int, key: str, value: str, kind: str,
                     search_queries: str = ''):
-        """Remove a row from the data_graph_fts external-content index.
-
-        Delegates to the shared FTS5 external-delete idiom in services._fts_delete
-        (the single home for this production-safe pattern; episodes_fts uses it
-        too). Column order must match the data_graph_fts schema.
-        """
+        """Delegates to the shared FTS5 external-delete idiom in
+        services._fts_delete (the single home for this production-safe
+        pattern; episodes_fts uses it too). Column order must match the
+        data_graph_fts schema."""
         fts5_external_delete(conn, "data_graph_fts", rowid, {
             "key": key,
             "value": value,
@@ -401,14 +398,12 @@ class DataGraphService:
         return 0.0
 
     def _apply_temporal_supersession(self, conn, existing_dict: dict, req: '_StoreRequest', now_iso: str) -> tuple[dict, Optional[tuple], Optional[tuple]]:
-        """Demote old row, insert new, add supersedes/superseded_by edges.
-
-        Bi-temporal invalidation (Graphiti arXiv:2501.13956): the new fact's
-        event-time start (``valid_from = now_iso``) is also the moment the old
-        fact stopped being true, so the old row's ``valid_to`` is closed to the
-        same instant. Combined with ``active=0`` and the halved retrieval weight,
-        the superseded row drops out of every recall lane (all filter
-        ``valid_to IS NULL``) and enters the fast-decay tombstone regime.
+        """Bi-temporal invalidation (Graphiti arXiv:2501.13956): the new
+        fact's event-time start is also the moment the old fact stopped
+        being true, so old.valid_to closes to the same instant. Combined
+        with active=0 and the halved retrieval weight, the superseded row
+        drops out of every recall lane and enters the fast-decay
+        tombstone regime.
 
         Returns (new_row_dict, schedule_emb_args, schedule_d2q_args).
         """
@@ -464,20 +459,18 @@ class DataGraphService:
 
     def upsert_fact(self, key: str, value: str, *, source=None) -> Optional[dict]:
         """Exact-key ADD/UPDATE for the worker fact pipeline (TKT-925).
-
-        The ADD and UPDATE constrained ops both land here. The reconciliation
-        decision was already made by the LLM against the *actual* neighbour keys
-        the worker showed it, so this path writes the chosen key VERBATIM and
-        does NOT re-run concept-LUT canonicalization (which would fight the
-        model's choice and break exact-key supersession targeting). The chat
-        model's ``memory.store`` keeps the LUT path; this is the router's path.
+        The reconciliation decision was already made by the LLM against the
+        *actual* neighbour keys the worker showed it, so this path writes
+        the chosen key verbatim and does NOT re-run concept-LUT
+        canonicalization (which would fight the model's choice and break
+        exact-key supersession targeting). The chat model's ``memory.store``
+        keeps the LUT path; this is the router's path.
 
         Semantics on the ``user_specific`` kind, keyed exactly on ``key``:
-          * no live row            → insert new (status ``created``);
-          * same value             → reinforce (status ``reinforced``);
-          * contradicting value    → bi-temporal supersession (status
-            ``superseded``): old ``active=0`` + ``valid_to = now``, new row
-            ``valid_from = now``.
+        no live row → insert new (status ``created``); same value → reinforce
+        (status ``reinforced``); contradicting value → bi-temporal
+        supersession (status ``superseded``): old ``active=0`` +
+        ``valid_to = now``, new row ``valid_from = now``.
 
         Returns the structured store result, or ``None`` on DB failure.
         """
@@ -1429,19 +1422,22 @@ class DataGraphService:
     def invalidate(self, kind: str, key: str) -> int:
         """Bi-temporally invalidate every live row for the EXACT ``(kind, key)``.
 
-        The DELETE op of the worker fact pipeline: a fact the user has revoked is
-        not erased (that would lose the audit trail and the bi-temporal history)
-        but closed — ``active=0``, ``valid_to`` set to now, retrieval weight
-        halved. Recall lanes filter ``valid_to IS NULL`` (TKT-923), so the row
-        vanishes from retrieval immediately, then the fast-decay tombstone regime
-        (TKT-921) hard-deletes it after the superseded window.
+        The DELETE op of the worker fact pipeline: a fact the user has
+        revoked is not erased (that would lose the audit trail and the
+        bi-temporal history) but closed — ``active=0``, ``valid_to`` set
+        to now, retrieval weight halved. Recall lanes filter
+        ``valid_to IS NULL`` (TKT-923), so the row vanishes from retrieval
+        immediately, then the fast-decay tombstone regime (TKT-921)
+        hard-deletes it after the superseded window.
 
-        The key is matched VERBATIM (no concept-LUT canonicalization): the LLM
-        chose it from the neighbour facts the worker showed it, so re-mapping it
-        would target the wrong row. Mirrors ``upsert_fact``'s exact-key contract.
+        The key is matched VERBATIM (no concept-LUT canonicalization): the
+        LLM chose it from the neighbour facts the worker showed it, so
+        re-mapping it would target the wrong row. Mirrors ``upsert_fact``'s
+        exact-key contract.
 
-        Returns the number of rows invalidated (0 when no live row matches).
-        Pure-failure: a DB error bubbles up to the caller, which counts it.
+        Returns the number of rows invalidated (0 when no live row
+        matches). Pure-failure: a DB error bubbles up to the caller, which
+        counts it.
         """
         if kind not in VALID_KINDS:
             logger.warning("[DATA GRAPH] invalidate: invalid kind '%s'", kind)

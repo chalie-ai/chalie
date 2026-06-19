@@ -30,18 +30,14 @@ _ASSISTANT_HTML = sanitize(
 
 
 def _seed_assistant_turn(content: str = _ASSISTANT_HTML) -> int:
-    """Write a real assistant turn on the user channel; return its row id."""
     return transcript_service.write_assistant_row("user", content)
 
 
 def _ui_message_text(content: str = _ASSISTANT_HTML) -> str:
-    """The plaintext the remember button derives from the rendered content."""
     return extract_plaintext(content)
 
 
 def test_pin_by_message_text_persists_moment(authed_client):
-    """POST /moments with the UI's real payload (message_text, no transcript_id)
-    resolves the assistant turn server-side and persists a moment."""
     client, _db, _store = authed_client
     tid = _seed_assistant_turn()
 
@@ -60,7 +56,6 @@ def test_pin_by_message_text_persists_moment(authed_client):
 
 
 def test_pin_missing_text_and_id_is_rejected(authed_client):
-    """An empty payload is a 400 — but the message names both accepted keys."""
     client, _db, _store = authed_client
 
     resp = client.post("/moments", json={}, content_type="application/json")

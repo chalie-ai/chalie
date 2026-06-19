@@ -1,12 +1,6 @@
 # Baseline: 2249 passed, 65 failed, 499 errors (2026-03-27)
 # Errors are pre-existing: 15 files excluded (numpy import failure in this env),
 # and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
-"""
-Shared test fixtures — full sandbox isolation.
-
-No real external connections. MemoryStore IS the production implementation.
-"""
-
 import shutil
 from unittest.mock import patch
 
@@ -172,8 +166,7 @@ def authed_client(db):
 
     with patch('services.auth_session_service.validate_session', return_value=True), \
          patch('services.memory_store.get_shared_store', return_value=real_store), \
-         patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store), \
-         patch('api._get_or_generate_session_secret', return_value='test-secret'):
+         patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store):
         app = create_app()
         app.config['TESTING'] = True
         with app.test_client() as client:

@@ -8,7 +8,7 @@ async-only HiddenInput flag (``skip_input_row`` belongs to ``deliver_async_resul
 ``mp.uid`` stayed ``None``, ``_render_act_trail`` short-circuited to ``""``, and the
 delegate's ``get_user_prompt`` was a constant, results-blind prompt on EVERY ACT
 iteration. The loop never saw what it had already gathered, so it re-issued the
-same searches until it exhausted ``max_iterations=50`` — minutes per delegate.
+same searches turn after turn — minutes per delegate.
 
 This drives the REAL production path with zero mocks: the real
 ``MessageProcessor._setup()`` (whose uid assignment from the config flags is the
@@ -32,7 +32,7 @@ from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
-_CHAT = ProcessorConfig.POLICY_CHANNEL.CHAT
+_CHAT = ProcessorConfig.PolicyChannel.CHAT
 
 # (config class, expected transcript channel, expected role, user-prompt prefix)
 _DELEGATES = [
@@ -42,10 +42,6 @@ _DELEGATES = [
 
 
 def _delegate_mp(config: ProcessorConfig) -> MessageProcessor:
-    """A real delegate MessageProcessor driven through the REAL ``_setup()`` — the
-    method whose uid assignment is the fix under test. ``_seed_turn_zero`` is a
-    no-op for these configs (memory_seed=False, no attachments, non-user channel),
-    so no provider or network is touched."""
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "current population of Malta", {})
     mp.config = config

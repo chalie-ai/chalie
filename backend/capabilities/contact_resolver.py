@@ -66,10 +66,7 @@ def index_contact_profile(profile: dict, source: str = "carddav") -> None:
 
 
 def _parse_contact_row(key: str, raw_value: str) -> dict | None:
-    """Parse a single data_graph row into a contact dict.
-
-    Handles both JSON profile (CardDAV) and legacy email→name (IMAP) formats.
-    """
+    """Parse a single data_graph row into a contact dict."""
     if not key.startswith(_CONTACT_KEY_PREFIX):
         return None
     try:
@@ -83,11 +80,7 @@ def _parse_contact_row(key: str, raw_value: str) -> dict | None:
 
 
 def resolve(identifier: str, limit: int = 5) -> list[dict]:
-    """Look up person entries matching *identifier*.
-
-    Uses DataGraphService.recall() with RRF across key/value vec + FTS5.
-    Returns full profile dicts for CardDAV entries, or ``{"email", "name"}``
-    for legacy IMAP entries.
+    """Look up person entries matching *identifier* via RRF across key/value vec + FTS5.
     """
     if not identifier or not str(identifier).strip():
         return []
@@ -109,13 +102,6 @@ def resolve(identifier: str, limit: int = 5) -> list[dict]:
 
 
 def get_tool() -> dict:
-    """Return a tool definition dict for ``resolve_contact``.
-
-    Registered at startup so the LLM can resolve names, partial emails,
-    or identifiers to known contacts from the people index built by
-    IMAP senders and CalDAV attendees.
-    """
-
     def _execute(topic, params, config=None, telemetry=None):
         query = (params.get("query") or "").strip()
         if not query:

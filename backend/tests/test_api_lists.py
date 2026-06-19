@@ -1,10 +1,3 @@
-"""
-Tests for backend/api/lists.py — Lists API blueprint.
-
-Real-DB end-to-end tests via the ``authed_client`` fixture: routes hit a real
-ListService against a per-test SQLite database. No service-layer mocking.
-"""
-
 import pytest
 
 

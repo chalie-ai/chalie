@@ -89,8 +89,8 @@ def _strip_code_fence(text: str) -> str:
 class FactExtractionConfig(ProcessorConfig):
     """Per-episode fact-extraction config — one tool-free constrained LLM call.
 
-    channel/role='fact_extraction', suppress_history=True, max_iterations=1,
-    no tools, no memory seed. ``MessageProcessor.process('', config)`` returns
+    channel/role='fact_extraction', suppress_history=True, no tools, no memory
+    seed (a tool-free request completes in one send). ``MessageProcessor.process('', config)`` returns
     the model's raw JSON text, which the worker parses with ``parse_fact_ops``.
 
     The episode gist and the pre-fetched neighbour facts are captured at
@@ -102,11 +102,8 @@ class FactExtractionConfig(ProcessorConfig):
         super().__init__(
             channel="fact_extraction",
             role="fact_extraction",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,

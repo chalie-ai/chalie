@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 _GLOB_DEFAULT_MAX_FILES = 10
@@ -51,8 +52,8 @@ class SearchFilesAbility(Ability):
     # 'query' → a single code=missing-params error. A present-but-whitespace
     # query passes the pre-gate (the value is truthy), so run() still guards it.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "glob": ("query",),
-        "grep": ("query",),
+        "glob": (Keys.query,),
+        "grep": (Keys.query,),
     }
 
     def get_name(self) -> str:
@@ -83,7 +84,7 @@ class SearchFilesAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": ["glob", "grep"],
                 "description": (
@@ -93,7 +94,7 @@ class SearchFilesAbility(Ability):
                     "shape, 'grep' when you know what's inside the file."
                 ),
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": (
                     "For 'glob': a filename or glob pattern (e.g. '*.md', "
@@ -101,7 +102,7 @@ class SearchFilesAbility(Ability):
                     "string or regex to search file contents for."
                 ),
             },
-            "directory": {
+            Keys.directory: {
                 "type": "string",
                 "description": (
                     "Optional directory to search under. Defaults to the "
@@ -110,7 +111,7 @@ class SearchFilesAbility(Ability):
                     "~-prefixed home-relative path."
                 ),
             },
-            "max_files": {
+            Keys.max_files: {
                 "type": "integer",
                 "description": (
                     "Maximum number of files to return. "
@@ -119,7 +120,7 @@ class SearchFilesAbility(Ability):
                     "truncated=true."
                 ),
             },
-            "context_lines": {
+            Keys.context_lines: {
                 "type": "integer",
                 "description": (
                     "Grep only. Number of lines to show above AND below "
@@ -128,16 +129,16 @@ class SearchFilesAbility(Ability):
                 ),
             },
         },
-        "required": ["action", "query"],
+        "required": [Keys.action, Keys.query],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        action = params.get("action", "")
-        query = (params.get("query") or "").strip()
-        directory = (params.get("directory") or "").strip()
+        action = params.get(Keys.action, "")
+        query = (params.get(Keys.query) or "").strip()
+        directory = (params.get(Keys.directory) or "").strip()
 
         # The dispatcher's ACTION_REQUIRED pre-gate has already rejected an
         # unknown action and a missing 'query'; this guards the residue it lets
@@ -156,7 +157,7 @@ class SearchFilesAbility(Ability):
             )
 
         default_max = _GREP_DEFAULT_MAX_FILES if action == "grep" else _GLOB_DEFAULT_MAX_FILES
-        max_files_raw = params.get("max_files")
+        max_files_raw = params.get(Keys.max_files)
         if max_files_raw is not None:
             try:
                 max_files = int(max_files_raw)
@@ -177,7 +178,7 @@ class SearchFilesAbility(Ability):
 
         context_lines = _DEFAULT_CONTEXT_LINES
         if action == "grep":
-            cl_raw = params.get("context_lines")
+            cl_raw = params.get(Keys.context_lines)
             if cl_raw is not None:
                 try:
                     context_lines = int(cl_raw)
@@ -240,7 +241,6 @@ class SearchFilesAbility(Ability):
 
 
 def _glob_result(files: list[str], exhausted: bool, max_files: int) -> ToolResult:
-    """Build the glob ToolResult: structured ``{"files": [...]}`` + count/truncated."""
     truncated = len(files) > max_files
     shown = files[:max_files] if truncated else files
     capped = truncated or exhausted
@@ -258,11 +258,9 @@ def _glob_result(files: list[str], exhausted: bool, max_files: int) -> ToolResul
 
 
 def _grep_result(rows: list[dict], exhausted: bool, capped: bool) -> ToolResult:
-    """Build the grep ToolResult: structured match rows + count/truncated.
-
-    *rows* are the file/line/text(/context) match rows; *capped* is True when the
-    max_files file cap stopped the walk early; *exhausted* is True when the walk
-    budget expired. Either signal surfaces as ``meta truncated=true``.
+    """*capped* is True when the max_files file cap stopped the walk early;
+    *exhausted* is True when the walk budget expired. Either signal surfaces as
+    ``meta truncated=true``.
     """
     truncated = capped or exhausted
     if not rows:
@@ -287,9 +285,7 @@ def _iter_files(root: Path, deadline: float):
 
 
 def _do_glob(root: Path, pattern: str, max_files: int, deadline: float) -> tuple[list[str], bool]:
-    """Return (matched abs paths sorted newest-first, exhausted).
-
-    The returned list may be LONGER than *max_files*; the caller slices and
+    """The returned list may be LONGER than *max_files*; the caller slices and
     decides whether to flag truncation, so a "more existed" signal is not lost
     in the slice.
     """
@@ -320,13 +316,9 @@ def _do_glob(root: Path, pattern: str, max_files: int, deadline: float) -> tuple
 def _do_grep(
     root: Path, query: str, max_files: int, context_lines: int, deadline: float
 ) -> tuple[list[dict], bool, bool]:
-    """Return (match rows, exhausted, capped).
-
-    Each row is ``{"file": <abs>, "line": <1-based int>, "text": <matched line>}``
-    plus a ``"context"`` field carrying the surrounding lines when
-    *context_lines* > 0. *capped* is True when the max_files file cap stopped the
-    walk before the tree was exhausted; *exhausted* is True when the walk budget
-    expired. Files are visited newest-first so the rows favour recent files.
+    """*capped* is True when the max_files file cap stopped the walk before the
+    tree was exhausted; *exhausted* is True when the walk budget expired. Files
+    are visited newest-first so the rows favour recent files.
     """
     pattern = re.compile(query)
     files_with_hits: list[tuple[float, str, list[str]]] = []
@@ -363,8 +355,6 @@ def _do_grep(
 def _match_rows(
     fp: str, lines: list[str], pattern: re.Pattern, context_lines: int
 ) -> list[dict]:
-    """One row per matched line in *fp*: ``{file, line, text}`` plus ``context``
-    (the surrounding lines joined by newlines) when *context_lines* > 0."""
     rows: list[dict] = []
     for i, line in enumerate(lines):
         if not pattern.search(line):

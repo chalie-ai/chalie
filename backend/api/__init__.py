@@ -3,7 +3,6 @@ REST API package — Flask app factory with Blueprint registration, WebSocket,
 and static file serving (replaces nginx).
 """
 
-import os
 import importlib
 import mimetypes
 import pkgutil
@@ -42,37 +41,6 @@ mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
 
-def _get_or_generate_session_secret() -> str:
-    """Return the Flask session signing secret.
-
-    Priority:
-    1. SESSION_SECRET_KEY environment variable (for multi-instance or reverse-proxy setups)
-    2. Persisted value in data/.session_secret (auto-generated on first run, mode 0600)
-    """
-    import secrets
-
-    env_key = os.environ.get('SESSION_SECRET_KEY', '').strip()
-    if env_key:
-        return env_key
-
-    secret_file = FileMapperService.get_session_secret_path()
-    if secret_file.exists():
-        try:
-            value = secret_file.read_text().strip()
-            if value:
-                return value
-        except Exception as e:
-            logger.warning(f"[Flask] Could not read {secret_file}: {e}")
-
-    # Generate a new secret and persist it
-    secret_file.parent.mkdir(parents=True, exist_ok=True)
-    value = secrets.token_hex(32)
-    secret_file.write_text(value)
-    secret_file.chmod(0o600)
-    logger.info(f"[Flask] Generated new session secret → {secret_file}")
-    return value
-
-
 def _register_blueprints(app: Flask) -> None:
     """Auto-discover and register every Blueprint defined in this package.
 
@@ -97,7 +65,6 @@ def _register_blueprints(app: Flask) -> None:
 
 def _configure_app(app: Flask) -> None:
     """Apply Flask config, proxy middleware, and CORS to a new app instance."""
-    app.secret_key = _get_or_generate_session_secret()
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 

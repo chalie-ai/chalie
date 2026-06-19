@@ -1,14 +1,3 @@
-"""
-Generate search routing embeddings directly into providers.sqlite.
-
-Reads all provider examples, embeds them using EmbeddingService, and writes
-the vectors into an ``example_embeddings`` vec0 virtual table inside the same
-providers.sqlite database.
-
-Run from the backend directory:
-    cd backend && python -m utils.generate_search_cache
-"""
-
 import sqlite3
 import sys
 

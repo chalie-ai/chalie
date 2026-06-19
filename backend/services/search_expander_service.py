@@ -1,15 +1,5 @@
-"""
-Search Expander Service — singleton daemon that expands stored data_graph rows
-into doc2query variants and embeds each variant for vector retrieval.
 
-Replaces the fire-and-forget _schedule_doc2query / _schedule_embeddings thread
-pattern in DataGraphService with a single sequential FIFO worker, eliminating
-thundering-herd contention on the doc2query ONNX sessions under write bursts.
 
-Dependents:
-  - services.data_graph_service calls enqueue("data_graph", rowid)
-  - backend/run.py              registers search_expander_worker via _try_register
-"""
 
 import json
 import logging
@@ -35,7 +25,6 @@ _instance_lock = threading.Lock()
 
 
 def _get_service() -> "SearchExpanderService":
-    """Return or create the module-level singleton."""
     global _service_instance
     if _service_instance is not None:
         return _service_instance
@@ -46,16 +35,6 @@ def _get_service() -> "SearchExpanderService":
 
 
 def enqueue(table: str, rowid: int) -> None:
-    """Enqueue a row for semantic expansion.
-
-    Called by DataGraphService after a successful store().
-    Idempotent — if the worker processes the same rowid twice it skips the
-    second pass because search_queries will already be set.
-
-    Args:
-        table:  'data_graph'
-        rowid:  integer primary key of the stored row
-    """
     if table not in _VALID_TABLES:
         logger.warning("[SES] enqueue: unknown table '%s', ignoring", table)
         return
@@ -65,17 +44,6 @@ def enqueue(table: str, rowid: int) -> None:
 # ── Service ───────────────────────────────────────────────────────────────────
 
 class SearchExpanderService:
-    """Background daemon that pops one enqueued row at a time and expands it.
-
-    Worker lifecycle:
-      1. self._self_heal() — at boot, scans for rows with search_queries IS NULL
-         and re-enqueues them (covers queue loss across restarts/crashes).
-      2. while True: wait on threading.Event → drain queue → clear event.
-
-    The Event pattern guarantees no busy-loop and no recursive Timer chain:
-    enqueue() sets the event; the worker wakes, drains until empty, then
-    re-enters wait.
-    """
 
     def __init__(self, db_service=None):
         self._db = db_service or get_shared_db_service()
@@ -88,13 +56,11 @@ class SearchExpanderService:
     # ── Public interface ──────────────────────────────────────────────────────
 
     def enqueue(self, table: str, rowid: int) -> None:
-        """Push (table, rowid) to the FIFO queue and wake the worker."""
         item = json.dumps({"table": table, "rowid": rowid})
         self._store.rpush(_QUEUE_KEY, item)
         self._event.set()
 
     def run(self) -> None:
-        """Blocking worker loop — call from a daemon thread."""
         logger.info("[SES] Worker starting")
         self._self_heal()
         logger.info("[SES] Self-heal complete — entering event wait loop")
@@ -111,7 +77,6 @@ class SearchExpanderService:
     # ── Private: queue ────────────────────────────────────────────────────────
 
     def _dequeue(self) -> Optional[dict]:
-        """Pop and decode one item from the queue. Returns None when empty."""
         raw = self._store.lpop(_QUEUE_KEY)
         if raw is None:
             return None
@@ -124,11 +89,6 @@ class SearchExpanderService:
     # ── Private: self-heal ────────────────────────────────────────────────────
 
     def _self_heal(self) -> None:
-        """Scan data_graph for rows with search_queries IS NULL and re-enqueue them.
-
-        Handles the case where the process crashed mid-flight and the MemoryStore
-        queue was lost. Runs once at boot, before the event wait loop.
-        """
         try:
             with self._db.connection() as conn:
                 data_graph_ids = [
@@ -154,16 +114,6 @@ class SearchExpanderService:
     # ── Private: per-item processing ──────────────────────────────────────────
 
     def _process(self, item: dict) -> None:
-        """Process one queue item end-to-end.
-
-        Steps:
-          1. Load (key, value) from the source table.
-          2. Generate doc2query variants.
-          3. Embed each variant and write to expanded_semantic + expanded_semantic_vec.
-          4. For data_graph: populate key_vec + value_vec if missing.
-          5. Persist variant texts as JSON in search_queries column.
-          6. Resync FTS.
-        """
         table = item.get("table")
         rowid = item.get("rowid")
 
@@ -177,7 +127,6 @@ class SearchExpanderService:
             logger.warning("[SES] Processing failed for %s rowid=%s: %s", table, rowid, e)
 
     def _process_data_graph(self, rowid: int) -> None:
-        """Expand one data_graph row, also backfilling key_vec/value_vec if absent."""
         with self._db.connection() as conn:
             row = conn.execute(
                 "SELECT key, value, kind FROM data_graph WHERE id = ?",
@@ -198,12 +147,7 @@ class SearchExpanderService:
             self._update_search_queries_data_graph(conn, rowid, variants)
 
     def _generate_variants(self, key: str, value: str) -> list:
-        """Generate doc2query variants for the compound 'key: value' text.
-
-        Returns a list of variant strings (may be empty if model unavailable).
-        Always returns a list — empty means skip variant writes but still mark
-        search_queries so self-heal doesn't re-enqueue the row.
-        """
+        """Empty return means skip variant writes but still mark search_queries so self-heal doesn't re-enqueue the row."""
         try:
             from services.doc2query_service import get_doc2query_service
             d2q = get_doc2query_service()

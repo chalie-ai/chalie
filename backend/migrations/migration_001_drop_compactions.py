@@ -1,21 +1,17 @@
 """Migration 001 — drop the compactions table.
 
 The `compactions` table is replaced by append-only `tool_calls` rows with
-`tool_name='compaction'`.  `schema.sql` no longer declares `compactions`, so
-SchemaConvergenceService will drop it automatically on the next boot
-(CHALIE_SCHEMA_ALLOW_DESTRUCTIVE=1, which is the default).
+`tool_name='compaction'`. `schema.sql` no longer declares `compactions` so
+SchemaConvergenceService drops it automatically on the next boot
+(`CHALIE_SCHEMA_ALLOW_DESTRUCTIVE=1`, the default). This file is the
+standalone idempotent script for operators who want to apply the drop
+manually.
 
-This file documents the intent and provides a standalone idempotent script
-for operators who want to apply the drop manually (e.g. in production before
-restarting with the new code).
-
-No backfill is needed — every historical compaction summary is already present
-in `tool_calls` as a durable row (tool_name='compaction') written by
-`_run_full_compaction`. The canonical lookup in
+No backfill is needed — every historical compaction summary is already in
+`tool_calls` (tool_name='compaction') written by `_run_full_compaction`;
 `compaction_persistence.get_compaction()` now reads from that table.
 
-Usage (manual, standalone):
-    python backend/migrations/migration_001_drop_compactions.py [path/to/chalie.db]
+Usage: `python backend/migrations/migration_001_drop_compactions.py [DB_PATH]`
 """
 
 import os

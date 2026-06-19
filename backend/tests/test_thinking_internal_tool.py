@@ -6,28 +6,22 @@ pytestmark = pytest.mark.integration
 
 
 def test_thinking_never_discoverable(db):
-    # thinking is registered but in no discoverable/always_available list.
+    # thinking is registered but DISCOVERABLE=False, so it never enters the
+    # global find_tools roster, and it is in no always_available list either.
     assert "thinking" in {a.get_name() for a in AbilityRegistry.all()}
+    assert "thinking" not in AbilityRegistry.discoverable_names()
     cfg = UserConfig()
     assert "thinking" not in (cfg.always_available or [])
-    assert "thinking" not in (cfg.discoverable or [])
 
 
 def test_thinking_config_mirrors_parent_tool_surface(db):
-    """ThinkingConfig mirrors the parent's LIVE tool surface: its always_available
-    is the snapshot of the parent's active_tools it is handed, and the parent's
-    blocked set carries over. No discovery — a single deliberation pass never runs
-    find_tools, so discoverable is empty."""
     from abilities.thinking import ThinkingConfig
     from configs.channels import UserConfig
     parent = UserConfig()
     active_tools_snapshot = list(parent.always_available or [])
-    tc = ThinkingConfig(active_tools_snapshot, parent.blocked, parent.policy_channel)
+    tc = ThinkingConfig(active_tools_snapshot, parent.policy_channel)
     assert tc.always_available == active_tools_snapshot
-    assert tc.discoverable == []
-    assert tc.blocked == frozenset(parent.blocked or ())
     assert tc.thinking_mode == "high"
-    assert tc.max_iterations == 1
 
 
 def test_thinking_gate_writes_the_public_thinking_level_attr(db):
@@ -55,3 +49,76 @@ def test_thinking_gate_writes_the_public_thinking_level_attr(db):
         "gate did not write the public thinking_level — readers would see the stale value"
     )
     assert mp.thinking_level in {"low", "medium", "high"}
+
+
+# ===========================================================================
+# Migrated from test_ability_thinking_tool_result.py (TKT-975)
+# Ability-specific business-logic tests for the NOTHING sentinel.
+# ===========================================================================
+
+from unittest.mock import patch  # noqa: E402 — appended to existing file
+
+_PROVIDERS_RESOLVE = "services.providers.Providers._resolve"
+
+
+class _ThinkingRecordingProvider:
+    """Stand-in for the resolved LLM provider — the single sanctioned boundary."""
+
+    CONTENT_FIELD_LABEL = "message.content"
+
+    def __init__(self, reply_text: str) -> None:
+        self._reply_text = reply_text
+
+    def get_context_limit(self):
+        return 200000
+
+    def estimate_request_tokens(self, dto):
+        return 1
+
+    def send(self, dto):
+        from services.provider_api import ProviderApiResponse
+        return ProviderApiResponse(text=self._reply_text, model="recorder", tool_calls=None)
+
+
+def _build_thinking_parent(raw_input: str):
+    """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
+    fires the thinking pass from."""
+    from services.message_processor import MessageProcessor
+    from services.transcript_service import write_input_row
+
+    parent = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(parent, raw_input, None)
+    parent.config = UserConfig()
+    parent.uid = write_input_row("user", "user", raw_input)
+    parent.active_tools = list(parent.config.always_available or [])
+    return parent
+
+
+def _dispatch_thinking(parent, reply_text: str) -> str:
+    """Drive the real turn-0 dispatch with a recorder that returns *reply_text*."""
+    from abilities._dispatcher import ToolDispatcher
+
+    recorder = _ThinkingRecordingProvider(reply_text)
+    with patch(_PROVIDERS_RESOLVE, return_value=recorder):
+        return ToolDispatcher(parent).dispatch("thinking", {})
+
+
+@pytest.mark.unit
+def test_nothing_sentinel_yields_empty_body(db):
+    """The ``NOTHING`` sentinel collapses to an empty body — ``ToolResult.ok("")``
+    rendered as ``[thinking(status=success)]\\n\\n[end:thinking]`` (the body line
+    is empty, the envelope still well-formed)."""
+    out = _dispatch_thinking(_build_thinking_parent("Trivial request."), "NOTHING")
+
+    assert out == "[thinking(status=success)]\n\n[end:thinking]"
+
+
+@pytest.mark.unit
+def test_nothing_sentinel_is_case_insensitive(db):
+    """run() does ``text.strip().upper() == "NOTHING"`` — so lowercase and
+    surrounding whitespace still resolve to the empty-body envelope."""
+    lowercase = _dispatch_thinking(_build_thinking_parent("Trivial A."), "nothing")
+    assert lowercase == "[thinking(status=success)]\n\n[end:thinking]"
+
+    padded = _dispatch_thinking(_build_thinking_parent("Trivial B."), "  NOTHING  \n")
+    assert padded == "[thinking(status=success)]\n\n[end:thinking]"

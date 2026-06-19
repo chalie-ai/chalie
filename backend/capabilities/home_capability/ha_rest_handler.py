@@ -47,7 +47,6 @@ def _post(
 
 
 def probe(url: str, token: str, verify_ssl: bool) -> dict:
-    """Health check -- GET /api/. Returns the JSON body or raises."""
     return _get(url, "/api/", token, verify_ssl).json()
 
 
@@ -59,9 +58,7 @@ def list_devices(
     area: str | None = None,
     limit: int = 50,
 ) -> dict:
-    """List HA entities, optionally filtered by domain and/or area."""
     states = _get(url, "/api/states", token, verify_ssl).json()
-
     if domain:
         states = [s for s in states if s["entity_id"].startswith(f"{domain}.")]
 
@@ -91,8 +88,8 @@ def list_devices(
 
 
 def get_state(url: str, token: str, verify_ssl: bool, entity_id: str) -> dict:
-    """Get the full state of a single entity."""
     data = _get(url, f"/api/states/{entity_id}", token, verify_ssl).json()
+
     return {
         "entity_id": data["entity_id"],
         "state": data["state"],
@@ -110,8 +107,8 @@ def control(
     service: str,
     service_data: dict | None = None,
 ) -> dict:
-    """Call a service on an entity (e.g. light/turn_on)."""
     domain = entity_id.split(".")[0]
+
     body = {"entity_id": entity_id}
     if service_data:
         body.update(service_data)
@@ -120,8 +117,8 @@ def control(
 
 
 def list_automations(url: str, token: str, verify_ssl: bool) -> dict:
-    """List all automation entities."""
     states = _get(url, "/api/states", token, verify_ssl).json()
+
     autos = [
         {
             "entity_id": s["entity_id"],
@@ -136,7 +133,6 @@ def list_automations(url: str, token: str, verify_ssl: bool) -> dict:
 
 
 def trigger_automation(url: str, token: str, verify_ssl: bool, automation_id: str) -> dict:
-    """Manually trigger an automation."""
     _post(
         url,
         "/api/services/automation/trigger",

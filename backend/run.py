@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""
-Single entry point for Chalie.
+"""Single entry point for Chalie.
 
-Start with:
-    python backend/run.py
-
-CLI options:
-    python backend/run.py --port=9000
-    python backend/run.py --host=127.0.0.1
-
-All worker threads, database initialization, and the Flask+WebSocket server
+CLI: `python backend/run.py [--port=9000] [--host=127.0.0.1]`
+All worker threads, database initialisation, and the Flask+WebSocket server
 run in a single process. Voice runs natively when deps are installed.
 """
 
@@ -96,17 +89,11 @@ def _start_model_preload():
 
 
 def _migrate_legacy_policy_rules(database_service) -> None:
-    """Copy a legacy ``policy_rules`` table 1:1 into the flat ``policy`` table,
-    BEFORE schema convergence drops policy_rules.
-
-    Upgrade-path only.  On a fresh install there is no policy_rules, so this is a
-    no-op and — critically — does NOT create the ``policy`` table early.  Creating
-    any table here would make the DB look non-empty to convergence's freshness
-    check, which would then skip schema.sql's INSERT OR IGNORE seed pass entirely
-    — including the row that marks ``api_key`` sensitive, persisting the REST API
-    key in cleartext on fresh installs.  Convergence creates ``policy`` (schema.sql)
-    and runs the seeds; the declarative policy seed is applied separately, after
-    convergence (see _init_database)."""
+    """Upgrade-path only — on a fresh install this is a no-op. Critically does
+    NOT create the ``policy`` table early: making the DB look non-empty to
+    convergence's freshness check would skip the schema.sql seed pass (incl.
+    the row that marks ``api_key`` sensitive, persisting the REST API key in
+    cleartext on fresh installs)."""
     with database_service.connection() as conn:
         has_legacy = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='policy_rules'"
@@ -130,7 +117,6 @@ def _migrate_legacy_policy_rules(database_service) -> None:
 
 
 def _init_database():
-    """Initialize SQLite database via declarative convergence and return the service."""
     from services.database_service import get_shared_db_service
     from services.schema_convergence_service import SchemaConvergenceService
 
@@ -312,9 +298,6 @@ def _register_workers(manager, host: str, port: int) -> None:
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)
 
-    from services.moment_context_service import moment_context_worker
-    manager.register_service("moment-context-service", moment_context_worker)
-
     from services.subconscious_worker import subconscious_worker
     manager.register_service("subconscious-worker", subconscious_worker)
 
@@ -399,6 +382,15 @@ def main():
 
     import runtime_config
     runtime_config.set({"port": port, "host": host})
+
+    # Apply any staged whole-instance restore BEFORE the DB is opened. The first
+    # chalie.db open happens inside _init_database() → converge() below, so the
+    # artifact swap must complete here or convergence would run against the old
+    # DB. SnapshotService.apply_pending owns its own try/except (boot safety):
+    # a failed restore is rolled back + logged and never aborts startup.
+    # Paired with services/snapshot_service.py (Phase B) and api/snapshot.py.
+    from services.snapshot_service import SnapshotService
+    SnapshotService.apply_pending()
 
     _start_model_preload()
 

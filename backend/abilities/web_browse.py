@@ -28,7 +28,8 @@ happens at the outer ``web_browse`` tool.
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._delegate import delegate_goal, delegate_result
+from abilities._delegate import delegate_result
+from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
 
@@ -39,11 +40,12 @@ class WebBrowseAbility(Ability):
 
     def get_summary(self) -> str:
         return (
-            "Delegate an interactive web-browsing task to a focused agent that "
-            "drives a real browser — rendering pages, filling forms, navigating "
-            "flows, and taking screenshots it inspects with its own vision — and "
-            "reports what it finds. Screenshots are saved as documents whose "
-            "doc_id any vision-capable tool can view later."
+            "Spawn a subagent with full web browser control to perform an action on "
+            "one or more websites. It drives a real browser — rendering pages, "
+            "filling forms, navigating multi-step flows — and inspects screenshots "
+            "with its own vision. Screenshots are saved as documents whose doc_id "
+            "any vision tool can view later. Use for acting on a specific site — "
+            "not for general lookups."
         )
 
     def get_examples(self) -> list[str]:
@@ -64,7 +66,7 @@ class WebBrowseAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "goal": {
+            Keys.goal: {
                 "type": "string",
                 "description": (
                     "What to accomplish in the browser. Include everything the "
@@ -73,14 +75,14 @@ class WebBrowseAbility(Ability):
                 ),
             },
         },
-        "required": ["goal"],
+        "required": [Keys.goal],
     }
 
     # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
     # ``""`` key covers action-less tools) rejects a missing/empty ``goal`` with
     # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
     # goal never spawns an expensive browser delegate on nothing.
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("goal",)}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.goal,)}
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
@@ -89,7 +91,7 @@ class WebBrowseAbility(Ability):
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         cfg = WebBrowseConfig(self.mp.config.policy_channel)
-        result = MessageProcessor.process(delegate_goal(params), cfg)
+        result = MessageProcessor.process(self.param(params, Keys.goal, required=True), cfg)
         tr = delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."
         )
@@ -97,12 +99,8 @@ class WebBrowseAbility(Ability):
 
     @staticmethod
     def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
-        """Append the run's screenshot doc_ids to a successful answer.
-
-        Mechanical, not prompt-dependent: even when the delegate forgets to
-        mention its screenshots, the caller still receives every doc_id and the
-        tool that views one — so a follow-up "what does it show?" can be
-        answered with vision instead of a re-browse."""
+        """Mechanical, not prompt-dependent: the caller receives every doc_id
+        even when the delegate forgets to mention its screenshots."""
         if tr.status != "success" or not shots:
             return tr
         lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)

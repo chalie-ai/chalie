@@ -1,11 +1,3 @@
-"""
-Unit tests for Chat UI wrapper contract integration.
-
-Covers:
-  - IntentService intent delivery via __chat_ui__ wrapper
-  - __chat_ui__ auto-registration via WrapperAuthService.create_token with wrapper_id_override
-"""
-
 import pytest
 
 
@@ -16,10 +8,8 @@ import pytest
 
 @pytest.mark.unit
 class TestIntentDelivery:
-    """CognitiveIntents addressed to __chat_ui__ must be stored and retrievable."""
 
     def test_emit_and_retrieve_present_response_intent(self):
-        """IntentService can emit and retrieve a present_response intent for __chat_ui__."""
         from services.memory_store import MemoryStore
         from services.intent_service import IntentService, CognitiveIntent
         import uuid

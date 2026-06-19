@@ -1,10 +1,4 @@
-"""
-CaldavHandler — protocol-specific CalDAV logic for the mail capability.
 
-Plain class (no AbstractCapability subclass). Credentials are passed per-call
-for server-facing methods; DB-only methods query ``scheduled_items`` directly.
-Signal emission uses ``capability_id='mail'`` throughout.
-"""
 
 from __future__ import annotations
 
@@ -60,7 +54,6 @@ _SQL_INSERT_NOTIFICATION = """INSERT OR IGNORE INTO scheduled_items
 
 
 def _make_date_utc(d: object) -> _dt_module.datetime:
-    """Convert date or datetime to UTC-aware datetime. date-only → midnight UTC."""
     if isinstance(d, _dt_module.datetime):
         if d.tzinfo is not None:
             return d.astimezone(_dt_module.timezone.utc)
@@ -75,7 +68,6 @@ def _events_overlap(a: dict, b: dict) -> bool:
 
 
 def _find_overlap_pairs(events: list, now: _dt_module.datetime) -> list:
-    """Return ``(ev_a, ev_b, canon_key)`` tuples for upcoming overlapping events."""
     upcoming = [
         e for e in events
         if e.get("dtstart") and e.get("uid")
@@ -90,7 +82,6 @@ def _find_overlap_pairs(events: list, now: _dt_module.datetime) -> list:
 
 
 def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
-    """Return ``(ev_a, ev_b, gap_minutes, canon_key)`` for gaps < 5 minutes."""
     threshold = _BACK_TO_BACK_GAP.total_seconds() / 60
     upcoming = sorted(
         [e for e in events
@@ -108,11 +99,6 @@ def _find_back_to_back_pairs(events: list, now: _dt_module.datetime) -> list:
 
 
 def _get_user_tz():
-    """Return user's ZoneInfo timezone or None.
-
-    Delegates to locale_service.get_timezone().
-    Returns None when the result is plain UTC (no user timezone detected).
-    """
     from services.locale_service import get_timezone
     tz = get_timezone()
     if tz.key == "UTC":
@@ -121,7 +107,6 @@ def _get_user_tz():
 
 
 def _next_morning_8am() -> _dt_module.datetime:
-    """Return the next 08:00 in the user's local timezone (UTC fallback)."""
     from services.locale_service import local_now, to_utc
     now = local_now()
     local_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
@@ -136,14 +121,12 @@ def _next_morning_8am() -> _dt_module.datetime:
 
 
 class CaldavHandler:
-    """Protocol-specific CalDAV operations for the mail capability."""
 
     # ------------------------------------------------------------------
     # Server connection
     # ------------------------------------------------------------------
 
     def open_client(self, url: str, username: str, password: str):
-        """Create and return an authenticated caldav.DAVClient."""
         if not _CALDAV_AVAILABLE:
             raise RuntimeError(_ERR_CALDAV_NOT_INSTALLED)
         return _caldav_lib.DAVClient(
@@ -160,7 +143,6 @@ class CaldavHandler:
         past_days: int = _DEFAULT_PAST_DAYS,
         future_days: int = _DEFAULT_FUTURE_DAYS,
     ) -> list[dict]:
-        """Fetch events from all calendars on *client* within the date range."""
         if not _CALDAV_AVAILABLE:
             logger.error("[caldav_handler] ingest: 'caldav' package unavailable.")
             return []
@@ -214,7 +196,6 @@ class CaldavHandler:
     # ------------------------------------------------------------------
 
     def parse_event(self, raw_event: object, calendar_name: str) -> list[dict]:
-        """Parse a CalDAV resource into normalised event dicts (one per VEVENT)."""
         results: list[dict] = []
 
         try:
@@ -299,11 +280,6 @@ class CaldavHandler:
     # ------------------------------------------------------------------
 
     def upsert_events(self, events: list[dict], now: _dt_module.datetime) -> None:
-        """Mark-sweep delta-sync events into scheduled_items (source='mail').
-
-        Creates derivative items: 15-min alerts, conflict/b2b notifications,
-        daily digest prompt, and a one-time greeting.
-        """
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
@@ -459,11 +435,6 @@ class CaldavHandler:
     # ------------------------------------------------------------------
 
     def create_event(self, client, params: dict) -> dict:
-        """Create a new VEVENT on the CalDAV server.
-
-        Required params: summary, dtstart (ISO 8601 UTC), dtend (ISO 8601 UTC).
-        Optional: location, description, calendar_name.
-        """
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
@@ -534,7 +505,6 @@ class CaldavHandler:
 
     @staticmethod
     def _find_event_by_uid(client, uid: str):
-        """Search all calendars for an event matching ``uid``. Returns the event or None."""
         principal = client.principal()
         for calendar in principal.calendars():
             try:
@@ -547,7 +517,6 @@ class CaldavHandler:
 
     @staticmethod
     def _parse_ical_from_event(found_event):
-        """Parse the icalendar Calendar object from a CalDAV event."""
         try:
             ical_data = (
                 found_event.data if isinstance(found_event.data, str)
@@ -559,7 +528,6 @@ class CaldavHandler:
 
     @staticmethod
     def _apply_event_updates(ical, params: dict) -> None:
-        """Apply field updates from ``params`` onto the VEVENT component in-place."""
         for component in ical.walk():
             if component.name != "VEVENT":
                 continue
@@ -583,11 +551,6 @@ class CaldavHandler:
             break
 
     def update_event(self, client, params: dict) -> dict:
-        """Update an existing CalDAV event by UID.
-
-        Required params: uid.
-        Optional: summary, dtstart, dtend, location, description.
-        """
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
@@ -614,7 +577,6 @@ class CaldavHandler:
             return {"error": str(exc)}
 
     def delete_event(self, client, params: dict) -> dict:
-        """Delete a calendar event from the CalDAV server by UID."""
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
 
@@ -643,11 +605,6 @@ class CaldavHandler:
     # ------------------------------------------------------------------
 
     def find_free_slots(self, params: dict) -> dict:
-        """Find free time slots within working hours by querying scheduled_items.
-
-        params: date_from, date_to, min_duration_minutes (30), working_hours_start (8),
-                working_hours_end (18).
-        """
         try:
             from datetime import timezone as _tz
             from services.database_service import get_shared_db_service
@@ -722,7 +679,6 @@ class CaldavHandler:
             return {"error": f"Failed to find free slots: {exc}"}
 
     def get_attendees(self, params: dict) -> dict:
-        """Return resolved attendees for a calendar event by UID."""
         uid = params.get("uid") or params.get("event_uid")
         if not uid:
             return {"error": "uid is required"}

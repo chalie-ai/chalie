@@ -52,19 +52,31 @@ _ASYNC_PROPERTY: dict = {
 
 
 class Ability(ABC):
-    """Base class for every dispatchable tool.
-
-    A concrete Ability implements five getters (the metadata) plus ``run()`` (the
-    behaviour). The getters read ``self.mp`` (the invoking MessageProcessor,
+    """The getters read ``self.mp`` (the invoking MessageProcessor,
     constructor-injected) when a value depends on the live request; at
     ``self.mp is None`` — introspection / search-index build — they MUST return
     deterministic base text.
 
-    Tool *scope* (always-available vs discoverable) lives on ProcessorConfig
-    (always_available / discoverable / blocked). Whether a call blocks or runs in
-    the background is a per-call decision (the framework ``async`` flag), not an
-    ability-level trait.
+    Tool *scope* is two flags and nothing else. ``DISCOVERABLE`` (below) decides
+    whether ``find_tools`` may ever surface this ability — it is a single global
+    trait of the ability, not a per-channel list. A MessageProcessor reaches a
+    tool one of exactly two ways: the config injects it directly
+    (``ProcessorConfig.always_available``), or — if the ability is
+    ``DISCOVERABLE`` — the processor discovers it through ``find_tools`` (which
+    the processor only carries when ``find_tools`` is in its always_available).
+    There is no per-config discoverable/blocked allow-list. Whether a call blocks
+    or runs in the background is a per-call decision (the framework ``async``
+    flag), not an ability-level trait.
     """
+
+    # Global discovery flag. True (the default) means find_tools may surface this
+    # ability — semantically via the abilities.sqlite index (query mode) and by
+    # exact name (select mode). False removes it from the index AND the select
+    # roster entirely: it can ONLY reach a processor by being pinned directly in
+    # that processor's ProcessorConfig.always_available. Internal/framework tools
+    # (the compactors, thinking, find_tools itself, the pattern writers, the raw
+    # web tools, memory) set this False; user-facing tools leave it True.
+    DISCOVERABLE: ClassVar[bool] = True
 
     # Constructor-injected, the invoking MessageProcessor (the "parent" of this
     # tool call). A tool reads ALL its context off this — self.mp.config.channel,
@@ -135,80 +147,52 @@ class Ability(ABC):
 
     @abstractmethod
     def get_name(self) -> str:
-        """The tool's stable identifier (the name the model calls)."""
         ...
 
     @abstractmethod
     def get_summary(self) -> str:
-        """The tool description shown to the model AND the base text embedded for
-        semantic search. Override to enrich at runtime (e.g. bash appends the cwd)
-        — but gate enrichment on ``self.mp is not None`` so the build-time index
-        stays deterministic."""
+        """Override to enrich at runtime (e.g. bash appends the cwd) — gate
+        enrichment on ``self.mp is not None`` so the build-time index stays
+        deterministic."""
         ...
 
     @abstractmethod
     def get_examples(self) -> list[str]:
-        """6–8 natural-language example invocations, embedded + FTS-indexed for
-        find_tools search."""
+        """6–8 entries, embedded + FTS-indexed for find_tools search."""
         ...
 
     @abstractmethod
     def get_search_tooltip(self) -> str:
-        """A short search-facing label for the tool."""
         ...
 
     @abstractmethod
     def get_parameters(self) -> dict:
-        """The bare JSON-schema body for the tool's inputs
-        (``{"type": "object", "properties": {...}, "required": [...]}``) WITHOUT
-        the framework fields. Override to enrich at runtime (e.g. find_tools folds
-        the discoverable-tools index into the ``select`` description) — gate on
-        ``self.mp`` so the build-time schema stays deterministic."""
+        """Override to enrich at runtime (e.g. bash folds the live cwd into its
+        description). When the enrichment reads live request state, gate on
+        ``self.mp`` so the build-time (mp=None) schema stays deterministic for
+        the search-index/SHA build. (find_tools enriches from the global
+        discoverable roster and is itself DISCOVERABLE=False, so it is never
+        part of that build.)"""
         ...
 
     # ── Instance method — the actual tool logic ───────────────────────────────
 
     @abstractmethod
     def run(self, params: dict) -> "ToolResult":
-        """Execute the ability. Called by ToolDispatcher._run().
-
-        The invoking MessageProcessor is available as ``self.mp`` (read
-        ``self.mp.config.channel`` where the old signature passed ``channel``),
-        and the flattened client telemetry as ``self.telemetry`` (or None).
-
-        MUST return an :class:`abilities._result.ToolResult`, built ONLY via
-        ``ToolResult.ok(body, *, rich=None, **meta)`` /
-        ``ToolResult.err(message, *, code, hint=None, valid=(), **meta)``:
-        - ``ok`` body is prose (``str``, shown verbatim) or structured data
-          (``dict``/``list``, rendered as compact JSON); ``rich=`` is an optional
-          card payload; ``**meta`` is the flat tag map.
-        - ``err`` carries a stable kebab-case ``code``, a one-line ``hint``, and
-          a ``valid`` tuple of acceptable actions/values.
-
-        The ability NEVER formats the ``[tool(...)]`` wire envelope — the
-        dispatcher (``ToolDispatcher._render``) owns it. Returning anything that
-        is not a ``ToolResult`` HARD-FAILS as ``code=non-canonical-result``.
-        Raise ``ToolParamError`` (via ``self.param``) for bad inputs; the
-        dispatcher renders it canonically.
-
-        Args:
-            params: Input parameters from the LLM, framework keys stripped.
-
-        Spec §5.
-        """
+        """MUST return a :class:`abilities._result.ToolResult` — anything else
+        HARD-FAILS as ``code=non-canonical-result``. Raise ``ToolParamError``
+        (via ``self.param``) for bad inputs; the dispatcher renders it
+        canonically. The ability NEVER formats the ``[tool(...)]`` wire envelope
+        — the dispatcher owns it."""
         ...
 
     # ── The single, final tool-descriptor assembler ───────────────────────────
 
     @typing.final
     def get_input_schema(self) -> dict:
-        """Assemble the full LLM-facing tool descriptor from the getters and inject
-        the framework fields. This is the ONE place a tool schema is built and the
-        ONE place ``act_summary`` + ``async`` are declared. ``final`` — sealed at
-        import by ``__init_subclass__``.
-
-        Spec §4.3.
-        """
+        """This is the ONE place a tool schema is built and the ONE place
+        ``act_summary`` + ``async`` are declared. ``final`` — sealed at import
+        by ``__init_subclass__``."""
         return {
             "name": self.get_name(),
             "description": self.get_summary(),
@@ -216,10 +200,7 @@ class Ability(ABC):
         }
 
     def _inject_framework_fields(self, params: dict) -> dict:
-        """Return a copy of *params* with the framework fields added: ``act_summary``
-        (always, required) and ``async`` (iff this channel backgrounds — i.e. the
-        invoking ``mp``'s config sets ``SUPPORTS_ASYNC``). Deep-copies so a getter
-        that returns a shared dict is never mutated."""
+        """Deep-copies so a getter that returns a shared dict is never mutated."""
         schema = copy.deepcopy(params)
         properties = schema.setdefault("properties", {})
         required = schema.setdefault("required", [])
@@ -241,36 +222,22 @@ class Ability(ABC):
         params: dict,
         name: str,
         *,
-        aliases: tuple[str, ...] = (),
         default: object = _MISSING,
         choices: "tuple | None" = None,
         clamp: "tuple | None" = None,
         required: bool = False,
     ) -> object:
-        """Resolve one input the model passed, with self-correcting failures.
-
-        Resolution order: the canonical ``name`` first, then each alias in turn
-        (the TKT-834 ``read`` alias-ladder generalised) — the first key present
-        with a non-None value wins. Missing → *default* (or a ``ToolParamError``
-        when *required* / no default). ``choices`` validates membership; ``clamp``
-        ``(lo, hi)`` bounds a numeric. All failures raise ``ToolParamError`` —
-        the dispatcher catches it and renders ``code=invalid-param`` with a
-        ``hint`` and ``valid=`` so the model fixes the call without re-reading the
-        schema. ``final`` — sealed at import by ``__init_subclass__``.
-        """
-        value = _MISSING
-        for key in (name, *aliases):
-            if key in params and params[key] is not None:
-                value = params[key]
-                break
-
-        if value is _MISSING:
+        """All failures raise ``ToolParamError`` — the dispatcher catches it and
+        renders ``code=invalid-param`` with a ``hint`` and ``valid=`` so the model
+        fixes the call without re-reading the schema. ``final`` — sealed at import
+        by ``__init_subclass__``."""
+        value = params.get(name)
+        if value is None:
             if required:
-                tried = ", ".join((name, *aliases))
                 raise ToolParamError(
                     f"Required parameter '{name}' is missing.",
                     code="invalid-param",
-                    hint=f"pass one of: {tried}.",
+                    hint=f"pass '{name}'.",
                 )
             if default is _MISSING:
                 return None

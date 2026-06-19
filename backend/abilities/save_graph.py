@@ -1,18 +1,12 @@
-"""SaveGraph — record a durable, non-behavioural fact in the data graph.
-
-Reachable when a processor lists ``"save_graph"`` in its ``ALWAYS_AVAILABLE``
-or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
-
-Budget state lives on the calling processor (read via
-``self.mp``).  PMP initialises ``_save_graph_calls = 0`` in
-``__init__``; this Ability uses ``getattr`` defaults so it remains usable
-from any processor that opts it in.
-"""
+"""SaveGraph — record a durable, non-behavioural fact in the data graph."""
+import json
 from typing import ClassVar
 
 from abilities._budget import BudgetCappedAbility
+from abilities._params import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
+from services.act_trail import ActTrail
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
 
 # Subset: exclude behavioral_pattern (own tool) and system (internal use).
@@ -25,15 +19,39 @@ _INVALID_KIND_HINT = "pick one of the allowed kinds, e.g. kind=user_specific key
 
 class SaveGraph(BudgetCappedAbility):
     SYSTEM = True
+    DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
 
-    BUDGET_COUNTER_ATTR: ClassVar[str] = "_save_graph_calls"
     BUDGET_CAP: ClassVar[int] = 50
+
+    def _seen_from_trail(self) -> set[tuple[str, str, str]]:
+        """Build the dedup set from this turn's prior save_graph rows."""
+        proc = self.mp
+        if proc is None:
+            return set()
+        channel = getattr(getattr(proc, "config", None), "channel", None)
+        turn_id = getattr(proc, "turn_id", None)
+        if channel is None or turn_id is None:
+            return set()
+        seen: set[tuple[str, str, str]] = set()
+        for row in ActTrail().fetch_by_turn(channel, turn_id):
+            if row.get("tool_name") != "save_graph":
+                continue
+            try:
+                p = json.loads(row.get("params") or "{}")
+            except (ValueError, TypeError):
+                continue
+            k = p.get(Keys.kind, "")
+            key = p.get(Keys.key, "")
+            val = p.get(Keys.value, "")
+            if k and key and val:
+                seen.add((k, key.lower(), val.lower()))
+        return seen
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty kind/key/value as code=missing-params before run() is reached
     # (precedent: _delegate.py, file_permissions.py). The pre-gate is
     # truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("kind", "key", "value")}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.kind, Keys.key, Keys.value)}
 
     def get_name(self) -> str:
         return "save_graph"
@@ -63,11 +81,11 @@ class SaveGraph(BudgetCappedAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "enum": ALLOWED_KINDS},
-            "key": {"type": "string"},
-            "value": {"type": "string"},
+            Keys.kind: {"type": "string", "enum": ALLOWED_KINDS},
+            Keys.key: {"type": "string"},
+            Keys.value: {"type": "string"},
         },
-        "required": ["kind", "key", "value"],
+        "required": [Keys.kind, Keys.key, Keys.value],
     }
 
     def get_parameters(self) -> dict:
@@ -79,7 +97,7 @@ class SaveGraph(BudgetCappedAbility):
             return capped
 
         proc = self.mp
-        kind = params.get("kind", "")
+        kind = params.get(Keys.kind, "")
         if kind not in ALLOWED_KINDS:
             return ToolResult.err(
                 f"Unknown kind {kind!r}; not a storable fact kind.",
@@ -91,8 +109,8 @@ class SaveGraph(BudgetCappedAbility):
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only key/value slips past it and must be rejected here
         # (precedent: file_permissions.py).
-        key = params.get("key", "").strip()
-        value = params.get("value", "").strip()
+        key = params.get(Keys.key, "").strip()
+        value = params.get(Keys.value, "").strip()
         if not key or not value:
             missing = ", ".join(
                 name for name, val in (("key", key), ("value", value)) if not val
@@ -103,9 +121,10 @@ class SaveGraph(BudgetCappedAbility):
                 valid=("kind", "key", "value"),
             )
 
+        # Derive the dedup set from the persisted trail — single DB round-trip.
+        seen = self._seen_from_trail()
         dedup_key = (kind, key.lower(), value.lower())
-        seen: set | None = getattr(proc, "_save_graph_seen", None) if proc else None
-        if seen is not None and dedup_key in seen:
+        if dedup_key in seen:
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})
 
         # DataGraphService.store() never raises — it swallows every failure
@@ -124,12 +143,6 @@ class SaveGraph(BudgetCappedAbility):
                 code="store-failed",
                 hint="check the data graph service logs; nothing was persisted",
             )
-
-        self.bump_budget()
-        if proc is not None:
-            if seen is None:
-                proc._save_graph_seen = set()
-            proc._save_graph_seen.add(dedup_key)
 
         if result.get("status") == "reinforced":
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})

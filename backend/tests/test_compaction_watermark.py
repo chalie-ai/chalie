@@ -1,12 +1,3 @@
-"""Feature tests for compaction watermark and over-cap detection.
-
-Spec change: OVER_CAP sentinel is gone, replaced by
-RequestOverCapError. Providers is mp-free; send(dto) takes a ProviderApiRequest.
-_over_cap() and build_request_body() are deleted; replaced by
-providers.measure(dto) + the cap formula. Tests migrated to exercise the real
-new production entry points.
-"""
-
 import pytest
 from services import compaction_persistence, transcript_service
 from services.database_service import get_shared_db_service
@@ -83,10 +74,7 @@ def test_get_context_limit_reads_declared_max_tokens_capped():
 def _seed_selected_ollama(db, max_tokens):
     """Seed an offline Ollama provider and mark it selected, returning its id.
 
-    OllamaClient.estimate_request_tokens / get_context_limit (via declared
-    max_tokens) run with zero network, so the cap check exercises the real
-    provider stack without a live model. client.send(dto) is never reached
-    by the over-cap path — RequestOverCapError is raised before the call."""
+    Uses zero network - RequestOverCapError is raised before send(dto) is called."""
     cur = db.execute(
         "INSERT INTO providers (name, platform, model, host, max_tokens) "
         "VALUES ('fit-test', 'ollama', 'fit-model', 'http://localhost:11434', ?)",
@@ -103,15 +91,6 @@ def _seed_selected_ollama(db, max_tokens):
 
 
 def test_measure_true_when_full_request_reaches_threshold(db):
-    """Compact-first (canonical step 3): when the FULL request's measured token
-    count reaches RS >= window - max(10% window, 8k), providers.measure(dto)
-    returns a value at or above the cap so the ACT loop fires compaction BEFORE
-    sending — no trimmed/partial-view turn, no API call.
-
-    _over_cap(system, messages, tools, provider) deleted; replaced by
-    providers.measure(dto) which exercises the real ProviderClient.estimate_request_tokens
-    path. The cap formula is preserved: window - max(int(0.10*window), 8000).
-    """
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
@@ -147,11 +126,6 @@ def test_measure_true_when_full_request_reaches_threshold(db):
 
 
 def test_measure_false_when_request_fits(db):
-    """When the request fits under the cap, providers.measure(dto) returns a
-    value below the cap so send() proceeds to the API — no compaction fires.
-
-    _over_cap deleted; replaced by providers.measure(dto) < cap.
-    """
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
@@ -182,13 +156,7 @@ def test_measure_false_when_request_fits(db):
 
 
 def test_send_raises_request_over_cap_without_calling_provider(db):
-    """providers.send(dto) raises RequestOverCapError when the request exceeds
-    the cap — the offline provider is never reached (zero network), proving
-    compaction fires BEFORE any API call (compact-first).
-
-    OVER_CAP sentinel replaced by RequestOverCapError. Sentinel
-    pattern `response is OVER_CAP` becomes `except RequestOverCapError`.
-    """
+    """providers.send(dto) raises RequestOverCapError before any API call (zero network)."""
     from services.message_processor import MessageProcessor
     from services.provider_api import RequestOverCapError
     from configs.channels import UserConfig
@@ -218,13 +186,8 @@ def test_send_raises_request_over_cap_without_calling_provider(db):
 
 
 def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db):
-    """Canonical step 4.2 (rare fallback): ChatHistoryCompactor shrinks its
-    bare {system + prior + get_previous_messages} request by dropping the OLDEST
-    message one at a time until it fits the cap. Real provider stack, no model.
-
-    provider.build_request_body(system, [msg], []) removed; compactor
-    now calls parent.providers.measure(candidate_dto) via ProviderApiRequest.
-    """
+    """Rare fallback (step 4.2): compactor drops the oldest message one at a time
+    until the bare request fits the cap. Real provider stack, no live model."""
     from abilities.chat_history_compactor import ChatHistoryCompactor
     from services.message_processor import MessageProcessor
     from services.system_message_prompt import ChatHistoryCompactionSystemPrompt

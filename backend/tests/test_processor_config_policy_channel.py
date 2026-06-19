@@ -11,18 +11,18 @@ def _make(policy_channel):
     return StubProcessorConfig(
         channel="user", role="user", policy_channel=policy_channel,
         build_user_prompt=lambda mp: "", build_user_definition=lambda mp: "",
-        build_system_prompt=lambda mp: "", always_available=[], discoverable=[],
-        blocked=frozenset(), max_iterations=None, skip_transcript=False,
+        build_system_prompt=lambda mp: "", always_available=[],
+        skip_transcript=False,
         skip_input_row=False, suppress_history=False, broadcast_to=None,
         memory_seed=False,
     )
 
 
 def test_enum_has_three_values():
-    vals = {c.value for c in ProcessorConfig.POLICY_CHANNEL}
+    vals = {c.value for c in ProcessorConfig.PolicyChannel}
     assert vals == {"chat", "subconscious", "external_agent"}
 
 
 def test_usage_class_derives_from_policy_channel():
-    assert _make(ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS).usage_class == "subconscious"
-    assert _make(ProcessorConfig.POLICY_CHANNEL.CHAT).usage_class == "chat"
+    assert _make(ProcessorConfig.PolicyChannel.SUBCONSCIOUS).usage_class == "subconscious"
+    assert _make(ProcessorConfig.PolicyChannel.CHAT).usage_class == "chat"

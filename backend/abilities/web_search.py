@@ -20,10 +20,10 @@ Properties (spec §5b "Properties of every delegate tool"):
     no personality, no history, no world state.
   - Goal-driven system prompt — short, task-specific.
   - Finite tool surface — always_available lists exactly what the delegate needs;
-    discoverable=[] prevents discovery of anything else.
-  - No recursion — with no find_tools and discoverable=[], a delegate can only
-    call what is in always_available; delegate tools are not in that surface, so
-    a delegate can never spawn another delegate.
+    it does NOT pin find_tools, so the delegate cannot discover anything else.
+  - No recursion — with no find_tools pinned, a delegate can only call what is in
+    always_available; delegate tools are not in that surface, so a delegate can
+    never spawn another delegate.
   - Per-call async — the model may pass ``async: true`` (exposed only on
     SUPPORTS_ASYNC channels) to run the search in the background and receive the
     result as a later turn; the framework (Ability.execute) wraps run() in a
@@ -39,7 +39,8 @@ happens at the outer ``web_search`` tool.
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._delegate import delegate_goal, delegate_result
+from abilities._delegate import delegate_result
+from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
 
@@ -50,8 +51,10 @@ class WebSearchAbility(Ability):
 
     def get_summary(self) -> str:
         return (
-            "Delegate a web-research task to a focused agent that searches the web, "
-            "reads the best sources, and returns a grounded synthesis with citations."
+            "Research something online using various search engines. A focused agent "
+            "runs the searches, reads the best sources, and returns a grounded "
+            "synthesis with citations. Use for looking things up — not for "
+            "interacting with a specific page."
         )
 
     def get_examples(self) -> list[str]:
@@ -72,19 +75,19 @@ class WebSearchAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "What to research on the web.",
             },
         },
-        "required": ["query"],
+        "required": [Keys.query],
     }
 
     # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
     # ``""`` key covers action-less tools) rejects a missing/empty ``query`` with
     # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
     # query never spawns an expensive delegate on an empty goal.
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("query",)}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.query,)}
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
@@ -93,7 +96,7 @@ class WebSearchAbility(Ability):
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         result = MessageProcessor.process(
-            delegate_goal(params),
+            self.param(params, Keys.query, required=True),
             WebSearchConfig(self.mp.config.policy_channel),
         )
         return delegate_result(

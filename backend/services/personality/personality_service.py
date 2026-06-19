@@ -55,7 +55,6 @@ class PersonalityService:
         self._tuple = None
 
     def voice_for(self, tup: tuple[int, int, int, int, int]) -> str:
-        """Lookup by arbitrary tuple — used by corpus tests only."""
         return self._index.get(tup) or self._index.get(
             NEUTRAL, "Engage naturally as a peer.",
         )

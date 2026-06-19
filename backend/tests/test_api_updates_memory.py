@@ -1,17 +1,8 @@
-"""
-Feature tests for POST /api/updates/memory.
-
-Regression guard for commit 361466b8: handle_store() returns a ToolResult, not
-a string.  The pre-fix code called .split() on the ToolResult object → AttributeError
-→ broad except → HTTP 500 on every call.  The fix checks result.status instead.
-
-These tests drive the real Flask entry point with real bearer-token auth against
-a real SQLite database (via the ``db`` conftest fixture), and assert downstream
-DB effects.  No collaborators are mocked.
-"""
+# Regression guard for commit 361466b8: handle_store() returns a ToolResult, not
+# a string.  The pre-fix code called .split() on the ToolResult object → AttributeError
+# → broad except → HTTP 500 on every call.  The fix checks result.status instead.
 
 import pytest
-from unittest.mock import patch
 
 from services.wrapper_auth_service import WrapperAuthService
 
@@ -19,36 +10,19 @@ from services.wrapper_auth_service import WrapperAuthService
 pytestmark = pytest.mark.unit
 
 
-# ---------------------------------------------------------------------------
-# Shared helper — build a real, unauthenticated Flask test client.
-# The ``authed_client`` conftest fixture short-circuits validate_session with a
-# patch, which means bearer tokens are never evaluated.  We build the app
-# ourselves so the real require_auth decorator runs the real bearer path.
-# ---------------------------------------------------------------------------
-
+# Build a real, unauthenticated Flask test client — the authed_client conftest
+# fixture short-circuits validate_session with a patch, so we build the app
+# ourselves so require_auth runs the real bearer path.
 def _make_client():
-    """Return a real Flask test client with no session patches applied.
-
-    The only infra patch is ``_get_or_generate_session_secret`` → it reads from
-    disk (or generates a file) during app construction, which is irrelevant to
-    bearer-auth tests and would fail if the file path is not writable in CI.
-    """
-    with patch('api._get_or_generate_session_secret', return_value='test-secret-updates'):
-        from api import create_app
-        app = create_app()
-        app.config['TESTING'] = True
-        return app.test_client()
+    from api import create_app
+    app = create_app()
+    app.config['TESTING'] = True
+    return app.test_client()
 
 
-# ---------------------------------------------------------------------------
-# Test 1 — success path: HTTP 200 + data_graph row written
-#
-# Regression assertion: pre-fix, handle_store() returned a ToolResult whose
-# .split() call raised AttributeError, was caught by ``except Exception``,
-# and the endpoint returned 500.  This test would have FAILED (expected 200,
-# got 500) on the pre-fix code and PASSES on HEAD.
-# ---------------------------------------------------------------------------
-
+# --- Regression assertion: pre-fix, handle_store() returned a ToolResult,
+# .split() raised AttributeError → caught by except Exception → HTTP 500.
+# This would have FAILED (expected 200, got 500) on the pre-fix code.
 class TestUpdateMemorySuccess:
     def test_success_returns_200_and_writes_data_graph_row(self, db):
         svc = WrapperAuthService()
@@ -80,15 +54,8 @@ class TestUpdateMemorySuccess:
         assert row["active"] == 1
 
 
-# ---------------------------------------------------------------------------
-# Test 2 — genuine store failure: HTTP 422 with structured error body
-#
-# Dropping the data_graph table causes DataGraphService.store() to raise
-# internally, which it catches and returns None → handle_store returns
-# ToolResult.err(code="invalid-kind") → result.status == "error" → 422.
-# This proves the result.status branch (the actual fix) fires correctly.
-# ---------------------------------------------------------------------------
-
+# --- Dropping data_graph causes DataGraphService.store() to raise, returning
+# None → handle_store returns ToolResult.err(code="invalid-kind") → 422.
 class TestUpdateMemoryStoreFailure:
     def test_genuine_store_failure_returns_422(self, db):
         svc = WrapperAuthService()
@@ -112,13 +79,7 @@ class TestUpdateMemoryStoreFailure:
         assert resp.get_json() == {"error": "Memory encoding failed"}
 
 
-# ---------------------------------------------------------------------------
-# Test 3 — no token → 401
-#
-# Guards against accidentally re-introducing a validate_session bypass that
-# would let unauthenticated callers reach the store primitive.
-# ---------------------------------------------------------------------------
-
+# --- Missing auth → 401, guarding against a validate_session bypass.
 class TestUpdateMemoryNoToken:
     def test_missing_auth_returns_401(self, db):
         client = _make_client()

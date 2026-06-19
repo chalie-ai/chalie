@@ -6,12 +6,12 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-App Update Service — in-place update system for installed Chalie instances.
+"""In-place update system for installed Chalie instances.
 
-Detects deployment mode, checks GitHub for new releases, downloads and validates
-tarballs, and performs atomic rename-swap upgrades with rollback on failure.
-Dev environments receive mode-appropriate guidance instead of in-place mutation.
+Detects deployment mode, checks GitHub for new releases, downloads and
+validates tarballs, performs atomic rename-swap upgrades with rollback on
+failure. Dev environments get mode-appropriate guidance instead of
+in-place mutation.
 """
 
 import json
@@ -48,12 +48,7 @@ class AppUpdateService:
 
     @staticmethod
     def detect_deployment_mode() -> str:
-        """Detect how Chalie was deployed.
-
-        Returns:
-            ``"dev"`` if a ``.git/`` directory exists at the app root,
-            ``"installed"`` otherwise.
-        """
+        """``"dev"`` if ``.git/`` exists at the app root, else ``"installed"``."""
         if (APP_ROOT / ".git").is_dir():
             return "dev"
         return "installed"
@@ -62,12 +57,7 @@ class AppUpdateService:
 
     @staticmethod
     def get_current_version() -> str:
-        """Read the current version from the ``VERSION`` file at the app root.
-
-        Returns:
-            Version string (e.g. ``"0.2.0"``), or ``"0.0.0"`` if the file
-            is missing or unreadable.
-        """
+        """Returns ``"0.0.0"`` if the file is missing or unreadable."""
         version_file = APP_ROOT / "VERSION"
         try:
             return version_file.read_text().strip()
@@ -77,17 +67,8 @@ class AppUpdateService:
 
     @staticmethod
     def parse_version(tag: str) -> tuple:
-        """Parse a version tag into a comparable integer tuple.
-
-        Strips a leading ``v`` if present, splits on ``.``, and converts
-        each segment to an integer.  Non-numeric segments become ``0``.
-
-        Args:
-            tag: Version string such as ``"v1.0.1"`` or ``"0.2.0"``.
-
-        Returns:
-            Tuple of ints, e.g. ``(1, 0, 1)``.
-        """
+        """Strips a leading ``v`` if present, splits on ``.``, and converts
+        each segment to an int. Non-numeric segments become 0."""
         tag = tag.strip().lstrip("v")
         parts = []
         for segment in tag.split("."):
@@ -100,17 +81,9 @@ class AppUpdateService:
     # ── Update Check ─────────────────────────────────────────────────────
 
     def check_for_update(self) -> dict:
-        """Check GitHub for a newer release and return update info.
-
-        Results are cached in MemoryStore for 6 hours.  On network failure
+        """Results are cached in MemoryStore for 6 hours. On network failure
         the cached result is returned if available; otherwise a safe default
-        with ``update_available: False`` is returned.
-
-        Returns:
-            Dict with keys: ``current_version``, ``latest_version``,
-            ``latest_tag``, ``update_available``, ``release_notes``,
-            ``release_url``, ``deployment_mode``, ``checked_at``.
-        """
+        with ``update_available: False`` is returned."""
         store = MemoryClientService.create_connection()
         current = self.get_current_version()
         mode = self.detect_deployment_mode()
@@ -177,23 +150,11 @@ class AppUpdateService:
 
     @staticmethod
     def download_and_validate(tag: str) -> Path:
-        """Download a release tarball and validate its contents.
-
-        Downloads from GitHub, extracts with path-traversal protection via
-        ``_safe_tar_extract``, and verifies that the archive contains the
+        """Downloads from GitHub, extracts with path-traversal protection
+        via ``_safe_tar_extract``, and verifies the archive contains the
         required files (``backend/run.py``, ``backend/schema.sql``,
-        ``VERSION``).
-
-        Args:
-            tag: Git tag to download (e.g. ``"v1.0.1"``).
-
-        Returns:
-            Path to the extracted top-level directory.
-
-        Raises:
-            RuntimeError: If download fails, extraction is unsafe, or
-                required files are missing.
-        """
+        ``VERSION``). Raises ``RuntimeError`` on download/extract/missing
+        file failures."""
         from run import _safe_tar_extract
 
         tarball_url = GITHUB_TARBALL_URL.format(tag=tag)
@@ -354,28 +315,12 @@ class AppUpdateService:
             shutil.rmtree(str(tmp_root), ignore_errors=True)
 
     def apply_update(self, tag: str) -> dict:
-        """Orchestrate the full in-place update.
-
-        For dev deployments, returns guidance instead of mutating
-        the filesystem.  For installed deployments, performs:
-
-        1. Database backup
-        2. Download and validate the release
-        3. Rename-swap (``backend/`` and ``frontend/``)
-        4. Copy preserved data (``data/``, ``tools/``)
-        5. Stamp deletion (``.deps-installed``)
-        6. Cleanup
-
-        On any failure during the swap phase, renames are reversed to
-        restore the previous state.
-
-        Args:
-            tag: Git tag to apply (e.g. ``"v1.0.1"``).
-
-        Returns:
-            Dict with ``ok`` (bool), ``message`` (str), and additional
-            context fields.
-        """
+        """For dev deployments, returns guidance instead of mutating the
+        filesystem. For installed deployments: backup DB → download+validate
+        → rename-swap (backend/, frontend/) → copy preserved data → stamp
+        deletion (``.deps-installed``) → cleanup. On any failure during
+        the swap phase, renames are reversed to restore the previous
+        state."""
         mode = self.detect_deployment_mode()
 
         if mode == "dev":
@@ -443,12 +388,9 @@ class AppUpdateService:
 
     @staticmethod
     def request_restart():
-        """Request a process restart by exiting with code 42.
-
-        Spawns a daemon thread that waits 2 seconds (allowing the HTTP
-        response to flush) then calls ``os._exit(42)``.  The exit code 42
-        signals the ``run.sh`` wrapper to restart the process.
-        """
+        """Daemon thread waits 2 s (HTTP response to flush) then
+        ``os._exit(42)``. Exit code 42 signals ``run.sh`` to restart the
+        process."""
         def _deferred_exit():
             import time
             time.sleep(2)

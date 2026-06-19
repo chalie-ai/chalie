@@ -1,16 +1,15 @@
-"""
-Locale Service — Single chokepoint for ALL localisation in Chalie.
+"""Locale Service — single chokepoint for ALL localisation in Chalie.
 
-RULES (enforced by code review):
-  - ALL dates/times stored in the DB MUST pass through this service and be UTC.
-  - ALL dates/times shown to users or used in triggers MUST pass through this
-    service and be converted to the user's local timezone.
-  - ALL locale-sensitive values (currency, language, location) MUST be read
-    from this service — never directly from telemetry, settings, or env.
+Rules (enforced by code review):
+- ALL dates/times stored in the DB MUST pass through this service and be UTC.
+- ALL dates/times shown to users or used in triggers MUST pass through
+  this service and be converted to the user's local timezone.
+- ALL locale-sensitive values (currency, language, location) MUST be
+  read from this service — never directly from telemetry, settings, or env.
 
 The backing store is the ``telemetry`` table (populated by the frontend
-heartbeat via ClientContextService.save()).  This service is the exclusive
-read interface for locale fields.
+heartbeat via ClientContextService.save()). This service is the
+exclusive read interface for locale fields.
 """
 
 import logging

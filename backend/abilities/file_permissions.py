@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ class FilePermissionsAbility(Ability):
     #: ``code=missing-params`` BEFORE run(). Blank strings are invalid here, so the
     #: truthiness-based pre-gate is exactly right; run() guards the whitespace-only
     #: residue the pre-gate lets through (``"  "`` is truthy).
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("path", "permissions")}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.path, Keys.permissions)}
 
     def get_name(self) -> str:
         return "file_permissions"
@@ -89,11 +90,11 @@ class FilePermissionsAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "path": {
+            Keys.path: {
                 "type": "string",
                 "description": "Absolute path to the file or directory whose permissions you want to change.",
             },
-            "permissions": {
+            Keys.permissions: {
                 "type": "string",
                 "description": (
                     "How to set the permissions. Accepts three forms:"
@@ -108,15 +109,15 @@ class FilePermissionsAbility(Ability):
                 ),
             },
         },
-        "required": ["path", "permissions"],
+        "required": [Keys.path, Keys.permissions],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        path_str = (params.get("path") or "").strip()
-        perm_str = (params.get("permissions") or "").strip()
+        path_str = (params.get(Keys.path) or "").strip()
+        perm_str = (params.get(Keys.permissions) or "").strip()
 
         # The ACTION_REQUIRED pre-gate rejects a missing/blank path or
         # permissions; this guards the whitespace-only residue it lets through
@@ -253,16 +254,10 @@ def _parse_octal(text: str) -> int | None:
 
 
 def _format_octal(st_mode: int) -> str:
-    """Return the low 4 octal digits of ``st_mode`` (suid/sgid/sticky + rwx)."""
     return format(st_mode & 0o7777, "04o")
 
 
 def _format_symbolic(st_mode: int) -> str:
-    """Return the 9-char ``rwxrwxrwx`` string for the low rwx bits of ``st_mode``.
-
-    Plain rwx letters with ``-`` for unset bits; suid/sgid/sticky display
-    refinements are intentionally ignored.
-    """
     bits = st_mode & 0o777
     out = []
     for shift in (6, 3, 0):

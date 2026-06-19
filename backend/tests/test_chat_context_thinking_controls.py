@@ -37,12 +37,6 @@ def _make_provider(db, *, name, max_tokens):
 class TestContextUsageEndpoint:
 
     def test_returns_last_user_turn_tokens_and_window(self, authed_client):
-        """GET /system/context-usage = last user-turn tokens_input / selected window.
-
-        The production logger keys the row by ``job_name`` = ``channel:role``; the
-        UserConfig turn is 'user:user' (asserted in
-        ``test_indicator_filter_matches_real_config_jobs``).
-        """
         from services.llm_call_log_service import log_call
         from services.provider_db_service import ProviderDbService
         import services.database_service as _db_mod
@@ -103,10 +97,10 @@ class TestContextUsageEndpoint:
         from configs.channels.web_search import WebSearchConfig
         from abilities.thinking import ThinkingConfig
 
-        chat = ProcessorConfig.POLICY_CHANNEL.CHAT
+        chat = ProcessorConfig.PolicyChannel.CHAT
         assert UserConfig().job == 'user:user'
         assert WebSearchConfig(chat).job != 'user:user'
-        assert ThinkingConfig([], frozenset(), chat).job != 'user:user'
+        assert ThinkingConfig([], chat).job != 'user:user'
         # All three share the SAME usage_class — proving why usage_class can't
         # be the discriminator and job_name must be.
         assert UserConfig().usage_class == WebSearchConfig(chat).usage_class == 'chat'

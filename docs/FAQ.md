@@ -47,7 +47,13 @@ You can inspect Chalie's memory at any time via the Brain dashboard Memory tab, 
 - **OpenAI-compatible** — any endpoint speaking the Chat Completions format (Groq, OpenRouter, LM Studio, vLLM, …)
 - **Google Gemini** — Gemini models via API key
 
-One globally selected provider handles all chat and reasoning; an optional separate **vision provider** handles image understanding. See `docs/02-PROVIDERS-SETUP.md` for configuration.
+Three provider roles can be configured independently:
+
+- **Chat (main)** — handles all chat and reasoning turns.
+- **Vision** — optional dedicated provider for image understanding; falls back to the main provider when it supports vision.
+- **Delegate** — optional dedicated provider for subagent turns (`web_search`, `web_browse`, and other delegated tool work); falls back to the main provider when not set.
+
+Both the Vision and Delegate selectors live inside **Brain → Settings → Providers**. See `docs/02-PROVIDERS-SETUP.md` for configuration.
 
 ---
 

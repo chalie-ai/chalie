@@ -31,6 +31,7 @@ import sqlite3
 from pathlib import Path
 from typing import ClassVar
 
+from abilities._params import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
 from services.embedding_utils import pack_embedding
@@ -44,7 +45,7 @@ _BROADEN_HINT = "Try broadening the query or describing the task differently."
 
 
 class FindSkillsAbility(SearchableAbility):
-    """Return procedural skill playbooks matching the user's query."""
+    DISCOVERABLE: ClassVar[bool] = False  # framework discovery tool; always pinned, never discovered
 
     def get_name(self) -> str:
         return "find_skills"
@@ -71,16 +72,16 @@ class FindSkillsAbility(SearchableAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "Describe the task or topic you need a playbook for.",
             },
-            "limit": {
+            Keys.limit: {
                 "type": "integer",
                 "description": "Max results (default 3, max 5).",
             },
         },
-        "required": ["query"],
+        "required": [Keys.query],
     }
 
     def get_parameters(self) -> dict:
@@ -90,8 +91,8 @@ class FindSkillsAbility(SearchableAbility):
     _LOG_PREFIX = "[FIND_SKILLS]"
 
     def run(self, params: dict) -> ToolResult:
-        query = params.get("query", "").strip()
-        limit = min(params.get("limit", _DEFAULT_LIMIT) or _DEFAULT_LIMIT, _MAX_LIMIT)
+        query = params.get(Keys.query, "").strip()
+        limit = min(params.get(Keys.limit, _DEFAULT_LIMIT) or _DEFAULT_LIMIT, _MAX_LIMIT)
         logger.info(f"{self._LOG_PREFIX} query='{query}' limit={limit}")
 
         if not query:
@@ -128,15 +129,6 @@ class FindSkillsAbility(SearchableAbility):
         return self._result(query, rows)
 
     def _probe_index(self) -> "ToolResult | None":
-        """Verify the on-disk index is actually usable, returning an error result
-        on any sqlite failure (corrupt DB, missing/unreadable tables).
-
-        A cheap ``SELECT 1`` against both the base ``skills`` table and the FTS5
-        index — the two surfaces the search reads. ``sqlite3.Error`` (and its
-        subclasses, e.g. DatabaseError on a corrupt file) is the only caught
-        class; anything else bubbles to the dispatcher. Returns ``None`` when the
-        index is healthy.
-        """
         try:
             conn = sqlite3.connect(str(self._DB_PATH))
             try:
@@ -180,7 +172,6 @@ class FindSkillsAbility(SearchableAbility):
         return ToolResult.ok(skill_rows, **meta)
 
     def _row(self, merged: dict) -> dict:
-        """Map one RRF-merged hit to an actionable skill row carrying the playbook."""
         content, rules = self._fetch_detail(merged["key"])
         return {
             "name": merged["label"],

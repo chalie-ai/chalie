@@ -31,6 +31,7 @@ from urllib.parse import urlparse
 import requests
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services.web_fetch import DOWNLOAD, DownloadTooLarge, FetchBlocked, stream_to_file
 
@@ -49,7 +50,9 @@ class WebDownloadAbility(Ability):
     #: Action-less tool — the ``""`` key drives the dispatcher's ACTION_REQUIRED
     #: pre-gate to reject a missing/blank url with ``code=missing-params`` BEFORE
     #: run() (instead of run() returning a status=success "url required" prose).
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("url",)}
+    #: Runs AFTER seam key-healing, so a model's ``uri``/``source``/etc. has already
+    #: been canonicalised to ``url`` via ``VARIANTS[Keys.url]`` before this fires.
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.url,)}
 
     def get_name(self) -> str:
         return "web_download"
@@ -73,23 +76,23 @@ class WebDownloadAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "url": {
+            Keys.url: {
                 "type": "string",
                 "description": "URL of the file to download",
             },
-            "timeout": {
+            Keys.timeout: {
                 "type": "number",
                 "description": "Download timeout in minutes (default: 15, max: 120)",
             },
         },
-        "required": ["url"],
+        "required": [Keys.url],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        url = self.param(params, "url", required=True)
+        url = self.param(params, Keys.url, required=True)
         url = str(url).strip()
 
         scheme = urlparse(url).scheme
@@ -101,7 +104,7 @@ class WebDownloadAbility(Ability):
                 source=url,
             )
 
-        timeout_min = self.param(params, "timeout", default=15, clamp=(1, 120))
+        timeout_min = self.param(params, Keys.timeout, default=15, clamp=(1, 120))
         timeout_sec = float(timeout_min) * 60
 
         dest_path = _build_dest_path(url)

@@ -41,7 +41,7 @@ Network failures in any gate → stay and mount; the API endpoints are still pro
 
 ## The Chat Surface
 
-**ACT cycle.** While a turn runs, the UI shows a chrome-less working state — a pulsing violet logo, a one-line narration that updates in place, and a cumulative list of tool calls (name, optional `act_summary`, then duration or error). When the turn finishes, the whole ACT UI is replaced by the final reply bubble. The data comes from WebSocket events: `act_tool_start`, `act_tool_end`, `act_narration`, then `message` + `done`.
+**ACT cycle.** While a turn runs, the UI shows a chrome-less working state — a pulsing violet logo and a cumulative list of tool calls (name, optional `act_summary`, then duration or error). When the turn finishes, the whole ACT UI is replaced by the final reply bubble. The data comes from WebSocket events: `act_tool_start`, `act_tool_end`, then `message` + `done`.
 
 **Rich-media cards.** Tools can return a structured payload that renders as an inline card instead of prose. The registry (`frontend/apps/interface/src/components/rich/richRegistry.ts`) maps tag prefixes to card components. Eight prefixes resolve to seven components — `news` and `search` share `ArticleCard.vue`:
 
@@ -69,6 +69,7 @@ Cards are loaded via `defineAsyncComponent` so each card and its scoped styles c
 |---|---|---|
 | **Providers** | `/providers` | Add/test/select LLM providers |
 | **Vision** | `/vision` | Vision-provider configuration |
+| **Delegate** | `/delegate` | Delegate-provider selection (the model used for delegated sub-tasks; clears to the main provider) |
 | **Cognition** | `/cognition` | Subtabs: Memory, Tools, World state, Personality, Errors, Usage, Compacted Summary |
 | **Scheduler** | `/scheduler` | Reminders and scheduled tasks (All / Pending / Fired / Failed / Cancelled) |
 | **Lists** | `/lists` | The user's persistent checklists |

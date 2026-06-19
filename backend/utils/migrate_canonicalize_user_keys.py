@@ -1,27 +1,10 @@
 """
-Backfill migration: canonicalize existing user_specific data_graph keys via the concept LUT.
-
-Walks every active, non-deleted user_specific row in data_graph. For each row,
-embeds the key and performs a KNN lookup against concept_lut.sqlite. If the LUT
-returns a canonical key that differs from the stored key, the row is updated
-in-place:
-    - data_graph.key     → canonical_key
-    - data_graph_key_vec → new embedding blob for the canonical key
-    - FTS index          → delete old entry, insert new entry
-
-Collision handling (rule-aware merge when two raw keys canonicalize to the same target):
-    - temporal:  keep the more recently confirmed row as active=1; demote the older
-                 row to active=0 with retrieval_weight halved; link both via
-                 supersedes/superseded_by edges.
-    - coexist:   same value → merge evidence_count into existing row and hard-delete
-                 the migrating row. Different value → rewrite key and leave both active.
-    - immutable: same value → merge evidence_count and hard-delete the migrating row.
-                 Different value → log and skip (leave migrating row at original key
-                 to preserve history; will surface as a LUT miss on next read).
-
-Idempotent under canonical-key collisions: re-running will detect already-merged state
-via the rule dispatch and skip. Rows already at their canonical key are also skipped.
-Safe to re-run.
+Backfill migration: embed each active user_specific key, look it up against concept_lut.sqlite,
+and canonicalize keys that differ. Rule-aware merge when two raw keys map to the same target:
+  temporal   → newer row stays active=1; older demoted to active=0 with halved weight + supersedes edges.
+  coexist    → same value merges evidence and hard-deletes; different value rewrites key, both stay active.
+  immutable  → same value merges evidence and hard-deletes; different value logs and skips.
+Idempotent / safe to re-run.
 
 Run from backend/:
     python -m utils.migrate_canonicalize_user_keys [--dry-run]
@@ -49,7 +32,6 @@ _TEMPORAL_DEMOTION_FACTOR = 0.5
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
-    """Load the sqlite-vec extension into conn."""
     conn.enable_load_extension(True)
     try:
         import sqlite_vec
@@ -59,7 +41,6 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 
 def _open_lut() -> sqlite3.Connection:
-    """Open the concept LUT read-only."""
     if not Path(_CONCEPT_LUT_PATH).exists():
         raise FileNotFoundError(f"concept_lut.sqlite not found at {_CONCEPT_LUT_PATH}")
     conn = sqlite3.connect(_CONCEPT_LUT_PATH)
@@ -68,7 +49,6 @@ def _open_lut() -> sqlite3.Connection:
 
 
 def _lut_lookup(lut_conn: sqlite3.Connection, blob: bytes) -> tuple[str, str] | None:
-    """KNN lookup against lut_embeddings; return (canonical_key, rule) or None."""
     hits = lut_conn.execute(
         "SELECT rowid, distance FROM lut_embeddings WHERE embedding MATCH ? AND k = 1 ORDER BY distance",
         (blob,),
@@ -94,7 +74,6 @@ def _update_fts(
     old_sq: str,
     new_key: str,
 ) -> None:
-    """Delete old FTS entry and insert updated entry with new key."""
     try:
         conn.execute(
             "INSERT INTO data_graph_fts(data_graph_fts, rowid, key, value, kind, search_queries) "
@@ -116,7 +95,6 @@ def _update_fts(
 
 
 def _hard_delete_row(conn: sqlite3.Connection, row_id: int) -> None:
-    """Remove a data_graph row and all associated index and edge entries."""
     try:
         conn.execute(
             "INSERT INTO data_graph_fts(data_graph_fts, rowid, key, value, kind, search_queries) "
@@ -141,7 +119,6 @@ def _hard_delete_row(conn: sqlite3.Connection, row_id: int) -> None:
 
 
 def _fetch_active_row(conn: sqlite3.Connection, canonical_key: str) -> dict | None:
-    """Return the active row dict for (kind=user_specific, key=canonical_key), or None."""
     row = conn.execute(
         "SELECT id, key, value, evidence_count, retrieval_weight, "
         "first_seen_at, last_confirmed_at "
@@ -164,12 +141,10 @@ def _fetch_active_row(conn: sqlite3.Connection, canonical_key: str) -> dict | No
 
 
 def _effective_date(row: dict) -> str:
-    """Return the best available date string for recency comparison."""
     return (row.get('last_confirmed_at') or row.get('first_seen_at') or '')
 
 
 def _add_supersession_edges(conn: sqlite3.Connection, winner_id: int, loser_id: int) -> None:
-    """Insert supersedes/superseded_by edges between winner and loser."""
     from services.time_utils import utc_now
     now_iso = utc_now().isoformat()
     for from_id, to_id, edge_type in (
@@ -194,12 +169,6 @@ def _apply_temporal_collision(
     canonical_key: str,
     dry_run: bool,
 ) -> None:
-    """Resolve a temporal collision between migrating and existing active rows.
-
-    The newer row (by last_confirmed_at / first_seen_at) wins and stays active=1.
-    The older row is demoted to active=0 with retrieval_weight halved.
-    Supersession edges link the two rows.
-    """
     migrating_date = _effective_date(migrating)
     existing_date = _effective_date(existing)
     if migrating_date >= existing_date:
@@ -241,13 +210,6 @@ def _apply_coexist_collision(
     emb_service: EmbeddingService,
     dry_run: bool,
 ) -> str:
-    """Resolve a coexist collision.
-
-    Same value: merge evidence_count into existing row, hard-delete migrating row.
-    Different value: rewrite migrating row's key and leave both active.
-
-    Returns 'merged-coexist' or 'updated'.
-    """
     if (migrating['value'] or '').strip().lower() == (existing['value'] or '').strip().lower():
         print(f"  COEXIST same-value merge on '{canonical_key}': hard-deleting id={migrating['id']}, incrementing id={existing['id']} evidence_count")
         if dry_run:
@@ -276,13 +238,6 @@ def _apply_immutable_collision(
     key: str,
     dry_run: bool,
 ) -> str:
-    """Resolve an immutable collision.
-
-    Same value: merge evidence_count into existing row, hard-delete migrating row.
-    Different value: log and skip — leave migrating row at original key.
-
-    Returns 'merged-immutable' or 'skipped'.
-    """
     if (migrating['value'] or '').strip().lower() == (existing['value'] or '').strip().lower():
         print(f"  IMMUTABLE same-value merge on '{canonical_key}': hard-deleting id={migrating['id']}, incrementing id={existing['id']} evidence_count")
         if dry_run:

@@ -27,15 +27,16 @@ Three responsibilities, in order:
      path carries zero MANDATORY LLM calls.
   3. **Curated render** — instead of injecting raw recall JSON, the seed injects
      a small bundle: up to five live facts as bullets plus up to three episodes
-     as ``On <date>: <one-liner>`` flashbacks (super-episodes preferred). The
-     explicit, model-invoked ``memory.recall`` keeps its JSON contract
-     unchanged — this render is the seed path only.
+     as ``On <date>: <gist>`` flashbacks, each gist in full (super-episodes
+     preferred). The explicit, model-invoked ``memory.recall`` keeps its JSON
+     contract unchanged — this render is the seed path only.
 
 The recall it runs uses ``caller='seed'`` so the ``memory_recall_log`` seed row
 and its telemetry stay exactly as the retrieval rework left them, and it records
-its own ``memory(action='recall', _auto=True)`` act-trail row so the rest of the
-trail machinery (``_is_auto_memory_recall``) still recognises it as the
-framework seed. Moments never appear here (§4.7).
+its own ``memory(action='recall', _auto=True)`` act-trail row so the seed recall
+and its curated result are visible in the turn's act-trail, marked ``_auto`` as
+the framework seed (distinct from a model-invoked recall). Moments never appear
+here (§4.7).
 """
 
 import logging
@@ -44,10 +45,10 @@ from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
-#: The tool name + params the framework records for the turn-0 seed. The name and
-#: the ``_auto`` flag are load-bearing: ``_is_auto_memory_recall`` keys the
-#: trail-compaction exclusion on exactly this shape, and the persisted
-#: ``caller='seed'`` recall_log row is frozen by the scenario lock.
+#: The tool name + params the framework records for the turn-0 seed. The
+#: ``_auto`` flag marks the recorded act-trail row as the framework seed (vs a
+#: model-invoked recall); the persisted ``caller='seed'`` recall_log row is
+#: frozen by the scenario lock.
 _SEED_TOOL_NAME = "memory"
 _SEED_ACTION = "recall"
 
@@ -94,12 +95,14 @@ _TERSE_TOKEN_CEILING = 8
 #: plain embedding, so the hot path never depends on it.
 _STRONG_PROVIDER_CONTEXT_FLOOR = 200_000
 
-#: Curated-bundle caps (spec §4.5: ≤5 facts + ≤3 dated one-liners).
+#: Curated-bundle caps (spec §4.5: ≤5 facts + ≤3 dated episode gists). These are
+#: selection counts (how many memories surface), not text limits — each surfaced
+#: gist is rendered in full (TKT-821).
 _MAX_FACTS = 5
 _MAX_EPISODES = 3
 
 #: Episodes at this hierarchy level or above are super-episodes / era digests and
-#: are preferred over raw leaves when choosing the ≤3 dated one-liners.
+#: are preferred over raw leaves when choosing the ≤3 dated episodes.
 _SUPER_LEVEL_FLOOR = 1
 
 #: Over-fetch multiplier for the episode recall: pull this many times
@@ -107,9 +110,6 @@ _SUPER_LEVEL_FLOOR = 1
 #: AND supers to choose from before the final ≤3 clip, rather than clipping at
 #: the retrieval layer and starving the preference.
 _EPISODE_OVERFETCH_FACTOR = 3
-
-#: Episode-gist one-liners are clipped to keep the flashback dense.
-_ONELINER_CHARS = 160
 
 #: HyDE rewrite request shaping — a single constrained generation that drafts a
 #: hypothetical answer paragraph to embed instead of the bare query (HyDE,
@@ -124,12 +124,6 @@ _HYDE_JOB_NAME = "turn_zero_hyde"
 
 
 class TurnZeroFlashback:
-    """Builds and injects the turn-0 memory flashback for one turn.
-
-    One instance per seed, bound to the invoking ``MessageProcessor``. Stateless
-    across turns: the conversation centroid is derived from the channel's recent
-    transcript each time, so nothing is persisted on the processor.
-    """
 
     def __init__(self, mp) -> None:
         self._mp = mp
@@ -398,7 +392,7 @@ class TurnZeroFlashback:
     # ── Retrieval + render ────────────────────────────────────────────────────
 
     def _build_flashback_block(self, query: str) -> str:
-        """Assemble the curated flashback: ≤5 fact bullets + ≤3 dated one-liners.
+        """Assemble the curated flashback: ≤5 fact bullets + ≤3 dated episodes.
 
         Facts come from the live data-graph lane (moments excluded by the lane
         itself); episodes come from the seed recall (``caller='seed'`` — frozen
@@ -469,16 +463,17 @@ class TurnZeroFlashback:
         return "\n".join(sections)
 
     def _render_episode(self, ep: dict) -> str:
-        """One episode as ``On <date>: <one-liner>`` (spec §4.5).
+        """One episode as ``On <date>: <gist>`` (spec §4.5).
 
-        The date is the episode's local-time creation day; an unparseable /
-        missing timestamp drops the date prefix rather than emitting a bogus one.
+        The gist is rendered in full — NO truncation (TKT-821); newlines are
+        collapsed to keep the bundle one line per episode, but no characters are
+        dropped. The date is the episode's local-time creation day; an
+        unparseable / missing timestamp drops the date prefix rather than
+        emitting a bogus one.
         """
         gist = (ep.get("gist") or "").strip().replace("\n", " ")
         if not gist:
             return ""
-        if len(gist) > _ONELINER_CHARS:
-            gist = gist[: _ONELINER_CHARS - 1].rstrip() + "…"
         date = self._episode_date(ep.get("created_at"))
         return f"On {date}: {gist}" if date else gist
 
@@ -500,14 +495,17 @@ class TurnZeroFlashback:
         """Record the framework seed row so the model sees the curated block.
 
         Writes a ``memory(action='recall', _auto=True)`` ``tool_calls`` row whose
-        ``result`` is the curated block. The ``_auto`` flag keeps
-        ``_is_auto_memory_recall`` recognising it as the framework seed (excluded
-        from trail compaction); the result is the curated bundle, NOT recall JSON
-        — that JSON contract belongs to the explicit, model-invoked recall only.
+        ``result`` is the curated block, so the seed recall is visible in the
+        turn's act-trail. The ``_auto`` flag marks it as the framework seed; the
+        result is the curated bundle, NOT recall JSON — that JSON contract belongs
+        to the explicit, model-invoked recall only.
         """
         from services.act_trail import ActTrail  # noqa: PLC0415
 
         params = {"action": _SEED_ACTION, "query": query, "_auto": True}
+        # Anchors to this turn's input row: _render_act_trail's
+        # turn-keyed fetch and the cancel cleanup both reach it by joining
+        # transcript on (channel, turn_id), so no turn column is stamped here.
         ActTrail().record(
             tool_name=_SEED_TOOL_NAME,
             params=params,

@@ -1,18 +1,23 @@
-"""Integration test: /conversation/recent includes segments on assistant rows.
-
-Seeds transcript + tool_calls rows directly into the DB, then calls
-get_recent_history() and asserts:
-- Assistant rows with a paired weather tool_call get a ``segments`` field with
-  at least one ``type=rich`` segment.
-- User rows do NOT get a ``segments`` field.
-- The refresh path produces the same pairing as the WS live path for the same
-  data.
-- When no tool_calls exist the assistant row still gets a ``type=text``
-  segment containing the content.
-
-All tool_calls rows are now durable (no ephemeral column); the retention janitor
-in DecayEngineService removes rows older than 7 days.
-"""
+# All tool_calls rows are now durable (no ephemeral column); the retention janitor
+# in DecayEngineService removes rows older than 7 days.
+#
+# Feature tests for the /conversation/recent refresh path (get_recent_history)
+# under the recursive MP-chain turn model. A tool turn is now a CHAIN of rows:
+#
+#     input row (user)
+#       → assistant STEP row  (emits the tool calls; tools anchor HERE)
+#       → assistant FINAL row (carries the synthesis spans)
+#
+# all sharing the turn_id the input row opened. So the refresh path must:
+#   * render each assistant row's OWN tool calls as chips ({tool_name, summary}),
+#     anchored to the row that emitted them (the step row), AND
+#   * resolve rich-media spans TURN-WIDE — the span lives on the final row but the
+#     tool that produced the card ran on the step row, so pairing needs every
+#     transcript id in the turn, not just the row's own.
+#
+# These drive the REAL production entry point (get_recent_history) against the
+# REAL db, seeding turns through the production writers (transcript_service +
+# ActTrail) — no hand-rolled INSERTs, no mocks.
 
 import json
 import pytest
@@ -54,49 +59,59 @@ _TOOL_RESULT = (
 )
 
 
+def _weather_result(loc: str, ordinal: int) -> str:
+    payload = dict(_WEATHER_DICT, location=loc)
+    return json.dumps(payload) + f"\n\n<span id='weather_{ordinal}'>"
+
+
 class TestConversationRecentSegments:
 
-    def _seed_turn(self, conn, user_text: str, assistant_text: str, tool_calls=None):
-        """Insert a user+assistant transcript pair and optional tool_calls.
+    def _seed_plain_turn(self, user_text: str, final_text: str):
+        """A turn with no tools: input row + a single final assistant row."""
+        from services import transcript_service as ts
+        uid = ts.write_input_row("user", "user", user_text)
+        turn = ts.turn_id_of_row(uid)
+        final_id = ts.write_assistant_row("user", final_text, turn_id=turn)
+        return uid, final_id
 
-        Returns (user_transcript_id, assistant_transcript_id).
-        Tool_calls are linked to the user transcript row (matches production).
-        """
-        conn.execute(
-            "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES ('user', 'user', ?, 1)",
-            (user_text,),
-        )
-        user_tid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    def _seed_tool_turn(self, user_text, step_text, final_text, tool_calls):
+        """A tool turn in the chain model: input row → assistant STEP row that
+        emitted the tools (tools anchor to the step row, carrying their
+        act_summary) → assistant FINAL row carrying the synthesis spans. All
+        three share the turn_id the input row opened.
 
-        conn.execute(
-            "INSERT INTO transcript (channel, role, content, xml_migrated) VALUES ('user', 'assistant', ?, 1)",
-            (assistant_text,),
-        )
-        asst_tid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        for tc in (tool_calls or []):
-            conn.execute(
-                "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
-                "VALUES (?, ?, ?, ?, datetime('now'))",
-                (user_tid, tc["tool_name"], tc.get("params", "{}"), tc["result"]),
+        Seeded through the production writers + ActTrail.record — the same path
+        the live chain takes — so the refresh path reads exactly what production
+        persists."""
+        from services import transcript_service as ts
+        from services.act_trail import ActTrail
+        uid = ts.write_input_row("user", "user", user_text)
+        turn = ts.turn_id_of_row(uid)
+        step_id = ts.write_assistant_row("user", step_text, turn_id=turn)
+        trail = ActTrail()
+        for tc in tool_calls:
+            trail.record(
+                tool_name=tc["tool_name"],
+                params=tc.get("params", {}),
+                result=tc["result"],
+                transcript_id=step_id,
+                summary=tc.get("summary", ""),
             )
-        conn.commit()
-        return user_tid, asst_tid
+        final_id = ts.write_assistant_row("user", final_text, turn_id=turn)
+        return uid, step_id, final_id
 
-    def test_assistant_row_without_tool_calls_gets_text_segment(self, db):
-        self._seed_turn(db, "Hello", "Hi there!", tool_calls=[])
+    def test_plain_assistant_row_gets_one_text_segment(self, db):
+        self._seed_plain_turn("Hello", "Hi there!")
 
         from api.conversation import get_recent_history
         messages, _ = get_recent_history(limit=10)
 
         asst = next(m for m in messages if m["role"] == "assistant")
-        assert "segments" in asst
-        assert len(asst["segments"]) == 1
-        assert asst["segments"][0]["type"] == "text"
-        assert asst["segments"][0]["content"] == "Hi there!"
+        assert asst["segments"] == [{"type": "text", "content": "Hi there!"}]
+        assert not asst.get("tool_calls")          # no tools on a plain turn
 
     def test_user_row_has_no_segments_field(self, db):
-        self._seed_turn(db, "Hello", "Hi!")
+        self._seed_plain_turn("Hello", "Hi!")
 
         from api.conversation import get_recent_history
         messages, _ = get_recent_history(limit=10)
@@ -104,118 +119,101 @@ class TestConversationRecentSegments:
         user_msg = next(m for m in messages if m["role"] == "user")
         assert "segments" not in user_msg
 
-    def test_assistant_row_with_weather_tool_gets_rich_segment(self, db):
-        assistant_content = "Here is the weather. <span id='weather_1'>Partly cloudy, 12°C.</span>"
-        self._seed_turn(
-            db,
+    def test_final_row_pairs_a_rich_segment_from_the_step_rows_tool(self, db):
+        """Turn-wide resolve: the weather tool ran on the STEP row, the synthesis
+        span lives on the FINAL row. The refresh path must reach across the turn
+        to pair them — the rich card lands on the final row's segments."""
+        _, _, final_id = self._seed_tool_turn(
             "What's the weather in London?",
-            assistant_content,
-            tool_calls=[
-                {"tool_name": "weather", "params": '{"location":"London"}', "result": _TOOL_RESULT},
-            ],
+            "Let me check the weather.",
+            "Here is the weather. <span id='weather_1'>Partly cloudy, 12°C.</span>",
+            [{"tool_name": "weather", "params": {"location": "London"},
+              "result": _TOOL_RESULT, "summary": "Checking London weather"}],
         )
 
         from api.conversation import get_recent_history
         messages, _ = get_recent_history(limit=10)
 
-        asst = next(m for m in messages if m["role"] == "assistant")
-        assert "segments" in asst
-        rich_segs = [s for s in asst["segments"] if s["type"] == "rich"]
-        assert len(rich_segs) == 1
-        seg = rich_segs[0]
-        assert seg["tag"] == "weather_1"
-        assert seg["synthesis"] == "Partly cloudy, 12°C."
-        assert seg["payload"]["location"] == "London, GB"
-        assert seg["payload"]["temperature_c"] == pytest.approx(12.4, abs=1e-9)
+        final = next(m for m in messages if m["id"] == str(final_id))
+        rich = [s for s in final["segments"] if s["type"] == "rich"]
+        assert len(rich) == 1
+        assert rich[0]["tag"] == "weather_1"
+        assert rich[0]["synthesis"] == "Partly cloudy, 12°C."
+        assert rich[0]["payload"]["location"] == "London, GB"
 
-    def test_tool_calls_included_in_pairing(self, db):
-        """Tool calls stored for a turn must be included in segment pairing."""
-        assistant_content = "<span id='weather_1'>Sunny!</span>"
-        self._seed_turn(
-            db,
-            "Weather?",
-            assistant_content,
-            tool_calls=[
-                {"tool_name": "weather", "params": "{}", "result": _TOOL_RESULT},
-            ],
+    def test_step_row_carries_its_own_tool_chip_with_summary(self, db):
+        """Each assistant row surfaces ONLY the tools it emitted, with the
+        ability's persisted act_summary — the blue box the frontend prints."""
+        _, step_id, final_id = self._seed_tool_turn(
+            "What's the weather in London?",
+            "Let me check the weather.",
+            "Here is the weather. <span id='weather_1'>Partly cloudy, 12°C.</span>",
+            [{"tool_name": "weather", "params": {"location": "London"},
+              "result": _TOOL_RESULT, "summary": "Checking London weather"}],
         )
 
         from api.conversation import get_recent_history
         messages, _ = get_recent_history(limit=10)
+        by_id = {m["id"]: m for m in messages}
 
-        asst = next(m for m in messages if m["role"] == "assistant")
-        rich_segs = [s for s in asst["segments"] if s["type"] == "rich"]
-        assert len(rich_segs) == 1
+        step = by_id[str(step_id)]
+        assert step["tool_calls"] == [
+            {"tool_name": "weather", "summary": "Checking London weather"}
+        ]
+        # The tool ran on the step row, so the final synthesis row shows no chip.
+        assert not by_id[str(final_id)].get("tool_calls")
 
-    def test_two_city_turn_produces_two_rich_segments(self, db):
-        def _make_result(loc, ordinal):
-            payload = dict(_WEATHER_DICT, location=loc)
-            return (
-                json.dumps(payload)
-                + f"\n\n<span id='weather_{ordinal}'>"
-            )
+    def test_content_field_preserved_on_assistant_rows(self, db):
+        _, final_id = self._seed_plain_turn("Q", "Plain response with no spans.")
 
-        assistant_content = (
-            "London: <span id='weather_1'>Cloudy.</span> "
-            "Tokyo: <span id='weather_2'>Clear.</span>"
-        )
-        self._seed_turn(
-            db,
+        from api.conversation import get_recent_history
+        messages, _ = get_recent_history(limit=10)
+
+        asst = next(m for m in messages if m["id"] == str(final_id))
+        assert asst["content"] == "Plain response with no spans."
+
+    def test_two_city_turn_final_row_has_two_rich_segments(self, db):
+        _, step_id, final_id = self._seed_tool_turn(
             "Compare London and Tokyo weather",
-            assistant_content,
-            tool_calls=[
-                {"tool_name": "weather", "params": '{"location":"London"}', "result": _make_result("London, GB", 1)},
-                {"tool_name": "weather", "params": '{"location":"Tokyo"}', "result": _make_result("Tokyo, JP", 2)},
+            "Checking both cities.",
+            "London: <span id='weather_1'>Cloudy.</span> "
+            "Tokyo: <span id='weather_2'>Clear.</span>",
+            [
+                {"tool_name": "weather", "params": {"location": "London"},
+                 "result": _weather_result("London, GB", 1), "summary": "London"},
+                {"tool_name": "weather", "params": {"location": "Tokyo"},
+                 "result": _weather_result("Tokyo, JP", 2), "summary": "Tokyo"},
             ],
         )
 
         from api.conversation import get_recent_history
         messages, _ = get_recent_history(limit=10)
+        by_id = {m["id"]: m for m in messages}
 
-        asst = next(m for m in messages if m["role"] == "assistant")
-        rich_segs = [s for s in asst["segments"] if s["type"] == "rich"]
-        assert len(rich_segs) == 2
-        tags = {s["tag"] for s in rich_segs}
-        assert tags == {"weather_1", "weather_2"}
+        final = by_id[str(final_id)]
+        rich = [s for s in final["segments"] if s["type"] == "rich"]
+        assert {s["tag"] for s in rich} == {"weather_1", "weather_2"}
+        # Both chips live on the step row that emitted them.
+        assert [t["tool_name"] for t in by_id[str(step_id)]["tool_calls"]] == ["weather", "weather"]
 
-    def test_content_field_still_present_on_assistant_row(self, db):
-        """Backwards compat: content field must not be removed."""
-        assistant_content = "Plain response with no spans."
-        self._seed_turn(db, "Q", assistant_content)
-
-        from api.conversation import get_recent_history
-        messages, _ = get_recent_history(limit=10)
-
-        asst = next(m for m in messages if m["role"] == "assistant")
-        assert asst["content"] == assistant_content
-
-    def test_multiple_turns_each_assistant_gets_own_segments(self, db):
-        """Multiple conversation turns; each assistant row paired with its own tool_calls."""
-        def _make_result(loc, ordinal):
-            payload = dict(_WEATHER_DICT, location=loc)
-            return json.dumps(payload) + f"\n\n<span id='weather_{ordinal}'>"
-
-        # Turn 1: weather tool used
-        self._seed_turn(
-            db, "London weather?",
+    def test_each_turn_gets_its_own_segments(self, db):
+        # Turn 1: a weather tool turn (step + final assistant rows).
+        self._seed_tool_turn(
+            "London weather?",
+            "Checking.",
             "<span id='weather_1'>Cloudy.</span>",
-            tool_calls=[
-                {"tool_name": "weather", "params": "{}", "result": _make_result("London, GB", 1)},
-            ],
+            [{"tool_name": "weather", "params": {"location": "London"},
+              "result": _weather_result("London, GB", 1), "summary": "x"}],
         )
-        # Turn 2: no tool used
-        self._seed_turn(db, "Thanks", "You are welcome!", tool_calls=[])
+        # Turn 2: a plain turn (final assistant row only).
+        self._seed_plain_turn("Thanks", "You are welcome!")
 
         from api.conversation import get_recent_history
         messages, _ = get_recent_history(limit=10)
 
-        asst_msgs = [m for m in messages if m["role"] == "assistant"]
-        assert len(asst_msgs) == 2
-
-        # First assistant message (weather turn) has a rich segment
-        first_asst = asst_msgs[0]
-        assert any(s["type"] == "rich" for s in first_asst["segments"])
-
-        # Second assistant message (plain turn) has only text segment
-        second_asst = asst_msgs[1]
-        assert all(s["type"] == "text" for s in second_asst["segments"])
+        asst = [m for m in messages if m["role"] == "assistant"]
+        # turn 1 yields a step + a final row; turn 2 yields one final row.
+        assert len(asst) == 3
+        assert any(s["type"] == "rich" for m in asst for s in m["segments"])
+        plain = next(m for m in asst if m["content"] == "You are welcome!")
+        assert all(s["type"] == "text" for s in plain["segments"])

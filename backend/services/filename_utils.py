@@ -19,16 +19,7 @@ _MAX_FILENAME_LEN = 255
 
 
 def safe_filename(name: str) -> str:
-    """Return a filesystem-safe filename, capped at 255 chars.
-
-    Delegates to ``werkzeug.utils.secure_filename`` for the actual hardening
-    (strips path separators, null bytes, control chars, leading dots; collapses
-    spaces to underscores; reduces to ASCII), then enforces a 255-char limit
-    while keeping the extension intact.
-
-    Returns an empty string when the name reduces to nothing safe — the caller
-    is responsible for substituting a fallback in that case.
-    """
+    """Sanitize filename to be filesystem-safe, capped at 255 chars while preserving the extension."""
     name = secure_filename(name or '')
     if len(name) > _MAX_FILENAME_LEN:
         stem, ext = os.path.splitext(name)

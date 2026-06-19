@@ -30,6 +30,7 @@ from typing import ClassVar
 import requests
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult, truncate
 from services.text_extractor import extract_html
 from services.web_fetch import API, FetchBlocked, fetch_text
@@ -45,7 +46,6 @@ _RE_HTML_TAGS = re.compile(r"<[^>]+>")
 # ── Low-level fetch helpers (all through services.web_fetch) ────────────────────
 
 def _fetch(url: str) -> str:
-    """GET *url* through the shared SSRF-guarded stack with the API profile."""
     return fetch_text(url, profile=API, timeout=_FETCH_TIMEOUT)
 
 
@@ -69,14 +69,9 @@ def _templates(
     *patterns: str,
     title: str = "{q}",
 ) -> Callable[[str], list[dict]]:
-    """Build candidate URLs from query-substituted templates — no HTTP.
-
-    Each *pattern* is a URL template using the placeholders produced by
-    :func:`_query_vars`. The engine fetches candidates in order and keeps the
-    first that yields real content, so templates are tried cheapest-first WITHOUT
-    a separate HEAD probe (the fetch IS the validation — a dead URL simply falls
-    through to the next candidate or to ``source-unavailable``).
-    """
+    """Templates are tried cheapest-first WITHOUT a separate HEAD probe — the
+    fetch IS the validation (a dead URL falls through to the next candidate or
+    to ``source-unavailable``)."""
 
     def resolve(query: str) -> list[dict]:
         vars_ = _query_vars(query)
@@ -104,13 +99,8 @@ def _json_api(
     title_field: str,
     url_prefix: str = "",
 ) -> Callable[[str], list[dict]]:
-    """Resolve candidates from a JSON search API (MDN, MS Learn).
-
-    Hits *endpoint* (``{q}`` = url-encoded query), reads ``results_key`` from the
-    JSON body, and maps each item's ``url_field``/``title_field`` into a candidate.
-    A request failure bubbles to the engine, which surfaces ``source-unavailable``
-    — it never fabricates a fallback URL.
-    """
+    """A request failure bubbles to the engine, which surfaces
+    ``source-unavailable`` — it never fabricates a fallback URL."""
 
     def resolve(query: str) -> list[dict]:
         url = endpoint.format(q=urllib.parse.quote(query))
@@ -135,12 +125,7 @@ def _html_search(
     base: str,
     skip_self: bool = True,
 ) -> Callable[[str], list[dict]]:
-    """Resolve candidates by scraping a documentation search-results page.
-
-    Hits *endpoint* (``{q}`` = url-encoded query), applies *link_pattern* (a regex
-    with two groups: href, title) to the returned HTML, and resolves each href
-    against *base*. A request failure bubbles to the engine.
-    """
+    """A request failure bubbles to the engine."""
     rx = re.compile(link_pattern, re.DOTALL | re.IGNORECASE)
 
     def resolve(query: str) -> list[dict]:
@@ -168,13 +153,6 @@ def _html_search(
 
 
 def _query_vars(query: str) -> dict:
-    """The placeholder vocabulary every ``_templates`` source draws from.
-
-    Keeps templates declarative: a source picks the casing/separators it needs
-    (``{q}`` raw-lower, ``{dash}``, ``{us}`` underscores, ``{dot}``, ``{slash}``
-    for ``::``→``/``, ``{Title}`` capitalised, ``{last}`` final segment, ``{base}``
-    base name before ``.``/``::``/``#``).
-    """
     q = query.strip()
     lower = q.lower()
     last = re.split(r"[.\\/:#]+", q)[-1] or q
@@ -196,9 +174,7 @@ def _query_vars(query: str) -> dict:
 
 @dataclass
 class Source:
-    """One documentation source: identity + a candidate resolver.
-
-    ``base_url`` is both the human "where these docs live" pointer AND the value
+    """``base_url`` is both the human "where these docs live" pointer AND the value
     the engine fetches when a resolver yields no candidate of its own (a real
     landing/search page — never a fabricated symbol page). It is a plain mutable
     field so deployment/test can repoint a source without touching code.
@@ -443,9 +419,7 @@ def resolve_source(language: str) -> "Source | None":
 # ── The single generic lookup engine ────────────────────────────────────────────
 
 def lookup(language: str, query: str) -> ToolResult:
-    """Resolve *language* to a source, fetch the top real candidate, return rows.
-
-    Truthful failure modes (NEVER fabrication):
+    """Truthful failure modes (NEVER fabrication):
       * unknown language → ``code=unknown-source`` + valid= the table's ids.
       * no candidate AND base_url unfetchable → ``code=source-unavailable``.
       * top candidate fetch/extract fails → ``code=source-unavailable``.
@@ -558,25 +532,25 @@ class ProgrammingDocsSearchAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "language": {
+            Keys.language: {
                 "type": "string",
                 "enum": _LANGUAGE_ENUM,
                 "description": "Programming language or framework to search documentation for.",
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "What to look up — function name, class, method, module, or concept in plain language.",
             },
         },
-        "required": ["language", "query"],
+        "required": [Keys.language, Keys.query],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        language = self.param(params, "language", required=True)
-        query = self.param(params, "query", required=True)
+        language = self.param(params, Keys.language, required=True)
+        query = self.param(params, Keys.query, required=True)
         language = str(language).strip()
         query = str(query).strip()
         if not language:

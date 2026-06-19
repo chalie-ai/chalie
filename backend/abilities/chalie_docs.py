@@ -26,6 +26,7 @@ from typing import ClassVar
 import requests
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult, truncate
 from services.file_mapper_service import FileMapperService
 from services.text_extractor import extract_html
@@ -80,7 +81,7 @@ class ChalieDocsAbility(Ability):
     #: Action-less tool: the canonical ``query`` is the one required input. The
     #: dispatcher's ACTION_REQUIRED pre-gate rejects a call with no query as
     #: ``code=missing-params`` BEFORE run() (and before the policy gate).
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("query",)}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.query,)}
 
     def get_name(self) -> str:
         return "chalie_docs"
@@ -107,7 +108,7 @@ class ChalieDocsAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "enum": ["basics", "tools", "releases", "code-base"],
                 "description": (
@@ -118,11 +119,11 @@ class ChalieDocsAbility(Ability):
                 ),
             },
         },
-        "required": ["query"],
+        "required": [Keys.query],
     }
 
     def run(self, params: dict) -> ToolResult:
-        raw = self.param(params, "query", required=True)
+        raw = self.param(params, Keys.query, required=True)
         query = str(raw).strip().lower()
         urls = _QUERY_URLS.get(query)
         if not urls:

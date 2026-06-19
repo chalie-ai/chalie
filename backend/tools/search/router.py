@@ -10,6 +10,8 @@ Regenerate embeddings with:  cd backend && python -m utils.generate_search_cache
 import logging
 import sqlite3
 
+import numpy as np
+
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
 
@@ -23,6 +25,62 @@ _K = 30             # k-NN depth
 _TOP_N = 3          # top-N examples per provider for mean score
 _MIN_SCORE = 0.50   # below this = routing miss
 _WEAK_SCORE = 0.60  # below this (but >= _MIN_SCORE) = DDG supplement fires
+
+
+def rank_results(query: str, results: list[dict]) -> list[dict]:
+    """Score each result by cosine similarity to *query* and return best-first.
+
+    Each result's score is the cosine similarity in [0, 1] between the query
+    embedding and the result's ``(title + " " + summary)`` embedding.  This is
+    a per-HIT relevance signal — distinct from the per-provider routing score
+    used by :func:`route_query` — so the global top-5 cut in
+    ``SearchAbility.run`` selects the 5 most query-relevant hits across all
+    providers after merging their result sets.
+
+    Fail-open: any embedding error is logged at WARNING level and the original
+    *results* list is returned unchanged with no ``score`` key added.  Search
+    is never aborted by a ranking failure.
+
+    Args:
+        query: The user's plain-language search query.
+        results: List of result dicts with at least ``title`` and ``summary``.
+
+    Returns:
+        A new list sorted descending by ``score`` (each result gains a
+        ``score: float`` key), or the original *results* unchanged on error.
+    """
+    if not results:
+        return results
+
+    try:
+        from services.embedding_service import EmbeddingService
+        svc = EmbeddingService()
+
+        query_vec: np.ndarray = svc.generate_embedding_np(query)
+
+        texts = [
+            (r.get("title") or "") + " " + (r.get("summary") or "")
+            for r in results
+        ]
+        result_vecs: list[np.ndarray] = svc.generate_embeddings_batch(texts)
+
+        # Cosine similarity: dot(q, r) / (‖q‖ · ‖r‖), clamped to [0, 1].
+        q_norm = np.linalg.norm(query_vec)
+        scored: list[dict] = []
+        for r, vec in zip(results, result_vecs):
+            r_norm = np.linalg.norm(vec)
+            if q_norm == 0.0 or r_norm == 0.0:
+                sim = 0.0
+            else:
+                sim = float(np.dot(query_vec, vec) / (q_norm * r_norm))
+            sim = max(0.0, min(1.0, sim))
+            scored.append({**r, "score": sim})
+
+        return sorted(scored, key=lambda x: x["score"], reverse=True)
+
+    except Exception as exc:
+        logger.warning("[SEARCH] rank_results embedding error, returning unranked: %s", exc)
+        return results
 
 
 def route_query(query: str) -> list[dict]:

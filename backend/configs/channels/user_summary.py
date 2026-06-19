@@ -10,7 +10,6 @@ _MAX_PATTERN_ROWS = 25
 
 
 def _format_pattern_line(content: dict) -> str:
-    """Render a single behavioral_pattern content dict as a compact one-liner."""
     name = content.get("name", "unknown")
     freq = content.get("frequency", "?")
     anchor = content.get("time_anchor") or ""
@@ -25,11 +24,10 @@ def _format_pattern_line(content: dict) -> str:
 
 
 class PersistUserSummaryHook(PostTurnHook):
-    """Parse JSON {short, long} from the assistant text and write to data_graph.
-
-    AC-29: receives response_text directly — no on_store hook, no _last_response
-    cache.  §3b / §4.8: this hook is the only after-turn callback for this channel.
-    """
+    """AC-29: receives response_text directly — no on_store hook, no
+    _last_response cache. §3b / §4.8: this hook is the only after-turn
+    callback for this channel. Writes user_summary_long FIRST so crash
+    recovery works correctly."""
 
     def run(self, mp, response_text: str) -> None:
         import json as _json  # noqa: PLC0415
@@ -97,17 +95,10 @@ class PersistUserSummaryHook(PostTurnHook):
 
 
 def _should_synthesise() -> bool:
-    """Return True when re-synthesis is warranted.
-
-    Logic:
-    - latest_trait_ts = MAX(last_confirmed_at) WHERE kind IN
-      ('user_specific', 'behavioral_pattern') AND active=1
-    - current_summary = row WHERE kind='system' AND key='user_summary' AND active=1
-
-    Cases:
-    - No traits or patterns at all → False (nothing to synthesise).
-    - Traits/patterns exist, no summary → True (first synthesis needed).
-    - Both exist → True only when latest trait/pattern is newer than the summary row.
+    """True only when re-synthesis is needed:
+    no traits/patterns → False;
+    traits/patterns exist but no summary → True;
+    otherwise → True iff the latest trait/pattern is newer than the summary row.
     """
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
@@ -160,24 +151,15 @@ def _should_synthesise() -> bool:
 
 
 class UserSummaryConfig(ProcessorConfig):
-    """User-summary config — one-shot user synthesis.
-
-    channel/role='user_summary', suppress_history=True, max_iterations=1.
-    post_turn parses {short, long} → data_graph (§3b / AC-29).
-
-    The caller gates on _should_synthesise() BEFORE calling
-    MessageProcessor.process() — §3c / O1.
-    """
+    """Caller gates on _should_synthesise() BEFORE calling
+    MessageProcessor.process() — §3c / O1."""
 
     def __init__(self) -> None:
         super().__init__(
             channel="user_summary",
             role="user_summary",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
@@ -256,9 +238,6 @@ class UserSummaryConfig(ProcessorConfig):
         return facts_section + "\n\n" + patterns_section
 
     def get_system_prompt(self, mp) -> str:
-        """User-summary system prompt: user_definition prefix + body.
-
-        Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
-        """
+        """OLD assembly ``f"{user_def}\n\n{body}"``."""
         from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
         return f"{self.get_user_definition(mp)}\n\n{UserSummarySystemPrompt().get_prompt()}"

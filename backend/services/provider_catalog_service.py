@@ -9,16 +9,6 @@ A preset is NEVER a runtime platform of its own — ``platform`` is always a rea
 Chalie platform, and the provider is created through the ordinary create path
 with no catalog special-casing. That is why this module is a plain in-process
 constant: no file I/O, no path resolution.
-
-Preset fields:
-  - ``id``        stable slug, unique within the list
-  - ``name``      human label shown in the picker
-  - ``platform``  one of the five Chalie platforms
-  - ``host``      base URL to pre-fill; ``""`` means no host field (native APIs)
-  - ``needs_key`` ``False`` only for Ollama (local, unauthenticated)
-
-Base URLs are each provider's official OpenAI-compatible endpoint, sourced from
-the provider's own API docs and the models.dev catalog.
 """
 
 from __future__ import annotations
@@ -62,5 +52,4 @@ CURATED_PROVIDERS: list[dict] = [
 
 
 def get_catalog() -> list[dict]:
-    """Return the curated provider presets, in display order."""
     return CURATED_PROVIDERS

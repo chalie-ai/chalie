@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from abilities._capability import CapabilityAbility
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 # Actions whose ``entity_id`` must name a real entity. ``control`` is the silent-
@@ -71,11 +72,11 @@ class HomeAbility(CapabilityAbility):
     # naming all missing params. Read/list actions have no hard requirement.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list_devices": (),
-        "get_state": ("entity_id",),
-        "control": ("entity_id", "service"),
+        "get_state": (Keys.entity_id,),
+        "control": (Keys.entity_id, Keys.service),
         "list_automations": (),
-        "trigger_automation": ("automation_id",),
-        "subscribe_events": ("entity_id",),
+        "trigger_automation": (Keys.automation_id,),
+        "subscribe_events": (Keys.entity_id,),
     }
 
     def get_name(self) -> str:
@@ -109,7 +110,7 @@ class HomeAbility(CapabilityAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": [
                     "list_devices",
@@ -128,30 +129,30 @@ class HomeAbility(CapabilityAbility):
                     "subscribe_events -- subscribe to real-time state changes for an entity."
                 ),
             },
-            "entity_id": {
+            Keys.entity_id: {
                 "type": "string",
                 "description": (
                     "HA entity ID, e.g. 'light.living_room'. Must name a real "
                     "entity — call list_devices first if unsure."
                 ),
             },
-            "domain": {
+            Keys.domain: {
                 "type": "string",
                 "description": "list_devices: filter by HA domain (light, switch, sensor, climate, lock, etc.).",
             },
-            "area": {
+            Keys.area: {
                 "type": "string",
                 "description": "list_devices: filter by area name.",
             },
-            "service": {
+            Keys.service: {
                 "type": "string",
                 "description": "control: service to call, e.g. 'turn_on', 'turn_off', 'toggle'.",
             },
-            "service_data": {
+            Keys.service_data: {
                 "type": "object",
                 "description": "control: extra service data (brightness, temperature, etc.).",
             },
-            "automation_id": {
+            Keys.automation_id: {
                 "type": "string",
                 "description": (
                     "trigger_automation: automation entity_id (e.g. "
@@ -160,24 +161,24 @@ class HomeAbility(CapabilityAbility):
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     # ── Entry point — entity guardrail, then delegate to the base ──────────────
 
     def run(self, params: dict) -> ToolResult:
-        action = str(params.get("action", self.DEFAULT_ACTION)).lower()
-        params["action"] = action
+        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
+        params[Keys.action] = action
 
         cap = self._connected_capability()
         if cap is not None:
             if action in _ENTITY_ACTIONS:
-                guard = self._guard_entity(cap, action, str(params.get("entity_id", "")))
+                guard = self._guard_entity(cap, action, str(params.get(Keys.entity_id, "")))
                 if guard is not None:
                     return guard
             elif action == "trigger_automation":
                 guard = self._guard_automation(
-                    cap, action, str(params.get("automation_id", ""))
+                    cap, action, str(params.get(Keys.automation_id, ""))
                 )
                 if guard is not None:
                     return guard
@@ -190,8 +191,6 @@ class HomeAbility(CapabilityAbility):
     # ── Guardrails ─────────────────────────────────────────────────────────────
 
     def _guard_entity(self, cap, action: str, entity_id: str) -> "ToolResult | None":
-        """Return an ``unknown-entity`` error when *entity_id* is not in the live
-        states list, else ``None`` (the entity exists — proceed to the base)."""
         entities = self._live_entities(cap, prefix=None)
         if entity_id in entities:
             return None
@@ -204,8 +203,6 @@ class HomeAbility(CapabilityAbility):
         )
 
     def _guard_automation(self, cap, action: str, automation_id: str) -> "ToolResult | None":
-        """Return an ``unknown-automation`` error when *automation_id* is not a real
-        automation entity, else ``None``."""
         automations = self._live_entities(cap, prefix="automation.")
         if automation_id in automations:
             return None
@@ -220,8 +217,6 @@ class HomeAbility(CapabilityAbility):
     # ── Live-state lookup + closest-match helpers ──────────────────────────────
 
     def _connected_capability(self):
-        """Return the connected home capability, or ``None`` when absent / not
-        connected (the base then surfaces the canonical not-connected error)."""
         from capabilities import load_capabilities
 
         cap = load_capabilities().get(self.CAPABILITY_KEY)
@@ -231,12 +226,6 @@ class HomeAbility(CapabilityAbility):
 
     @staticmethod
     def _live_entities(cap, *, prefix: str | None) -> list[str]:
-        """The live entity ids from the capability's own ``list_devices`` handler,
-        optionally restricted to a domain *prefix* (e.g. ``"automation."``).
-
-        Going through the capability handler keeps credentials encapsulated and
-        reuses the one connection the capability owns. ``limit`` is raised so the
-        guardrail sees the full universe, not just the first page."""
         from services.innate_skills._capability import dispatch_capability_handler
 
         tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
@@ -250,12 +239,6 @@ class HomeAbility(CapabilityAbility):
 
     @staticmethod
     def _closest(needle: str, candidates: list[str]) -> tuple[str, ...]:
-        """The closest real entity ids to *needle*, ranked by a ci substring /
-        edit-distance proximity, capped at :data:`_MAX_CANDIDATES`.
-
-        Substring hits (either direction) come first; the remainder is ordered by
-        ``difflib`` similarity so a transposed/typo'd id (``light.ofice``) still
-        surfaces ``light.office`` as the top candidate."""
         import difflib
 
         needle_l = needle.lower()
@@ -270,8 +253,6 @@ class HomeAbility(CapabilityAbility):
 
     @classmethod
     def _closest_hint(cls, needle: str, candidates: list[str], list_action: str) -> str:
-        """A one-line recovery hint naming the closest real ids, or directing the
-        model to the matching list action when there is nothing close."""
         closest = cls._closest(needle, candidates)
         if closest:
             return f"closest matches: {', '.join(closest)} — re-issue with an exact id."

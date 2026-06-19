@@ -15,7 +15,6 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def metrics(store):
-    """MetricsService connected to the isolated test MemoryStore."""
     return MetricsService()
 
 

@@ -1,16 +1,3 @@
-"""
-Capability framework — discovery, loading, and management of capability plugins.
-
-Each capability lives in its own sub-package under ``capabilities/`` and must
-provide a ``manifest.yaml`` file plus a ``capability.py`` module that exposes a
-concrete subclass of :class:`capabilities.base.AbstractCapability`.
-
-Public API
-----------
-- :func:`load_capabilities` — scan the filesystem and return all discovered
-  capability instances keyed by their ``id``.
-"""
-
 import importlib
 import logging
 
@@ -26,19 +13,6 @@ _capabilities_cache: dict | None = None
 
 
 def load_capabilities() -> dict:
-    """Discover, load, and return all capability plugin instances.
-
-    On the first call, scans every direct sub-directory of ``capabilities/``
-    for a ``manifest.yaml``, imports and instantiates the declared
-    ``entry_class``, and caches the result.  Subsequent calls return the
-    same cached instances so that in-memory state (``_connected``, etc.)
-    is preserved across API requests.
-
-    Returns:
-        dict[str, AbstractCapability]: Mapping of capability ``id`` →
-        instantiated capability object.  Returns an empty dict if no
-        ``manifest.yaml`` files are found or all loads fail.
-    """
     global _capabilities_cache
     if _capabilities_cache is not None:
         return _capabilities_cache

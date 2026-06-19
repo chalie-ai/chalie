@@ -1,19 +1,11 @@
-"""SavePattern — record a repeating behavioural pattern in the data graph.
-
-Reachable when a processor lists ``"save_pattern"`` in its ``ALWAYS_AVAILABLE``
-or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
-
-Budget + decay-tracking state lives on the calling processor (read via
-``self.mp``).  PMP initialises ``_save_pattern_calls = 0`` and
-``_touched_pattern_ids = set()`` in ``__init__``; this Ability uses ``getattr``
-defaults so it remains usable from any processor that opts it in.
-"""
+"""SavePattern — record a repeating behavioural pattern in the data graph."""
 import json
 import math
 import re
 from typing import ClassVar
 
 from abilities._budget import BudgetCappedAbility
+from abilities._params import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
 from services.database_service import get_shared_db_service
@@ -33,8 +25,8 @@ _EXAMPLE_HINT = (
 
 class SavePattern(BudgetCappedAbility):
     SYSTEM = True
+    DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
 
-    BUDGET_COUNTER_ATTR: ClassVar[str] = "_save_pattern_calls"
     BUDGET_CAP: ClassVar[int] = 20
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
@@ -44,7 +36,7 @@ class SavePattern(BudgetCappedAbility):
     # evidence list is rejected there too, while whitespace-only name/summary
     # residue still reaches run().
     ACTION_REQUIRED: ClassVar[dict] = {
-        "": ("name", "frequency", "summary", "evidence_transcript_ids")
+        "": (Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids)
     }
 
     def get_name(self) -> str:
@@ -74,28 +66,28 @@ class SavePattern(BudgetCappedAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "name": {
+            Keys.name: {
                 "type": "string",
                 "description": "snake_case identifier; mirror existing names when reinforcing.",
             },
-            "frequency": {
+            Keys.frequency: {
                 "type": "string",
                 "enum": ["daily", "weekly", "weekday", "weekend", "ad-hoc"],
             },
-            "time_anchor": {
+            Keys.time_anchor: {
                 "type": "string",
                 "description": "Optional anchor: '07:00' | 'evening' | 'weekends' | '' if not applicable.",
             },
-            "summary": {
+            Keys.summary: {
                 "type": "string",
                 "description": "One concise sentence describing the habitual behavior. Not a narrative or episode summary.",
             },
-            "evidence_transcript_ids": {
+            Keys.evidence_transcript_ids: {
                 "type": "array",
                 "items": {"type": "integer"},
             },
         },
-        "required": ["name", "frequency", "summary", "evidence_transcript_ids"],
+        "required": [Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids],
     }
 
     def get_parameters(self) -> dict:
@@ -109,7 +101,7 @@ class SavePattern(BudgetCappedAbility):
         # The validation ORDER and rules are frozen (regex → frequency set →
         # min-2 evidence); only the failure shape changes from a phantom-success
         # dict to a loud ToolResult error, in parity with save_graph.
-        name = (params.get("name") or "").strip()
+        name = (params.get(Keys.name) or "").strip()
         # The dispatcher pre-gate is truthiness-based, so a whitespace-only name
         # slips past it as a non-empty string and must be rejected here
         # (precedent: save_graph.py, file_permissions.py).
@@ -126,7 +118,7 @@ class SavePattern(BudgetCappedAbility):
                 hint=_EXAMPLE_HINT,
             )
 
-        frequency = params.get("frequency", "")
+        frequency = params.get(Keys.frequency, "")
         if frequency not in _VALID_FREQUENCIES:
             return ToolResult.err(
                 f"Unknown frequency {frequency!r}; not a recognised cadence.",
@@ -135,7 +127,7 @@ class SavePattern(BudgetCappedAbility):
                 hint=_EXAMPLE_HINT,
             )
 
-        summary = (params.get("summary") or "").strip()
+        summary = (params.get(Keys.summary) or "").strip()
         if not summary:
             return ToolResult.err(
                 "Missing required parameter(s): summary.",
@@ -143,7 +135,7 @@ class SavePattern(BudgetCappedAbility):
                 valid=("name", "frequency", "summary", "evidence_transcript_ids"),
             )
 
-        evidence = params.get("evidence_transcript_ids")
+        evidence = params.get(Keys.evidence_transcript_ids)
         n_evidence = len(evidence) if isinstance(evidence, list) else 0
         if n_evidence < 2:
             return ToolResult.err(
@@ -157,17 +149,11 @@ class SavePattern(BudgetCappedAbility):
             "frequency": frequency,
             "summary": summary,
             "evidence": evidence,
-            "time_anchor": params.get("time_anchor", "") or "",
+            "time_anchor": params.get(Keys.time_anchor, "") or "",
         }
         proc = self.mp
         source = pattern_provenance(proc)
         row_id, confidence_out, reinforced = _upsert_pattern(validated, source)
-
-        self.bump_budget()
-        if proc is not None:
-            touched = getattr(proc, "_touched_pattern_ids", None)
-            if touched is not None:
-                touched.add(row_id)
 
         body = {"saved": 1}
         if reinforced:
@@ -179,14 +165,7 @@ class SavePattern(BudgetCappedAbility):
 
 
 def _upsert_pattern(validated: dict, source: str) -> tuple[int, float, bool]:
-    """Insert or merge a behavioral_pattern row in data_graph.
-
-    ``source`` is the provenance of the pass that produced this pattern
-    (``pattern_match`` or ``geo_pattern``).
-
-    Returns ``(row_id, confidence, reinforced)`` — ``reinforced`` is True when an
-    existing pattern was merged, False when a fresh row was inserted.
-    """
+    """``source`` is the provenance of the pass that produced this pattern"""
     now_iso = utc_now().isoformat()
     db = get_shared_db_service()
 

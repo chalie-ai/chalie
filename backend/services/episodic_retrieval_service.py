@@ -71,19 +71,7 @@ _RELATIVE_SCORE_FLOOR = 0.5
 
 
 def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
-    """Fetch a single episode row as a pure read (no side-effects).
-
-    Used for apex traversal and final-apex surfacing alike: retrieval is a pure
-    read, so no row is mutated here.  ``last_relevant_at`` is carried so the
-    composite rerank can use the relevance anchor as its recency clock.
-
-    Args:
-        episode_id: The episode UUID.
-        db:         Optional DatabaseService; resolves via shared service if None.
-
-    Returns:
-        Episode dict or None if not found.
-    """
+    """Fetch a single episode row for apex traversal or final-apex surfacing."""
     if db is None:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -139,28 +127,7 @@ def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
 
 
 def walk_up_to_apex(episode_id: str, db=None) -> Optional[dict]:
-    """Walk the consolidated_into chain from *episode_id* to its apex.
-
-    Returns the apex episode dict.  If the episode has no consolidated_into,
-    it is its own apex and is returned directly.
-
-    Pure read — no episode is mutated on any hop (see ``_get_episode_raw``).
-
-    Cycle-safe: tracks visited IDs in a ``seen`` set and logs an error if a
-    cycle is detected, returning the current episode rather than looping.
-
-    Depth-safe: stops after _MAX_TRAVERSAL_DEPTH hops and logs a warning,
-    returning whatever episode is current at that point.
-
-    Args:
-        episode_id: UUID string of the starting episode.
-        db:         Optional DatabaseService for testing; resolves the shared
-                    service when None.
-
-    Returns:
-        Episode dict at the apex (or the current episode on cycle/depth-guard),
-        or None if the starting episode does not exist.
-    """
+    """Walk the consolidated_into chain from *episode_id* to its apex."""
     seen: set[str] = set()
     current_id = episode_id
 

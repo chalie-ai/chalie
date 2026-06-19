@@ -25,6 +25,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.vision import VisionConfig
 
@@ -48,10 +49,9 @@ _NO_VISION_NOTE = (
 
 
 def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel) -> dict:
-    """Describe an image. Forks ONCE on vision-provider-configured.
-    Returns {"description": str, "vision_used": bool, "note": str|None}.
-    Provider path RAISES on provider failure (never swallowed); the OCR fallback
-    is ONLY for the not-configured path."""
+    """Forks ONCE on vision-provider-configured. Provider path RAISES on provider
+    failure (never swallowed); the OCR fallback is ONLY for the not-configured path.
+    """
     from services.database_service import get_shared_db_service  # noqa: PLC0415
     from services.provider_db_service import ProviderDbService  # noqa: PLC0415
 
@@ -107,24 +107,24 @@ class VisionAbility(Ability):
     # or empty image/query as code=missing-params before run() is reached
     # (precedent: save_graph.py, save_pattern.py, file_permissions.py). The
     # pre-gate is truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("image", "query")}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.image, Keys.query)}
 
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "image": {
+            Keys.image: {
                 "type": "string",
                 "description": (
                     "The 8-character document id (doc_id). If this is not available "
                     "in context, use the `document.search` tool to look it up."
                 ),
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "What to find out about the image, in natural language.",
             },
         },
-        "required": ["image", "query"],
+        "required": [Keys.image, Keys.query],
     }
 
     def get_parameters(self) -> dict:
@@ -134,8 +134,8 @@ class VisionAbility(Ability):
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only image/query slips past it and must be rejected here
         # (precedent: save_graph.py, file_permissions.py).
-        doc_id = (params.get("image") or "").strip()
-        query = (params.get("query") or "").strip()
+        doc_id = (params.get(Keys.image) or "").strip()
+        query = (params.get(Keys.query) or "").strip()
         if not doc_id or not query:
             missing = ", ".join(
                 name for name, val in (("image", doc_id), ("query", query)) if not val

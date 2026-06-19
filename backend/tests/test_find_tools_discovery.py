@@ -1,22 +1,13 @@
 """Feature tests for find_tools discovery via abilities.sqlite only.
 
-Verifies:
-- Weather discovered via vec k-NN in abilities.sqlite
-- FTS5 BM25 path: ability with no vec match still surfaces via keyword
-- RRF fusion: vec and FTS5 disagree — merged ranking is correct
-- No duplicates when an ability ranks in both vec and FTS results
-- RRF order matches formula when vec and FTS disagree on winner (stub embeddings)
-- Fallback keyword search queries ability_search_fts in abilities.sqlite
-- find_tools module has no reference to the old shared DB or tool_capability_profiles
-- DISCOVERABLE allowlist gates which abilities surface for a given processor
-
 Strategy: monkeypatch _DB_PATH on FindToolsAbility to a tmp_path
 database populated with real embeddings. Real EmbeddingService is used.
-``FindToolsAbility.execute()`` reads the calling MessageProcessor's
-``DISCOVERABLE`` list via ``self.MessageProcessor``; tests bind a stub
-processor for that lookup. Direct ``_query`` and ``_fallback`` calls
-accept the allowlist as a positional arg so RRF ordering can be verified
-by formula, not by semantic luck.
+``FindToolsAbility.run()`` discovers against the GLOBAL roster of
+``DISCOVERABLE=True`` abilities (``AbilityRegistry.discoverable_names()``) —
+there is no per-config allowlist; tests bind a stub processor only because
+run() needs a config. Direct ``_query`` and ``_fallback`` calls accept the
+allowlist as a positional arg so RRF ordering can be verified by formula,
+not by semantic luck.
 """
 
 import sqlite3
@@ -34,18 +25,17 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# Stub processor — a *flat* MessageProcessor instance (no subclass: §7a / P1)
-# carrying a custom DISCOVERABLE list for the find_tools query gate.
+# Stub processor — a *flat* MessageProcessor instance (no subclass: §7a / P1).
+# Discovery is GLOBAL now: find_tools.run() reads the candidate roster from
+# ``AbilityRegistry.discoverable_names()`` (every DISCOVERABLE=True ability),
+# not from any per-config list. The stub only needs a real config carrying
+# find_tools — there is nothing per-config to inject.
 # ---------------------------------------------------------------------------
 
 
-def _make_stub_processor(discoverable: list[str]) -> MessageProcessor:
-    """Flat MessageProcessor carrying a config whose ``discoverable`` is the
-    find_tools allow-list gate, plus an empty active_tools that find_tools
-    appends discovered names onto via self.mp (find_tools reads
-    ``mp.config.discoverable`` / ``mp.config.blocked``)."""
+def _make_stub_processor() -> MessageProcessor:
     proc = object.__new__(MessageProcessor)
-    proc.config = make_stub_config(discoverable=discoverable)
+    proc.config = make_stub_config()
     proc._active_tools = []
     return proc
 
@@ -77,7 +67,6 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     """Build a minimal abilities.sqlite at path.
 
     Each ability dict: {"name": str, "summary": str, "embedding": list[float]}.
-    Populates vec + FTS5 (contentless FTS5 needs explicit INSERT).
     """
     from utils.build_ability_db import _create_schema, _load_sqlite_vec
     from services.embedding_utils import pack_embedding
@@ -111,12 +100,11 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     conn.close()
 
 
-def _execute_with_discoverable(ability, query, discoverable):
-    """Run ability.run() inside a stub-processor binding; return
-    (result, active_tools) so callers assert on the appended names. The query
-    path caps results at ``MAX_QUERY_RESULTS`` internally — there is no caller
-    'limit' knob (dropped in the v2 select/query split)."""
-    proc = _make_stub_processor(discoverable=discoverable)
+def _execute_query(ability, query):
+    """The query path caps results at ``MAX_QUERY_RESULTS`` internally - there is no
+    caller 'limit' knob (dropped in the v2 select/query split). Discovery filters
+    against the global ``DISCOVERABLE=True`` roster — no per-call allowlist."""
+    proc = _make_stub_processor()
     ability.mp = proc
     result = ability.run({"query": query})
     return result, proc.active_tools
@@ -131,7 +119,6 @@ class TestFindToolsDiscovery:
     def test_weather_discovered_via_abilities_db(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """Weather in abilities.sqlite → 'weather' appears in active_tools."""
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [{
             "name": "weather",
@@ -141,7 +128,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_query(ability, "weather forecast")
 
         assert "weather" in active, (
             f"Expected 'weather' in active, got: {active}"
@@ -150,12 +137,8 @@ class TestFindToolsDiscovery:
     def test_fts_keyword_path_surfaces_ability(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """Ability with a keyword match in FTS5 surfaces above the relevance floor.
-
-        Uses the query 'python sandbox' — every token is present in the code_eval
-        summary text, so FTS5 (whose default tokenizer requires ALL query terms)
-        fires and combines with the vec signal to clear ``MIN_RRF_SCORE``. A single
-        vec-only signal would sit under the floor; the FTS hit is what lifts it.
+        """Uses the query 'python sandbox' - FTS5 requires ALL query terms; the FTS
+        hit lifts the result above ``MIN_RRF_SCORE`` where a vec-only signal would not.
         """
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [
@@ -173,9 +156,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(
-            ability, "python sandbox", ["weather", "code_eval"]
-        )
+        _, active = _execute_query(ability, "python sandbox")
 
         assert "code_eval" in active, (
             f"Expected 'code_eval' via FTS keyword, got: {active}"
@@ -184,13 +165,8 @@ class TestFindToolsDiscovery:
     def test_rrf_merges_vec_and_fts_results(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """RRF fuses the vec and FTS retrievers: one query, both abilities ranked.
-
-        The query 'weather forecast' is a dual signal for weather (vec close + FTS
-        on 'weather'/'forecast') and a vec-only signal for code_eval. The real
-        ``_query`` (which does NOT apply the relevance floor — that is layered on
-        in ``_run_query``) must therefore return BOTH abilities, fused into one
-        ranked list with no duplicates and weather ahead of code_eval.
+        """``_query`` does NOT apply the relevance floor (that is layered on in
+        ``_run_query``), so both abilities appear fused with weather ahead of code_eval.
         """
         from services.embedding_service import EmbeddingService
         from services.embedding_utils import pack_embedding
@@ -228,7 +204,6 @@ class TestFindToolsDiscovery:
     def test_no_duplicates_when_ability_in_both_retrievers(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """Ability ranked by both vec k-NN and FTS5 appears exactly once."""
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [{
             "name": "weather",
@@ -238,32 +213,28 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(
-            ability, "weather forecast", ["weather"]
-        )
+        _, active = _execute_query(ability, "weather forecast")
 
         assert active.count("weather") <= 1, (
             f"Duplicate 'weather' in active: {active}"
         )
 
     def test_missing_db_returns_empty_gracefully(self, tmp_path, monkeypatch):
-        """abilities.sqlite does not exist → empty active_tools, no exception."""
         nonexistent = tmp_path / "does_not_exist" / "abilities.sqlite"
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", nonexistent)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_query(ability, "weather forecast")
 
         assert active == []
 
     def test_discoverable_allowlist_filters_results(
         self, tmp_path, monkeypatch, _real_embeddings
     ):
-        """Abilities outside the calling processor's DISCOVERABLE list never surface.
-
-        Indexes both 'memory' and 'weather' in abilities.sqlite. Calling processor
-        lists only ['weather']. Even when 'memory' would otherwise rank, the gate
-        excludes it because it is not in the allowlist.
+        """Indexes both 'memory' and 'weather'. ``memory`` is DISCOVERABLE=False
+        globally, so even though it is in the tmp index and would otherwise rank,
+        the global discovery roster excludes it. ``weather`` is DISCOVERABLE=True
+        and survives.
         """
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [
@@ -281,35 +252,13 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(ability, "weather forecast", ["weather"])
+        _, active = _execute_query(ability, "weather forecast")
 
         assert "memory" not in active, (
-            f"'memory' should be filtered by DISCOVERABLE allowlist, got: "
-            f"{active}"
+            f"'memory' (DISCOVERABLE=False) must be excluded by the global "
+            f"discovery roster, got: {active}"
         )
         assert "weather" in active
-
-    def test_empty_discoverable_returns_empty_results(
-        self, tmp_path, monkeypatch, _real_embeddings
-    ):
-        """A processor with no DISCOVERABLE entries gets an empty result.
-
-        find_tools is a no-op when the calling processor has no discoverable
-        scope at all. The
-        SQL never executes when the allowlist is empty.
-        """
-        new_db_path = tmp_path / "abilities.sqlite"
-        _build_abilities_sqlite(new_db_path, [{
-            "name": "weather",
-            "summary": _real_embeddings["weather_summary_text"],
-            "embedding": _real_embeddings["weather_summary"],
-        }])
-        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
-
-        ability = FindToolsAbility()
-        _, active = _execute_with_discoverable(ability, "weather forecast", [])
-
-        assert active == []
 
 
 # ---------------------------------------------------------------------------
@@ -320,7 +269,7 @@ class TestFindToolsDiscovery:
 def _build_stub_db(path: Path, abilities: list) -> None:
     """Like _build_abilities_sqlite but accepts raw numpy float32 embeddings.
 
-    Each ability dict: {"name": str, "summary": str, "embedding": np.ndarray}.
+    Each ability dict: {"name": str, "summary": str, "embedding": np.ndarray}
     """
     from utils.build_ability_db import _create_schema, _load_sqlite_vec
     from services.embedding_utils import pack_embedding
@@ -354,20 +303,14 @@ def _build_stub_db(path: Path, abilities: list) -> None:
 class TestFindToolsPhase3Gaps:
 
     def test_rrf_order_matches_formula_when_vec_and_fts_disagree(self, tmp_path, monkeypatch):
-        """Ability winning FTS but losing vec ranks above the vec-only winner when
-        the FTS boost produces a higher RRF score.
-
-        Fixture:
-        - ability_a: unit vector along dim-0 (very close to query_blob)
-          → vec rank 1, not in FTS (query word 'zetakeyword' absent from summary)
-        - ability_b: opposite unit vector (vec rank 2, distance ~1.99)
-          → summary contains 'zetakeyword' → FTS rank 1
+        """Fixture: ability_a vec rank 1 (no FTS hit); ability_b vec rank 2 with FTS
+        rank 1 ('zetakeyword' in summary).
 
         RRF formula:
-          score(a) = 1/(RRF_K+1) [vec rank 1]       = 0.0625
-          score(b) = 1/(RRF_K+2) + 1/(RRF_K+1)     = 0.0588 + 0.0625 = 0.1213
+          score(a) = 1/(RRF_K+1) [vec rank 1]   = 0.0625
+          score(b) = 1/(RRF_K+2) + 1/(RRF_K+1) = 0.0588 + 0.0625 = 0.1213
 
-        So ability_b must rank first in the merged output.
+        ability_b must rank first.
         """
         from services.embedding_utils import pack_embedding
 
@@ -404,8 +347,7 @@ class TestFindToolsPhase3Gaps:
         )
 
     def test_fallback_keyword_search_queries_abilities_sqlite(self, tmp_path, monkeypatch):
-        """_fallback hits ability_search_fts in abilities.sqlite and appends the
-        hit to the bound processor's ACTIVE_TOOLS (never tool_capability_profiles)."""
+        """_fallback queries ability_search_fts in abilities.sqlite (never tool_capability_profiles)."""
         db_path = tmp_path / "fallback.sqlite"
         q_vec = np.zeros(768, dtype=np.float32)
         q_vec[0] = 1.0
@@ -417,18 +359,14 @@ class TestFindToolsPhase3Gaps:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
 
         ability = FindToolsAbility()
-        proc = _make_stub_processor(discoverable=["sandboxer"])
+        proc = _make_stub_processor()
         ability.mp = proc
         ability._fallback("sandbox", ["sandboxer"])
 
         assert proc.active_tools == ["sandboxer"]
 
     def test_query_abilities_filters_by_allowlist(self, tmp_path, monkeypatch):
-        """_query ignores rows whose name is outside the allowlist.
-
-        Indexes two abilities; runs the query with only the second in `allow`.
-        The first MUST NOT appear regardless of vec or FTS rank.
-        """
+        """_query ignores rows whose name is outside the allowlist, regardless of vec or FTS rank."""
         from services.embedding_utils import pack_embedding
 
         db_path = tmp_path / "allowlist.sqlite"

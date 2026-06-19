@@ -1,14 +1,10 @@
 """Feature test for BashAbility's mp-gated summary enrichment.
 
-bash is the canonical example of a getter that enriches on a live request:
-``get_summary()`` appends the working directory when bound to a real processor
-(``self.mp is not None``) so the model knows where commands run, but returns the
-bare base text at ``self.mp is None`` (build / search-index time) so
-``abilities.sqlite`` + the SHA drift map stay machine-independent.
+Invariants: abilities.sqlite + SHA drift map are identical across machines at
+build time (self.mp is None); cwd enriches only on a real processor.
 
 Real BashAbility, no mocks — the only injected value is a minimal real
-MP-shaped context carrying a real channel config (what ``get_summary`` reads
-nothing off, but mirrors the live binding the dispatcher performs).
+MP-shaped context carrying a real channel config.
 """
 
 from pathlib import Path
@@ -22,19 +18,11 @@ pytestmark = pytest.mark.unit
 
 
 class _Mp:
-    """Minimal real MP-shaped context — bash's get_summary only checks that
-    ``self.mp is not None``; a live processor carries a real config."""
-
     def __init__(self, config):
         self.config = config
 
 
 def test_summary_is_bare_base_text_at_build_time():
-    """mp=None (search-index build / introspection) → no cwd, deterministic text.
-
-    This is the invariant that keeps the built abilities.sqlite + abilities_sha
-    identical across machines regardless of where the build runs.
-    """
     summary = BashAbility().get_summary()
     assert "Working directory" not in summary
     assert summary == BashAbility._SUMMARY

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult, truncate
 
 logger = logging.getLogger(__name__)
@@ -147,7 +148,7 @@ class BashAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "command": {
+            Keys.command: {
                 "type": "string",
                 "description": (
                     "Shell command to run via bash -c. "
@@ -157,7 +158,7 @@ class BashAbility(Ability):
                     "web_download for downloads, document for saving notes."
                 ),
             },
-            "timeout_s": {
+            Keys.timeout_s: {
                 "type": "integer",
                 "description": (
                     "Timeout in seconds (default 30, max 300). "
@@ -165,7 +166,7 @@ class BashAbility(Ability):
                 ),
             },
         },
-        "required": ["command"],
+        "required": [Keys.command],
     }
 
     def get_parameters(self) -> dict:
@@ -180,13 +181,13 @@ class BashAbility(Ability):
         no model-supplied action to trust. Returns ``read`` (the benign
         inspection floor) when no heavier pattern matches.
         """
-        command = (params.get("command") or "").strip()
+        command = (params.get(Keys.command) or "").strip()
         if not command:
             return _DEFAULT_ACTION
         return _classify_heuristic(command) or _DEFAULT_ACTION
 
     def run(self, params: dict) -> ToolResult:
-        command = (params.get("command") or "").strip()
+        command = (params.get(Keys.command) or "").strip()
         if not command:
             return ToolResult.err(
                 "command is required.",
@@ -202,7 +203,7 @@ class BashAbility(Ability):
                 hint="this command is blocked outright; it cannot be run.",
             )
 
-        timeout_s = _resolve_timeout(params.get("timeout_s"))
+        timeout_s = _resolve_timeout(params.get(Keys.timeout_s))
         safe_env = _build_safe_env()
 
         return _run_command(command, timeout_s, safe_env)
@@ -246,7 +247,6 @@ def _classify_heuristic(command: str) -> str | None:
 
 
 def _has_unquoted(command: str, needle: str) -> bool:
-    """Check if *needle* appears in *command* outside of quoted strings."""
     in_single = False
     in_double = False
     i = 0

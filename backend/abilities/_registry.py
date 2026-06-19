@@ -13,9 +13,7 @@ _registry: dict[str, Ability] | None = None
 
 
 def _load() -> dict[str, Ability]:
-    """Walk backend/abilities/ and import every non-underscore .py module.
-
-    Concrete Ability subclasses self-register via __init_subclass__; we collect
+    """Concrete Ability subclasses self-register via __init_subclass__; we collect
     them after the walk by inspecting all subclasses of Ability.
     """
     abilities_dir = FileMapperService.get_abilities_path()
@@ -33,7 +31,6 @@ def _load() -> dict[str, Ability]:
 
 
 def _all_concrete_subclasses(cls: type) -> list[type]:
-    """Recursively collect unique concrete (non-abstract) subclasses of *cls*."""
     seen: set[type] = set()
     out: list[type] = []
 
@@ -65,20 +62,34 @@ def _get_registry() -> dict[str, Ability]:
 class AbilityRegistry:
     """Registry of every dispatchable Ability subclass.
 
-    Tool *scope* (always-available vs discoverable) is owned by each
-    MessageProcessor subclass — the registry just provides the dispatch
-    lookup and the full inventory.
+    Tool *scope* is two flags: an ability is pinned directly on a
+    MessageProcessor (``config.always_available``) or — iff its
+    ``Ability.DISCOVERABLE`` is True — reachable through ``find_tools``. The
+    registry owns the full inventory, the dispatch lookup, and the single global
+    roster of discoverable names that ``find_tools`` searches over.
     """
 
     @staticmethod
     def get(name: str) -> Ability:
-        """Return the Ability instance for *name*; raises KeyError on miss."""
+        """Raises KeyError on miss."""
         return _get_registry()[name]
 
     @staticmethod
     def all() -> list[Ability]:
-        """Return every registered Ability instance."""
         return list(_get_registry().values())
+
+    @staticmethod
+    def discoverable_names() -> set[str]:
+        """The global set of ability names ``find_tools`` may surface.
+
+        This is the single source of truth for discovery scope: every ability
+        whose ``DISCOVERABLE`` flag is True. ``find_tools`` searches over exactly
+        this set for both the ``query`` (semantic) and ``select`` (by-name)
+        paths; the abilities.sqlite index is built from the same predicate, so
+        the two never drift. MCP proxies (``_mcp_*``) are not in the registry and
+        are handled by find_tools' MCP path separately.
+        """
+        return {name for name, a in _get_registry().items() if a.DISCOVERABLE}
 
     @staticmethod
     def build_tools(mp: "object") -> list[dict]:

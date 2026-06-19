@@ -28,13 +28,12 @@ _VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "
 
 def _browse_mp() -> MessageProcessor:
     mp = MessageProcessor("drive a web page")
-    mp.config = WebBrowseConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp.active_tools = list(mp.config.always_available or [])
     return mp
 
 
 def _dispatch(params: dict) -> str:
-    """The exact rendered string the ACT loop consumes for one browser call."""
     return ToolDispatcher(_browse_mp()).dispatch("browser", params)
 
 

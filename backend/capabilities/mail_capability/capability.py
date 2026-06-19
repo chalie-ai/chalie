@@ -1,41 +1,4 @@
-"""MailCapability — unified IMAP/SMTP + CalDAV + CardDAV capability.
 
-:class:`MailCapability` ties :class:`~capabilities.mail_capability.imap_handler.ImapHandler`,
-:class:`~capabilities.mail_capability.caldav_handler.CaldavHandler`, and
-:class:`~capabilities.mail_capability.carddav_handler.CarddavHandler` together
-into a single :class:`~capabilities.base.AbstractCapability` subclass.
-
-Protocol probing
-----------------
-:meth:`MailCapability.configure` probes each protocol independently; any subset
-may succeed.  The set of active protocols is persisted as ``mail:protocols`` so
-that subsequent :meth:`MailCapability.connect` calls never attempt a protocol
-that is unsupported by the provider (e.g. Outlook has no CalDAV/CardDAV).
-
-Monitor cadence
----------------
-The base cycle is 5 minutes (``interval:5``).  IMAP runs every cycle;
-CalDAV every 3rd cycle (~15 min); CardDAV every 12th cycle (~60 min).
-
-Credential storage
-------------------
-All credentials are persisted under ``tool_name='mail'`` in ``tool_configs``.
-Config keys follow the ``mail:{field}`` convention:
-
-- ``mail:email``          — account email address
-- ``mail:password``       — app password (encrypted at rest)
-- ``mail:provider_name``  — resolved provider name (e.g. "Google")
-- ``mail:imap_host``      — IMAP server hostname
-- ``mail:imap_port``      — IMAP port number
-- ``mail:imap_tls``       — "1" if TLS, "0" otherwise
-- ``mail:smtp_host``      — SMTP server hostname
-- ``mail:smtp_port``      — SMTP port number
-- ``mail:smtp_tls``       — "1" if TLS, "0" otherwise
-- ``mail:caldav_url``     — CalDAV endpoint URL (absent if provider has none)
-- ``mail:carddav_url``    — CardDAV endpoint URL (absent if provider has none)
-- ``mail:protocols``      — JSON list of active protocols, e.g. ["imap","caldav"]
-- ``mail:imap_watermark`` — last seen IMAP UID
-"""
 
 from __future__ import annotations
 
@@ -89,18 +52,6 @@ _K_WATERMARK = _K_IMAP_WATERMARK  # alias used by MailCapability
 
 
 class MailCapability(AbstractCapability):
-    """Unified email + calendar + contacts capability.
-
-    Orchestrates :class:`ImapHandler`, :class:`CaldavHandler`, and
-    :class:`CarddavHandler`.  Each protocol is probed independently during
-    :meth:`configure`; only the successful subset is activated.
-
-    Attributes:
-        _imap_ok (bool): IMAP protocol is connected and operational.
-        _caldav_ok (bool): CalDAV protocol is connected and operational.
-        _carddav_ok (bool): CardDAV protocol is connected and operational.
-        _cycle_count (int): Monitor cycles since last successful :meth:`connect`.
-    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -118,20 +69,9 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def get_id(self) -> str:
-        """Return the capability identifier.
-
-        Returns:
-            str: Always ``"mail"``.
-        """
         return "mail"
 
     def get_manifest(self) -> dict:
-        """Return the parsed ``manifest.yaml`` contents (cached after first load).
-
-        Returns:
-            dict: Manifest dict including ``id``, ``name``, ``version``,
-            ``entry_class``.
-        """
         if self._manifest_cache is None:
             with open(_MANIFEST_PATH, "r", encoding="utf-8") as fh:
                 self._manifest_cache = yaml.safe_load(fh)
@@ -142,15 +82,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def _resolve_provider(self, email: str):
-        """Resolve provider from email domain, falling back to stored credentials.
-
-        Known domains (Gmail, Apple, Yahoo, Outlook) resolve from the registry.
-        Custom/self-hosted servers fall back to connection fields persisted
-        during :meth:`configure`.
-
-        Returns:
-            UnifiedProvider or ``None`` if resolution fails entirely.
-        """
         provider = discover_provider(email)
         if provider is not None:
             return provider
@@ -175,7 +106,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def _resolve_or_build_provider(self, email: str, credentials: dict):
-        """Return a provider object for the email, building a custom one if needed."""
         provider = discover_provider(email)
         if provider is not None:
             return provider
@@ -202,7 +132,6 @@ class MailCapability(AbstractCapability):
         )
 
     def _persist_provider_credentials(self, email: str, password: str, provider) -> None:
-        """Store provider connection settings in the credential store."""
         self.store_credential(_K_EMAIL, email)
         self.store_credential(_K_PASSWORD, password)
         self.store_credential(_K_PROVIDER, provider.name)
@@ -226,7 +155,6 @@ class MailCapability(AbstractCapability):
             )
 
     def _probe_protocols(self, email: str, password: str, provider) -> list[str]:
-        """Probe each protocol independently and return a list of active protocol names."""
         active: list[str] = []
 
         if provider.imap:
@@ -285,15 +213,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def configure(self, credentials: dict) -> None:
-        """Validate credentials, probe each protocol, and persist active ones.
-
-        Args:
-            credentials: Must contain ``email`` (str) and ``password`` (str).
-
-        Raises:
-            ValueError: If email or password is missing, the provider is not
-                supported, or every protocol probe fails.
-        """
         email = (credentials.get("email") or credentials.get("username") or "").strip()
         password = (credentials.get("password") or "").strip()
         if not email:
@@ -326,14 +245,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def connect(self) -> bool:
-        """Establish connections for all stored active protocols.
-
-        Loads credentials, probes only the protocols listed in
-        ``mail:protocols``, and sets per-protocol flags.
-
-        Returns:
-            bool: ``True`` if at least one protocol connected successfully.
-        """
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
         protocols_raw = self.load_credential(_K_PROTOCOLS)
@@ -413,7 +324,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def disconnect(self) -> None:
-        """Tear down all connections, cancel pending scheduled items, and delete credentials."""
         self._imap_ok = False
         self._caldav_ok = False
         self._carddav_ok = False
@@ -441,15 +351,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def ingest(self) -> list:
-        """Fetch raw items from all connected protocols.
-
-        Returns items from IMAP (header dicts), CalDAV (event dicts), and
-        CardDAV (contact dicts) combined into a single list.  Returns ``[]``
-        when not connected.
-
-        Returns:
-            list[dict]: Combined raw items from all active protocols.
-        """
         if not self.is_connected():
             return []
 
@@ -516,17 +417,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def understand(self, items: list) -> list:
-        """Classify and enrich raw items from :meth:`ingest`.
-
-        Applies IMAP triage and sender indexing to email headers.
-        CalDAV and CardDAV items are already processed inline by their handlers.
-
-        Args:
-            items: Raw items returned by :meth:`ingest`.
-
-        Returns:
-            list[dict]: Items with triage/enrichment applied where applicable.
-        """
         if not items:
             return items
         imap_items = [it for it in items if "subject" in it and "uid" in it]
@@ -539,7 +429,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def _monitor_imap(self, email: str, password: str, provider) -> None:
-        """Run one IMAP monitor cycle: ingest new messages and update the watermark."""
         try:
             watermark_raw = self.load_credential(_K_WATERMARK)
             watermark = int(watermark_raw) if watermark_raw else None
@@ -567,7 +456,6 @@ class MailCapability(AbstractCapability):
             logger.error("[mail] _do_monitor() IMAP: %s", exc)
 
     def _monitor_caldav(self, email: str, password: str, provider, now) -> None:
-        """Run one CalDAV monitor cycle: ingest events and upsert them."""
         try:
             caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
             client = self._caldav_handler.open_client(
@@ -580,7 +468,6 @@ class MailCapability(AbstractCapability):
             logger.error("[mail] _do_monitor() CalDAV: %s", exc)
 
     def _monitor_carddav(self, email: str, password: str, provider) -> None:
-        """Run one CardDAV monitor cycle."""
         try:
             carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
             client = self._carddav_handler.open_client(
@@ -592,15 +479,6 @@ class MailCapability(AbstractCapability):
             logger.error("[mail] _do_monitor() CardDAV: %s", exc)
 
     def _do_monitor(self) -> None:
-        """Run one monitor cycle with per-protocol cadence management.
-
-        Cadence:
-        - IMAP: every cycle (~5 min)
-        - CalDAV: every 3rd cycle (~15 min)
-        - CardDAV: every 12th cycle (~60 min)
-
-        Auto-reconnects when not connected before running.
-        """
         if not self.is_connected():
             self.connect()
         if not self.is_connected():
@@ -630,16 +508,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def act(self, action: str, params: dict) -> dict:
-        """Dispatch a write action to the appropriate protocol handler.
-
-        Args:
-            action: Tool name, e.g. ``"draft_email"``, ``"create_event"``.
-            params: Action-specific parameters.
-
-        Returns:
-            dict: Result from the handler, or ``{"error": ...}`` if the action
-            is unknown.
-        """
         tool_map = {t["name"]: t["handler"] for t in self.get_tools()}
         handler = tool_map.get(action)
         if handler is None:
@@ -655,10 +523,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def _load_smtp_creds(self) -> SmtpCreds:
-        """Load SMTP credentials from the credential store.
-
-        Raises ValueError when SMTP is not configured.
-        """
         smtp_host = self.load_credential(_K_SMTP_HOST)
         if not smtp_host:
             raise ValueError("SMTP not configured for this provider.")
@@ -675,7 +539,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def _open_imap_client(self):
-        """Open and return an authenticated IMAP client."""
         _email = self.load_credential(_K_EMAIL)
         _password = self.load_credential(_K_PASSWORD)
         _provider = self._resolve_provider(_email or "")
@@ -690,7 +553,6 @@ class MailCapability(AbstractCapability):
         )
 
     def _open_caldav_client(self):
-        """Open and return an authenticated CalDAV client."""
         _email = self.load_credential(_K_EMAIL)
         _password = self.load_credential(_K_PASSWORD)
         _provider = self._resolve_provider(_email or "")
@@ -945,7 +807,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def _build_smtp_tools(self) -> list:
-        """Return SMTP tool dicts if SMTP credentials are present."""
         smtp_host = self.load_credential(_K_SMTP_HOST)
         if not smtp_host:
             return []
@@ -1007,7 +868,6 @@ class MailCapability(AbstractCapability):
         ]
 
     def _build_imap_tools(self) -> list:
-        """Return IMAP + SMTP tool dicts."""
         return self._build_smtp_tools() + [
             {
                 "name": "search_email",
@@ -1087,7 +947,6 @@ class MailCapability(AbstractCapability):
         ]
 
     def _build_caldav_tools(self) -> list:
-        """Return CalDAV tool dicts."""
         return [
             {
                 "name": "create_event",
@@ -1179,7 +1038,6 @@ class MailCapability(AbstractCapability):
         ]
 
     def _build_carddav_tools(self) -> list:
-        """Return CardDAV tool dicts."""
         return [
             {
                 "name": "list_contacts",
@@ -1217,25 +1075,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def get_tools(self) -> list:
-        """Return tool definitions conditioned on which protocols are connected.
-
-        IMAP tools (when ``_imap_ok``):
-            ``search_email``, ``read_email``, ``draft_email``, ``manage_email``
-
-        SMTP tools (when ``_imap_ok`` and SMTP credentials are stored):
-            ``send_email``, ``reply_email``, ``forward_email``
-
-        CalDAV tools (when ``_caldav_ok``):
-            ``create_event``, ``update_event``, ``delete_event``,
-            ``find_free_slots``, ``get_attendees``
-
-        CardDAV tools (when ``_carddav_ok``):
-            ``list_contacts``, ``get_contact``
-
-        Returns:
-            list[dict]: Tool definition dicts with ``name``, ``description``,
-            ``parameters``, ``handler``, and ``timeout`` keys.
-        """
         tools: list[dict] = []
 
         if self._imap_ok:
@@ -1255,11 +1094,6 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def health_details(self) -> dict:
-        """Return detailed health state including per-protocol flags.
-
-        Returns:
-            dict: ``{"connected": bool, "protocols": {"imap": bool, "caldav": bool, "carddav": bool}}``.
-        """
         return {
             "connected": self.is_connected(),
             "protocols": {

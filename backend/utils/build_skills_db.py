@@ -1,16 +1,3 @@
-"""
-Build or drift-check the skill search database.
-
-Walks backend/abilities/skills/ for .yaml skill files (curated) and
-data/skills/user/ for user-created skills, embeds title + use_for
-text for each, and writes:
-  backend/abilities/assets/skills.sqlite  — vector + FTS5 search index
-  backend/pre-trained/skills_sha.json   — drift sidecar
-
-Run from backend/:
-    python -m utils.build_skills_db           # build (default)
-    python -m utils.build_skills_db --check   # drift check
-"""
 
 import argparse
 import hashlib
@@ -48,7 +35,6 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 
 def _rebuild_schema(conn: sqlite3.Connection) -> None:
-    """Drop and recreate all skill search tables."""
     conn.execute("DROP TABLE IF EXISTS skill_search_fts")
     conn.execute("DROP TABLE IF EXISTS skill_search_vec")
     conn.execute("DROP INDEX IF EXISTS idx_skill_search_entries_skill")
@@ -104,7 +90,6 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
 
 
 def _parse_skill_file(path: Path) -> dict:
-    """Parse a YAML-frontmatter skill file into a metadata dict."""
     text = path.read_text()
     if not text.startswith('---'):
         raise ValueError(f"Skill file {path} missing YAML frontmatter")
@@ -115,7 +100,6 @@ def _parse_skill_file(path: Path) -> dict:
 
 
 def _compute_sha(meta: dict) -> str:
-    """SHA of the fields that drive the search index (title + use_for + tags)."""
     raw = json.dumps(
         [meta.get('title', ''), meta.get('use_for', ''), meta.get('tags', '')],
         ensure_ascii=False,
@@ -127,11 +111,7 @@ def _dedup_entries(
     entries: list[tuple[str, str]],
     embeddings: list[np.ndarray],
 ) -> tuple[list[tuple[str, str]], list[np.ndarray]]:
-    """Drop entry j when cos(emb[i], emb[j]) > threshold for any i < j.
-
-    Embeddings are L2-normalised so dot-product == cosine similarity.
-    Entry order determines precedence: title first, then use_for.
-    """
+    """Entry order determines precedence: title first, then use_for."""
     kept_entries: list[tuple[str, str]] = []
     kept_embs: list[np.ndarray] = []
 
@@ -154,11 +134,6 @@ def index_skill(
     use_for: str,
     tags_str: str,
 ) -> int:
-    """Embed and insert search entries for an already-inserted skill row.
-
-    Writes to skill_search_entries, skill_search_vec, and skill_search_fts.
-    Returns the number of search entries inserted.
-    """
     combined = f"{title}. {use_for}"
     raw_entries: list[tuple[str, str]] = [
         (title, 'title'),
@@ -195,7 +170,6 @@ def _insert_skill(
     meta: dict,
     source: str = _SOURCE_CURATED,
 ) -> int:
-    """Insert one skill row and its search entries. Returns count of entries inserted."""
     title = meta.get('title', '')
     use_for = meta.get('use_for', '')
     tags_raw = meta.get('tags', '')
@@ -219,7 +193,6 @@ def _insert_skill(
 
 
 def _load_skills() -> list[dict]:
-    """Walk skills/ directory and parse all .yaml skill files."""
     if not _SKILLS_DIR.exists():
         return []
     skills = []
@@ -234,7 +207,6 @@ def _load_skills() -> list[dict]:
 
 
 def _load_user_skills() -> list[dict]:
-    """Walk data/skills/user/ directory and parse all .yaml skill files."""
     if not _USER_SKILLS_DIR.exists():
         return []
     skills = []
@@ -249,7 +221,6 @@ def _load_user_skills() -> list[dict]:
 
 
 def _build_sha_map(skills: list[dict]) -> dict[str, str]:
-    """SHA map covering every skill in the search DB."""
     return {m.get('title', m['_path']): _compute_sha(m) for m in skills}
 
 

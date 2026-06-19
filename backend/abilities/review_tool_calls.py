@@ -12,6 +12,7 @@ declares only the windowed ``tool_calls`` SELECT and the structured row shape.
 
 from typing import ClassVar
 
+from abilities._params import Keys
 from abilities._review_window import ReviewWindowAbility
 
 # Tool-call params summaries can be large; clip so one row stays a single readable
@@ -46,7 +47,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "date_time": {
+            Keys.date_time: {
                 "type": "string",
                 "description": (
                     "ISO timestamp to anchor the search "
@@ -55,7 +56,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
                 ),
             },
         },
-        "required": ["date_time"],
+        "required": [Keys.date_time],
     }
 
     def get_parameters(self) -> dict:
@@ -64,16 +65,14 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
     def _fetch(self, lo: str, hi: str, params: dict) -> list[dict]:
-        """All durable tool_calls in the window, excluding narration rows.
+        """Excludes legacy ``tool_name='narration'`` rows.
 
-        Narration rows (tool_name='narration') are mid-loop LLM text blobs not
-        meaningful as tool activity. Oldest first — created_at then id so ties
-        are deterministic.
-        """
+        Narration as a separate tool_calls row was removed — mid-turn assistant
+        text is no longer persisted at all (a turn emits one end message), so no
+        new narration rows are written. The literal filter stays only to hide any
+        such rows left in an existing DB from before that change; it is not a
+        live tool name."""
         from services.database_service import get_shared_db_service
-        # Single source of the narration tool_name — the writer
-        # (MessageProcessor._record_narration) and this reader must agree.
-        from services.message_processor import NARRATION_TOOL
 
         db = get_shared_db_service()
         with db.connection() as conn:
@@ -83,10 +82,10 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
                 SELECT tool_name, params, result, created_at
                 FROM tool_calls
                 WHERE created_at BETWEEN ? AND ?
-                  AND tool_name != ?
+                  AND tool_name != 'narration'
                 ORDER BY created_at ASC, id ASC
                 """,
-                (lo, hi, NARRATION_TOOL),
+                (lo, hi),
             )
             columns = ("tool_name", "params", "result", "created_at")
             rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
@@ -113,9 +112,8 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
 
 
 def _result_ok(result: object) -> bool:
-    """Envelope-aware status read: a recorded result is now a dispatcher envelope
-    whose first line is ``[<tool>(status=…)]`` (TKT-882). The call failed iff that
-    first line carries ``status=error``; the stale ``startswith('error')``
-    heuristic predated the envelope and is gone."""
+    """A recorded result is now a dispatcher envelope whose first line is
+    ``[<tool>(status=…)]`` (TKT-882). The call failed iff that first line carries
+    ``status=error``."""
     first_line = str(result or "").splitlines()[0] if result else ""
     return "status=error" not in first_line

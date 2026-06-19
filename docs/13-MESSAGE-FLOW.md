@@ -46,7 +46,7 @@ A Chalie instance belongs to **one user**, but that user may have it open on sev
 1. **User messages.** When a surface sends a message, the server stores it and broadcasts a `user_message` echo to every connection. The sending surface already rendered the bubble optimistically, so it recognises its own echo — by a client-minted `echo_id` round-tripped through `POST /chat` — and drops it; every other surface has no such bubble and renders one. The echo carries the text verbatim.
 2. **Assistant messages.** The final reply is broadcast as a `message` event to every connection. The surface that started the turn renders it through its turn callbacks; peer surfaces render a plain assistant bubble from the broadcast. Either way the reply shows on all surfaces.
 
-What is *not* mirrored is the live per-turn ACT trail (status, tool activity, narration): those events are bound to the surface that started the turn and are deliberately device-local — ephemeral turn scaffolding, not durable conversation. A surface that joins mid-turn simply shows the user and assistant bubbles once they broadcast. The broker fans each frame out to all live connections and prunes any socket whose send fails, so one stale connection can neither block delivery nor accumulate.
+The live per-turn ACT trail (status and tool activity) rides the same channel — the broker fans **every** frame out to all live connections and prunes any socket whose send fails, so one stale connection can neither block delivery nor accumulate. What differs is rendering, not routing: only the surface that started the turn shows the trail, because idle peers drop content-free ACT frames client-side (a render-policy choice) — the trail is ephemeral turn scaffolding, not durable conversation. A surface that joins mid-turn simply shows the user and assistant bubbles once they broadcast.
  
  ---
  
@@ -58,19 +58,18 @@ build request (history + world state + input + tool trail)
   → send to LLM
   → no tool calls?  → done, return the text
   → tool calls      → dispatch each via ToolDispatcher → results appended to trail
-  → next iteration (until done, cancel, or max_iterations)
+  → next iteration (until done or cancelled)
 ```
  
-- The user channel has `max_iterations=None` (unbounded — the user can always interrupt). Background and delegate channels set explicit caps (e.g. DMN 100, `web_search` 50, `web_browse` 200).
+- There is no iteration cap on any channel: the loop terminates only when the model answers in plain text (no tool calls) or the cancel event fires. The user can always interrupt a turn.
 - Tool errors are returned to the model as structured result strings; they never crash the loop or surface raw to the user.
 - Every tool call is written to the `tool_calls` table as it happens; rows are kept for 7 days, then purged by the decay engine.
  
 ### Compaction
  
-Compaction is size-driven only — there is no turn-count trigger. When the pre-flight check (or a provider-side size rejection) fires, the loop dispatches two internal abilities through the normal tool chokepoint:
+Compaction is size-driven only — there is no turn-count or age trigger. The `## Previous Messages` block each turn assembles keeps growing as the conversation continues; when the pre-flight check (or a provider-side size rejection) fires, the loop dispatches a single internal ability through the normal tool chokepoint:
  
-1. **`tool_chain_compactor`** — summarises the current turn's tool trail; its result row becomes the new trail boundary.
-2. **`chat_history_compactor`** — summarises the older `## Previous Messages` block; the summary is written to the transcript as a `role='compaction'` row, whose id becomes the new history watermark.
+1. **`chat_history_compactor`** — summarises the older `## Previous Messages` block; the summary is written to the transcript as a `role='compaction'` row, whose id becomes the new history watermark.
  
 Because every iteration rebuilds the request from the database, advancing the watermark automatically shrinks the next request. If nothing is left to compact, the loop force-sends and lets the provider be the source of truth. The latest compaction summary is visible in Brain → Cognition → Compacted Summary.
  
@@ -78,7 +77,7 @@ Because every iteration rebuilds the request from the database, advancing the wa
  
  ## Background Paths
  
-**Subconscious tick** — every 5 minutes, gated on 30+ minutes of user idleness, the subconscious worker runs its seven steps (consolidate, decay, pattern match, synthesis, DMN reflection, capability sync, geo patterns). See [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition). These are normal `MessageProcessor` turns on their own channels; most write no transcript rows and none broadcast to chat.
+**Subconscious tick** — every 5 minutes, gated on 30+ minutes of user idleness, the subconscious worker runs its seven steps (consolidate, decay, pattern match, synthesis, DMN reflection, capability sync, geo patterns). See [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition). Each is a normal `MessageProcessor` turn on its own channel. Most write no transcript rows and none broadcast to chat.
  
 **Scheduled prompts** — the scheduler worker polls for due items and fires each in two stages, modelled on the delegate tools. Stage one runs the instruction as an independent background turn on its own muted `scheduled` channel (full tool surface, no episodes or facts of its own), persisting the instruction so a fired task is recoverable. Stage two hands that result to an ordinary user-channel turn with `hidden_input=True`, which is what surfaces to the client and is episodically encoded — so the trigger text stays out of the visible conversation while the reply is delivered normally. The two stages run on a daemon thread so the poll never blocks on the LLM work.
  

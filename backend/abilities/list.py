@@ -31,6 +31,7 @@ import logging
 from typing import ClassVar, Optional
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -50,13 +51,13 @@ class ListAbility(Ability):
     # handlers raise the precise missing-target error.
     ACTION_REQUIRED: ClassVar[dict] = {
         "list_all": (),
-        "create": ("name",),
+        "create": (Keys.name,),
         "view": (),
-        "add": ("items",),
-        "check": ("items",),
-        "remove": ("items",),
+        "add": (Keys.items,),
+        "check": (Keys.items,),
+        "remove": (Keys.items,),
         "clear": (),
-        "rename": ("name",),
+        "rename": (Keys.name,),
         "delete": (),
     }
 
@@ -83,7 +84,7 @@ class ListAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": list(_VALID_ACTIONS),
                 "description": (
@@ -98,7 +99,7 @@ class ListAbility(Ability):
                     "delete: delete a list entirely."
                 ),
             },
-            "list": {
+            Keys.list: {
                 "type": "string",
                 "description": (
                     "List name or id; addresses an existing list for "
@@ -106,11 +107,11 @@ class ListAbility(Ability):
                     "matches more than one list returns the candidates to pick from by id."
                 ),
             },
-            "name": {
+            Keys.name: {
                 "type": "string",
                 "description": "New list name; used for create and rename only.",
             },
-            "items": {
+            Keys.items: {
                 "type": "array",
                 "items": {},
                 "description": (
@@ -122,14 +123,14 @@ class ListAbility(Ability):
                 ),
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        action = self.param(params, "action", default="list_all")
+        action = self.param(params, Keys.action, default="list_all")
 
         from services.database_service import get_shared_db_service
         from services.list_service import ListService
@@ -197,9 +198,11 @@ def _resolve_list(ability: "ListAbility", service, params: dict) -> "dict | Tool
     Resolution order: exact id → exact (case-insensitive) name → single
     case-insensitive substring match. More than one substring match returns
     ``ambiguous-match`` with the candidate rows rather than silently picking one.
-    The ``id`` alias keeps the frontend silent-action and old transcripts working.
+    The ``id`` spelling keeps the frontend silent-action and old transcripts
+    working — it is healed to the canonical ``list`` key upstream at the dispatch
+    seam via ``VARIANTS[Keys.list]``.
     """
-    target = ability.param(params, "list", aliases=("id",), default="")
+    target = ability.param(params, Keys.list, default="")
     target = str(target).strip()
     if not target:
         return ToolResult.err(
@@ -287,7 +290,6 @@ def _resolve_items(lst: dict, terms: list) -> "list | ToolResult":
 
 
 def _rows(lst: dict) -> list:
-    """Model-facing item rows: id/text/done/position (content→text, checked→done)."""
     return [
         {
             "id": item["id"],
@@ -300,12 +302,10 @@ def _rows(lst: dict) -> list:
 
 
 def _body(lst: dict) -> dict:
-    """The structured body for a list-returning action: id, name, and rows."""
     return {"id": lst["id"], "name": lst["name"], "items": _rows(lst)}
 
 
 def _fe_card(lst: dict) -> dict:
-    """The LEGACY frontend card payload: id, name, items with content/checked."""
     return {
         "id": lst["id"],
         "name": lst["name"],
@@ -335,7 +335,7 @@ def _ok_list(service, list_id: str) -> ToolResult:
 
 
 def _normalize_string_items(params: dict) -> list:
-    items = params.get("items", [])
+    items = params.get(Keys.items, [])
     if isinstance(items, str):
         try:
             parsed = json.loads(items)
@@ -376,7 +376,7 @@ def _handle_list_all(service) -> ToolResult:
 
 
 def _handle_create(ability: "ListAbility", service, params: dict) -> ToolResult:
-    name = str(ability.param(params, "name", default="")).strip()
+    name = str(ability.param(params, Keys.name, default="")).strip()
     if not name:
         return ToolResult.err("'name' is required.", code="missing-name")
 
@@ -431,7 +431,7 @@ def _handle_check(ability: "ListAbility", service, params: dict) -> ToolResult:
     if isinstance(lst, ToolResult):
         return lst
 
-    raw = params.get("items")
+    raw = params.get(Keys.items)
     if not isinstance(raw, list) or not raw:
         return ToolResult.err(
             "'items' must be a non-empty array.",
@@ -495,7 +495,7 @@ def _handle_rename(ability: "ListAbility", service, params: dict) -> ToolResult:
     if isinstance(lst, ToolResult):
         return lst
 
-    new_name = str(ability.param(params, "name", default="")).strip()
+    new_name = str(ability.param(params, Keys.name, default="")).strip()
     if not new_name:
         return ToolResult.err("'name' is required.", code="missing-name")
 

@@ -12,7 +12,6 @@ _SUPER_EP_LOG_PREFIX = "[SUPER_EP]"
 
 
 def _super_ep_strip_code_fence(text: str) -> str:
-    """Remove a single markdown code fence wrapper (```[lang]...```) from text."""
     open_end = text.find("```")
     if open_end == -1:
         return text
@@ -26,7 +25,6 @@ def _super_ep_strip_code_fence(text: str) -> str:
 
 
 def _safe_json_load_object(text: str) -> dict:
-    """Parse a JSON object from LLM response text. Returns {} on any failure."""
     import json as _json  # noqa: PLC0415
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
@@ -47,7 +45,6 @@ def _safe_json_load_object(text: str) -> dict:
 
 
 def _parse_super_ep_transcript_ids_field(raw) -> list:
-    """Normalize an episode.transcript_ids field (JSON string or list) to a list."""
     import json as _json  # noqa: PLC0415
     if isinstance(raw, str):
         try:
@@ -60,12 +57,8 @@ def _parse_super_ep_transcript_ids_field(raw) -> list:
 
 
 def _collect_transcript_ids(episodes: list) -> set:
-    """Return the union of all transcript IDs referenced by *episodes*.
-
-    Handles both JSON-string and list forms of the ``transcript_ids`` field,
-    and also expands the ``transcript_id_start``–``transcript_id_end`` range so
-    overlap rows are always included.
-    """
+    """Also expands transcript_id_start..transcript_id_end so overlap rows
+    are always included."""
     ids: set = set()
     for ep in episodes:
         for tid in _parse_super_ep_transcript_ids_field(ep.get("transcript_ids")):
@@ -85,12 +78,7 @@ def _collect_transcript_ids(episodes: list) -> set:
 
 
 def _fetch_transcript_spans(t_ids: set, db) -> str:
-    """Fetch and format the raw transcript rows for the given transcript IDs.
-
-    Fetches those rows and formats them as ``[id] (ts) role: content`` lines.
-
-    Returns formatted string oldest-first, or '' if no transcript IDs found.
-    """
+    """Returns '' if no transcript IDs found."""
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
     if not t_ids:
@@ -130,31 +118,20 @@ def _fetch_transcript_spans(t_ids: set, db) -> str:
 
 
 class SuperEpisodeConfig(ProcessorConfig):
-    """Super-episode encoder config — per-cluster episode synthesis.
+    """§3b / O2 — post_turn_hooks = () (caller owns the episode write).
 
-    channel/role='super_episode_encoder', suppress_history=True, max_iterations=1.
-    post_turn_hooks = () (caller owns episode write — §3b / O2).
-
-    sources and spans are captured at construction time so get_user_prompt is
-    self-contained per cluster (§3c: cluster loop moves to caller).
-
-    Args:
-        channel:  The user channel being consolidated (e.g. 'user'). Recorded for
-                  caller traceability only; the processor's transcript channel is
-                  always 'super_episode_encoder'.
-        sources:  List of episode dicts for this cluster (each with 'id', 'gist').
-        spans:    Raw transcript spans string covering these episodes.
+    sources and spans are captured at construction so get_user_prompt is
+    self-contained per cluster (§3c: cluster loop moves to caller). The
+    ``channel`` arg is the user channel being consolidated; the processor's
+    transcript channel is always 'super_episode_encoder'.
     """
 
     def __init__(self, channel: str, sources: list[Any], spans: Any) -> None:
         super().__init__(
             channel="super_episode_encoder",
             role="super_episode_encoder",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
@@ -178,9 +155,6 @@ class SuperEpisodeConfig(ProcessorConfig):
         )
 
     def get_system_prompt(self, mp) -> str:
-        """Super-episode system prompt: user_definition prefix + body.
-
-        Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
-        """
+        """OLD assembly ``f"{user_def}\n\n{body}"``."""
         from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
         return f"{self.get_user_definition(mp)}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"

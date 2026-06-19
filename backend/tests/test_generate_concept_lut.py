@@ -1,13 +1,4 @@
-"""Tests for the generate_concept_lut script — idempotency and schema correctness.
-
-Runs the generator against the real YAML and a temp DB so the production asset
-is never touched. Marked as integration because the embedding model is required.
-
-Row counts are derived dynamically from the source YAML the generator reads, so
-the suite never goes stale when concepts or aliases are added/removed. The LUT
-stores one row per *label* (canonical_key + every alias), so the total row count
-is always >= the number of distinct canonical keys.
-"""
+"""Tests for generate_concept_lut — idempotency and schema correctness."""
 
 import sqlite3
 
@@ -22,14 +13,12 @@ _YAML_PATH = FileMapperService.get_concept_lut_yaml_path()
 
 
 def _canonical_keys_from_yaml() -> set[str]:
-    """Return the set of distinct canonical keys declared in the source YAML."""
     with open(_YAML_PATH) as f:
         data = yaml.safe_load(f)
     return {c["canonical_key"] for c in data.get("concepts", [])}
 
 
 def _encoder_available() -> bool:
-    """True when the ONNX embedding encoder can produce an embedding locally."""
     try:
         from services.embedding_service import EmbeddingService
 
@@ -40,7 +29,6 @@ def _encoder_available() -> bool:
 
 
 def _run_generator(db_path: str) -> None:
-    """Invoke the generator with an overridden output path."""
     import utils.generate_concept_lut as gen
     from pathlib import Path
 
@@ -50,7 +38,6 @@ def _run_generator(db_path: str) -> None:
         gen.main()
     finally:
         gen._DB_PATH = original_db
-
 
 def _open_lut(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
@@ -64,7 +51,6 @@ def _open_lut(db_path: str) -> sqlite3.Connection:
 
 
 def _require_generator_prereqs() -> None:
-    """Skip when the YAML asset or the embedding encoder is unavailable."""
     if not _YAML_PATH.exists():
         pytest.skip(f"YAML not found at {_YAML_PATH}")
     if not _encoder_available():
@@ -74,7 +60,6 @@ def _require_generator_prereqs() -> None:
 class TestGenerateConceptLut:
 
     def test_row_count_covers_every_canonical_key(self, tmp_path):
-        """Generator embeds one row per label — at least one per canonical key."""
         _require_generator_prereqs()
 
         expected_canonical = len(_canonical_keys_from_yaml())
@@ -98,7 +83,6 @@ class TestGenerateConceptLut:
         )
 
     def test_embeddings_count_matches_concepts(self, tmp_path):
-        """One embedding row per concept — no orphan or missing embeddings."""
         _require_generator_prereqs()
 
         db_path = str(tmp_path / "concept_lut_test.sqlite")

@@ -6,24 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for TKT-947 — durable tool_calls retention.
-
-Three real-world behaviours asserted here:
-
-B. Rich-card pipeline end-to-end: a tool_calls row written by ActTrail survives
-   after the turn (no purge), and SegmentService.build() over the same transcript
-   IDs returns a rich segment — not an orphan-tag text fallback.  This is the
-   direct proof that the purge-before-segment-build bug class is fixed.
-
-C. Janitor: DecayEngineService._purge_tool_calls() deletes rows older than 7 days
-   and leaves recent rows intact.
-
-D. review_tool_calls narration filter: a narration row seeded inside the window
-   must be absent from the ability's results; a normal tool row must be present.
-
-All tests use the real ``db`` fixture (SchemaConvergenceService-converged schema,
-zero hand-rolled DDL), zero mocks, utc_now() for all datetimes.
-"""
+"""Feature tests for TKT-947 — durable tool_calls retention."""
 
 import json
 from datetime import timedelta
@@ -86,14 +69,7 @@ _RICH_RESULT = (
 
 
 def test_tool_calls_row_survives_turn_and_segment_service_builds_rich_card(db):
-    """The tool_calls row written by ActTrail must persist after the turn and
-    allow SegmentService.build() to produce a rich segment.
-
-    Before TKT-947: _purge_ephemeral_tool_calls() deleted the row before
-    SegmentService ran, so the span tag became an orphan and no card was produced.
-    After TKT-947: every row is durable; SegmentService reads it and returns
-    type=rich with the correct payload.
-    """
+    """This is the direct proof that TKT-947's purge-before-segment-build bug is fixed."""
     tid = _seed_transcript(db, content="What's the weather in Valletta?")
     db.commit()
 
@@ -150,23 +126,28 @@ def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db):
     shared function the refresh path uses.
     """
     import time
+    from services import transcript_service as ts
 
-    uid = _seed_transcript(db, content="What's the weather in Valletta?")
-    db.commit()
-
-    # Tool call recorded against the user row via the real production write path
+    # Chain model: the tool anchors to the assistant STEP row, the synthesis span
+    # lands on the FINAL row, and all three rows share the turn_id the input row
+    # opened. _broadcast_turn_result resolves TURN-WIDE from the newest channel
+    # row (the final assistant row) so the final-row span pairs with the step
+    # row's tool. Seeded through the production writers + ActTrail.record — the
+    # same path the live chain takes.
+    uid = ts.write_input_row("user", "user", "What's the weather in Valletta?")
+    turn = ts.turn_id_of_row(uid)
+    step_id = ts.write_assistant_row("user", "Let me check the weather.", turn_id=turn)
     ActTrail().record(
         tool_name="weather",
         params={"location": "Valletta"},
         result=_RICH_RESULT,
-        transcript_id=uid,
+        transcript_id=step_id,
     )
 
-    # Assistant reply persisted BEFORE the broadcast runs — reproducing the live
-    # ordering where the newest channel row is the assistant's, not the user's.
+    # Final synthesis row persisted BEFORE the broadcast runs — reproducing the
+    # live ordering where the newest channel row is the turn's final assistant row.
     assistant_content = "<span id='weather_1'>Sunny, 27°C.</span>"
-    _seed_transcript(db, role="assistant", content=assistant_content)
-    db.commit()
+    ts.write_assistant_row("user", assistant_content, turn_id=turn)
 
     # Real consumer at the WS boundary: the broker pushes JSON strings to the
     # connected object exactly as it does to the browser connection.

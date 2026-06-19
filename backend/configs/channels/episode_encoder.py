@@ -10,11 +10,8 @@ class EpisodeEncoderConfig(ProcessorConfig):
         super().__init__(
             channel="episode_encoder",
             role="episode_encoder",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
@@ -29,11 +26,6 @@ class EpisodeEncoderConfig(ProcessorConfig):
         )
 
     def get_user_prompt(self, mp) -> str:
-        """Episode encoder user-prompt: transcript window + referenced episodes.
-
-        Reads _window and _referenced from the mp instance (set by the caller
-        before calling MessageProcessor.process()).
-        """
         window = getattr(mp, "_window", "") or ""
         referenced = getattr(mp, "_referenced", "") or ""
         parts = [
@@ -51,10 +43,6 @@ class EpisodeEncoderConfig(ProcessorConfig):
         return "\n".join(parts)
 
     def get_system_prompt(self, mp) -> str:
-        """Episode encoder system prompt: user_definition prefix + body.
-
-        Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
-        """
         from services.system_message_prompt import EpisodeEncoderSystemPrompt  # noqa: PLC0415
         return (
             f"{self.get_user_definition(mp)}\n\n"

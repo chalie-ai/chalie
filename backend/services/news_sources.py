@@ -87,10 +87,8 @@ for _s in SOURCES:
 
 
 def get_source_by_id(source_id: str):
-    """Return a Source by exact ID, or None."""
     return _BY_ID.get(source_id)
 
 
 def get_sources_by_category(category: str) -> list:
-    """Return all sources in a category."""
     return list(_BY_CATEGORY.get(category, []))

@@ -9,14 +9,9 @@ Segment shapes:
     {"type": "rich", "tag": "weather_1", "synthesis": "<safe HTML>", "payload": {…}}
 
 The parser is called at the WS-send boundary and again on the
-``/conversation/recent`` refresh path.  Both paths operate against the same
-persisted surfaces (``transcript.content`` + ``tool_calls.result``) so they
-produce byte-identical output.
-
-Edge cases that result in a ``text`` segment (with a warning log):
-- Orphan tag whose tool_call result cannot be found
-- LLM forgets the closing ``</span>`` (non-greedy regex simply misses it)
-- Tag prefix with no registered frontend module (frontend falls back to text)
+``/conversation/recent`` refresh path — both against persisted surfaces
+(``transcript.content`` + ``tool_calls.result``) so they produce
+byte-identical output.
 """
 from __future__ import annotations
 
@@ -29,46 +24,27 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn) -> list[int]:
-    """Return the transcript row IDs whose tool_calls feed the parser for one assistant turn.
+    """Return every transcript row ID of the turn that owns ``assistant_transcript_id``.
 
-    Tool_calls are stored against the user-input transcript row that triggered
-    the ACT loop — not against the assistant output row.  This function queries
-    the DB to find that user-input row for the given assistant turn: the most
-    recent row with ``id < assistant_transcript_id`` that shares the same
-    ``channel`` and has ``role = 'user'`` or ``role = 'subagent_return'``.
-
-    Both the live broadcast path (``api/chat.py::_broadcast_turn_result``) and
-    the ``/conversation/recent`` refresh path (``api/conversation.py``) use this
-    function so they are guaranteed to resolve the same transcript IDs.  If the
-    storage rule ever changes (e.g. tool_calls keyed to the assistant row
-    instead), updating this single function is sufficient — neither call site
-    needs to change.
-
-    Args:
-        assistant_transcript_id: The ``transcript.id`` of the assistant output row.
-        conn: An open SQLite connection (or compatible cursor) for the query.
-
-    Returns:
-        List containing the single user-input transcript ID for this turn, or an
-        empty list if no preceding user row can be found (should not happen in
-        normal operation — logged as a warning).
+    Under the chain model a turn is many rows (input → step rows that each
+    emitted the tool calls → final synthesis row), all sharing one turn_id. A
+    rich-media span lives on the FINAL row, but the tool that produced the card
+    ran on a STEP row, so pairing needs the WHOLE turn's transcript ids, not just
+    the row's own. Both the live broadcast path and the refresh path call this,
+    so they resolve the same id set. Falls back to ``[assistant_transcript_id]``
+    when the row has no turn (skip_transcript channels) or is unknown.
     """
     row = conn.execute(
-        "SELECT t2.id FROM transcript t1 "
-        "JOIN transcript t2 ON t2.channel = t1.channel "
-        "  AND t2.id < t1.id "
-        "  AND t2.role IN ('user', 'subagent_return') "
-        "WHERE t1.id = ? "
-        "ORDER BY t2.id DESC LIMIT 1",
+        "SELECT channel, turn_id FROM transcript WHERE id = ?",
         (assistant_transcript_id,),
     ).fetchone()
-    if row is None:
-        logger.warning(
-            "resolve_tool_call_transcript_ids: no preceding user row for assistant_id=%s",
-            assistant_transcript_id,
-        )
-        return []
-    return [row[0]]
+    if row is None or row[1] is None:
+        return [assistant_transcript_id]
+    ids = conn.execute(
+        "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id",
+        (row[0], row[1]),
+    ).fetchall()
+    return [r[0] for r in ids] or [assistant_transcript_id]
 
 # Matches <span id='tool_name_N'>…</span> or <span id="tool_name_N">…</span>,
 # optionally with a single ``data-image='url'`` attribute that lets the LLM
@@ -87,20 +63,9 @@ _TAG_RE = re.compile(
 def strip_spans(content: str | None) -> str | None:
     """Remove every ``<span id='name_N'>…</span>`` wrapper, keeping inner text.
 
-    Used at the subagent → parent boundary as a defensive scrub: subagents are
-    architecturally prevented from receiving the rich-media trailer (the
-    dispatcher gates ordinal injection on ``channel == 'user'``), but if a
-    subagent ever emits a stray span — via memorised prior turns, hallucination,
-    or a future tool-trailer leak — we still strip it before the text reaches
-    the parent. Idempotent: a string with no spans is returned unchanged.
-
-    Args:
-        content: Arbitrary text that may contain rich-media span wrappers.
-
-    Returns:
-        The same text with every matching span tag replaced by its inner
-        synthesis text. Whitespace is preserved as-is so the caller can decide
-        whether to re-strip.
+    Defensive scrub at the subagent → parent boundary: if a subagent ever emits
+    a stray span (via memorised prior turns, hallucination, or a future
+    tool-trailer leak), we strip it before the text reaches the parent.
     """
     if not content:
         return content
@@ -108,19 +73,7 @@ def strip_spans(content: str | None) -> str | None:
 
 
 def parse(content: str, tool_calls: list[dict]) -> list[dict[str, Any]]:
-    """Convert sanitised assistant text + tool_calls rows to a segment list.
-
-    Args:
-        content: Post-sanitisation LLM response (``transcript.content``).
-                 May contain ``<span id='tool_N'>…</span>`` tags.
-        tool_calls: List of tool_call row dicts for this turn.  All rows are
-                    durable so the full set is always available.  Each dict
-                    should carry at least ``result`` (the full tool return string).
-
-    Returns:
-        Ordered list of segment dicts.  Never raises — edge cases produce
-        ``text`` segments and emit a warning log entry.
-    """
+    """Convert sanitised assistant text + tool_calls rows to a segment list."""
     if not content:
         return []
 
@@ -143,7 +96,6 @@ def parse(content: str, tool_calls: list[dict]) -> list[dict[str, Any]]:
 
 
 def _append_leading_prose(content: str, cursor: int, match_start: int, segments: list) -> None:
-    """Emit any prose that precedes a tag match as a text segment."""
     if match_start > cursor:
         head = content[cursor:match_start].strip()
         if head:
@@ -151,7 +103,6 @@ def _append_leading_prose(content: str, cursor: int, match_start: int, segments:
 
 
 def _append_tag_segment(match: "re.Match", tool_calls: list[dict], segments: list) -> None:
-    """Resolve a span tag to a rich or text segment and append it."""
     tool_name = match.group(1)
     ordinal = match.group(2)
     chosen_image = (match.group(3) or "").strip()
@@ -213,11 +164,6 @@ def _apply_image_choice(payload, chosen_image: str):
 def _enrich_payload(tool_name: str, payload, row: dict):
     """Hand the payload to the matching ability so it can resolve runtime state.
 
-    The parser stays tool-agnostic — every ability declares its own
-    ``enrich_rich_payload`` classmethod (defaults to identity). This is the
-    single hook so cards needing live data (timer's wall-clock anchor, list's
-    live items) can graft it on without the parser learning their names.
-
     A non-dict payload (i.e. JSON parse failed and ``_extract_data`` returned
     the raw string) is passed through unchanged — there is nothing to enrich.
     """
@@ -262,29 +208,7 @@ def _unwrap_skill_tag(result: str) -> str:
 
 
 def _find_payload(tag: str, tool_calls: list[dict]) -> tuple[dict | str, dict] | None:
-    """Scan tool_calls for the row whose rich-media trailer references this tag.
-
-    Matching is anchored to the trailer section (the part of the result string
-    that follows the first ``\\n\\n`` separator) so that tool results whose
-    *payload* JSON happens to contain a literal span tag — for example, a search
-    snippet that scraped a page containing ``<span id='weather_1'>`` in its body
-    — are never mistakenly paired.  The span tag must appear in the trailer, not
-    anywhere in the full result string.
-
-    All rich-media tool trailers follow the format::
-
-        <json payload>
-
-        You MUST present this result by wrapping your synthesis in <span id='tag'>
-
-    So the span tag is always in the trailer section.  A search snippet or
-    document body containing a literal span would be part of the JSON payload
-    (before the first ``\\n\\n``), and will never satisfy this check.
-
-    Returns:
-        Parsed payload dict (or raw string if JSON parse fails), or None if
-        no matching row is found.
-    """
+    """Scan tool_calls for the row whose rich-media trailer references this tag."""
     needle_single = f"<span id='{tag}'>"
     needle_double = f'<span id="{tag}">'
 

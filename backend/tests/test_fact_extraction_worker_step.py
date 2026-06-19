@@ -1,49 +1,28 @@
 """Feature tests — TKT-925 worker fact-extraction step (Phase 3, ticket F).
 
-These drive the NEW subconscious-worker step that closes the router gap: hard
-facts must reach ``data_graph`` from the worker, WITHOUT the chat model ever
-calling ``memory.store``. The step selects episodes ``WHERE facts_extracted_at
-IS NULL`` oldest-first, runs one small constrained LLM call per episode, and
-emits a single Mem0 op (ADD / UPDATE / DELETE / NOOP) against the fact store —
-UPDATE/DELETE on a temporally-overlapping contradiction performing bi-temporal
-invalidation (old ``active=0``, ``valid_to = new.valid_from``, fast-decay
-tombstone). Unparseable model output → NOOP + counter, never corruption.
+Tests the subconscious-worker step that closes the router gap: hard facts reach
+``data_graph`` from the worker WITHOUT the chat model calling ``memory.store``.
+The step selects episodes WHERE facts_extracted_at IS NULL oldest-first, runs one
+small constrained LLM call per episode, and emits a single Mem0 op (ADD / UPDATE
+/ DELETE / NOOP) — UPDATE/DELETE on a temporally-overlapping contradiction performs
+bi-temporal invalidation (old active=0, old.valid_to == new.valid_from, fast-decay
+tombstone). Unparseable model output → NOOP + counter.
 
-═══════════════════════════════════════════════════════════════════════════════
-RED-FIRST / COORDINATION NOTE (read before "fixing" a failure)
-═══════════════════════════════════════════════════════════════════════════════
-This file was written BEFORE the production step exists (coder works in
-parallel). Every test here MUST be RED right now — that is the proof it tests
-NEW behavior, not the status quo.
+Two contract points are pinned to FROZEN names: if the coder diverges, the test
+reds at the seam, which IS the coordination signal (do not paper over it):
 
-Two contract points are pinned to the FROZEN names in the build plan; if the
-coder diverges from these, the test reds at the seam and that IS the
-coordination signal (do not paper over it):
+  * Entry point         : ``SubconsciousWorker._step_fact_extraction()`` follows the
+                          existing ``_step_*`` convention. Surfaced under step key
+                          ``fact_extraction`` (build doc 140; nightly 122 gates).
+  * Op transport : ``MessageProcessor.process("", FactExtractionConfig)`` called, then
+                   ``parse_fact_ops(text)`` (configs/channels/fact_extraction.py).
+                   ``kind`` forced to ``user_specific`` inside the parser.
 
-  * Entry point  : ``SubconsciousWorker._step_fact_extraction()`` — follows the
-                   existing ``_step_pattern_match`` / ``_step_geo_patterns``
-                   ``_step_*`` convention. Surfaced in the tick under the FROZEN
-                   step key ``fact_extraction`` (build doc 140; nightly 122 gates
-                   ``body.steps.fact_extraction.status``).
-  * Op transport : the step fires ``MessageProcessor.process("", FactExtractionConfig)``
-                   which returns the model's TEXT, then ``parse_fact_ops(text)``
-                   parses a ``{"ops": [{op, key, value}, ...]}`` envelope into
-                   validated op dicts (configs/channels/fact_extraction.py).
-                   ``_ops_response`` builds that exact envelope as the provider
-                   response ``text``. ``kind`` is forced to ``user_specific``
-                   inside the parser, so the op payloads omit it.
+LLM boundary (Pattern H): resolved provider client (``Providers._resolve``) swapped
+via try/finally context manager — never ``unittest.mock``, entirely real objects.
 
-LLM boundary (Pattern H — the ONLY sanctioned seam): the resolved provider
-client (``Providers._resolve``) is swapped via a plain try/finally context
-manager, never ``unittest.mock``. Everything in-process is real: the real ``db``
-fixture (schema.sql through SchemaConvergenceService at 256-dim + redesign
-backfill), real ``EpisodicService.store_episode`` seeding (the production write
-path), real ``DataGraphService``, real ``MemoryStore``. Precedent followed
-verbatim: ``tests/test_pattern_match_processor.py`` (``_inject_fake_client``)
-and ``tests/test_episodic_retrieval_service.py`` (256-dim embedding seeding).
-
-Dual-store isolation (TKT-922 lesson): tests that touch BOTH MemoryStore and
-data_graph take the ``store`` fixture so neither store leaks to a real path.
+Tests touching both MemoryStore and data_graph take the ``store`` fixture so neither
+leaks to a real path.
 """
 
 import contextlib
@@ -64,7 +43,6 @@ _DIM = 256  # conftest vec tables are 256-dim (suite convention)
 # ── 256-dim embedding helpers (test_episodic_retrieval_service.py precedent) ───
 
 def _unit(index: int, dim: int = _DIM) -> list:
-    """Unit basis vector — controllable cosine similarity for the vec lane."""
     v = [0.0] * dim
     v[index] = 1.0
     return v
@@ -73,13 +51,6 @@ def _unit(index: int, dim: int = _DIM) -> list:
 # ── LLM network-boundary seam (test_pattern_match_processor.py precedent) ──────
 
 class _FakeLLMService(ProviderClient):
-    """Stand-in for the resolved provider client — the single sanctioned boundary.
-
-    A proper ProviderClient subclass so the real ``Providers.send`` still runs
-    prompt assembly, tool building and pre-flight. ``send_fn`` is called once
-    per provider round-trip and returns the controlled response, letting a test
-    hand the fact step a different op decision per episode.
-    """
 
     CONTENT_FIELD_LABEL = "message.content"
 
@@ -108,12 +79,6 @@ def _inject_fake_client(send_fn):
 
 
 def _ops_response(ops: list | str) -> ProviderApiResponse:
-    """Build a provider response carrying a constrained Mem0 op batch as JSON text.
-
-    The accepted envelope (configs/channels/fact_extraction.py:parse_fact_ops)
-    is ``{"ops": [ {op, key, value}, ... ]}``. Pass a raw string instead of a
-    list to simulate unparseable model output (the safe-NOOP path).
-    """
     text = ops if isinstance(ops, str) else json.dumps({"ops": ops})
     return ProviderApiResponse(
         text=text, model="test-model", provider="mock", tool_calls=None,
@@ -121,10 +86,8 @@ def _ops_response(ops: list | str) -> ProviderApiResponse:
 
 
 def _sequenced_sender(responses):
-    """Return a send_fn that yields ``responses`` in order, repeating the last.
-
-    The fact step makes one LLM call per unprocessed episode (within budget);
-    one entry per episode lets each candidate get its own op decision.
+    """The fact step makes one LLM call per unprocessed episode; one entry per
+    episode lets each candidate get its own op decision — last entry repeats.
     """
     state = {"n": 0}
 

@@ -1,17 +1,3 @@
-"""Stateless REST client for the Ubiquiti UniFi Controller API (UniFi OS only).
-
-Every function accepts connection parameters (url, site, verify_ssl, api_key,
-username, password) rather than storing them -- the caller (UbiquitiCapability)
-owns credential lifecycle.
-
-Auth modes:
-  - API key: pass ``api_key``; adds ``X-API-KEY`` header.
-  - Session: pass ``username`` + ``password``; logs in via POST /api/auth/login,
-    stores cookie + CSRF token in a module-level session cache keyed by URL.
-
-Base path: /proxy/network/api/s/{site}/
-Traffic rules path: /v2/api/site/{site}/trafficrules
-"""
 
 import logging
 import threading
@@ -38,7 +24,6 @@ def _auth_headers(api_key: str | None) -> dict:
 
 
 def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tuple[requests.Session, str]:
-    """Return a (session, csrf_token) pair, logging in if no valid session cached."""
     key = (url, username)
     with _session_lock:
         cached = _session_cache.get(key)
@@ -76,7 +61,6 @@ def _invalidate_session(url: str, username: str = "") -> None:
 
 
 def _ssl_call(fn, *args, verify_ssl: bool, url: str, **kwargs) -> requests.Response:
-    """Call fn(*args, verify=verify_ssl, **kwargs), retrying with verify=False on SSLError."""
     try:
         return fn(*args, verify=verify_ssl, **kwargs)
     except SSLError:
@@ -94,7 +78,6 @@ def _request(
     verify_ssl: bool,
     body: dict | None = None,
 ) -> requests.Response:
-    """Single entry point for all HTTP calls; handles SSL fallback and 401 retry."""
     full_url = f"{url.rstrip('/')}{path}"
     kwargs: dict = {"timeout": _TIMEOUT}
     if body is not None or method in ("post", "put"):
@@ -131,12 +114,10 @@ def _request(
 
 
 def _site_path(site: str, endpoint: str) -> str:
-    """Build a UniFi OS proxy path: /proxy/network/api/s/{site}/{endpoint}."""
     return f"/proxy/network/api/s/{site}/{endpoint}"
 
 
 def _v2_path(site: str, endpoint: str) -> str:
-    """Build a v2 API path: /v2/api/site/{site}/{endpoint}."""
     return f"/v2/api/site/{site}/{endpoint}"
 
 
@@ -151,10 +132,6 @@ def probe(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Health check -- GET /api/ with auth. Returns API root response.
-
-    Raises ValueError on legacy 404, requests.HTTPError on other non-2xx.
-    """
     try:
         resp = _request("get", url, "/api/", api_key, username, password, verify_ssl)
     except requests.HTTPError as exc:
@@ -175,7 +152,6 @@ def list_devices(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """List all adopted network devices. Returns ``{"devices": [...], "count": N}``."""
     raw = _request("get", url, _site_path(site, "stat/device"), api_key, username, password, verify_ssl).json().get("data", [])
     devices = [
         {
@@ -202,10 +178,6 @@ def list_clients(
     verify_ssl: bool = True,
     active_only: bool = True,
 ) -> dict:
-    """List clients connected to the network. Returns ``{"clients": [...], "count": N}``.
-
-    active_only=True queries stat/sta (currently associated); False queries rest/user.
-    """
     endpoint = "stat/sta" if active_only else "rest/user"
     raw = _request("get", url, _site_path(site, endpoint), api_key, username, password, verify_ssl).json().get("data", [])
     clients = [
@@ -232,10 +204,6 @@ def get_info(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Get site health or full device detail by MAC.
-
-    target="health" returns subsystem statuses; any MAC returns the device dict.
-    """
     if target == "health":
         data = _request("get", url, _site_path(site, "stat/health"), api_key, username, password, verify_ssl).json()
         return {"health": data.get("data", [])}
@@ -259,10 +227,6 @@ def control_client(
     verify_ssl: bool = True,
     **kwargs,
 ) -> dict:
-    """Send a client management command (block-sta, unblock-sta, kick-sta, authorize-guest).
-
-    Returns ``{"status": "ok", "command": command, "mac": mac}``.
-    """
     _request("post", url, _site_path(site, "cmd/stamgr"), api_key, username, password, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
     return {"status": "ok", "command": command, "mac": mac}
 
@@ -278,10 +242,6 @@ def control_device(
     verify_ssl: bool = True,
     **kwargs,
 ) -> dict:
-    """Send a device management command (restart, set-locate, unset-locate, power-cycle).
-
-    Returns ``{"status": "ok", "command": command, "mac": mac}``.
-    """
     _request("post", url, _site_path(site, "cmd/devmgr"), api_key, username, password, verify_ssl, {"cmd": command, "mac": mac, **kwargs})
     return {"status": "ok", "command": command, "mac": mac}
 
@@ -294,10 +254,6 @@ def list_wlans(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """List WLAN configurations. Returns ``{"wlans": [...], "count": N}``.
-
-    Passphrase (x_passphrase) is intentionally excluded to avoid LLM credential leakage.
-    """
     raw = _request("get", url, _site_path(site, "rest/wlanconf"), api_key, username, password, verify_ssl).json().get("data", [])
     wlans = [
         {
@@ -323,7 +279,6 @@ def update_wlan(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Update a WLAN configuration. Returns ``{"status": "ok", "wlan_id": wlan_id, "updated": [...]}``."""
     _request("put", url, _site_path(site, f"rest/wlanconf/{wlan_id}"), api_key, username, password, verify_ssl, updates)
     return {"status": "ok", "wlan_id": wlan_id, "updated": list(updates.keys())}
 
@@ -336,7 +291,6 @@ def list_port_forwards(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """List port forwarding rules. Returns ``{"rules": [...], "count": N}``."""
     raw = _request("get", url, _site_path(site, "rest/portforward"), api_key, username, password, verify_ssl).json().get("data", [])
     rules = [
         {
@@ -363,7 +317,6 @@ def update_port_forward(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Update an existing port forwarding rule. Returns ``{"status": "ok", "rule_id": rule_id, "updated": [...]}``."""
     _request("put", url, _site_path(site, f"rest/portforward/{rule_id}"), api_key, username, password, verify_ssl, updates)
     return {"status": "ok", "rule_id": rule_id, "updated": list(updates.keys())}
 
@@ -377,7 +330,6 @@ def create_port_forward(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Create a new port forwarding rule. Returns ``{"status": "ok", "rule": <created rule dict>}``."""
     resp = _request("post", url, _site_path(site, "rest/portforward"), api_key, username, password, verify_ssl, rule)
     created = resp.json().get("data", [{}])
     return {"status": "ok", "rule": created[0] if created else {}}
@@ -391,7 +343,6 @@ def list_traffic_rules(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """List traffic rules via v2 API. Returns ``{"rules": [...], "count": N}``."""
     data = _request("get", url, _v2_path(site, "trafficrules"), api_key, username, password, verify_ssl).json()
     raw = data if isinstance(data, list) else data.get("data", [])
     rules = [
@@ -417,6 +368,5 @@ def update_traffic_rule(
     password: str | None = None,
     verify_ssl: bool = True,
 ) -> dict:
-    """Update a traffic rule via v2 API. Returns ``{"status": "ok", "rule_id": rule_id, "updated": [...]}``."""
     _request("put", url, _v2_path(site, f"trafficrules/{rule_id}"), api_key, username, password, verify_ssl, updates)
     return {"status": "ok", "rule_id": rule_id, "updated": list(updates.keys())}

@@ -3,20 +3,9 @@
 Every test runs through the real production services (services.markup.sanitize
 and services.rich_media_parser.parse).  No mocks.
 
-Regression class covered: hostile span content that survived the nh3
-sanitisation pass must still produce safe, well-defined output from the
-parser.  Covers cases the coder's test_markup_span_whitelist.py did not:
-
-- id with leading underscore  → regex [a-z][a-z0-9_]* rejects; falls to text
-- <script> nested inside span synthesis → nh3 strips the script; synthesis
-  text survives; parser sees clean text inside the span
-- XSS event attribute on span alongside a valid id → nh3 strips onclick;
-  span with just id survives; parser pairs normally
-- nested spans (<span id='weather_1'><span id='weather_2'>inner</span></span>)
-  → outer span regex matches the outermost close tag; inner span tag is
-  treated as part of synthesis (either stripped by nh3 or left as a plain tag)
-- unclosed span injected via onclick-carrying span → sanitiser strips onclick,
-  no close tag → regex misses; full content falls to text segment
+Covers cases the coder's test_markup_span_whitelist.py did not: hostile span
+content that survived nh3 sanitisation must still produce safe, well-defined
+output from the parser.
 """
 
 import pytest
@@ -32,8 +21,6 @@ def _tc(result: str) -> dict:
 
 
 class TestAdversarialSanitiser:
-    """Sanitiser must strip hostile attributes while keeping the id for pairing."""
-
     def test_onclick_plus_id_onclick_stripped_id_kept(self):
         raw = "<span id='weather_1' onclick='alert(1)'>Sunny.</span>"
         out = sanitize(raw)
@@ -64,8 +51,6 @@ class TestAdversarialSanitiser:
 
 
 class TestAdversarialParser:
-    """Parser must produce safe fallback behaviour on hostile or malformed input."""
-
     def test_id_with_leading_underscore_not_recognised_as_rich(self):
         # _invalid_1: leading underscore — does not match [a-z][a-z0-9_]*.
         # No span match → full content is a text segment, no rich segment emitted.

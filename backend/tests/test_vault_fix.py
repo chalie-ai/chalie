@@ -7,34 +7,6 @@ stamped ``vault_backup_<stamp>.json`` and never overwrites or deletes an earlier
 one. Recovery tries every retained backup, newest first — a corrupt latest
 backup is simply skipped and an older valid one restores the original DEK.
 
-Scenarios covered (7 tests total):
-
-1. initialize() writes one vault_backup_<stamp>.json with hex-encoded key
-   material, file permissions 0o400, and directory permissions 0o700.
-2. RESTORE: encrypt a secret, corrupt the live vault_config row, login with the
-   correct password → 200, vault unlocked, the previously-encrypted secret still
-   decrypts (no data loss — same DEK recovered from backup).
-3. Restore skips a corrupt NEWER backup and falls through to an older valid one;
-   every retained backup survives and no new backup is written on restore.
-4. UNRECOVERABLE: no backup file exists AND vault_config row is corrupt → login
-   returns 401 with onboarding_required=True, master_account row is wiped, and
-   all backup files are removed (vault.reset() ran).
-5. Append-forever retention: a second call to initialize() leaves the first
-   backup in place and adds a second — both are retained.
-6. ProviderDbService.get_all_providers returns good providers alongside one
-   that has a garbage (undecryptable) api_key, marking the bad row with
-   decrypt_failed=True and still returning the good one intact.
-7. With the vault sealed (no DEK), get_all_providers() returns all rows with
-   api_key=None — the listing must not fail just because the vault is locked.
-
-Every test:
-- Uses the real ``db`` fixture (schema.sql via SchemaConvergenceService)
-- Uses the real ``store`` fixture (isolated MemoryStore, same production class)
-- Uses the real VaultService, real ProviderDbService, real user_auth blueprint
-- Zero mocks of production code; FileMapperService._SECURE_DIR is redirected to
-  ``tmp_path`` via ``monkeypatch.setattr`` — every path helper derives from this
-  one attribute, so it is configuration redirection, not a production-code mock.
-
 NOTE on the transient-exception branch (login() returns 200 locked when
 unlock_or_restore raises an unexpected Exception): this path cannot be exercised
 without mocks because the password-hash check and the vault access share the same
@@ -61,7 +33,6 @@ from services.provider_db_service import ProviderDbService
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 def _seed_account(raw_conn, password: str = "testpassword123") -> str:
-    """Insert a master_account row hashed with *password*; return the password."""
     raw_conn.execute(
         "INSERT INTO master_account (username, password_hash) VALUES (?, ?)",
         ("admin", generate_password_hash(password)),
@@ -71,7 +42,6 @@ def _seed_account(raw_conn, password: str = "testpassword123") -> str:
 
 
 def _backups(secure_dir):
-    """Return all retained backup files, newest first (matches production glob)."""
     return sorted(secure_dir.glob("vault_backup_*.json"), reverse=True)
 
 
@@ -79,12 +49,8 @@ def _backups(secure_dir):
 
 @pytest.fixture(autouse=True)
 def _reset_vault_singletons():
-    """Reset vault module-level singletons before and after every test.
-
-    The cached VaultService instance binds to a DB path that changes per test.
-    Clearing it forces ``get_vault_service()`` to re-create the service against
-    whatever ``_shared_db_service`` is currently active.
-    """
+    """Clears the cached VaultService singleton before and after every test so
+    ``get_vault_service()`` re-creates it against the per-test DB path."""
     _vault_state.dek = None
     _vault_mod._vault_service_instance = None
     yield
@@ -94,31 +60,19 @@ def _reset_vault_singletons():
 
 @pytest.fixture
 def secure_dir(tmp_path):
-    """Return a fresh per-test secure directory under tmp_path."""
     return tmp_path / "secure"
 
 
 @pytest.fixture
 def redirect_backup_paths(secure_dir, monkeypatch):
-    """Redirect FileMapperService's secure dir to tmp_path so tests never write
-    to the real data/secure/ directory.
-
-    Every backup path helper derives from the single ``_SECURE_DIR`` class
-    attribute, so patching it alone redirects ``get_secure_dir``,
-    ``get_vault_backup_path`` and ``list_vault_backups`` consistently. This is
-    configuration redirection, not a mock of production behaviour.
-    """
+    """Redirects ``FileMapperService._SECURE_DIR`` to ``tmp_path`` so all backup
+    path helpers (``get_secure_dir``, ``get_vault_backup_path``,
+    ``list_vault_backups``) resolve under the per-test temp directory."""
     monkeypatch.setattr(FileMapperService, "_SECURE_DIR", secure_dir)
 
 
 @pytest.fixture
 def auth_client(db, store, redirect_backup_paths):
-    """Minimal Flask test client with only the user_auth blueprint.
-
-    Uses the real ``db`` fixture (schema.sql + singleton patch), the real
-    ``store`` fixture (isolated MemoryStore), and the redirect_backup_paths
-    fixture (temp secure directory). No mocks of production code.
-    """
     app = Flask(__name__)
     app.secret_key = secrets.token_hex(32)
     app.config["TESTING"] = True
@@ -131,15 +85,10 @@ def auth_client(db, store, redirect_backup_paths):
 
 @pytest.mark.unit
 class TestVaultBackupWrite:
-    """VaultService.initialize() writes a valid backup file with correct permissions."""
 
     def test_initialize_writes_backup_file_with_hex_fields_and_secure_permissions(
         self, db, store, redirect_backup_paths, secure_dir
     ):
-        """initialize() creates exactly one vault_backup_<stamp>.json containing
-        hex-encoded key material (kdf_salt, wrapped_dek, dek_nonce), the directory
-        is 0o700, and the file is 0o400.  No plaintext secret appears in the JSON.
-        """
         vault = _vault_mod.get_vault_service()
         vault.initialize("strongpassword99")
 
@@ -173,20 +122,10 @@ class TestVaultBackupWrite:
 
 @pytest.mark.unit
 class TestVaultRestore:
-    """Login recovers the live DEK from backup when vault_config is corrupt."""
 
     def test_login_restores_vault_and_previously_encrypted_secret_still_decrypts(
         self, auth_client, secure_dir
     ):
-        """The full no-data-loss recovery path:
-
-        1. Register + initialize vault; encrypt a secret.
-        2. Corrupt the live vault_config row (simulate DB corruption).
-        3. Login with the correct password.
-        4. Expect 200, vault_state=unlocked.
-        5. The secret encrypted before corruption must still decrypt correctly —
-           the same DEK was recovered from the backup file.
-        """
         client, raw_conn = auth_client
         pw = _seed_account(raw_conn)
 
@@ -230,13 +169,6 @@ class TestVaultRestore:
     def test_login_skips_corrupt_newest_backup_and_restores_from_older(
         self, auth_client, secure_dir
     ):
-        """Recovery iterates every retained backup newest-first.
-
-        With one valid backup on disk, drop a NEWER (lexically-greater stamp)
-        corrupt backup file alongside it.  When vault_config is wiped, login must
-        skip the unreadable newest backup and restore from the older valid one.
-        Every retained backup must survive and no new backup is written on restore.
-        """
         client, raw_conn = auth_client
         pw = _seed_account(raw_conn)
 
@@ -284,16 +216,10 @@ class TestVaultRestore:
 
 @pytest.mark.unit
 class TestVaultUnrecoverable:
-    """Login wipes master_account and returns 401 when no backup can restore the DEK."""
 
     def test_login_wipes_master_account_and_returns_401_with_onboarding_required(
         self, auth_client, secure_dir
     ):
-        """When vault_config is corrupt AND no valid backup file exists, login
-        must wipe the master_account row, call vault.reset() (removing all backup
-        files), and return 401 with onboarding_required=True so the frontend
-        drives a clean re-onboarding.
-        """
         client, raw_conn = auth_client
         pw = _seed_account(raw_conn)
 
@@ -345,15 +271,10 @@ class TestVaultUnrecoverable:
 
 @pytest.mark.unit
 class TestVaultBackupRetention:
-    """Each initialize() appends a new backup and retains all earlier ones."""
 
     def test_second_initialize_retains_first_backup_and_adds_a_second(
         self, db, store, redirect_backup_paths, secure_dir
     ):
-        """After a first initialize(), one backup exists.  A second initialize()
-        must leave the first backup untouched and add a second — both retained,
-        each owner-read-only.
-        """
         vault = _vault_mod.get_vault_service()
         vault.initialize("passwordone99")
 
@@ -385,16 +306,10 @@ class TestVaultBackupRetention:
 
 @pytest.mark.unit
 class TestProviderDecryptTolerance:
-    """ProviderDbService.get_all_providers tolerates per-row decrypt failures."""
 
     def test_good_provider_returned_when_another_row_has_garbage_key(
         self, db, store
     ):
-        """One provider with a validly-encrypted key and one with unreadable
-        garbage in api_key are both inserted.  get_all_providers() must return
-        both rows: the good one with a decrypted api_key and the bad one marked
-        with decrypt_failed=True.
-        """
         # Initialize and unlock the vault so encryption is available
         vault = _vault_mod.get_vault_service()
         vault.initialize("correct-password-123")
@@ -439,10 +354,6 @@ class TestProviderDecryptTolerance:
         assert bad.get("decrypt_failed") is True
 
     def test_all_providers_returned_when_vault_is_locked(self, db, store):
-        """With the vault sealed (no DEK), get_all_providers() returns all rows
-        with api_key=None — the listing must not fail just because the vault is
-        locked.
-        """
         # Insert two providers (no need to encrypt — vault is never unlocked)
         db.execute(
             "INSERT INTO providers (name, platform, model, api_key) "

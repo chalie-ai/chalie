@@ -5,9 +5,6 @@ from services.processor_config import ProcessorConfig
 
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
-    DEFAULT_DISCOVERABLE,
-    DELEGATE_INTERNAL_TOOLS,
-    PATTERN_WRITE_TOOLS,
     substitute_provider_content_field,
 )
 
@@ -66,11 +63,8 @@ class EAMPConfig(ProcessorConfig):
         super().__init__(
             channel=f"external-agent:{agent_name}",
             role="external_agent",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.EXTERNAL_AGENT,
+            policy_channel=ProcessorConfig.PolicyChannel.EXTERNAL_AGENT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
-            discoverable=DEFAULT_DISCOVERABLE,
-            blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
-            max_iterations=200,
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,
@@ -91,11 +85,6 @@ class EAMPConfig(ProcessorConfig):
         )
 
     def get_system_prompt(self, mp) -> str:
-        """EAMP system prompt.
-
-        Fills in {user_name}, {agent_name}, {project_or_task_name} template
-        variables from data_graph and the EAMP constructor args.  §3b.
-        """
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         _agent_name = self._agent_name
@@ -135,12 +124,6 @@ class EAMPConfig(ProcessorConfig):
             return ""
 
     def get_user_prompt(self, mp) -> str:
-        """EAMP user-message body for one ACT iteration.
-
-        Stripped compared to UMP: no world state, no user definition (it lives
-        in the system prompt for EAMP).  Keeps: previous messages, ACT trail,
-        input line.  §3b.
-        """
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []

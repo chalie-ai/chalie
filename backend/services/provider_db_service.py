@@ -7,9 +7,16 @@ from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 
+# User-facing 409 message when a provider still holds an assigned role.
+# Must stay byte-identical to the entry in api/providers._SAFE_VALIDATION_MESSAGES
+# (imported there) — it is the single source of truth surfaced to the admin.
+PROVIDER_IN_USE_MSG = (
+    "This provider is in use as the main, vision, or delegate provider and "
+    "cannot be deleted. Clear or reassign that role first."
+)
+
 
 class ProviderDbService:
-    """Manages provider configuration in database."""
 
     # Column list used by all SELECT queries — order matters for positional access
     _PROVIDER_COLS = (
@@ -18,40 +25,16 @@ class ProviderDbService:
     )
 
     def __init__(self, database_service):
-        """Initialise the service with an injected database dependency.
-
-        Args:
-            database_service: The shared database service instance used for
-                all provider table reads and writes.
-        """
         self.db = database_service
 
     @staticmethod
     def _seal_api_key(value: str) -> str:
-        """Protect *value* with the vault DEK and return a base64-encoded string.
-
-        Uses :func:`~services.vault_service.get_vault_service` to obtain the
-        process-wide :class:`~services.vault_service.VaultService` singleton.
-        The raw AES-256-GCM blob is base64-encoded so it can be stored safely
-        in the TEXT ``api_key`` column.
-
-        Args:
-            value: Plaintext API-key string to protect.
-
-        Returns:
-            Base64-encoded ciphertext string (safe for TEXT column storage).
-
-        Raises:
-            :exc:`~services.vault_service.VaultLockedError`: If the vault has
-                not been unlocked before this call.
-        """
         import base64
         from services.vault_service import get_vault_service
         return base64.b64encode(get_vault_service().encrypt_str(value)).decode()
 
     @staticmethod
     def _unseal_api_key(encrypted_val) -> Optional[str]:
-        """Stored value is always a base64-encoded AES-256-GCM blob (TEXT column)."""
         if not encrypted_val:
             return None
         import base64
@@ -62,23 +45,6 @@ class ProviderDbService:
             return None
 
     def _row_to_provider(self, row) -> Dict[str, Any]:
-        """Convert a database row to a provider dict, decrypting api_key.
-
-        Column order: id, name, platform, model, host, api_key,
-                      dimensions, timeout, supports_vision, max_tokens
-
-        The ``api_key`` field is decrypted via :meth:`_unseal_api_key`.  If the
-        vault is currently locked the field is returned as ``None`` so that
-        listing and read operations still succeed before the user has logged in.
-
-        Args:
-            row: A ``sqlite3.Row`` dict-like object or a positional tuple
-                as returned by ``cursor.fetchone()`` / ``fetchall()``.
-
-        Returns:
-            Provider dict with all fields populated (``api_key`` may be
-            ``None`` when the vault is sealed).
-        """
         if isinstance(row, dict):
             result = {
                 "id": row['id'],
@@ -125,7 +91,6 @@ class ProviderDbService:
         return result
 
     def get_all_providers(self) -> List[Dict[str, Any]]:
-        """Get all providers."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -137,7 +102,6 @@ class ProviderDbService:
             return [self._row_to_provider(row) for row in rows]
 
     def list_providers_summary(self) -> List[Dict[str, Any]]:
-        """Get all providers without decrypting api_key (for REST listings)."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -164,7 +128,6 @@ class ProviderDbService:
             ]
 
     def get_provider_by_id(self, provider_id: int) -> Optional[Dict[str, Any]]:
-        """Get provider by ID."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -179,14 +142,6 @@ class ProviderDbService:
             return self._row_to_provider(row)
 
     def create_provider(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new provider.
-
-        Args:
-            data: Dict with at least ``name``, ``platform``, and ``model``.
-
-        Returns:
-            The newly created provider dict.
-        """
         default_model = data.get("model")
         if not default_model:
             raise ValueError("'model' is required")
@@ -276,7 +231,6 @@ class ProviderDbService:
         return self.get_provider_by_id(new_id)
 
     def update_provider(self, provider_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Update a provider."""
         updates = []
         params = []
 
@@ -335,8 +289,43 @@ class ProviderDbService:
 
         return self.get_provider_by_id(provider_id)
 
+    def _provider_roles(self, provider_id: int) -> List[str]:
+        """An empty list means the provider holds no role and is safe to delete.
+        """
+        role_by_key = {
+            'selected_provider_id': 'main',
+            'vision_provider_id': 'vision',
+            'delegate_provider_id': 'delegate',
+        }
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT key, value FROM settings WHERE key IN "
+                "('selected_provider_id', 'vision_provider_id', 'delegate_provider_id')"
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+        assigned = set()
+        for key, value in rows:
+            if not value:
+                continue
+            try:
+                if int(value) == provider_id:
+                    assigned.add(role_by_key[key])
+            except (ValueError, TypeError):
+                # A non-numeric settings value means a corrupted pin: surface it
+                # rather than silently treating the role as unassigned (which
+                # could let a functionally-pinned provider be deleted).
+                logger.warning(
+                    "Ignoring non-numeric %s settings value %s while resolving "
+                    "provider roles", key, safe(value)
+                )
+                continue
+        return [role for role in ('main', 'vision', 'delegate') if role in assigned]
+
     def delete_provider(self, provider_id: int) -> bool:
-        """Permanently delete a provider row."""
+        if self._provider_roles(provider_id):
+            raise ValueError(PROVIDER_IN_USE_MSG)
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -349,7 +338,6 @@ class ProviderDbService:
     # ── Selected Provider ──────────────────────────────────────────
 
     def get_selected_provider(self) -> Optional[Dict[str, Any]]:
-        """Return the currently selected provider, or None if none is set."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -366,7 +354,6 @@ class ProviderDbService:
                 return None
 
     def set_selected_provider(self, provider_id: int) -> None:
-        """Set the selected provider ID in settings."""
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -382,14 +369,6 @@ class ProviderDbService:
     _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
 
     def _resolve_vision_provider(self):
-        """Resolve (provider_or_None, source) where source ∈ explicit|auto|none.
-
-        explicit — an active, vision-capable provider id is stored in settings.
-        auto     — no explicit id, but the active selected provider supports
-                   vision (NOT persisted; surfaced to the UI so the user can
-                   lock it in).
-        none     — nothing usable.
-        """
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -411,7 +390,6 @@ class ProviderDbService:
         return None, 'none'
 
     def get_vision_provider(self) -> Optional[Dict[str, Any]]:
-        """Runtime resolver — the provider to use for image understanding, or None."""
         provider, _ = self._resolve_vision_provider()
         return provider
 
@@ -432,6 +410,65 @@ class ProviderDbService:
                 cursor.execute(
                     "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
                     "VALUES ('vision_provider_id', ?, 'int', 'ID of the provider used for image understanding', 0) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                    (str(provider_id),)
+                )
+            cursor.close()
+
+    # ── Delegate Provider ──────────────────────────────────────────
+    #
+    # The provider that subagent (delegate) turns — web_search, web_browse,
+    # and friends — run on, independent of the main chat provider. Unlike
+    # vision there is NO 'Disabled'/none clear state: clearing the pin falls
+    # back to the selected (main) provider, never the last-pinned one. There is
+    # also no supports_vision requirement — any active provider can be pinned.
+
+    def _resolve_delegate_provider(self):
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT value FROM settings WHERE key = 'delegate_provider_id'"
+            )
+            row = cursor.fetchone()
+            cursor.close()
+        if row and row[0]:
+            try:
+                pid = int(row[0])
+                provider = self.get_provider_by_id(pid)  # active-only
+                if provider:
+                    return provider, 'explicit'
+            except (ValueError, TypeError):
+                pass
+        selected = self.get_selected_provider()
+        if selected:
+            return selected, 'auto'
+        return None, 'none'
+
+    def get_delegate_provider(self) -> Optional[Dict[str, Any]]:
+        """Runtime resolver — the provider to use for delegate turns, or None."""
+        provider, _ = self._resolve_delegate_provider()
+        return provider
+
+    def get_delegate_provider_status(self) -> Dict[str, Any]:
+        """UI-facing — {'provider': dict|None, 'source': 'explicit'|'auto'|'none'}."""
+        provider, source = self._resolve_delegate_provider()
+        return {'provider': provider, 'source': source}
+
+    def set_delegate_provider(self, provider_id: Optional[int]) -> None:
+        """Persist the explicit delegate provider id, or clear it when None.
+
+        Clearing does NOT disable delegate turns — resolution then falls back
+        to the selected (main) provider (see _resolve_delegate_provider)."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            if provider_id is None:
+                cursor.execute(
+                    "DELETE FROM settings WHERE key = 'delegate_provider_id'"
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
+                    "VALUES ('delegate_provider_id', ?, 'int', 'ID of the provider used for subagent (delegate) turns', 0) "
                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
                     (str(provider_id),)
                 )

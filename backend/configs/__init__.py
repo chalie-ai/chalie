@@ -6,12 +6,4 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-configs — per-channel ProcessorConfig constants and factory functions.
-
-Each channel's behavioural surface is expressed as a frozen ProcessorConfig
-instance.  Simple channels expose module-level constants; channels that require
-per-instance arguments expose factory functions.
-
-Spec: ACT Loop Orchestrator Refactor §3.
-"""
+"""Per-channel ProcessorConfig constants and factory functions."""

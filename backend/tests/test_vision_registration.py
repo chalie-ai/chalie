@@ -1,24 +1,15 @@
 """Feature tests — the ``vision`` delegate tool is fully registered.
 
-Task 7 of the Vision Subagent feature wires an already-built ``VisionAbility``
-into three production surfaces. These tests drive the REAL production hot paths
-for all three — zero mocks, real DB, real seed file, real config resolution,
-real search index — and assert the downstream effects:
+Policy defaults seeded by ``policy_defaults.json``:
+    (chat, vision) -> allow · (external_agent, vision) -> allow ·
+    (subconscious, vision) -> deny.
 
-1. Policy gate — the real ``PolicyManager.apply_seed()`` reads the real
-   ``policy_defaults.json`` into a real (temp) DB exactly as ``run.py`` boots it,
-   and the real ``_setting`` lookup returns the seeded vision settings:
-       (chat, vision) -> allow · (external_agent, vision) -> allow ·
-       (subconscious, vision) -> deny.
-2. Tool visibility — the real ``FindToolsAbility.run({"select": ["vision"]})``
-   dispatch (the same call ToolDispatcher makes) injects ``vision`` into a
-   user-facing config's ``active_tools`` and is rejected on a background config,
-   because ``vision`` is in ``DELEGATE_TOOLS`` (subtracted on DmnConfig) yet in
-   ``DEFAULT_DISCOVERABLE`` (offered on UserConfig). The real subtraction runs —
-   the test never re-implements it.
-3. Search index — the rebuilt real ``abilities.sqlite`` carries a row for
-   ``vision``, and the real ``AbilityRegistry`` resolves ``"vision"`` to
-   ``VisionAbility``. This proves the index rebuild captured the new ability.
+``vision`` is ``DISCOVERABLE=True``, so it lives in the single global discovery
+roster (``AbilityRegistry.discoverable_names()``) and is selectable via
+find_tools on every channel that carries find_tools — including the DMN
+background channel. Channel containment for vision is the policy gate above
+(subconscious → deny), NOT a discovery block. The policy gate and the discovery
+roster are orthogonal.
 """
 
 import sqlite3
@@ -29,7 +20,6 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
 from configs.channels import DmnConfig, UserConfig
-from configs.channels._common import DELEGATE_TOOLS
 from run import _migrate_legacy_policy_rules
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
@@ -40,7 +30,7 @@ from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
-_CHANNEL = ProcessorConfig.POLICY_CHANNEL
+_CHANNEL = ProcessorConfig.PolicyChannel
 
 
 # ---------------------------------------------------------------------------
@@ -48,8 +38,6 @@ _CHANNEL = ProcessorConfig.POLICY_CHANNEL
 # ---------------------------------------------------------------------------
 
 def _mp_for(config) -> MessageProcessor:
-    """A real MessageProcessor bound to a real channel config, seeded exactly
-    as ``_setup`` seeds it (active_tools = config.always_available)."""
     mp = MessageProcessor("find a vision tool for me")
     mp.config = config
     mp.active_tools = list(config.always_available or [])
@@ -57,19 +45,12 @@ def _mp_for(config) -> MessageProcessor:
 
 
 def _find_tools_on(mp: MessageProcessor, params: dict) -> str:
-    """Drive the real find_tools dispatch path: bind the invoking mp and run.
-
-    ``run()`` returns a ``ToolResult``; its ``body`` is the human-readable
-    select-result text the model sees (the dispatcher adds the envelope)."""
     ability = FindToolsAbility()
     ability.mp = mp
     return ability.run(params).body
 
 
 def _seeded_policy_db(tmp_path) -> PolicyManager:
-    """Boot a real DB through the exact ``run.py`` _init_database order
-    (legacy copy → converge → apply_seed) so the real policy_defaults.json is
-    seeded into a real ``policy`` table. Returns a PolicyManager over it."""
     db = DatabaseService(str(tmp_path / "vision_policy.db"))
     _migrate_legacy_policy_rules(db)                                  # no-op on fresh
     SchemaConvergenceService(db, embedding_dimensions=256).converge()  # creates policy
@@ -104,17 +85,14 @@ class TestVisionPolicyDefaults:
 
 class TestVisionVisibility:
 
-    def test_vision_is_a_delegate_tool(self):
-        """Pin the constant the whole visibility split rests on: a silent edit
-        that drops vision from DELEGATE_TOOLS trips this guard."""
-        assert "vision" in DELEGATE_TOOLS
+    def test_vision_is_globally_discoverable(self):
+        """Pin the flag the whole visibility model now rests on: a silent edit
+        that flips VisionAbility.DISCOVERABLE to False drops it from the global
+        roster and trips this guard."""
+        assert "vision" in AbilityRegistry.discoverable_names()
 
     def test_vision_selectable_on_user_channel(self):
-        """vision is in DEFAULT_DISCOVERABLE and NOT subtracted on UserConfig
-        (UserConfig.blocked does not include DELEGATE_TOOLS), so the real
-        find_tools select path injects it into active_tools."""
         mp = _mp_for(UserConfig())
-        assert "vision" not in mp.config.blocked  # contract guard
 
         result = _find_tools_on(mp, {"select": ["vision"]})
 
@@ -128,20 +106,22 @@ class TestVisionVisibility:
             f"vision must not be reported unavailable on the user channel. result={result!r}"
         )
 
-    def test_vision_blocked_on_dmn_background_channel(self):
-        """DmnConfig.blocked = DELEGATE_TOOLS | ... so vision (a delegate tool)
-        is subtracted from discovery on this background loop — the real select
-        path must reject it."""
+    def test_vision_selectable_on_dmn_channel(self):
+        """Discovery is global now: the DMN background channel carries find_tools,
+        and vision is DISCOVERABLE=True, so the DMN can discover and spawn the
+        vision delegate. Containing vision away from the subconscious is the policy
+        gate's job (subconscious → deny, asserted above), NOT a discovery block."""
         mp = _mp_for(DmnConfig())
-        assert "vision" in mp.config.blocked  # contract guard
 
         result = _find_tools_on(mp, {"select": ["vision"]})
 
-        assert "vision" not in mp.active_tools, (
-            f"vision must be blocked on the DMN background channel. "
+        assert "vision" in mp.active_tools, (
+            f"vision must be discoverable on the DMN background channel. "
             f"active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" in result.lower()
+        assert result["not_found"] == [], (
+            f"vision must not be reported unavailable on the DMN channel. result={result!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +134,6 @@ class TestVisionSearchIndex:
         assert isinstance(AbilityRegistry.get("vision"), VisionAbility)
 
     def test_abilities_sqlite_contains_vision_row(self):
-        """The rebuilt search index must carry a ``vision`` row in the real
-        ``abilities`` table — proof the rebuild captured the new ability."""
         db_path = FileMapperService.get_abilities_db_path()
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         try:

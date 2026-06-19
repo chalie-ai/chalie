@@ -32,15 +32,12 @@ pytestmark = pytest.mark.unit
 
 
 def _parse_body(rendered: str) -> object:
-    """JSON-parse the body between the open tag and ``[end:memory]``."""
     head = rendered.index("]\n") + 2
     tail = rendered.index("\n[end:memory]")
     return json.loads(rendered[head:tail])
 
 
 def _render_recall(params: dict) -> str:
-    """Run a real recall and render the dispatcher envelope (no bound mp — the
-    data-graph recall lane does not depend on a processor)."""
     result = MemoryAbility().run(params)
     assert result is not None, "MemoryAbility.run() returned None"
     return ToolDispatcher._render("memory", result, None)
@@ -48,8 +45,6 @@ def _render_recall(params: dict) -> str:
 
 class TestMemoryRecallStructuredBody:
     def test_recall_hit_is_a_structured_json_row(self, db):
-        """A real data-graph hit projects to a JSON row with the full contract:
-        id / content / score / kind — replacing the old prose markers."""
         from services.data_graph_service import get_data_graph_service
 
         get_data_graph_service().store(
@@ -78,8 +73,6 @@ class TestMemoryRecallStructuredBody:
         assert match["kind"] == "user_specific"
 
     def test_explicit_recall_carries_fallback_field_seed_does_not(self, db):
-        """The explicit recall body carries the fallback guardrail naming the
-        document/schedule tools; the silent seed body omits it entirely."""
         explicit = _parse_body(
             _render_recall({"action": "recall", "query": "xyzzy_nonexistent_key_abc"})
         )

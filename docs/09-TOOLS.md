@@ -2,13 +2,14 @@
 
 Every tool the LLM can call is an **Ability** — a Python class under `backend/abilities/`. The full catalogue is in [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md).
 
-## Three Tiers
+## Tool Visibility
 
-Which tools a turn can see is carried on its channel config (`always_available`, `discoverable`, `blocked` — defaults in `backend/configs/channels/_common.py`):
+Which tools a turn can see is governed by a single binary — the `Ability.DISCOVERABLE` flag — plus each channel config's `always_available` list (default in `backend/configs/channels/_common.py`). A tool reaches the model exactly one of two ways:
 
-- **Always available** — pre-injected on every iteration. The default is just three meta-tools: `find_skills`, `find_tools`, `memory`.
-- **Discoverable** — everything else. Never pre-injected; the model activates them mid-turn by calling `find_tools` (by name, or by natural-language search). This keeps the request small and works with any number of installed tools.
-- **Blocked** — a per-channel exclusion set. For example, background channels block the delegate tools so a reflection pass can never spawn web research, and the raw `browser`/`search` tools are blocked everywhere except inside their delegate agents.
+- **Always available** — pre-injected on every iteration, listed in the channel's `always_available`. The default is just three meta-tools: `find_skills`, `find_tools`, `memory`.
+- **Discoverable** — every ability with `DISCOVERABLE = True` (the base default). Never pre-injected; the model activates one mid-turn by calling `find_tools` (by name, or by natural-language search). Discovery is **global** — `find_tools` searches one roster, `AbilityRegistry.discoverable_names()`, not a per-channel slice. This keeps the request small and works with any number of installed tools.
+
+An ability that sets `DISCOVERABLE = False` is absent from that roster, so `find_tools` can never surface it on any channel. It reaches the model **only** by being pinned into a processor's `always_available`. That is how the raw `browser` / `search` / `news` tools stay exclusive to their delegate configs (`WebBrowseConfig` / `WebSearchConfig`), and the pattern-write tools (`save_pattern` / `save_graph`) stay exclusive to the pattern-match processor. Channel isolation is therefore just two facts: whether a tool is `DISCOVERABLE`, and whether the invoking processor carries `find_tools`.
 
 `find_tools` returns a structured result the model can act on:
 
@@ -98,8 +99,8 @@ Every call — model-issued, framework seed, or background pass — goes through
 ## Adding a Tool — Checklist
 
 1. Create `backend/abilities/<name>.py` with an `Ability` subclass: five metadata getters + `run()` returning a `ToolResult`.
-2. Add the tool name to `DEFAULT_DISCOVERABLE` (or `DEFAULT_ALWAYS_AVAILABLE`) in `backend/configs/channels/_common.py`; add it to a channel's `blocked` set if that channel shouldn't see it.
-3. Rebuild the search index: `python -m utils.build_ability_db` (CI fails on a stale index).
+2. Leave `DISCOVERABLE = True` (the base default) so the tool joins the global `find_tools` roster — or set `DISCOVERABLE = False` and pin its name into the `always_available` of every channel that should reach it (this is how delegate-only and pattern-write tools are scoped).
+3. Rebuild the search index: `python -m utils.build_ability_db` (CI fails on a stale index). Only `DISCOVERABLE = True` abilities are indexed.
 4. If the tool needs credentials, register its config keys with `ToolConfigService` so they're configurable from the Brain UI and stored encrypted.
 
 ## MCP Tools

@@ -1,18 +1,7 @@
 """
-Telemetry Service — in-process event collection and summarisation.
+Telemetry module-level event constants and a process singleton collector.
 
-Provides a lightweight :class:`TelemetryCollector` that:
-
-- Exposes a direct :meth:`TelemetryCollector.record` entry-point for services
-  that want to emit telemetry events.
-- Maintains an in-memory ring buffer (``collections.deque``, ``maxlen=1000``)
-  so memory footprint is bounded even under high event rates.
-- Provides :meth:`TelemetryCollector.get_summary` for the observability
-  endpoint at ``/system/observability/telemetry``.
-
-A process-level singleton is accessed via :func:`get_telemetry_collector`.
-
-Typical usage by a service::
+Usage by a service::
 
     from services.telemetry_service import get_telemetry_collector, MEMORY_RECALL
 

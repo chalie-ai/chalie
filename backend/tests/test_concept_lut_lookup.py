@@ -1,9 +1,4 @@
-"""Tests for the concept LUT lookup path in DataGraphService.
-
-Covers KNN threshold gating, canonical key + rule retrieval, and the miss path.
-Uses the real concept_lut.sqlite asset so tests reflect production behaviour.
-Marked as integration because they require the sqlite-vec extension.
-"""
+"""Tests for the concept LUT lookup path in DataGraphService."""
 
 import os
 
@@ -21,11 +16,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture(autouse=True)
 def reset_lut_singleton():
-    """Reset the module-level LUT connection singleton before each test.
-
-    Needed because _get_lut_conn() caches the connection after the first call,
-    and tests that intentionally break the path would poison subsequent tests.
-    """
+    """Reset module-level LUT connection singleton to prevent test pollution."""
     import services.data_graph_service as _mod
     original_conn = _mod._lut_conn
     original_loaded = _mod._lut_loaded
@@ -37,17 +28,13 @@ def reset_lut_singleton():
 
 
 class TestLutConnLoad:
-    """Verify the lazy-load mechanism and logging."""
-
     def test_lut_file_exists(self):
-        """concept_lut.sqlite must be present on disk (committed artifact)."""
         assert os.path.exists(_CONCEPT_LUT_PATH), (
             f"concept_lut.sqlite not found at {_CONCEPT_LUT_PATH}. "
             "Run: cd backend && python -m utils.generate_concept_lut"
         )
 
     def test_get_lut_conn_returns_connection(self):
-        """_get_lut_conn() returns a live sqlite3 connection on a real build."""
         conn = _get_lut_conn()
         assert conn is not None, "LUT connection is None — sqlite not found or failed to load"
 
@@ -75,7 +62,6 @@ class TestLutKnnLookup:
     """End-to-end KNN lookup tests against the real LUT asset."""
 
     def _embed(self, text: str):
-        """Generate embedding via the production service (requires running model)."""
         from services.embedding_service import EmbeddingService
         return EmbeddingService().generate_embedding(text)
 

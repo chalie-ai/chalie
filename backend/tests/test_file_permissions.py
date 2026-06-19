@@ -17,8 +17,30 @@ from abilities.file_permissions import (
     _format_octal,
     _parse_octal,
 )
+from abilities._dispatcher import ToolDispatcher
+from configs.channels import UserConfig
+from tests._tool_result_harness import allow_policy, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
+
+
+class _MP:
+    def __init__(self, uid: int, config) -> None:
+        self.config = config
+        self.uid = uid
+        self._uid = uid
+
+
+@pytest.fixture
+def chat_mp(db):
+    allow_policy(db, "file_permissions")
+    return _MP(
+        seed_transcript(db, "chat", "make this script executable"), UserConfig({})
+    )
+
+
+def _parse_body(rendered: str) -> object:
+    return parse_body(rendered, "file_permissions")
 
 
 # ---------------------------------------------------------------------------
@@ -75,9 +97,6 @@ def test_format_octal_preserves_special_bits():
 
 
 def _result_payload(result) -> dict:
-    """``run()`` returns a ``ToolResult`` whose success ``body`` is the structured
-    dict the dispatcher renders as compact JSON. The dispatcher adds the
-    ``[file_permissions(...)]`` envelope around it."""
     return result.body
 
 
@@ -176,3 +195,91 @@ def test_execute_rejects_path_not_found(tmp_path):
     assert result.status == "error"
     assert result.code == "path-not-found"
     assert str(missing) in result.body
+
+
+# ---------------------------------------------------------------------------
+# Migrated from test_ability_file_permissions_tool_result.py (TKT-975)
+# Tests that drive the real ToolDispatcher end-to-end hot path.
+# ---------------------------------------------------------------------------
+
+
+def test_intent_readonly_strips_write_and_execute(db, chat_mp, tmp_path):
+    """``permissions="readonly"`` (the examples' own vocabulary) on a 0o755 file
+    chmods it to 0o444 with ``mode_symbolic="r--r--r--"``."""
+    target = tmp_path / "config.yaml"
+    target.write_text("k: v\n")
+    os.chmod(target, 0o755)
+
+    out = ToolDispatcher(chat_mp).dispatch(
+        "file_permissions", {"path": str(target), "permissions": "readonly"}
+    )
+
+    assert "[file_permissions(status=success" in out
+    body = _parse_body(out)
+    assert body["mode_octal"] == "0444"
+    assert body["mode_symbolic"] == "r--r--r--"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o444
+
+
+def test_compound_symbolic_clauses(db, chat_mp, tmp_path):
+    """``"u+x,go-rwx"`` resolves both clauses against the current 0o644 mode:
+    ``u+x`` → owner rwx, ``go-rwx`` → group/other cleared, leaving 0o700."""
+    target = tmp_path / "tool"
+    target.write_text("x")
+    os.chmod(target, 0o644)
+
+    out = ToolDispatcher(chat_mp).dispatch(
+        "file_permissions", {"path": str(target), "permissions": "u+x,go-rwx"}
+    )
+
+    assert "[file_permissions(status=success" in out
+    body = _parse_body(out)
+    assert body["mode_octal"] == "0700"
+    assert body["mode_symbolic"] == "rwx------"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize("bad", ["banana", "u=g"])
+def test_invalid_mode_leaves_file_unchanged(db, chat_mp, tmp_path, bad):
+    """An unparseable value (gibberish ``"banana"`` and the unsupported copy-form
+    ``"u=g"``) errors ``code=invalid-mode`` with a hint showing BOTH accepted
+    forms, and the file's mode on disk is UNCHANGED."""
+    target = tmp_path / "f.txt"
+    target.write_text("x")
+    os.chmod(target, 0o644)
+
+    out = ToolDispatcher(chat_mp).dispatch(
+        "file_permissions", {"path": str(target), "permissions": bad}
+    )
+
+    assert "[file_permissions(status=error, code=invalid-mode" in out
+    assert "status=success" not in out
+    # The hint shows both accepted forms.
+    assert "octal" in out and "symbolic" in out
+    # The file was not touched.
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root may chmod any path, so the PermissionError never fires",
+)
+def test_permission_denied_on_root_owned_path(db, chat_mp):
+    """chmod-ing a root-owned path (``/``) as a non-root user makes the real
+    ``os.chmod`` raise ``PermissionError`` → ``code=permission-denied`` (not
+    swallowed as success). Verified against the live OS first so the assertion is
+    grounded, not assumed."""
+    try:
+        os.chmod("/", 0o755)
+        pytest.skip("chmod('/') did not raise — cannot exercise permission-denied")
+    except PermissionError:
+        pass
+    except OSError:
+        pytest.skip("chmod('/') raised a non-PermissionError OSError")
+
+    out = ToolDispatcher(chat_mp).dispatch(
+        "file_permissions", {"path": "/", "permissions": "755"}
+    )
+
+    assert "[file_permissions(status=error, code=permission-denied" in out
+    assert "status=success" not in out

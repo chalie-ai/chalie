@@ -1,10 +1,3 @@
-"""
-Unit tests for TimeFormatterService.
-
-Pure-function tests — no DB, no MemoryStore, no IO.
-All boundaries and tiers are covered as specified in the world-state-rebuild plan.
-"""
-
 import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -16,8 +9,6 @@ from services.time_utils import utc_now
 
 @pytest.mark.unit
 class TestDurationBoundaries:
-    """Tier boundary values: seconds, minutes, hours, days."""
-
     def test_61s_minutes_tier(self):
         assert T.duration(61) == "1m"
 
@@ -33,8 +24,6 @@ class TestDurationBoundaries:
 
 @pytest.mark.unit
 class TestAgo:
-    """ago() accepts datetime, ISO string, or int/float seconds."""
-
     def test_past_datetime(self):
         past = utc_now() - timedelta(seconds=90)
         assert T.ago(past) == "1m ago"
@@ -51,8 +40,6 @@ class TestAgo:
 
 @pytest.mark.unit
 class TestLocalConvertsUtcToUserTimezone:
-    """local() must render UTC inputs in the user's tz, never raw UTC."""
-
     def _patch_tz(self, tz_name: str):
         return patch(
             "services.locale_service.get_timezone",

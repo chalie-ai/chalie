@@ -1,22 +1,12 @@
 """
 McpClientService — outbound MCP client connection manager.
 
-Chalie connects OUT to remote MCP servers via the MCP streamable-HTTP
-transport.  This service owns:
-  - CRUD for mcp_client_servers rows (chalie.db)
-  - per-server ping + tool-list sync (written to data/mcp_tools.sqlite)
-  - dynamic policy-row management in policy (lazy ask on first use)
-  - dispatch of _mcp_<server>_<tool> calls
-  - heartbeat loop orchestration
+Chalie connects OUT to remote MCP servers via the MCP streamable-HTTP transport.
+All MCP client calls bridge to asyncio.run() per dispatch (safe because Chalie's
+worker threads carry no running loop). Tool names use scheme: _mcp_<sanitized_server>_<remote>.
 
-Design notes:
-  - All MCP client calls are async (mcp library).  Chalie's ability system
-    and workers are synchronous.  The bridge is asyncio.run() per call —
-    safe because Chalie's worker threads never carry a running event loop.
-  - mcp_tools.sqlite is a separate gitignored DB so build_ability_db
-    rebuilds never destroy the dynamically-synced rows.
-  - Tool names use the scheme: _mcp_<sanitized_server_name>_<remote_tool>.
-    Server name is sanitized to [a-z0-9_] to make a valid Python identifier.
+Each server's tool index is synced via ping_and_sync and stored in mcp_tools.sqlite;
+vector embeddings are optional — queries degrade gracefully without sqlite_vec.
 """
 
 import asyncio
@@ -976,7 +966,7 @@ class McpClientService:
         if stripped[:1] in ("{", "["):
             try:
                 parsed = json.loads(stripped)
-            except (json.JSONDecodeError, ValueError):
+            except ValueError:
                 return text
             if isinstance(parsed, (dict, list)):
                 return parsed

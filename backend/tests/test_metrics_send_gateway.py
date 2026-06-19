@@ -6,19 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""user_messages_total — read-time transcript COUNT (spec §9).
-
-``user_messages_total`` is deleted as a stored counter; the dashboard derives
-it on demand from the transcript table:
-
-    SELECT COUNT(*) FROM transcript WHERE role='user' AND channel='user'
-
-These two tests exercise that pure read-path against a real SQLite database (no
-mocked collaborators): a stale stored counter is ignored, and the COUNT is exact
-and scoped to user/user rows. The per-send gateway wiring (token accumulation,
-request/turn counters) is covered end-to-end by the scenario suite
-(message-event ``metrics`` object).
-"""
+"""user_messages_total counts — dashboard derives on demand from transcript COUNT."""
 
 import pytest
 
@@ -29,8 +17,6 @@ pytestmark = pytest.mark.unit
 
 
 def test_stored_counter_does_not_affect_user_messages(db, store):
-    """Recording a stale user_messages_total counter does NOT change the
-    dashboard value — the dashboard reads the transcript COUNT only."""
     from services.metrics_service import MetricsService
 
     db.execute(
@@ -49,7 +35,6 @@ def test_stored_counter_does_not_affect_user_messages(db, store):
 
 
 def test_count_exactness_n_turns(db, store):
-    """N user turns → COUNT N over (role='user' AND channel='user')."""
     from services.metrics_service import MetricsService
 
     for i in range(5):

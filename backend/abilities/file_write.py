@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import ClassVar
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ class FileWriteAbility(Ability):
     #: BEFORE run(). ``contents`` is deliberately NOT listed: the pre-gate check
     #: is truthiness-based, so an empty-string ``contents`` (valid user data)
     #: would be falsely rejected there. run() guards a MISSING contents key.
-    ACTION_REQUIRED: ClassVar[dict] = {"": ("path",)}
+    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.path,)}
 
     def get_name(self) -> str:
         return "file_write"
@@ -56,11 +57,11 @@ class FileWriteAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "path": {
+            Keys.path: {
                 "type": "string",
                 "description": "Absolute path to write to.",
             },
-            "contents": {
+            Keys.contents: {
                 "type": "string",
                 "description": (
                     "Content to write to the file. Pass an empty string to "
@@ -68,24 +69,24 @@ class FileWriteAbility(Ability):
                 ),
             },
         },
-        "required": ["path", "contents"],
+        "required": [Keys.path, Keys.contents],
     }
 
     def get_parameters(self) -> dict:
         return self._PARAMETERS
 
     def run(self, params: dict) -> ToolResult:
-        path_str = params.get("path", "")
+        path_str = params.get(Keys.path, "")
 
         # 'contents' is NOT pre-gated (an empty string is valid), so a MISSING
         # key is guarded here; a present "" proceeds to write a 0-byte file.
-        if "contents" not in params:
+        if Keys.contents not in params:
             return ToolResult.err(
                 "contents is required.",
                 code="missing-params",
                 hint="pass a 'contents' string (an empty string writes a 0-byte file).",
             )
-        contents = params["contents"]
+        contents = params[Keys.contents]
         if not isinstance(contents, str):
             return ToolResult.err(
                 f"contents must be a string, got {type(contents).__name__}.",
@@ -135,8 +136,6 @@ class FileWriteAbility(Ability):
         )
 
     def _read_called_first(self, db, target: Path) -> bool:
-        """True if a prior ``read`` call on this resolved path exists in the
-        transcript (or the guard cannot anchor and so does not block)."""
         proc = self.mp
         if proc is None:
             return True

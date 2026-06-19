@@ -1,16 +1,4 @@
-"""Feature tests for the pre-trained asset layout.
-
-Asserts that:
-  1. OnnxInferenceService boots cleanly with both shipped heads from pretrained_dir.
-  2. Pre-shipped assets are NOT re-downloaded when already present (mtime invariant).
-  3. Moving the deliberation_score meta aside causes a clean failure-to-register,
-     not a silent fallback. File is restored at the end so the suite stays hermetic.
-
-Skips when the shared encoder ONNX is absent from disk (CI machines that have not
-yet downloaded the encoder). No mocks, no fakes.
-
-pytestmark applies pytest.mark.integration to every test in this file.
-"""
+# Tests assert: both heads register, shipped assets aren't overwritten, and missing meta causes clean failure (no silent fallback). Skips when shared encoder is absent from disk.
 
 import os
 import shutil
@@ -52,12 +40,8 @@ def _require_shipped_assets():
 
 
 class TestPretrainedAssetLayoutBoot:
-    """OnnxInferenceService boots cleanly with the real shipped layout."""
 
     def test_both_heads_register_without_exception(self):
-        """Constructing OnnxInferenceService and explicitly registering both heads
-        must not raise. Both tasks must load cleanly from the shipped pretrained_dir.
-        """
         _require_encoder()
         _require_shipped_assets()
 
@@ -79,10 +63,6 @@ class TestPretrainedAssetLayoutBoot:
         )
 
     def test_pretrained_assets_not_redownloaded_when_present(self):
-        """ensure_models() (or any direct file access) must not touch / overwrite
-        the shipped .npz when it is already present. Verified by stat-checking mtime
-        before and after constructing the service and calling _register_task.
-        """
         _require_encoder()
         _require_shipped_assets()
 
@@ -103,15 +83,8 @@ class TestPretrainedAssetLayoutBoot:
 
 
 class TestPretrainedAssetMissingMeta:
-    """Moving the deliberation_score meta aside causes a clean failure, not silent fallback."""
 
     def test_missing_meta_causes_register_failure_not_silent_success(self):
-        """If deliberation-score-classifier_meta.json is absent, _register_task must
-        return None (not raise, not silently succeed with a wrong head).
-
-        The meta file is moved to a tmp location and restored in the finally block
-        so the test suite remains hermetic for subsequent tests.
-        """
         _require_encoder()
         _require_shipped_assets()
 

@@ -1,9 +1,4 @@
-"""
-SegmentService — builds rich media segments from transcript content and tool_calls rows.
 
-Extracted from api/websocket.py so the parsing logic is not entangled with
-WebSocket-specific handler code.
-"""
 
 import logging
 
@@ -11,26 +6,10 @@ logger = logging.getLogger(__name__)
 
 
 class SegmentService:
-    """Builds rich media segments from transcript content and tool_calls rows."""
 
     @staticmethod
     def build(content: str, transcript_ids: list) -> list:
-        """Build segments for a message event.
-
-        Fetches tool_calls rows by exact transcript IDs then runs the rich
-        media parser.  Always returns at least one plain text segment so the
-        frontend never receives an empty array.
-
-        When ``transcript_ids`` is empty or None a plain text segment is
-        returned immediately — no DB round-trip, no silent degradation.
-
-        Args:
-            content: Sanitised assistant text (transcript.content).
-            transcript_ids: List of transcript row IDs for this turn.
-
-        Returns:
-            List of segment dicts.  Always at least one element.
-        """
+        """Always returns at least one plain text segment. When transcript_ids is empty, no DB query is issued."""
         if not transcript_ids:
             logger.warning(
                 "[SEGMENT] build: no transcript_ids — emitting plain text segment"
@@ -45,19 +24,6 @@ class SegmentService:
 
     @staticmethod
     def _fetch_tool_calls(transcript_ids: list) -> list:
-        """Fetch all tool_calls rows for a list of transcript IDs.
-
-        All rows are durable; the rich-media parser receives the full set so
-        span tags can be paired with their payloads on both the live broadcast
-        and page-refresh paths.
-
-        Args:
-            transcript_ids: List of transcript.id values from the turn that
-                produced the response.
-
-        Returns:
-            Tool_calls rows ordered by created_at, id.  Empty list on any error.
-        """
         if not transcript_ids:
             return []
         try:

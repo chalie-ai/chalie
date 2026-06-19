@@ -44,9 +44,7 @@ class FetchBlocked(Exception):
 class DownloadTooLarge(Exception):
     """Raised by :func:`stream_to_file` when a download exceeds its byte cap.
 
-    Carries the enforced ``max_bytes`` cap so the caller can report it to the
-    model verbatim. The partial file is removed before this is raised — a
-    too-large download is an ERROR, never a silent truncation.
+    The partial file is removed before this is raised — never a silent truncation.
     """
 
     def __init__(self, max_bytes: int) -> None:
@@ -56,7 +54,6 @@ class DownloadTooLarge(Exception):
 
 @dataclass(frozen=True)
 class FetchProfile:
-    """A named header bundle describing how Chalie presents itself for a fetch."""
 
     name: str
     headers: dict[str, str]
@@ -112,7 +109,6 @@ DOWNLOAD = FetchProfile(
 
 
 def _guard(url: str) -> None:
-    """Refuse private/internal destinations before any socket opens."""
     if is_private_url(url):
         raise FetchBlocked(f"private or internal URL blocked: {url}")
 
@@ -183,18 +179,12 @@ def stream_to_file(
 ) -> tuple[int, str]:
     """GET *url* behind the SSRF guard and stream the body to *dest_path*.
 
-    Creates the parent directory, streams in ``chunk_size`` blocks (never
-    buffering the whole file), and removes a partial file if the write fails.
-    Returns ``(bytes_written, content_type)`` — the bare ``Content-Type`` header
-    lower-cased with any charset suffix stripped (mirrors :func:`fetch_page`),
-    or an empty string when the server sends none.
-
-    When *max_bytes* is set the cap is enforced: an obviously-too-large download
-    is aborted before the body is pulled if the ``Content-Length`` header already
-    exceeds it, and the running byte count is checked during streaming so a
-    server that under-declares (or omits) its length is still stopped. On
-    over-cap the partial file is removed and :class:`DownloadTooLarge` is raised
-    — never a silent truncation.
+    When *max_bytes* is set: the ``Content-Length`` header is checked upfront so
+    an obviously-oversized download is aborted before the body is pulled, and the
+    running byte count is also checked during streaming so a server that
+    under-declares (or omits) its length is still stopped. On over-cap the
+    partial file is removed and :class:`DownloadTooLarge` is raised — never a
+    silent truncation.
 
     Raises :class:`FetchBlocked` for a private/internal host,
     :class:`DownloadTooLarge` when the cap is exceeded, and
@@ -228,7 +218,7 @@ def stream_to_file(
                     if max_bytes is not None and written > max_bytes:
                         raise DownloadTooLarge(max_bytes)
                     fh.write(chunk)
-        except (DownloadTooLarge, requests.RequestException, OSError):
+        except (DownloadTooLarge, OSError):
             if os.path.exists(dest_path):
                 os.remove(dest_path)
             raise

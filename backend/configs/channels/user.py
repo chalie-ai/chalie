@@ -7,51 +7,38 @@ from services.processor_config import ProcessorConfig
 
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
-    DEFAULT_DISCOVERABLE,
-    DELEGATE_INTERNAL_TOOLS,
-    PATTERN_WRITE_TOOLS,
     substitute_provider_content_field,
 )
 
 
 class ProactiveSuggestionHook(PostTurnHook):
-    """UMP after-turn: proactive skill suggestion only.  No metrics, no phase.
-
-    Fires only on clean ACT exits with 4+ tool-calling iterations.
-    Non-blocking (daemon thread inside the service).
-
-    §3b / §4e / §6 / §4.8.
-    """
+    """Fires on a turn that ran 4+ tool calls. Non-blocking (daemon thread inside"""
 
     def run(self, mp, response_text: str) -> None:
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
-        exited_cleanly = getattr(mp, "loop_exited_cleanly", False)
-        iteration = getattr(mp, "current_iteration", 0)
-        if exited_cleanly and iteration >= 4:
-            try:
-                from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
-                rendered = mp._render_act_trail()  # type: ignore[attr-defined]
-                act_trail = rendered.split("\n") if rendered else []
-                raw_input = getattr(mp, "_raw_input", "")
-                maybe_suggest_skill(act_trail, raw_input)
-            except Exception as exc:
-                _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
+        turn_id = getattr(mp, "turn_id", None)
+        if turn_id is None:
+            return
+        try:
+            from services.act_trail import ActTrail  # noqa: PLC0415
+            rows = ActTrail().fetch_by_turn(mp.config.channel, turn_id)
+            tool_call_count = sum(
+                1 for r in rows if r.get("tool_name") != "chat_history_compactor"
+            )
+            if tool_call_count < 4:
+                return
+            from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
+            rendered = mp._render_act_trail()  # type: ignore[attr-defined]
+            act_trail = rendered.split("\n") if rendered else []
+            raw_input = getattr(mp, "_raw_input", "")
+            maybe_suggest_skill(act_trail, raw_input, mp.config.channel, turn_id)
+        except Exception as exc:
+            _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
 
 
 class UserConfig(ProcessorConfig):
-    """UMP config — conversational user channel.
-
-    broadcast_to='user' (live output), memory_seed=True, suppress_history=False.
-    Attachments auto-fire document.upload on turn 0 (no flag needed — presence
-    of metadata['attachments'] drives this).  post_turn_hooks = (ProactiveSuggestionHook(),)
-    — skill suggestion only (no metrics, no phase — §3b / §4e / §6).
-
-    SUPPORTS_ASYNC=True — the user channel is a push channel with a durable
-    session, so it can honour a deferred result: the per-call ``async`` boolean
-    is exposed on every tool here, and a backgrounded call's result is delivered
-    as a later assistant turn on this channel (§4.0 / §4.8d).
-    """
+    """Attachments auto-fire document.upload on turn 0 (presence of"""
 
     SUPPORTS_ASYNC = True
 
@@ -60,11 +47,8 @@ class UserConfig(ProcessorConfig):
         super().__init__(
             channel="user",
             role="user",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.CHAT,
+            policy_channel=ProcessorConfig.PolicyChannel.CHAT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
-            discoverable=DEFAULT_DISCOVERABLE,
-            blocked=PATTERN_WRITE_TOOLS | DELEGATE_INTERNAL_TOOLS,
-            max_iterations=None,
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
             suppress_history=False,
@@ -74,15 +58,7 @@ class UserConfig(ProcessorConfig):
         )
 
     def get_user_definition(self, mp) -> str:
-        """One-sentence synthesis of the real human user.
-
-        Reads user_summary / user_summary_long from data_graph, preferring the
-        long form when the converse mode is strongly active.  Falls back to a
-        static peer-to-peer framing on any failure or missing row.
-
-        Per-turn cached on mp._user_definition_cached so each ACT iteration is
-        cheap.  §3b / spec body-structure §1.
-        """
+        """Per-turn cached on mp._user_definition_cached so each ACT iteration"""
         _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
         cached = getattr(mp, "_user_definition_cached", None)
         if cached is not None:
@@ -118,12 +94,7 @@ class UserConfig(ProcessorConfig):
         return _FALLBACK
 
     def get_system_prompt(self, mp) -> str:
-        """UMP system prompt — personality voice + template + mode-gate directives.
-
-        Voice line sits at the very top for cache warmth.  The user_definition is
-        NOT emitted here — it lives in the user prompt (spec § Prompt Message
-        Definitions).  §3b / §6.
-        """
+        """Voice line sits at the very top for cache warmth. The"""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         try:
@@ -150,22 +121,7 @@ class UserConfig(ProcessorConfig):
         return prompt
 
     def get_user_prompt(self, mp) -> str:
-        """UMP user-message body for one ACT iteration.
-
-        Section order:
-          1. User definition (identity anchor — in user prompt, not system prompt).
-          2. World State block.
-          3. ## Previous Messages.
-          (blank separator)
-          4. Input line: user: <raw_input>  (BEFORE the trail).
-          5. ACT loop trail (empty before any tools have run; carries the
-             turn-0 memory/thinking seed once it has fired).
-
-        The framework _loop wraps the returned body with the ### Checkpoint /
-        ### Current State envelope when a compaction row exists.
-
-        §3b / §6 / spec §4.
-        """
+        """Section order: user_def, World State, Previous Messages, blank,"""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []
@@ -198,6 +154,23 @@ class UserConfig(ProcessorConfig):
 
         # Blank separator
         parts.append("")
+
+        # 3b. Post-compaction continuity banner — only on the continuation MP
+        #     spawned right after a mid-turn compaction. The collapse cost the
+        #     model its working context, so the current-state block opens by
+        #     restating the user's request and pointing at the Checkpoint section
+        #     (the compacted summary, prepended by the framework envelope) and the
+        #     transcript-reading tool, mirroring how a fresh post-compaction agent
+        #     recovers continuity. Sits ABOVE the input line.
+        if getattr(mp, "post_compaction_continuation", False):
+            query = getattr(mp, "continuation_user_query", None) or mp._raw_input  # type: ignore[attr-defined]
+            parts.append(
+                "You are continuing after a mid-turn compaction. "
+                f"The user query was: {query}. "
+                "Read the Checkpoint section above to recover what you were "
+                "working on, and use the review_transcript tool to read the "
+                "previous turns of this conversation."
+            )
 
         # 4. Input line with optional nudge — BEFORE the trail (OLD ordering).
         nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""

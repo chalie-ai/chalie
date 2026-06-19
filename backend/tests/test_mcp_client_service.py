@@ -1,13 +1,8 @@
-"""Feature tests for McpClientService — network-free behaviors.
+"""Feature tests for McpClientService - network-free behaviors.
 
 The end-to-end MCP-over-HTTP path is covered by a separate end-to-end
 scenario.  These tests cover only the deterministic, network-free
-behaviors that can be exercised against a real temporary SQLite database
-without any mocks.
-
-Each test drives the REAL McpClientService against a real fully-converged
-SQLite database (via the conftest `db` fixture) and asserts observable
-state — rows in policy, mcp_client_servers, and mcp_tools.sqlite.
+behaviors exercised against a real temporary SQLite database without mocks.
 """
 
 import pytest
@@ -24,11 +19,8 @@ pytestmark = pytest.mark.unit
 
 
 def test_tool_name_sanitization_produces_valid_prefix():
-    """Mixed-case, punctuated server names are reduced to [a-z0-9_] fragments
-    and combined with the remote tool name under the _mcp_ prefix.
-
-    This asserts the contract that downstream dispatch, policy seeding, and
-    find_tools gating all depend on: the key format _mcp_<sanitized>_<tool>.
+    """Asserts the key format _mcp_<sanitized>_<tool> that downstream dispatch,
+    policy seeding, and find_tools gating all depend on.
     """
     # Server name with capitals, hyphens, spaces, and leading/trailing noise
     result = _tool_name("My-Taskie Server!", "create_document")
@@ -53,12 +45,9 @@ def test_tool_name_sanitization_produces_valid_prefix():
 
 
 def test_resolve_tool_routes_to_longest_prefix_server(db):
-    """With two registered servers whose sanitized names share a prefix,
-    _resolve_tool picks the LONGER match.
+    """_resolve_tool picks the longest-matching server prefix.
 
-    Also verifies that calling _resolve_tool on a disabled server's tool
-    raises ValueError — the disabled gate is enforced before any network
-    call happens.
+    Raises ValueError for a disabled server's tool before any network call.
     """
     svc = McpClientService()
 
@@ -95,22 +84,13 @@ def test_resolve_tool_routes_to_longest_prefix_server(db):
 
 
 def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db, tmp_path, monkeypatch):
-    """get_online_mcp_tool_names returns tool names ONLY for servers that are
-    both enabled=1 AND status='online'.
+    """get_online_mcp_tool_names returns tool names only for servers that are
+    both enabled=1 AND status='online' - the gate find_tools uses to control
+    LLM visibility.
 
-    A disabled-but-online server and an enabled-but-offline server both
-    contribute ZERO tool names.  Only the enabled+online combination
-    contributes to the discoverable set.
-
-    This is the gate that find_tools uses; if it's wrong, disabled/offline
-    servers' tools would appear to the LLM.
-
-    Isolation: _DATA_DIR is redirected to tmp_path so mcp_tools.sqlite is
-    written to a fresh temp directory.  get_mcp_tools_db_path() reads
-    cls._DATA_DIR at call time (file_mapper_service.py:106), so the redirect
-    takes effect for every _open_tools_db() call in this test.  The conftest
-    db fixture patches get_shared_db_service (not _DATA_DIR), so the two
-    redirects are independent — svc._db is unaffected.
+    _DATA_DIR is redirected to tmp_path so mcp_tools.sqlite lands in a fresh
+    temp directory.  The conftest db fixture patches get_shared_db_service
+    (not _DATA_DIR), so the two redirects are independent.
     """
     # Redirect mcp_tools.sqlite to a fresh temp directory via the class attribute
     # that get_mcp_tools_db_path() reads.  monkeypatch auto-undoes this at teardown.
@@ -177,11 +157,8 @@ def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db, tmp_path, m
 
 
 def test_add_server_persists_row_with_correct_defaults(db):
-    """add_server writes a row to mcp_client_servers with status='unknown',
-    the supplied enabled flag, and proper JSON-serialized headers.
-
-    Tests that the row actually reaches the DB and that the end-to-end
-    contract is met: row exists with enabled=1.
+    """add_server persists to mcp_client_servers with status='unknown' and
+    JSON-serialized headers; verifies the row is actually in the DB.
     """
     svc = McpClientService()
     server = svc.add_server(
@@ -221,15 +198,11 @@ def test_add_server_persists_row_with_correct_defaults(db):
 
 
 def test_get_tool_schema_round_trips_stored_input_schema(db, tmp_path, monkeypatch):
-    """get_tool_schema returns the exact inputSchema written by _write_tools.
+    """get_tool_schema returns the exact inputSchema written by _write_tools -
+    the schema the LLM sees when find_tools surfaces an _mcp_* tool.
 
-    This is the schema the LLM sees when find_tools surfaces an _mcp_* tool.
-    Without this round-trip the model receives a parameter-less tool spec and
-    must brute-force its arguments.
-
-    Isolation: _DATA_DIR is redirected so mcp_tools.sqlite lands in tmp_path.
-    The seed is done via the real production writer _write_tools — no hand-
-    crafted SQL — so the test exercises the real store→read path end to end.
+    Seeded via the real _write_tools writer (no hand-crafted SQL) so the full
+    store-to-read path is exercised.
     """
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
 

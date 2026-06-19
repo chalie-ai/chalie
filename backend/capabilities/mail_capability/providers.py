@@ -1,22 +1,4 @@
-"""
-Unified provider registry for the mail capability.
-
-Merges IMAP/SMTP, CalDAV, and CardDAV endpoint information into a single
-lookup keyed by email domain.  Four providers are supported:
-
-- **Google** (gmail.com, googlemail.com) — IMAP, CalDAV, CardDAV
-- **Apple** (icloud.com, me.com, mac.com) — IMAP, CalDAV, CardDAV
-- **Yahoo** (yahoo.com, yahoo.co.uk) — IMAP, CalDAV only
-- **Outlook** (outlook.com, hotmail.com, live.com) — IMAP only
-
-Usage::
-
-    from capabilities.mail_capability.providers import discover_provider
-
-    provider = discover_provider("user@gmail.com")
-    if provider and provider.imap:
-        # connect IMAP ...
-"""
+"""Unified provider registry for the mail capability."""
 
 from __future__ import annotations
 
@@ -27,7 +9,6 @@ from utils.email_utils import Email
 
 @dataclass(frozen=True, slots=True)
 class ServerSettings:
-    """Connection settings for a single mail server (IMAP or SMTP)."""
 
     host: str
     port: int
@@ -36,7 +17,6 @@ class ServerSettings:
 
 @dataclass(frozen=True, slots=True)
 class UnifiedProvider:
-    """All protocol endpoints for a single email provider."""
 
     name: str
 
@@ -131,10 +111,6 @@ PROVIDERS: dict[str, UnifiedProvider] = {
 
 
 def discover_provider(email: str) -> UnifiedProvider | None:
-    """Resolve all protocol endpoints from an email address.
-
-    Returns ``None`` for unsupported domains.
-    """
     if not email or "@" not in email:
         return None
     domain = Email.get_domain(email)
@@ -144,7 +120,6 @@ def discover_provider(email: str) -> UnifiedProvider | None:
 
 
 def list_supported_providers() -> list[str]:
-    """Return a sorted, deduplicated list of supported provider names."""
     return sorted({p.name for p in PROVIDERS.values()})
 
 
@@ -159,12 +134,6 @@ def build_custom_provider(
     caldav_url: str | None = None,
     carddav_url: str | None = None,
 ) -> UnifiedProvider:
-    """Build a provider from explicit connection fields.
-
-    Used for custom or self-hosted mail servers (e.g. GreenMail + Radicale
-    in test environments) that are not in the ``PROVIDERS`` registry.
-    SMTP settings are optional; omit to disable outbound sending.
-    """
     return UnifiedProvider(
         name="Custom",
         imap=ServerSettings(imap_host, imap_port, imap_tls) if imap_host else None,

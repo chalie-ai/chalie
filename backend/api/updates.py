@@ -59,7 +59,6 @@ def _check_update_permission(update_type: str):
 
 
 def _get_db():
-    """Return the shared DatabaseService."""
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 

@@ -22,13 +22,10 @@ _SKILLS_DB = FileMapperService.get_skills_db_path()
 class SkillAssociationService:
     """Run LLM-driven association passes between behavioural patterns and skills.
 
-    Accepts the row IDs of patterns touched by the current PMP pass, loads only
-    those patterns, makes one LLM call to determine personalisation rules, then
-    writes the results back to skill_associations in skills.sqlite.
+    Writes personalisation rules to skill_associations in skills.sqlite.
     """
 
     def run_pass(self, touched_pattern_ids: set[int]) -> int:
-        """Run a single association pass. Returns the number of rules written."""
         if not _SKILLS_DB.exists():
             logger.info(f"{LOG_PREFIX} skills.sqlite not found — skipping")
             return 0
@@ -59,7 +56,6 @@ class SkillAssociationService:
         return written
 
     def _load_patterns(self, row_ids: set[int]) -> list[tuple[str, str]]:
-        """Load behavioral_pattern rows by their data_graph IDs."""
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
         placeholders = ",".join("?" * len(row_ids))
@@ -72,7 +68,6 @@ class SkillAssociationService:
             ).fetchall()
 
     def _load_skill_index(self) -> list[tuple]:
-        """Read skill index (id, title, use_for) from skills.sqlite."""
         conn = sqlite3.connect(str(_SKILLS_DB))
         try:
             return conn.execute(
@@ -86,7 +81,6 @@ class SkillAssociationService:
         patterns: list[tuple[str, str]],
         skills: list[tuple],
     ) -> list[dict] | None:
-        """Call LLM to map patterns to skills. Returns parsed associations or None."""
         pattern_list = [
             {key: json.loads(value).get("summary", value) if value else value}
             for key, value in patterns
@@ -123,7 +117,6 @@ class SkillAssociationService:
         valid_skill_ids: set[int],
         pattern_names: set[str],
     ) -> int:
-        """Write valid associations. Returns count written."""
         now = utc_now().isoformat()
         written = 0
 
@@ -155,7 +148,6 @@ class SkillAssociationService:
 
 
 def _parse_associations(text: str) -> list[dict] | None:
-    """Parse LLM JSON response into a list of association dicts."""
     if not text:
         return None
     try:

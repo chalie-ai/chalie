@@ -2,6 +2,8 @@
 
 Chalie keeps a lightweight, in-process picture of "what's going on right now" in **WorldState** (`backend/services/world_state.py`). It feeds two things: the `### Background Telemetry, Processes & Signals` block rendered into every system prompt, and the idle gate that decides when background cognition may run.
 
+> **Location privacy.** The telemetry block rendered into every chat/system prompt surfaces the *resolved place name* (e.g. `location_name:Valletta, Malta`), never the raw GPS coordinates the client reports. The latitude/longitude pair the render hides stays backend-internal — consumed directly by the departure advisory, weather lookups, and `locale_service`. The one model-facing consumer of coordinates is the background **geo-pattern** pass, which runs only in the subconscious tick (never a user-facing turn) and is given them to cluster location-tagged transcripts into place-based habits.
+
 There are two ways information enters WorldState.
 
 ## 1. The Typed Snapshot — `absorb(Signal)`
@@ -64,7 +66,6 @@ POST /api/signals
 |---|---|---|
 | **Subconscious worker** | Every 5 min, fires only after 30+ min of user idleness | The seven-step cognition tick — consolidation, decay, pattern matching, user-summary synthesis, DMN reflection, capability sync, geo patterns (see [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition)) |
 | **World awareness** | Hourly | Derives up to 8 interests from the user's strongest traits and recent topics, fetches matching headlines, pushes a `news` signal — zero LLM calls |
-| **Moment context** | Every 6 h | Distils recent assistant turns into `moment` rows in the data graph |
 | **Decay engine** | Inside each subconscious tick | Recomputes episode retrieval weights, applies per-kind data-graph decay, deletes expired rows, prunes old transcripts and tool-call records |
 
 All background work degrades gracefully: every step is wrapped at its boundary, a failed step is logged and skipped, and a missing signal means "nothing interesting happened", never an error.

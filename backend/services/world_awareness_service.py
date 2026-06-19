@@ -51,10 +51,6 @@ class WorldAwarenessService:
     # ── Interest extraction ───────────────────────────────────
 
     def extract_interests(self) -> list:
-        """Extract ranked interest terms from user traits + topic frequency.
-
-        Returns list of dicts: [{"term": str, "score": float, "source": "trait"|"topic"}, ...]
-        """
         candidates = []
         candidates.extend(self._extract_trait_interests())
         candidates.extend(self._extract_topic_interests())
@@ -67,7 +63,6 @@ class WorldAwarenessService:
         return deduped[:MAX_INTERESTS]
 
     def _extract_trait_interests(self) -> list:
-        """Get interest terms from high-confidence user traits."""
         try:
             from services.data_graph_service import get_data_graph_service
             rows = get_data_graph_service().fetch(
@@ -93,7 +88,6 @@ class WorldAwarenessService:
         return candidates
 
     def _extract_topic_interests(self) -> list:
-        """Get interest terms from recent topic frequency."""
         try:
             conn = self._db.get_connection()
             cutoff = utc_now().isoformat()
@@ -127,7 +121,6 @@ class WorldAwarenessService:
         return candidates
 
     def _deduplicate_by_embedding(self, candidates: list) -> list:
-        """Remove near-duplicate interests using embedding cosine similarity."""
         if len(candidates) <= 1:
             return candidates
 

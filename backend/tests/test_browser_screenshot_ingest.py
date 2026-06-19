@@ -28,7 +28,6 @@ pytestmark = pytest.mark.unit
 
 
 def _invoice_png_path() -> str:
-    """High-contrast 'INVOICE' PNG under the Chalie tmp prefix (proven OCR fixture)."""
     from PIL import Image, ImageDraw, ImageFont
 
     img = Image.new("RGB", (480, 160), "white")
@@ -75,7 +74,7 @@ def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db):
     # The delegate reads its own screenshot via the REAL dispatch chokepoint.
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "look at the screenshot", {})
-    mp.config = WebBrowseConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp._setup()
     out = ToolDispatcher(mp).dispatch(
         "vision", {"image": ingested["id"], "query": "what text is in this image"}

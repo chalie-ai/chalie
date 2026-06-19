@@ -1,14 +1,4 @@
-"""
-Seed additional provider_examples into search_tool_providers.sqlite.
-
-Run from the backend directory after inserting rows:
-    cd backend && python -m utils.seed_routing_examples
-    cd backend && python -m utils.generate_search_cache
-
-Uses INSERT OR IGNORE so this script is idempotent — safe to re-run.
-Requires a UNIQUE constraint on (provider_id, example_query); the script
-creates it if missing.
-"""
+"""Seed additional provider_examples into search_tool_providers.sqlite."""
 
 import sqlite3
 import sys

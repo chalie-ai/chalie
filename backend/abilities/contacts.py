@@ -34,6 +34,7 @@ import json
 from typing import ClassVar
 
 from abilities._capability import CapabilityAbility
+from abilities._params import Keys
 from abilities._result import ToolResult
 
 # Read actions answered inline against the local index. An unknown action is
@@ -53,7 +54,7 @@ class ContactsAbility(CapabilityAbility):
     # caught inline in run() so the valid= ladder names the real read actions.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list": (),
-        "get": ("identifier",),
+        "get": (Keys.identifier,),
     }
 
     def get_name(self) -> str:
@@ -85,7 +86,7 @@ class ContactsAbility(CapabilityAbility):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
                 "enum": ["list", "get"],
                 "description": (
@@ -94,26 +95,26 @@ class ContactsAbility(CapabilityAbility):
                     "get — fetch full details for a specific contact by name or email."
                 ),
             },
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "list: search query to filter contacts by name or other fields.",
             },
-            "limit": {
+            Keys.limit: {
                 "type": "integer",
                 "description": "list: maximum number of contacts to return.",
             },
-            "identifier": {
+            Keys.identifier: {
                 "type": "string",
                 "description": "get: name or email address identifying the contact to look up.",
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
 
     # ── Entry point — both actions are inline reads against the local index ─────
 
     def run(self, params: dict) -> ToolResult:
-        action = str(params.get("action", self.DEFAULT_ACTION)).lower()
+        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
 
         if action == "list":
             return self._list(params)
@@ -132,8 +133,8 @@ class ContactsAbility(CapabilityAbility):
     def _list(self, params: dict) -> ToolResult:
         from capabilities.contact_resolver import _parse_contact_row, resolve
 
-        limit = int(self.param(params, "limit", default=20, clamp=(1, 50)))
-        query = (params.get("query") or "").strip()
+        limit = int(self.param(params, Keys.limit, default=20, clamp=(1, 50)))
+        query = (params.get(Keys.query) or "").strip()
 
         if query:
             contacts = resolve(query, limit=limit)
@@ -172,7 +173,7 @@ class ContactsAbility(CapabilityAbility):
     def _get(self, params: dict) -> ToolResult:
         from capabilities.contact_resolver import resolve
 
-        identifier = (params.get("identifier") or "").strip()
+        identifier = (params.get(Keys.identifier) or "").strip()
         candidates = resolve(identifier, limit=5)
 
         if not candidates:
@@ -277,15 +278,10 @@ def _is_relevant(identifier: str, contact: dict) -> bool:
 
 
 def _contact_name(contact: dict) -> str:
-    """The display name of a contact dict — ``fn`` for CardDAV profiles, ``name``
-    for legacy IMAP rows."""
     return (contact.get("fn") or contact.get("name") or "").strip()
 
 
 def _contact_id(contact: dict) -> str:
-    """A stable identifier for a contact dict — ``uid`` for CardDAV profiles,
-    falling back to the display name / legacy email so a candidate row always
-    carries an addressable id."""
     return (
         contact.get("uid")
         or _contact_name(contact)

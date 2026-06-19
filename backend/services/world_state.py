@@ -1,33 +1,3 @@
-"""
-WorldState — in-process singleton for ambient world context.
-
-render() is called on demand: once per user turn and once per Cognition
-endpoint hit.  Signals are stored in an internal dict, TTL-pruned on read;
-telemetry and schedule are read directly from the database.
-
-Push sites:
-  - POST /health (heartbeat.js) → ClientContextService.save() →
-                                  upserts ``telemetry`` table rows
-  - POST /api/signals           → world_state.push_signal(source, label)
-  - WorldAwarenessService       → world_state.push_signal("news", headline)
-  - IMAPHandler                 → world_state.push_signal("inbox", summary)
-
-Pull sites (read inside render()):
-  - telemetry        — flat key/value rows persisted from the FE heartbeat
-  - scheduled_items  — upcoming / recently-fired schedule entries
-
-Output format (literal):
-  ### Background Telemetry,Processes & Signals
-  [telemetry]
-  * **user**;<flat top-level keys, k:v comma-separated>
-  * **device**;<keys nested under "device", k:v comma-separated>
-  * **behavioral**;<keys nested under "behavioral", k:v comma-separated>
-  …one bullet per top-level group the FE sent…
-  [schedule]
-  * {message} (due-in:{duration})
-  [signal:{source}] {label}
-"""
-
 import json
 import logging
 import threading
@@ -78,18 +48,20 @@ LIMIT 200
 _TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale", "connection"}
 
 # Top-level dict groups that should not be rendered as their own bullet.
-_TELEMETRY_HIDDEN_GROUPS = {"behavioral"}
+# ``location`` carries the raw GPS dict (lat/lon) the frontend heartbeat sends;
+# it stays out of the chat/system prompt. Backend consumers read the coordinates
+# directly (departure advisory, weather, locale_service); the chat LLM only ever
+# sees the resolved ``location_name`` scalar, which renders under the synthetic
+# ``user`` group. (The background geo-pattern pass — configs/channels/geo_pattern.py
+# — is the one model-facing consumer still given coordinates, to cluster
+# location-tagged transcripts into place-based habits.)
+_TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
 
 # Strftime format for the synthesised local_time field — "Sat 02 May 2026 11:35".
 _LOCAL_TIME_FORMAT = "%a %d %b %Y %H:%M"
 
 
 def _format_telemetry_value(value) -> str | None:
-    """Render a leaf telemetry value as a string, or None to suppress the field.
-
-    Suppresses null/empty values so absent fields do not clutter the output.
-    Booleans render as ``true``/``false`` (LLM-friendly, matches JSON).
-    """
     if value is None:
         return None
     if isinstance(value, bool):
@@ -112,7 +84,6 @@ def _is_hidden_telemetry_key(key: str) -> bool:
 
 
 def _render_dict_subfields(d: dict) -> list[str]:
-    """Render the visible fields of a nested telemetry dict as ``key:value`` strings."""
     sub_fields = []
     for sub_key, sub_value in d.items():
         if _is_hidden_telemetry_key(sub_key):
@@ -124,13 +95,6 @@ def _render_dict_subfields(d: dict) -> list[str]:
 
 
 def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
-    """Group a nested telemetry dict into ``[(group_label, [k:v, ...])]`` entries.
-
-    - Top-level scalar keys collect under the synthetic ``user`` group.
-    - Top-level dict keys form their own groups (``device``, ``behavioral``, …).
-    - Hidden bookkeeping keys (``saved_at``, ``_location_name_stale``) drop.
-    - Empty groups are omitted entirely.
-    """
     user_fields: list[str] = []
     grouped: dict[str, list[str]] = {}
 
@@ -157,7 +121,6 @@ def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
 
 
 def _schedule_due_field(due_at_str: str, now) -> str:
-    """Format the due-in field for a scheduled_items row."""
     try:
         diff_secs = (parse_utc(due_at_str) - now).total_seconds()
     except Exception:
@@ -168,7 +131,6 @@ def _schedule_due_field(due_at_str: str, now) -> str:
 
 
 def _schedule_last_fired_field(last_fired_str) -> str | None:
-    """Format the last-fired field, or None if absent / unparseable."""
     if not last_fired_str:
         return None
     try:
@@ -178,7 +140,6 @@ def _schedule_last_fired_field(last_fired_str) -> str | None:
 
 
 def _schedule_recurrence_field(recurrence_str) -> str | None:
-    """Format the repeats field, or None if absent / non-numeric."""
     if not recurrence_str:
         return None
     try:
@@ -228,7 +189,7 @@ def _order_schedule_messages(pending: dict, fired: dict) -> list[str]:
 
 
 def _compute_local_time() -> str | None:
-    """Render the user's wall-clock time as ``Sat 02 May 2026 11:35``."""
+    """Return wall-clock time formatted as ``Sat 02 May 2026 11:35``."""
     try:
         from services.locale_service import format_date
         from services.time_utils import utc_now
@@ -252,8 +213,6 @@ def _render_schedule_fields(row: dict, now) -> str:
 
 @dataclass(frozen=True)
 class Signal:
-    """Typed event pushed by a background worker or capability."""
-
     source: str
     kind: str
     payload: dict[str, Any] = field(default_factory=dict)
@@ -286,30 +245,11 @@ class WorldState:
     # ── Public API ─────────────────────────────────────────────────────────
 
     def set(self, type: str, value: dict) -> "WorldState":
-        """Store a typed fragment, overwriting any prior value.
-
-        Args:
-            type: Arbitrary key, e.g. ``'telemetry'``, ``'signals'``.
-            value: The dict to store.
-
-        Returns:
-            ``self`` for chaining.
-        """
         with self._lock:
             self._store[type] = value
         return self
 
     def get(self, type: str) -> dict:
-        """Retrieve a typed fragment.
-
-        For ``type='signals'``, expired entries are pruned before returning.
-
-        Args:
-            type: Key previously passed to :meth:`set`.
-
-        Returns:
-            The stored dict, or ``{}`` when unset.
-        """
         with self._lock:
             if type == "signals":
                 self._prune_signals()

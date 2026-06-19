@@ -1,11 +1,6 @@
-"""
-Test data factories — produce realistic row tuples matching actual DB column orders.
+"""Test data factories — produce realistic row tuples matching actual DB column orders.
 
-Usage:
-    from tests.helpers import make_scheduled_item
-
-All factories return tuples (matching cursor.fetchone/fetchall) unless
-noted otherwise.  Override any field via keyword argument.
+All factories return tuples unless noted otherwise. Override any field via keyword argument.
 """
 
 from datetime import datetime, timezone, timedelta
@@ -20,8 +15,6 @@ from services.processor_config import ProcessorConfig
 # to them, letting test helpers inject custom prompt bodies exactly as before.
 
 class StubProcessorConfig(ProcessorConfig):
-    """Concrete ProcessorConfig for tests, with injectable prompt builders."""
-
     def __init__(
         self,
         *,
@@ -47,33 +40,16 @@ class StubProcessorConfig(ProcessorConfig):
 
 def make_stub_config(
     *,
-    discoverable=None,
-    blocked=frozenset(),
     always_available=None,
     channel="user",
     role="user",
     policy_channel=None,
 ):
-    """Build a concrete ProcessorConfig carrying an explicit tool-visibility
-    surface for find_tools mechanics tests.
-
-    find_tools sources its allow-list / block-list from the invoking
-    processor's ``config.discoverable`` / ``config.blocked`` — the
-    single source of truth is the per-channel ProcessorConfig, not a static
-    class list.  Tests that exercise the discovery mechanics (RRF floor, MCP
-    merge, select-vs-query) attach one of these to a stub MessageProcessor so
-    they control exactly which names are discoverable.  Channel-isolation
-    behaviour is covered separately against the REAL channel configs in
-    test_find_tools_channel_isolation.py.
-    """
     return StubProcessorConfig(
         channel=channel,
         role=role,
-        policy_channel=policy_channel or ProcessorConfig.POLICY_CHANNEL.CHAT,
+        policy_channel=policy_channel or ProcessorConfig.PolicyChannel.CHAT,
         always_available=list(always_available or []),
-        discoverable=list(discoverable or []),
-        blocked=frozenset(blocked),
-        max_iterations=None,
         skip_transcript=False,
         skip_input_row=False,
         suppress_history=False,
@@ -99,7 +75,6 @@ def make_scheduled_item(
     group_id=None,
     is_prompt=False,
 ):
-    """Return an 11-element tuple matching scheduled_items SELECT order."""
     due_at = due_at or (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     return (
         item_id, item_type, message, due_at, recurrence,
@@ -133,7 +108,6 @@ _EPISODE_DEFAULTS = {
 
 
 def make_episode_row(**overrides):
-    """Return a dict matching episodic retrieval service output."""
     row = {**_EPISODE_DEFAULTS, **overrides}
     if row["created_at"] is None:
         row["created_at"] = datetime.now(timezone.utc)
@@ -155,7 +129,6 @@ def make_provider_row(
     timeout=30,
     supports_vision=0,
 ):
-    """Return a 9-element tuple matching providers SELECT order."""
     return (
         provider_id, name, platform, model, host,
         api_key, dimensions, timeout, supports_vision,

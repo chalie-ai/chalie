@@ -1,19 +1,3 @@
-"""
-Unified Embedding Service — Single source of truth for all vector embeddings.
-
-Uses gte-modernbert-base via ONNX Runtime — no PyTorch required.
-All outputs are L2-normalized for cosine similarity via dot product.
-
-Model: Alibaba-NLP/gte-modernbert-base
-  - 768 dimensions (drop-in compatible with existing vector store)
-  - ~300MB model file (smaller than previous all-mpnet-base-v2 at 438MB)
-  - MTEB 64.38 (vs 57.8 for all-mpnet-base-v2)
-  - 8192 token context window (vs 512 previously)
-  - ONNX Runtime inference, CPU-friendly, no PyTorch dependency
-
-Model downloads automatically from HuggingFace on first run (~300MB, cached
-at ``data/models/gte-modernbert-base/onnx/model.onnx``).
-"""
 
 import concurrent.futures
 import hashlib
@@ -67,7 +51,6 @@ _COMPILING_EPS = frozenset({
 
 
 def _model_dir() -> Path:
-    """Return path to local model cache directory, creating it if needed."""
     from services.file_mapper_service import FileMapperService
     base = FileMapperService.get_models_path(_MODEL_SUBDIR)
     base.mkdir(parents=True, exist_ok=True)
@@ -75,13 +58,6 @@ def _model_dir() -> Path:
 
 
 def _resolve_thread_count() -> int:
-    """Pick ``intra_op_num_threads``. Env override wins, else ``min(4, max(2, cpu//2))``.
-
-    The hardcoded ``2`` left cycles on the table on 8+ core hosts. Cap of 4 avoids
-    oversubscribing shared workers (memory pipeline, DMN, goal pursuit all share the
-    same CPU). Env override (``CHALIE_ORT_INTRA_THREADS``) is the escape hatch for
-    container CPU limits that ``os.cpu_count()`` cannot see.
-    """
     override = os.environ.get("CHALIE_ORT_INTRA_THREADS")
     if override:
         try:
@@ -95,18 +71,6 @@ def _resolve_thread_count() -> int:
 
 
 def _build_session(providers: Optional[List[str]] = None):
-    """Construct an ONNX InferenceSession for the embedding encoder.
-
-    Provider selection is delegated to ``onnx_session.choose_providers``, which
-    reads the installed wheel's accelerators and strips CoreML when the model
-    trips the Metal 16384-dim texture ceiling.
-
-    The pre-optimized graph is cached with the ORT version baked into the filename
-    (``model.optimized.<ort_version>.onnx``). Optimized graphs are not forward-
-    compatible across ORT upgrades — a stale ``.optimized.onnx`` from an older ORT
-    can load but silently degrade, or worse, fail to run specific op kernels. Pin
-    the version so every upgrade forces a fresh optimize pass.
-    """
     import onnxruntime as ort
     from huggingface_hub import hf_hub_download
 
@@ -167,7 +131,6 @@ def _build_session(providers: Optional[List[str]] = None):
 
 
 def _rebuild_session_cpu_only():
-    """Rebuild the module-level session as CPU-only. Called when an accelerator fails at runtime."""
     global _session
     with _model_lock:
         session, _ = _build_session(providers=[CPU_PROVIDER])
@@ -176,13 +139,6 @@ def _rebuild_session_cpu_only():
 
 
 def _get_session_and_tokenizer():
-    """Return (ort.InferenceSession, AutoTokenizer), loading on first call.
-
-    Uses double-checked locking so only one thread triggers the model load.
-    Some providers (notably CoreML on ModernBERT variants) init cleanly but
-    fail on certain runtime shapes/token-ids. The inference path in
-    _encode_batch catches that and calls _rebuild_session_cpu_only.
-    """
     global _session, _tokenizer, _output_names, _input_names
 
     if _session is not None and _tokenizer is not None:
@@ -217,7 +173,6 @@ def _get_session_and_tokenizer():
 
 
 def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.ndarray:
-    """Mean pool token embeddings, excluding padding tokens."""
     mask = attention_mask[..., np.newaxis].astype(np.float32)
     sum_emb = (last_hidden_state * mask).sum(axis=1)
     sum_mask = mask.sum(axis=1).clip(min=1e-9)
@@ -225,23 +180,11 @@ def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.
 
 
 def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
-    """L2-normalize embeddings along the last axis."""
     norms = np.linalg.norm(embeddings, axis=-1, keepdims=True).clip(min=1e-9)
     return embeddings / norms
 
 
 def _encode_batch(texts: List[str]) -> np.ndarray:
-    """Tokenize and embed a batch of texts. Returns (N, 768) float32, L2-normalized.
-
-    Called ONLY from the module-level embedding worker. External callers go
-    through the queue via generate_embedding* — direct calls bypass the
-    serialization contract and risk concurrent ORT inference.
-
-    Sequence length is set dynamically by the tokenizer (padding=True pads each
-    batch to its longest item). _MODEL_MAX_TOKENS only bites for truly
-    oversized inputs — it prevents position_ids from exceeding the model's
-    positional-embedding range.
-    """
     session, tokenizer = _get_session_and_tokenizer()
 
     encoded = tokenizer(
@@ -284,12 +227,10 @@ def _encode_batch(texts: List[str]) -> np.ndarray:
 
 
 def _cache_key(text: str) -> str:
-    """Deterministic cache key from text content."""
     return _CACHE_PREFIX + hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
 
 
 def _get_store():
-    """Lazy import to avoid circular imports at module load time."""
     from services.memory_client import MemoryClientService
     return MemoryClientService.create_connection()
 
@@ -311,12 +252,6 @@ _embedding_worker_running = False
 
 
 def _run_embedding_worker() -> None:
-    """Process inference jobs from the module-level queue, one at a time.
-
-    Each job is a (texts, future) pair.  Results are delivered via the future
-    so callers block until their job completes.  Exceptions are forwarded to
-    the future so the caller receives them via future.result().
-    """
     while True:
         texts, future = _embedding_queue.get()
         try:
@@ -327,7 +262,6 @@ def _run_embedding_worker() -> None:
 
 
 def _ensure_worker_started() -> None:
-    """Start the embedding worker thread on first call. Idempotent."""
     global _embedding_worker_running
     if _embedding_worker_running:
         return
@@ -340,19 +274,6 @@ def _ensure_worker_started() -> None:
 
 
 def _submit_for_inference(texts: List[str], mp=None) -> np.ndarray:
-    """Submit texts to the inference queue and block until the result is ready.
-
-    Cache checks must be done BEFORE calling this function — submitting a
-    job for a cache-hit text would needlessly queue behind pending work and
-    could cause reentrance if the worker itself ever needed to embed (it does
-    not, but the guard keeps the contract explicit).
-
-    When the caller threads its MessageProcessor (``mp``) through, the
-    queue+inference wait is recorded into that processor's ``embedding_wait_ms``
-    stage so callers can see how much pre-LLM time the single-threaded ONNX
-    worker is costing them. Background callers pass no ``mp`` — the timing is
-    simply not attributed (the worker is queue-decoupled and has no parent).
-    """
     _ensure_worker_started()
     future: concurrent.futures.Future = concurrent.futures.Future()
     _embedding_queue.put((texts, future))
@@ -368,7 +289,6 @@ _embedding_service_instance = None
 
 
 def get_embedding_service() -> 'EmbeddingService':
-    """Return the process-wide EmbeddingService singleton, creating it if needed."""
     global _embedding_service_instance
     if _embedding_service_instance is None:
         _embedding_service_instance = EmbeddingService()
@@ -376,19 +296,12 @@ def get_embedding_service() -> 'EmbeddingService':
 
 
 class EmbeddingService:
-    """Unified embedding service using gte-modernbert-base via ONNX Runtime.
-
-    All single-text methods check MemoryStore before computing. Cache is keyed by
-    sha256(text)[:16] with a 1-hour TTL. Batch embeddings bypass the cache (bulk
-    operations like document chunking don't benefit from per-text caching).
-    """
 
     def __init__(self, config: dict = None):
         self.config = config or {}
         self.embedding_dimensions = self.config.get('embedding_dimensions', 768)
 
     def _cache_get(self, text: str) -> Optional[list]:
-        """Check MemoryStore for a cached embedding. Returns list or None."""
         try:
             store = _get_store()
             raw = store.get(_cache_key(text))
@@ -399,7 +312,6 @@ class EmbeddingService:
         return None
 
     def _cache_put(self, text: str, embedding: list) -> None:
-        """Store embedding in MemoryStore with TTL."""
         try:
             store = _get_store()
             store.set(_cache_key(text), json.dumps(embedding), ex=_CACHE_TTL)
@@ -407,19 +319,6 @@ class EmbeddingService:
             pass
 
     def generate_embedding(self, text: str, mp=None) -> list:
-        """Generate a single L2-normalized embedding vector as a list. Cached.
-
-        Cache hit returns immediately without touching the queue — this also
-        prevents reentrance deadlock if an embedding is requested from within
-        the worker thread (impossible today, but guarded explicitly).
-
-        ``mp`` (the invoking MessageProcessor) is threaded through to attribute
-        the embedding-wait timing when called from within a turn; None from
-        background callers.
-
-        Returns:
-            Embedding as a plain Python list of floats suitable for SQLite storage.
-        """
         # Cache check FIRST — bypass the queue entirely on a hit.
         cached = self._cache_get(text)
         if cached is not None:
@@ -434,18 +333,6 @@ class EmbeddingService:
             raise
 
     def generate_embedding_np(self, text: str, mp=None) -> np.ndarray:
-        """Generate a single L2-normalized embedding vector as a numpy array. Cached.
-
-        Cache hit returns immediately without touching the queue — this also
-        prevents reentrance deadlock if an embedding is requested from within
-        the worker thread (impossible today, but guarded explicitly).
-
-        ``mp`` is threaded through for embedding-wait attribution; None from
-        background callers.
-
-        Returns:
-            Embedding as a float32 numpy array for cosine similarity math.
-        """
         # Cache check FIRST — bypass the queue entirely on a hit.
         cached = self._cache_get(text)
         if cached is not None:
@@ -460,17 +347,6 @@ class EmbeddingService:
             raise
 
     def generate_embeddings_batch(self, texts: List[str], mp=None) -> List[np.ndarray]:
-        """Generate L2-normalized embeddings for a batch of texts.
-
-        Each chunk is submitted as a single queue job so the worker processes
-        chunks sequentially — enforcing the same OOM-prevention contract as
-        single-text calls.  Per-text caching is bypassed for batch operations;
-        the overhead of N cache lookups + JSON serialization negates the
-        benefit for large batches.
-
-        Returns:
-            List of float32 numpy arrays, one per input text.
-        """
         if not texts:
             return []
 

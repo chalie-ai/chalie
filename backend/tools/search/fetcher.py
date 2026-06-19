@@ -282,7 +282,7 @@ def _transform_ddg_results(raw: list) -> list:
         if not url or url in seen:
             continue
         seen.add(url)
-        snippet = re.sub(r"\s{2,}", " ", (r.get("body") or "").strip())[:300]
+        snippet = re.sub(r"\s{2,}", " ", (r.get("body") or "").strip())
         results.append({
             'title': (r.get('title') or '').strip(),
             'snippet': snippet,

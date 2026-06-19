@@ -1,24 +1,5 @@
-"""
-Feature tests for ModeGateService — per-turn cognitive mode classifier + EMA.
+"""Feature tests for ModeGateService — zero mocks; MemoryStore IS the production store."""
 
-Coverage:
-  - ModeGateService._update_state()          : asymmetric EMA math   [unit]
-  - ModeGateService._load_config()           : missing / malformed   [unit]
-  - ModeGateService._load_state / _save_state: MemoryStore round-trip [integration]
-  - ModeGateService.tick()                   : end-to-end persist + active set [integration]
-
-Tool-promotion is no longer the gate's job — innate skills are always
-injected via each processor's ALWAYS_AVAILABLE list and external tools are
-reached via find_tools.
-The classifier + state machine is retained for prompt steering and future
-mode-driven features.
-
-Test markers:
-  @pytest.mark.unit        — pure-function math; no IO
-  @pytest.mark.integration — touches MemoryStore
-
-Zero mocks. MemoryStore IS the production store.
-"""
 
 from __future__ import annotations
 
@@ -39,11 +20,6 @@ def _zero_state() -> dict:
 
 
 def _fresh_service(fire_threshold: float = 0.60):
-    """Return a ModeGateService whose fire thresholds are all forced to *fire_threshold*.
-
-    Resets the module-level caches so each test gets a clean state and forces
-    a deterministic threshold vector — no need for classifier_meta.json on disk.
-    """
     import services.mode_gate_service as mgm
     mgm._config_loaded = None
     mgm._fire_thresholds_cache = None

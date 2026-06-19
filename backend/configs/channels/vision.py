@@ -6,14 +6,14 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""VisionConfig — the delegate channel that runs on the brain's Vision Provider.
+"""VisionConfig — delegate channel that runs on the brain's Vision Provider.
 
-The typed ``ProcessorConfig`` for the ``vision`` delegate tool. Paired
-with ``VisionAbility`` in ``abilities/vision.py``: the ability's
-``describe_image()`` core instantiates this config and calls
-``MessageProcessor.process()``. ``uses_vision_provider=True`` is what makes
-``Providers._resolve`` read the Vision Provider from the DB instead of the global
-selected provider; ``policy_channel`` is inherited from the caller.
+``uses_vision_provider=True`` is what makes ``Providers._resolve`` read the
+Vision Provider from the DB instead of the global selected provider;
+``policy_channel`` is inherited from the caller. Paired with
+``VisionAbility`` in ``abilities/vision.py``: the ability's
+``describe_image()`` instantiates this config and calls
+``MessageProcessor.process()``.
 """
 
 from __future__ import annotations
@@ -32,20 +32,16 @@ _VISION_SYSTEM_PROMPT = (
 
 
 class VisionConfig(ProcessorConfig):
-    """Single-shot, no-tools delegate config that runs on the vision provider.
-    policy_channel is inherited from the caller."""
+    """Single-shot, no-tools. policy_channel inherited from caller."""
 
     uses_vision_provider: ClassVar[bool] = True
 
-    def __init__(self, policy_channel: "ProcessorConfig.POLICY_CHANNEL") -> None:
+    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
         super().__init__(
             channel="delegate:vision",
             role="vision",
             policy_channel=policy_channel,
             always_available=[],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=1,
             skip_transcript=True,
             skip_input_row=True,
             suppress_history=True,

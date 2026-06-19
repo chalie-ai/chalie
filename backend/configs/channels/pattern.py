@@ -43,28 +43,45 @@ def _pattern_existing_patterns_block() -> str:
         return "(none yet)"
 
 
-class PatternDecayHook(PostTurnHook):
-    """Confidence decay sweep: -0.005 on untouched active rows; soft-delete at <=0.
+def _touched_pattern_names(mp) -> set[str]:
+    """Pattern names (= data_graph keys) save_pattern wrote this turn, from the DB."""
+    import json as _json  # noqa: PLC0415
+    from services.act_trail import ActTrail  # noqa: PLC0415
+    turn_id = getattr(mp, "turn_id", None)
+    if turn_id is None:
+        return set()
+    names: set[str] = set()
+    for row in ActTrail().fetch_by_turn(mp.config.channel, turn_id):
+        if row.get("tool_name") != "save_pattern":
+            continue
+        try:
+            name = (_json.loads(row.get("params") or "{}") or {}).get("name")
+        except Exception:
+            continue
+        if name:
+            names.add(name)
+    return names
 
-    §3b / §4e / §4.8 — no metrics recorded here (metrics moved to send gateway).
-    """
+
+class PatternDecayHook(PostTurnHook):
+    """Confidence decay sweep: -0.005 on untouched active rows; soft-delete at <=0."""
 
     def run(self, mp, response_text: str) -> None:
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
         try:
-            touched_ids: set = getattr(mp, "_touched_pattern_ids", set()) or set()
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             from services.time_utils import utc_now  # noqa: PLC0415
+            touched_names = _touched_pattern_names(mp)
             db = get_shared_db_service()
             with db.connection() as conn:
-                # Decrement confidence on untouched rows.
+                # Decrement confidence on untouched rows (excluded by pattern key).
                 params: list = []
                 touched_filter = ""
-                if touched_ids:
-                    placeholders = ",".join("?" * len(touched_ids))
-                    touched_filter = f"AND id NOT IN ({placeholders})"
-                    params = list(touched_ids)
+                if touched_names:
+                    placeholders = ",".join("?" * len(touched_names))
+                    touched_filter = f"AND key NOT IN ({placeholders})"
+                    params = list(touched_names)
                 conn.execute(
                     f"""
                     UPDATE data_graph
@@ -91,58 +108,61 @@ class PatternDecayHook(PostTurnHook):
                       AND CAST(json_extract(value, '$.confidence') AS REAL) <= 0.0
                     """,
                 )
-            save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
-            save_graph_calls = getattr(mp, "_save_graph_calls", 0)
             now_iso = utc_now().isoformat()
             _log.info(
-                "[PATTERN_CONFIG] done save_pattern=%d save_graph=%d "
-                "touched=%d at=%s",
-                save_pattern_calls,
-                save_graph_calls,
-                len(touched_ids),
+                "[PATTERN_CONFIG] done touched=%d at=%s",
+                len(touched_names),
                 now_iso,
             )
         except Exception as exc:
             _log.warning("[PATTERN_CONFIG] decay sweep failed: %s", exc)
 
 
-def _pattern_init_instance_state(mp: object) -> None:
-    """Initialise per-instance counter/state attrs that SavePattern/SaveGraph read."""
-    if not hasattr(mp, "_save_pattern_calls"):
-        mp._save_pattern_calls = 0  # type: ignore[attr-defined]
-    if not hasattr(mp, "_save_graph_calls"):
-        mp._save_graph_calls = 0  # type: ignore[attr-defined]
-    if not hasattr(mp, "_save_graph_seen"):
-        mp._save_graph_seen = set()  # type: ignore[attr-defined]
-    if not hasattr(mp, "_touched_pattern_ids"):
-        mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
+class PatternSkillSyncHook(PostTurnHook):
+    """Map the behavioural patterns touched this turn to curated skill playbooks."""
+
+    def run(self, mp, response_text: str) -> None:
+        import logging as _logging  # noqa: PLC0415
+        _log = _logging.getLogger(__name__)
+        try:
+            names = _touched_pattern_names(mp)
+            if not names:
+                return
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            db = get_shared_db_service()
+            placeholders = ",".join("?" * len(names))
+            with db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT id FROM data_graph "
+                    "WHERE kind='behavioral_pattern' AND active=1 "
+                    "AND deleted_at IS NULL AND source=? "
+                    f"AND key IN ({placeholders})",
+                    (mp.config.channel, *names),
+                ).fetchall()
+            touched_ids = {r[0] for r in rows}
+            if not touched_ids:
+                return
+            from services.skill_association_service import SkillAssociationService  # noqa: PLC0415
+            SkillAssociationService().run_pass(touched_ids)
+        except Exception as exc:
+            _log.warning("[PATTERN_CONFIG] skill association pass failed: %s", exc)
 
 
 class PatternConfig(ProcessorConfig):
-    """Pattern-match config — per-window background pattern recognition.
-
-    channel/role='pattern_match', suppress_history=True, max_iterations=100.
-    post_turn_hooks = (PatternDecayHook(),) — confidence decay sweep (§3b).
-
-    Counter/state attrs are lazily initialised by get_user_prompt on the first
-    call so the caller does not need to pre-set them.
-    """
+    """Pattern-match config — per-window background pattern recognition."""
 
     def __init__(self, window_start: int, window_end: int) -> None:
         super().__init__(
             channel="pattern_match",
             role="pattern_match",
-            policy_channel=ProcessorConfig.POLICY_CHANNEL.SUBCONSCIOUS,
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
-            discoverable=[],
-            blocked=frozenset(),
-            max_iterations=100,
             skip_transcript=True,
             skip_input_row=False,
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn_hooks=(PatternDecayHook(),),
+            post_turn_hooks=(PatternDecayHook(), PatternSkillSyncHook()),
         )
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
@@ -152,8 +172,6 @@ class PatternConfig(ProcessorConfig):
 
     def get_user_prompt(self, mp) -> str:
         """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
-        # Lazy-init per-instance state so SavePattern/SaveGraph find it.
-        _pattern_init_instance_state(mp)
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
         # Bidirectional dependency: the per-source allowlist lives in

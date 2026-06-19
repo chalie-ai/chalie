@@ -6,31 +6,11 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-Per-channel ProcessorConfig subclasses.
-
-Spec: ACT Loop Orchestrator Refactor §3.
-
-Each channel is a named ProcessorConfig subclass with a typed __init__.
-The caller instantiates the subclass directly — no factory layer, no
-extras dict.
-
-Static channels (§3a) — zero-arg constructors:
-  DmnConfig(), EpisodeEncoderConfig(), SkillSuggestionConfig()
-
-Per-instance channels (§3b) — typed constructors:
-  UserConfig(metadata: dict | None = None)
-  EAMPConfig(agent_name, project, loop_in_human, wrapper_id)
-  PatternConfig(window_start, window_end)
-  GeoConfig(window_start, window_end)
-  UserSummaryConfig()
-  SuperEpisodeConfig(channel, sources, spans)
-  ScheduledConfig(policy_channel)
-"""
+"""Per-channel ProcessorConfig subclasses and re-exports."""
 
 from __future__ import annotations
 
-from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE, DEFAULT_DISCOVERABLE
+from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.dmn import DmnConfig
 from configs.channels.episode_encoder import EpisodeEncoderConfig
@@ -53,7 +33,6 @@ from services.processor_config import ProcessorConfig
 __all__ = [
     "SkillAssociationConfig",
     "DEFAULT_ALWAYS_AVAILABLE",
-    "DEFAULT_DISCOVERABLE",
     "DmnConfig",
     "EAMPConfig",
     "EpisodeEncoderConfig",

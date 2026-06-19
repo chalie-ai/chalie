@@ -4,7 +4,7 @@ Covers the NEW behaviours introduced by the refactor:
   - Providers().send(dto) raises RequestOverCapError on pre-flight over-cap.
   - Providers().measure(dto) returns a usable token estimate.
   - MessageProcessor._build_send_dto() derives the correct ProviderType for
-    CHAT vs VISION configs (replaces the deleted uses_vision_provider boolean).
+    CHAT vs VISION configs, carrying the provider role on the DTO's type field.
   - send_image_with_config builds a VISION DTO and returns None (not raises)
     when the provider is unreachable (defensive probe path).
 
@@ -35,11 +35,8 @@ def _png_1x1() -> bytes:
 
 
 def _seed_ollama_with_window(db, max_tokens):
-    """Seed an offline Ollama provider as the selected provider.
-
-    Returns the provider id.  OllamaClient.estimate_request_tokens works without
-    a live model (pure heuristic / json serialisation), so over-cap tests never
-    hit the network.
+    """OllamaClient.estimate_request_tokens works without a live model (pure heuristic /
+    json serialisation), so over-cap tests never hit the network.
     """
     cur = db.execute(
         "INSERT INTO providers (name, platform, model, host, max_tokens) "
@@ -60,20 +57,13 @@ def _seed_ollama_with_window(db, max_tokens):
 
 
 def test_send_raises_request_over_cap_for_oversized_dto(db):
-    """Providers().send(dto) raises RequestOverCapError when the request token
-    count exceeds window - max(10% window, 8000) — the pre-flight check fires
-    BEFORE any network call.
+    """Replaces the old OVER_CAP sentinel: callers now catch RequestOverCapError instead
+    of comparing `response is OVER_CAP`. The pre-flight check fires before any network call.
 
-    This is the replacement for the old OVER_CAP sentinel: callers now catch
-    RequestOverCapError instead of comparing `response is OVER_CAP`. The offline
-    provider proves no actual LLM call happens — the exception is raised by
-    Providers.send() itself at the measurement step.
-
-    Note: Providers.send() derives the window from client.get_context_limit()
-    (which falls back to 8192 for an offline Ollama). The DB-declared max_tokens
-    feeds Providers.get_context_limit() (the facade) but not the send path directly.
-    We assert that the exception carries correct structural invariants, not a
-    specific window value.
+    Providers.send() derives the window from client.get_context_limit() (falls back to 8192
+    for an offline Ollama). The DB-declared max_tokens feeds Providers.get_context_limit()
+    (the facade) but not the send path directly - we assert structural invariants on the
+    exception, not a specific window value.
     """
     from services.providers import Providers
     from services.provider_cache_service import ProviderCacheService
@@ -115,14 +105,7 @@ def test_send_raises_request_over_cap_for_oversized_dto(db):
 
 
 def test_measure_returns_positive_integer_for_real_dto(db):
-    """Providers().measure(dto) returns a positive integer token estimate for a
-    real ProviderApiRequest DTO — proving the sizing path works end-to-end
-    without raising or sending to the provider.
-
-    Used by ChatHistoryCompactor._fit_compaction_input to decide how much
-    history to drop; the result must be a meaningful count (> 0) even for
-    a short request.
-    """
+    """Used by ChatHistoryCompactor._fit_compaction_input to decide how much history to drop."""
     from services.providers import Providers
     from services.provider_cache_service import ProviderCacheService
 
@@ -148,12 +131,8 @@ def test_measure_returns_positive_integer_for_real_dto(db):
 
 
 def test_build_send_dto_type_chat_for_user_config(db):
-    """MessageProcessor._build_send_dto() produces a ProviderApiRequest with
-    type=CHAT for a standard UserConfig — proving the DTO construction derives
-    the correct provider pool for the most common message path.
-
-    Replaces the deleted uses_vision_provider boolean: the config's role is now
-    encoded in the DTO, not as a side-channel flag on the config class.
+    """The config's role is encoded in the DTO's type field, derived from the config's
+    provider flags rather than read directly at the send call site.
     """
     from services.message_processor import MessageProcessor
     from configs.channels.user import UserConfig
@@ -181,12 +160,8 @@ def test_build_send_dto_type_chat_for_user_config(db):
 
 
 def test_build_send_dto_type_vision_for_vision_config(db, tmp_path):
-    """MessageProcessor._build_send_dto() produces a ProviderApiRequest with
-    type=VISION for a VisionConfig — the DTO type drives provider resolution in
-    Providers.send(dto) instead of the deleted uses_vision_provider flag.
-
-    Also proves the image payload from config.get_image(mp) survives into the
-    DTO's messages array.
+    """The DTO type drives provider resolution in Providers.send(dto), derived from
+    the config's uses_vision_provider flag.
     """
     from services.message_processor import MessageProcessor
     from configs.channels.vision import VisionConfig
@@ -200,7 +175,7 @@ def test_build_send_dto_type_vision_for_vision_config(db, tmp_path):
         mp, "what is this image?",
         {"image_path": str(img), "mime_type": "image/png"},
     )
-    mp.config = VisionConfig(ProcessorConfig.POLICY_CHANNEL.CHAT)
+    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp.thinking_level = "low"
 
     dto = mp._build_send_dto()
@@ -216,12 +191,8 @@ def test_build_send_dto_type_vision_for_vision_config(db, tmp_path):
 
 
 def test_send_image_with_config_returns_none_for_unreachable_provider():
-    """send_image_with_config builds a VISION DTO and returns None (never raises)
-    when the configured provider is unreachable — the vision probe is a
-    best-effort infrastructure path and must be fully defensive.
-
-    This validates the OllamaClient path: an offline host gets a network error,
-    which send_image_with_config catches and maps to None. No mock needed.
+    """The vision probe is a best-effort path - an offline host gets a network error,
+    which send_image_with_config catches and maps to None.
     """
     from services.vision_service import send_image_with_config, build_vision_config
 

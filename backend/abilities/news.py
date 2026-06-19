@@ -15,17 +15,13 @@ Result contract (TKT-904):
   Google News aggregated) a Google News failure is tolerated when the category
   feeds produced articles (``meta degraded=true``); it is ``provider-unreachable``
   only when nothing was gathered at all.
-
-  The rich article card travels via ``ToolResult(rich=…)`` — the dispatcher owns
-  the ordinal + the single span instruction and injects the card only when the
-  invoking channel broadcasts to the user. This ability never formats a wire
-  envelope.
 """
 
 import logging
 from typing import ClassVar, Optional
 
 from abilities._ability import Ability
+from abilities._params import Keys
 from abilities._result import ToolResult
 from services import news_sources
 from services.news_service import NewsFetchError, NewsService
@@ -37,12 +33,14 @@ _SNIPPET_LEN = 200
 
 
 class NewsAbility(Ability):
+    DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebSearchConfig only
+
     # Pre-gated by the dispatcher BEFORE run() and BEFORE the policy gate: an
     # action-less tool whose only hard requirement is a non-empty query. The ""
     # key covers action-less tools (see ToolDispatcher._prevalidate); a missing or
     # blank query is rejected as one code=missing-params error naming 'query', so
     # run() never sees a query-less call.
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": ("query",)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
 
     def get_name(self) -> str:
         return "news"
@@ -68,17 +66,17 @@ class NewsAbility(Ability):
     _PARAMETERS: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "What to search for.",
             },
-            "category": {
+            Keys.category: {
                 "type": "string",
                 "enum": list(_CATEGORIES),
                 "description": "Narrow to a news category. Use only for broad topic browsing.",
             },
         },
-        "required": ["query"],
+        "required": [Keys.query],
     }
 
     def get_parameters(self) -> dict:
@@ -102,7 +100,7 @@ class NewsAbility(Ability):
     def run(self, params: dict) -> ToolResult:
         # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
         # whitespace-only value that the truthiness pre-gate lets through.
-        query = (params.get("query") or "").strip()
+        query = (params.get(Keys.query) or "").strip()
         if not query:
             return ToolResult.err(
                 "query is required and cannot be blank.",
@@ -114,7 +112,7 @@ class NewsAbility(Ability):
         # A bogus category must be rejected loudly, never silently degraded into
         # an uncategorised search — the param helper raises ToolParamError
         # (code=invalid-param) which the dispatcher renders canonically.
-        category = self.param(params, "category", default=None, choices=_CATEGORIES)
+        category = self.param(params, Keys.category, default=None, choices=_CATEGORIES)
         telemetry = self.telemetry or {}
 
         svc = self._get_service()
@@ -158,8 +156,7 @@ class NewsAbility(Ability):
         if degraded:
             meta["degraded"] = True
 
-        rich = self._build_rich_card(top) if rows else None
-        return ToolResult.ok(rows, rich=rich, **meta)
+        return ToolResult.ok(rows, **meta)
 
     @staticmethod
     def _provider_unreachable(exc: NewsFetchError) -> ToolResult:
@@ -181,68 +178,3 @@ class NewsAbility(Ability):
             return "US"
         return cls._COUNTRY_CODE_MAP.get(country.lower().strip(), "US")
 
-    # ── Rich article card (via ToolResult.rich) ─────────────────────────────────
-
-    @staticmethod
-    def _build_rich_card(articles) -> dict:
-        """Build the rich article-card payload: the headline rows plus up to three
-        image candidates the frontend can render as a thumbnail.
-
-        Returned as the ``rich`` payload of the success ToolResult; the dispatcher
-        serialises it as the card JSON head and appends the single span
-        instruction (and the ordinal-keyed tag) ONLY when the invoking channel
-        broadcasts to the user. This ability never formats the envelope.
-
-        Card rows carry ``{title, url, snippet, source}`` (the FE article card
-        renders domain pills from ``url``/``source``); this card shape deliberately
-        omits ``published_at`` — body shape need not equal card shape.
-        """
-        results = []
-        image_items: list[tuple[str, str]] = []
-        og_targets: list[tuple[str, str]] = []
-        for a in articles:
-            title = a.title or ""
-            url = getattr(a, "url", "") or ""
-            results.append({
-                "title": title,
-                "url": url,
-                "snippet": (a.description or "")[:_SNIPPET_LEN],
-                "source": a.source,
-            })
-            img = getattr(a, "image_url", "") or ""
-            if img:
-                image_items.append((img, title))
-            elif url:
-                og_targets.append((url, title))
-
-        # og_meta maps the resolved image_url → its og metadata so the caption can
-        # be derived (mirrors search.py's keying by image URL).
-        og_meta: dict = {}
-        if len(image_items) < 3 and og_targets:
-            from services.og_image_service import resolve_og_images
-            try:
-                og_map = resolve_og_images([u for u, _ in og_targets[: 3 - len(image_items)]])
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[news-tool] og:image lookup failed: %s", exc)
-                og_map = {}
-            for article_url, title in og_targets:
-                resolved = og_map.get(article_url)
-                if resolved:
-                    img = resolved["image_url"]
-                    image_items.append((img, title))
-                    og_meta[img] = resolved
-                if len(image_items) >= 3:
-                    break
-
-        payload: dict = {"results": results}
-        if image_items:
-            from services.image_candidate_service import build_image_candidates
-            try:
-                candidates = build_image_candidates(image_items, og_meta=og_meta or None)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[news-tool] image candidate shortlist failed: %s", exc)
-                candidates = []
-            if candidates:
-                payload["image_candidates"] = candidates
-
-        return payload

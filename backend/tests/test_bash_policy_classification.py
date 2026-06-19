@@ -9,24 +9,19 @@
 """Feature tests for bash's command-derived policy classification (TKT-884).
 
 Real hot path, zero mocks: every assertion drives the genuine
-``ToolDispatcher(mp).dispatch()`` chokepoint on the CHAT channel against a real
-``mp``-shaped context, the real ``AbilityRegistry`` resolution of the production
-``BashAbility``, the real ``PolicyManager.wrap`` gate (seeded through the
-production ``PolicyManager.upsert`` write path, no mock), the real
-``BashAbility.run``, and the real ``ActTrail`` write (the ``db`` fixture binds
-``ActTrail()`` to a real SQLite database).
+``ToolDispatcher(mp).dispatch()`` chokepoint against a real ``AbilityRegistry``,
+the production ``PolicyManager.wrap`` gate, ``BashAbility.run``, and a real
+SQLite-backed ``ActTrail``.
 
 The contract under test (the closed bypass):
-  * The permission the gate evaluates is derived from the COMMAND via the
-    ``Ability.classify_action`` hook the dispatcher consults BEFORE the gate —
-    NOT from a model-supplied ``action`` param. A forged ``action="read"`` on a
+  * Permission is derived from the COMMAND via ``Ability.classify_action``, NOT
+    from a model-supplied ``action`` param. A forged ``action="read"`` on a
     ``rm -rf``-class command is ignored: the gate evaluates ``bash.compound``
-    (the command's real class), so a ``deny`` on that class blocks the call.
+    (the command's real class), so a ``deny`` blocks the call.
   * The default ``classify_action`` (any other ability) returns ``None``, leaving
     the ``action`` param path untouched.
-  * ``BashAbility.run`` returns a ``ToolResult`` whose body is the structured
-    ``{exit_code, stdout, stderr}`` dict, with ``meta truncated=true`` when the
-    output is clipped by the shared ``truncate`` helper.
+  * ``BashAbility.run`` returns a ``ToolResult`` body with structured
+    ``{exit_code, stdout, stderr}`` and ``meta truncated=true`` when clipped.
 """
 
 import pytest

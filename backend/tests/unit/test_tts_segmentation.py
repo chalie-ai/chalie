@@ -8,12 +8,10 @@ _LIMIT = _MAX_TTS_CHUNK_CHARS
 
 
 def _word(length: int, char: str = "a") -> str:
-    """Return a single word of exactly *length* chars."""
     return char * length
 
 
 def _sentence_of(length: int) -> str:
-    """Return a sentence that is exactly *length* chars long, ending in '.'"""
     # "word word ... word." — fill with 4-char words + spaces then trim/pad.
     assert length >= 2
     body = "word " * (length // 5 + 2)
