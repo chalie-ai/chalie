@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chalie · Brain</title>
+    <script>
+      // Theme bootstrap — runs before paint to avoid a dark→light flash on
+      // light-mode preference. Honours saved choice; falls back to system.
+      (function () {
+        function pickTheme(saved) {
+          if (saved === 'light' || saved === 'dark') return saved;
+          return globalThis.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        try {
+          var saved = localStorage.getItem('chalie-theme');
+          document.documentElement.dataset.theme = pickTheme(saved);
+        } catch (err) {
+          console.warn('theme-persist failed', err);
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
+    <script type="module" crossorigin src="/brain/assets/index-CO35hbZS.js"></script>
+    <link rel="stylesheet" crossorigin href="/brain/assets/index-Bnou3K7k.css">
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>
