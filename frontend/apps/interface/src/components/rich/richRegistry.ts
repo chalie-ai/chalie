@@ -6,8 +6,9 @@ import { defineAsyncComponent } from 'vue';
  *
  * Port of legacy frontend/interface/rich_media/registry.js: maps a tag PREFIX
  * (the part before the first underscore, e.g. "weather" in "weather_1") to the
- * card component that renders it. Eight prefixes → seven components (news and
- * search share ArticleCard).
+ * card component that renders it. Six prefixes → six components. (The `news`
+ * and `search` tools no longer emit a rich envelope — TKT-1067 made their
+ * results text-only — so no ArticleCard producer remains.)
  *
  * Cards are loaded via `defineAsyncComponent` so each card + its scoped styles
  * code-split into their own chunk — the chat spine stays light until a card of
@@ -19,8 +20,6 @@ export interface RichCardEntry {
 
 const richRegistry: Record<string, RichCardEntry> = {
   weather: { component: defineAsyncComponent(() => import('./WeatherCard.vue')) },
-  news: { component: defineAsyncComponent(() => import('./ArticleCard.vue')) },
-  search: { component: defineAsyncComponent(() => import('./ArticleCard.vue')) },
   schedule: { component: defineAsyncComponent(() => import('./SchedulerCard.vue')) },
   list: { component: defineAsyncComponent(() => import('./ListCard.vue')) },
   timer: { component: defineAsyncComponent(() => import('./TimerCard.vue')) },

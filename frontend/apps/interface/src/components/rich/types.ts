@@ -7,7 +7,6 @@
  * shapes without importing a whole `.vue` component.
  */
 export type { WeatherPayload } from './WeatherCard.vue';
-export type { ArticlePayload } from './ArticleCard.vue';
 export type { SchedulerPayload } from './SchedulerCard.vue';
 export type { ListPayload } from './ListCard.vue';
 export type { TimerPayload } from './TimerCard.vue';
