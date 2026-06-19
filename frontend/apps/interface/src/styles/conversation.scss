@@ -470,7 +470,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 4px 0;
   min-width: 220px;
   max-width: 760px;
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -544,7 +543,7 @@
   margin-left: 24px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 0; // act-trail rows condensed to line-height gaps only
 }
 
 .act-tool__summary--collapsed {

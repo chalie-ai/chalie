@@ -15,6 +15,7 @@
  */
 import { defineStore } from 'pinia';
 import type { ConversationAttachment, ConversationMessage, ConversationSegment } from '../api/conversation';
+import { extractText } from '../composables/useMarkup';
 
 // ── Type definitions ──────────────────────────────────────────────────────────
 
@@ -85,6 +86,25 @@ export interface ErrorForm {
 
 export type ConversationForm = UserForm | ChalieForm | ActForm | ErrorForm;
 
+/** A turn: a user form plus the assistant rows / act groups it produced. */
+export interface Turn {
+  id: number;
+  forms: ConversationForm[];
+}
+
+/**
+ * Plain-text (TTS / remember) for one Chalie form — segments concatenated, else
+ * the single text path, both stripped of markup. Shared by the speak/remember
+ * buttons and the turn-level speech aggregation so the two never diverge.
+ */
+export function chalieFormPlaintext(form: ChalieForm): string {
+  const segs = form.meta.segments ?? form.segments;
+  if (segs?.length) {
+    return extractText(segs.map((s) => s.content ?? s.synthesis ?? '').join(' '));
+  }
+  return extractText(form.text ?? '');
+}
+
 // ── Module-scope monotonic id counter ─────────────────────────────────────────
 let _nextId = 1;
 function nextId(): number {
@@ -99,6 +119,20 @@ export const useConversationStore = defineStore('conversation', {
   }),
 
   getters: {
+    /**
+     * The flat forms array grouped into turns. A turn starts at each user form
+     * and runs until the next one; any forms before the first user form (e.g. a
+     * turn-zero flashback) form their own leading group. Drives turn-based
+     * spacing and whole-turn TTS.
+     */
+    turns(state): Turn[] {
+      const groups: Turn[] = [];
+      for (const f of state.forms) {
+        if (f.kind === 'user' || groups.length === 0) groups.push({ id: f.id, forms: [] });
+        groups[groups.length - 1].forms.push(f);
+      }
+      return groups;
+    },
     /** Id of the most recent act form, or null. */
     activeActFormId(state): number | null {
       for (let i = state.forms.length - 1; i >= 0; i--) {
@@ -328,6 +362,21 @@ export const useConversationStore = defineStore('conversation', {
       for (let i = messages.length - 1; i >= 0; i--) {
         this._prependMessage(messages[i], false);
       }
+    },
+
+    /**
+     * Concatenated plaintext of every Chalie form in the turn that contains
+     * `formId` — so clicking speak on any bubble plays the whole turn, not just
+     * the single transcript row clicked.
+     */
+    turnSpeechText(formId: number): string {
+      const turn = this.turns.find((t) => t.forms.some((f) => f.id === formId));
+      if (!turn) return '';
+      return turn.forms
+        .filter((f): f is ChalieForm => f.kind === 'chalie')
+        .map(chalieFormPlaintext)
+        .filter(Boolean)
+        .join(' ');
     },
 
     // ── Internal helpers ─────────────────────────────────────────────────────

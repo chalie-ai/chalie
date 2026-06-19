@@ -138,25 +138,29 @@ onBeforeUnmount(() => {
       <span class="history-end-pill__label">End of working history</span>
     </div>
 
-    <!-- Conversation forms — discriminated union narrowed by v-if branches -->
-    <template v-for="form in conversationStore.forms" :key="form.id">
-      <UserBubble
-        v-if="form.kind === 'user'"
-        :form="(form as UserForm)"
-      />
-      <ChalieBubble
-        v-else-if="form.kind === 'chalie'"
-        :form="(form as ChalieForm)"
-      />
-      <ActCycle
-        v-else-if="form.kind === 'act'"
-        :form="(form as ActForm)"
-      />
-      <ErrorFormVue
-        v-else-if="form.kind === 'error'"
-        :form="(form as ErrorForm)"
-      />
-    </template>
+    <!-- Forms grouped into turns: the user message + the assistant rows / act
+         groups it produced share one `.turn` wrapper, so they render as a single
+         visually-tight unit (intra-turn spacing < inter-turn spacing). -->
+    <div v-for="turn in conversationStore.turns" :key="turn.id" class="turn">
+      <template v-for="form in turn.forms" :key="form.id">
+        <UserBubble
+          v-if="form.kind === 'user'"
+          :form="(form as UserForm)"
+        />
+        <ChalieBubble
+          v-else-if="form.kind === 'chalie'"
+          :form="(form as ChalieForm)"
+        />
+        <ActCycle
+          v-else-if="form.kind === 'act'"
+          :form="(form as ActForm)"
+        />
+        <ErrorFormVue
+          v-else-if="form.kind === 'error'"
+          :form="(form as ErrorForm)"
+        />
+      </template>
+    </div>
   </main>
 </template>
 

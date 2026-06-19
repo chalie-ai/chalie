@@ -331,9 +331,18 @@ body.speaker-user #ambientBloom {
   padding: calc(56px + var(--space-xl)) var(--space-lg) calc(80px + var(--space-xl));
   display: flex;
   flex-direction: column;
-  gap: var(--space-xl);
+  gap: var(--space-xl); // separation BETWEEN turns
   min-height: 100vh;
   mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent);
+}
+
+// A turn groups the user message with the assistant rows / act groups it
+// produced. Inner forms keep their own align-self (user right, Chalie/act left);
+// the tighter intra-turn gap signals they belong together vs. the spine's gap.
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
 }
 
 // --------------------------------------------------------------------------

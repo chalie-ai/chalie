@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import type { ChalieForm } from '../../stores/conversation';
-import type { ConversationSegment } from '../../api/conversation';
-import { renderMarkup, extractText } from '../../composables/useMarkup';
+import { chalieFormPlaintext, useConversationStore } from '../../stores/conversation';
+import { renderMarkup } from '../../composables/useMarkup';
 import { emit } from '../../composables/useEventBus';
 import SegmentRenderer from './SegmentRenderer.vue';
+
+const conversationStore = useConversationStore();
 
 const props = defineProps<{ form: ChalieForm }>();
 
@@ -26,35 +28,23 @@ const modeBadgeLabel = computed(() => {
   return MODE_LABELS[mode] ?? '';
 });
 
-// ── FIX 3 + 5: plaintext for remember / speak ─────────────────────────────
-function _derivePlaintext(): string {
-  // Segment-based message: concatenate each segment's content/synthesis
-  const segs: ConversationSegment[] | undefined =
-    props.form.meta.segments ?? props.form.segments;
-  if (segs && segs.length) {
-    const raw = segs.map((s) => s.content ?? s.synthesis ?? '').join(' ');
-    return extractText(raw);
-  }
-  // Single text path
-  return extractText(props.form.text ?? '');
-}
-
 // ── FIX 5: only show Speak when there is speakable text ───────────────────
-const speakText = computed(() => _derivePlaintext());
+const speakText = computed(() => chalieFormPlaintext(props.form));
 
 // ── FIX 4: Remember click — 150ms delay, guard against double-fire ─────────
 function onRemember(): void {
   if (pinned.value) return;
   pinned.value = true;
   setTimeout(() => {
-    // FIX 3: emit plaintext, not raw markup
-    emit('chalie:pin-moment', { content: _derivePlaintext() });
+    // FIX 3: emit plaintext, not raw markup. Remember is per-message.
+    emit('chalie:pin-moment', { content: speakText.value });
     pinActive.value = true; // glow lands with the emit, per legacy timing
   }, 150);
 }
 
+// Speak plays the WHOLE turn (every Chalie row), not just this transcript row.
 function onSpeak(): void {
-  emit('chalie:speak-message', { text: speakText.value });
+  emit('chalie:speak-message', { text: conversationStore.turnSpeechText(props.form.id) });
 }
 </script>
 
