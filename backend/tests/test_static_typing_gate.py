@@ -14,18 +14,14 @@
 
 """Whole-source mypy --strict gate for all first-party backend code.
 
-This test enforces that the entire first-party source tree passes
-``mypy --strict`` without errors. Unmigrated packages are intentionally
-relaxed via the ``[[tool.mypy.overrides]]`` relax block in
-``pyproject.toml`` — those packages appear in the ``module`` list there
-with every strict sub-flag turned off plus ``disable_error_code`` covering
-the default correctness codes that still fire.
+This test enforces that the entire first-party source tree — every package
+listed in ``_PACKAGES`` plus the top-level modules in ``_TOP_LEVEL_MODULES``,
+including the test suite itself — passes ``mypy --strict`` with zero errors.
 
-The gate tightens automatically as each package is migrated: remove a
-package's glob from the ``module`` list in the relax override, run this
-test, fix every surfaced strict and correctness error, then commit. When
-all globs are removed the relax block (and its ``disable_error_code``
-entry) can be deleted entirely in the final-flip ticket.
+There is no relax/override block in ``pyproject.toml``: the whole backend is
+held to strict from the start, so any new untyped or unsound code fails this
+gate immediately. See ``docs/typing-ratchet.md`` for how the codebase was
+migrated to this state and for the supported narrowing patterns.
 
 The per-ability ToolResult return-type assertion lives in
 :mod:`tests.test_ability_returns_tool_result` as a special case of this
@@ -45,8 +41,7 @@ from services.file_mapper_service import FileMapperService
 pytestmark = pytest.mark.unit
 
 # First-party packages and top-level modules to check.
-# This list must mirror the packages passed to mypy in pyproject.toml and
-# the gate verification step in docs/typing-ratchet.md.
+# This list must mirror the gate verification step in docs/typing-ratchet.md.
 _PACKAGES = [
     "abilities",
     "api",
@@ -69,33 +64,16 @@ _TOP_LEVEL_MODULES = [
 ]
 
 
-# Ratchet ceiling: max allowed mypy errors during the incremental migration.
-# Tickets may temporarily raise this ceiling when migrating a package that calls
-# into not-yet-migrated packages (cross-package cascade residuals). The ceiling
-# reaches 0 at TKT-1055 (final flip) when this check reverts to returncode == 0.
-#
-# After TKT-1046..1053 plus the non-tests final-flip cleanup (migrations, scripts
-# and the consumer/run/runtime_config/migrate_transcript_rebuild top-level modules
-# migrated, and the last configs/utils/workers residuals cleared) EVERY first-party
-# package and module is strict-clean EXCEPT `tests.*`, which is the only remaining
-# entry in the pyproject relax block. With tests relaxed the gate sees zero errors,
-# so the ceiling is 0. TKT-1054 hard-types tests/; TKT-1055 then removes the final
-# `tests.*` glob, deletes the relax block entirely, and reverts the assertion below
-# to ``proc.returncode == 0``.
-_MAX_RESIDUAL_ERRORS: int = 0
-
-
 def test_first_party_source_is_strict_clean() -> None:
     """Assert the whole first-party source tree passes mypy --strict.
 
-    During the incremental migration the ratchet ceiling (_MAX_RESIDUAL_ERRORS)
-    allows known cross-package cascade errors while rejecting any regression.
-    The ceiling decreases to 0 at TKT-1055 (final flip); at that point this
-    assertion reverts to ``proc.returncode == 0``.
+    The migration to full strict is complete: there is no relax override in
+    pyproject.toml, so this gate requires a clean ``mypy --strict`` run over
+    every package and top-level module. Any error — strict or default
+    correctness — fails the build.
 
-    The relax override in pyproject.toml keeps unmigrated packages green
-    automatically. As each package is migrated and its glob is removed from
-    that override, this test tightens without any change to this file.
+    See docs/typing-ratchet.md for the supported narrowing patterns when a
+    strict error needs to be resolved without weakening a type.
     """
     assert importlib.util.find_spec("mypy") is not None, (
         "mypy must be installed (it is a pyproject dependency) for the "
@@ -111,14 +89,10 @@ def test_first_party_source_is_strict_clean() -> None:
         text=True,
     )
 
-    error_lines = [ln for ln in proc.stdout.splitlines() if ": error:" in ln]
-    actual = len(error_lines)
-
-    assert actual <= _MAX_RESIDUAL_ERRORS, (
-        f"mypy --strict found {actual} errors (ceiling: {_MAX_RESIDUAL_ERRORS}).\n"
-        "If you introduced new errors, fix them before committing.\n"
-        "If this is a new migration ticket, lower _MAX_RESIDUAL_ERRORS "
-        "in this file to match the new residual count.\n"
-        "See docs/typing-ratchet.md for the full migration workflow.\n\n"
-        f"mypy output:\n{proc.stdout}"
+    assert proc.returncode == 0, (
+        "mypy --strict reported errors over the first-party source tree.\n"
+        "Fix every error before committing — the whole backend must stay "
+        "strict-clean (there is no relax override).\n"
+        "See docs/typing-ratchet.md for the supported narrowing patterns.\n\n"
+        f"mypy output:\n{proc.stdout}{proc.stderr}"
     )
