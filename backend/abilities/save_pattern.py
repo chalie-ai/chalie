@@ -1,13 +1,4 @@
-"""SavePattern — record a repeating behavioural pattern in the data graph.
-
-Reachable when a processor lists ``"save_pattern"`` in its ``ALWAYS_AVAILABLE``
-or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
-
-Budget + decay-tracking state lives on the calling processor (read via
-``self.mp``).  PMP initialises ``_save_pattern_calls = 0`` and
-``_touched_pattern_ids = set()`` in ``__init__``; this Ability uses ``getattr``
-defaults so it remains usable from any processor that opts it in.
-"""
+"""SavePattern — record a repeating behavioural pattern in the data graph."""
 import json
 import math
 import re
@@ -36,7 +27,6 @@ class SavePattern(BudgetCappedAbility):
     SYSTEM = True
     DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
 
-    BUDGET_COUNTER_ATTR: ClassVar[str] = "_save_pattern_calls"
     BUDGET_CAP: ClassVar[int] = 20
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
@@ -165,12 +155,6 @@ class SavePattern(BudgetCappedAbility):
         source = pattern_provenance(proc)
         row_id, confidence_out, reinforced = _upsert_pattern(validated, source)
 
-        self.bump_budget()
-        if proc is not None:
-            touched = getattr(proc, "_touched_pattern_ids", None)
-            if touched is not None:
-                touched.add(row_id)
-
         body = {"saved": 1}
         if reinforced:
             body["reinforced"] = 1
@@ -181,8 +165,7 @@ class SavePattern(BudgetCappedAbility):
 
 
 def _upsert_pattern(validated: dict, source: str) -> tuple[int, float, bool]:
-    """``source`` is the provenance of the pass that produced this pattern
-    (``pattern_match`` or ``geo_pattern``)."""
+    """``source`` is the provenance of the pass that produced this pattern"""
     now_iso = utc_now().isoformat()
     db = get_shared_db_service()
 

@@ -4,8 +4,7 @@ from services.processor_config import ProcessorConfig
 
 
 class SkillSuggestionConfig(ProcessorConfig):
-    """§3a / AC-26 — suppress_history=True replaces the old
-    get_previous_messages() override."""
+    """§3a / AC-26 — suppress_history=True replaces the old"""
 
     def __init__(self) -> None:
         super().__init__(
@@ -20,33 +19,25 @@ class SkillSuggestionConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def turn_scoped_state(self) -> tuple[str, ...]:
-        # The caller snapshots the original request onto the root MP before the
-        # turn runs; a skill_manager call spawns a continuation MP that must still
-        # see it, so carry it across the chain (see MessageProcessor._continue).
-        return ("_original_trail", "_original_input", "_iteration_count")
-
     def get_user_definition(self, mp) -> str:
         return ""
 
     def get_user_prompt(self, mp) -> str:
-        """Reads _original_trail, _original_input, _iteration_count from mp
-        (set by the caller before MessageProcessor.process())."""
-        original_trail = getattr(mp, "_original_trail", []) or []
-        original_input = getattr(mp, "_original_input", "") or ""
-        iteration_count = getattr(mp, "_iteration_count", len(original_trail))
+        """Derive the triggering turn's act-trail and iteration count from the"""
+        from services.act_trail import ActTrail  # noqa: PLC0415
+        trigger_channel = getattr(mp, "_trigger_channel", None)
+        trigger_turn_id = getattr(mp, "_trigger_turn_id", None)
+        rows: list[dict] = []
+        if trigger_channel is not None and trigger_turn_id is not None:
+            rows = ActTrail().fetch_by_turn(trigger_channel, trigger_turn_id)
+        iteration_count = len(rows)
+        original_input = getattr(mp, "_raw_input", "") or ""
         parts = [
             f"## Original User Request\n{original_input}",
             f"\n## Completed ACT Loop Trail ({iteration_count} iterations)",
         ]
-        for entry in original_trail:
-            parts.append(entry)
-        try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
-            if trail:
-                parts.append(f"\n{trail}")
-        except Exception:
-            pass
+        for row in rows:
+            parts.append(ActTrail.render(row))
         return "\n".join(parts)
 
     def get_system_prompt(self, mp) -> str:

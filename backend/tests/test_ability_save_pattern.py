@@ -14,8 +14,10 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from abilities.save_pattern import SavePattern, _VALID_FREQUENCIES
 from configs.channels.geo_pattern import GeoConfig
-from configs.channels.pattern import PatternConfig, _pattern_init_instance_state
+from configs.channels.pattern import PatternConfig
+from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
+from services.transcript_service import turn_id_of_row
 from tests._tool_result_harness import body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
@@ -37,7 +39,10 @@ def _mp(db) -> MessageProcessor:
     mp.config = PatternConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])
     mp.uid = _seed_transcript(db)
-    _pattern_init_instance_state(mp)
+    # The per-turn budget is derived from this turn's tool_calls rows, keyed by
+    # (config.channel, turn_id) — set turn_id from the seeded input row exactly
+    # as production's _setup does. No instance state.
+    mp.turn_id = turn_id_of_row(mp.uid)
     return mp
 
 
@@ -68,7 +73,7 @@ def _geo_mp(db) -> MessageProcessor:
     mp.uid = seed_transcript(
         db, channel="geo_pattern", content="user goes to the gym at the harbour daily"
     )
-    mp.config.get_user_prompt(mp)  # production lazy-init of save_pattern state
+    mp.turn_id = turn_id_of_row(mp.uid)
     return mp
 
 
@@ -176,12 +181,7 @@ def test_happy_path_stores_one_row(db):
 
 
 def test_geo_pass_stamps_geo_pattern_provenance(db):
-    """When save_pattern runs under the GEO pass (GeoConfig), the behavioral
-    pattern row's provenance must be 'geo_pattern', not 'pattern_match'.
-
-    The two background passes build separate MessageProcessors; a geo-derived
-    routine must be distinguishable from a behavioural one in data_graph.source.
-    The pattern pass (above) stays 'pattern_match'."""
+    """When save_pattern runs under the GEO pass (GeoConfig), the behavioral"""
     mp = _geo_mp(db)
     out = ToolDispatcher(mp).dispatch(
         "save_pattern",
@@ -223,8 +223,18 @@ def test_reinforce_same_name(db):
 
 def test_budget_cap_is_loud_capped(db):
     mp = _mp(db)
-    # Drive the real counter attribute straight to the cap — no mock.
-    setattr(mp, SavePattern.BUDGET_COUNTER_ATTR, SavePattern.BUDGET_CAP)
+    # Fill this turn's durable trail to the cap with real save_pattern rows via
+    # the production writer (the exact call the dispatcher makes), so the
+    # DB-derived budget counts BUDGET_CAP prior calls for the turn — no in-memory
+    # counter, no mock.
+    trail = ActTrail()
+    for i in range(SavePattern.BUDGET_CAP):
+        trail.record(
+            tool_name="save_pattern",
+            params={"name": f"prior_{i}"},
+            result="[save_pattern(status=success)]\n{\"saved\":1}\n[end:save_pattern]",
+            transcript_id=mp.uid,
+        )
     out = ToolDispatcher(mp).dispatch("save_pattern", _valid_params(name="over_cap"))
     h = _head(out)
     assert "status=success" in h

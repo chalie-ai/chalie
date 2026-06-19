@@ -6,17 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-ProcessorConfig — frozen dataclass for per-channel MessageProcessor behaviour.
-
-Every channel's behavioural surface is expressed through a single
-ProcessorConfig instance.  The dataclass is frozen so that a config created
-for one turn can never be mutated mid-loop.
-
-The ``job`` property — ``f"{channel}:{role}"`` — is the telemetry label passed
-through ``Providers.send`` to the resolved provider and ``_log_after_call``.
-There is no separate ``LOG_LABEL`` field; ``config.job`` IS the label.
-"""
+"""ProcessorConfig — frozen dataclass for per-channel MessageProcessor behaviour."""
 
 from __future__ import annotations
 
@@ -32,13 +22,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ProcessorConfig(ABC):
-    """Everything that varies between channels.  Immutable per-turn.
-
-    Every concrete subclass must implement ``get_system_prompt``,
-    ``get_user_prompt``, and ``get_user_definition``; the ABC constraint ensures
-    a subclass that omits any of the three cannot be instantiated.  The config
-    holds no reference to the processor — it stays a pure, frozen dataclass.
-    """
+    """Everything that varies between channels.  Immutable per-turn."""
 
     # ── Async capability (ClassVar — not a dataclass field) ────────────────────
     SUPPORTS_ASYNC: ClassVar[bool] = False
@@ -145,36 +129,14 @@ class ProcessorConfig(ABC):
     # ── Per-turn image attachment (concrete hook — default: no image) ──────────
 
     def get_image(self, mp: "MessageProcessor") -> "dict | None":
-        """VisionConfig overrides this to return
-        ``{"data": <base64>, "mime_type": <str>}`` — the shape every converter
-        consumes."""
+        """VisionConfig overrides this to return"""
         return None
-
-    # ── Turn-scoped instance state (concrete hook — default: none) ─────────────
-
-    def turn_scoped_state(self) -> tuple[str, ...]:
-        """Names of per-instance ``mp`` attributes that belong to the WHOLE turn,
-        not a single chain link.
-
-        A turn can span several MessageProcessors: each tool-bearing step spawns a
-        hidden-input continuation MP that rebuilds the request from the DB (see
-        ``MessageProcessor._continue``). Accumulators a tool mutates across steps
-        (counters, dedup/touched sets) and snapshots the prompt reads each step
-        live on the MP instance — a fresh continuation would otherwise reset them,
-        so a pattern saved in step 1 would be wrongly decayed by the post-turn hook
-        that runs on the final step. ``_continue`` carries every name listed here
-        forward by reference, so the whole chain shares one turn-scoped value.
-
-        Default ``()`` — channels with no cross-step state need no override."""
-        return ()
 
     # ── Derived properties ────────────────────────────────────────────────────
 
     @property
     def job(self) -> str:
-        """Telemetry label passed through ``Providers.send()`` to the resolved
-        provider's ``send_messages()`` and ``_log_after_call``.  Replaces the
-        per-subclass ``LOG_LABEL`` class attribute."""
+        """Telemetry label passed through ``Providers.send()`` to the resolved"""
         return f"{self.channel}:{self.role}"
 
     @property
@@ -185,12 +147,7 @@ class ProcessorConfig(ABC):
     # ── Cloning ───────────────────────────────────────────────────────────────
 
     def with_hidden_input(self) -> "ProcessorConfig":
-        """Return a shallow copy with ``skip_input_row=True``.
-
-        ``copy.copy`` preserves the concrete subclass and every field without
-        re-running the typed ``__init__``; ``object.__setattr__`` is required
-        because frozen dataclasses forbid normal field mutation.
-        """
+        """Return a shallow copy with ``skip_input_row=True``."""
         import copy  # noqa: PLC0415
         clone = copy.copy(self)
         object.__setattr__(clone, "skip_input_row", True)

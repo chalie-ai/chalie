@@ -12,16 +12,7 @@ from configs.channels._common import (
 
 
 class ProactiveSuggestionHook(PostTurnHook):
-    """Fires on a turn that ran 4+ tool calls. Non-blocking (daemon thread inside
-    the service). §3b / §4e / §6 / §4.8.
-
-    Post-turn hooks only run on a clean turn completion — ``_end_turn`` returns
-    early (firing no hooks) on cancellation and ``_run`` deletes the cancelled
-    turn — so the old ``loop_exited_cleanly`` guard is implicit here. The
-    iteration counter is gone with the loop's state machine; the gate now counts
-    the turn's durable ``tool_calls`` rows (the framework compaction marker
-    excluded), which is the real measure of how much tool activity the turn
-    drove."""
+    """Fires on a turn that ran 4+ tool calls. Non-blocking (daemon thread inside"""
 
     def run(self, mp, response_text: str) -> None:
         import logging  # noqa: PLC0415
@@ -41,20 +32,13 @@ class ProactiveSuggestionHook(PostTurnHook):
             rendered = mp._render_act_trail()  # type: ignore[attr-defined]
             act_trail = rendered.split("\n") if rendered else []
             raw_input = getattr(mp, "_raw_input", "")
-            maybe_suggest_skill(act_trail, raw_input)
+            maybe_suggest_skill(act_trail, raw_input, mp.config.channel, turn_id)
         except Exception as exc:
             _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
 
 
 class UserConfig(ProcessorConfig):
-    """Attachments auto-fire document.upload on turn 0 (presence of
-    metadata['attachments'] drives this — no flag needed). post_turn_hooks =
-    (ProactiveSuggestionHook(),) — skill suggestion only (no metrics, no
-    phase — §3b / §4e / §6).
-
-    SUPPORTS_ASYNC=True — the user channel is a push channel with a durable
-    session, so a backgrounded call's result is delivered as a later
-    assistant turn on this channel (§4.0 / §4.8d)."""
+    """Attachments auto-fire document.upload on turn 0 (presence of"""
 
     SUPPORTS_ASYNC = True
 
@@ -74,9 +58,7 @@ class UserConfig(ProcessorConfig):
         )
 
     def get_user_definition(self, mp) -> str:
-        """Per-turn cached on mp._user_definition_cached so each ACT iteration
-        is cheap. Prefers user_summary_long when converse mode is strongly
-        active; falls back to a static peer-to-peer framing on any failure."""
+        """Per-turn cached on mp._user_definition_cached so each ACT iteration"""
         _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
         cached = getattr(mp, "_user_definition_cached", None)
         if cached is not None:
@@ -112,9 +94,7 @@ class UserConfig(ProcessorConfig):
         return _FALLBACK
 
     def get_system_prompt(self, mp) -> str:
-        """Voice line sits at the very top for cache warmth. The
-        user_definition is NOT emitted here — it lives in the user prompt
-        (spec § Prompt Message Definitions). §3b / §6."""
+        """Voice line sits at the very top for cache warmth. The"""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         try:
@@ -141,11 +121,7 @@ class UserConfig(ProcessorConfig):
         return prompt
 
     def get_user_prompt(self, mp) -> str:
-        """Section order: user_def, World State, Previous Messages, blank,
-        post-compaction continuity banner (continuation only), input line
-        (BEFORE the trail), ACT trail. The framework wraps the body with the
-        ### Checkpoint / ### Current State envelope when a compaction row
-        exists. §3b / §6 / spec §4."""
+        """Section order: user_def, World State, Previous Messages, blank,"""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []

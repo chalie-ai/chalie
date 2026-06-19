@@ -1,35 +1,4 @@
-"""
-SubconsciousWorker — idle-gated 5-minute cognition tick.
-
-A single daemon thread that owns latent cognition: super-episode consolidation,
-decay, pattern extraction, user synthesis, and background DMN reflection.
-Fires only when the user is not active.
-
-Tick body (sequential, per §5.3):
-    0. Consolidate episodes → super-episodes  (per HEAVY channel: user, dmn,
-       external-agent:*; clusters stay channel-scoped).
-    1. Fact extraction — route hard facts from new episodes into data_graph
-       via constrained ADD/UPDATE/DELETE/NOOP ops (Mem0 pattern); drains the
-       facts_extracted_at backlog at a per-tick LLM-call budget.
-    2. Run decay engine.
-    3. Run pattern match.
-    4. Run user synthesis.
-    5. Run DMN reflection (skipped when no user_summary row exists).
-    6. Capability sync (IMAP/CalDAV/CardDAV via MailCapability._do_monitor).
-    7. Geo-spatial pattern extraction from location-tagged transcripts.
-
-Gates (both must pass — §5.2):
-    - User-active: ``last_user_message_at`` is older than 30 minutes.
-    - Already-fired: ``subconscious_last_fired_at > last_user_message_at``.
-
-Each step is wrapped in ``try/except``; one bad step does not skip the rest.
-The DMN step self-gates when ``user_summary`` is absent in data_graph.
-
-State persistence — ``subconscious_last_fired_at``:
-    - MemoryStore key ``subconscious:last_fired_at`` (fast read).
-    - data_graph row ``kind='system' key='subconscious_last_fired_at'``
-      (durable across restarts; reloaded into MemoryStore on first run).
-"""
+"""SubconsciousWorker — idle-gated 5-minute cognition tick."""
 
 import logging
 import os
@@ -109,15 +78,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 class SubconsciousWorker:
-    """Idle-gated tick orchestrator. Stateless across ticks, except for last_fired_at.
-
-    Public API:
-        - ``run_once()`` — fire one tick (gates, steps, state update).
-        - ``last_fired_at`` property — current persisted value (or None).
-
-    Re-entrancy: a non-blocking lock guards against overlapping ticks. Cheap
-    insurance even though the 5-minute spacing makes overlap unlikely.
-    """
+    """Idle-gated tick orchestrator. Stateless across ticks, except for last_fired_at."""
 
     def __init__(
         self,
@@ -146,16 +107,7 @@ class SubconsciousWorker:
     # ── Public entry ─────────────────────────────────────────────────────────
 
     def run_once(self) -> dict:
-        """Run one full tick. Returns a structured summary.
-
-        Summary keys:
-            - ``skipped``: gate name when both-gates check rejects the tick
-              (``user_active`` | ``already_fired`` | ``re_entrant``); absent
-              when steps run.
-            - ``steps``: dict per step with ``status`` (``ok`` | ``skipped`` |
-              ``error``) and optional ``detail`` / ``error`` fields.
-            - ``last_fired_at``: ISO string when state was bumped, else ``None``.
-        """
+        """Run one full tick. Returns a structured summary."""
         if not self._lock.acquire(blocking=False):
             logger.info(f"{LOG_PREFIX} tick already running — skipping re-entry")
             return {"skipped": "re_entrant", "steps": {}, "last_fired_at": None}
@@ -177,12 +129,7 @@ class SubconsciousWorker:
     # ── Tick orchestration ───────────────────────────────────────────────────
 
     def _tick(self) -> dict:
-        """Body of one tick after gates have been cleared.
-
-        Steps are strictly sequential — each step completes before the next
-        begins. Synthesis writes the user_summary row that DMN reads; the
-        sequential contract ensures DMN always sees the latest synthesis output.
-        """
+        """Body of one tick after gates have been cleared."""
         steps: dict = {}
         steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
         steps["fact_extraction"] = self._safe_step("fact_extraction", self._step_fact_extraction)
@@ -227,25 +174,7 @@ class SubconsciousWorker:
     # ── Gates ────────────────────────────────────────────────────────────────
 
     def _check_gates(self) -> Optional[str]:
-        """Return the name of the failing gate, or ``None`` when both pass.
-
-        Gate 1 (user-active) — Skip when ``last_user_message_at`` is within the
-        idle window. We are conservative: when the snapshot does not yet have
-        a user-message timestamp (cold boot, no traffic), Gate 1 passes (we
-        treat the system as idle so latent cognition can run).
-
-        Gate 2 (already-fired) — Skip when ``last_fired_at`` is newer than
-        ``last_user_message_at``. The worker has already covered this idle
-        window; a new user message must reset the comparison before it fires
-        again.
-
-        Post-restart hydrated-state edge case — when ``last_fired_at`` is
-        present (loaded from durable storage) but ``last_user_message_at`` is
-        still ``None`` (WorldState is cold and no user has talked since boot),
-        we have already fired during the previous process lifetime and
-        nothing has changed since. Skip with ``already_fired`` until a real
-        user message arrives.
-        """
+        """Return the name of the failing gate, or ``None`` when both pass."""
         from services.world_state import world_state
 
         snapshot = world_state.snapshot()
@@ -267,18 +196,7 @@ class SubconsciousWorker:
     # ── Steps ────────────────────────────────────────────────────────────────
 
     def _step_consolidate(self) -> str:
-        """Step 1 — consolidate apex episodes into super-episodes, per channel.
-
-        §3c / O2: the cluster loop lives here, not inside the processor — one
-        MessageProcessor.process() call per cluster.
-
-        Iterates every HEAVY (episode-producing) channel: user, dmn, and each
-        live external-agent channel. Clusters stay strictly channel-scoped —
-        find_super_candidates(channel) only joins episodes WHERE channel=? — so
-        memory from different sources is never pooled into one super-episode.
-        Channels that produce no episodes (delegate:*, skills_building,
-        scheduled) never appear and need no exclusion.
-        """
+        """Step 1 — consolidate apex episodes into super-episodes, per channel."""
         from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.embedding_service import get_embedding_service  # noqa: PLC0415
 
@@ -312,14 +230,7 @@ class SubconsciousWorker:
 
     @staticmethod
     def _consolidating_channels(db) -> list[str]:
-        """Return the channels to consolidate: the HEAVY exact channels (user,
-        dmn) unioned with each live external-agent channel found in episodes.
-
-        External-agent channels are per-agent (``external-agent:<id>``), so they
-        cannot be enumerated statically; they are discovered from the episodes
-        table at tick time. Clusters never cross channels, so each is processed
-        independently.
-        """
+        """Return the channels to consolidate: the HEAVY exact channels (user,"""
         from services.source_profiles import (  # noqa: PLC0415
             LIKE_EXTERNAL_AGENT,
             consolidating_exact_channels,
@@ -343,17 +254,7 @@ class SubconsciousWorker:
         return channels
 
     def _consolidate_channel(self, channel: str, db, emb_svc) -> tuple[int, int]:
-        """Consolidate one channel across both hierarchy rounds. Returns
-        (clusters_found, supers_written) summed over the rounds.
-
-        Two count-gated rounds run sequentially:
-          - Leaf round (level-0 → level-1): fires at ``APEX_COUNT_TRIGGER`` leaf
-            apexes via ``find_super_candidates``.
-          - Era round (level-1 → level-2): fires at ``ERA_DIGEST_TRIGGER`` level-1
-            apexes; clusters their stored summary embeddings the same way.
-        Both rounds emit clusters into the shared write path. A find/novelty
-        failure on one round is contained to that round.
-        """
+        """Consolidate one channel across both hierarchy rounds. Returns"""
         from services.episodic_constants import ERA_DIGEST_TRIGGER  # noqa: PLC0415
         from services.episodic_service import (  # noqa: PLC0415
             EpisodicService,
@@ -406,12 +307,7 @@ class SubconsciousWorker:
     def _write_round(
         self, channel, clusters, level, db, emb_svc, episodic_svc
     ) -> int:
-        """Write one roll-up round's clusters at ``level``. Returns supers written.
-
-        Hoists the channel's novelty comparison set once for the round, then
-        encodes + stores one parent per cluster while the per-tick summarization
-        budget lasts. A per-cluster failure is logged and skipped.
-        """
+        """Write one roll-up round's clusters at ``level``. Returns supers written."""
         from services.episodic_service import _fetch_novelty_comparison_set  # noqa: PLC0415
 
         if not clusters or self._summarization_budget_remaining <= 0:
@@ -441,14 +337,7 @@ class SubconsciousWorker:
     def _write_super_episode(
         channel, cluster_ids, level, db, emb_svc, episodic_svc, prior_embeddings
     ) -> bool:
-        """Encode + store one parent episode for a cluster. Returns True on write.
-
-        Shared by the leaf round (``level=1`` super) and the era round
-        (``level=2`` digest). The source channel and ``level`` are stamped onto
-        the parent so the hierarchy stays channel-scoped and decays at the right
-        tau. Children get a back-pointer + tombstone via ``set_consolidated_into``.
-        Any failure is logged and returns False.
-        """
+        """Encode + store one parent episode for a cluster. Returns True on write."""
         from configs.channels import (  # noqa: PLC0415
             SuperEpisodeConfig,
             _collect_transcript_ids,
@@ -528,20 +417,7 @@ class SubconsciousWorker:
             return False
 
     def _step_fact_extraction(self) -> str:
-        """Step 2 — route hard facts from new episodes into data_graph.
-
-        Drains the ``facts_extracted_at IS NULL`` backlog oldest-first under a
-        per-tick LLM-call budget (spec §4.6 mechanism 3). For each episode: one
-        tool-free constrained LLM call (``FactExtractionConfig``) over the gist
-        plus the top-N most-similar existing facts, parsed into ADD/UPDATE/
-        DELETE/NOOP ops (Mem0 arXiv:2504.19413). The chat model never has to call
-        memory.store on a user turn — this step is the router.
-
-        Safety contract (spec §4.6.2/.3): unparseable model output is a NOOP plus
-        a WARN plus a counter increment — never a write. Every processed episode
-        is stamped so the backlog advances even when extraction yielded nothing,
-        and a per-episode failure never aborts the rest of the budget.
-        """
+        """Step 2 — route hard facts from new episodes into data_graph."""
         from configs.channels import FactExtractionConfig, parse_fact_ops  # noqa: PLC0415
         from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
         from services.database_service import get_shared_db_service  # noqa: PLC0415
@@ -582,13 +458,7 @@ class SubconsciousWorker:
         self, episode, episodic_svc, dg, counters,
         config_cls, parse_ops, processor_cls,
     ) -> None:
-        """Run the constrained-op pipeline for a single episode and stamp it.
-
-        Retrieves neighbours, fires the one constrained call, parses, applies the
-        ops, then stamps ``facts_extracted_at``. Parse failure degrades to NOOP
-        (counted) so a confused model never corrupts the graph; the episode is
-        still stamped so the backlog drains.
-        """
+        """Run the constrained-op pipeline for a single episode and stamp it."""
         gist = episode.get("gist") or ""
         neighbours = dg.recall(gist, limit=_FACT_NEIGHBOUR_LIMIT) if gist else []
 
@@ -617,15 +487,7 @@ class SubconsciousWorker:
         counters["episodes"] += 1
 
     def _apply_fact_op(self, op, dg, counters, source) -> None:
-        """Apply one validated constrained op to data_graph and count it.
-
-        ``source`` is the channel-tagged provenance for this episode's facts.
-        ADD/UPDATE go through ``upsert_fact`` (exact-key; a contradicting value
-        triggers bi-temporal supersession); DELETE goes through ``invalidate``
-        (active=0 + valid_to). A failed write is logged and counted as a
-        ``failed`` (distinct from a model-chosen NOOP) — never raised past here,
-        so one bad fact cannot abort the others.
-        """
+        """Apply one validated constrained op to data_graph and count it."""
         from configs.channels.fact_extraction import OP_DELETE  # noqa: PLC0415
 
         verb = op["op"]
@@ -647,14 +509,7 @@ class SubconsciousWorker:
             )
 
     def _step_decay(self) -> str:
-        """Step 3 — run the unified decay cycle.
-
-        DecayEngineService owns episodic + data_graph + transcript cleanup +
-        tool_calls purge + behavioural-pattern stale flips. Engine logic
-        unchanged; only the trigger surface lives here now.
-
-        The engine is cached on the worker instance to reuse the same instance across ticks.
-        """
+        """Step 3 — run the unified decay cycle."""
         if self._decay_engine is None:
             from services.decay_engine_service import DecayEngineService
             self._decay_engine = DecayEngineService()
@@ -662,13 +517,7 @@ class SubconsciousWorker:
         return "ok"
 
     def _step_pattern_match(self) -> str:
-        """Step 4 — single-pass LLM pattern matcher over a transcript-id window.
-
-        Reads a cursor row from data_graph (kind='system'
-        key='pattern_match_cursor'). If MAX(transcripts.id) - cursor < 50,
-        skip. Else fire PatternMatchProcessor over the (cursor, latest] window
-        and advance the cursor on success.
-        """
+        """Step 4 — single-pass LLM pattern matcher over a transcript-id window."""
         from services.data_graph_service import get_data_graph_service
         from services.database_service import get_shared_db_service
 
@@ -722,31 +571,15 @@ class SubconsciousWorker:
             )
             return f"skip cursor={cursor} latest={latest} delta={delta}"
 
-        # 3. Fire processor via flat path (§3b / T8 migration).
-        # get_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
+        # 3. Fire the pattern pass via the canonical entry point. The skill-
+        # personalisation sync (PatternSkillSyncHook) runs inside the turn's
+        # post_turn_hooks, keyed off the patterns it touched — both that set and
+        # the confidence-decay sweep are derived from the turn's durable rows, so
+        # nothing needs to be inspected on the processor after it returns.
         from configs.channels import PatternConfig  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        config = PatternConfig(cursor, latest)
-        # Build the mp manually so we can inspect _touched_pattern_ids after _run().
-        pmp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(pmp, "", None)
-        pmp.config = config
-        pmp.uid = None
-        pmp.cancel_event = threading.Event()
-        pmp.thinking_level = "low"
-        pmp._run()
-
-        # Layer 2: update skill-personalisation associations for touched patterns
-        touched = getattr(pmp, "_touched_pattern_ids", set())
-        if touched:
-            try:
-                from services.skill_association_service import SkillAssociationService
-                SkillAssociationService().run_pass(touched)
-            except Exception as exc:
-                logger.warning(
-                    f"{LOG_PREFIX} skill_association pass failed: {exc}"
-                )
+        MessageProcessor.process("", PatternConfig(cursor, latest))
 
         # 4. Advance cursor on success.
         # Cursor write race / known risk: a crash here leaves the cursor
@@ -773,16 +606,7 @@ class SubconsciousWorker:
         return f"fired cursor={cursor}->{latest} delta={delta}"
 
     def _step_synthesis(self) -> str:
-        """Step 5 — refresh the user synopsis (short + long).
-
-        §3c / O1: _should_synthesise() gate lives HERE, not inside the config.
-        When no new traits or behavioural patterns have arrived since the last
-        synthesis, skip.  Inputs are the union of Episodes + Data Graph + Patterns.
-
-        The resulting ``user_summary`` / ``user_summary_long`` rows in
-        data_graph are the prerequisite for the DMN step. Sequential execution
-        guarantees DMN sees the freshest synthesis output.
-        """
+        """Step 5 — refresh the user synopsis (short + long)."""
         from configs.channels import UserSummaryConfig, _should_synthesise  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
@@ -795,20 +619,7 @@ class SubconsciousWorker:
         return "ok"
 
     def _step_dmn(self) -> str:
-        """Step 6 — background DMN reflection via DMNMessageProcessor.
-
-        Runs DMNMessageProcessor which reads user synthesis + recent episodes,
-        acts on open threads using web_search/web_browse/memory tools, and saves
-        all findings to data_graph via the memory tool. No UI broadcast.
-
-        Prerequisites (checked before constructing the processor):
-            - ``user_summary`` or ``user_summary_long`` must exist in data_graph.
-              The synthesis step runs earlier in the same tick and may have just
-              produced this row; this check runs after synthesis completes.
-
-        Skips (returns early) when no synthesis row exists.
-        DMN has nothing meaningful to reflect on without a user model.
-        """
+        """Step 6 — background DMN reflection via DMNMessageProcessor."""
         synthesis = self._load_user_synthesis()
         if not synthesis:
             logger.info(f"{LOG_PREFIX} Skipping DMN — no user synthesis available")
@@ -820,12 +631,7 @@ class SubconsciousWorker:
         return "ok"
 
     def _step_capability_sync(self) -> str:
-        """Step 7 — IMAP / CalDAV / CardDAV server sync.
-
-        Delegates to every connected capability's ``monitor()`` method.
-        MailCapability._do_monitor() manages per-protocol cadence internally
-        (IMAP every call, CalDAV every 3rd, CardDAV every 12th).
-        """
+        """Step 7 — IMAP / CalDAV / CardDAV server sync."""
         from capabilities import load_capabilities
 
         synced = []
@@ -836,13 +642,7 @@ class SubconsciousWorker:
         return f"synced: {', '.join(synced)}" if synced else "no connected capabilities"
 
     def _step_geo_patterns(self) -> str:
-        """Step 8 — single-pass LLM geo-spatial pattern extractor.
-
-        Reads a cursor from data_graph (kind='system' key='geo_pattern_cursor').
-        If the count of location-tagged transcripts beyond the cursor is below
-        the minimum delta (30), skip. Else fire via flat MessageProcessor.process()
-        with GeoConfig and advance the cursor on success.
-        """
+        """Step 8 — single-pass LLM geo-spatial pattern extractor."""
         from services.data_graph_service import get_data_graph_service
         from services.database_service import get_shared_db_service
 
@@ -894,19 +694,11 @@ class SubconsciousWorker:
             )
             return f"skip cursor={cursor} latest={latest} delta={delta}"
 
-        # Fire via flat path (§3b / T8 migration).
-        # get_user_prompt lazily inits _save_pattern_calls / _touched_pattern_ids etc.
+        # Fire the geo pass via the canonical entry point.
         from configs.channels import GeoConfig  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        config = GeoConfig(cursor, latest)
-        gmp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(gmp, "", None)
-        gmp.config = config
-        gmp.uid = None
-        gmp.cancel_event = threading.Event()
-        gmp.thinking_level = "low"
-        gmp._run()
+        MessageProcessor.process("", GeoConfig(cursor, latest))
 
         try:
             get_data_graph_service().store(
@@ -925,13 +717,7 @@ class SubconsciousWorker:
         return f"fired cursor={cursor}->{latest} delta={delta}"
 
     def _load_user_synthesis(self) -> Optional[str]:
-        """Check whether a user_summary row exists in data_graph.
-
-        Returns the synthesis value when present, None otherwise.
-        Prefers user_summary_long for completeness but falls back to
-        user_summary — matching the same preference logic used by
-        DMNMessageProcessor._fetch_user_synthesis().
-        """
+        """Check whether a user_summary row exists in data_graph."""
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
@@ -951,20 +737,11 @@ class SubconsciousWorker:
     # ── State persistence ───────────────────────────────────────────────────
 
     def _load_last_fired_from_storage(self) -> Optional[datetime]:
-        """Hydrate last_fired_at from the durable dual-write store.
-
-        Returns ``None`` when never persisted; the shared store handles the
-        MemoryStore-then-data_graph fallback and corruption guard.
-        """
+        """Hydrate last_fired_at from the durable dual-write store."""
         return _LAST_FIRED_TIMESTAMP.load()
 
     def _persist_last_fired(self, when: datetime) -> None:
-        """Write last_fired_at to MemoryStore + data_graph.
-
-        Best-effort across both stores; either failure is logged but does not
-        abort the tick. The next tick's gate logic still sees the cached
-        in-process value via ``self._cached_last_fired``.
-        """
+        """Write last_fired_at to MemoryStore + data_graph."""
         _LAST_FIRED_TIMESTAMP.persist(when)
 
 
@@ -990,12 +767,7 @@ def get_subconscious_worker() -> SubconsciousWorker:
 
 
 def subconscious_worker():
-    """WorkerManager entry point. Tick loop with a stable cadence.
-
-    The first tick is delayed by the configured tick interval so the worker
-    does not fire during boot before any user message has arrived (which
-    would defeat the user-active gate's intent).
-    """
+    """WorkerManager entry point. Tick loop with a stable cadence."""
     worker = get_subconscious_worker()
     interval = max(1, worker.tick_sec)
     logger.info(f"{LOG_PREFIX} Service started (tick={interval}s)")

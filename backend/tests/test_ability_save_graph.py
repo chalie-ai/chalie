@@ -6,11 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""save_graph-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. Covers whitespace-only key rejection, happy
-path row storage, geo-pass provenance stamping, same-fact deduplication, and the
-per-turn budget cap loud path.
-"""
+"""save_graph-specific business-logic tests migrated from the per-ability"""
 
 import json
 
@@ -19,8 +15,10 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from abilities.save_graph import SaveGraph
 from configs.channels.geo_pattern import GeoConfig
-from configs.channels.pattern import PatternConfig, _pattern_init_instance_state
+from configs.channels.pattern import PatternConfig
+from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
+from services.transcript_service import turn_id_of_row
 from tests._tool_result_harness import body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
@@ -38,7 +36,10 @@ def _mp(db) -> MessageProcessor:
     mp.config = PatternConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])
     mp.uid = _seed_transcript(db)
-    _pattern_init_instance_state(mp)
+    # The per-turn budget and dedup set are derived from this turn's tool_calls
+    # rows, keyed by (config.channel, turn_id) — set turn_id from the seeded
+    # input row exactly as production's _setup does. No instance state.
+    mp.turn_id = turn_id_of_row(mp.uid)
     return mp
 
 
@@ -63,15 +64,12 @@ def _rows(db, *, kind=None, key=None, source="pattern_match") -> list:
 
 
 def _geo_mp(db) -> MessageProcessor:
-    """A real MessageProcessor on the GEO config — the other background pass that
-    reaches save_graph. GeoConfig.get_user_prompt lazily inits the same
-    per-instance budget/dedupe state PatternConfig does, so we drive it once to
-    initialise exactly as production does (no hand-set attrs)."""
+    """A real MessageProcessor on the GEO config — the other background pass that"""
     mp = MessageProcessor("detect a geo fact")
     mp.config = GeoConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])
     mp.uid = seed_transcript(db, channel="geo_pattern", content="detect a geo fact")
-    mp.config.get_user_prompt(mp)  # production lazy-init of save_graph state
+    mp.turn_id = turn_id_of_row(mp.uid)
     return mp
 
 
@@ -112,13 +110,7 @@ def test_happy_path_stores_one_row(db):
 
 
 def test_geo_pass_stamps_geo_pattern_provenance(db):
-    """When save_graph runs under the GEO pass (GeoConfig), the stored fact's
-    provenance must be 'geo_pattern', not the pattern pass's 'pattern_match'.
-
-    This is the per-source provenance fix: the two background passes build
-    separate MessageProcessors, and the row each writes must record WHICH pass
-    produced it so a downstream reader can tell a geo-derived fact from a
-    behavioural one. The pattern pass (above) stays 'pattern_match'."""
+    """When save_graph runs under the GEO pass (GeoConfig), the stored fact's"""
     mp = _geo_mp(db)
     out = ToolDispatcher(mp).dispatch(
         "save_graph",
@@ -158,8 +150,18 @@ def test_same_fact_twice_dedupes(db):
 
 def test_budget_cap_is_loud_capped(db):
     mp = _mp(db)
-    # Drive the real counter attribute straight to the cap — no mock.
-    setattr(mp, SaveGraph.BUDGET_COUNTER_ATTR, SaveGraph.BUDGET_CAP)
+    # Fill this turn's durable trail to the cap with real save_graph rows via the
+    # production writer (the exact call the dispatcher makes), so the DB-derived
+    # budget counts BUDGET_CAP prior calls for the turn — no in-memory counter,
+    # no mock.
+    trail = ActTrail()
+    for i in range(SaveGraph.BUDGET_CAP):
+        trail.record(
+            tool_name="save_graph",
+            params={"kind": "misc", "key": f"prior_{i}", "value": "v"},
+            result="[save_graph(status=success)]\n{\"saved\":1}\n[end:save_graph]",
+            transcript_id=mp.uid,
+        )
     out = ToolDispatcher(mp).dispatch(
         "save_graph",
         {"kind": "misc", "key": "over_cap", "value": "nope", "act_summary": "x"},

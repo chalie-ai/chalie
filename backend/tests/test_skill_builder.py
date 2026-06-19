@@ -363,3 +363,66 @@ def test_skill_body_containing_skill_builder_survives_manager_op_byte_identical(
     assert after == content
     assert "skill_builder" in after
     assert "skill_manager" not in after
+
+
+# ===========================================================================
+# Feature test — SkillSuggestionConfig.get_user_prompt derives real query+trail
+# ===========================================================================
+
+
+@pytest.mark.unit
+def test_skill_suggestion_prompt_contains_real_query_and_trail(db):
+    """SkillSuggestionConfig.get_user_prompt must render the actual user query"""
+    from services.transcript_service import write_input_row, turn_id_of_row
+    from services.act_trail import ActTrail
+    from configs.channels import SkillSuggestionConfig
+    from services.message_processor import MessageProcessor
+    import threading
+
+    # 1. Seed a user transcript row — this is the triggering turn.
+    user_query = "Find me a good recipe for pasta carbonara and set a 20-minute timer"
+    row_id = write_input_row("user", "user", user_query)
+    trigger_turn_id = turn_id_of_row(row_id)
+
+    # 2. Seed two tool_calls rows anchored to that transcript row.
+    ActTrail().record(
+        tool_name="web_search",
+        params={"query": "pasta carbonara recipe", "act_summary": "searching recipes"},
+        result="[web_search(status=success)]\n...\n[end:web_search]",
+        transcript_id=row_id,
+        summary="Searching for recipes",
+    )
+    ActTrail().record(
+        tool_name="timer",
+        params={"duration": 1200, "act_summary": "starting timer"},
+        result="[timer(status=success)]\n...\n[end:timer]",
+        transcript_id=row_id,
+        summary="Starting 20-min timer",
+    )
+
+    # 3. Build the suggestion MP exactly as _run_suggestion_processor does.
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, user_query, None)
+    mp.config = SkillSuggestionConfig()
+    mp.uid = None
+    mp.cancel_event = threading.Event()
+    mp.thinking_level = "low"
+    mp._trigger_channel = "user"  # type: ignore[attr-defined]
+    mp._trigger_turn_id = trigger_turn_id  # type: ignore[attr-defined]
+
+    # 4. Call the real get_user_prompt.
+    prompt = mp.config.get_user_prompt(mp)
+
+    # 5. Assert both the user query and the tool-call trail are present — not empty.
+    assert user_query in prompt, (
+        f"Original user query not found in suggestion prompt.\nPrompt:\n{prompt}"
+    )
+    assert "web_search" in prompt, (
+        f"web_search tool call not found in suggestion prompt.\nPrompt:\n{prompt}"
+    )
+    assert "timer" in prompt, (
+        f"timer tool call not found in suggestion prompt.\nPrompt:\n{prompt}"
+    )
+    assert "2 iterations" in prompt, (
+        f"Iteration count not found in suggestion prompt.\nPrompt:\n{prompt}"
+    )

@@ -1,15 +1,4 @@
-"""
-Feature tests for PatternMatchProcessor.
-
-Each test answers one question: does this service do what it claims?
-
-LLM boundary: Providers._resolve is the only stubbed seam — Providers.send runs
-real prompt assembly, tool building, and pre-flight. DB, DataGraphService,
-save_pattern, save_graph, _touched_pattern_ids all run against real production code.
-
-Injection seam: Providers._resolve is swapped via a plain try/finally context
-manager (_inject_fake_client) — no unittest.mock.patch.
-"""
+"""Feature tests for PatternMatchProcessor."""
 
 import contextlib
 import json
@@ -157,11 +146,7 @@ def _fetch_cursor(db):
 
 
 class TestSkipsWhenDeltaBelowThreshold:
-    """Tests 1+2 — step returns 'skip' when delta is below the 50-transcript threshold.
-
-    Case A: no transcripts at all (cold boot) → no cursor row written.
-    Case B: cursor=10, only 30 transcripts (delta=20) → cursor unchanged.
-    """
+    """Tests 1+2 — step returns 'skip' when delta is below the 50-transcript threshold."""
 
     @pytest.mark.parametrize("scenario", ["cold_boot", "under_delta"])
     def test_skips_when_below_threshold(self, scenario, db, store):
@@ -236,11 +221,7 @@ class TestFiftyPlusDeltaFiresAndWritesPattern:
 
 
 class TestSavePatternConfidenceCap:
-    """Tests 4+5 — reinforce always caps at 10.0, whether starting below or at the cap.
-
-    seed_confidence=4.0 → 4+7=11 → capped to 10.0.
-    seed_confidence=10.0 → already at cap → stays 10.0.
-    """
+    """Tests 4+5 — reinforce always caps at 10.0, whether starting below or at the cap."""
 
     @pytest.mark.parametrize("seed_confidence", [4.0, 10.0])
     def test_reinforce_caps_at_10(self, seed_confidence, db, store):
@@ -364,8 +345,7 @@ class TestSaveGraphRoutesThroughDataGraphService:
 
 
 class TestSaveGraphBehavioralPatternKindReturnsError:
-    """Test 8 — save_graph with kind='behavioral_pattern' returns a loud
-    invalid-param error (TKT-912 contract), not a success-shaped rejection."""
+    """Test 8 — save_graph with kind='behavioral_pattern' returns a loud"""
 
     def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(self, db, store):
         from abilities.save_graph import ALLOWED_KINDS, SaveGraph
@@ -439,15 +419,7 @@ class TestSavePatternBudgetCapAt20:
 
 
 class TestSaveGraphBudgetCapAt50:
-    """Test 10 — 51 save_graph calls in one tick → 50 land, 51st hits the budget cap.
-
-    Driven through the REAL ACT loop (no hand-bound stub processor), mirroring
-    Test 9's save_pattern budget proof. ``kind='misc'`` stores verbatim
-    (DataGraphService policy: reinforce=False, contradiction=None), so each of
-    the 51 unique keys is a distinct row — the 51st never lands because the real
-    SaveGraph budget counter (carried on the real MessageProcessor) caps at 50.
-    Rewritten from a hand-bound ``_StubProcessor``.
-    """
+    """Test 10 — 51 save_graph calls in one tick → 50 land, 51st hits the budget cap."""
 
     def test_save_graph_budget_cap_at_50(self, db, store):
         from services.subconscious_worker import SubconsciousWorker
@@ -488,18 +460,7 @@ class TestSaveGraphBudgetCapAt50:
 
 
 class TestReinforcementDiminishingBoost:
-    """Test 12 — each successive reinforce adds a smaller storage_strength boost and
-    the value is capped at 1.0 (diminishing returns).
-
-    Driven through the REAL hot path: three successive
-    ``SubconsciousWorker._step_pattern_match()`` ticks, each firing one
-    ``save_pattern`` tool call for the same pattern through the real ACT loop
-    (MessageProcessor → ToolDispatcher → SavePattern.run → _upsert_pattern).
-    The only stubbed seam is the LLM provider (Providers._resolve); reinforcement
-    strength is read back from the real ``data_graph`` SQL columns after each tick.
-    Rewritten from a direct ``_upsert_pattern()`` call (the named
-    MagicMock/private-fn-bypass anti-pattern — no internal shortcut).
-    """
+    """Test 12 — each successive reinforce adds a smaller storage_strength boost and"""
 
     def test_multiple_reinforcements_give_diminishing_boost(self, db, store):
         from services.subconscious_worker import SubconsciousWorker
@@ -577,12 +538,7 @@ class TestReinforcementDiminishingBoost:
 
 
 def _seed_located_transcripts(db, count, *, channel):
-    """Seed `count` location-tagged transcripts on `channel`.
-
-    The geo step counts only rows whose source profile marks them as user
-    geo-activity (geo_user_channels_sql) — a located row on a muted/non-user
-    channel must NOT advance the geo cursor.
-    """
+    """Seed `count` location-tagged transcripts on `channel`."""
     for i in range(count):
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at, "
@@ -595,14 +551,7 @@ def _seed_located_transcripts(db, count, *, channel):
 
 
 class TestGeoPassProvenance:
-    """Test 13 — the GEO pass writes behavioural patterns with source='geo_pattern'.
-
-    Drives the REAL ``SubconsciousWorker._step_geo_patterns()`` over
-    location-tagged user-channel transcripts (the geo channel filter, anchor J,
-    is the firing precondition) through the real ACT loop. The pattern the geo
-    agent saves must carry provenance 'geo_pattern' — NOT the behavioural pass's
-    'pattern_match' — so a geo-derived routine is distinguishable downstream.
-    """
+    """Test 13 — the GEO pass writes behavioural patterns with source='geo_pattern'."""
 
     def test_geo_pass_writes_pattern_with_geo_provenance(self, db, store):
         from services.subconscious_worker import SubconsciousWorker
@@ -644,10 +593,7 @@ class TestGeoPassProvenance:
         )
 
     def test_geo_pass_skips_when_located_rows_are_on_muted_channel(self, db, store):
-        """Channel filter (anchor J): location-tagged rows on a NON-user-activity
-        channel must NOT advance the geo cursor, so the step skips even when the
-        raw row count is far above the delta. Without the allowlist filter a
-        delegate's located rows would fire a spurious geo pass."""
+        """Channel filter (anchor J): location-tagged rows on a NON-user-activity"""
         from services.source_profiles import profile_for
         from services.subconscious_worker import SubconsciousWorker
 

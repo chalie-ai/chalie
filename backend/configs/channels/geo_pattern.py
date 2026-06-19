@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
-from configs.channels.pattern import PATTERN_TURN_STATE, _pattern_existing_patterns_block
+from configs.channels.pattern import _pattern_existing_patterns_block
 
-# ── Geo-pattern prompt builders and post_turn ─────────────────────────────────
+# ── Geo-pattern prompt builders ───────────────────────────────────────────────
 
 
 def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> str:
-    """Fetch location-tagged transcripts from the window and format them.
-
-    Only channels whose source profile marks them as user geo-activity are
-    included, and compaction rows are excluded — background channels stamp NULL
-    location (transcript_service back-fill gate), but the allowlist filter is the
-    structural guard so a stray located row on a muted channel can never feed the
-    geo-pattern model.
-    """
+    """Fetch location-tagged transcripts from the window and format them."""
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
     # Bidirectional dependency: the per-source allowlist lives in
@@ -55,42 +47,8 @@ def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> st
         return "(transcript fetch failed)"
 
 
-class GeoCounterHook(PostTurnHook):
-    """Log completion counters. Decay is handled by pattern_match, not geo_pattern.
-
-    §3b / §4.8 — no metrics, no decay sweep.
-    """
-
-    def run(self, mp, response_text: str) -> None:
-        import logging as _logging  # noqa: PLC0415
-        _log = _logging.getLogger(__name__)
-        try:
-            from services.time_utils import utc_now  # noqa: PLC0415
-            save_pattern_calls = getattr(mp, "_save_pattern_calls", 0)
-            save_graph_calls = getattr(mp, "_save_graph_calls", 0)
-            touched_ids = getattr(mp, "_touched_pattern_ids", set()) or set()
-            now_iso = utc_now().isoformat()
-            _log.info(
-                "[GEO_CONFIG] done save_pattern=%d save_graph=%d "
-                "touched=%d at=%s",
-                save_pattern_calls,
-                save_graph_calls,
-                len(touched_ids),
-                now_iso,
-            )
-        except Exception as exc:
-            _log.warning("[GEO_CONFIG] post_turn logging failed: %s", exc)
-
-
 class GeoConfig(ProcessorConfig):
-    """Geo-pattern config — per-window background geo recognition.
-
-    channel/role='geo_pattern', suppress_history=True.
-    post_turn_hooks = (GeoCounterHook(),) — log counters only (§3b).
-
-    Counter/state attrs are lazily initialised by get_user_prompt on the first
-    call so the caller does not need to pre-set them.
-    """
+    """Geo-pattern config — per-window background geo recognition."""
 
     def __init__(self, window_start: int, window_end: int) -> None:
         super().__init__(
@@ -103,35 +61,16 @@ class GeoConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn_hooks=(GeoCounterHook(),),
         )
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
-
-    def turn_scoped_state(self) -> tuple[str, ...]:
-        return PATTERN_TURN_STATE
 
     def get_user_definition(self, mp) -> str:
         return ""
 
     def get_user_prompt(self, mp) -> str:
-        """Geo-pattern user-prompt: cached location transcripts + existing patterns + trail."""
-        # Lazy-init per-instance state so SavePattern/SaveGraph find it.
-        if not hasattr(mp, "_save_pattern_calls"):
-            mp._save_pattern_calls = 0  # type: ignore[attr-defined]
-        if not hasattr(mp, "_save_graph_calls"):
-            mp._save_graph_calls = 0  # type: ignore[attr-defined]
-        if not hasattr(mp, "_save_graph_seen"):
-            mp._save_graph_seen = set()  # type: ignore[attr-defined]
-        if not hasattr(mp, "_touched_pattern_ids"):
-            mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
-        # Cache the transcript block across multiple iterations (same as GPP).
-        cached = getattr(mp, "_cached_transcript_block", None)
-        if cached is None:
-            block = _geo_pattern_load_transcript_block(self._window_start, self._window_end)
-            mp._cached_transcript_block = block  # type: ignore[attr-defined]
-        else:
-            block = cached
+        """Geo-pattern user-prompt: location transcripts + existing patterns + trail."""
+        block = _geo_pattern_load_transcript_block(self._window_start, self._window_end)
         existing = _pattern_existing_patterns_block()
         parts = [f"Existing patterns:\n{existing}", block]
         try:
