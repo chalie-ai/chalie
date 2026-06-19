@@ -107,6 +107,10 @@ voice-rocm = [
 strict = true
 follow_imports = "silent"
 ignore_missing_imports = true
+# `--strict` does NOT imply these; we enable them explicitly so the bar is
+# closer to a hard-typed language. strict_bytes forbids the implicit
+# str/bytes/bytearray promiscuity mypy otherwise tolerates.
+strict_bytes = true
 
 [tool.setuptools]
 # backend/ is not an importable package — it's run directly via run.py.
