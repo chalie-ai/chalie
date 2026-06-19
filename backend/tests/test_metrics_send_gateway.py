@@ -8,7 +8,11 @@
 
 """user_messages_total counts — dashboard derives on demand from transcript COUNT."""
 
+import sqlite3
+
 import pytest
+
+from services.memory_store import MemoryStore
 
 pytestmark = pytest.mark.unit
 
@@ -16,7 +20,7 @@ pytestmark = pytest.mark.unit
 # ── user_messages_total deleted as stored counter; dashboard uses COUNT ────────
 
 
-def test_stored_counter_does_not_affect_user_messages(db, store):
+def test_stored_counter_does_not_affect_user_messages(db: sqlite3.Connection, store: MemoryStore) -> None:
     from services.metrics_service import MetricsService
 
     db.execute(
@@ -34,7 +38,7 @@ def test_stored_counter_does_not_affect_user_messages(db, store):
 # ── one user turn = exactly one user/user transcript row ───────────────────────
 
 
-def test_count_exactness_n_turns(db, store):
+def test_count_exactness_n_turns(db: sqlite3.Connection, store: MemoryStore) -> None:
     from services.metrics_service import MetricsService
 
     for i in range(5):

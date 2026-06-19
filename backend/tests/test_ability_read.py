@@ -8,7 +8,9 @@
 
 
 
+import sqlite3
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -19,13 +21,13 @@ from tests._tool_result_harness import allow_policy, seed_transcript
 pytestmark = pytest.mark.unit
 
 
-def _seed_transcript(db) -> int:
+def _seed_transcript(db: sqlite3.Connection) -> int:
     """Insert the transcript anchor (tool_calls.transcript_id FK) the trail hangs
     its recorded rows off, and return its id."""
     return seed_transcript(db, channel="dmn", content="read this for me")
 
 
-def _allow_read(db) -> None:
+def _allow_read(db: sqlite3.Connection) -> None:
     """Seed the real policy row prod would carry so the gate runs ``read`` on the
     allow path (no mock — the same flat ``policy`` table PolicyManager reads)."""
     allow_policy(db, "read", channel=DmnConfig().policy_channel.value)
@@ -36,7 +38,7 @@ class _MP:
     processor: ``config`` (policy channel + emitter gate), ``uid`` (the transcript
     anchor), and ``cancel_event``."""
 
-    def __init__(self, uid: int):
+    def __init__(self, uid: int) -> None:
         self.config = DmnConfig()
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
@@ -44,7 +46,7 @@ class _MP:
         self.cancel_event = threading.Event()
 
 
-def test_patch_file_passes_through_verbatim(db, tmp_path):
+def test_patch_file_passes_through_verbatim(db: sqlite3.Connection, tmp_path: Path) -> None:
     """A raw ``.patch`` file must come back VERBATIM — the TKT-899 bug was that
     ``extract_html`` stripped non-HTML text to ``no-readable-content``. The patch
     body has zero HTML, so any extraction would lose it."""
@@ -75,7 +77,7 @@ def test_patch_file_passes_through_verbatim(db, tmp_path):
     assert "+new_line = 2" in result
 
 
-def test_diff_file_passes_through_verbatim(db, tmp_path):
+def test_diff_file_passes_through_verbatim(db: sqlite3.Connection, tmp_path: Path) -> None:
     """Same passthrough guarantee for the ``.diff`` extension."""
     transcript_id = _seed_transcript(db)
     _allow_read(db)
@@ -93,7 +95,7 @@ def test_diff_file_passes_through_verbatim(db, tmp_path):
     assert "+added" in result
 
 
-def test_html_file_still_goes_through_extraction(db, tmp_path):
+def test_html_file_still_goes_through_extraction(db: sqlite3.Connection, tmp_path: Path) -> None:
     """Passthrough is NOT a blanket bypass — an ``.html`` file still runs through
     the real ``extract_html``, so script/style junk is stripped and only the
     readable article text survives."""
@@ -123,7 +125,7 @@ def test_html_file_still_goes_through_extraction(db, tmp_path):
     assert "RED_STYLE_JUNK" not in result
 
 
-def test_truncation_clips_body_and_flags_meta(db, tmp_path):
+def test_truncation_clips_body_and_flags_meta(db: sqlite3.Connection, tmp_path: Path) -> None:
     """An over-long body is clipped via the shared ``truncate`` helper and the
     envelope carries ``truncated=true``; a short body carries no truncated flag."""
     transcript_id = _seed_transcript(db)
@@ -141,7 +143,7 @@ def test_truncation_clips_body_and_flags_meta(db, tmp_path):
     assert "A" * 5000 not in result
 
 
-def test_short_body_carries_no_truncated_flag(db, tmp_path):
+def test_short_body_carries_no_truncated_flag(db: sqlite3.Connection, tmp_path: Path) -> None:
     """A body under max_chars must NOT carry the truncated flag."""
     transcript_id = _seed_transcript(db)
     _allow_read(db)
@@ -157,7 +159,7 @@ def test_short_body_carries_no_truncated_flag(db, tmp_path):
     assert "truncated=true" not in result
 
 
-def test_file_read_meta_carries_content_type(db, tmp_path):
+def test_file_read_meta_carries_content_type(db: sqlite3.Connection, tmp_path: Path) -> None:
     """Both branches name the type with ``content_type`` (the file branch's old
     ``mime`` key is renamed for consistency with the URL branch)."""
     transcript_id = _seed_transcript(db)
@@ -174,7 +176,7 @@ def test_file_read_meta_carries_content_type(db, tmp_path):
     assert "mime=" not in result
 
 
-def test_max_chars_clamped_below_floor(db, tmp_path):
+def test_max_chars_clamped_below_floor(db: sqlite3.Connection, tmp_path: Path) -> None:
     """``max_chars`` is clamped via the param helper's ``clamp=(100, …)`` floor —
     a value below 100 cannot drop the body to a sub-floor clip. A 250-char body
     with max_chars=1 survives to the floor (100), so it is still truncated but not
@@ -194,7 +196,7 @@ def test_max_chars_clamped_below_floor(db, tmp_path):
     assert "B" * 100 in result
 
 
-def test_system_path_blocked_renders_kebab_code(db):
+def test_system_path_blocked_renders_kebab_code(db: sqlite3.Connection) -> None:
     """A system path (``/etc/passwd``) is refused with ``system-path-blocked``.
 
     The read tool's path-traversal guard (abilities/read.py) is read-specific and

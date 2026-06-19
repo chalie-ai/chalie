@@ -15,6 +15,8 @@ correctly seeded in policy_defaults.json.
 """
 
 import json
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -54,13 +56,13 @@ _ALLOW_ACTIONS = (
 )
 
 
-def _allow_ubiquiti_actions(db, channel: str = "chat") -> None:
+def _allow_ubiquiti_actions(db: sqlite3.Connection, channel: str = "chat") -> None:
     for action in (*_ALLOW_ACTIONS, *_ASK_ACTIONS):
         allow_policy(db, f"ubiquiti.{action}", channel=channel)
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> MP:
     _allow_ubiquiti_actions(db)
     return MP(seed_transcript(db, content="is the office AP up?"), UserConfig({}))
 
@@ -68,22 +70,23 @@ def chat_mp(db):
 # ── Schema honesty: prose-DSL is gone, enum == ACTION_HANDLERS ──────────────────
 
 
-def test_prose_dsl_params_absent_from_parameters():
+def test_prose_dsl_params_absent_from_parameters() -> None:
     from abilities._registry import AbilityRegistry
 
-    props = AbilityRegistry.get("ubiquiti").get_parameters()["properties"]
+    props = cast("dict[str, object]", AbilityRegistry.get("ubiquiti").get_parameters()["properties"])
     assert "command" not in props
     assert "sub_action" not in props
     assert "mac" not in props
     assert "target" in props
 
 
-def test_action_enum_matches_action_handlers_exactly():
+def test_action_enum_matches_action_handlers_exactly() -> None:
     from abilities._registry import AbilityRegistry
+    from abilities.ubiquiti import UbiquitiAbility
 
     ability = AbilityRegistry.get("ubiquiti")
-    enum = ability.get_parameters()["properties"]["action"]["enum"]
-    assert set(enum) == set(ability.ACTION_HANDLERS)
+    enum = cast("list[str]", cast("dict[str, object]", cast("dict[str, object]", ability.get_parameters()["properties"])["action"])["enum"])
+    assert set(enum) == set(cast(UbiquitiAbility, ability).ACTION_HANDLERS)
     # The flat real operations the audit demanded are all present.
     for action in (
         "list_devices", "list_clients", "device_status", "site_health",
@@ -96,7 +99,7 @@ def test_action_enum_matches_action_handlers_exactly():
 # ── Policy: the new action ids resolve in the seeded defaults ───────────────────
 
 
-def test_policy_defaults_seed_the_new_action_ids():
+def test_policy_defaults_seed_the_new_action_ids() -> None:
     with open(FileMapperService.get_policy_defaults_path()) as fh:
         seed = json.load(fh)
 

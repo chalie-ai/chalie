@@ -20,7 +20,7 @@ def _converge_and_backfill(db: DatabaseService) -> None:
     svc.backfill_redesign_columns()
 
 
-def _columns(conn: sqlite3.Connection, table: str) -> set:
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
@@ -79,7 +79,7 @@ _RADIUS_COLUMNS = {
 }
 
 
-def _build_legacy_db(tmp_path: Path) -> tuple[DatabaseService, dict]:
+def _build_legacy_db(tmp_path: Path) -> tuple[DatabaseService, dict[str, str]]:
     db = _make_db(tmp_path)
     # First converge to get the full, correct schema for every OTHER table; then
     # we mutate only the three tables the redesign touches back to legacy shape.
@@ -192,7 +192,7 @@ def _build_legacy_db(tmp_path: Path) -> tuple[DatabaseService, dict]:
 @pytest.mark.unit
 class TestSchemaRedesignConvergence:
 
-    def test_old_shape_db_self_heals_to_redesign_shape(self, tmp_path):
+    def test_old_shape_db_self_heals_to_redesign_shape(self, tmp_path: Path) -> None:
         """A pre-redesign DB must self-heal to redesign shape after converge() + backfill()."""
         db, seeded = _build_legacy_db(tmp_path)
 
@@ -295,13 +295,13 @@ class TestSchemaRedesignConvergence:
                 "SELECT final_rrf_count FROM memory_recall_log"
             ).fetchone()[0] == 3
 
-    def test_backfill_is_idempotent(self, tmp_path):
+    def test_backfill_is_idempotent(self, tmp_path: Path) -> None:
         """Running converge() + backfill a SECOND time changes no derived value —
         the backfill only touches still-NULL targets, so it must no-op on rerun."""
         db, _ = _build_legacy_db(tmp_path)
         _converge_and_backfill(db)
 
-        def _snapshot(conn):
+        def _snapshot(conn: sqlite3.Connection) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
             eps = conn.execute(
                 "SELECT id, level, last_relevant_at, tombstoned_at, facts_extracted_at "
                 "FROM episodes ORDER BY id"
@@ -322,7 +322,7 @@ class TestSchemaRedesignConvergence:
 
         assert first == second, "second converge+backfill churned redesign column values"
 
-    def test_fresh_db_gets_redesign_shape_and_backfill_no_ops(self, tmp_path):
+    def test_fresh_db_gets_redesign_shape_and_backfill_no_ops(self, tmp_path: Path) -> None:
         """A fresh DB converges directly to the new shape; backfill runs cleanly
         and seeds level=0 with no rows present (no error, no churn)."""
         db = _make_db(tmp_path, name="fresh.db")

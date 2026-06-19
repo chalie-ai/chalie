@@ -13,7 +13,10 @@ is exactly the case that returned HTTP 400 ``transcript_id is required`` before
 the fix.
 """
 
+import sqlite3
+
 import pytest
+from flask.testing import FlaskClient
 
 from services import transcript_service
 from services.markup import extract_plaintext, sanitize
@@ -37,7 +40,7 @@ def _ui_message_text(content: str = _ASSISTANT_HTML) -> str:
     return extract_plaintext(content)
 
 
-def test_pin_by_message_text_persists_moment(authed_client):
+def test_pin_by_message_text_persists_moment(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     client, _db, _store = authed_client
     tid = _seed_assistant_turn()
 
@@ -55,7 +58,7 @@ def test_pin_by_message_text_persists_moment(authed_client):
     assert item["message_text"] == _ASSISTANT_HTML
 
 
-def test_pin_missing_text_and_id_is_rejected(authed_client):
+def test_pin_missing_text_and_id_is_rejected(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     client, _db, _store = authed_client
 
     resp = client.post("/moments", json={}, content_type="application/json")
@@ -64,7 +67,7 @@ def test_pin_missing_text_and_id_is_rejected(authed_client):
     assert "message_text" in resp.get_json()["error"]
 
 
-def test_pin_unmatched_text_returns_404(authed_client):
+def test_pin_unmatched_text_returns_404(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """Text that matches no assistant turn yields 404, not a silent success."""
     client, _db, _store = authed_client
     _seed_assistant_turn()
@@ -78,7 +81,7 @@ def test_pin_unmatched_text_returns_404(authed_client):
     assert resp.status_code == 404
 
 
-def test_full_roundtrip_pin_list_search_forget(authed_client):
+def test_full_roundtrip_pin_list_search_forget(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """The complete lifecycle the Recall UI depends on."""
     client, _db, _store = authed_client
     tid = _seed_assistant_turn()
@@ -122,7 +125,7 @@ def test_full_roundtrip_pin_list_search_forget(authed_client):
     assert _ASSISTANT_HTML not in values_after
 
 
-def test_explicit_transcript_id_path_still_works(authed_client):
+def test_explicit_transcript_id_path_still_works(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """Programmatic callers may still pin by integer transcript_id."""
     client, _db, _store = authed_client
     tid = _seed_assistant_turn()
@@ -137,7 +140,7 @@ def test_explicit_transcript_id_path_still_works(authed_client):
     assert resp.get_json()["item"]["transcript_id"] == tid
 
 
-def test_duplicate_pin_flags_duplicate(authed_client):
+def test_duplicate_pin_flags_duplicate(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """Pinning the same turn twice returns 200 with duplicate=True."""
     client, _db, _store = authed_client
     _seed_assistant_turn()

@@ -12,6 +12,8 @@ pinned centrally in test_tool_result_contract.py; this file holds only the
 contacts ability's genuine behaviour tests (list/get precision, ambiguous-match,
 not-found with hint) that have no coverage elsewhere."""
 
+import sqlite3
+
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -22,7 +24,7 @@ from tests._tool_result_harness import parse_body, seed_transcript
 pytestmark = pytest.mark.unit
 
 
-def _seed_transcript(db, channel: str) -> int:
+def _seed_transcript(db: sqlite3.Connection, channel: str) -> int:
     return seed_transcript(db, channel=channel, content="find John's number")
 
 
@@ -31,17 +33,17 @@ def _seed_contact(
     fn: str,
     given_name: str = "",
     family_name: str = "",
-    emails=None,
-    phones=None,
+    emails: list[object] | None = None,
+    phones: list[object] | None = None,
     org: str = "",
     title: str = "",
-) -> dict:
+) -> dict[str, object]:
     """Must use ``contact_resolver.index_contact_profile`` (CardDAV ingest entry
     point) so the contact lands as a ``user_specific`` data_graph row resolvable by
     the ability."""
     from capabilities.contact_resolver import index_contact_profile
 
-    profile = {
+    profile: dict[str, object] = {
         "fn": fn,
         "given_name": given_name,
         "family_name": family_name,
@@ -55,7 +57,7 @@ def _seed_contact(
 
 
 @pytest.fixture
-def dmn_mp(db):
+def dmn_mp(db: sqlite3.Connection) -> _MP:
     """A real non-user-broadcast mp (``broadcast_to is None``): contacts.list /
     contacts.get are seeded ``allow`` on the subconscious channel so the real
     policy gate passes, and no live WebSocket is needed (the act-event emitter is
@@ -64,7 +66,7 @@ def dmn_mp(db):
 
 
 @pytest.fixture
-def user_mp(db):
+def user_mp(db: sqlite3.Connection) -> _MP:
     """A real user-broadcast mp (``broadcast_to == 'user'``). On this channel the
     dispatcher assigns a rich-media ordinal and renders the contacts card
     trailer. contacts.list / contacts.get are seeded ``allow`` on chat."""
@@ -75,7 +77,7 @@ def _parse_body(rendered: str, tool: str = "contacts") -> object:
     return parse_body(rendered, tool, rich=True)
 
 
-def test_list_returns_structured_rows_with_count(db, dmn_mp):
+def test_list_returns_structured_rows_with_count(db: sqlite3.Connection, dmn_mp: _MP) -> None:
     _seed_contact(
         fn="John Smith", given_name="John", family_name="Smith",
         emails=[{"value": "john.smith@example.com", "type": "home"}],
@@ -91,17 +93,18 @@ def test_list_returns_structured_rows_with_count(db, dmn_mp):
 
     assert "[contacts(status=success" in out
     assert "action=list" in out
-    body = _parse_body(out)
+    from typing import cast
+    body = cast("dict[str, object]", _parse_body(out))
     assert body["action_performed"] == "list"
     assert body["count"] == 2
-    names = {c.get("fn") for c in body["contacts"]}
+    names = {c.get("fn") for c in cast("list[dict[str, object]]", body["contacts"])}
     assert names == {"John Smith", "Mike Borg"}
-    john = next(c for c in body["contacts"] if c["fn"] == "John Smith")
-    assert john["emails"][0]["value"] == "john.smith@example.com"
-    assert john["phones"][0]["value"] == "+35699111222"
+    john = next(c for c in cast("list[dict[str, object]]", body["contacts"]) if c["fn"] == "John Smith")
+    assert cast("list[dict[str, str]]", john["emails"])[0]["value"] == "john.smith@example.com"
+    assert cast("list[dict[str, str]]", john["phones"])[0]["value"] == "+35699111222"
 
 
-def test_list_with_query_filters_through_resolve(db, dmn_mp):
+def test_list_with_query_filters_through_resolve(db: sqlite3.Connection, dmn_mp: _MP) -> None:
     _seed_contact(fn="Mike Borg", given_name="Mike", family_name="Borg")
     _seed_contact(fn="Sarah Vella", given_name="Sarah", family_name="Vella")
 
@@ -110,13 +113,14 @@ def test_list_with_query_filters_through_resolve(db, dmn_mp):
     )
 
     assert "[contacts(status=success" in out
-    body = _parse_body(out)
-    names = {c.get("fn") for c in body["contacts"]}
+    from typing import cast
+    body = cast("dict[str, object]", _parse_body(out))
+    names = {c.get("fn") for c in cast("list[dict[str, object]]", body["contacts"])}
     assert "Mike Borg" in names
     assert "Sarah Vella" not in names
 
 
-def test_get_exact_name_returns_single_contact(db, user_mp):
+def test_get_exact_name_returns_single_contact(db: sqlite3.Connection, user_mp: _MP) -> None:
     """Pairs a rich card on the user-broadcast channel."""
     _seed_contact(
         fn="John Smith", given_name="John", family_name="Smith",
@@ -131,12 +135,13 @@ def test_get_exact_name_returns_single_contact(db, user_mp):
     assert "[contacts(status=success" in out
     assert "action=get" in out
     assert "<span id='contacts_1'>" in out
-    payload = _parse_body(out)
+    from typing import cast
+    payload = cast("dict[str, object]", _parse_body(out))
     assert payload["action_performed"] == "get"
-    assert payload["contact"]["fn"] == "John Smith"
+    assert cast("dict[str, str]", payload["contact"])["fn"] == "John Smith"
 
 
-def test_get_ambiguous_lists_candidates_picks_nothing(db, dmn_mp):
+def test_get_ambiguous_lists_candidates_picks_nothing(db: sqlite3.Connection, dmn_mp: _MP) -> None:
     """Returns ``code=ambiguous-match`` with BOTH candidate names — never a
     silent first-hit pick."""
     _seed_contact(fn="John Smith", given_name="John", family_name="Smith")
@@ -153,7 +158,7 @@ def test_get_ambiguous_lists_candidates_picks_nothing(db, dmn_mp):
     assert "hint:" in out
 
 
-def test_get_total_miss_returns_not_found_with_closest_match(db, dmn_mp):
+def test_get_total_miss_returns_not_found_with_closest_match(db: sqlite3.Connection, dmn_mp: _MP) -> None:
     """Errors ``code=not-found`` with a closest-match hint naming a real candidate."""
     _seed_contact(fn="John Smith", given_name="John", family_name="Smith")
     _seed_contact(fn="Mike Borg", given_name="Mike", family_name="Borg")

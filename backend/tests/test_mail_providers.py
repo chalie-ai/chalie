@@ -2,8 +2,11 @@
 
 import pytest
 
+from typing import cast
+
 from capabilities.mail_capability.providers import (
     ServerSettings,
+    UnifiedProvider,
     discover_provider,
     list_supported_providers,
 )
@@ -13,7 +16,7 @@ from capabilities.mail_capability.providers import (
 class TestDiscoverProvider:
     """discover_provider should resolve email domains to UnifiedProvider."""
 
-    def test_gmail(self):
+    def test_gmail(self) -> None:
         p = discover_provider("user@gmail.com")
         assert p is not None
         assert p.name == "Google"
@@ -23,14 +26,14 @@ class TestDiscoverProvider:
         assert p.carddav_url is not None
         assert p.requires_app_password is True
 
-    def test_apple_icloud(self):
+    def test_apple_icloud(self) -> None:
         p = discover_provider("user@icloud.com")
         assert p is not None
         assert p.name == "Apple"
         assert p.caldav_url is not None
         assert p.carddav_url is not None
 
-    def test_yahoo(self):
+    def test_yahoo(self) -> None:
         p = discover_provider("user@yahoo.com")
         assert p is not None
         assert p.name == "Yahoo"
@@ -38,7 +41,7 @@ class TestDiscoverProvider:
         assert p.caldav_url is not None
         assert p.carddav_url is None  # Yahoo deprecated CardDAV
 
-    def test_outlook(self):
+    def test_outlook(self) -> None:
         p = discover_provider("user@outlook.com")
         assert p is not None
         assert p.name == "Outlook"
@@ -46,26 +49,26 @@ class TestDiscoverProvider:
         assert p.caldav_url is None  # No CalDAV (Graph API only)
         assert p.carddav_url is None
 
-    def test_unknown_domain_returns_none(self):
+    def test_unknown_domain_returns_none(self) -> None:
         assert discover_provider("user@randomdomain.org") is None
 
-    def test_no_at_sign_returns_none(self):
+    def test_no_at_sign_returns_none(self) -> None:
         assert discover_provider("nope") is None
 
-    def test_case_insensitive(self):
+    def test_case_insensitive(self) -> None:
         assert discover_provider("User@Gmail.COM") is not None
-        assert discover_provider("User@Gmail.COM").name == "Google"
+        assert cast(UnifiedProvider, discover_provider("User@Gmail.COM")).name == "Google"
 
 
 @pytest.mark.unit
 class TestListSupportedProviders:
     """list_supported_providers should return deduplicated, sorted names."""
 
-    def test_returns_four_providers(self):
+    def test_returns_four_providers(self) -> None:
         names = list_supported_providers()
         assert len(names) == 4
 
-    def test_contains_all_providers(self):
+    def test_contains_all_providers(self) -> None:
         names = list_supported_providers()
         assert "Google" in names
         assert "Apple" in names

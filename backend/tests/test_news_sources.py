@@ -8,11 +8,11 @@ from services.news_sources import (
 @pytest.mark.unit
 class TestNewsSources:
 
-    def test_no_duplicate_ids(self):
+    def test_no_duplicate_ids(self) -> None:
         ids = [s.id for s in SOURCES]
         assert len(ids) == len(set(ids))
 
-    def test_get_source_by_id_found(self):
+    def test_get_source_by_id_found(self) -> None:
         src = get_source_by_id("bbc_world")
         assert src is not None
         assert src.name == "BBC World News"

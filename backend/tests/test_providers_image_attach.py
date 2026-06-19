@@ -2,6 +2,8 @@
 assembles its ProviderApiRequest DTO with image attachment from config.get_image."""
 
 import base64
+from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -16,7 +18,7 @@ def _png_bytes() -> bytes:
     )
 
 
-def test_build_send_messages_attaches_image_from_get_image(tmp_path):
+def test_build_send_messages_attaches_image_from_get_image(tmp_path: Path) -> None:
     from configs.channels.vision import VisionConfig
     from services.processor_config import ProcessorConfig
 
@@ -30,11 +32,11 @@ def test_build_send_messages_attaches_image_from_get_image(tmp_path):
     messages = mp._build_send_messages()
 
     assert messages[0]["role"] == "user"
-    assert messages[0]["image"]["mime_type"] == "image/png"
-    assert messages[0]["image"]["data"] == base64.b64encode(_png_bytes()).decode()
+    assert cast(dict[str, object], messages[0]["image"])["mime_type"] == "image/png"
+    assert cast(dict[str, object], messages[0]["image"])["data"] == base64.b64encode(_png_bytes()).decode()
 
 
-def test_build_send_messages_no_image_when_get_image_returns_none(tmp_path):
+def test_build_send_messages_no_image_when_get_image_returns_none(tmp_path: Path) -> None:
     from configs.channels.vision import VisionConfig
     from services.processor_config import ProcessorConfig
 

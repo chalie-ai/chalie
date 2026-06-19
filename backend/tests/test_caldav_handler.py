@@ -1,3 +1,4 @@
+# mypy: disable-error-code=no-untyped-call
 """
 Unit tests for :class:`capabilities.mail_capability.caldav_handler.CaldavHandler`.
 
@@ -37,9 +38,14 @@ All tests are marked ``@pytest.mark.unit``.
 from __future__ import annotations
 
 import datetime
+import sqlite3
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from capabilities.mail_capability.caldav_handler import CaldavHandler
 
 _UTC = datetime.timezone.utc
 
@@ -49,26 +55,26 @@ _UTC = datetime.timezone.utc
 # ---------------------------------------------------------------------------
 
 
-def _make_handler():
+def _make_handler() -> "CaldavHandler":
     from capabilities.mail_capability.caldav_handler import CaldavHandler
     return CaldavHandler()
 
 
-def _dt(year, month, day, hour=0, minute=0) -> datetime.datetime:
+def _dt(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime.datetime:
     return datetime.datetime(year, month, day, hour, minute, tzinfo=_UTC)
 
 
 def _make_event(
-    uid="uid-1",
-    summary="Meeting",
-    dtstart=None,
-    dtend=None,
-    all_day=False,
-    cal_name="Work",
-    attendees=None,
-    recurrence=None,
-    location=None,
-) -> dict:
+    uid: str = "uid-1",
+    summary: str = "Meeting",
+    dtstart: datetime.datetime | None = None,
+    dtend: datetime.datetime | None = None,
+    all_day: bool = False,
+    cal_name: str = "Work",
+    attendees: list[str] | None = None,
+    recurrence: str | None = None,
+    location: str | None = None,
+) -> dict[str, object]:
     start = dtstart or _dt(2026, 4, 1, 9)
     end = dtend or _dt(2026, 4, 1, 10)
     return {
@@ -84,7 +90,13 @@ def _make_event(
     }
 
 
-def _build_ical_resource(uid, summary, dtstart, dtend=None, attendees=None):
+def _build_ical_resource(
+    uid: str,
+    summary: str,
+    dtstart: datetime.datetime,
+    dtend: datetime.datetime | None = None,
+    attendees: list[str] | None = None,
+) -> MagicMock:
     """Build a mock caldav resource wrapping a real icalendar object."""
     import icalendar
 
@@ -105,7 +117,12 @@ def _build_ical_resource(uid, summary, dtstart, dtend=None, attendees=None):
     return resource
 
 
-def _build_duration_resource(uid, summary, dtstart, duration):
+def _build_duration_resource(
+    uid: str,
+    summary: str,
+    dtstart: datetime.datetime,
+    duration: datetime.timedelta,
+) -> MagicMock:
     """Build a mock resource with DURATION instead of DTEND."""
     import icalendar
 
@@ -129,7 +146,7 @@ def _build_duration_resource(uid, summary, dtstart, duration):
 
 @pytest.mark.unit
 class TestParseEvent:
-    def test_timed_event_fields(self):
+    def test_timed_event_fields(self) -> None:
         handler = _make_handler()
         dtstart = _dt(2026, 4, 1, 9)
         dtend = _dt(2026, 4, 1, 10)
@@ -146,7 +163,7 @@ class TestParseEvent:
         assert ev["all_day"] is False
         assert ev["calendar_name"] == "Work"
 
-    def test_duration_fallback(self):
+    def test_duration_fallback(self) -> None:
         handler = _make_handler()
         dtstart = _dt(2026, 4, 1, 10)
         duration = datetime.timedelta(hours=2)
@@ -166,7 +183,7 @@ class TestParseEvent:
 
 @pytest.mark.unit
 class TestFindOverlapPairs:
-    def test_overlapping_events_detected(self):
+    def test_overlapping_events_detected(self) -> None:
         from capabilities.mail_capability.caldav_handler import _find_overlap_pairs
 
         now = _dt(2026, 4, 1, 8)
@@ -187,7 +204,7 @@ class TestFindOverlapPairs:
 
 @pytest.mark.unit
 class TestFindBackToBackPairs:
-    def test_tight_gap_detected(self):
+    def test_tight_gap_detected(self) -> None:
         from capabilities.mail_capability.caldav_handler import _find_back_to_back_pairs
 
         now = _dt(2026, 4, 1, 8)
@@ -214,7 +231,7 @@ class TestFindBackToBackPairs:
 
 @pytest.mark.unit
 class TestUpsertEvents:
-    def test_events_written_with_mail_source(self, db):
+    def test_events_written_with_mail_source(self, db: sqlite3.Connection) -> None:
         handler = _make_handler()
         now = _dt(2026, 4, 1, 8)
         events = [_make_event("uid-10", "Sprint Review")]
@@ -227,7 +244,7 @@ class TestUpsertEvents:
         assert row is not None
         assert row[0] == "mail"
 
-    def test_stale_events_cancelled(self, db):
+    def test_stale_events_cancelled(self, db: sqlite3.Connection) -> None:
         handler = _make_handler()
         now = _dt(2026, 4, 1, 8)
         # Insert an event that will not appear in the next sync
@@ -247,7 +264,7 @@ class TestUpsertEvents:
         ).fetchone()
         assert row[0] == "cancelled"
 
-    def test_alert_created_for_upcoming_event(self, db):
+    def test_alert_created_for_upcoming_event(self, db: sqlite3.Connection) -> None:
         handler = _make_handler()
         now = _dt(2026, 4, 1, 8)
         # Event starts in 1 hour (within 24h window), not all-day
@@ -268,7 +285,7 @@ class TestUpsertEvents:
         assert row is not None
         assert row[0] == "notification"
 
-    def test_alert_not_created_for_all_day(self, db):
+    def test_alert_not_created_for_all_day(self, db: sqlite3.Connection) -> None:
         handler = _make_handler()
         now = _dt(2026, 4, 1, 8)
         events = [_make_event("uid-allday", "Holiday", all_day=True)]
@@ -280,7 +297,7 @@ class TestUpsertEvents:
         ).fetchone()
         assert row is None
 
-    def test_conflict_notification_created(self, db):
+    def test_conflict_notification_created(self, db: sqlite3.Connection) -> None:
         handler = _make_handler()
         now = _dt(2026, 4, 1, 8)
         events = [
@@ -298,7 +315,7 @@ class TestUpsertEvents:
         assert row is not None
         assert row[0] == "notification"
 
-    def test_daily_digest_inserted_once(self, db):
+    def test_daily_digest_inserted_once(self, db: sqlite3.Connection) -> None:
         handler = _make_handler()
         now = _dt(2026, 4, 1, 8)
 
@@ -321,7 +338,7 @@ class TestUpsertEvents:
 
 @pytest.mark.unit
 class TestFindFreeSlots:
-    def test_gap_between_two_events(self, db):
+    def test_gap_between_two_events(self, db: sqlite3.Connection) -> None:
         handler = _make_handler()
         now = _dt(2026, 4, 1, 0)
         events = [
@@ -343,10 +360,10 @@ class TestFindFreeSlots:
                 "min_duration_minutes": 30,
             })
 
-        assert result.get("count", 0) > 0
+        assert cast(int, result.get("count", 0)) > 0
         # The 10:00-11:00 gap should appear
-        starts = [s["start"] for s in result["free_slots"]]
-        assert any("10:00" in s for s in starts)
+        starts = [cast(dict[str, object], s)["start"] for s in cast(list[object], result["free_slots"])]
+        assert any("10:00" in cast(str, s) for s in starts)
 
 
 
@@ -357,7 +374,7 @@ class TestFindFreeSlots:
 
 @pytest.mark.unit
 class TestCreateEvent:
-    def test_returns_error_when_summary_missing(self):
+    def test_returns_error_when_summary_missing(self) -> None:
         handler = _make_handler()
         client = MagicMock()
         result = handler.create_event(client, {
@@ -365,7 +382,7 @@ class TestCreateEvent:
             "dtend": "2026-04-01T10:00:00+00:00",
         })
         assert "error" in result
-        assert "summary" in result["error"].lower()
+        assert "summary" in cast(str, result["error"]).lower()
 
 
 
@@ -377,7 +394,7 @@ class TestCreateEvent:
 
 @pytest.mark.unit
 class TestOpenClient:
-    def test_raises_when_caldav_unavailable(self):
+    def test_raises_when_caldav_unavailable(self) -> None:
         handler = _make_handler()
         with patch(
             "capabilities.mail_capability.caldav_handler._CALDAV_AVAILABLE", False

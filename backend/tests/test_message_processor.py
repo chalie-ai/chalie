@@ -1,7 +1,10 @@
 
+from typing import Optional
+
 import pytest
 
 from services.message_processor import _sanitize_llm_args
+from tests.helpers import StubProcessorConfig
 
 
 # ---------------------------------------------------------------------------
@@ -10,15 +13,15 @@ from services.message_processor import _sanitize_llm_args
 
 def _make_config(
     *,
-    channel="dmn",
-    role="proactive_thought",
-    max_iterations=5,
-    skip_transcript=True,
-    skip_input_row=False,
-    suppress_history=True,
-    broadcast_to=None,
-    memory_seed=False,
-):
+    channel: str = "dmn",
+    role: str = "proactive_thought",
+    max_iterations: int = 5,
+    skip_transcript: bool = True,
+    skip_input_row: bool = False,
+    suppress_history: bool = True,
+    broadcast_to: Optional[str] = None,
+    memory_seed: bool = False,
+) -> StubProcessorConfig:
 
     from services.processor_config import ProcessorConfig
     from tests.helpers import StubProcessorConfig
@@ -52,7 +55,7 @@ class TestSuppressHistory:
 
 
 
-    def test_suppress_history_returns_empty_string(self):
+    def test_suppress_history_returns_empty_string(self) -> None:
         from services.message_processor import MessageProcessor
         config = _make_config(suppress_history=True)
         mp = object.__new__(MessageProcessor)
@@ -69,7 +72,7 @@ class TestSuppressHistory:
 @pytest.mark.unit
 class TestProcessorConfigHookSurface:
 
-    def test_post_turn_is_only_optional_hook(self):
+    def test_post_turn_is_only_optional_hook(self) -> None:
         """post_turn_hooks is the ONLY hook surface (no on_narration/
         on_tool_event/pre_act/process_attachments/overflow_strategy). §2 / §4.8."""
         from services.processor_config import ProcessorConfig
@@ -94,24 +97,24 @@ class TestProcessorConfigHookSurface:
 
 @pytest.mark.unit
 class TestSanitizeLLMArgs:
-    def test_observed_qwen_list_items(self):
+    def test_observed_qwen_list_items(self) -> None:
         assert _sanitize_llm_args('<|"|milk<|"|') == 'milk'
 
-    def test_well_formed_qwen_sentinels(self):
+    def test_well_formed_qwen_sentinels(self) -> None:
         assert _sanitize_llm_args('<|im_start|>foo<|im_end|>') == 'foo'
 
-    def test_nested_dict_with_sentinel_items(self):
+    def test_nested_dict_with_sentinel_items(self) -> None:
         result = _sanitize_llm_args({'items': ['<|"|milk<|"|', 'eggs']})
         assert result == {'items': ['milk', 'eggs']}
 
-    def test_clean_inputs_untouched(self):
+    def test_clean_inputs_untouched(self) -> None:
         value = {'action': 'add', 'items': ['milk']}
         assert _sanitize_llm_args(value) == {'action': 'add', 'items': ['milk']}
 
-    def test_non_string_scalars_untouched(self):
+    def test_non_string_scalars_untouched(self) -> None:
         value = {'limit': 10, 'active': True, 'ratio': 0.5}
         assert _sanitize_llm_args(value) == {'limit': 10, 'active': True, 'ratio': 0.5}
 
-    def test_empty_string_after_strip(self):
+    def test_empty_string_after_strip(self) -> None:
         result = _sanitize_llm_args({'x': '<|"|<|"|'})
         assert result == {'x': ''}

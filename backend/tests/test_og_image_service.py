@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from collections.abc import Iterator
+from typing import cast
 
 import pytest
 
@@ -11,9 +13,9 @@ pytestmark = pytest.mark.unit
 
 
 class _HtmlHandler(BaseHTTPRequestHandler):
-    pages: dict[str, tuple[int, dict, bytes]] = {}
+    pages: dict[str, tuple[int, dict[str, str], bytes]] = {}
 
-    def do_GET(self):
+    def do_GET(self) -> None:
         if self.path not in self.pages:
             self.send_response(404)
             self.end_headers()
@@ -32,16 +34,16 @@ class _HtmlHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, *_args):
+    def log_message(self, *_args: object) -> None:
         pass
 
 
 @pytest.fixture(scope="module")
-def html_server():
+def html_server() -> Iterator[tuple[str, type[_HtmlHandler]]]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _HtmlHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    host, port = server.server_address
+    host, port = cast("tuple[str, int]", server.server_address)
     base = f"http://{host}:{port}"
     yield base, _HtmlHandler
     server.shutdown()
@@ -49,7 +51,7 @@ def html_server():
 
 
 @pytest.fixture(autouse=True)
-def _reset():
+def _reset() -> Iterator[None]:
     _HtmlHandler.pages = {}
     yield
 
@@ -61,7 +63,7 @@ def _html(meta_tags: str, title: str = "Page Title") -> bytes:
 
 
 class TestResolveOgImages:
-    def test_og_image_extracted(self, html_server):
+    def test_og_image_extracted(self, html_server: tuple[str, type[_HtmlHandler]]) -> None:
         from services.og_image_service import resolve_og_images
         base, handler = html_server
         body = _html('<meta property="og:image" content="https://cdn.example.com/og.jpg">')
@@ -69,7 +71,7 @@ class TestResolveOgImages:
         out = resolve_og_images([f"{base}/article"])
         assert out[f"{base}/article"]["image_url"] == "https://cdn.example.com/og.jpg"
 
-    def test_relative_url_resolved_against_page(self, html_server):
+    def test_relative_url_resolved_against_page(self, html_server: tuple[str, type[_HtmlHandler]]) -> None:
         from services.og_image_service import resolve_og_images
         base, handler = html_server
         body = _html('<meta property="og:image" content="/img/hero.png">')
@@ -77,7 +79,7 @@ class TestResolveOgImages:
         out = resolve_og_images([f"{base}/relative"])
         assert out[f"{base}/relative"]["image_url"] == f"{base}/img/hero.png"
 
-    def test_redirect_followed_and_relative_resolves_to_final(self, html_server):
+    def test_redirect_followed_and_relative_resolves_to_final(self, html_server: tuple[str, type[_HtmlHandler]]) -> None:
         from services.og_image_service import resolve_og_images
         base, handler = html_server
         # /redirect → /final ; og:image is relative, must resolve to /final's host (same here)
@@ -87,14 +89,14 @@ class TestResolveOgImages:
         out = resolve_og_images([f"{base}/redirect"])
         assert out[f"{base}/redirect"]["image_url"] == f"{base}/img/x.jpg"
 
-    def test_missing_meta_returns_no_entry(self, html_server):
+    def test_missing_meta_returns_no_entry(self, html_server: tuple[str, type[_HtmlHandler]]) -> None:
         from services.og_image_service import resolve_og_images
         base, handler = html_server
         handler.pages["/bare"] = (200, {"Content-Type": "text/html"}, _html(""))
         out = resolve_og_images([f"{base}/bare"])
         assert out == {}
 
-    def test_multiple_urls_parallel(self, html_server):
+    def test_multiple_urls_parallel(self, html_server: tuple[str, type[_HtmlHandler]]) -> None:
         from services.og_image_service import resolve_og_images
         base, handler = html_server
         handler.pages["/a"] = (200, {"Content-Type": "text/html"},
@@ -106,7 +108,7 @@ class TestResolveOgImages:
         assert out[f"{base}/a"]["image_url"] == "https://a.example/a.jpg"
         assert out[f"{base}/b"]["image_url"] == "https://b.example/b.jpg"
 
-    def test_double_quoted_attribute_order_swapped(self, html_server):
+    def test_double_quoted_attribute_order_swapped(self, html_server: tuple[str, type[_HtmlHandler]]) -> None:
         from services.og_image_service import resolve_og_images
         base, handler = html_server
         body = _html('<meta content="https://cdn.example.com/swap.jpg" property="og:image"/>')
@@ -118,7 +120,7 @@ class TestResolveOgImages:
 class TestResolveOgDescription:
     """og:description / og:title / <title> extraction alongside og:image."""
 
-    def test_og_description_extracted(self, html_server):
+    def test_og_description_extracted(self, html_server: tuple[str, type[_HtmlHandler]]) -> None:
         from services.og_image_service import resolve_og_images
         base, handler = html_server
         body = _html(
@@ -129,7 +131,7 @@ class TestResolveOgDescription:
         out = resolve_og_images([f"{base}/with-desc"])
         assert out[f"{base}/with-desc"]["description"] == "Scientists find water on Mars."
 
-    def test_og_image_resolved_when_buried_after_large_inline_payload(self, html_server):
+    def test_og_image_resolved_when_buried_after_large_inline_payload(self, html_server: tuple[str, type[_HtmlHandler]]) -> None:
         """Real-world parity: Google News article pages bury og:image past ~575KB.
 
         Regression guard against re-introducing a byte cap. The fetcher must

@@ -11,12 +11,15 @@ At HEAD the durable-survival and gate-de-starvation tests FAIL; they pass once
 persistence+hydrate land.
 """
 
+import sqlite3
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
 
+from services.memory_store import MemoryStore
 from services.time_utils import utc_now
 from services.world_state import WorldState, Signal
 
@@ -33,14 +36,12 @@ from services.world_state import WorldState, Signal
 
 
 @contextmanager
-def _simulated_restart():
+def _simulated_restart() -> Generator[WorldState, None, None]:
     """Yield a freshly-constructed WorldState with a cold (empty) MemoryStore.
 
     Forces any hydrate to read from the durable DB store, proving the value
     survived in the database and not merely in a cache from the first instance.
     """
-    from services.memory_store import MemoryStore
-
     cold_cache = MemoryStore()
     with patch('services.memory_store.get_shared_store', return_value=cold_cache), \
          patch('services.memory_client.MemoryClientService.create_connection',
@@ -53,10 +54,8 @@ def _simulated_restart():
 
 
 @pytest.fixture
-def warm_store():
+def warm_store() -> Iterator[MemoryStore]:
     """Isolated MemoryStore for the pre-restart (warm) process lifetime."""
-    from services.memory_store import MemoryStore
-
     _store = MemoryStore()
     with patch('services.memory_store.get_shared_store', return_value=_store), \
          patch('services.memory_client.MemoryClientService.create_connection',
@@ -68,7 +67,7 @@ def warm_store():
 class TestWorldStateDurabilityAcrossRestart:
     """The user-message timestamp must outlive a process restart via the DB."""
 
-    def test_user_message_timestamp_survives_restart(self, db, warm_store):
+    def test_user_message_timestamp_survives_restart(self, db: sqlite3.Connection, warm_store: MemoryStore) -> None:
         """absorb(user_message) then restart - durable snapshot equals the write.
 
         RED at HEAD: memory-only WorldState loses the value on restart.
@@ -91,7 +90,7 @@ class TestWorldStateDurabilityAcrossRestart:
         # stored representation round-trips through isoformat/parse_utc).
         assert abs((survived - when).total_seconds()) < 1.0
 
-    def test_durable_value_is_read_from_storage_not_a_live_dict(self, db, warm_store):
+    def test_durable_value_is_read_from_storage_not_a_live_dict(self, db: sqlite3.Connection, warm_store: MemoryStore) -> None:
         """A new WorldState starts with an empty ``_store``; passing proves a real hydrate.
 
         Guards against a test that would pass merely because some dict outlived
@@ -115,7 +114,7 @@ class TestWorldStateDurabilityAcrossRestart:
         assert survived is not None
         assert abs((survived - when).total_seconds()) < 1.0
 
-    def test_latest_user_message_wins_after_restart(self, db, warm_store):
+    def test_latest_user_message_wins_after_restart(self, db: sqlite3.Connection, warm_store: MemoryStore) -> None:
         """Persistence must overwrite, never append/stale - gate compares the most recent write."""
         old = utc_now() - timedelta(hours=3)
         recent = utc_now() - timedelta(minutes=3)
@@ -140,7 +139,7 @@ class TestSubconsciousGateDeStarvationAfterRestart:
     """The real worker gate must see the hydrated timestamp post-restart."""
 
     @contextmanager
-    def _gate_against(self, world_state_instance):
+    def _gate_against(self, world_state_instance: WorldState) -> Generator[None, None, None]:
         """Point the module-level world_state singleton at the given instance.
 
         Models the restarted process rebuilding its singletons. The real
@@ -154,7 +153,7 @@ class TestSubconsciousGateDeStarvationAfterRestart:
         finally:
             _ws_mod.world_state = original
 
-    def test_recent_user_message_keeps_gate_user_active_after_restart(self, db, warm_store):
+    def test_recent_user_message_keeps_gate_user_active_after_restart(self, db: sqlite3.Connection, warm_store: MemoryStore) -> None:
         """User spoke 1 min ago: gate must return 'user_active' after restart.
 
         At HEAD the restart wipes last_user_message_at so the worker wrongly
@@ -179,7 +178,7 @@ class TestSubconsciousGateDeStarvationAfterRestart:
             "here means the durable timestamp was lost (starvation)."
         )
 
-    def test_idle_user_message_lets_gate_run_after_restart(self, db, warm_store):
+    def test_idle_user_message_lets_gate_run_after_restart(self, db: sqlite3.Connection, warm_store: MemoryStore) -> None:
         """User last spoke 45 min ago: hydrated-but-old timestamp must not trip the gate.
 
         With no prior fire, ``_check_gates`` must return None, proving the

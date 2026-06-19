@@ -1,6 +1,9 @@
+import sqlite3
+from typing import cast
+
 import pytest
 
-from services import compaction_persistence, transcript_service
+from services import compaction_persistence
 from services.provider_cache_service import ProviderCacheService
 from services.subconscious_worker import SubconsciousWorker
 
@@ -9,18 +12,18 @@ pytestmark = pytest.mark.unit
 _CH = "user"
 
 
-def _clear(db):
+def _clear(db: sqlite3.Connection) -> None:
     db.execute("DELETE FROM transcript WHERE channel = ?", (_CH,))
     db.commit()
 
 
-def _seed_selected_ollama(db, max_tokens):
+def _seed_selected_ollama(db: sqlite3.Connection, max_tokens: int) -> int:
     cur = db.execute(
         "INSERT INTO providers (name, platform, model, host, max_tokens) "
         "VALUES ('idle-compact-test', 'ollama', 'fit-model', 'http://localhost:11434', ?)",
         (max_tokens,),
     )
-    pid = cur.lastrowid
+    pid = cast(int, cur.lastrowid)
     db.execute(
         "INSERT INTO settings (key, value) VALUES ('selected_provider_id', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -30,7 +33,7 @@ def _seed_selected_ollama(db, max_tokens):
     return pid
 
 
-def test_idle_gate_compaction_job_is_a_clean_noop_with_no_backlog(db):
+def test_idle_gate_compaction_job_is_a_clean_noop_with_no_backlog(db: sqlite3.Connection) -> None:
     """The real idle-gate job no-ops with zero side effects when there is nothing
     past the watermark — and repeating it stays free (the over-cap edge case).
 

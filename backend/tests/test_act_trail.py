@@ -8,6 +8,9 @@
 
 
 
+import sqlite3
+from typing import cast
+
 import pytest
 
 from services.act_trail import ActTrail
@@ -15,16 +18,16 @@ from services.act_trail import ActTrail
 pytestmark = pytest.mark.unit
 
 
-def _seed_transcript(db) -> int:
+def _seed_transcript(db: sqlite3.Connection) -> int:
     cur = db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
         ("user", "user", "what's the weather in Malta?"),
     )
     db.commit()
-    return cur.lastrowid
+    return cast(int, cur.lastrowid)
 
 
-def test_round_trips_a_real_tool_calls_row(db):
+def test_round_trips_a_real_tool_calls_row(db: sqlite3.Connection) -> None:
     transcript_id = _seed_transcript(db)
     trail = ActTrail()
 
@@ -52,7 +55,7 @@ def test_round_trips_a_real_tool_calls_row(db):
     assert ActTrail.render(rows[1]) == "[tool_chain_compactor] {} → summarised the trail"
 
 
-def test_record_is_a_silent_noop_without_a_transcript_id(db):
+def test_record_is_a_silent_noop_without_a_transcript_id(db: sqlite3.Connection) -> None:
     """Delegates with skip_transcript pass transcript_id=None; the NOT NULL FK
     means record must skip rather than raise (spec §4c / F2)."""
     before = db.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
@@ -68,5 +71,5 @@ def test_record_is_a_silent_noop_without_a_transcript_id(db):
     assert after == before
 
 
-def test_fetch_returns_empty_for_an_unknown_transcript(db):
+def test_fetch_returns_empty_for_an_unknown_transcript(db: sqlite3.Connection) -> None:
     assert ActTrail().fetch_by_transcript_id(999999) == []

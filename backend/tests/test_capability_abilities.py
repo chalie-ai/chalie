@@ -17,6 +17,8 @@ every execute() call on these abilities exercises the not-connected error
 path without requiring real IMAP/CalDAV/CardDAV credentials.
 """
 
+from typing import cast
+
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -26,7 +28,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def test_email_calendar_contacts_are_registered():
+def test_email_calendar_contacts_are_registered() -> None:
     """All three new abilities are discoverable via AbilityRegistry."""
     from abilities._registry import AbilityRegistry
     from abilities._ability import Ability
@@ -48,7 +50,7 @@ def test_email_calendar_contacts_are_registered():
 # ---------------------------------------------------------------------------
 
 
-def test_email_not_connected_returns_structured_error():
+def test_email_not_connected_returns_structured_error() -> None:
     """EmailAbility returns a ToolResult not-connected error when mail is not connected.
 
     email migrated onto CapabilityAbility in TKT-889, so the not-connected
@@ -63,11 +65,11 @@ def test_email_not_connected_returns_structured_error():
     result = EmailAbility().run({"action": "search"})
     assert result.status == "error"
     assert result.code == "not-connected"
-    assert "not connected" in result.body.lower()
+    assert "not connected" in cast(str, result.body).lower()
     assert "mail integration" in (result.hint or "").lower()
 
 
-def test_calendar_write_not_connected_returns_tool_result_error():
+def test_calendar_write_not_connected_returns_tool_result_error() -> None:
     """CalendarAbility write ops return a ToolResult not-connected error.
 
     calendar migrated onto CapabilityAbility in TKT-888, so the not-connected
@@ -84,11 +86,11 @@ def test_calendar_write_not_connected_returns_tool_result_error():
     )
     assert result.status == "error"
     assert result.code == "not-connected"
-    assert "not connected" in result.body.lower()
+    assert "not connected" in cast(str, result.body).lower()
     assert "mail integration" in (result.hint or "").lower()
 
 
-def test_contacts_not_connected_returns_structured_error():
+def test_contacts_not_connected_returns_structured_error() -> None:
     """ContactsAbility returns a structured ToolResult error when mail is not connected.
 
     contacts is the TKT-883 exemplar migrated onto CapabilityAbility, so its
@@ -102,7 +104,7 @@ def test_contacts_not_connected_returns_structured_error():
     result = ContactsAbility().run({"action": "list"})
     assert result.status == "error"
     assert result.code == "not-connected"
-    assert "not connected" in result.body.lower()
+    assert "not connected" in cast(str, result.body).lower()
     assert "mail integration" in (result.hint or "").lower()
 
 
@@ -111,7 +113,7 @@ def test_contacts_not_connected_returns_structured_error():
 # ---------------------------------------------------------------------------
 
 
-def test_subconscious_worker_owns_capability_sync():
+def test_subconscious_worker_owns_capability_sync() -> None:
     """The subconscious worker drives capability syncs via _step_capability_sync.
 
     The worker calls each connected capability's monitor() method on every
@@ -125,7 +127,7 @@ def test_subconscious_worker_owns_capability_sync():
     assert not hasattr(SubconsciousWorker, "_step_contacts_sync")
 
 
-def test_mail_capability_has_no_scheduler_sync_registration():
+def test_mail_capability_has_no_scheduler_sync_registration() -> None:
     """MailCapability must NOT register a scheduler handler for syncs.
 
     Syncs are driven by the subconscious worker, not the scheduler.

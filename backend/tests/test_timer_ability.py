@@ -9,6 +9,8 @@
 # Timer-ability business-logic tests migrated from the per-ability conformance file (TKT-975).
 
 import json
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -21,12 +23,12 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def user_mp(db):
+def user_mp(db: sqlite3.Connection) -> MP:
     return MP(seed_transcript(db, "chat", "start a timer"), UserConfig({}))
 
 
 @pytest.fixture
-def dmn_mp(db):
+def dmn_mp(db: sqlite3.Connection) -> MP:
     return MP(seed_transcript(db, "subconscious", "start a timer"), DmnConfig())
 
 
@@ -42,7 +44,7 @@ def _render_rich(title: str, duration: int, ordinal: int = 1) -> str:
 # ── Contract: invalid durations are run()-side invalid-duration errors ───────────
 
 
-def test_invalid_durations_are_invalid_duration_code(db, user_mp):
+def test_invalid_durations_are_invalid_duration_code(db: sqlite3.Connection, user_mp: MP) -> None:
     for bad in (-5, 86401, "30"):
         out = ToolDispatcher(user_mp).dispatch(
             "timer", {"title": "Bad", "duration_seconds": bad, "act_summary": "x"}
@@ -55,7 +57,7 @@ def test_invalid_durations_are_invalid_duration_code(db, user_mp):
 # ── Contract: title truncation + max-duration edge ───────────────────────────────
 
 
-def test_long_title_truncated_to_80_chars(db, dmn_mp):
+def test_long_title_truncated_to_80_chars(db: sqlite3.Connection, dmn_mp: MP) -> None:
     out = ToolDispatcher(dmn_mp).dispatch(
         "timer", {"title": "x" * 200, "duration_seconds": 60, "act_summary": "x"}
     )
@@ -63,7 +65,7 @@ def test_long_title_truncated_to_80_chars(db, dmn_mp):
     assert len(payload["title"]) == 80, payload
 
 
-def test_max_duration_accepted(db, dmn_mp):
+def test_max_duration_accepted(db: sqlite3.Connection, dmn_mp: MP) -> None:
     out = ToolDispatcher(dmn_mp).dispatch(
         "timer", {"title": "Long", "duration_seconds": 86400, "act_summary": "x"}
     )
@@ -80,7 +82,7 @@ def test_max_duration_accepted(db, dmn_mp):
 # exactly as the conversation-render path does.
 
 
-def test_parser_injects_started_at_from_created_at():
+def test_parser_injects_started_at_from_created_at() -> None:
     from services.rich_media_parser import parse
 
     raw = _render_rich("Pasta", 600)
@@ -98,12 +100,12 @@ def test_parser_injects_started_at_from_created_at():
     seg = segments[0]
     assert seg["type"] == "rich"
     assert seg["tag"] == "timer_1"
-    assert seg["payload"]["title"] == "Pasta"
-    assert seg["payload"]["duration_seconds"] == 600
-    assert seg["payload"]["started_at"] == "2026-05-03T14:30:00+00:00"
+    assert cast(dict[str, object], seg["payload"])["title"] == "Pasta"
+    assert cast(dict[str, object], seg["payload"])["duration_seconds"] == 600
+    assert cast(dict[str, object], seg["payload"])["started_at"] == "2026-05-03T14:30:00+00:00"
 
 
-def test_parser_rejects_unparseable_created_at_sentinel():
+def test_parser_rejects_unparseable_created_at_sentinel() -> None:
     """``parse_utc`` returns ``datetime.min`` (year 0001) on garbage rather than
     raising. The enrich hook must reject that sentinel so the FE falls through to
     its "Invalid timer payload" guard instead of firing the alarm at year 0001."""
@@ -118,11 +120,11 @@ def test_parser_rejects_unparseable_created_at_sentinel():
         "created_at": "this is not a date",
     }]
     segments = parse("<span id='timer_1'>Started.</span>", tool_calls)
-    assert "started_at" not in segments[0]["payload"]
+    assert "started_at" not in cast(dict[str, object], segments[0]["payload"])
     assert "started_at" not in raw
 
 
-def test_parser_skips_injection_when_created_at_missing():
+def test_parser_skips_injection_when_created_at_missing() -> None:
     from services.rich_media_parser import parse
 
     raw = _render_rich("Pasta", 600)
@@ -134,11 +136,11 @@ def test_parser_skips_injection_when_created_at_missing():
         # created_at deliberately absent
     }]
     segments = parse("<span id='timer_1'>Started.</span>", tool_calls)
-    assert segments[0]["payload"].get("started_at") is None
+    assert cast(dict[str, object], segments[0]["payload"]).get("started_at") is None
     assert "started_at" not in raw
 
 
-def test_parser_does_not_inject_started_at_for_non_timer_tools():
+def test_parser_does_not_inject_started_at_for_non_timer_tools() -> None:
     """The ``tool_name == "timer"`` gate ensures other rich-media tools (weather,
     list, …) never get a fabricated ``started_at`` even though their rows also
     carry a ``created_at`` column."""
@@ -156,4 +158,4 @@ def test_parser_does_not_inject_started_at_for_non_timer_tools():
         "created_at": "2026-05-03 14:30:00",
     }]
     segments = parse("<span id='weather_1'>Sunny.</span>", tool_calls)
-    assert "started_at" not in segments[0]["payload"]
+    assert "started_at" not in cast(dict[str, object], segments[0]["payload"])

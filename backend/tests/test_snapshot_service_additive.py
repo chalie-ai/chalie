@@ -7,12 +7,17 @@ branch, and cross-version artifact skipping.
 """
 
 import os
+import pathlib
 import zipfile
+from typing import TYPE_CHECKING
 
 import pytest
 
 import services.database_service as _db_mod
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    from flask.testing import FlaskClient
 
 # Reuse the locked file's real fixtures and production-path helpers verbatim —
 # one definition, shared by both files. Importing the fixture functions makes
@@ -28,14 +33,14 @@ from tests.test_snapshot_service import (  # noqa: F401
 )
 
 
-def _quarantine_dirs() -> list:
+def _quarantine_dirs() -> list[pathlib.Path]:
     return sorted(FileMapperService.get_data_path().glob(".restore-failed-*"))
 
 
 @pytest.mark.unit
 class TestSnapshotHttpExport:
 
-    def test_http_export_route_streams_a_real_zip(self, client):  # noqa: F811
+    def test_http_export_route_streams_a_real_zip(self, client: "FlaskClient") -> None:  # noqa: F811
         _seed_transcript("user", "user", "HTTP-EXPORT-MARKER")
 
         resp = client.post("/api/snapshot/export", json={})
@@ -58,7 +63,7 @@ class TestSnapshotHttpExport:
 @pytest.mark.unit
 class TestSnapshotApplyNoop:
 
-    def test_apply_pending_is_a_noop_when_nothing_is_staged(self, instance):  # noqa: F811
+    def test_apply_pending_is_a_noop_when_nothing_is_staged(self, instance: pathlib.Path) -> None:  # noqa: F811
         from services.snapshot_service import SnapshotService
 
         _seed_transcript("user", "user", "NO-STAGED-RESTORE")
@@ -78,7 +83,7 @@ class TestSnapshotApplyNoop:
 @pytest.mark.unit
 class TestSnapshotMidSwapRollback:
 
-    def test_mid_swap_failure_rolls_back_and_quarantines_to_break_boot_loop(self, instance):  # noqa: F811
+    def test_mid_swap_failure_rolls_back_and_quarantines_to_break_boot_loop(self, instance: pathlib.Path) -> None:  # noqa: F811
         """A mid-swap filesystem fault (read-only destination dir, AFTER chalie.db
         is already swapped) must roll back live artifacts, clear
         ``.pending-restore``, and quarantine the staged set as
@@ -125,7 +130,7 @@ class TestSnapshotMidSwapRollback:
 @pytest.mark.unit
 class TestSnapshotPlainCryptoAndManifest:
 
-    def test_plain_export_opens_without_password_and_missing_manifest_is_rejected(self, instance):  # noqa: F811
+    def test_plain_export_opens_without_password_and_missing_manifest_is_rejected(self, instance: pathlib.Path) -> None:  # noqa: F811
         """(a) Plain export is readable with no password (distinct from AES path).
         (b) A manifest-less zip raises from ``stage_import`` and stages nothing
         (exercises ``_read_manifest`` missing-manifest branch)."""
@@ -158,7 +163,7 @@ class TestSnapshotPlainCryptoAndManifest:
 @pytest.mark.unit
 class TestSnapshotCrossVersionRestore:
 
-    def test_restore_skips_unknown_artifact_kind_from_an_older_build(self, instance):  # noqa: F811
+    def test_restore_skips_unknown_artifact_kind_from_an_older_build(self, instance: pathlib.Path) -> None:  # noqa: F811
         """A snapshot carrying a dropped artifact kind (``session_secret``) must
         skip it and complete the restore - not ``KeyError`` and quarantine."""
         import json

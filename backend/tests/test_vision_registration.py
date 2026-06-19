@@ -9,6 +9,8 @@ Policy defaults seeded by ``policy_defaults.json``:
 """
 
 import sqlite3
+from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -34,20 +36,20 @@ _CHANNEL = ProcessorConfig.PolicyChannel
 # Shared real-stack helpers (mirror the channel-isolation feature suite).
 # ---------------------------------------------------------------------------
 
-def _mp_for(config) -> MessageProcessor:
+def _mp_for(config: ProcessorConfig) -> MessageProcessor:
     mp = MessageProcessor("find a vision tool for me")
     mp.config = config
     mp.active_tools = list(config.always_available or [])
     return mp
 
 
-def _find_tools_on(mp: MessageProcessor, params: dict) -> str:
+def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> object:
     ability = FindToolsAbility()
     ability.mp = mp
     return ability.run(params).body
 
 
-def _seeded_policy_db(tmp_path) -> PolicyManager:
+def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
     db = DatabaseService(str(tmp_path / "vision_policy.db"))
     _migrate_legacy_policy_rules(db)                                  # no-op on fresh
     SchemaConvergenceService(db, embedding_dimensions=256).converge()  # creates policy
@@ -61,17 +63,17 @@ def _seeded_policy_db(tmp_path) -> PolicyManager:
 
 class TestVisionPolicyDefaults:
 
-    def test_chat_vision_is_allow(self, tmp_path):
+    def test_chat_vision_is_allow(self, tmp_path: Path) -> None:
         pm = _seeded_policy_db(tmp_path)
         assert pm._setting(_CHANNEL.CHAT.value, "vision") == "allow"
 
-    def test_external_agent_vision_is_allow(self, tmp_path):
+    def test_external_agent_vision_is_allow(self, tmp_path: Path) -> None:
         """Intentional policy: external_agent vision is allow even though
         external_agent web_search is deny — do not regress this to deny."""
         pm = _seeded_policy_db(tmp_path)
         assert pm._setting(_CHANNEL.EXTERNAL_AGENT.value, "vision") == "allow"
 
-    def test_subconscious_vision_is_deny(self, tmp_path):
+    def test_subconscious_vision_is_deny(self, tmp_path: Path) -> None:
         pm = _seeded_policy_db(tmp_path)
         assert pm._setting(_CHANNEL.SUBCONSCIOUS.value, "vision") == "deny"
 
@@ -82,14 +84,14 @@ class TestVisionPolicyDefaults:
 
 class TestVisionVisibility:
 
-    def test_vision_is_a_delegate_tool(self):
+    def test_vision_is_a_delegate_tool(self) -> None:
         """Pin the constant the whole visibility split rests on: a silent edit
         that drops vision from DELEGATE_TOOLS trips this guard."""
         assert "vision" in DELEGATE_TOOLS
 
-    def test_vision_selectable_on_user_channel(self):
+    def test_vision_selectable_on_user_channel(self) -> None:
         mp = _mp_for(UserConfig())
-        assert "vision" not in mp.config.blocked  # contract guard
+        assert "vision" not in mp.config.blocked
 
         result = _find_tools_on(mp, {"select": ["vision"]})
 
@@ -99,13 +101,13 @@ class TestVisionVisibility:
         )
         # find_tools now returns a structured body: a successful select reports
         # nothing under not_found (vision was injected, not treated as unavailable).
-        assert result["not_found"] == [], (
+        assert cast(dict[str, object], result)["not_found"] == [], (
             f"vision must not be reported unavailable on the user channel. result={result!r}"
         )
 
-    def test_vision_blocked_on_dmn_background_channel(self):
+    def test_vision_blocked_on_dmn_background_channel(self) -> None:
         mp = _mp_for(DmnConfig())
-        assert "vision" in mp.config.blocked  # contract guard
+        assert "vision" in mp.config.blocked
 
         result = _find_tools_on(mp, {"select": ["vision"]})
 
@@ -113,7 +115,7 @@ class TestVisionVisibility:
             f"vision must be blocked on the DMN background channel. "
             f"active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" in result.lower()
+        assert "not found or unavailable" in cast(str, result).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -122,10 +124,10 @@ class TestVisionVisibility:
 
 class TestVisionSearchIndex:
 
-    def test_registry_resolves_vision_to_vision_ability(self):
+    def test_registry_resolves_vision_to_vision_ability(self) -> None:
         assert isinstance(AbilityRegistry.get("vision"), VisionAbility)
 
-    def test_abilities_sqlite_contains_vision_row(self):
+    def test_abilities_sqlite_contains_vision_row(self) -> None:
         db_path = FileMapperService.get_abilities_db_path()
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         try:

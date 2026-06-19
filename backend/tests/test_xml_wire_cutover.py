@@ -10,6 +10,9 @@
  of production code.
  """
 
+import sqlite3
+from typing import cast
+
 import pytest
 
 
@@ -22,7 +25,7 @@ class TestTranscriptAppendSetsXmlMigrated:
     corrupt already-correct XML content.
     """
 
-    def test_append_sets_xml_migrated_1(self, db):
+    def test_append_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append
 
         rowid = append("ch-xml", "user", "Hello world")
@@ -34,7 +37,7 @@ class TestTranscriptAppendSetsXmlMigrated:
         assert row is not None
         assert row[0] == 1, "append() must write xml_migrated=1"
 
-    def test_write_input_row_sets_xml_migrated_1(self, db):
+    def test_write_input_row_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import write_input_row
 
         rowid = write_input_row("ch-xml", "user", "Input content")
@@ -46,7 +49,7 @@ class TestTranscriptAppendSetsXmlMigrated:
         assert row is not None
         assert row[0] == 1, "write_input_row() must write xml_migrated=1"
 
-    def test_write_assistant_row_sets_xml_migrated_1(self, db):
+    def test_write_assistant_row_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import write_assistant_row
 
         rowid = write_assistant_row("ch-xml", "<p>Response</p>")
@@ -69,7 +72,7 @@ class TestConversationHistoryXmlWireFormat:
     chat.js now expects `content` only.
     """
 
-    def test_messages_have_content_key_not_blocks(self, db):
+    def test_messages_have_content_key_not_blocks(self, db: sqlite3.Connection) -> None:
         from api.conversation import get_recent_history
 
         db.execute(
@@ -85,7 +88,7 @@ class TestConversationHistoryXmlWireFormat:
                 "Message must NOT have a 'blocks' key — blocks array is the old wire format"
             )
 
-    def test_content_is_passed_through_verbatim(self, db):
+    def test_content_is_passed_through_verbatim(self, db: sqlite3.Connection) -> None:
         from api.conversation import get_recent_history
 
         db.execute(
@@ -94,5 +97,5 @@ class TestConversationHistoryXmlWireFormat:
         db.commit()
 
         messages, _ = get_recent_history(limit=12, offset=0)
-        target = next((m for m in messages if "<p>Verbatim</p>" in m.get("content", "")), None)
+        target = next((m for m in messages if "<p>Verbatim</p>" in cast(str, m.get("content", ""))), None)
         assert target is not None, "Content must be returned verbatim, not re-serialized"

@@ -14,7 +14,14 @@ test_compaction_watermark.py and the end-to-end scenario suite; the old singleto
 _run_full_compaction / _handle_overflow tests were removed with the redesign.
 """
 
+import sqlite3
+from typing import TYPE_CHECKING, cast
+
 import pytest
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+    from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
@@ -29,7 +36,7 @@ _GPM_USER_PROMPT = "What time is it?"
 _GPM_CHANNEL = 'test_channel'
 
 
-def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
+def _gpm_config(channel: str = _GPM_CHANNEL, role: str = 'test_role', suppress_history: bool = False) -> "ProcessorConfig":
     from services.processor_config import ProcessorConfig
     from tests.helpers import StubProcessorConfig
 
@@ -57,7 +64,7 @@ class _GPMFakeProcessor:
     _ROLE = 'test_role'
 
     @staticmethod
-    def make(channel=_GPM_CHANNEL, suppress_history=False, **kwargs):
+    def make(channel: str = _GPM_CHANNEL, suppress_history: bool = False, **kwargs: object) -> "MessageProcessor":
         from services.message_processor import MessageProcessor
 
         mp = object.__new__(MessageProcessor)
@@ -75,7 +82,7 @@ class _GPMFakeProcessor:
 
 
 class TestGetPreviousMessagesTranscript:
-    def _seed_transcript(self, db, channel=_GPM_CHANNEL):
+    def _seed_transcript(self, db: sqlite3.Connection, channel: str = _GPM_CHANNEL) -> tuple[int, int]:
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES (?, 'user', 'Hello world', '2026-04-10 10:00:00')",
@@ -105,7 +112,7 @@ class TestGetPreviousMessagesTranscript:
         db.commit()
         return uid1, uid2
 
-    def test_tool_calls_do_not_appear_in_previous_messages(self, db):
+    def test_tool_calls_do_not_appear_in_previous_messages(self, db: sqlite3.Connection) -> None:
         """History replay no longer renders tool_calls rows (decision 2).
         Tool calls are retained durably but excluded from get_previous_messages()
         to keep the history prompt clean and unambiguous."""
@@ -126,7 +133,7 @@ class TestGetPreviousMessagesTranscript:
 
 
 class TestGetPreviousMessagesChannelIsolation:
-    def _seed_all_channels(self, db):
+    def _seed_all_channels(self, db: sqlite3.Connection) -> None:
         for channel in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
             db.execute(
                 "INSERT INTO transcript (channel, role, content, created_at) "
@@ -135,7 +142,7 @@ class TestGetPreviousMessagesChannelIsolation:
             )
         db.commit()
 
-    def test_test_channel_isolation(self, db):
+    def test_test_channel_isolation(self, db: sqlite3.Connection) -> None:
         self._seed_all_channels(db)
         p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
         result = p.get_previous_messages()
@@ -150,7 +157,7 @@ class TestGetPreviousMessagesChannelIsolation:
 
 
 class TestGetPreviousMessagesTimestampFormat:
-    def test_iso_timestamp_with_offset_formatted_correctly(self, db):
+    def test_iso_timestamp_with_offset_formatted_correctly(self, db: sqlite3.Connection) -> None:
         channel = _GPM_CHANNEL
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
@@ -166,19 +173,11 @@ class TestGetPreviousMessagesTimestampFormat:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # get_previous_messages() — window-only, NO fixed row cap (compact-first)
-#
-# CANONICAL DESIGN (supersedes the trim-first build): there is
-# NO provider-layer trim. get_previous_messages() renders EVERY watermark-bounded
-# row. When the FULL request reaches the cap the ACT loop fires compaction BEFORE
-# sending (compact-first) — it never sends a trimmed/partial view. The only
-# drop-oldest is the ``drop_oldest`` PARAM, used solely by ChatHistoryCompactor's
-# rare bare-request fallback (step 4.2) when even the tool-free compaction request
-# overflows. _previous_rows() is id-ASC, so drop_oldest skips the OLDEST rows.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestGetPreviousMessagesWindowFit:
-    def _seed_rows(self, db, n, channel=_GPM_CHANNEL):
+    def _seed_rows(self, db: sqlite3.Connection, n: int, channel: str = _GPM_CHANNEL) -> None:
         for i in range(n):
             db.execute(
                 "INSERT INTO transcript (channel, role, content, created_at) "
@@ -187,7 +186,7 @@ class TestGetPreviousMessagesWindowFit:
             )
         db.commit()
 
-    def test_renders_all_rows_uncapped(self, db):
+    def test_renders_all_rows_uncapped(self, db: sqlite3.Connection) -> None:
         # Well past the retired 50-row cap — every row must still render.
         n = 60
         self._seed_rows(db, n)
@@ -198,7 +197,7 @@ class TestGetPreviousMessagesWindowFit:
         assert "line-0000-end" in result
         assert f"line-{n - 1:04d}-end" in result
 
-    def test_drop_oldest_param_skips_oldest_rows(self, db):
+    def test_drop_oldest_param_skips_oldest_rows(self, db: sqlite3.Connection) -> None:
         # The 4.2 fallback drops the three oldest rows from the compaction input.
         n = 10
         self._seed_rows(db, n)
@@ -210,7 +209,7 @@ class TestGetPreviousMessagesWindowFit:
         assert "line-0003-end" in result               # first surviving row
         assert f"line-{n - 1:04d}-end" in result        # newest always kept
 
-    def test_drop_oldest_param_at_or_beyond_count_returns_empty(self, db):
+    def test_drop_oldest_param_at_or_beyond_count_returns_empty(self, db: sqlite3.Connection) -> None:
         # Skipping every row leaves nothing to render — the fallback floor relies
         # on this to know when there is nothing left to compact.
         n = 2
@@ -222,16 +221,9 @@ class TestGetPreviousMessagesWindowFit:
 
 # =============================================================================
 # Trail compaction excludes the automatic memory-recall seed
-#
-# Canonical design §2-3: ToolChainCompactor no-ops when there are no tool calls
-# "excluding internal ones (compaction + automatic memory recall)", and when it
-# DOES compact it excludes the automatic memory recall from the act-trail. The
-# seed is the turn-0 memory(action=recall, _auto=True) dispatch; a model-issued
-# memory call has no _auto flag and stays real trail. Real DB rows, real
-# _has_trail / _render_act_trail off a uid-bound processor — zero mocks.
 # =============================================================================
 class TestTrailExcludesAutoMemoryRecall:
-    def _seed_turn(self, db, channel=_GPM_CHANNEL):
+    def _seed_turn(self, db: sqlite3.Connection, channel: str = _GPM_CHANNEL) -> int:
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
             "VALUES (?, 'user', 'turn input', '2026-04-10 10:00:00')",
@@ -239,9 +231,9 @@ class TestTrailExcludesAutoMemoryRecall:
         )
         tid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
         db.commit()
-        return tid
+        return cast(int, tid)
 
-    def _add_tool_call(self, db, tid, tool_name, params_json, result, when):
+    def _add_tool_call(self, db: sqlite3.Connection, tid: int, tool_name: str, params_json: str, result: str, when: str) -> None:
         db.execute(
             "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -249,7 +241,7 @@ class TestTrailExcludesAutoMemoryRecall:
         )
         db.commit()
 
-    def test_auto_memory_only_trail_is_no_op(self, db):
+    def test_auto_memory_only_trail_is_no_op(self, db: sqlite3.Connection) -> None:
         # Only the turn-0 auto memory seed fired — nothing real to compact.
         tid = self._seed_turn(db)
         self._add_tool_call(
@@ -264,7 +256,7 @@ class TestTrailExcludesAutoMemoryRecall:
         # ...but the compaction input drops it, leaving nothing to compact.
         assert p._render_act_trail(for_compaction=True) == ""
 
-    def test_auto_memory_plus_real_call_compacts_only_real(self, db):
+    def test_auto_memory_plus_real_call_compacts_only_real(self, db: sqlite3.Connection) -> None:
         tid = self._seed_turn(db)
         self._add_tool_call(
             db, tid, "memory",
@@ -283,7 +275,7 @@ class TestTrailExcludesAutoMemoryRecall:
         # Default per-turn render keeps both.
         assert "auto recalled facts" in p._render_act_trail()
 
-    def test_model_initiated_memory_counts_as_real_trail(self, db):
+    def test_model_initiated_memory_counts_as_real_trail(self, db: sqlite3.Connection) -> None:
         # A model-issued memory call has NO _auto flag — it is genuine activity.
         tid = self._seed_turn(db)
         self._add_tool_call(
@@ -298,11 +290,6 @@ class TestTrailExcludesAutoMemoryRecall:
 
 # =============================================================================
 # _wrap_with_checkpoint — real DB tests
-#
-# The checkpoint summary is read from the canonical watermark home: a transcript
-# row with role='compaction' (design §3.6, get_compaction). Seed it via the
-# production factory transcript_service.write_input_row — the exact call _compact()
-# makes — never a hand-rolled INSERT or the retired tool_calls audit-row model.
 # =============================================================================
 
 
@@ -310,7 +297,7 @@ _COMPACT_CHANNEL = 'test_compact_channel'
 
 
 class TestWrapWithCheckpoint:
-    def test_row_with_content_exact_envelope_format(self, db):
+    def test_row_with_content_exact_envelope_format(self, db: sqlite3.Connection) -> None:
         from services.message_processor import _wrap_with_checkpoint
         from services import transcript_service
 

@@ -7,7 +7,7 @@ from tests.helpers import StubProcessorConfig
 pytestmark = pytest.mark.unit
 
 
-def _make(policy_channel):
+def _make(policy_channel: ProcessorConfig.PolicyChannel) -> StubProcessorConfig:
     return StubProcessorConfig(
         channel="user", role="user", policy_channel=policy_channel,
         build_user_prompt=lambda mp: "", build_user_definition=lambda mp: "",
@@ -18,11 +18,11 @@ def _make(policy_channel):
     )
 
 
-def test_enum_has_three_values():
+def test_enum_has_three_values() -> None:
     vals = {c.value for c in ProcessorConfig.PolicyChannel}
     assert vals == {"chat", "subconscious", "external_agent"}
 
 
-def test_usage_class_derives_from_policy_channel():
+def test_usage_class_derives_from_policy_channel() -> None:
     assert _make(ProcessorConfig.PolicyChannel.SUBCONSCIOUS).usage_class == "subconscious"
     assert _make(ProcessorConfig.PolicyChannel.CHAT).usage_class == "chat"

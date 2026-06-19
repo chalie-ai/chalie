@@ -6,8 +6,11 @@ decay_cycle, and LUT-based upsert paths.
 
 import contextlib
 import math
+import pathlib
 import struct
 import sqlite3
+from collections.abc import Generator, Iterator
+from typing import TYPE_CHECKING, Optional, cast
 
 import pytest
 from unittest.mock import MagicMock, patch
@@ -22,6 +25,25 @@ from services.data_graph_service import (
 )
 from services.database_service import DatabaseService
 from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _Injectable(Protocol):
+        """Type-only view of the attributes the test fixtures assign onto a
+        freshly ``__new__``-constructed DatabaseService / DataGraphService /
+        _VecSimDb instance. Casting an instance to this Protocol lets the
+        assignment type-check without changing the runtime statement (the
+        ``cast`` is erased at runtime). Every slot is ``object`` because the
+        injected values (paths, flags, mocks, closures) are read back only by
+        the production code under test, never through this view.
+        """
+
+        _db_path: object
+        _init_complete: object
+        connection: object
+        _generate_embedding: object
+        _backfill_missing_embeddings: object
 
 
 pytestmark = pytest.mark.unit
@@ -121,7 +143,7 @@ DATA_GRAPH_DDL = [
 # ── DB fixture ────────────────────────────────────────────────────
 
 @pytest.fixture
-def db_service(tmp_path):
+def db_service(tmp_path: "pathlib.Path") -> Iterator[DatabaseService]:
     """Real SQLite DB with data_graph schema, shared connection for nested contexts.
 
     Uses a single persistent connection to mimic the production thread-local
@@ -138,14 +160,14 @@ def db_service(tmp_path):
     shared_conn.commit()
 
     db = DatabaseService.__new__(DatabaseService)
-    db._db_path = db_path
-    db._init_complete = True
+    cast("_Injectable", db)._db_path = db_path
+    cast("_Injectable", db)._init_complete = True
     db.db_path = db_path
 
     _depth = [0]
 
     @contextlib.contextmanager
-    def _connection():
+    def _connection() -> Generator[sqlite3.Connection, None, None]:
         _depth[0] += 1
         try:
             yield shared_conn
@@ -158,26 +180,26 @@ def db_service(tmp_path):
         finally:
             _depth[0] -= 1
 
-    db.connection = _connection
+    cast("_Injectable", db).connection = _connection
     yield db
     shared_conn.close()
 
 
 @pytest.fixture
-def svc(db_service):
+def svc(db_service: DatabaseService) -> DataGraphService:
     """DataGraphService with real SQLite backend, embedding generation disabled.
 
     _generate_embedding returns None so vec0 operations are skipped (graceful
     degradation path in the service).
     """
     service = DataGraphService(db_service)
-    service._generate_embedding = MagicMock(return_value=None)
+    cast("_Injectable", service)._generate_embedding = MagicMock(return_value=None)
     return service
 
 
 # ── Helpers ───────────────────────────────────────────────────────
 
-def _rid(result: dict) -> int:
+def _rid(result: dict[str, object]) -> int:
     """Extract a stable integer row identifier from a store/fetch result dict.
 
     SQLite's ``SELECT rowid, *`` on a table with ``id INTEGER PRIMARY KEY``
@@ -185,20 +207,20 @@ def _rid(result: dict) -> int:
     sqlite3.Row serialisation, ``dict(row)`` may expose the column only as
     ``id``. This helper checks both so test assertions stay stable.
     """
-    return result.get('rowid') or result.get('id')
+    return cast(int, result.get('rowid') or result.get('id'))
 
 
-def _raw_row(db_service, rowid: int) -> dict:
+def _raw_row(db_service: DatabaseService, rowid: int) -> dict[str, object]:
     """Fetch a data_graph row by rowid for assertion, bypassing the service."""
     with db_service.connection() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT rowid, * FROM data_graph WHERE rowid=?", (rowid,))
         row = cursor.fetchone()
         cursor.close()
-        return dict(row) if row else None
+        return dict(row) if row else cast(dict[str, object], None)
 
 
-def _raw_all(db_service) -> list:
+def _raw_all(db_service: DatabaseService) -> list[dict[str, object]]:
     """Fetch all data_graph rows (including deleted/inactive)."""
     with db_service.connection() as conn:
         cursor = conn.cursor()
@@ -208,7 +230,7 @@ def _raw_all(db_service) -> list:
         return [dict(r) for r in rows]
 
 
-def _raw_fts(db_service, query: str) -> list:
+def _raw_fts(db_service: DatabaseService, query: str) -> list[object]:
     """Direct FTS search; returns list of matching rowids."""
     with db_service.connection() as conn:
         cursor = conn.cursor()
@@ -221,11 +243,21 @@ def _raw_fts(db_service, query: str) -> list:
         return [r[0] for r in rows]
 
 
-def _insert_row(db_service, *, kind='user_specific', key='test_key',
-                value='test_value', active=1, deleted_at=None,
-                retrieval_weight=1.0, storage_strength=0.5,
-                evidence_count=1, last_confirmed_at=None, source=None,
-                valid_to=None) -> int:
+def _insert_row(
+    db_service: DatabaseService,
+    *,
+    kind: str = 'user_specific',
+    key: str = 'test_key',
+    value: str = 'test_value',
+    active: int = 1,
+    deleted_at: Optional[str] = None,
+    retrieval_weight: float = 1.0,
+    storage_strength: float = 0.5,
+    evidence_count: int = 1,
+    last_confirmed_at: Optional[str] = None,
+    source: Optional[str] = None,
+    valid_to: Optional[str] = None,
+) -> int:
     """Insert a raw data_graph row and sync FTS; returns the rowid."""
     now = utc_now().isoformat()
     lc = last_confirmed_at or now
@@ -238,7 +270,7 @@ def _insert_row(db_service, *, kind='user_specific', key='test_key',
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (kind, key, value, active, deleted_at, retrieval_weight,
               storage_strength, evidence_count, now, lc, source, valid_to))
-        rowid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        rowid = cast(int, conn.execute("SELECT last_insert_rowid()").fetchone()[0])
         conn.execute(
             "INSERT INTO data_graph_fts(rowid, key, value, kind, search_queries) VALUES (?, ?, ?, ?, ?)",
             (rowid, key, value or '', kind, '')
@@ -246,11 +278,11 @@ def _insert_row(db_service, *, kind='user_specific', key='test_key',
         return rowid
 
 
-def _get_db_id(db_service, rowid: int) -> int:
+def _get_db_id(db_service: DatabaseService, rowid: int) -> int:
     """Retrieve the data_graph.id for a given rowid (they are equal for INTEGER PRIMARY KEY)."""
     with db_service.connection() as conn:
         row = conn.execute("SELECT id FROM data_graph WHERE rowid=?", (rowid,)).fetchone()
-        return row[0] if row else None
+        return cast(int, row[0]) if row else cast(int, None)
 
 
 # TestStore
@@ -259,7 +291,7 @@ def _get_db_id(db_service, rowid: int) -> int:
 @pytest.mark.unit
 class TestStore:
 
-    def test_store_new_row(self, svc, db_service):
+    def test_store_new_row(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Basic insert: all required columns populated, FTS synced."""
         result = svc.store(KIND_USER_SPECIFIC, 'user_name', 'Jordan')
 
@@ -283,7 +315,7 @@ class TestStore:
         fts_hits = _raw_fts(db_service, '"Jordan"*')
         assert row_id in fts_hits
 
-    def test_store_reinforce_same_value_bumps_evidence(self, svc, db_service):
+    def test_store_reinforce_same_value_bumps_evidence(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Same kind+key+value → evidence_count increases, retrieval_weight reset to 1.0."""
         r1 = svc.store(KIND_USER_SPECIFIC, 'favourite_food', 'pizza')
         assert r1 is not None
@@ -300,7 +332,7 @@ class TestStore:
         assert r2 is not None
         assert r2['evidence_count'] == 2
         assert r2['retrieval_weight'] == pytest.approx(1.0)
-        assert r2['storage_strength'] > r1['storage_strength']
+        assert cast(float, r2['storage_strength']) > cast(float, r1['storage_strength'])
 
         # Only one active row for this key — first_seen_at must be unchanged
         all_rows = _raw_all(db_service)
@@ -310,11 +342,11 @@ class TestStore:
 
     _FAKE_EMB = [0.1] * 768  # non-None sentinel; KNN is patched so value doesn't matter
 
-    def _lut_hit(self, canonical_key: str, rule: str, cos: float = 0.95):
+    def _lut_hit(self, canonical_key: str, rule: str, cos: float = 0.95) -> dict[str, object]:
         """Build a fake LUT hit dict for patching _lookup_concept_lut."""
         return {'canonical_key': canonical_key, 'rule': rule, 'cos': cos}
 
-    def test_store_user_specific_lut_temporal_canonicalizes_and_supersedes(self, svc, db_service):
+    def test_store_user_specific_lut_temporal_canonicalizes_and_supersedes(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """New key hits LUT → canonical key rewrite → existing canonical row demoted, new inserted, edges created."""
         # Seed a row with the canonical key directly
         seed_rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='residence', value='Valletta')
@@ -322,7 +354,7 @@ class TestStore:
 
         # Store with an alias key — LUT maps it to 'residence' (temporal rule).
         # _generate_embedding must return a non-None value so _lookup_concept_lut is invoked.
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        cast("_Injectable", svc)._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('residence', 'temporal')):
             r2 = svc.store(KIND_USER_SPECIFIC, 'residency', 'Swieqi')
 
@@ -334,7 +366,7 @@ class TestStore:
         # Old canonical row demoted
         old = _raw_row(db_service, seed_rowid)
         assert old['active'] == 0
-        assert old['retrieval_weight'] < 1.0
+        assert cast(float, old['retrieval_weight']) < 1.0
 
         # TKT-925 (ticket-sanctioned spec change): bi-temporal invalidation now
         # closes the old fact's validity interval. Graphiti event-time model —
@@ -362,13 +394,13 @@ class TestStore:
         assert (r2['id'], seed_id, 'supersedes') in edge_set
         assert (seed_id, r2['id'], 'superseded_by') in edge_set
 
-    def test_store_user_specific_lut_coexist_different_value_inserts_new(self, svc, db_service):
+    def test_store_user_specific_lut_coexist_different_value_inserts_new(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Coexist rule + different value → both rows active, no supersession."""
         r1 = svc.store(KIND_USER_SPECIFIC, 'favorite_foods', 'pizza')
         assert r1 is not None
 
         # _generate_embedding must return non-None so LUT lookup is attempted.
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        cast("_Injectable", svc)._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('favorite_foods', 'coexist')):
             r2 = svc.store(KIND_USER_SPECIFIC, 'favorite_foods', 'pasta')
 
@@ -390,7 +422,7 @@ class TestStore:
             ).fetchall()
         assert not any(e[0] == 'supersedes' for e in edges)
 
-    def test_store_user_specific_lut_immutable_same_value_reinforces(self, svc, db_service):
+    def test_store_user_specific_lut_immutable_same_value_reinforces(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Immutable rule + same value → reinforce, no conflict."""
         r1 = svc.store(KIND_USER_SPECIFIC, 'birth_date', '1990-01-01')
         assert r1 is not None
@@ -399,14 +431,14 @@ class TestStore:
         with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('birth_date', 'immutable')):
             r2 = svc.store(KIND_USER_SPECIFIC, 'birth_date', '1990-01-01')
 
-        assert _rid(r2) == r1_id
-        assert r2['evidence_count'] == 2
+        assert _rid(cast("dict[str, object]", r2)) == r1_id
+        assert cast("dict[str, object]", r2)['evidence_count'] == 2
 
-    def test_store_user_specific_lut_immutable_different_value_returns_conflict(self, svc, db_service):
+    def test_store_user_specific_lut_immutable_different_value_returns_conflict(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Immutable rule + different value → conflict dict returned, original row preserved."""
         svc.store(KIND_USER_SPECIFIC, 'birth_date', 'March 15')
 
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        cast("_Injectable", svc)._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('birth_date', 'immutable')):
             result = svc.store(KIND_USER_SPECIFIC, 'birth_date', 'March 20')
 
@@ -424,9 +456,9 @@ class TestStore:
         assert len(active_rows) == 1
         assert active_rows[0][0] == 'March 15'
 
-    def test_store_user_specific_lut_miss_inserts_and_records_miss(self, svc, db_service):
+    def test_store_user_specific_lut_miss_inserts_and_records_miss(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """LUT miss (no hit above threshold) → row inserted with original key, miss recorded."""
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        cast("_Injectable", svc)._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         with patch.object(svc, '_lookup_concept_lut', return_value=None), \
              patch.object(svc, '_get_lut_miss_top_cos', return_value=0.42):
             result = svc.store(KIND_USER_SPECIFIC, 'dryer_streak', 'won 3 in a row')
@@ -450,16 +482,16 @@ class TestStore:
 @pytest.mark.unit
 class TestRecall:
 
-    def test_recall_basic_fts_match(self, svc, db_service):
+    def test_recall_basic_fts_match(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Rows matching FTS query are returned with a composite_score > 0."""
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='hobby', value='photography')
 
         results = svc.recall("photography")
         assert len(results) == 1
         assert results[0]['key'] == 'hobby'
-        assert results[0]['composite_score'] > 0.0
+        assert cast(float, results[0]['composite_score']) > 0.0
 
-    def test_recall_filters_deleted_rows(self, svc, db_service):
+    def test_recall_filters_deleted_rows(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Rows with deleted_at set are not returned."""
         now = utc_now().isoformat()
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='secret',
@@ -470,7 +502,7 @@ class TestRecall:
         keys = [r['key'] for r in results]
         assert 'secret' not in keys
 
-    def test_recall_kinds_filter(self, svc, db_service):
+    def test_recall_kinds_filter(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """kinds= restricts results to those kinds only."""
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='pref', value='dark mode')
         _insert_row(db_service, kind=KIND_SYSTEM, key='rule', value='dark mode response')
@@ -479,7 +511,7 @@ class TestRecall:
         kinds_returned = {r['kind'] for r in results}
         assert kinds_returned == {KIND_SYSTEM}
 
-    def test_recall_is_a_pure_read(self, svc, db_service):
+    def test_recall_is_a_pure_read(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """recall() mutates ZERO rows — relevance advances only on writes.
 
         The redesign deleted ``_touch_accessed`` (the rw+0.1 / last_accessed_at
@@ -503,7 +535,7 @@ class TestRecall:
         assert after['retrieval_weight'] == pytest.approx(0.55), \
             "read must not bump retrieval_weight"
 
-    def test_recall_graph_expansion_includes_neighbours(self, svc, db_service):
+    def test_recall_graph_expansion_includes_neighbours(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Rows connected by edges are included in the result set via 1-hop expansion."""
         rowid_a = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
                               key='partner', value='Alex', retrieval_weight=1.0)
@@ -532,14 +564,14 @@ class TestRecall:
 @pytest.mark.unit
 class TestFetch:
 
-    def test_fetch_basic_returns_active_non_deleted(self, svc, db_service):
+    def test_fetch_basic_returns_active_non_deleted(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Default fetch returns only active, non-deleted rows."""
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='name', value='Jordan')
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='gone', value='x',
                     deleted_at=utc_now().isoformat())
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='inactive', value='y', active=0)
 
-        rows = svc.fetch()
+        rows = cast(list[dict[str, object]], svc.fetch())
         keys = {r['key'] for r in rows}
         assert 'name' in keys
         assert 'gone' not in keys
@@ -553,7 +585,7 @@ class TestFetch:
 @pytest.mark.unit
 class TestDeletion:
 
-    def test_soft_delete_sets_deleted_at(self, svc, db_service):
+    def test_soft_delete_sets_deleted_at(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """soft_delete_by_id marks the row with a deleted_at timestamp."""
         rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
                             key='del_key', value='del_val')
@@ -564,7 +596,7 @@ class TestDeletion:
         raw = _raw_row(db_service, rowid)
         assert raw['deleted_at'] is not None
 
-    def test_soft_delete_removes_from_fts(self, svc, db_service):
+    def test_soft_delete_removes_from_fts(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """After soft delete the row is no longer findable via FTS."""
         rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
                             key='fts_del', value='uniquetoken')
@@ -584,7 +616,7 @@ class TestDeletion:
 @pytest.mark.unit
 class TestDecayCycle:
 
-    def test_decay_skips_system_kind(self, svc, db_service):
+    def test_decay_skips_system_kind(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """system kind has ttl_days=None so decay_cycle must never modify it."""
         assert _KIND_POLICY[KIND_SYSTEM]['ttl_days'] is None
 
@@ -597,7 +629,7 @@ class TestDecayCycle:
         raw = _raw_row(db_service, rowid)
         assert raw['retrieval_weight'] == pytest.approx(0.9, abs=0.001)
 
-    def test_decay_reduces_retrieval_weight_for_old_user_specific(self, svc, db_service):
+    def test_decay_reduces_retrieval_weight_for_old_user_specific(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Old user_specific rows have retrieval_weight reduced via power-law decay."""
         # Row confirmed in 2020 → age ~years → decayed well below 1.0
         old_ts = '2020-01-01T00:00:00+00:00'
@@ -609,10 +641,10 @@ class TestDecayCycle:
 
         raw = _raw_row(db_service, rowid)
         # Must be less than 1.0 and at or above salience_floor=0.2
-        assert raw['retrieval_weight'] < 1.0
-        assert raw['retrieval_weight'] >= _KIND_POLICY[KIND_USER_SPECIFIC]['salience_floor']
+        assert cast(float, raw['retrieval_weight']) < 1.0
+        assert cast(float, raw['retrieval_weight']) >= cast(float, _KIND_POLICY[KIND_USER_SPECIFIC]['salience_floor'])
 
-    def test_decay_hard_deletes_expired_misc_at_floor(self, svc, db_service):
+    def test_decay_hard_deletes_expired_misc_at_floor(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """misc rows with retrieval_weight < 0.01 and confirmed > 2 days ago are hard-deleted."""
         old_ts = '2020-01-01T00:00:00+00:00'
         rowid = _insert_row(db_service, kind=KIND_MISC, key='old_scratch',
@@ -624,7 +656,7 @@ class TestDecayCycle:
         raw = _raw_row(db_service, rowid)
         assert raw is None, "Expired misc row should have been hard-deleted by decay_cycle"
 
-    def test_decay_fast_decays_superseded_fact_recently_invalidated(self, svc, db_service):
+    def test_decay_fast_decays_superseded_fact_recently_invalidated(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """A just-superseded fact is dropped to near-zero weight but kept for history.
 
         valid_to set (recently) → inside the 90-day delete window, so the row
@@ -642,7 +674,7 @@ class TestDecayCycle:
         assert raw is not None, "recently-superseded fact is kept for bi-temporal history"
         assert raw['retrieval_weight'] == pytest.approx(0.01, abs=1e-6)
 
-    def test_decay_hard_deletes_superseded_fact_past_window(self, svc, db_service):
+    def test_decay_hard_deletes_superseded_fact_past_window(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """A fact superseded > 90 days ago is hard-deleted (clock = valid_to)."""
         old_invalidation = '2020-01-01T00:00:00+00:00'
         rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='residence',
@@ -654,7 +686,7 @@ class TestDecayCycle:
         raw = _raw_row(db_service, rowid)
         assert raw is None, "superseded fact past the 90-day window must be hard-deleted"
 
-    def test_decay_leaves_live_fact_untouched_by_superseded_branch(self, svc, db_service):
+    def test_decay_leaves_live_fact_untouched_by_superseded_branch(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """A live fact (active=1, valid_to NULL) is never touched by the supersession path.
 
         Confirmed recently so the live-fact power-law branch is a no-op too, the
@@ -682,7 +714,7 @@ class TestDecayCycle:
 @pytest.mark.unit
 class TestDocumentKind:
 
-    def test_store_document_kind(self, svc, db_service):
+    def test_store_document_kind(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Store a document artifact and verify kind, key, value, source are persisted."""
         result = svc.store(KIND_DOCUMENT, 'doc:test123:000', 'chunk zero content', source='doc:test123')
 
@@ -708,7 +740,7 @@ class TestHardDeleteBySourcePrefix:
     """hard_delete_by_source_prefix deletes all rows whose source starts with
     the given prefix, cleans FTS entries, and returns the correct count."""
 
-    def test_deletes_matching_rows_returns_count(self, svc, db_service):
+    def test_deletes_matching_rows_returns_count(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """All rows with the target source prefix are removed; count matches."""
         _insert_row(db_service, kind=KIND_DOCUMENT, key='doc:abc:000',
                     value='chunk 0', source='document:abc')
@@ -745,11 +777,11 @@ class TestForget:
 
     _FAKE_EMB = [0.1] * 768
 
-    def _lut_hit(self, canonical_key: str, rule: str, cos: float = 0.95):
+    def _lut_hit(self, canonical_key: str, rule: str, cos: float = 0.95) -> dict[str, object]:
         """Return a fake LUT hit dict for patching _lookup_concept_lut."""
         return {'canonical_key': canonical_key, 'rule': rule, 'cos': cos}
 
-    def test_forget_temporal_no_value_deletes_all_versions(self, svc, db_service):
+    def test_forget_temporal_no_value_deletes_all_versions(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Temporal key forget with no value param removes ALL version rows and their edges."""
         # Store two versions: seed old row directly, let service create the current one.
         old_rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
@@ -767,7 +799,7 @@ class TestForget:
                 (new_id, old_id)
             )
 
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        cast("_Injectable", svc)._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('residence', 'temporal')):
             result = svc.forget(KIND_USER_SPECIFIC, 'residence')
 
@@ -791,12 +823,12 @@ class TestForget:
             ).fetchall()
         assert edges == [], "Edges for deleted rows must be removed"
 
-    def test_forget_coexist_specific_value_removes_only_that_row(self, svc, db_service):
+    def test_forget_coexist_specific_value_removes_only_that_row(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Coexist key forget with explicit value removes that value, leaves others active."""
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='food_and_drink', value='pizza')
         _insert_row(db_service, kind=KIND_USER_SPECIFIC, key='food_and_drink', value='pasta')
 
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        cast("_Injectable", svc)._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('food_and_drink', 'coexist')):
             result = svc.forget(KIND_USER_SPECIFIC, 'food_and_drink', value='pizza')
 
@@ -811,12 +843,12 @@ class TestForget:
         assert 'pizza' not in values, "Forgotten value must be physically removed"
         assert 'pasta' in values, "Other coexist values must remain untouched"
 
-    def test_forget_immutable_hard_deletes_without_protection(self, svc, db_service):
+    def test_forget_immutable_hard_deletes_without_protection(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Immutable key forget removes the single row — no protection from deletion."""
         rowid = _insert_row(db_service, kind=KIND_USER_SPECIFIC,
                             key='birth_date', value='1990-03-15')
 
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        cast("_Injectable", svc)._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
         with patch.object(svc, '_lookup_concept_lut', return_value=self._lut_hit('birth_date', 'immutable')):
             result = svc.forget(KIND_USER_SPECIFIC, 'birth_date')
 
@@ -843,8 +875,14 @@ class TestBackfillMissingEmbeddings:
 
     _FAKE_EMB = [0.1, 0.2, 0.3]
 
-    def _bare_insert(self, db_service, *, kind='user_specific',
-                     key='sister_name', value='Sofia') -> int:
+    def _bare_insert(
+        self,
+        db_service: DatabaseService,
+        *,
+        kind: str = 'user_specific',
+        key: str = 'sister_name',
+        value: str = 'Sofia',
+    ) -> int:
         """Insert a data_graph row with NO vec or FTS entries — mirrors raw-SQL seeder."""
         now = utc_now().isoformat()
         with db_service.connection() as conn:
@@ -853,9 +891,9 @@ class TestBackfillMissingEmbeddings:
                     (kind, key, value, active, first_seen_at, last_confirmed_at)
                 VALUES (?, ?, ?, 1, ?, ?)
             """, (kind, key, value, now, now))
-            return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            return cast(int, conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
-    def test_backfill_populates_key_vec_on_recall(self, svc, db_service):
+    def test_backfill_populates_key_vec_on_recall(self, svc: DataGraphService, db_service: DatabaseService) -> None:
         """Recall triggers backfill: key_vec gains a row for a bare-inserted id."""
         row_id = self._bare_insert(db_service, key='sisters_name', value='Sofia')
 
@@ -867,7 +905,7 @@ class TestBackfillMissingEmbeddings:
         assert count_before == 0, "key_vec must have no entry before backfill"
 
         # Override _generate_embedding so backfill actually stores a blob
-        svc._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
+        cast("_Injectable", svc)._generate_embedding = MagicMock(return_value=self._FAKE_EMB)
 
         svc.recall("sisters name Sofia")
 
@@ -884,7 +922,7 @@ class TestBackfillMissingEmbeddings:
 # ══════════════════════════════════════════════════════════════════
 
 
-def _norm(v):
+def _norm(v: list[float]) -> list[float]:
     """Return unit-normalised copy of float list v."""
     mag = math.sqrt(sum(x * x for x in v))
     if mag == 0:
@@ -892,17 +930,17 @@ def _norm(v):
     return [x / mag for x in v]
 
 
-def _pack(v):
+def _pack(v: list[float]) -> bytes:
     """Pack float list to 32-bit float blob (sqlite-vec format)."""
     return struct.pack(f'{len(v)}f', *v)
 
 
-def _unpack(blob, n):
+def _unpack(blob: bytes, n: int) -> list[float]:
     """Unpack n floats from a blob."""
     return list(struct.unpack(f'{n}f', blob[:n * 4]))
 
 
-def _l2sq(a, b):
+def _l2sq(a: list[float], b: list[float]) -> float:
     """Squared L2 distance between two equal-length float lists."""
     return sum((x - y) ** 2 for x, y in zip(a, b))
 
@@ -920,13 +958,13 @@ class _VecSimCursor:
     _KEY_VEC_MATCH = "data_graph_key_vec"
     _VAL_VEC_MATCH = "data_graph_value_vec"
 
-    def __init__(self, real_cursor, conn, dim):
+    def __init__(self, real_cursor: sqlite3.Cursor, conn: sqlite3.Connection, dim: int) -> None:
         self._cur = real_cursor
         self._conn = conn
         self._dim = dim
-        self._rows = None  # populated when a MATCH query is intercepted
+        self._rows: Optional[list[tuple[int, float]]] = None  # populated when a MATCH query is intercepted
 
-    def _intercept_match(self, sql, params):
+    def _intercept_match(self, sql: str, params: object) -> bool:
         """Return True if we should handle this query ourselves."""
         s = sql.lower()
         return (
@@ -934,7 +972,7 @@ class _VecSimCursor:
             and ("data_graph_key_vec" in s or "data_graph_value_vec" in s)
         )
 
-    def _run_vec_sim(self, sql, params):
+    def _run_vec_sim(self, sql: str, params: tuple[object, ...]) -> None:
         """Compute cosine distances manually from the plain blob table."""
         s = sql.lower()
         table = (
@@ -942,7 +980,7 @@ class _VecSimCursor:
             if "data_graph_key_vec" in s
             else "data_graph_value_vec"
         )
-        query_blob, k = params[0], params[1]
+        query_blob, k = cast(bytes, params[0]), cast(int, params[1])
         query_vec = _norm(_unpack(query_blob, self._dim))
         # Use the real underlying connection cursor (not the wrapper) to avoid
         # recursion when fetching the plain blob rows.
@@ -950,21 +988,21 @@ class _VecSimCursor:
         plain_cur.execute(f"SELECT rowid, embedding FROM {table}")
         rows = plain_cur.fetchall()
         plain_cur.close()
-        results = []
+        results: list[tuple[int, float]] = []
         for rowid, blob in rows:
             if not blob:
                 continue
-            row_vec = _norm(_unpack(blob, self._dim))
+            row_vec = _norm(_unpack(cast(bytes, blob), self._dim))
             dist_sq = _l2sq(query_vec, row_vec)
             # sqlite-vec returns sqrt of dist² for L2; production code uses
             # _l2_dist_to_cosine(distance) = max(0, 1 - distance^2/2)
             # which expects the raw L2 distance (not squared).
             dist = math.sqrt(max(0.0, dist_sq))
-            results.append((rowid, dist))
+            results.append((cast(int, rowid), dist))
         results.sort(key=lambda x: x[1])
         self._rows = results[:k]
 
-    def execute(self, sql, params=()):
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> "_VecSimCursor":
         if self._intercept_match(sql, params):
             self._run_vec_sim(sql, params)
         else:
@@ -972,24 +1010,24 @@ class _VecSimCursor:
             self._cur.execute(sql, params)
         return self
 
-    def fetchall(self):
+    def fetchall(self) -> list[object]:
         if self._rows is not None:
-            r = self._rows
+            r = cast("list[object]", self._rows)
             self._rows = None
             return r
-        return self._cur.fetchall()
+        return cast(list[object], self._cur.fetchall())
 
-    def fetchone(self):
+    def fetchone(self) -> object:
         if self._rows is not None:
-            r = self._rows[0] if self._rows else None
+            r: object = self._rows[0] if self._rows else None
             self._rows = None
             return r
         return self._cur.fetchone()
 
-    def close(self):
+    def close(self) -> None:
         self._cur.close()
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[object]:
         if self._rows is not None:
             yield from self._rows
             self._rows = None
@@ -1005,35 +1043,35 @@ class _VecSimConn:
     override only cursor() to return a _VecSimCursor.
     """
 
-    def __init__(self, real_conn, dim):
+    def __init__(self, real_conn: sqlite3.Connection, dim: int) -> None:
         self._conn = real_conn
         self._dim = dim
 
     # -- cursor interception ------------------------------------------------
 
-    def cursor(self):
+    def cursor(self) -> _VecSimCursor:
         return _VecSimCursor(self._conn.cursor(), self._conn, self._dim)
 
     # -- transaction forwarding ---------------------------------------------
 
-    def commit(self):
+    def commit(self) -> None:
         return self._conn.commit()
 
-    def rollback(self):
+    def rollback(self) -> None:
         return self._conn.rollback()
 
-    def close(self):
+    def close(self) -> None:
         return self._conn.close()
 
     # -- convenience pass-throughs (production code calls these directly on conn)
 
-    def execute(self, sql, params=()):
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> _VecSimCursor:
         """Forward direct conn.execute() calls through a VecSimCursor."""
         cur = self.cursor()
         cur.execute(sql, params)
         return cur
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> object:
         """Proxy any attribute not explicitly overridden to the real connection."""
         return getattr(self._conn, name)
 
@@ -1046,22 +1084,24 @@ class _VecSimDb:
     unpack stored blobs consistently.
     """
 
-    def __init__(self, real_db, dim):
+    def __init__(self, real_db: DatabaseService, dim: int) -> None:
         self._db = real_db
         self._dim = dim
         # Expose attributes the service reads directly.
         self.db_path = real_db.db_path
         self._db_path = real_db.db_path
-        self._init_complete = real_db._init_complete
+        self._init_complete = cast("_Injectable", real_db)._init_complete
 
     @contextlib.contextmanager
-    def connection(self):
+    def connection(self) -> Generator[sqlite3.Connection, None, None]:
         with self._db.connection() as conn:
-            yield _VecSimConn(conn, self._dim)
+            yield cast(sqlite3.Connection, _VecSimConn(conn, self._dim))
 
 
 @pytest.fixture
-def svc_vec(db_service):
+def svc_vec(
+    db_service: DatabaseService,
+) -> tuple[DataGraphService, _VecSimDb, DatabaseService]:
     """DataGraphService with a vec-simulating DB wrapper (dim=4).
 
     _generate_embedding is replaced with a real Python callable that returns
@@ -1081,7 +1121,7 @@ def svc_vec(db_service):
     """
     DIM = 4
 
-    _VEC_MAP = {
+    _VEC_MAP: dict[str, list[float]] = {
         'food recipe':              _norm([1.0, 0.0, 0.0, 0.0]),
         'apple pie recipe':         _norm([1.0, 0.0, 0.0, 0.0]),
         'dentist appointment':      _norm([1.0, 0.0, 0.0, 0.0]),
@@ -1089,14 +1129,14 @@ def svc_vec(db_service):
         'dentist appt high':        _norm([0.0, 1.0, 0.0, 0.0]),
     }
 
-    def _fake_emb(text):
+    def _fake_emb(text: str) -> list[float]:
         return _VEC_MAP.get(text, _norm([0.5, 0.5, 0.0, 0.0]))
 
     vec_db = _VecSimDb(db_service, DIM)
-    service = DataGraphService(vec_db)
-    service._generate_embedding = _fake_emb
+    service = DataGraphService(cast("DatabaseService", vec_db))
+    cast("_Injectable", service)._generate_embedding = _fake_emb
     # Suppress backfill embedding calls for rows not in our map
-    service._backfill_missing_embeddings = lambda: None
+    cast("_Injectable", service)._backfill_missing_embeddings = lambda: None
     return service, vec_db, db_service
 
 
@@ -1104,8 +1144,17 @@ def svc_vec(db_service):
 class TestRecallCosScore:
     """cos_score is computed from semantic similarity, not retrieval_weight."""
 
-    def _insert_with_key_vec(self, db_service, rowid, key_vec, *, kind='user_specific',
-                             key, value, retrieval_weight=1.0):
+    def _insert_with_key_vec(
+        self,
+        db_service: DatabaseService,
+        rowid: Optional[int],
+        key_vec: list[float],
+        *,
+        kind: str = 'user_specific',
+        key: str,
+        value: str,
+        retrieval_weight: float = 1.0,
+    ) -> Optional[int]:
         """Insert a data_graph row and seed its key embedding blob."""
         _insert_row(db_service, kind=kind, key=key, value=value,
                     retrieval_weight=retrieval_weight)
@@ -1117,7 +1166,7 @@ class TestRecallCosScore:
                 (key,)
             )
             row = cur.fetchone()
-            db_id = row[0] if row else None
+            db_id: Optional[int] = cast(int, row[0]) if row else None
         if db_id is not None:
             with db_service.connection() as conn:
                 conn.execute(
@@ -1126,7 +1175,9 @@ class TestRecallCosScore:
                 )
         return db_id
 
-    def test_high_cos_score_row_carries_cos_score_gte_07(self, svc_vec):
+    def test_high_cos_score_row_carries_cos_score_gte_07(
+        self, svc_vec: tuple[DataGraphService, _VecSimDb, DatabaseService]
+    ) -> None:
         """Row whose key embedding aligns with the query returns cos_score >= 0.7."""
         service, _, db_service = svc_vec
 
@@ -1141,12 +1192,14 @@ class TestRecallCosScore:
         results = service.recall('food recipe')
         matching = [r for r in results if r['key'] == 'apple pie recipe']
         assert matching, "Expected 'apple pie recipe' row in recall results"
-        assert matching[0]['cos_score'] >= 0.7, (
+        assert cast(float, matching[0]['cos_score']) >= 0.7, (
             f"cos_score should be ≥ 0.7 for a nearly-identical embedding, "
             f"got {matching[0]['cos_score']}"
         )
 
-    def test_low_cos_score_row_carries_cos_score_lt_04(self, svc_vec):
+    def test_low_cos_score_row_carries_cos_score_lt_04(
+        self, svc_vec: tuple[DataGraphService, _VecSimDb, DatabaseService]
+    ) -> None:
         """Row found via FTS but whose key embedding is orthogonal to the query returns cos_score < 0.4.
 
         Row key: 'dentist dental appt'  → blob [0,1,0,0]
@@ -1187,7 +1240,7 @@ class TestRecallCosScore:
         assert matching, (
             "Expected 'dentist dental appt' row to surface via FTS (search_queries='food recipe')"
         )
-        assert matching[0]['cos_score'] < 0.4, (
+        assert cast(float, matching[0]['cos_score']) < 0.4, (
             f"cos_score should be < 0.4 for an orthogonal embedding, "
             f"got {matching[0]['cos_score']}"
         )

@@ -1,16 +1,22 @@
+import sqlite3
+from typing import TYPE_CHECKING, cast
+
 import pytest
 from services import compaction_persistence, transcript_service
 from services.database_service import get_shared_db_service
 
+if TYPE_CHECKING:
+    from abilities.chat_history_compactor import _CompactionParent  # noqa: F401
+
 pytestmark = pytest.mark.integration
 
 
-def _clear(db, channel):
+def _clear(db: sqlite3.Connection, channel: str) -> None:
     db.execute("DELETE FROM transcript WHERE channel = ?", (channel,))
     db.commit()
 
 
-def test_get_compaction_reads_transcript_role_compaction(db):
+def test_get_compaction_reads_transcript_role_compaction(db: sqlite3.Connection) -> None:
     ch = "test_wm"
     _clear(db, ch)
     transcript_service.write_input_row(ch, "user", "hello one")
@@ -24,7 +30,7 @@ def test_get_compaction_reads_transcript_role_compaction(db):
     _clear(db, ch)
 
 
-def test_previous_rows_excludes_through_watermark_and_has_no_limit(db):
+def test_previous_rows_excludes_through_watermark_and_has_no_limit(db: sqlite3.Connection) -> None:
     ch = "test_wm2"
     _clear(db, ch)
     for i in range(25):  # >20 — proves the old limit=20 bug is gone
@@ -33,14 +39,14 @@ def test_previous_rows_excludes_through_watermark_and_has_no_limit(db):
     after = transcript_service.write_input_row(ch, "user", "after compaction")
 
     rows = transcript_service.get_recent(ch, since_id=cid)
-    ids = [r["id"] for r in rows]
+    ids = [cast(int, r["id"]) for r in rows]
     assert after in ids
     assert cid not in ids               # watermark row itself excluded
     assert all(i > cid for i in ids)    # nothing at/below the watermark
     _clear(db, ch)
 
 
-def test_get_context_limit_reads_declared_max_tokens_capped():
+def test_get_context_limit_reads_declared_max_tokens_capped() -> None:
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.providers import MAX_CONTEXT_WINDOW
@@ -71,7 +77,7 @@ def test_get_context_limit_reads_declared_max_tokens_capped():
         ProviderCacheService.invalidate()
 
 
-def _seed_selected_ollama(db, max_tokens):
+def _seed_selected_ollama(db: sqlite3.Connection, max_tokens: int) -> int:
     """Seed an offline Ollama provider and mark it selected, returning its id.
 
     Uses zero network - RequestOverCapError is raised before send(dto) is called."""
@@ -80,7 +86,7 @@ def _seed_selected_ollama(db, max_tokens):
         "VALUES ('fit-test', 'ollama', 'fit-model', 'http://localhost:11434', ?)",
         (max_tokens,),
     )
-    pid = cur.lastrowid
+    pid = cast(int, cur.lastrowid)
     db.execute(
         "INSERT INTO settings (key, value) VALUES ('selected_provider_id', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -90,7 +96,7 @@ def _seed_selected_ollama(db, max_tokens):
     return pid
 
 
-def test_measure_true_when_full_request_reaches_threshold(db):
+def test_measure_true_when_full_request_reaches_threshold(db: sqlite3.Connection) -> None:
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
@@ -125,7 +131,7 @@ def test_measure_true_when_full_request_reaches_threshold(db):
         _clear(db, ch)
 
 
-def test_measure_false_when_request_fits(db):
+def test_measure_false_when_request_fits(db: sqlite3.Connection) -> None:
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.provider_cache_service import ProviderCacheService
@@ -155,7 +161,7 @@ def test_measure_false_when_request_fits(db):
         _clear(db, ch)
 
 
-def test_send_raises_request_over_cap_without_calling_provider(db):
+def test_send_raises_request_over_cap_without_calling_provider(db: sqlite3.Connection) -> None:
     """providers.send(dto) raises RequestOverCapError before any API call (zero network)."""
     from services.message_processor import MessageProcessor
     from services.provider_api import RequestOverCapError
@@ -185,7 +191,7 @@ def test_send_raises_request_over_cap_without_calling_provider(db):
         _clear(db, ch)
 
 
-def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db):
+def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db: sqlite3.Connection) -> None:
     """Rare fallback (step 4.2): compactor drops the oldest message one at a time
     until the bare request fits the cap. Real provider stack, no live model."""
     from abilities.chat_history_compactor import ChatHistoryCompactor
@@ -208,7 +214,7 @@ def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db):
     MessageProcessor.__init__(mp, "compact", None)
     mp.config = UserConfig()
     try:
-        combined = ChatHistoryCompactor._fit_compaction_input(mp, "")
+        combined = ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "")
         assert combined is not None
         # Dropped at least one oldest row → the very first row is gone.
         assert "row000" not in combined
@@ -232,7 +238,7 @@ def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db):
         _clear(db, ch)
 
 
-def test_fit_compaction_input_no_drop_when_bare_request_fits(db):
+def test_fit_compaction_input_no_drop_when_bare_request_fits(db: sqlite3.Connection) -> None:
     """When the bare compaction request already fits, _fit_compaction_input keeps
     every message (no drop) and folds in the prior checkpoint."""
     from abilities.chat_history_compactor import ChatHistoryCompactor
@@ -251,7 +257,7 @@ def test_fit_compaction_input_no_drop_when_bare_request_fits(db):
     MessageProcessor.__init__(mp, "compact", None)
     mp.config = UserConfig()
     try:
-        combined = ChatHistoryCompactor._fit_compaction_input(mp, "PRIOR-CHECKPOINT")
+        combined = ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "PRIOR-CHECKPOINT")
         assert combined is not None
         assert "## Previous Summary" in combined          # prior carried forward
         assert "PRIOR-CHECKPOINT" in combined
@@ -262,7 +268,7 @@ def test_fit_compaction_input_no_drop_when_bare_request_fits(db):
         _clear(db, ch)
 
 
-def test_fit_compaction_input_returns_none_when_no_history(db):
+def test_fit_compaction_input_returns_none_when_no_history(db: sqlite3.Connection) -> None:
     """No rows past the watermark → nothing to compact → None (no watermark write)."""
     from abilities.chat_history_compactor import ChatHistoryCompactor
     from services.message_processor import MessageProcessor
@@ -278,13 +284,13 @@ def test_fit_compaction_input_returns_none_when_no_history(db):
     MessageProcessor.__init__(mp, "compact", None)
     mp.config = UserConfig()
     try:
-        assert ChatHistoryCompactor._fit_compaction_input(mp, "") is None
+        assert ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "") is None
     finally:
         ProviderCacheService.invalidate()
         _clear(db, ch)
 
 
-def test_substitute_provider_content_field_uses_mp_providers():
+def test_substitute_provider_content_field_uses_mp_providers() -> None:
     from configs.channels._common import substitute_provider_content_field, _CONTENT_FIELD_PLACEHOLDER
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig

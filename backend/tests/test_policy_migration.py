@@ -10,7 +10,9 @@ Two paths:
 """
 import contextlib
 import sqlite3
+from collections.abc import Generator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -23,15 +25,15 @@ pytestmark = pytest.mark.unit
 
 
 class _FakeDB:
-    def __init__(self, conn): self._conn = conn
-    def connection(self):
+    def __init__(self, conn: sqlite3.Connection) -> None: self._conn = conn
+    def connection(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
         @contextlib.contextmanager
-        def _ctx(): yield self._conn
+        def _ctx() -> Generator[sqlite3.Connection, None, None]: yield self._conn
         return _ctx()
 
 
 @pytest.fixture()
-def legacy_db():
+def legacy_db() -> Generator[sqlite3.Connection, None, None]:
     """A pre-redesign DB: has policy_rules with one custom row, no policy table."""
     conn = sqlite3.connect(":memory:")
     conn.executescript("""
@@ -47,8 +49,8 @@ def legacy_db():
     conn.close()
 
 
-def test_upgrade_copies_legacy_rules_one_to_one(legacy_db):
-    _migrate_legacy_policy_rules(_FakeDB(legacy_db))
+def test_upgrade_copies_legacy_rules_one_to_one(legacy_db: sqlite3.Connection) -> None:
+    _migrate_legacy_policy_rules(cast(DatabaseService, _FakeDB(legacy_db)))
     # policy table created to hold the copy
     assert legacy_db.execute(
         "SELECT count(*) FROM sqlite_master WHERE name='policy'").fetchone()[0] == 1
@@ -58,12 +60,12 @@ def test_upgrade_copies_legacy_rules_one_to_one(legacy_db):
     ).fetchone()[0] == "allow"
 
 
-def test_fresh_install_is_noop_and_leaves_db_empty():
+def test_fresh_install_is_noop_and_leaves_db_empty() -> None:
     """Fresh path: no policy_rules → no-op → the policy table is NOT created early,
     so convergence still sees a genuinely empty (fresh) database."""
     conn = sqlite3.connect(":memory:")
     try:
-        _migrate_legacy_policy_rules(_FakeDB(conn))
+        _migrate_legacy_policy_rules(cast(DatabaseService, _FakeDB(conn)))
         assert conn.execute(
             "SELECT count(*) FROM sqlite_master "
             "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
@@ -72,7 +74,7 @@ def test_fresh_install_is_noop_and_leaves_db_empty():
         conn.close()
 
 
-def test_fresh_install_seeds_api_key_as_sensitive(tmp_path: Path):
+def test_fresh_install_seeds_api_key_as_sensitive(tmp_path: Path) -> None:
     """REGRESSION: a fresh boot (copy no-op → converge → seed) must run schema.sql's
     seed pass so ``api_key`` is marked sensitive — otherwise the REST API key is
     persisted in cleartext.  Mirrors _init_database's boot order against a real

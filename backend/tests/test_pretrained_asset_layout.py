@@ -28,12 +28,12 @@ _MODE_META = os.path.join(
 )
 
 
-def _require_encoder():
+def _require_encoder() -> None:
     if not os.path.exists(_ENCODER_PATH):
         pytest.skip("gte-modernbert-base encoder not on disk — skipping encoder-dependent test")
 
 
-def _require_shipped_assets():
+def _require_shipped_assets() -> None:
     for path in (_DELIB_META, _DELIB_NPZ, _MODE_META):
         if not os.path.exists(path):
             pytest.skip(f"Shipped pre-trained asset missing: {path}")
@@ -41,7 +41,7 @@ def _require_shipped_assets():
 
 class TestPretrainedAssetLayoutBoot:
 
-    def test_both_heads_register_without_exception(self):
+    def test_both_heads_register_without_exception(self) -> None:
         _require_encoder()
         _require_shipped_assets()
 
@@ -62,7 +62,7 @@ class TestPretrainedAssetLayoutBoot:
             "mode_detector head failed to register from pre-trained dir"
         )
 
-    def test_pretrained_assets_not_redownloaded_when_present(self):
+    def test_pretrained_assets_not_redownloaded_when_present(self) -> None:
         _require_encoder()
         _require_shipped_assets()
 
@@ -84,7 +84,7 @@ class TestPretrainedAssetLayoutBoot:
 
 class TestPretrainedAssetMissingMeta:
 
-    def test_missing_meta_causes_register_failure_not_silent_success(self):
+    def test_missing_meta_causes_register_failure_not_silent_success(self) -> None:
         _require_encoder()
         _require_shipped_assets()
 

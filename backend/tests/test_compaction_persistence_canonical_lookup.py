@@ -11,6 +11,8 @@ Rows are seeded through the production factory transcript_service.write_input_ro
 seam, not a hand-rolled INSERT.
 """
 
+import sqlite3
+
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -19,18 +21,18 @@ _CHANNEL = 'test_cp_canonical'
 _OTHER_CHANNEL = 'test_cp_other'
 
 
-def _seed_compaction(channel, summary):
+def _seed_compaction(channel: str, summary: str) -> int:
     from services import transcript_service
     return transcript_service.write_input_row(channel, 'compaction', summary)
 
 
 class TestGetCompactionCanonicalLookup:
-    def test_returns_none_when_no_rows(self, db):
+    def test_returns_none_when_no_rows(self, db: sqlite3.Connection) -> None:
         from services.compaction_persistence import get_compaction
         result = get_compaction(_CHANNEL)
         assert result is None
 
-    def test_returns_compaction_row(self, db):
+    def test_returns_compaction_row(self, db: sqlite3.Connection) -> None:
         watermark = _seed_compaction(_CHANNEL, 'the summary text')
 
         from services.compaction_persistence import get_compaction
@@ -39,38 +41,41 @@ class TestGetCompactionCanonicalLookup:
         assert result['compacted_text'] == 'the summary text'
         assert result['compacted_up_to_id'] == watermark
 
-    def test_returns_latest_by_id(self, db):
+    def test_returns_latest_by_id(self, db: sqlite3.Connection) -> None:
         _seed_compaction(_CHANNEL, 'old summary')
         newer = _seed_compaction(_CHANNEL, 'new summary')
 
         from services.compaction_persistence import get_compaction
+        from typing import cast
         result = get_compaction(_CHANNEL)
-        assert result['compacted_text'] == 'new summary'
-        assert result['compacted_up_to_id'] == newer
+        assert cast("dict[str, object]", result)['compacted_text'] == 'new summary'
+        assert cast("dict[str, object]", result)['compacted_up_to_id'] == newer
 
-    def test_channel_isolation(self, db):
+    def test_channel_isolation(self, db: sqlite3.Connection) -> None:
         _seed_compaction(_OTHER_CHANNEL, 'other channel summary')
 
         from services.compaction_persistence import get_compaction
         result = get_compaction(_CHANNEL)
         assert result is None
 
-    def test_own_channel_visible_alongside_other_channel(self, db):
+    def test_own_channel_visible_alongside_other_channel(self, db: sqlite3.Connection) -> None:
         _seed_compaction(_CHANNEL, 'own summary')
         _seed_compaction(_OTHER_CHANNEL, 'other summary')
 
         from services.compaction_persistence import get_compaction
+        from typing import cast
         result = get_compaction(_CHANNEL)
-        assert result['compacted_text'] == 'own summary'
+        assert cast("dict[str, object]", result)['compacted_text'] == 'own summary'
 
-    def test_result_shape_tool_call_id_none_and_created_at_present(self, db):
+    def test_result_shape_tool_call_id_none_and_created_at_present(self, db: sqlite3.Connection) -> None:
         watermark = _seed_compaction(_CHANNEL, 'summary')
 
         from services.compaction_persistence import get_compaction
+        from typing import cast
         result = get_compaction(_CHANNEL)
         # tool_call_id is a retired legacy field: the watermark is no longer a
         # tool_call, so the canonical reader always returns None for it.
-        assert result['tool_call_id'] is None
+        assert cast("dict[str, object]", result)['tool_call_id'] is None
         # created_at is populated from the transcript row's DB default.
-        assert result['created_at'] is not None
-        assert result['compacted_up_to_id'] == watermark
+        assert cast("dict[str, object]", result)['created_at'] is not None
+        assert cast("dict[str, object]", result)['compacted_up_to_id'] == watermark

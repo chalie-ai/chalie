@@ -1,6 +1,7 @@
 # Requires network + chromium; run with: pytest -m e2e tests/e2e/test_browser_live.py
 
 import json
+from typing import cast
 
 import pytest
 
@@ -14,30 +15,30 @@ class _Mp:
     uid = 877_001
 
 
-def _run(params: dict) -> dict:
-    return json.loads(BrowserAbility(mp=_Mp()).run(params)["result"])
+def _run(params: dict[str, object]) -> dict[str, object]:
+    return cast(dict[str, object], json.loads(cast(str, cast(dict[str, object], BrowserAbility(mp=_Mp()).run(params))["result"])))
 
 
-def test_full_browse_flow_on_one_persistent_page():
+def test_full_browse_flow_on_one_persistent_page() -> None:
     env = _run({"action": "open", "url": "https://example.com"})
     assert env["error"] is None, env
-    assert env["page"]["status"] == 200
-    assert "Example Domain" in env["data"]["text"]
+    assert cast(dict[str, object], env["page"])["status"] == 200
+    assert "Example Domain" in cast(str, cast(dict[str, object], env["data"])["text"])
 
     # The SAME page persists — read without re-opening.
     env = _run({"action": "read"})
-    assert "Example Domain" in env["data"]["text"]
+    assert "Example Domain" in cast(str, cast(dict[str, object], env["data"])["text"])
 
     env = _run({"action": "find", "query": "More information"})
-    assert env["data"]["interactive"], env
+    assert cast(dict[str, object], env["data"])["interactive"], env
 
     env = _run({"action": "click", "target": "More information"})
-    assert env["changed"]["navigated"] is True, env
-    assert "iana.org" in env["page"]["url"]
+    assert cast(dict[str, object], env["changed"])["navigated"] is True, env
+    assert "iana.org" in cast(str, cast(dict[str, object], env["page"])["url"])
     assert env["data"], "navigation diff must carry the new page's read view"
 
     env = _run({"action": "back"})
-    assert "example.com" in env["page"]["url"]
+    assert "example.com" in cast(str, cast(dict[str, object], env["page"])["url"])
 
     from tools.browser.session import close_session
     close_session(_Mp.uid)

@@ -14,7 +14,10 @@ geopy is required. Tests are skipped if the package is absent so the CI
 baseline is not broken in environments that haven't installed it yet.
 """
 
+import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import pytest
 
@@ -42,7 +45,7 @@ _requires_geopy = pytest.mark.skipif(
 
 class TestDistanceKm:
     @_requires_geopy
-    def test_valletta_to_sliema_approx_2km(self):
+    def test_valletta_to_sliema_approx_2km(self) -> None:
         from services.geo_utils import distance_km
 
         dist = distance_km(35.8989, 14.5146, 35.9121, 14.5013)
@@ -52,7 +55,7 @@ class TestDistanceKm:
         )
 
     @_requires_geopy
-    def test_same_point_is_zero(self):
+    def test_same_point_is_zero(self) -> None:
         from services.geo_utils import distance_km
 
         dist = distance_km(35.8989, 14.5146, 35.8989, 14.5146)
@@ -66,7 +69,7 @@ class TestDistanceKm:
 
 class TestEstimateTravelMinutes:
     @_requires_geopy
-    def test_zero_speed_returns_zero(self):
+    def test_zero_speed_returns_zero(self) -> None:
         """Zero speed guard returns 0.0 rather than raising ZeroDivisionError."""
         from services.geo_utils import estimate_travel_minutes
 
@@ -81,20 +84,20 @@ class TestEstimateTravelMinutes:
 
 class TestEstimateSpeedFromHistory:
 
-    def _entry(self, lat, lon, ts):
+    def _entry(self, lat: float, lon: float, ts: datetime) -> dict[str, object]:
         return {"location": {"lat": lat, "lon": lon}, "saved_at": ts.isoformat()}
 
     @_requires_geopy
-    def test_valid_entries_return_plausible_speed(self):
+    def test_valid_entries_return_plausible_speed(self) -> None:
         from services.geo_utils import estimate_speed_from_history
 
         t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
         t1 = t0 + timedelta(minutes=4)
 
-        speed = estimate_speed_from_history([
+        speed = estimate_speed_from_history(cast(list[object], [
             self._entry(35.8989, 14.5146, t0),
             self._entry(35.9121, 14.5013, t1),
-        ])
+        ]))
 
         assert speed is not None
         # Valletta–Sliema at ~1.9 km in 4 min ≈ 28.5 km/h
@@ -109,10 +112,14 @@ class TestEstimateSpeedFromHistory:
         (lambda s: [s._entry(35.8989, 14.5146, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)),
                     s._entry(35.9121, 14.5013, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc))], "identical timestamps"),
     ], ids=["empty", "single", "gps_noise", "same_ts"])
-    def test_degenerate_inputs_return_none(self, entries_fn, reason):
+    def test_degenerate_inputs_return_none(
+        self,
+        entries_fn: Callable[["TestEstimateSpeedFromHistory"], list[dict[str, object]]],
+        reason: str,
+    ) -> None:
         from services.geo_utils import estimate_speed_from_history
 
-        result = estimate_speed_from_history(entries_fn(self))
+        result = estimate_speed_from_history(cast(list[object], entries_fn(self)))
         assert result is None, f"Expected None for {reason}, got {result}"
 
 
@@ -120,7 +127,7 @@ class TestEstimateSpeedFromHistory:
 # Test 4: geo-pattern window honours the per-source channel allowlist
 # ---------------------------------------------------------------------------
 
-def _seed_located_row(db, *, channel, role="user", content):
+def _seed_located_row(db: sqlite3.Connection, *, channel: str, role: str = "user", content: str) -> None:
     db.execute(
         "INSERT INTO transcript (channel, role, content, created_at, "
         "location_lat, location_lon, location_name) "
@@ -141,7 +148,7 @@ class TestGeoPatternWindowChannelFilter:
     builder GeoConfig.get_user_prompt calls) over mixed-channel fixtures.
     """
 
-    def test_only_user_geoactivity_rows_enter_the_window(self, db):
+    def test_only_user_geoactivity_rows_enter_the_window(self, db: sqlite3.Connection) -> None:
         from configs.channels.geo_pattern import _geo_pattern_load_transcript_block
 
         # One row per representative channel, all located, all in the window.
@@ -163,7 +170,7 @@ class TestGeoPatternWindowChannelFilter:
         assert "EXT located" not in block
         assert "COMPACTION located" not in block
 
-    def test_existing_patterns_block_empty_db_returns_none_yet(self, db):
+    def test_existing_patterns_block_empty_db_returns_none_yet(self, db: sqlite3.Connection) -> None:
         from configs.channels import _pattern_existing_patterns_block
 
         block = _pattern_existing_patterns_block()

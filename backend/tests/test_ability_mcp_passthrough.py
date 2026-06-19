@@ -10,8 +10,12 @@
 
 import json
 import socket
+import sqlite3
 import threading
 import time
+from collections.abc import Iterator
+from pathlib import Path
+from typing import cast
 
 import pytest
 import uvicorn
@@ -24,6 +28,7 @@ from services.act_trail import ActTrail
 from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService
 from services.message_processor import MessageProcessor
+from services.processor_config import ProcessorConfig
 from tests._tool_result_harness import allow_policy, body, seed_transcript
 
 pytestmark = pytest.mark.unit
@@ -35,16 +40,16 @@ pytestmark = pytest.mark.unit
 def _free_port() -> int:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
+    port = cast(int, cast(tuple[object, ...], s.getsockname())[1])
     s.close()
     return port
 
 
-def _seed_transcript(db, channel: str) -> int:
+def _seed_transcript(db: sqlite3.Connection, channel: str) -> int:
     return seed_transcript(db, channel=channel, content="call an mcp tool")
 
 
-def _mp_for(config, db) -> MessageProcessor:
+def _mp_for(config: ProcessorConfig, db: sqlite3.Connection) -> MessageProcessor:
     mp = MessageProcessor("call an mcp tool")
     mp.config = config
     mp.active_tools = list(config.always_available or [])
@@ -52,7 +57,7 @@ def _mp_for(config, db) -> MessageProcessor:
     return mp
 
 
-def _allow(db, permission: str) -> None:
+def _allow(db: sqlite3.Connection, permission: str) -> None:
     """Seed an ``allow`` policy row so the gate runs the callback (reaches run()).
 
     This is the real policy table the production ``PolicyManager.wrap`` SELECTS —
@@ -73,7 +78,7 @@ def _body(rendered: str, tool_name: str) -> str:
 # ── UNREACHABLE: real outbound connection failure → code=mcp-unreachable ─────────
 
 
-def test_unreachable_server_renders_mcp_unreachable_naming_the_server(db):
+def test_unreachable_server_renders_mcp_unreachable_naming_the_server(db: sqlite3.Connection) -> None:
     svc = McpClientService()
     # Real registration through the production CRUD path; the host is a closed
     # localhost port so the outbound MCP connection fails fast.
@@ -97,11 +102,11 @@ def test_unreachable_server_renders_mcp_unreachable_naming_the_server(db):
     assert "ghost" in out
 
     # The same error envelope was recorded on the act-trail.
-    trail = ActTrail().fetch_by_transcript_id(mp.uid)
-    assert "code=mcp-unreachable" in trail[0]["result"]
+    trail = ActTrail().fetch_by_transcript_id(cast(int, mp.uid))
+    assert "code=mcp-unreachable" in cast(str, trail[0]["result"])
 
 
-def test_unknown_mcp_server_renders_stable_error_code(db):
+def test_unknown_mcp_server_renders_stable_error_code(db: sqlite3.Connection) -> None:
     tool = "_mcp_nosuchserver_whatever"
     _allow(db, tool)
     mp = _mp_for(UserConfig({}), db)
@@ -118,7 +123,7 @@ def test_unknown_mcp_server_renders_stable_error_code(db):
 
 
 @pytest.fixture()
-def local_mcp_server():
+def local_mcp_server() -> Iterator[dict[str, object]]:
     port = _free_port()
     mcp = FastMCP("passthrough_probe", host="127.0.0.1", port=port)
 
@@ -127,7 +132,7 @@ def local_mcp_server():
         return f"the answer is {msg}"
 
     @mcp.tool()
-    def give_struct() -> dict:
+    def give_struct() -> dict[str, object]:
         return {"city": "Valletta", "temps": [21, 23, 19], "ok": True}
 
     @mcp.tool()
@@ -157,23 +162,28 @@ def local_mcp_server():
 
 
 @pytest.fixture()
-def registered_server(db, tmp_path, monkeypatch, local_mcp_server):
+def registered_server(
+    db: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_mcp_server: dict[str, object],
+) -> McpClientService:
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
     svc = McpClientService()
     server = svc.add_server(
         name="probe",
-        host=local_mcp_server["host"],
+        host=cast(str, local_mcp_server["host"]),
         headers={},
         enabled=True,
     )
-    result = svc.ping_and_sync(server["id"])
+    result = svc.ping_and_sync(cast(str, server["id"]))
     assert result["reachable"] is True, (
         f"local MCP server must be reachable for the test, got {result!r}"
     )
     return svc
 
 
-def test_text_tool_renders_prose_body(db, registered_server):
+def test_text_tool_renders_prose_body(db: sqlite3.Connection, registered_server: McpClientService) -> None:
     tool = "_mcp_probe_say_text"
     _allow(db, tool)
     mp = _mp_for(UserConfig({}), db)
@@ -189,7 +199,7 @@ def test_text_tool_renders_prose_body(db, registered_server):
     assert "server=probe" in _head(out)
 
 
-def test_struct_tool_keeps_structured_body_no_double_wrapping(db, registered_server):
+def test_struct_tool_keeps_structured_body_no_double_wrapping(db: sqlite3.Connection, registered_server: McpClientService) -> None:
     tool = "_mcp_probe_give_struct"
     _allow(db, tool)
     mp = _mp_for(UserConfig({}), db)
@@ -215,7 +225,7 @@ def test_struct_tool_keeps_structured_body_no_double_wrapping(db, registered_ser
     assert "\n" not in body
 
 
-def test_remote_iserror_renders_mcp_tool_error(db, registered_server):
+def test_remote_iserror_renders_mcp_tool_error(db: sqlite3.Connection, registered_server: McpClientService) -> None:
     tool = "_mcp_probe_explode"
     _allow(db, tool)
     mp = _mp_for(UserConfig({}), db)

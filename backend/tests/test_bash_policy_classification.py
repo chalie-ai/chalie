@@ -24,23 +24,27 @@ The contract under test (the closed bypass):
     ``{exit_code, stdout, stderr}`` and ``meta truncated=true`` when clipped.
 """
 
+import sqlite3
+from typing import cast
+
 import pytest
 
 from abilities._ability import Ability
 from abilities._dispatcher import ToolDispatcher
+from abilities._result import ToolResult
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
 
 pytestmark = pytest.mark.unit
 
 
-def _seed_transcript(db, channel: str) -> int:
+def _seed_transcript(db: sqlite3.Connection, channel: str) -> int:
     cur = db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
         (channel, "user", "run a command"),
     )
     db.commit()
-    return cur.lastrowid
+    return cast(int, cur.lastrowid)
 
 
 class _MP:
@@ -48,13 +52,13 @@ class _MP:
     processor: ``config`` (the chat policy channel) and ``uid`` (the transcript
     anchor the trail records against)."""
 
-    def __init__(self, uid: int, config) -> None:
+    def __init__(self, uid: int, config: object) -> None:
         self.config = config
         self.uid = uid
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> _MP:
     """A real chat-channel mp bound to the test database, with a seeded
     transcript anchor for the act-trail write."""
     return _MP(_seed_transcript(db, "chat"), UserConfig({}))
@@ -70,7 +74,7 @@ def _deny(channel: str, permission: str) -> None:
 # ── The bypass proof: forged action is ignored; the COMMAND decides the gate ──
 
 
-def test_forged_action_read_cannot_bypass_command_classification(db, chat_mp):
+def test_forged_action_read_cannot_bypass_command_classification(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """A ``rm -rf``-class command dispatched with a FORGED ``action="read"`` is
     gated on its COMMAND-derived class (``bash.compound``), not the self-declared
     ``read``.
@@ -99,10 +103,10 @@ def test_forged_action_read_cannot_bypass_command_classification(db, chat_mp):
 
     # The act-trail recorded the same block envelope against the transcript.
     rows = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert "bash.compound action is not allowed" in rows[0]["result"]
+    assert "bash.compound action is not allowed" in cast(str, rows[0]["result"])
 
 
-def test_forged_action_read_on_remote_command_is_gated_as_remote(db, chat_mp):
+def test_forged_action_read_on_remote_command_is_gated_as_remote(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """A non-destructive but escalated command (ssh → ``remote_execution``) with a
     forged ``action="read"`` is still gated on its command-derived class, proving
     the bypass is closed for the whole classification ladder, not just rm -rf."""
@@ -121,18 +125,18 @@ def test_forged_action_read_on_remote_command_is_gated_as_remote(db, chat_mp):
 # ── The default hook path is untouched for non-classifying abilities ──────────
 
 
-def test_default_classify_action_returns_none():
+def test_default_classify_action_returns_none() -> None:
     """The base ``Ability.classify_action`` returns None — "no opinion, use the
     action param" — so the dispatcher's action-param path is unchanged for every
     ability that does not override the hook. Driven on a real concrete ability."""
 
     class _Plain(Ability):
-        def get_name(self): return "_tkt884_plain"
-        def get_summary(self): return "throwaway: does not classify"
-        def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-        def get_search_tooltip(self): return "x"
-        def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-        def run(self, params): return None  # never reached in this test
+        def get_name(self) -> str: return "_tkt884_plain"
+        def get_summary(self) -> str: return "throwaway: does not classify"
+        def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+        def get_search_tooltip(self) -> str: return "x"
+        def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+        def run(self, params: dict[str, object]) -> ToolResult: return cast(ToolResult, None)  # never reached in this test
 
     assert _Plain().classify_action({"action": "delete", "id": "7"}) is None
 
@@ -140,7 +144,7 @@ def test_default_classify_action_returns_none():
 # ── ToolResult envelope shape: structured body + truncation meta ──────────────
 
 
-def test_bash_run_returns_structured_exit_code_body(db, chat_mp):
+def test_bash_run_returns_structured_exit_code_body(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """A benign command (classified ``read`` → allow on chat) runs through the real
     gate and returns the structured ``{exit_code, stdout, stderr}`` JSON body in
     the rendered envelope."""
@@ -155,7 +159,7 @@ def test_bash_run_returns_structured_exit_code_body(db, chat_mp):
     assert "[end:bash]" in out
 
 
-def test_bash_run_marks_truncated_meta_when_output_clipped(db, chat_mp):
+def test_bash_run_marks_truncated_meta_when_output_clipped(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """Output larger than the 100KB budget is clipped via the shared ``truncate``
     helper and reported uniformly as ``meta truncated=true`` in the open tag, with
     the truncation notice appended to the clipped stream."""

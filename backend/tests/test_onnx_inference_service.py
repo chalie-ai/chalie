@@ -22,6 +22,7 @@ Risks covered:
 import json
 import math
 import os
+from typing import cast
 
 import numpy as np
 import pytest
@@ -51,7 +52,7 @@ _TASK_NAME = "deliberation_score"
 _PREFIX = "deliberation-score"
 
 
-def _default_arrays(num_outputs: int) -> dict:
+def _default_arrays(num_outputs: int) -> "dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]":
     return {
         "W1": np.zeros((256, 768), dtype=np.float32),
         "b1": np.zeros(256, dtype=np.float32),
@@ -60,7 +61,7 @@ def _default_arrays(num_outputs: int) -> dict:
     }
 
 
-def _build_meta(sha256: str, arrays: dict, *, num_outputs: int, extra_feature_dim: int, output_activation: str, head_asset: str | None) -> dict:
+def _build_meta(sha256: str, arrays: "dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]", *, num_outputs: int, extra_feature_dim: int, output_activation: str, head_asset: str | None) -> dict[str, object]:
     """Assemble a regression-head meta dict from concrete pieces."""
     meta = {
         "labels": ["score"],
@@ -80,17 +81,17 @@ def _build_meta(sha256: str, arrays: dict, *, num_outputs: int, extra_feature_di
     return meta
 
 
-def _ensure_task_dir(pretrained_dir) -> str:
+def _ensure_task_dir(pretrained_dir: object) -> str:
     task_dir = os.path.join(str(pretrained_dir), _TASK_NAME)
     os.makedirs(task_dir, exist_ok=True)
     return task_dir
 
 
-def _write_npz(task_dir: str, head_filename: str, arrays: dict) -> None:
-    np.savez(os.path.join(task_dir, head_filename), **arrays)
+def _write_npz(task_dir: str, head_filename: str, arrays: "dict[str, np.ndarray[tuple[int, ...], np.dtype[np.float32]]]") -> None:
+    np.savez(os.path.join(task_dir, head_filename), **cast(dict[str, bool], arrays))
 
 
-def _write_meta(task_dir: str, meta: dict) -> None:
+def _write_meta(task_dir: str, meta: dict[str, object]) -> None:
     with open(os.path.join(task_dir, f"{_PREFIX}-classifier_meta.json"), "w") as f:
         json.dump(meta, f)
 
@@ -99,7 +100,7 @@ def _write_meta(task_dir: str, meta: dict) -> None:
 
 
 def _write_valid_head(
-    pretrained_dir,
+    pretrained_dir: object,
     *,
     sha256: str | None = None,
     num_outputs: int = 1,
@@ -123,7 +124,7 @@ def _write_valid_head(
 
 
 def _write_head_with_arrays(
-    pretrained_dir,
+    pretrained_dir: object,
     *,
     num_outputs: int = 1,
     w1: np.ndarray | None = None,
@@ -153,7 +154,7 @@ def _write_head_with_arrays(
     _write_meta(task_dir, meta)
 
 
-def _write_corrupted_head(pretrained_dir, *, mode: str) -> None:
+def _write_corrupted_head(pretrained_dir: object, *, mode: str) -> None:
     """Write a head deliberately broken in one specific way.
 
     ``mode`` must be one of:
@@ -188,7 +189,7 @@ def _write_corrupted_head(pretrained_dir, *, mode: str) -> None:
     _write_meta(task_dir, meta)
 
 
-def _write_head_with_custom_asset(pretrained_dir, *, head_asset_name: str) -> None:
+def _write_head_with_custom_asset(pretrained_dir: object, *, head_asset_name: str) -> None:
     """Write only a meta whose ``head_asset`` points at a non-existent file (no npz written)."""
     task_dir = _ensure_task_dir(pretrained_dir)
     arrays = _default_arrays(1)
@@ -212,14 +213,14 @@ class TestPredictScalarReal:
     """Real shipped head + real encoder — verify output contract holds end-to-end."""
 
     @classmethod
-    def setup_class(cls):
+    def setup_class(cls) -> None:
         # Load the real encoder once for the whole class. Subsequent tests reuse it.
         _get_session_and_tokenizer()
 
-    def _svc(self):
+    def _svc(self) -> OnnxInferenceService:
         return OnnxInferenceService(_DEFAULT_MODELS_DIR, _DEFAULT_PRETRAINED_DIR)
 
-    def test_predict_scalar_returns_finite_float_in_range(self):
+    def test_predict_scalar_returns_finite_float_in_range(self) -> None:
         """Real text → finite float strictly inside [0, 1]."""
         svc = self._svc()
         result = svc.predict_scalar(
@@ -231,7 +232,7 @@ class TestPredictScalarReal:
         assert math.isfinite(result)
         assert 0.0 <= result <= 1.0
 
-    def test_predict_scalar_handles_short_text(self):
+    def test_predict_scalar_handles_short_text(self) -> None:
         """Short text should still produce finite scalar in range."""
         svc = self._svc()
         result = svc.predict_scalar("deliberation_score", "ok")
@@ -239,7 +240,7 @@ class TestPredictScalarReal:
         assert math.isfinite(result)
         assert 0.0 <= result <= 1.0
 
-    def test_predict_scalar_handles_long_text(self):
+    def test_predict_scalar_handles_long_text(self) -> None:
         """Text longer than the 256 token cap is truncated and still scored."""
         svc = self._svc()
         long_text = "philosophy " * 500  # ~500 tokens, well over the 256 cap
@@ -248,7 +249,7 @@ class TestPredictScalarReal:
         assert math.isfinite(result)
         assert 0.0 <= result <= 1.0
 
-    def test_predict_scalar_handles_unicode(self):
+    def test_predict_scalar_handles_unicode(self) -> None:
         """Unicode/emoji input doesn't crash and produces a finite scalar."""
         svc = self._svc()
         result = svc.predict_scalar(
@@ -259,13 +260,13 @@ class TestPredictScalarReal:
         assert math.isfinite(result)
         assert 0.0 <= result <= 1.0
 
-    def test_predict_scalar_unknown_task_returns_none(self):
+    def test_predict_scalar_unknown_task_returns_none(self) -> None:
         """An unregistered task name returns None, not raises."""
         svc = self._svc()
         result = svc.predict_scalar("not_a_real_task", "anything")
         assert result is None
 
-    def test_predict_scalar_repeatable_for_same_input(self):
+    def test_predict_scalar_repeatable_for_same_input(self) -> None:
         """Same text → same scalar (within float tolerance) on repeated calls."""
         svc = self._svc()
         text = "What's the right way to think about uncertainty?"
@@ -284,10 +285,10 @@ class TestPredictScalarNaNGuard:
     """Inject heads with NaN/Inf weights and verify the guard returns None."""
 
     @classmethod
-    def setup_class(cls):
+    def setup_class(cls) -> None:
         _get_session_and_tokenizer()
 
-    def test_nan_weights_in_w1_returns_none(self, tmp_path):
+    def test_nan_weights_in_w1_returns_none(self, tmp_path: object) -> None:
         w1 = np.zeros((256, 768), dtype=np.float32)
         w1[0, 0] = np.nan  # Single NaN poisons the whole forward pass.
         _write_head_with_arrays(tmp_path, w1=w1)
@@ -296,7 +297,7 @@ class TestPredictScalarNaNGuard:
         result = svc.predict_scalar("deliberation_score", "anything")
         assert result is None, "NaN W1 must be caught by the guard"
 
-    def test_nan_in_b2_returns_none(self, tmp_path):
+    def test_nan_in_b2_returns_none(self, tmp_path: object) -> None:
         b2 = np.zeros(1, dtype=np.float32)
         b2[0] = np.nan
         _write_head_with_arrays(tmp_path, b2=b2)
@@ -305,7 +306,7 @@ class TestPredictScalarNaNGuard:
         result = svc.predict_scalar("deliberation_score", "anything")
         assert result is None, "NaN b2 must be caught by the guard"
 
-    def test_nan_in_w2_returns_none(self, tmp_path):
+    def test_nan_in_w2_returns_none(self, tmp_path: object) -> None:
         w2 = np.zeros((1, 256), dtype=np.float32)
         w2[0, 5] = np.nan
         _write_head_with_arrays(tmp_path, w2=w2)
@@ -314,7 +315,7 @@ class TestPredictScalarNaNGuard:
         result = svc.predict_scalar("deliberation_score", "anything")
         assert result is None, "NaN W2 must be caught by the guard"
 
-    def test_zero_weights_produce_legal_midpoint(self, tmp_path):
+    def test_zero_weights_produce_legal_midpoint(self, tmp_path: object) -> None:
         """Sanity check: all-zero weights → sigmoid(0) = 0.5, NOT None.
 
         Confirms the guard rejects ONLY non-finite or out-of-range values, not
@@ -338,10 +339,10 @@ class TestRegisterTaskContractViolations:
     """A regression head that violates the scalar-output contract must raise."""
 
     @classmethod
-    def setup_class(cls):
+    def setup_class(cls) -> None:
         _get_session_and_tokenizer()
 
-    def test_num_outputs_not_one_raises(self, tmp_path):
+    def test_num_outputs_not_one_raises(self, tmp_path: object) -> None:
         _write_head_with_arrays(
             tmp_path,
             num_outputs=3,
@@ -352,19 +353,19 @@ class TestRegisterTaskContractViolations:
         with pytest.raises(ValueError, match="num_outputs"):
             svc._register_task("deliberation_score")
 
-    def test_extra_feature_dim_nonzero_raises(self, tmp_path):
+    def test_extra_feature_dim_nonzero_raises(self, tmp_path: object) -> None:
         _write_valid_head(tmp_path, extra_feature_dim=5)
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         with pytest.raises(ValueError, match="extra_feature_dim"):
             svc._register_task("deliberation_score")
 
-    def test_output_activation_not_sigmoid_raises(self, tmp_path):
+    def test_output_activation_not_sigmoid_raises(self, tmp_path: object) -> None:
         _write_valid_head(tmp_path, output_activation="softmax")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         with pytest.raises(ValueError, match="sigmoid"):
             svc._register_task("deliberation_score")
 
-    def test_w2_row_count_mismatch_raises(self, tmp_path):
+    def test_w2_row_count_mismatch_raises(self, tmp_path: object) -> None:
         # num_outputs=1 in meta but W2 has 2 rows — boot validation must catch this.
         _write_head_with_arrays(
             tmp_path,
@@ -383,17 +384,17 @@ class TestRegisterTaskContractViolations:
 
 class TestSha256PinCheck:
     @classmethod
-    def setup_class(cls):
+    def setup_class(cls) -> None:
         _get_session_and_tokenizer()
 
-    def test_wrong_sha256_in_meta_raises(self, tmp_path):
+    def test_wrong_sha256_in_meta_raises(self, tmp_path: object) -> None:
         """A head trained against a different encoder must NOT register."""
         _write_valid_head(tmp_path, sha256="0" * 64)  # Definitely not the real encoder sha.
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         with pytest.raises(RuntimeError, match="sha256 mismatch"):
             svc._register_task("deliberation_score")
 
-    def test_matching_sha256_succeeds(self, tmp_path):
+    def test_matching_sha256_succeeds(self, tmp_path: object) -> None:
         _write_valid_head(tmp_path)  # uses real encoder sha by default
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         head = svc._register_task("deliberation_score")
@@ -408,10 +409,10 @@ class TestSha256PinCheck:
 
 class TestRegisterTaskGracefulDegradation:
     @classmethod
-    def setup_class(cls):
+    def setup_class(cls) -> None:
         _get_session_and_tokenizer()
 
-    def test_missing_meta_returns_none(self, tmp_path):
+    def test_missing_meta_returns_none(self, tmp_path: object) -> None:
         # Only a .npz, no meta — register should bail with None.
         _write_corrupted_head(tmp_path, mode="skip_meta")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
@@ -419,25 +420,25 @@ class TestRegisterTaskGracefulDegradation:
         # Public surface stays None, no exception.
         assert svc.predict_scalar("deliberation_score", "x") is None
 
-    def test_corrupt_meta_returns_none(self, tmp_path):
+    def test_corrupt_meta_returns_none(self, tmp_path: object) -> None:
         _write_corrupted_head(tmp_path, mode="corrupt_meta")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
         assert svc.predict_scalar("deliberation_score", "x") is None
 
-    def test_missing_npz_returns_none(self, tmp_path):
+    def test_missing_npz_returns_none(self, tmp_path: object) -> None:
         _write_corrupted_head(tmp_path, mode="skip_npz")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
         assert svc.predict_scalar("deliberation_score", "x") is None
 
-    def test_meta_omits_head_asset_returns_none(self, tmp_path):
+    def test_meta_omits_head_asset_returns_none(self, tmp_path: object) -> None:
         _write_corrupted_head(tmp_path, mode="omit_head_asset")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
         assert svc.predict_scalar("deliberation_score", "x") is None
 
-    def test_meta_references_nonexistent_npz_returns_none(self, tmp_path):
+    def test_meta_references_nonexistent_npz_returns_none(self, tmp_path: object) -> None:
         _write_head_with_custom_asset(tmp_path, head_asset_name="totally-not-shipped.npz")
         svc = OnnxInferenceService(_DEFAULT_MODELS_DIR, str(tmp_path))
         assert svc._register_task("deliberation_score") is None
@@ -452,15 +453,15 @@ class TestDeliberationScoreServiceReal:
     """Verify the wrapper's None semantics against the real classifier stack."""
 
     @classmethod
-    def setup_class(cls):
+    def setup_class(cls) -> None:
         _get_session_and_tokenizer()
 
-    def _real_svc(self):
+    def _real_svc(self) -> DeliberationScoreService:
         return DeliberationScoreService(
             inference_service=OnnxInferenceService(_DEFAULT_MODELS_DIR, _DEFAULT_PRETRAINED_DIR)
         )
 
-    def test_classify_real_text_returns_finite_scalar(self):
+    def test_classify_real_text_returns_finite_scalar(self) -> None:
         result = self._real_svc().classify(
             "Walk me through how you'd debug a memory leak in a long-running service."
         )
@@ -468,13 +469,13 @@ class TestDeliberationScoreServiceReal:
         assert math.isfinite(result)
         assert 0.0 <= result <= 1.0
 
-    def test_classify_empty_string_returns_none(self):
+    def test_classify_empty_string_returns_none(self) -> None:
         assert self._real_svc().classify("") is None
 
-    def test_classify_whitespace_only_returns_none(self):
+    def test_classify_whitespace_only_returns_none(self) -> None:
         assert self._real_svc().classify("   \t\n  ") is None
 
-    def test_classify_with_nan_head_returns_none(self, tmp_path):
+    def test_classify_with_nan_head_returns_none(self, tmp_path: object) -> None:
         """End-to-end NaN propagation guard: bad head → wrapper returns None."""
         w1 = np.zeros((256, 768), dtype=np.float32)
         w1[0, 0] = np.nan
@@ -485,7 +486,7 @@ class TestDeliberationScoreServiceReal:
         )
         assert svc.classify("anything goes") is None
 
-    def test_classify_with_missing_head_returns_none(self, tmp_path):
+    def test_classify_with_missing_head_returns_none(self, tmp_path: object) -> None:
         """Missing assets in the configured pretrained dir → wrapper returns None."""
         # Empty tmp dir — no meta, no npz.
         svc = DeliberationScoreService(

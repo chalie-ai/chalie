@@ -22,6 +22,7 @@ delivery (§4.4).
 
 import threading
 import time
+from typing import cast
 
 import pytest
 
@@ -31,34 +32,35 @@ from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
 from configs.channels import DmnConfig, UserConfig
 from services.async_delegate_runner import async_delegate_runner
+from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
 
 class _Ctx:
-    def __init__(self, config):
+    def __init__(self, config: ProcessorConfig) -> None:
         self.config = config
 
 
-def test_async_property_exposed_only_on_supports_async_channel():
+def test_async_property_exposed_only_on_supports_async_channel() -> None:
     weather_cls = type(AbilityRegistry.get("weather"))
 
-    user_schema = weather_cls(mp=_Ctx(UserConfig({}))).get_input_schema()["input_schema"]
-    assert "async" in user_schema["properties"]
-    assert user_schema["properties"]["async"]["type"] == "boolean"
-    assert user_schema["properties"]["async"]["default"] is False
+    user_schema = cast("dict[str, object]", weather_cls(mp=_Ctx(UserConfig({}))).get_input_schema()["input_schema"])
+    assert "async" in cast("dict[str, object]", user_schema["properties"])
+    assert cast("dict[str, object]", cast("dict[str, object]", user_schema["properties"])["async"])["type"] == "boolean"
+    assert cast("dict[str, object]", cast("dict[str, object]", user_schema["properties"])["async"])["default"] is False
     # The declared params (get_parameters) are never mutated — exposure deepcopies.
-    assert "async" not in weather_cls().get_parameters()["properties"]
+    assert "async" not in cast("dict[str, object]", weather_cls().get_parameters()["properties"])
 
     # A non-async channel (delegate/system) never sees the flag.
-    dmn_schema = weather_cls(mp=_Ctx(DmnConfig())).get_input_schema()["input_schema"]
-    assert "async" not in dmn_schema.get("properties", {})
+    dmn_schema = cast("dict[str, object]", weather_cls(mp=_Ctx(DmnConfig())).get_input_schema()["input_schema"])
+    assert "async" not in cast("dict[str, object]", dmn_schema.get("properties", {}))
 
     # No live processor (mp=None) → synchronous default, no flag.
-    assert "async" not in weather_cls().get_input_schema()["input_schema"].get("properties", {})
+    assert "async" not in cast("dict[str, object]", cast("dict[str, object]", weather_cls().get_input_schema()["input_schema"]).get("properties", {}))
 
 
-def test_build_tools_exposes_async_on_user_channel():
+def test_build_tools_exposes_async_on_user_channel() -> None:
 
     class _Proc:
         config = UserConfig({})
@@ -66,7 +68,7 @@ def test_build_tools_exposes_async_on_user_channel():
 
     tools = AbilityRegistry.build_tools(_Proc())
     weather_tool = next(t for t in tools if t["name"] == "weather")
-    props = weather_tool["input_schema"]["properties"]
+    props = cast("dict[str, object]", cast("dict[str, object]", weather_tool["input_schema"])["properties"])
     assert "async" in props
     assert "act_summary" in props
 
@@ -82,9 +84,9 @@ class _EchoAbility(Ability):
 
     _SYNTHETIC = True
 
-    def __init__(self, mp=None):
+    def __init__(self, mp: object = None) -> None:
         super().__init__(mp)
-        self.ran_with = None
+        self.ran_with: dict[str, object] | None = None
 
     def get_name(self) -> str:
         return "test_per_call_echo"
@@ -105,19 +107,19 @@ class _EchoAbility(Ability):
             "give me back my text",
         ]
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return {
             "type": "object",
             "properties": {"text": {"type": "string"}},
             "required": ["text"],
         }
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         self.ran_with = dict(params)
         return ToolResult.ok(f"echoed: {params.get('text', '')}")
 
 
-def test_dispatch_without_async_runs_inline():
+def test_dispatch_without_async_runs_inline() -> None:
     ctx = _Ctx(DmnConfig())
     ability = _EchoAbility(mp=ctx)
 
@@ -133,10 +135,10 @@ def test_dispatch_without_async_runs_inline():
     assert ability.ran_with == {"text": "hi"}
 
 
-def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
+def test_dispatch_with_async_returns_placeholder_and_registers_delegate() -> None:
     release = threading.Event()
     started = threading.Event()
-    finished = []
+    finished: list[bool] = []
 
     class _BlockingAbility(Ability):
         _SYNTHETIC = True  # keep out of the static registry (see _EchoAbility)
@@ -160,10 +162,10 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate():
                 "wait then finish",
             ]
 
-        def get_parameters(self) -> dict:
+        def get_parameters(self) -> dict[str, object]:
             return {"type": "object", "properties": {}, "required": []}
 
-        def run(self, params: dict) -> ToolResult:
+        def run(self, params: dict[str, object]) -> ToolResult:
             started.set()
             release.wait(timeout=5)
             finished.append(True)

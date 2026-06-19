@@ -5,6 +5,9 @@ scenario.  These tests cover only the deterministic, network-free
 behaviors exercised against a real temporary SQLite database without mocks.
 """
 
+import sqlite3
+from typing import cast
+
 import pytest
 
 from services.file_mapper_service import FileMapperService
@@ -18,7 +21,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def test_tool_name_sanitization_produces_valid_prefix():
+def test_tool_name_sanitization_produces_valid_prefix() -> None:
     """Asserts the key format _mcp_<sanitized>_<tool> that downstream dispatch,
     policy seeding, and find_tools gating all depend on.
     """
@@ -44,7 +47,7 @@ def test_tool_name_sanitization_produces_valid_prefix():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_tool_routes_to_longest_prefix_server(db):
+def test_resolve_tool_routes_to_longest_prefix_server(db: sqlite3.Connection) -> None:
     """_resolve_tool picks the longest-matching server prefix.
 
     Raises ValueError for a disabled server's tool before any network call.
@@ -73,7 +76,7 @@ def test_resolve_tool_routes_to_longest_prefix_server(db):
     assert remote_tool_a == "ping"
 
     # Disabling server_b and then trying to resolve its tool raises ValueError.
-    svc.update_server(server_b["id"], {"enabled": False})
+    svc.update_server(cast(str, server_b["id"]), {"enabled": False})
     with pytest.raises(ValueError, match="disabled"):
         svc._resolve_tool("_mcp_taskie_create_document")
 
@@ -83,7 +86,7 @@ def test_resolve_tool_routes_to_longest_prefix_server(db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db, tmp_path, monkeypatch):
+def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Connection, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
     """get_online_mcp_tool_names returns tool names only for servers that are
     both enabled=1 AND status='online' - the gate find_tools uses to control
     LLM visibility.
@@ -156,7 +159,7 @@ def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db, tmp_path, m
 # ---------------------------------------------------------------------------
 
 
-def test_add_server_persists_row_with_correct_defaults(db):
+def test_add_server_persists_row_with_correct_defaults(db: sqlite3.Connection) -> None:
     """add_server persists to mcp_client_servers with status='unknown' and
     JSON-serialized headers; verifies the row is actually in the DB.
     """
@@ -177,7 +180,7 @@ def test_add_server_persists_row_with_correct_defaults(db):
     assert server["host"] == "http://example.lan:9000"
 
     # Headers round-trip correctly.
-    assert server["headers"]["Authorization"] == "Bearer token123"
+    assert cast(dict[str, object], server["headers"])["Authorization"] == "Bearer token123"
 
     # Row is actually in the DB — not just in the returned dict.
     with svc._db.connection() as conn:
@@ -197,7 +200,7 @@ def test_add_server_persists_row_with_correct_defaults(db):
 # ---------------------------------------------------------------------------
 
 
-def test_get_tool_schema_round_trips_stored_input_schema(db, tmp_path, monkeypatch):
+def test_get_tool_schema_round_trips_stored_input_schema(db: sqlite3.Connection, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
     """get_tool_schema returns the exact inputSchema written by _write_tools -
     the schema the LLM sees when find_tools surfaces an _mcp_* tool.
 
@@ -262,7 +265,7 @@ from services.mcp_client_service import _normalize_host, _open_tools_db  # noqa:
     ("  https://mcp.example.com/mcp  ", "https://mcp.example.com/mcp"),
     ("mcp.example.com/mcp", "https://mcp.example.com/mcp"),
 ])
-def test_normalize_host_treats_variants_as_equal(a, b):
+def test_normalize_host_treats_variants_as_equal(a: str, b: str) -> None:
     assert _normalize_host(a) == _normalize_host(b)
 
 
@@ -272,11 +275,11 @@ def test_normalize_host_treats_variants_as_equal(a, b):
     ("https://mcp.example.com:9000/mcp", "https://mcp.example.com/mcp"),
     ("http://mcp.example.com/x", "https://mcp.example.com/x"),
 ])
-def test_normalize_host_keeps_distinct_endpoints_distinct(a, b):
+def test_normalize_host_keeps_distinct_endpoints_distinct(a: str, b: str) -> None:
     assert _normalize_host(a) != _normalize_host(b)
 
 
-def test_add_server_dedups_same_endpoint_variant(db):
+def test_add_server_dedups_same_endpoint_variant(db: sqlite3.Connection) -> None:
     """Re-adding the same endpoint (trailing-slash variant) updates the existing
     row instead of creating a duplicate."""
     svc = McpClientService()
@@ -288,7 +291,7 @@ def test_add_server_dedups_same_endpoint_variant(db):
     assert len(svc.list_servers()) == 1
 
 
-def test_add_server_upsert_updates_fields_and_reenables(db):
+def test_add_server_upsert_updates_fields_and_reenables(db: sqlite3.Connection) -> None:
     """Re-adding a known endpoint refreshes headers and re-enables it."""
     svc = McpClientService()
     a = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
@@ -301,7 +304,7 @@ def test_add_server_upsert_updates_fields_and_reenables(db):
     assert len(svc.list_servers()) == 1
 
 
-def test_add_server_distinct_endpoints_create_separate_rows(db):
+def test_add_server_distinct_endpoints_create_separate_rows(db: sqlite3.Connection) -> None:
     """Genuinely different endpoints are kept as separate servers."""
     svc = McpClientService()
     svc.add_server(name="a", host="https://a.example.com/mcp", headers={}, enabled=True)
@@ -309,7 +312,7 @@ def test_add_server_distinct_endpoints_create_separate_rows(db):
     assert len(svc.list_servers()) == 2
 
 
-def test_add_server_upsert_name_change_purges_old_prefix_rows(db, tmp_path, monkeypatch):
+def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connection, tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> None:
     """When an upsert changes the server name, the old _mcp_<oldname>_* tool and
     policy rows are purged so a later re-sync leaves no orphans."""
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)

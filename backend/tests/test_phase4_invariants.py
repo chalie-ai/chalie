@@ -39,7 +39,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 
 
-def test_save_pattern_save_graph_are_registered_abilities():
+def test_save_pattern_save_graph_are_registered_abilities() -> None:
     """SavePattern / SaveGraph are first-class Ability subclasses registered
     in AbilityRegistry.
 
@@ -67,7 +67,7 @@ def test_save_pattern_save_graph_are_registered_abilities():
 # ---------------------------------------------------------------------------
 
 
-def test_abilities_sqlite_indexes_save_pattern_and_save_graph():
+def test_abilities_sqlite_indexes_save_pattern_and_save_graph() -> None:
     """abilities.sqlite MUST contain save_pattern and save_graph alongside
     every other ability.
 
@@ -160,7 +160,7 @@ _EXPECTED_ABILITY_MODULE_STEMS = frozenset({
 })
 
 
-def test_abilities_directory_has_expected_non_underscore_modules():
+def test_abilities_directory_has_expected_non_underscore_modules() -> None:
     """abilities/ contains exactly the expected dispatchable top-level modules.
 
     Mirrors what AbilityRegistry._load() walks: a shallow glob("*.py")
@@ -216,7 +216,7 @@ _ALLOWED_REGISTRY_ALL_CALLERS = frozenset({
 _REGISTRY_ALL_PATTERN = re.compile(r"AbilityRegistry\.all\(\)")
 
 
-def test_no_production_code_calls_ability_registry_all_outside_allowlist():
+def test_no_production_code_calls_ability_registry_all_outside_allowlist() -> None:
     """Static scan: AbilityRegistry.all() must only be called from allowlisted files.
 
     The bloat regression in an end-to-end run originated from

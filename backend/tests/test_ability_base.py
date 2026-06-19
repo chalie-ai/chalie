@@ -23,6 +23,7 @@ tests.
 """
 
 import gc
+from typing import cast
 
 import pytest
 
@@ -40,17 +41,17 @@ class _Mp:
     (UserConfig backgrounds, DmnConfig does not). Not a mock — the real config
     object decides the gate."""
 
-    def __init__(self, config):
+    def __init__(self, config: object) -> None:
         self.config = config
 
 
 def _getters(
-    name="valid_ability",
-    summary="Does something useful",
-    examples=None,
-    tooltip="a useful tool",
-    parameters=None,
-):
+    name: str = "valid_ability",
+    summary: str = "Does something useful",
+    examples: "list[str] | None" = None,
+    tooltip: str = "a useful tool",
+    parameters: "dict[str, object] | None" = None,
+) -> "dict[str, object]":
     """Build the concrete-ability namespace dict."""
     examples = list(_VALID_EXAMPLES) if examples is None else examples
     parameters = {"type": "object", "properties": {}, "required": []} if parameters is None else parameters
@@ -64,7 +65,7 @@ def _getters(
     }
 
 
-def _make_subclass(clsname, drop=(), **overrides):
+def _make_subclass(clsname: str, drop: "tuple[str, ...]" = (), **overrides: object) -> "type[Ability]":
     """Build an Ability subclass dynamically; triggers __init_subclass__.
 
     ``drop`` names getters to OMIT (leaving the abstractmethod unfilled, so the
@@ -82,7 +83,7 @@ def _make_subclass(clsname, drop=(), **overrides):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_name_getter_makes_class_abstract():
+def test_missing_name_getter_makes_class_abstract() -> None:
     """A subclass that omits get_name is abstract — instantiation raises TypeError
     naming the missing getter. (Replaces the old 'missing NAME ClassVar' guard.)"""
     cls = _make_subclass("_MissingName", drop=("get_name",))
@@ -92,7 +93,7 @@ def test_missing_name_getter_makes_class_abstract():
     gc.collect()
 
 
-def test_missing_examples_getter_rejected_at_class_creation():
+def test_missing_examples_getter_rejected_at_class_creation() -> None:
     """A subclass that omits get_examples is rejected when the class is built: the
     __init_subclass__ probe calls the inherited abstract get_examples() (→ None),
     which fails the list[str] shape check — so it never becomes a usable ability."""
@@ -101,7 +102,7 @@ def test_missing_examples_getter_rejected_at_class_creation():
     gc.collect()
 
 
-def test_subclass_without_run_cannot_be_instantiated():
+def test_subclass_without_run_cannot_be_instantiated() -> None:
     """Concrete metadata but missing run() → still abstract → ABC blocks it."""
     cls = _make_subclass("_NoRun", drop=("run",))
     with pytest.raises(TypeError, match="run"):
@@ -115,21 +116,21 @@ def test_subclass_without_run_cannot_be_instantiated():
 # ---------------------------------------------------------------------------
 
 
-def test_examples_non_list_raises_at_class_creation():
+def test_examples_non_list_raises_at_class_creation() -> None:
     """get_examples returning a non-list raises TypeError when the class is built."""
     with pytest.raises(TypeError, match="get_examples"):
         _make_subclass("_ExamplesString", get_examples=lambda self: "not a list")
     gc.collect()
 
 
-def test_examples_too_short_raises_at_class_creation():
+def test_examples_too_short_raises_at_class_creation() -> None:
     """get_examples with fewer than 6 entries raises TypeError (lower bound)."""
     with pytest.raises(TypeError, match="6"):
         _make_subclass("_ExamplesShort", get_examples=lambda self: ["a", "b", "c", "d"])
     gc.collect()
 
 
-def test_examples_too_long_raises_at_class_creation():
+def test_examples_too_long_raises_at_class_creation() -> None:
     """get_examples with more than 8 entries raises TypeError (upper bound)."""
     with pytest.raises(TypeError, match="8"):
         _make_subclass(
@@ -139,7 +140,7 @@ def test_examples_too_long_raises_at_class_creation():
     gc.collect()
 
 
-def test_examples_exactly_six_accepted():
+def test_examples_exactly_six_accepted() -> None:
     """get_examples with exactly 6 entries is valid (lower boundary)."""
     cls = _make_subclass("_ExamplesSix", get_examples=lambda self: ["a", "b", "c", "d", "e", "f"])
     instance = cls()
@@ -153,7 +154,7 @@ def test_examples_exactly_six_accepted():
 # ---------------------------------------------------------------------------
 
 
-def test_overriding_get_input_schema_is_rejected():
+def test_overriding_get_input_schema_is_rejected() -> None:
     """A subclass that redefines the final get_input_schema would fork the
     act_summary/async contract — __init_subclass__ rejects it at class creation."""
     with pytest.raises(TypeError, match="get_input_schema"):
@@ -161,7 +162,7 @@ def test_overriding_get_input_schema_is_rejected():
     gc.collect()
 
 
-def test_overriding_inject_framework_fields_is_rejected():
+def test_overriding_inject_framework_fields_is_rejected() -> None:
     """The single injection site is sealed too — redefining it is rejected."""
     with pytest.raises(TypeError, match="_inject_framework_fields"):
         _make_subclass("_OverridesInjector", _inject_framework_fields=lambda self, params: params)
@@ -173,7 +174,7 @@ def test_overriding_inject_framework_fields_is_rejected():
 # ---------------------------------------------------------------------------
 
 
-def test_valid_concrete_subclass_assembles_full_descriptor():
+def test_valid_concrete_subclass_assembles_full_descriptor() -> None:
     """A fully specified subclass instantiates and get_input_schema() returns the
     full LLM-facing descriptor assembled from the getters."""
     cls = _make_subclass(
@@ -193,57 +194,57 @@ def test_valid_concrete_subclass_assembles_full_descriptor():
     assert schema["name"] == "valid_ability"
     assert schema["description"] == "Does something useful"
     # The declared param survived assembly.
-    assert schema["input_schema"]["properties"]["q"] == {"type": "string"}
+    assert cast("dict[str, object]", cast("dict[str, object]", schema["input_schema"])["properties"])["q"] == {"type": "string"}
 
     del cls
     gc.collect()
 
 
-def test_act_summary_always_injected_and_required():
+def test_act_summary_always_injected_and_required() -> None:
     """act_summary is injected into EVERY descriptor and marked required — the one
     framework field present regardless of channel or mp."""
     cls = _make_subclass("_ActSummaryProbe")
-    schema = cls().get_input_schema()["input_schema"]
-    assert "act_summary" in schema["properties"]
-    assert schema["properties"]["act_summary"]["type"] == "string"
-    assert "act_summary" in schema["required"]
+    schema = cast("dict[str, object]", cls().get_input_schema()["input_schema"])
+    assert "act_summary" in cast("dict[str, object]", schema["properties"])
+    assert cast("dict[str, object]", cast("dict[str, object]", schema["properties"])["act_summary"])["type"] == "string"
+    assert "act_summary" in cast("list[str]", schema["required"])
     del cls
     gc.collect()
 
 
-def test_async_injected_only_under_supports_async_config():
+def test_async_injected_only_under_supports_async_config() -> None:
     """async appears ONLY when the bound mp's config sets SUPPORTS_ASYNC. It is a
     per-call deepcopy — never mutates the declared get_parameters()."""
-    shared_params = {"type": "object", "properties": {}, "required": []}
+    shared_params: dict[str, object] = {"type": "object", "properties": {}, "required": []}
     cls = _make_subclass("_AsyncProbe", get_parameters=lambda self: shared_params)
 
     # SUPPORTS_ASYNC channel (UserConfig) → async exposed.
-    user_props = cls(mp=_Mp(UserConfig({}))).get_input_schema()["input_schema"]["properties"]
+    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(UserConfig({}))).get_input_schema()["input_schema"])["properties"])
     assert "async" in user_props
-    assert user_props["async"]["type"] == "boolean"
-    assert user_props["async"]["default"] is False
+    assert cast("dict[str, object]", user_props["async"])["type"] == "boolean"
+    assert cast("dict[str, object]", user_props["async"])["default"] is False
 
     # Non-async channel (DmnConfig) → never exposed.
-    dmn_props = cls(mp=_Mp(DmnConfig())).get_input_schema()["input_schema"]["properties"]
+    dmn_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(DmnConfig())).get_input_schema()["input_schema"])["properties"])
     assert "async" not in dmn_props
 
     # No live processor (mp=None — build/introspection) → never exposed.
-    none_props = cls().get_input_schema()["input_schema"]["properties"]
+    none_props = cast("dict[str, object]", cast("dict[str, object]", cls().get_input_schema()["input_schema"])["properties"])
     assert "async" not in none_props
 
     # The declared params dict was never mutated by any of the above.
-    assert "async" not in shared_params["properties"]
-    assert "act_summary" not in shared_params["properties"]
+    assert "async" not in cast("dict[str, object]", shared_params["properties"])
+    assert "act_summary" not in cast("dict[str, object]", shared_params["properties"])
 
     del cls
     gc.collect()
 
 
-def test_mp_gated_summary_is_deterministic_at_build_time():
+def test_mp_gated_summary_is_deterministic_at_build_time() -> None:
     """A getter that enriches on a live mp (e.g. bash's cwd) MUST fall back to
     deterministic base text at mp=None so the search index stays machine-stable."""
 
-    def _summary(self):
+    def _summary(self: Ability) -> str:
         base = "base summary"
         return f"{base} — cwd /tmp" if self.mp is not None else base
 

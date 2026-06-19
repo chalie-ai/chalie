@@ -6,7 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
+import sqlite3
 import threading
+from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -17,16 +20,16 @@ from services.act_trail import ActTrail
 pytestmark = pytest.mark.unit
 
 
-def _seed_transcript(db) -> int:
+def _seed_transcript(db: sqlite3.Connection) -> int:
     cur = db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
         ("dmn", "user", "read this for me"),
     )
     db.commit()
-    return cur.lastrowid
+    return cast(int, cur.lastrowid)
 
 
-def _allow_read(db) -> None:
+def _allow_read(db: sqlite3.Connection) -> None:
     db.execute(
         "INSERT OR REPLACE INTO policy (channel, permission, setting) VALUES (?, 'read', 'allow')",
         (DmnConfig().policy_channel.value,),
@@ -43,7 +46,7 @@ class _MP:
         self.cancel_event = threading.Event()
 
 
-def test_read_resolves_url_alias_through_real_dispatch(db):
+def test_read_resolves_url_alias_through_real_dispatch(db: sqlite3.Connection) -> None:
     transcript_id = _seed_transcript(db)
     _allow_read(db)
     mp = _MP(transcript_id)
@@ -58,10 +61,10 @@ def test_read_resolves_url_alias_through_real_dispatch(db):
     # And the real trail recorded the read outcome against the anchor.
     rows = ActTrail().fetch_by_transcript_id(transcript_id)
     assert [r["tool_name"] for r in rows] == ["read"]
-    assert "private-or-internal-url-blocked" in rows[0]["result"]
+    assert "private-or-internal-url-blocked" in cast(str, rows[0]["result"])
 
 
-def test_read_resolves_path_alias_with_real_file(db, tmp_path):
+def test_read_resolves_path_alias_with_real_file(db: sqlite3.Connection, tmp_path: Path) -> None:
     transcript_id = _seed_transcript(db)
     _allow_read(db)
     mp = _MP(transcript_id)
@@ -75,7 +78,7 @@ def test_read_resolves_path_alias_with_real_file(db, tmp_path):
     assert "ALIAS_PATH_CONTENT_OK" in result
 
 
-def test_read_missing_source_returns_diagnostic_keys(db):
+def test_read_missing_source_returns_diagnostic_keys(db: sqlite3.Connection) -> None:
     transcript_id = _seed_transcript(db)
     _allow_read(db)
     mp = _MP(transcript_id)

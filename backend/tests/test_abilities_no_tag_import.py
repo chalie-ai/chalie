@@ -44,7 +44,7 @@ def _imports_banned(tree: ast.AST) -> bool:
     return False
 
 
-def test_no_ability_module_imports_skill_tag():
+def test_no_ability_module_imports_skill_tag() -> None:
     abilities_dir = FileMapperService.get_abilities_path()
     offenders = []
     for path in sorted(abilities_dir.glob("*.py")):

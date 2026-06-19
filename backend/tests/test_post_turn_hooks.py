@@ -17,12 +17,18 @@ No mocks: the data_graph write goes through the real DataGraphService bound to
 the real test DB, and the assertion reads the row straight back out of SQLite.
 """
 
+import sqlite3
+from typing import TYPE_CHECKING
+
 import pytest
 
 from configs.channels.user_summary import PersistUserSummaryHook
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 from tests.helpers import StubProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -32,7 +38,7 @@ class _ExplodingHook(PostTurnHook):
     def __init__(self) -> None:
         self.ran = False
 
-    def run(self, mp, result_text: str) -> None:
+    def run(self, mp: object, result_text: str) -> None:
         self.ran = True
         raise RuntimeError("hook deliberately exploded")
 
@@ -40,7 +46,7 @@ class _ExplodingHook(PostTurnHook):
 _SUMMARY_CHANNEL = "test_post_turn_hooks_channel"
 
 
-def _config_with_hooks(hooks):
+def _config_with_hooks(hooks: "tuple[PostTurnHook, ...]") -> StubProcessorConfig:
     return StubProcessorConfig(
         channel=_SUMMARY_CHANNEL,
         role="user_summary",
@@ -61,7 +67,7 @@ def _config_with_hooks(hooks):
     )
 
 
-def _make_processor(hooks):
+def _make_processor(hooks: "tuple[PostTurnHook, ...]") -> "MessageProcessor":
     from services.message_processor import MessageProcessor
 
     mp = object.__new__(MessageProcessor)
@@ -74,7 +80,7 @@ def _make_processor(hooks):
 _SUMMARY_JSON = '{"short": "Alice, a runner", "long": "Alice is a long-distance runner in Berlin."}'
 
 
-def _read_summary(db):
+def _read_summary(db: sqlite3.Connection) -> dict[str, object]:
     rows = db.execute(
         "SELECT key, value FROM data_graph "
         "WHERE kind='system' AND key IN ('user_summary', 'user_summary_long') "
@@ -83,7 +89,7 @@ def _read_summary(db):
     return dict(rows)
 
 
-def test_exploding_sibling_does_not_block_real_hook(db):
+def test_exploding_sibling_does_not_block_real_hook(db: sqlite3.Connection) -> None:
     """A saboteur hook raising first must not stop PersistUserSummaryHook from
     writing both user_summary rows to data_graph (§4.8 failure isolation)."""
     saboteur = _ExplodingHook()
@@ -98,7 +104,7 @@ def test_exploding_sibling_does_not_block_real_hook(db):
     assert summary.get("user_summary_long") == "Alice is a long-distance runner in Berlin."
 
 
-def test_isolation_holds_regardless_of_hook_order(db):
+def test_isolation_holds_regardless_of_hook_order(db: sqlite3.Connection) -> None:
     saboteur = _ExplodingHook()
     mp = _make_processor((PersistUserSummaryHook(), saboteur))
 

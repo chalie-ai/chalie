@@ -32,6 +32,10 @@ a real service-backed list by its ``id`` alias. The registry-level tests assert
 the structural invariants the design rests on against the REAL registry.
 """
 
+import sqlite3
+from pathlib import Path
+from typing import cast
+
 import pytest
 
 from abilities._ability import Ability
@@ -41,13 +45,14 @@ from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
 from configs.channels import DmnConfig, UserConfig
 from services.act_trail import ActTrail
+from services.list_service import ListService
 from tests._registry_invariants import RegistryInvariant, RegistryOverlapError
 from tests._tool_result_harness import MP, allow_policy, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
 
-def _chat_mp(db, *, allow: "tuple[str, ...]" = ()) -> MP:
+def _chat_mp(db: sqlite3.Connection, *, allow: tuple[str, ...] = ()) -> MP:
     # user-channel ``MessageProcessor`` bound to the test db, with each *allow*
     # permission flipped to ``allow`` in the real policy table.
     for permission in allow:
@@ -55,9 +60,8 @@ def _chat_mp(db, *, allow: "tuple[str, ...]" = ()) -> MP:
     return MP(seed_transcript(db, "chat", "do a thing"), UserConfig({}))
 
 
-def _list_service():
+def _list_service() -> ListService:
     from services.database_service import get_shared_db_service
-    from services.list_service import ListService
 
     return ListService(get_shared_db_service())
 
@@ -65,7 +69,7 @@ def _list_service():
 # ── read: the TKT-963 regression — a mangled/aliased key heals to ``source`` ─────
 
 
-def test_read_mangled_source_key_heals_not_source_required(db):
+def test_read_mangled_source_key_heals_not_source_required(db: sqlite3.Connection) -> None:
     mp = _chat_mp(db, allow=("read",))
 
     result = ToolDispatcher(mp).dispatch("read", {'source"': "http://localhost", "act_summary": "x"})
@@ -76,10 +80,10 @@ def test_read_mangled_source_key_heals_not_source_required(db):
     # The real trail recorded the healed read against the anchor.
     rows = ActTrail().fetch_by_transcript_id(mp.uid)
     assert [r["tool_name"] for r in rows] == ["read"], rows
-    assert "private-or-internal-url-blocked" in rows[0]["result"], rows
+    assert "private-or-internal-url-blocked" in cast(str, rows[0]["result"]), rows
 
 
-def test_read_uppercase_url_composes_normalize_and_variant(db):
+def test_read_uppercase_url_composes_normalize_and_variant(db: sqlite3.Connection) -> None:
     mp = _chat_mp(db, allow=("read",))
 
     result = ToolDispatcher(mp).dispatch("read", {"URL": "http://localhost", "act_summary": "x"})
@@ -88,7 +92,7 @@ def test_read_uppercase_url_composes_normalize_and_variant(db):
     assert "private-or-internal-url-blocked" in result, result
 
 
-def test_read_mangled_max_chars_heals_and_truncates_downstream(db, tmp_path):
+def test_read_mangled_max_chars_heals_and_truncates_downstream(db: sqlite3.Connection, tmp_path: Path) -> None:
     mp = _chat_mp(db, allow=("read",))
     target = tmp_path / "big.txt"
     target.write_text("A" * 200, encoding="utf-8")
@@ -104,7 +108,7 @@ def test_read_mangled_max_chars_heals_and_truncates_downstream(db, tmp_path):
     assert "AAAA" in result, result
 
 
-def test_read_genuinely_unknown_key_passes_through_and_still_bounces(db):
+def test_read_genuinely_unknown_key_passes_through_and_still_bounces(db: sqlite3.Connection) -> None:
     mp = _chat_mp(db, allow=("read",))
 
     result = ToolDispatcher(mp).dispatch(
@@ -118,7 +122,7 @@ def test_read_genuinely_unknown_key_passes_through_and_still_bounces(db):
 # ── web_download: the ladder, scoped — ``source`` heals to ``url`` ───────────────
 
 
-def test_web_download_source_alias_heals_to_url(db):
+def test_web_download_source_alias_heals_to_url(db: sqlite3.Connection) -> None:
     mp = _chat_mp(db, allow=("web_download",))
 
     result = ToolDispatcher(mp).dispatch(
@@ -129,7 +133,7 @@ def test_web_download_source_alias_heals_to_url(db):
     assert "blocked-url" in result, result
 
 
-def test_web_download_url_stays_canonical(db):
+def test_web_download_url_stays_canonical(db: sqlite3.Connection) -> None:
     mp = _chat_mp(db, allow=("web_download",))
 
     result = ToolDispatcher(mp).dispatch(
@@ -143,7 +147,7 @@ def test_web_download_url_stays_canonical(db):
 # ── list: the historical ``id`` alias heals to the ``list`` selector ─────────────
 
 
-def test_list_id_alias_heals_to_list_selector_and_returns_contents(db):
+def test_list_id_alias_heals_to_list_selector_and_returns_contents(db: sqlite3.Connection) -> None:
     mp = MP(seed_transcript(db, "subconscious", "show my list"), DmnConfig())
     service = _list_service()
     list_id = service.create_list("groceries")
@@ -155,12 +159,12 @@ def test_list_id_alias_heals_to_list_selector_and_returns_contents(db):
 
     assert "[list(status=success" in result, result
     assert "missing-target" not in result and "list-not-found" not in result, result
-    body = parse_body(result, "list", rich=True)
-    texts = [row["text"] for row in body["items"]]
+    body = cast(dict[str, object], parse_body(result, "list", rich=True))
+    texts = [cast(dict[str, object], row)["text"] for row in cast(list[object], body["items"])]
     assert "milk" in texts and "eggs" in texts, body
 
 
-def test_list_mangled_action_key_heals_before_action_required_pre_gate(db):
+def test_list_mangled_action_key_heals_before_action_required_pre_gate(db: sqlite3.Connection) -> None:
     mp = _chat_mp(db)
 
     result = ToolDispatcher(mp).dispatch("list", {'action"': "list_all", "act_summary": "x"})
@@ -173,29 +177,29 @@ def test_list_mangled_action_key_heals_before_action_required_pre_gate(db):
 # ── Registry-level structural invariants (driven against the REAL registry) ──────
 
 
-def _shipping_abilities() -> list:
+def _shipping_abilities() -> list[Ability]:
     # ``AbilityRegistry.all()`` walks EVERY ``Ability`` subclass, including throwaway
     # test abilities. The production registry only holds ``abilities.*`` classes — no
     # test module is imported in prod — so we filter to that real, shipping set.
     return [a for a in AbilityRegistry.all() if type(a).__module__.startswith("abilities.")]
 
 
-def test_real_registry_has_no_variant_overlaps():
+def test_real_registry_has_no_variant_overlaps() -> None:
     RegistryInvariant().check_no_overlaps(_shipping_abilities())
 
 
-def test_every_native_param_is_a_keys_constant():
+def test_every_native_param_is_a_keys_constant() -> None:
     allowed = RegistryInvariant().canonical_keys()
     offenders = []
     for ability in _shipping_abilities():
-        properties = (ability.get_parameters() or {}).get("properties") or {}
+        properties = cast(dict[str, object], (ability.get_parameters() or {}).get("properties") or {})
         offenders += [
             (ability.get_name(), key) for key in properties if key not in allowed
         ]
     assert not offenders, f"non-Keys param keys declared: {offenders}"
 
 
-def test_overlap_validator_rejects_a_tool_declaring_two_aliased_params():
+def test_overlap_validator_rejects_a_tool_declaring_two_aliased_params() -> None:
 
     class _OverlapProbe(Ability):
         _SYNTHETIC = True
@@ -212,7 +216,7 @@ def test_overlap_validator_rejects_a_tool_declaring_two_aliased_params():
         def get_search_tooltip(self) -> str:
             return "probe"
 
-        def get_parameters(self) -> dict:
+        def get_parameters(self) -> dict[str, object]:
             return {
                 "type": "object",
                 "properties": {
@@ -223,7 +227,7 @@ def test_overlap_validator_rejects_a_tool_declaring_two_aliased_params():
                 "required": [],
             }
 
-        def run(self, params: dict) -> ToolResult:
+        def run(self, params: dict[str, object]) -> ToolResult:
             return ToolResult.ok("x")
 
     with pytest.raises(RegistryOverlapError) as excinfo:
@@ -237,7 +241,7 @@ def test_overlap_validator_rejects_a_tool_declaring_two_aliased_params():
 # ── First-write-wins collision: both ``source`` and ``url`` present for read ──────
 
 
-def test_read_collision_first_key_wins_and_warning_emitted(db, tmp_path, caplog):
+def test_read_collision_first_key_wins_and_warning_emitted(db: sqlite3.Connection, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     mp = _chat_mp(db, allow=("read",))
     real_file = tmp_path / "winner.txt"
     real_file.write_text("content if the wrong key won", encoding="utf-8")
@@ -266,7 +270,7 @@ def test_read_collision_first_key_wins_and_warning_emitted(db, tmp_path, caplog)
     assert "source" in combined, combined   # the canonical that both map to
 
 
-def test_read_collision_order_decides_winner_not_key_identity(db, tmp_path, caplog):
+def test_read_collision_order_decides_winner_not_key_identity(db: sqlite3.Connection, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     mp = _chat_mp(db, allow=("read",))
     real_file = tmp_path / "order_proof.txt"
     real_file.write_text("MARKER_CONTENT", encoding="utf-8")

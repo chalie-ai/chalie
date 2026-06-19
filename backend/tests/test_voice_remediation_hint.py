@@ -2,7 +2,10 @@
 never the installer, across whatever readiness branch the environment exercises.
 """
 
+import sqlite3
+
 import pytest
+from flask.testing import FlaskClient
 
 
 def _no_installer(hint: str) -> None:
@@ -14,7 +17,7 @@ def _no_installer(hint: str) -> None:
 
 
 @pytest.mark.unit
-def test_voice_remediation_points_to_settings_not_installer(authed_client):
+def test_voice_remediation_points_to_settings_not_installer(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """/voice/health (and /voice/synthesize) must steer users to Settings, not the installer."""
     client, _db, _store = authed_client
 

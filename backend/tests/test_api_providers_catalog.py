@@ -10,9 +10,13 @@ is NEVER a runtime platform of its own — the old catalog-id-as-platform branch
 gone, and these tests pin both the new catalog shape and the removal of that branch.
 """
 
+import sqlite3
+from collections.abc import Iterator
+
 import pytest
 
 import services.vault_service as _vault_mod
+from flask.testing import FlaskClient
 from services.vault_service import _vault_state, get_vault_service
 
 # The seven providers the product owner named explicitly. The curated list is
@@ -32,14 +36,14 @@ def _unlock_vault(password: str = "test-password") -> None:
 class TestProviderCatalog:
 
     @pytest.fixture(autouse=True)
-    def _reset_vault_state(self):
+    def _reset_vault_state(self) -> Iterator[None]:
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
         yield
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
 
-    def test_catalog_is_a_curated_preset_list_not_the_full_dump(self, authed_client):
+    def test_catalog_is_a_curated_preset_list_not_the_full_dump(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
 
         resp = client.get('/providers/catalog')
@@ -62,7 +66,7 @@ class TestProviderCatalog:
         assert len(ids) == len(catalog), "preset ids must be unique"
         assert _NAMED_IDS <= ids, f"missing named providers: {_NAMED_IDS - ids}"
 
-    def test_named_presets_prefill_the_right_platform_and_host(self, authed_client):
+    def test_named_presets_prefill_the_right_platform_and_host(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
 
         catalog = client.get('/providers/catalog').get_json()['catalog']
@@ -92,7 +96,7 @@ class TestProviderCatalog:
         assert by_id['ollama']['host'] == 'http://localhost:11434'
         assert by_id['ollama']['needs_key'] is False
 
-    def test_preset_id_is_not_a_runtime_platform(self, authed_client):
+    def test_preset_id_is_not_a_runtime_platform(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """Pins removal of the catalog-id-as-platform branch: 'deepseek' was a
         real id in the old dump and must be rejected as a platform, not resolved
         to a static model list."""
@@ -105,7 +109,7 @@ class TestProviderCatalog:
         assert body['models'] == []
         assert "Unsupported platform" in body['error']
 
-    def test_preset_save_roundtrips_through_the_existing_create_path(self, authed_client):
+    def test_preset_save_roundtrips_through_the_existing_create_path(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
         _unlock_vault()
 

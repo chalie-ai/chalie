@@ -1,6 +1,8 @@
 """Integration test: rich-media cards in the message processing pipeline."""
 
 import json
+from typing import cast
+
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -38,7 +40,7 @@ _MOCK_WEATHER_DICT = {
 
 class TestWeatherSerialise:
 
-    def test_render_with_ordinal_produces_json_and_trailer(self):
+    def test_render_with_ordinal_produces_json_and_trailer(self) -> None:
         from abilities._dispatcher import ToolDispatcher
         from abilities._result import ToolResult
 
@@ -50,7 +52,7 @@ class TestWeatherSerialise:
         assert json.loads(payload_str) == {"temperature_c": 12}
         assert "<span id='weather_1'>" in trailer
 
-    def test_render_without_ordinal_has_no_trailer(self):
+    def test_render_without_ordinal_has_no_trailer(self) -> None:
         from abilities._dispatcher import ToolDispatcher
         from abilities._result import ToolResult
 
@@ -61,7 +63,7 @@ class TestWeatherSerialise:
         assert json.loads(inner) == {"temperature_c": 12}
         assert "<span" not in rendered
 
-    def test_render_error_payload_no_trailer(self):
+    def test_render_error_payload_no_trailer(self) -> None:
         from abilities._dispatcher import ToolDispatcher
         from abilities._result import ToolResult
 
@@ -72,7 +74,7 @@ class TestWeatherSerialise:
         assert "unavailable" in rendered
         assert "<span" not in rendered
 
-    def test_render_ordinal_2_uses_correct_tag(self):
+    def test_render_ordinal_2_uses_correct_tag(self) -> None:
         from abilities._dispatcher import ToolDispatcher
         from abilities._result import ToolResult
 
@@ -84,7 +86,7 @@ class TestWeatherSerialise:
 class TestRichMediaParserIntegration:
     """Parser round-trip: tool result → parse() → segments."""
 
-    def test_parse_produces_rich_segment_for_london(self):
+    def test_parse_produces_rich_segment_for_london(self) -> None:
         from services.rich_media_parser import parse
 
         tool_result = (
@@ -103,18 +105,18 @@ class TestRichMediaParserIntegration:
         rich_seg = segs[1]
 
         assert text_seg["type"] == "text"
-        assert "Here is the weather." in text_seg["content"]
+        assert "Here is the weather." in cast(str, text_seg["content"])
 
         assert rich_seg["type"] == "rich"
         assert rich_seg["tag"] == "weather_1"
         assert rich_seg["synthesis"] == "Partly cloudy, 12°C."
-        assert rich_seg["payload"]["location"] == "London, GB"
-        assert rich_seg["payload"]["temperature_c"] == pytest.approx(12.4, abs=1e-9)
+        assert cast("dict[str, object]", rich_seg["payload"])["location"] == "London, GB"
+        assert cast("dict[str, object]", rich_seg["payload"])["temperature_c"] == pytest.approx(12.4, abs=1e-9)
 
-    def test_parse_two_cities_produces_two_rich_segments(self):
+    def test_parse_two_cities_produces_two_rich_segments(self) -> None:
         from services.rich_media_parser import parse
 
-        def _make_result(loc, ordinal):
+        def _make_result(loc: str, ordinal: int) -> str:
             payload = dict(_MOCK_WEATHER_DICT, location=loc)
             return (
                 json.dumps(payload)
@@ -133,6 +135,6 @@ class TestRichMediaParserIntegration:
         rich_segs = [s for s in segs if s["type"] == "rich"]
         assert len(rich_segs) == 2
         assert rich_segs[0]["tag"] == "weather_1"
-        assert rich_segs[0]["payload"]["location"] == "Paris, FR"
+        assert cast("dict[str, object]", rich_segs[0]["payload"])["location"] == "Paris, FR"
         assert rich_segs[1]["tag"] == "weather_2"
-        assert rich_segs[1]["payload"]["location"] == "Tokyo, JP"
+        assert cast("dict[str, object]", rich_segs[1]["payload"])["location"] == "Tokyo, JP"

@@ -22,6 +22,8 @@ real ``db`` fixture, the real ``ToolDispatcher`` envelope renderer, and the real
 """
 
 import json
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -31,20 +33,20 @@ from abilities.memory import MemoryAbility
 pytestmark = pytest.mark.unit
 
 
-def _parse_body(rendered: str) -> object:
+def _parse_body(rendered: str) -> dict[str, object]:
     head = rendered.index("]\n") + 2
     tail = rendered.index("\n[end:memory]")
-    return json.loads(rendered[head:tail])
+    return cast(dict[str, object], json.loads(rendered[head:tail]))
 
 
-def _render_recall(params: dict) -> str:
+def _render_recall(params: dict[str, object]) -> str:
     result = MemoryAbility().run(params)
     assert result is not None, "MemoryAbility.run() returned None"
     return ToolDispatcher._render("memory", result, None)
 
 
 class TestMemoryRecallStructuredBody:
-    def test_recall_hit_is_a_structured_json_row(self, db):
+    def test_recall_hit_is_a_structured_json_row(self, db: sqlite3.Connection) -> None:
         from services.data_graph_service import get_data_graph_service
 
         get_data_graph_service().store(
@@ -59,7 +61,7 @@ class TestMemoryRecallStructuredBody:
 
         body = _parse_body(out)
         assert isinstance(body, dict), f"recall body must be a JSON object: {body!r}"
-        rows = body["results"]
+        rows = cast(list[dict[str, object]], body["results"])
         assert isinstance(rows, list) and rows, f"expected non-empty results list: {body!r}"
 
         match = next((r for r in rows if r.get("id") == "residence"), None)
@@ -68,18 +70,18 @@ class TestMemoryRecallStructuredBody:
         assert set(match) >= {"id", "content", "score", "kind", "created_at"}, (
             f"row missing contracted fields: {match!r}"
         )
-        assert "Valletta" in match["content"]
-        assert match["score"] in ("high", "medium", "low")
+        assert "Valletta" in cast(str, match["content"])
+        assert cast(str, match["score"]) in ("high", "medium", "low")
         assert match["kind"] == "user_specific"
 
-    def test_explicit_recall_carries_fallback_field_seed_does_not(self, db):
+    def test_explicit_recall_carries_fallback_field_seed_does_not(self, db: sqlite3.Connection) -> None:
         explicit = _parse_body(
             _render_recall({"action": "recall", "query": "xyzzy_nonexistent_key_abc"})
         )
         assert explicit["results"] == []
         assert "fallback" in explicit, f"explicit recall lost the guardrail: {explicit!r}"
-        assert "`document` (action: search)" in explicit["fallback"]
-        assert "`schedule` (action: search)" in explicit["fallback"]
+        assert "`document` (action: search)" in cast(str, explicit["fallback"])
+        assert "`schedule` (action: search)" in cast(str, explicit["fallback"])
 
         seed = _parse_body(
             _render_recall(
@@ -91,7 +93,7 @@ class TestMemoryRecallStructuredBody:
 
 
 class TestEpisodeBackReferenceFromStructuredBody:
-    def test_recall_envelope_resolves_its_episode_downstream(self, db):
+    def test_recall_envelope_resolves_its_episode_downstream(self, db: sqlite3.Connection) -> None:
         """The transcript back-reference fetches the real episode from a recorded
         recall envelope whose JSON body carries that episode's id.
 
@@ -117,7 +119,7 @@ class TestEpisodeBackReferenceFromStructuredBody:
             ("chat", "user", "what did we talk about at home"),
         )
         db.commit()
-        transcript_id = cur.lastrowid
+        transcript_id = cast(int, cur.lastrowid)
 
         # Build the recall body exactly as production does — a real episode-kind
         # hit through the real projection — and render the real envelope.
@@ -142,7 +144,7 @@ class TestEpisodeBackReferenceFromStructuredBody:
             transcript_id=transcript_id,
         )
 
-        entries = [{"id": transcript_id}]
+        entries: list[dict[str, object]] = [{"id": transcript_id}]
         episodes = _fetch_referenced_episodes(entries, shared_db)
 
         assert episodes, "back-reference resolved no episodes from the JSON body"

@@ -34,7 +34,7 @@ _BLOCKED = (
         ["find", "--recursive"],
     ],
 )
-def test_has_recursive_flag_returns_true(tokens):
+def test_has_recursive_flag_returns_true(tokens: list[str]) -> None:
     assert _has_recursive_flag(tokens) is True
 
 
@@ -50,7 +50,7 @@ def test_has_recursive_flag_returns_true(tokens):
         ["rm", "path", "-R"],
     ],
 )
-def test_has_recursive_flag_returns_false(tokens):
+def test_has_recursive_flag_returns_false(tokens: list[str]) -> None:
     assert _has_recursive_flag(tokens) is False
 
 
@@ -73,7 +73,7 @@ def test_has_recursive_flag_returns_false(tokens):
         "rm -Rf /path",  # capital R
     ],
 )
-def test_is_rm_rf_returns_true(command):
+def test_is_rm_rf_returns_true(command: str) -> None:
     assert _is_rm_rf(command) is True
 
 
@@ -93,7 +93,7 @@ def test_is_rm_rf_returns_true(command):
         "rm --force /path",  # --recursive missing
     ],
 )
-def test_is_rm_rf_returns_false(command):
+def test_is_rm_rf_returns_false(command: str) -> None:
     assert _is_rm_rf(command) is False
 
 
@@ -120,7 +120,7 @@ def test_is_rm_rf_returns_false(command):
         "echo 'unclosed",  # shlex ValueError → compound
     ],
 )
-def test_classify_heuristic_returns_compound(command):
+def test_classify_heuristic_returns_compound(command: str) -> None:
     assert _classify_heuristic(command) == "compound"
 
 
@@ -132,7 +132,7 @@ def test_classify_heuristic_returns_compound(command):
         'echo "he\\"llo | world"',
     ],
 )
-def test_classify_heuristic_quoted_operators_not_compound(command):
+def test_classify_heuristic_quoted_operators_not_compound(command: str) -> None:
     assert _classify_heuristic(command) is None
 
 
@@ -146,7 +146,7 @@ def test_classify_heuristic_quoted_operators_not_compound(command):
         "rsync -a src/ dst/",
     ],
 )
-def test_classify_heuristic_returns_remote_execution(command):
+def test_classify_heuristic_returns_remote_execution(command: str) -> None:
     assert _classify_heuristic(command) == "remote_execution"
 
 
@@ -159,7 +159,7 @@ def test_classify_heuristic_returns_remote_execution(command):
         "ncat host 80",
     ],
 )
-def test_classify_heuristic_returns_web_fetch(command):
+def test_classify_heuristic_returns_web_fetch(command: str) -> None:
     assert _classify_heuristic(command) == "web_fetch"
 
 
@@ -177,7 +177,7 @@ def test_classify_heuristic_returns_web_fetch(command):
         "apt install vim",
     ],
 )
-def test_classify_heuristic_returns_installation(command):
+def test_classify_heuristic_returns_installation(command: str) -> None:
     assert _classify_heuristic(command) == "installation"
 
 
@@ -198,7 +198,7 @@ def test_classify_heuristic_returns_installation(command):
         "cat file > other",
     ],
 )
-def test_classify_heuristic_returns_modify_file(command):
+def test_classify_heuristic_returns_modify_file(command: str) -> None:
     assert _classify_heuristic(command) == "modify_file"
 
 
@@ -217,7 +217,7 @@ def test_classify_heuristic_returns_modify_file(command):
         ".gitignore",  # dot-prefixed non-keyword token
     ],
 )
-def test_classify_heuristic_returns_none(command):
+def test_classify_heuristic_returns_none(command: str) -> None:
     assert _classify_heuristic(command) is None
 
 
@@ -251,7 +251,7 @@ def test_classify_heuristic_returns_none(command):
         "rm -rf /*",
     ],
 )
-def test_check_destructive_returns_blocked(command):
+def test_check_destructive_returns_blocked(command: str) -> None:
     assert _check_destructive(command) == _BLOCKED
 
 
@@ -268,5 +268,5 @@ def test_check_destructive_returns_blocked(command):
         "mkfstools",
     ],
 )
-def test_check_destructive_returns_none(command):
+def test_check_destructive_returns_none(command: str) -> None:
     assert _check_destructive(command) is None

@@ -7,6 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 
+import pathlib
 
 import pytest
 
@@ -15,18 +16,18 @@ from services.llm_request_logger import log_llm_request
 
 
 @pytest.fixture
-def logs_dir(tmp_path, monkeypatch):
+def logs_dir(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
     logs = tmp_path / 'logs'
     monkeypatch.setattr(llm_request_logger, '_LOGS_DIR', logs)
     return logs
 
 
 @pytest.mark.unit
-def test_writes_file_with_all_fields_verbatim(logs_dir):
+def test_writes_file_with_all_fields_verbatim(logs_dir: pathlib.Path) -> None:
 
     big_user = 'x' * 100_000
     unicode_sys = 'Hello 🌍 — こんにちは — <>&"'
-    tools = [{'name': 'search', 'description': 'Search the web'}]
+    tools: list[object] = [{'name': 'search', 'description': 'Search the web'}]
 
     log_llm_request(
         caller='TestCaller',
@@ -56,7 +57,7 @@ def test_writes_file_with_all_fields_verbatim(logs_dir):
 
 
 @pytest.mark.unit
-def test_does_not_raise_on_unwritable_dir(tmp_path, monkeypatch):
+def test_does_not_raise_on_unwritable_dir(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Side-effect: write failures are silently swallowed so the LLM call is never blocked.
     fake_file = tmp_path / 'i_am_a_file'
     fake_file.write_text('block')

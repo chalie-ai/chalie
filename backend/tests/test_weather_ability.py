@@ -9,6 +9,9 @@
 
 
 import json
+import sqlite3
+from collections.abc import Iterator
+from typing import cast
 
 import pytest
 
@@ -28,26 +31,26 @@ _DEAD_HOST = "http://127.0.0.1:9"
 
 
 @pytest.fixture(autouse=True)
-def _clear_weather_cache():
+def _clear_weather_cache() -> Iterator[None]:
     WeatherAbility._cache.clear()
     yield
     WeatherAbility._cache.clear()
 
 @pytest.fixture
-def dead_providers(monkeypatch):
+def dead_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(weather_mod, "_OPEN_METEO_BASE", _DEAD_HOST)
     monkeypatch.setattr(weather_mod, "_WTTR_BASE", _DEAD_HOST)
 
 
 @pytest.fixture
-def no_telemetry(monkeypatch):
+def no_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "services.client_context.ClientContext.current", classmethod(lambda cls: None)
     )
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> object:
     return MP(seed_transcript(db, "chat", "what's the weather"), UserConfig({}))
 
 
@@ -59,7 +62,7 @@ def _body(rendered: str) -> str:
     return body(rendered, "weather", rich=True)
 
 
-def _sample_payload(location: str = "Valletta, Malta") -> dict:
+def _sample_payload(location: str = "Valletta, Malta") -> dict[str, object]:
     return {
         "location": location,
         "condition": "Partly cloudy",
@@ -93,7 +96,7 @@ def _sample_payload(location: str = "Valletta, Malta") -> dict:
 # ── 1. missing-location: no coords AND no location param → loud guardrail ────────
 
 
-def test_no_location_is_missing_location(db, chat_mp, no_telemetry, dead_providers):
+def test_no_location_is_missing_location(db: sqlite3.Connection, chat_mp: object, no_telemetry: None, dead_providers: None) -> None:
     out = ToolDispatcher(chat_mp).dispatch("weather", {"act_summary": "x"})
 
     assert "[weather(status=error, code=missing-location" in out
@@ -108,8 +111,8 @@ def test_no_location_is_missing_location(db, chat_mp, no_telemetry, dead_provide
 
 
 def test_named_location_all_providers_dead_is_provider_unreachable(
-    db, chat_mp, no_telemetry, dead_providers
-):
+    db: sqlite3.Connection, chat_mp: object, no_telemetry: None, dead_providers: None
+) -> None:
     out = ToolDispatcher(chat_mp).dispatch(
         "weather", {"location": "Valletta", "act_summary": "x"}
     )
@@ -127,7 +130,7 @@ def test_named_location_all_providers_dead_is_provider_unreachable(
 # ── 3. fresh cache hit → success, body round-trips, NO stale marker ─────────────
 
 
-def test_fresh_cache_hit_is_plain_success(db, chat_mp, no_telemetry, dead_providers):
+def test_fresh_cache_hit_is_plain_success(db: sqlite3.Connection, chat_mp: object, no_telemetry: None, dead_providers: None) -> None:
     import time
 
     payload = _sample_payload()
@@ -146,7 +149,7 @@ def test_fresh_cache_hit_is_plain_success(db, chat_mp, no_telemetry, dead_provid
 # ── 4. stale cache → success BUT loud stale=true marker ──────────────────────────
 
 
-def test_stale_cache_is_marked_stale(db, chat_mp, no_telemetry, dead_providers):
+def test_stale_cache_is_marked_stale(db: sqlite3.Connection, chat_mp: object, no_telemetry: None, dead_providers: None) -> None:
     import time
 
     payload = _sample_payload()
@@ -166,9 +169,9 @@ def test_stale_cache_is_marked_stale(db, chat_mp, no_telemetry, dead_providers):
 # ── 5. schema frozen (exemplar guard): exactly one optional `location` ───────────
 
 
-def test_schema_is_frozen_one_optional_location():
+def test_schema_is_frozen_one_optional_location() -> None:
     schema = AbilityRegistry.get("weather").get_parameters()
-    props = schema["properties"]
+    props = cast(dict[str, object], schema["properties"])
     assert list(props.keys()) == ["location"]
     assert schema["required"] == []
-    assert props["location"]["type"] == "string"
+    assert cast(dict[str, object], props["location"])["type"] == "string"

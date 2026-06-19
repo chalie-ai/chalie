@@ -1,3 +1,6 @@
+import sqlite3
+from typing import cast
+
 import pytest
 
 
@@ -9,7 +12,7 @@ import pytest
 @pytest.mark.unit
 class TestIntentDelivery:
 
-    def test_emit_and_retrieve_present_response_intent(self):
+    def test_emit_and_retrieve_present_response_intent(self) -> None:
         from services.memory_store import MemoryStore
         from services.intent_service import IntentService, CognitiveIntent
         import uuid
@@ -31,9 +34,9 @@ class TestIntentDelivery:
         assert len(pending) == 1
         assert pending[0]['intent_type'] == 'present_response'
         assert pending[0]['target_wrapper'] == '__chat_ui__'
-        assert pending[0]['payload']['content'] == 'Hello back'
+        assert cast("dict[str, object]", pending[0]['payload'])['content'] == 'Hello back'
 
-    def test_intent_marked_delivered_after_get_pending(self):
+    def test_intent_marked_delivered_after_get_pending(self) -> None:
         """An intent transitions from pending → delivered when fetched."""
         from services.memory_store import MemoryStore
         from services.intent_service import IntentService, CognitiveIntent
@@ -57,7 +60,7 @@ class TestIntentDelivery:
         second = svc.get_pending('__chat_ui__')
         assert second == []
 
-    def test_intent_event_structure(self):
+    def test_intent_event_structure(self) -> None:
         """An emitted present_response intent carries the expected payload fields."""
         from services.memory_store import MemoryStore
         from services.intent_service import IntentService, CognitiveIntent
@@ -75,7 +78,7 @@ class TestIntentDelivery:
 
         pending = svc.get_pending('__chat_ui__', limit=5)
         assert len(pending) == 1
-        assert pending[0]['payload']['content'] == 'Hi'
+        assert cast("dict[str, object]", pending[0]['payload'])['content'] == 'Hi'
         assert pending[0]['intent_type'] == 'present_response'
 
 
@@ -88,7 +91,7 @@ class TestIntentDelivery:
 class TestChatUIRegistration:
     """__chat_ui__ must be registerable with a stable, well-known wrapper_id."""
 
-    def test_create_token_with_wrapper_id_override(self, db):
+    def test_create_token_with_wrapper_id_override(self, db: sqlite3.Connection) -> None:
         """create_token() accepts wrapper_id_override and uses it as the wrapper_id."""
         from services.wrapper_auth_service import WrapperAuthService
 
@@ -112,7 +115,7 @@ class TestChatUIRegistration:
         assert wrapper_id == '__chat_ui__'
         assert raw_token  # non-empty token generated
 
-    def test_chat_ui_wrapper_retrievable_after_registration(self, db):
+    def test_chat_ui_wrapper_retrievable_after_registration(self, db: sqlite3.Connection) -> None:
         """get_wrapper('__chat_ui__') returns the wrapper after auto-registration."""
         from services.wrapper_auth_service import WrapperAuthService
 
@@ -128,7 +131,7 @@ class TestChatUIRegistration:
         assert result['wrapper_id'] == '__chat_ui__'
         assert result['name'] == 'Chat UI (Built-in)'
 
-    def test_idempotent_registration_check(self, db):
+    def test_idempotent_registration_check(self, db: sqlite3.Connection) -> None:
         """Registering __chat_ui__ twice is prevented by checking get_wrapper first."""
         from services.wrapper_auth_service import WrapperAuthService
 
@@ -146,7 +149,7 @@ class TestChatUIRegistration:
         chat_ui_wrappers = [w for w in wrappers if w['wrapper_id'] == '__chat_ui__']
         assert len(chat_ui_wrappers) == 1
 
-    def test_wrapper_id_override_none_generates_random_id(self, db):
+    def test_wrapper_id_override_none_generates_random_id(self, db: sqlite3.Connection) -> None:
         """Passing wrapper_id_override=None falls back to the auto-generated wrp_ prefix."""
         from services.wrapper_auth_service import WrapperAuthService
 

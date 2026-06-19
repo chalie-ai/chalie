@@ -2,10 +2,12 @@
 SQLite (schema.sql). Zero mocks of Chalie services."""
 
 
+import sqlite3
 import uuid
 from datetime import timedelta
 
 import pytest
+from flask.testing import FlaskClient
 
 from services.world_state import world_state
 from services.time_utils import utc_now
@@ -23,7 +25,7 @@ def _recent_iso(seconds: int = 30) -> str:
     return (utc_now() - timedelta(seconds=seconds)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _reset_world_state(db_conn=None):
+def _reset_world_state(db_conn: sqlite3.Connection | None = None) -> None:
 
     world_state.set("signals", {})
     if db_conn is not None:
@@ -33,7 +35,7 @@ def _reset_world_state(db_conn=None):
         db_conn.commit()
 
 
-def _seed_telemetry(db_conn, ctx: dict) -> None:
+def _seed_telemetry(db_conn: sqlite3.Connection, ctx: dict[str, object]) -> None:
     from services.heartbeat_service import heartbeat_service
     heartbeat_service._ctx = None
     flat = heartbeat_service._flatten(ctx)
@@ -52,14 +54,14 @@ def _seed_telemetry(db_conn, ctx: dict) -> None:
 
 @pytest.mark.unit
 class TestWorldStateObservabilityEmpty:
-    def test_empty_state_returns_200(self, authed_client):
+    def test_empty_state_returns_200(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 
         resp = client.get("/system/observability/world-state")
         assert resp.status_code == 200
 
-    def test_empty_state_rendered_is_empty_string(self, authed_client):
+    def test_empty_state_rendered_is_empty_string(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 
@@ -73,7 +75,7 @@ class TestWorldStateObservabilityEmpty:
 
 @pytest.mark.unit
 class TestWorldStateTelemetryRendering:
-    def test_telemetry_location_appears_in_rendered(self, authed_client):
+    def test_telemetry_location_appears_in_rendered(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _seed_telemetry(db_conn, {"location_name": "Sliema, MT"})
         world_state.set("signals", {})
@@ -81,7 +83,7 @@ class TestWorldStateTelemetryRendering:
         data = client.get("/system/observability/world-state").get_json()
         assert "location_name:Sliema, MT" in data["rendered"]
 
-    def test_telemetry_reflected_in_inputs(self, authed_client):
+    def test_telemetry_reflected_in_inputs(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _seed_telemetry(db_conn, {"location_name": "Valletta", "mobility": "stationary"})
         world_state.set("signals", {})
@@ -97,7 +99,7 @@ class TestWorldStateTelemetryRendering:
 
 @pytest.mark.unit
 class TestWorldStateScheduleRendering:
-    def test_pending_scheduled_item_appears_in_rendered_block(self, authed_client):
+    def test_pending_scheduled_item_appears_in_rendered_block(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 
@@ -123,7 +125,7 @@ class TestWorldStateScheduleRendering:
 class TestWorldStateSignalRendering:
     """push_signal() on the singleton produces a [signal:…] line in rendered output."""
 
-    def test_signal_appears_in_rendered_block(self, authed_client):
+    def test_signal_appears_in_rendered_block(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
         world_state.push_signal("weather", "Thunderstorm at 18:00")
@@ -143,7 +145,7 @@ class TestWorldStateFullLifecycle:
     """Push all four data sources → GET world-state → assert all sections rendered
     and all inputs populated."""
 
-    def test_all_three_sections_in_render_and_inputs(self, authed_client):
+    def test_all_three_sections_in_render_and_inputs(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 

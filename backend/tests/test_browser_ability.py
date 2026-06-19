@@ -13,6 +13,8 @@ The canonical-result-code contract (kebab codes + hint + the unknown-action /
 missing-params pre-gate) is locked in tests/test_ability_browser_tool_result.py.
 """
 
+from typing import cast
+
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -33,28 +35,28 @@ def _browse_mp() -> MessageProcessor:
     return mp
 
 
-def _dispatch(params: dict) -> str:
+def _dispatch(params: dict[str, object]) -> str:
     return ToolDispatcher(_browse_mp()).dispatch("browser", params)
 
 
-def test_schema_is_nine_flat_verbs():
+def test_schema_is_nine_flat_verbs() -> None:
     schema = BrowserAbility(mp=None).get_input_schema()
-    params = schema["input_schema"]
-    assert params["properties"]["action"]["enum"] == _VERBS
+    params = cast("dict[str, object]", schema["input_schema"])
+    assert cast("dict[str, object]", cast("dict[str, object]", params["properties"])["action"])["enum"] == _VERBS
     # 7 model-facing params + the framework act_summary — nothing else.
-    assert set(params["properties"]) == {
+    assert set(cast("dict[str, object]", params["properties"])) == {
         "action", "url", "target", "value", "query", "section", "direction", "act_summary",
     }
-    assert params["required"] == ["action", "act_summary"]
+    assert cast("list[str]", params["required"]) == ["action", "act_summary"]
 
 
-def test_ssrf_guard_blocks_private_urls_before_any_browser_work():
+def test_ssrf_guard_blocks_private_urls_before_any_browser_work() -> None:
     rendered = _dispatch({"action": "open", "url": "http://127.0.0.1:9/admin"})
     assert rendered.startswith("[browser(status=error, code=url-blocked"), rendered
     assert "URL blocked" in rendered, rendered
 
 
-def test_verbs_demand_an_open_page_first():
+def test_verbs_demand_an_open_page_first() -> None:
     """No session for this key → mechanical guidance, no browser launch."""
     rendered = _dispatch({"action": "click", "target": "Sign in"})
     assert "status=error" in rendered.splitlines()[0], rendered

@@ -22,6 +22,9 @@ flags ``mp.uid`` is ``None`` and the prompt stays constant — both assertions b
 fail. With the fix the delegate sees its own work and can converge.
 """
 
+import sqlite3
+from collections.abc import Callable
+
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -50,7 +53,13 @@ def _delegate_mp(config: ProcessorConfig) -> MessageProcessor:
 
 
 @pytest.mark.parametrize("config_cls,channel,role,prefix", _DELEGATES)
-def test_delegate_sees_its_own_act_trail(db, config_cls, channel, role, prefix):
+def test_delegate_sees_its_own_act_trail(
+    db: sqlite3.Connection,
+    config_cls: Callable[[ProcessorConfig.PolicyChannel], ProcessorConfig],
+    channel: str,
+    role: str,
+    prefix: str,
+) -> None:
     mp = _delegate_mp(config_cls(_CHAT))
 
     # ── Fix part 1: _setup assigned a uid and wrote the delegate's OWN

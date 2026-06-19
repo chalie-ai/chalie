@@ -17,6 +17,9 @@ from collecting it as a test module while ``test_param_key_resilience`` imports 
 
 from __future__ import annotations
 
+from typing import cast
+
+from abilities._ability import Ability
 from abilities._params import VARIANTS, KeyNormalizer, Keys
 
 # The two keys the framework injects into / strips from every call (see
@@ -58,7 +61,7 @@ class RegistryInvariant:
             if not k.startswith("_") and isinstance(v, str)
         )
 
-    def check_no_overlaps(self, abilities: "list") -> None:
+    def check_no_overlaps(self, abilities: "list[Ability]") -> None:
         """Raises :class:`RegistryOverlapError` listing ALL violations found (not
         just the first), so one run surfaces the entire registry state.
         """
@@ -70,7 +73,7 @@ class RegistryInvariant:
         for ability in abilities:
             name = ability.get_name()
             try:
-                properties = (ability.get_parameters() or {}).get("properties") or {}
+                properties = cast(dict[str, object], (ability.get_parameters() or {}).get("properties") or {})
             except Exception as exc:  # noqa: BLE001
                 problems.append(f"{name}: get_parameters() raised {exc!r}")
                 continue

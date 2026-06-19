@@ -13,6 +13,7 @@ per-turn budget cap loud path.
 """
 
 import json
+import sqlite3
 
 import pytest
 
@@ -29,11 +30,11 @@ pytestmark = pytest.mark.unit
 # ── Fixtures / helpers ──────────────────────────────────────────────────────────
 
 
-def _seed_transcript(db) -> int:
+def _seed_transcript(db: sqlite3.Connection) -> int:
     return seed_transcript(db, channel="pattern_match", content="remember a fact")
 
 
-def _mp(db) -> MessageProcessor:
+def _mp(db: sqlite3.Connection) -> MessageProcessor:
     mp = MessageProcessor("remember a fact")
     mp.config = PatternConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])
@@ -50,19 +51,20 @@ def _body(rendered: str) -> str:
     return body(rendered, "save_graph")
 
 
-def _rows(db, *, kind=None, key=None, source="pattern_match") -> list:
+def _rows(db: sqlite3.Connection, *, kind: str | None = None, key: str | None = None, source: str = "pattern_match") -> list[object]:
+    from typing import cast
     sql = "SELECT id, kind, key, value, source FROM data_graph WHERE source=?"
-    params: list = [source]
+    params: list[str] = [source]
     if kind is not None:
         sql += " AND kind=?"
         params.append(kind)
     if key is not None:
         sql += " AND key=?"
         params.append(key)
-    return db.execute(sql, params).fetchall()
+    return cast("list[object]", db.execute(sql, params).fetchall())
 
 
-def _geo_mp(db) -> MessageProcessor:
+def _geo_mp(db: sqlite3.Connection) -> MessageProcessor:
     """A real MessageProcessor on the GEO config — the other background pass that
     reaches save_graph. GeoConfig.get_user_prompt lazily inits the same
     per-instance budget/dedupe state PatternConfig does, so we drive it once to
@@ -78,7 +80,7 @@ def _geo_mp(db) -> MessageProcessor:
 # ── whitespace-only key slips the truthiness pre-gate → run() rejects it ────────
 
 
-def test_whitespace_only_key_is_missing_params(db):
+def test_whitespace_only_key_is_missing_params(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch(
         "save_graph",
@@ -93,7 +95,7 @@ def test_whitespace_only_key_is_missing_params(db):
 # ── happy path → success, body {"saved":1,...}, real row with source ────────────
 
 
-def test_happy_path_stores_one_row(db):
+def test_happy_path_stores_one_row(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch(
         "save_graph",
@@ -103,15 +105,16 @@ def test_happy_path_stores_one_row(db):
     assert "status=success" in h
     b = json.loads(_body(out))
     assert b == {"saved": 1, "kind": "misc", "key": "fav_drink"}
+    from typing import cast
     rows = _rows(db, kind="misc", key="fav_drink")
     assert len(rows) == 1
-    assert rows[0][4] == "pattern_match"
+    assert cast("tuple[object, ...]", rows[0])[4] == "pattern_match"
 
 
 # ── geo pass → same row, provenance stamped 'geo_pattern' not 'pattern_match' ───
 
 
-def test_geo_pass_stamps_geo_pattern_provenance(db):
+def test_geo_pass_stamps_geo_pattern_provenance(db: sqlite3.Connection) -> None:
     """When save_graph runs under the GEO pass (GeoConfig), the stored fact's
     provenance must be 'geo_pattern', not the pattern pass's 'pattern_match'.
 
@@ -137,7 +140,7 @@ def test_geo_pass_stamps_geo_pattern_provenance(db):
 # ── same fact twice in one mp → second is deduped, exactly one row ──────────────
 
 
-def test_same_fact_twice_dedupes(db):
+def test_same_fact_twice_dedupes(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     params = {"kind": "misc", "key": "fav_drink", "value": "espresso", "act_summary": "x"}
     first = ToolDispatcher(mp).dispatch("save_graph", dict(params))
@@ -156,7 +159,7 @@ def test_same_fact_twice_dedupes(db):
 # ── budget cap → capped=true success, body {"saved":0,"skipped":1}, no row ──────
 
 
-def test_budget_cap_is_loud_capped(db):
+def test_budget_cap_is_loud_capped(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     # Drive the real counter attribute straight to the cap — no mock.
     setattr(mp, SaveGraph.BUDGET_COUNTER_ATTR, SaveGraph.BUDGET_CAP)

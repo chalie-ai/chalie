@@ -9,6 +9,7 @@
 
 
 import sqlite3
+from typing import cast
 
 import pytest
 
@@ -23,7 +24,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> MP:
     return MP(seed_transcript(db, "chat", "search for something"), UserConfig({}))
 
 
@@ -38,7 +39,7 @@ def _configured_providers() -> set[str]:
 # ── The heart: a forced UNKNOWN provider errors loudly, never DDG-masked ───────
 
 
-def test_forced_unknown_provider_errors_not_silent_ddg(db, chat_mp):
+def test_forced_unknown_provider_errors_not_silent_ddg(db: sqlite3.Connection, chat_mp: MP) -> None:
     out = ToolDispatcher(chat_mp).dispatch(
         "search", {"query": "rust foundation", "provider": "kagi", "act_summary": "x"}
     )
@@ -54,10 +55,10 @@ def test_forced_unknown_provider_errors_not_silent_ddg(db, chat_mp):
 
     # The act-trail recorded the same loud error envelope against the transcript.
     trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert "[search(status=error, code=unknown-provider" in trail[0]["result"]
+    assert "[search(status=error, code=unknown-provider" in cast(str, trail[0]["result"])
 
 
-def test_unknown_provider_valid_ladder_is_the_real_registry(db, chat_mp):
+def test_unknown_provider_valid_ladder_is_the_real_registry(db: sqlite3.Connection, chat_mp: MP) -> None:
     out = ToolDispatcher(chat_mp).dispatch(
         "search", {"query": "anything", "provider": "stackoverflow", "act_summary": "x"}
     )
@@ -76,9 +77,9 @@ def test_unknown_provider_valid_ladder_is_the_real_registry(db, chat_mp):
 # ── Schema honesty: the enum the model reads names only real providers ─────────
 
 
-def test_schema_provider_enum_matches_real_registry(db):
+def test_schema_provider_enum_matches_real_registry(db: sqlite3.Connection) -> None:
     schema = SearchAbility(mp=None).get_parameters()
-    enum = set(schema["properties"]["provider"]["enum"])
+    enum = set(cast(list[object], cast(dict[str, object], cast(dict[str, object], schema["properties"])["provider"])["enum"]))
 
     expected = _configured_providers() | {"ddg"}
     assert enum == expected
@@ -90,7 +91,7 @@ def test_schema_provider_enum_matches_real_registry(db):
 # ── Blank query: slips the pre-gate, caught by search's own .strip() guard ─────
 
 
-def test_blank_query_reports_missing_params(db, chat_mp):
+def test_blank_query_reports_missing_params(db: sqlite3.Connection, chat_mp: MP) -> None:
     out = ToolDispatcher(chat_mp).dispatch(
         "search", {"query": "   ", "act_summary": "x"}
     )

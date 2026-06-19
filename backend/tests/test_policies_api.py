@@ -1,15 +1,20 @@
 import contextlib
 import sqlite3
+from collections.abc import Generator
+from typing import TYPE_CHECKING
 
 import pytest
 
 import api.policies as mod
 
+if TYPE_CHECKING:
+    from flask.testing import FlaskClient
+
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture()
-def client(monkeypatch):
+def client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
     from flask import Flask
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -25,9 +30,9 @@ def client(monkeypatch):
     conn.commit()
 
     class _FakeDB:
-        def connection(self):
+        def connection(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
             @contextlib.contextmanager
-            def _ctx(): yield conn
+            def _ctx() -> Generator[sqlite3.Connection, None, None]: yield conn
             return _ctx()
 
     monkeypatch.setattr("services.database_service.get_shared_db_service", lambda: _FakeDB())
@@ -41,7 +46,7 @@ def client(monkeypatch):
     return app.test_client()
 
 
-def test_get_returns_flat_rows_excluding_internal(client):
+def test_get_returns_flat_rows_excluding_internal(client: "FlaskClient") -> None:
     r = client.get("/api/policies")
     assert r.status_code == 200
     rows = r.get_json()["policies"]
@@ -54,13 +59,13 @@ def test_get_returns_flat_rows_excluding_internal(client):
     assert all(x["setting"] != "internal" for x in rows)
 
 
-def test_put_single_upsert(client):
+def test_put_single_upsert(client: "FlaskClient") -> None:
     r = client.put("/api/policies", json={"channel": "chat", "permission": "email.send", "setting": "deny"})
     assert r.status_code == 200 and r.get_json()["updated"] == 1
 
 
 @pytest.fixture()
-def mcp_client(monkeypatch):
+def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
     from flask import Flask
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
@@ -78,9 +83,9 @@ def mcp_client(monkeypatch):
     conn.commit()
 
     class _FakeDB:
-        def connection(self):
+        def connection(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
             @contextlib.contextmanager
-            def _ctx(): yield conn
+            def _ctx() -> Generator[sqlite3.Connection, None, None]: yield conn
             return _ctx()
 
     monkeypatch.setattr("services.database_service.get_shared_db_service", lambda: _FakeDB())
@@ -94,7 +99,7 @@ def mcp_client(monkeypatch):
     return app.test_client()
 
 
-def test_get_groups_and_humanizes_mcp_rows(mcp_client):
+def test_get_groups_and_humanizes_mcp_rows(mcp_client: "FlaskClient") -> None:
     from services.database_service import get_shared_db_service
     from services.mcp_client_service import McpClientService
     from services.policy_manager import PolicyManager

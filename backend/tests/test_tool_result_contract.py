@@ -23,7 +23,10 @@
     NOT (the entire card path is gated on user broadcast).
 """
 
+import sqlite3
 import threading
+from collections.abc import Iterator
+from typing import cast
 
 import pytest
 
@@ -42,7 +45,7 @@ class _MP:
     processor: ``config`` (policy channel + emitter gate + broadcast_to) and
     ``uid`` (the transcript anchor the trail records against)."""
 
-    def __init__(self, uid: int, config) -> None:
+    def __init__(self, uid: int, config: object) -> None:
         self.config = config
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
@@ -56,59 +59,59 @@ class _MP:
 
 
 class _BadDictAbility(Ability):
-    def get_name(self): return "_tr_baddict"
-    def get_summary(self): return "throwaway: returns a legacy dict"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-    def run(self, params): return {"status": "ok", "text": "legacy"}
+    def get_name(self) -> str: return "_tr_baddict"
+    def get_summary(self) -> str: return "throwaway: returns a legacy dict"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+    def run(self, params: dict[str, object]) -> ToolResult: return cast(ToolResult, {"status": "ok", "text": "legacy"})
 
 
 class _BadStrAbility(Ability):
-    def get_name(self): return "_tr_badstr"
-    def get_summary(self): return "throwaway: returns a plain str"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-    def run(self, params): return "just a string"
+    def get_name(self) -> str: return "_tr_badstr"
+    def get_summary(self) -> str: return "throwaway: returns a plain str"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+    def run(self, params: dict[str, object]) -> ToolResult: return cast(ToolResult, "just a string")
 
 
 class _BadNoneAbility(Ability):
-    def get_name(self): return "_tr_badnone"
-    def get_summary(self): return "throwaway: returns None"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-    def run(self, params): return None
+    def get_name(self) -> str: return "_tr_badnone"
+    def get_summary(self) -> str: return "throwaway: returns None"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+    def run(self, params: dict[str, object]) -> ToolResult: return cast(ToolResult, None)
 
 
 class _OkDictAbility(Ability):
-    def get_name(self): return "_tr_okdict"
-    def get_summary(self): return "throwaway: ok with dict body + meta"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-    def run(self, params):
+    def get_name(self) -> str: return "_tr_okdict"
+    def get_summary(self) -> str: return "throwaway: ok with dict body + meta"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+    def run(self, params: dict[str, object]) -> ToolResult:
         return ToolResult.ok({"location": "London", "temp_c": 18}, count=1)
 
 
 class _OkStrAbility(Ability):
-    def get_name(self): return "_tr_okstr"
-    def get_summary(self): return "throwaway: ok with prose body"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-    def run(self, params):
+    def get_name(self) -> str: return "_tr_okstr"
+    def get_summary(self) -> str: return "throwaway: ok with prose body"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+    def run(self, params: dict[str, object]) -> ToolResult:
         return ToolResult.ok("plain prose verbatim")
 
 
 class _ErrAbility(Ability):
-    def get_name(self): return "_tr_err"
-    def get_summary(self): return "throwaway: err with code/hint/valid"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-    def run(self, params):
+    def get_name(self) -> str: return "_tr_err"
+    def get_summary(self) -> str: return "throwaway: err with code/hint/valid"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+    def run(self, params: dict[str, object]) -> ToolResult:
         return ToolResult.err(
             "dtstart '2026-13-40' is not a valid datetime.",
             code="invalid-param",
@@ -120,21 +123,21 @@ class _ErrAbility(Ability):
 class _ActionMapAbility(Ability):
     ACTION_REQUIRED = {"create": ("name", "value"), "delete": ("id",)}
 
-    def get_name(self): return "_tr_actionmap"
-    def get_summary(self): return "throwaway: ACTION_REQUIRED pre-validation"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-    def run(self, params):
+    def get_name(self) -> str: return "_tr_actionmap"
+    def get_summary(self) -> str: return "throwaway: ACTION_REQUIRED pre-validation"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+    def run(self, params: dict[str, object]) -> ToolResult:
         return ToolResult.ok("ran")
 
 
 class _ParamAbility(Ability):
-    def get_name(self): return "_tr_param"
-    def get_summary(self): return "throwaway: exercises Ability.param"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self):
+    def get_name(self) -> str: return "_tr_param"
+    def get_summary(self) -> str: return "throwaway: exercises Ability.param"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]:
         # Declares the canonical 'source'; the seam (KeyHealer.heal) heals the
         # model's 'url'/'path' onto it via the shared VARIANTS[source] ladder BEFORE
         # run() — param() itself no longer carries a per-tool alias list.
@@ -147,7 +150,7 @@ class _ParamAbility(Ability):
             },
             "required": ["source"],
         }
-    def run(self, params):
+    def run(self, params: dict[str, object]) -> ToolResult:
         source = self.param(params, "source", required=True)
         limit = self.param(params, "limit", default=10, clamp=(1, 100))
         mode = self.param(params, "mode", default="fast", choices=("fast", "slow"))
@@ -155,12 +158,12 @@ class _ParamAbility(Ability):
 
 
 class _RichAbility(Ability):
-    def get_name(self): return "_tr_rich"
-    def get_summary(self): return "throwaway: sets rich payload"
-    def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-    def get_search_tooltip(self): return "x"
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
-    def run(self, params):
+    def get_name(self) -> str: return "_tr_rich"
+    def get_summary(self) -> str: return "throwaway: sets rich payload"
+    def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+    def get_search_tooltip(self) -> str: return "x"
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
+    def run(self, params: dict[str, object]) -> ToolResult:
         # Mirrors the production exemplar (weather.py): the rich card payload IS
         # the structured body — on a user turn the renderer surfaces that payload
         # as the card head, then the span instruction trailer.
@@ -179,7 +182,7 @@ _THROWAWAY_TOOLS = (
 
 
 @pytest.fixture
-def registered(db):
+def registered(db: sqlite3.Connection) -> Iterator[None]:
     """Rebuild the registry so it picks up the throwaway abilities defined in
     this module (they self-register as Ability subclasses), then reset it again
     so the live registry is left exactly as found.
@@ -209,7 +212,7 @@ def registered(db):
 # ── (a) hard-fail chokepoint: legacy dict / str / None → non-canonical-result ──
 
 @pytest.mark.parametrize("tool", ["_tr_baddict", "_tr_badstr", "_tr_badnone"])
-def test_non_toolresult_return_hard_fails(db, registered, tool):
+def test_non_toolresult_return_hard_fails(db: sqlite3.Connection, registered: None, tool: str) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch(tool, {})
     assert out.startswith(f"[{tool}(status=error, code=non-canonical-result")
@@ -217,12 +220,12 @@ def test_non_toolresult_return_hard_fails(db, registered, tool):
     assert out.rstrip().endswith(f"[end:{tool}]")
     # The act-trail recorded the same hard-fail envelope (ok flag is False).
     rows = ActTrail().fetch_by_transcript_id(mp.uid)
-    assert "non-canonical-result" in rows[0]["result"]
+    assert "non-canonical-result" in cast(str, rows[0]["result"])
 
 
 # ── (b) success render: dict body → compact JSON envelope; str body verbatim ──
 
-def test_ok_dict_body_renders_compact_json_with_meta(db, registered):
+def test_ok_dict_body_renders_compact_json_with_meta(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_okdict", {})
     assert out == (
@@ -232,7 +235,7 @@ def test_ok_dict_body_renders_compact_json_with_meta(db, registered):
     )
 
 
-def test_ok_str_body_renders_verbatim(db, registered):
+def test_ok_str_body_renders_verbatim(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_okstr", {})
     assert out == (
@@ -244,7 +247,7 @@ def test_ok_str_body_renders_verbatim(db, registered):
 
 # ── (c) error render with code/hint/valid lines ──────────────────────────────
 
-def test_err_render_carries_code_hint_valid(db, registered):
+def test_err_render_carries_code_hint_valid(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_err", {})
     assert out == (
@@ -258,7 +261,7 @@ def test_err_render_carries_code_hint_valid(db, registered):
 
 # ── (d) ACTION_REQUIRED pre-validation ───────────────────────────────────────
 
-def test_action_required_unknown_action_lists_valid(db, registered):
+def test_action_required_unknown_action_lists_valid(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_actionmap", {"action": "bogus"})
     assert "status=error" in out
@@ -266,7 +269,7 @@ def test_action_required_unknown_action_lists_valid(db, registered):
     assert "valid: create | delete" in out
 
 
-def test_action_required_missing_params_reported_in_one_error(db, registered):
+def test_action_required_missing_params_reported_in_one_error(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_actionmap", {"action": "create"})
     assert "code=missing-params" in out
@@ -276,7 +279,7 @@ def test_action_required_missing_params_reported_in_one_error(db, registered):
 
 # ── (e) seam-healed alias + Ability.param choices / clamp through the chokepoint ─
 
-def test_param_alias_clamp_choice_happy_path(db, registered):
+def test_param_alias_clamp_choice_happy_path(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_param", {"url": "x", "limit": 999})
     # seam heals url→source; limit clamped 999→100; mode default 'fast'.
@@ -285,14 +288,14 @@ def test_param_alias_clamp_choice_happy_path(db, registered):
     assert '"mode":"fast"' in out
 
 
-def test_param_required_missing_raises_canonical_error(db, registered):
+def test_param_required_missing_raises_canonical_error(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_param", {})
     assert "status=error" in out
     assert "code=invalid-param" in out
 
 
-def test_param_bad_choice_raises_canonical_error(db, registered):
+def test_param_bad_choice_raises_canonical_error(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_param", {"url": "x", "mode": "warp"})
     assert "status=error" in out
@@ -301,7 +304,7 @@ def test_param_bad_choice_raises_canonical_error(db, registered):
 
 # ── (f) rich exemplar: ordinal + card instruction on user; absent off-user ────
 
-def test_rich_payload_injected_on_user_broadcast(db, registered):
+def test_rich_payload_injected_on_user_broadcast(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "user"), UserConfig())
     out = ToolDispatcher(mp).dispatch("_tr_rich", {})
     # The rich block round-trips: JSON head, blank line, then the card
@@ -310,7 +313,7 @@ def test_rich_payload_injected_on_user_broadcast(db, registered):
     assert "<span id='_tr_rich_1'>" in out
 
 
-def test_rich_payload_absent_on_non_user_broadcast(db, registered):
+def test_rich_payload_absent_on_non_user_broadcast(db: sqlite3.Connection, registered: None) -> None:
     mp = _MP(_seed_transcript(db, "dmn"), DmnConfig())
     out = ToolDispatcher(mp).dispatch("_tr_rich", {})
     assert "_tr_rich_1" not in out

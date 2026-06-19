@@ -11,6 +11,9 @@ with zero mocks: read-guard, empty-contents handling, and structured
 success/error bodies."""
 
 import os
+import sqlite3
+from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -25,14 +28,14 @@ pytestmark = pytest.mark.unit
 
 class _MP:
 
-    def __init__(self, uid: int, config) -> None:
+    def __init__(self, uid: int, config: object) -> None:
         self.config = config
         self.uid = uid
         self._uid = uid
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> _MP:
     allow_policy(db, "file_write")
     return _MP(seed_transcript(db, "chat", "save this to a file"), UserConfig({}))
 
@@ -45,7 +48,7 @@ def _parse_body(rendered: str) -> object:
 
 
 
-def test_empty_contents_writes_zero_byte_file(db, chat_mp, tmp_path):
+def test_empty_contents_writes_zero_byte_file(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     target = tmp_path / "empty.txt"
 
     out = ToolDispatcher(chat_mp).dispatch(
@@ -53,7 +56,7 @@ def test_empty_contents_writes_zero_byte_file(db, chat_mp, tmp_path):
     )
 
     assert "[file_write(status=success" in out
-    body = _parse_body(out)
+    body = cast("dict[str, object]", _parse_body(out))
     assert body["bytes"] == 0
     assert body["created"] is True
     assert body["path"] == str(target.resolve())
@@ -65,7 +68,7 @@ def test_empty_contents_writes_zero_byte_file(db, chat_mp, tmp_path):
 # ── 2. happy-path new file → created=true, bytes==len, content round-trips ──────
 
 
-def test_new_file_written_and_round_trips(db, chat_mp, tmp_path):
+def test_new_file_written_and_round_trips(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     target = tmp_path / "sub" / "note.txt"
     text = "hello chalie line one\nand a second line"
 
@@ -74,7 +77,7 @@ def test_new_file_written_and_round_trips(db, chat_mp, tmp_path):
     )
 
     assert "[file_write(status=success" in out
-    body = _parse_body(out)
+    body = cast("dict[str, object]", _parse_body(out))
     assert body["created"] is True
     assert body["bytes"] == len(text.encode("utf-8"))
     assert target.read_text(encoding="utf-8") == text
@@ -83,7 +86,7 @@ def test_new_file_written_and_round_trips(db, chat_mp, tmp_path):
 # ── 3. overwrite WITH a prior read → success, created=false ─────────────────────
 
 
-def test_overwrite_with_prior_read_succeeds(db, chat_mp, tmp_path):
+def test_overwrite_with_prior_read_succeeds(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     """An existing file plus a prior ``read`` call on the same resolved path in
     the transcript clears the read-guard: the write succeeds with
     ``created=false``.
@@ -109,7 +112,7 @@ def test_overwrite_with_prior_read_succeeds(db, chat_mp, tmp_path):
     )
 
     assert "[file_write(status=success" in out
-    body = _parse_body(out)
+    body = cast("dict[str, object]", _parse_body(out))
     assert body["created"] is False
     assert target.read_text(encoding="utf-8") == "new content"
 
@@ -117,7 +120,7 @@ def test_overwrite_with_prior_read_succeeds(db, chat_mp, tmp_path):
 # ── 4. overwrite WITHOUT a prior read → read-required, file UNCHANGED ────────────
 
 
-def test_overwrite_without_prior_read_is_read_required(db, chat_mp, tmp_path):
+def test_overwrite_without_prior_read_is_read_required(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     """Overwriting an existing file with NO prior ``read`` on the path is
     ``code=read-required`` (not a ``status=success`` prose body) and leaves the
     file content untouched on disk."""
@@ -137,7 +140,7 @@ def test_overwrite_without_prior_read_is_read_required(db, chat_mp, tmp_path):
 # ── 5. missing contents key (from run(), not the pre-gate) → missing-params ─────
 
 
-def test_missing_contents_key_is_missing_params(db, chat_mp, tmp_path):
+def test_missing_contents_key_is_missing_params(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     """A MISSING ``contents`` key (not pre-gated, since an empty string is valid)
     is guarded by run() as ``code=missing-params`` — not a success body."""
     target = tmp_path / "x.txt"
@@ -152,7 +155,7 @@ def test_missing_contents_key_is_missing_params(db, chat_mp, tmp_path):
 # ── 6. relative path → invalid-path ─────────────────────────────────────────────
 
 
-def test_relative_path_is_invalid_path(db, chat_mp):
+def test_relative_path_is_invalid_path(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """A non-absolute path errors ``code=invalid-path`` — the tool requires an
     absolute path, not a success body."""
     out = ToolDispatcher(chat_mp).dispatch(
@@ -170,7 +173,7 @@ def test_relative_path_is_invalid_path(db, chat_mp):
     hasattr(os, "geteuid") and os.geteuid() == 0,
     reason="root bypasses unix file permissions, so the chmod 0o500 dir is writable",
 )
-def test_permission_denied_into_readonly_dir(db, chat_mp, tmp_path):
+def test_permission_denied_into_readonly_dir(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     locked = tmp_path / "locked"
     locked.mkdir()
     locked.chmod(0o500)

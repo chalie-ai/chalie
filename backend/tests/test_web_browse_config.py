@@ -1,4 +1,6 @@
 
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -12,7 +14,7 @@ pytestmark = pytest.mark.unit
 _CHAT = ProcessorConfig.PolicyChannel.CHAT
 
 
-def _mp():
+def _mp() -> MessageProcessor:
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "find the cheapest flight to Malta", {})
     mp.config = WebBrowseConfig(_CHAT)
@@ -20,7 +22,7 @@ def _mp():
     return mp
 
 
-def test_config_contract():
+def test_config_contract() -> None:
     cfg = WebBrowseConfig(_CHAT)
     assert cfg.max_iterations == 200
     assert set(cfg.always_available) == {"browser", "read", "vision", "memory"}
@@ -30,61 +32,61 @@ def test_config_contract():
     assert cfg.skip_input_row is False
     assert cfg.suppress_history is True
     assert len(cfg.post_turn_hooks) == 1
-    assert "STOP RULE" in cfg.get_system_prompt(None)
+    assert "STOP RULE" in cfg.get_system_prompt(cast("MessageProcessor", None))
 
 
-def test_screenshot_ledger_pins_doc_ids_into_every_prompt(db):
+def test_screenshot_ledger_pins_doc_ids_into_every_prompt(db: sqlite3.Connection) -> None:
     mp = _mp()
     before = mp.config.get_user_prompt(mp)
     assert before.startswith("Browsing goal:")
     assert "doc_id" not in before
 
-    record_screenshot(mp.uid, "ab12cd34", "https://example.com/checkout")
+    record_screenshot(cast(int, mp.uid), "ab12cd34", "https://example.com/checkout")
     after = mp.config.get_user_prompt(mp)
     assert "ab12cd34" in after
     assert "https://example.com/checkout" in after
     assert "vision" in after  # the line teaches the follow-up tool
 
-    close_session(mp.uid)  # the post-turn hook's call — ledger gone
+    close_session(cast(int, mp.uid))  # the post-turn hook's call — ledger gone
     assert "ab12cd34" not in mp.config.get_user_prompt(mp)
 
 
-def test_post_turn_hook_clears_the_ledger(db):
+def test_post_turn_hook_clears_the_ledger(db: sqlite3.Connection) -> None:
     mp = _mp()
-    record_screenshot(mp.uid, "ff00ff00", "https://example.com")
+    record_screenshot(cast(int, mp.uid), "ff00ff00", "https://example.com")
     hook = mp.config.post_turn_hooks[0]
     hook.run(mp, "final answer")
     assert "ff00ff00" not in mp.config.get_user_prompt(mp)
 
 
-def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db):
+def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db: sqlite3.Connection) -> None:
     from abilities._delegate import delegate_result
     from abilities.web_browse import WebBrowseAbility
 
     mp = _mp()
-    record_screenshot(mp.uid, "ab12cd34", "https://example.com")
-    mp.config.post_turn_hooks[0].run(mp, "final answer")
+    record_screenshot(cast(int, mp.uid), "ab12cd34", "https://example.com")
+    cast(WebBrowseConfig, mp.config).post_turn_hooks[0].run(mp, "final answer")
 
     # Stash survives the pop; the live ledger is gone.
-    assert mp.config.final_screenshots() == [("ab12cd34", "https://example.com")]
-    assert "ab12cd34" not in mp.config.get_user_prompt(mp)
+    assert cast(WebBrowseConfig, mp.config).final_screenshots() == [("ab12cd34", "https://example.com")]
+    assert "ab12cd34" not in cast(WebBrowseConfig, mp.config).get_user_prompt(mp)
 
     # The exact result the outer model receives from run().
     tr = WebBrowseAbility._with_screenshots(
         delegate_result("The page shows Example Domain.", hint="retry"),
-        mp.config.final_screenshots(),
+        cast(WebBrowseConfig, mp.config).final_screenshots(),
     )
     assert tr.status == "success"
-    assert "The page shows Example Domain." in tr.body
-    assert "doc_id=ab12cd34" in tr.body
-    assert "vision" in tr.body
+    assert "The page shows Example Domain." in cast(str, tr.body)
+    assert "doc_id=ab12cd34" in cast(str, tr.body)
+    assert "vision" in cast(str, tr.body)
     assert tr.meta == {"screenshots": 1}
 
     # A delegate that died without an answer keeps its canonical error shape —
     # no ledger lines grafted onto an err body.
     dead = WebBrowseAbility._with_screenshots(
-        delegate_result("", hint="retry"), mp.config.final_screenshots()
+        delegate_result("", hint="retry"), cast(WebBrowseConfig, mp.config).final_screenshots()
     )
     assert dead.status == "error"
     assert dead.code == "delegate-no-answer"
-    assert "ab12cd34" not in dead.body
+    assert "ab12cd34" not in cast(str, dead.body)

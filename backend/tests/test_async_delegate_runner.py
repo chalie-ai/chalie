@@ -18,10 +18,12 @@ without firing the real-LLM synthesis turn (that is QA-env / end-to-end-suite te
 
 import threading
 import time
+from typing import cast
 
 import pytest
 
 from abilities._ability import Ability
+from abilities._result import ToolResult
 from services.async_delegate_runner import AsyncDelegateRunner
 
 pytestmark = pytest.mark.unit
@@ -30,10 +32,10 @@ pytestmark = pytest.mark.unit
 class _GatedAbility(Ability):
     _SYNTHETIC = True
 
-    def get_name(self): return "test_runner_gated"
-    def get_search_tooltip(self): return "block until released — runner feature-test fixture"
-    def get_summary(self): return "Block until released — feature-test fixture only."
-    def get_examples(self): return [
+    def get_name(self) -> str: return "test_runner_gated"
+    def get_search_tooltip(self) -> str: return "block until released — runner feature-test fixture"
+    def get_summary(self) -> str: return "Block until released — feature-test fixture only."
+    def get_examples(self) -> list[str]: return [
         "block until released",
         "wait for the gate",
         "hold until signalled",
@@ -41,24 +43,24 @@ class _GatedAbility(Ability):
         "stay blocked",
         "wait then return",
     ]
-    def get_parameters(self): return {"type": "object", "properties": {}, "required": []}
+    def get_parameters(self) -> dict[str, object]: return {"type": "object", "properties": {}, "required": []}
 
-    def __init__(self, release: threading.Event, started: threading.Event, done: list):
+    def __init__(self, release: threading.Event, started: threading.Event, done: list[bool]) -> None:
         self._release = release
         self._started = started
         self._done = done
 
-    def run(self, params: dict) -> str:
+    def run(self, params: dict[str, object]) -> ToolResult:
         self._started.set()
         self._release.wait(timeout=5)
         self._done.append(True)
-        return "gated done"
+        return cast(ToolResult, "gated done")
 
 
-def test_spawn_is_non_blocking_registers_and_deregisters():
+def test_spawn_is_non_blocking_registers_and_deregisters() -> None:
     release = threading.Event()
     started = threading.Event()
-    done = []
+    done: list[bool] = []
     ability = _GatedAbility(release, started, done)
     ability.mp = object()  # delivery is skipped (cancelled below)
 
@@ -88,7 +90,7 @@ def test_spawn_is_non_blocking_registers_and_deregisters():
     assert done == [True]
 
 
-def test_cancel_unknown_id_returns_false():
+def test_cancel_unknown_id_returns_false() -> None:
     runner = AsyncDelegateRunner()
     assert runner.cancel("nope_12345678") is False
     assert runner.active_ids() == []

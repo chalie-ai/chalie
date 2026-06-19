@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from api.conversation import get_recent_history
@@ -6,7 +8,7 @@ from api.conversation import get_recent_history
 @pytest.mark.unit
 class TestChatHistory:
 
-    def test_boot_and_scroll(self, db):
+    def test_boot_and_scroll(self, db: sqlite3.Connection) -> None:
         for i in range(30):
             role = 'user' if i % 2 == 0 else 'assistant'
             db.execute(
@@ -32,7 +34,7 @@ class TestChatHistory:
         assert messages[0]["content"] == "Message 6"
         assert messages[-1]["content"] == "Message 17"
 
-    def test_subagent_return_role_hidden_from_recent_history(self, db):
+    def test_subagent_return_role_hidden_from_recent_history(self, db: sqlite3.Connection) -> None:
         """subagent_return rows must be hidden from user-visible chat history.
 
         Plan §Q-spec-1: 'subagent_return' role is internal async-delivery — only the

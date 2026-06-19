@@ -30,7 +30,7 @@ def _has_ttl(store: MemoryStore, key: str) -> bool:
 class TestIntentServiceQueueTTL:
     """After rpush to intents:{target}, expire(intents:{target}, _INTENT_TTL_SECONDS) must fire."""
 
-    def test_emit_sets_ttl_on_intents_list(self):
+    def test_emit_sets_ttl_on_intents_list(self) -> None:
         store = MemoryStore()
         from services.intent_service import IntentService, CognitiveIntent
 
@@ -46,7 +46,7 @@ class TestIntentServiceQueueTTL:
         list_key = "intents:wrapper-abc"
         assert _has_ttl(store, list_key), f"{list_key} must have a TTL after rpush"
 
-    def test_emit_broadcast_sets_ttl_on_broadcast_list(self):
+    def test_emit_broadcast_sets_ttl_on_broadcast_list(self) -> None:
         store = MemoryStore()
         from services.intent_service import IntentService, CognitiveIntent, _BROADCAST_KEY
 

@@ -10,6 +10,9 @@
 enum honesty, and the no-fabrication guarantee on a dead source.
 """
 
+import sqlite3
+from typing import cast
+
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -25,7 +28,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> MP:
     """A real chat-channel mp with a seeded transcript for act-trail verification."""
     return MP(
         seed_transcript(db, content="look up something in the docs"),
@@ -37,14 +40,14 @@ def _table_ids() -> set[str]:
     return {src.id for src in SOURCES}
 
 
-def _parse_body(rendered: str, tool: str = "programming_docs_search") -> object:
-    return parse_body(rendered, tool)
+def _parse_body(rendered: str, tool: str = "programming_docs_search") -> "dict[str, object]":
+    return cast("dict[str, object]", parse_body(rendered, tool))
 
 
 # ── Unknown source: errors loudly with the real-source ladder ──────────────────
 
 
-def test_unknown_source_errors_with_valid_ladder(db, chat_mp):
+def test_unknown_source_errors_with_valid_ladder(db: sqlite3.Connection, chat_mp: MP) -> None:
     """A language the table does not know returns a STABLE ``code=unknown-source``
     error whose ``valid:`` ladder lists the REAL source ids — so a weak model
     self-corrects without re-reading the schema. The mechanical ``code=error``
@@ -64,10 +67,10 @@ def test_unknown_source_errors_with_valid_ladder(db, chat_mp):
 
     # The act-trail recorded the same loud error envelope against the transcript.
     trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert "code=unknown-source" in trail[0]["result"]
+    assert "code=unknown-source" in cast(str, trail[0]["result"])
 
 
-def test_unknown_source_valid_ladder_is_the_real_table(db, chat_mp):
+def test_unknown_source_valid_ladder_is_the_real_table(db: sqlite3.Connection, chat_mp: MP) -> None:
     """The ``valid:`` ladder on an unknown-source error lists EXACTLY the real
     source ids from the production table — drives the guardrail against the live
     table, not a hardcoded list."""
@@ -84,13 +87,13 @@ def test_unknown_source_valid_ladder_is_the_real_table(db, chat_mp):
 # ── Schema honesty: the enum the model reads matches the table EXACTLY ──────────
 
 
-def test_schema_language_enum_matches_source_table(db):
+def test_schema_language_enum_matches_source_table(db: sqlite3.Connection) -> None:
     """The ``language`` enum advertised in ``get_parameters`` is EXACTLY the set
     of source ids (+ every alias) the table resolves — so a schema-obedient model
     can never name a language that the ability rejects as unknown. Pure
     introspection, no network."""
     schema = ProgrammingDocsSearchAbility(mp=None).get_parameters()
-    enum = set(schema["properties"]["language"]["enum"])
+    enum = set(cast("list[str]", cast("dict[str, object]", cast("dict[str, object]", schema["properties"])["language"])["enum"]))
 
     resolvable = set()
     for src in SOURCES:
@@ -104,7 +107,7 @@ def test_schema_language_enum_matches_source_table(db):
 # ── The heart: a dead source errors loudly and fabricates NOTHING ──────────────
 
 
-def test_dead_source_yields_source_unavailable_no_fabrication(db, chat_mp, monkeypatch):
+def test_dead_source_yields_source_unavailable_no_fabrication(db: sqlite3.Connection, chat_mp: MP, monkeypatch: pytest.MonkeyPatch) -> None:
     """A source whose host cannot be reached must produce a LOUD
     ``code=source-unavailable`` error — NOT a fabricated page presented as the
     answer. We configure a real table entry to yield no candidate and point its
@@ -137,4 +140,4 @@ def test_dead_source_yields_source_unavailable_no_fabrication(db, chat_mp, monke
 
     # The act-trail recorded the same loud error — the model sees a routable failure.
     trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert "code=source-unavailable" in trail[0]["result"]
+    assert "code=source-unavailable" in cast(str, trail[0]["result"])

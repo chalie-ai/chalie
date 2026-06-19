@@ -18,14 +18,24 @@ the raw error visible in the message.
 """
 
 import base64
+import hashlib
+import pathlib
+import sqlite3
 import threading
+from typing import cast
 
 import pytest
 
+from abilities._dispatcher import ToolDispatcher
+from abilities.vision import VisionAbility
+from configs.channels import UserConfig
 from services.database_service import get_shared_db_service
+from services.document_service import DocumentService
+from services.file_mapper_service import FileMapperService
 from services.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 from services.provider_db_service import ProviderDbService
+from tests._tool_result_harness import MP, body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -37,8 +47,6 @@ def _png_bytes() -> bytes:
 
 
 def _make_user_mp() -> MessageProcessor:
-    from configs.channels.user import UserConfig
-
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "x", {})
     mp.config = UserConfig()
@@ -50,7 +58,7 @@ def _make_user_mp() -> MessageProcessor:
     return mp
 
 
-def _force_vision_provider(db) -> int:
+def _force_vision_provider(db: sqlite3.Connection) -> int:
     svc = ProviderDbService(get_shared_db_service())
     provider = svc.create_provider(
         {
@@ -61,14 +69,14 @@ def _force_vision_provider(db) -> int:
             "api_key": "",
         }
     )
-    pid = provider["id"]
+    pid = cast(int, cast("dict[str, object]", provider)["id"])
     db.execute("UPDATE providers SET supports_vision = 1 WHERE id = ?", (pid,))
     db.commit()
     svc.set_vision_provider(pid)
     return pid
 
 
-def test_describe_image_no_vision_provider_falls_back_to_ocr(db, tmp_path):
+def test_describe_image_no_vision_provider_falls_back_to_ocr(db: sqlite3.Connection, tmp_path: pathlib.Path) -> None:
     from abilities.vision import describe_image
 
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
@@ -85,10 +93,10 @@ def test_describe_image_no_vision_provider_falls_back_to_ocr(db, tmp_path):
     assert out["vision_used"] is False
     assert "description" in out
     assert out["note"] is not None
-    assert "vision provider" in out["note"].lower()
+    assert "vision provider" in cast(str, out["note"]).lower()
 
 
-def test_describe_image_provider_path_surfaces_provider_error(db, tmp_path):
+def test_describe_image_provider_path_surfaces_provider_error(db: sqlite3.Connection, tmp_path: pathlib.Path) -> None:
     """Configured-but-unreachable vision provider: the provider error must NOT be
     swallowed. describe_image drives the real MessageProcessor.process, whose
     provider exception propagates — so describe_image RAISES."""
@@ -106,19 +114,13 @@ def test_describe_image_provider_path_surfaces_provider_error(db, tmp_path):
         )
 
 
-def test_vision_run_provider_error_returns_visible_error(db):
+def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection) -> None:
     """The styled-error surface: VisionAbility.run wraps describe_image's raise in
     its one allowed except and returns status='error' with the raw error visible
     — never a false success / empty string."""
-    from abilities.vision import VisionAbility
-    from services.document_service import DocumentService
-    from services.file_mapper_service import FileMapperService
-
     _force_vision_provider(db)
 
     # A real document row + a real on-disk image file the ability resolves.
-    import hashlib
-
     doc_svc = DocumentService(get_shared_db_service())
     doc_id = doc_svc.create_document(
         original_name="pic.png",
@@ -139,17 +141,15 @@ def test_vision_run_provider_error_returns_visible_error(db):
     assert result.body  # non-empty: the failure is visible, not swallowed
 
 
-def test_vision_run_unknown_doc_id_is_error(db):
-    from abilities.vision import VisionAbility
-
+def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
     ability = VisionAbility(mp=_make_user_mp())
     result = ability.run({"image": "deadbeef", "query": "x"})
 
     assert result.status == "error"
-    assert "deadbeef" in result.body
+    assert "deadbeef" in cast(str, result.body)
 
 
-def test_rich_index_prompt_mentions_searchable():
+def test_rich_index_prompt_mentions_searchable() -> None:
     from abilities.vision import RICH_INDEX_PROMPT
 
     assert "searchable" in RICH_INDEX_PROMPT
@@ -160,17 +160,9 @@ def test_rich_index_prompt_mentions_searchable():
 # Ability-specific business-logic tests for the ToolResult contract (TKT-915).
 # ===========================================================================
 
-import hashlib  # noqa: E402 — appended to existing file
-
-from abilities._dispatcher import ToolDispatcher  # noqa: E402
-from configs.channels import UserConfig  # noqa: E402
-from services.document_service import DocumentService  # noqa: E402
-from services.file_mapper_service import FileMapperService  # noqa: E402
-from tests._tool_result_harness import MP, body, head, seed_transcript  # noqa: E402
-
 
 @pytest.fixture
-def _vision_chat_mp(db):
+def _vision_chat_mp(db: sqlite3.Connection) -> MP:
     """A real chat-channel mp bound to the test database, with a seeded transcript
     anchor. Vision seeds ``allow`` on chat in the db template, so the real gate
     passes through to the production run()."""
@@ -185,7 +177,7 @@ def _vision_body(rendered: str) -> str:
     return body(rendered, "vision")
 
 
-def _real_image_doc_for_vision(db, rel_dir: str = "vis_tr001") -> str:
+def _real_image_doc_for_vision(db: sqlite3.Connection, rel_dir: str = "vis_tr001") -> str:
     """Create a real document row AND materialise a real PNG at the resolved
     documents path so the ability resolves a genuine file on disk."""
     png = _png_bytes()
@@ -204,7 +196,7 @@ def _real_image_doc_for_vision(db, rel_dir: str = "vis_tr001") -> str:
 
 
 @pytest.mark.unit
-def test_whitespace_only_image_is_missing_params(db, _vision_chat_mp):
+def test_whitespace_only_image_is_missing_params(db: sqlite3.Connection, _vision_chat_mp: MP) -> None:
     """A whitespace-only ``image`` slips the truthiness pre-gate and reaches run(),
     which rejects the stripped-empty doc id as ``code=missing-params``."""
     out = ToolDispatcher(_vision_chat_mp).dispatch(
@@ -219,7 +211,7 @@ def test_whitespace_only_image_is_missing_params(db, _vision_chat_mp):
 
 
 @pytest.mark.unit
-def test_doc_with_no_file_path_is_no_file_on_disk(db, _vision_chat_mp):
+def test_doc_with_no_file_path_is_no_file_on_disk(db: sqlite3.Connection, _vision_chat_mp: MP) -> None:
     """A real document row whose ``file_path`` is empty (no stored file) →
     ``code=no-file-on-disk`` with a recovery hint."""
     doc_id = "facefeed2"
@@ -243,7 +235,7 @@ def test_doc_with_no_file_path_is_no_file_on_disk(db, _vision_chat_mp):
 
 
 @pytest.mark.unit
-def test_ocr_fallback_success_is_degraded(db, _vision_chat_mp):
+def test_ocr_fallback_success_is_degraded(db: sqlite3.Connection, _vision_chat_mp: MP) -> None:
     """No vision provider configured → the OCR fallback returns ``ok`` BUT with
     ``degraded=true`` in the head, and the no-vision-provider note still rides the
     body verbatim."""

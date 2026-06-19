@@ -11,7 +11,7 @@ _CHANNELS = {"chat", "subconscious", "external_agent"}
 _SETTINGS = {"internal", "allow", "ask", "deny"}
 
 
-def test_seed_is_valid_and_carries_known_rows():
+def test_seed_is_valid_and_carries_known_rows() -> None:
     with open(FileMapperService.get_policy_defaults_path()) as f:
         rows = json.load(f)
 

@@ -12,11 +12,15 @@ request — and pin the slimmed prompt shape:
 """
 
 import re
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from abilities.chat_history_compactor import ChatHistoryCompactionConfig
 from abilities.tool_chain_compactor import ToolChainCompactionConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -32,8 +36,8 @@ def _ordered(haystack: str, needles: list[str]) -> bool:
     return True
 
 
-def test_history_compaction_prompt_contract():
-    prompt = ChatHistoryCompactionConfig().get_system_prompt(None)
+def test_history_compaction_prompt_contract() -> None:
+    prompt = ChatHistoryCompactionConfig().get_system_prompt(cast("MessageProcessor", None))
 
     # Materially shorter: the old body ran ~430 words because the keep-list
     # duplicated the section definitions. The approved rewrite is ~210 words.
@@ -60,8 +64,8 @@ def test_history_compaction_prompt_contract():
     assert "<summary>" not in prompt
 
 
-def test_trail_compaction_prompt_contract():
-    prompt = ToolChainCompactionConfig().get_system_prompt(None)
+def test_trail_compaction_prompt_contract() -> None:
+    prompt = ToolChainCompactionConfig().get_system_prompt(cast("MessageProcessor", None))
 
     # The trail rewrite changed structure, not size (the pre-rewrite body
     # measured 164 words; the rewrite is 148): guard against regrowth only.

@@ -9,16 +9,21 @@
 import contextlib
 import json
 import math
+import sqlite3
 import struct
 import threading
+from collections.abc import Callable, Generator
 from datetime import timedelta
+from typing import cast
 
 import pytest
 
+from services.database_service import DatabaseService
 from services.episodic_service import EpisodicService
 from services.llm_clients.base import ProviderClient
-from services.provider_api import ProviderApiResponse
+from services.provider_api import ProviderApiRequest, ProviderApiResponse
 from services.providers import Providers
+from services.subconscious_worker import SubconsciousWorker
 
 pytestmark = pytest.mark.unit
 
@@ -27,7 +32,7 @@ _DIM = 256  # conftest vec tables are 256-dim (suite convention)
 
 # ── 256-dim embedding helper (test_episodic_retrieval_service.py precedent) ─────
 
-def _unit(index: int, dim: int = _DIM) -> list:
+def _unit(index: int, dim: int = _DIM) -> list[float]:
     v = [0.0] * dim
     v[index] = 1.0
     return v
@@ -38,27 +43,27 @@ def _unit(index: int, dim: int = _DIM) -> list:
 class _FakeLLMService(ProviderClient):
     CONTENT_FIELD_LABEL = "message.content"
 
-    def __init__(self, send_fn):
+    def __init__(self, send_fn: Callable[[ProviderApiRequest], ProviderApiResponse]) -> None:
         self._send_fn = send_fn
 
     def get_context_limit(self) -> int:
         return 200_000
 
-    def estimate_request_tokens(self, dto) -> int:
+    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         return 1
 
-    def send(self, dto) -> ProviderApiResponse:
+    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         return self._send_fn(dto)
 
 
 @contextlib.contextmanager
-def _inject_fake_client(send_fn):
+def _inject_fake_client(send_fn: Callable[[ProviderApiRequest], ProviderApiResponse]) -> Generator[None, None, None]:
     original = Providers._resolve
-    Providers._resolve = lambda self, *_a, **_kw: _FakeLLMService(send_fn)
+    setattr(Providers, '_resolve', lambda self, *_a, **_kw: _FakeLLMService(send_fn))
     try:
         yield
     finally:
-        Providers._resolve = original
+        setattr(Providers, '_resolve', original)
 
 
 def _text_response(text: str) -> ProviderApiResponse:
@@ -67,7 +72,7 @@ def _text_response(text: str) -> ProviderApiResponse:
     )
 
 
-def _ops_response(ops: list) -> ProviderApiResponse:
+def _ops_response(ops: list[object]) -> ProviderApiResponse:
     return ProviderApiResponse(
         text=json.dumps({"ops": ops}), model="test-model", provider="mock",
         tool_calls=None,
@@ -76,12 +81,12 @@ def _ops_response(ops: list) -> ProviderApiResponse:
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
-def _db_service():
+def _db_service() -> DatabaseService:
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 
 
-def _seed_episode(db, gist, *, channel, emb_index=3, salience=8):
+def _seed_episode(db: sqlite3.Connection, gist: str, *, channel: str, emb_index: int = 3, salience: int = 8) -> str:
     es = EpisodicService(_db_service())
     return es.store_episode(
         {"gist": gist, "salience": salience, "channel": channel},
@@ -89,8 +94,7 @@ def _seed_episode(db, gist, *, channel, emb_index=3, salience=8):
     )
 
 
-def _worker():
-    from services.subconscious_worker import SubconsciousWorker
+def _worker() -> SubconsciousWorker:
     return SubconsciousWorker(tick_sec=10, idle_window_sec=60)
 
 
@@ -98,7 +102,7 @@ def _worker():
 # Cross-pollination recall (Decision 1 / §3.9)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _new_user_turn(text: str):
+def _new_user_turn(text: str) -> object:
     """A real UserConfig MessageProcessor positioned where the turn-0 seed fires —
     input row written (anchors the act-trail FK), config attached, tools seeded.
     Mirrors tests/test_turn0_flashback_continuation_gate.py:_new_turn."""
@@ -115,7 +119,7 @@ def _new_user_turn(text: str):
     return mp
 
 
-def test_user_turn_recall_cross_pollinates_across_producing_channels(db, store):
+def test_user_turn_recall_cross_pollinates_across_producing_channels(db: sqlite3.Connection, store: object) -> None:
     """A flashback recall on a USER turn must surface episodes stored from every
     episode-producing channel — user, dmn AND external-agent — because memory is
     one corpus that cross-pollinates (Decision 1). Before this change a user turn
@@ -136,7 +140,8 @@ def test_user_turn_recall_cross_pollinates_across_producing_channels(db, store):
     _seed_episode(db, "Agent noted the user's harbour cafe preference.",
                   channel="external-agent:bob", emb_index=6)
 
-    mp = _new_user_turn("what do you remember about the harbour")
+    from services.message_processor import MessageProcessor
+    mp = cast(MessageProcessor, _new_user_turn("what do you remember about the harbour"))
     episodes = TurnZeroFlashback(mp)._recall_episodes("harbour")
 
     channels = {ep.get("channel") for ep in episodes}
@@ -164,7 +169,7 @@ def test_user_turn_recall_cross_pollinates_across_producing_channels(db, store):
 # Fact-extraction per-source provenance (E, F)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _facts_for_value(db, value):
+def _facts_for_value(db: sqlite3.Connection, value: str) -> list[object]:
     """All data_graph fact rows carrying ``value`` with their source tag."""
     return db.execute(
         "SELECT key, value, source FROM data_graph "
@@ -173,7 +178,7 @@ def _facts_for_value(db, value):
     ).fetchall()
 
 
-def _episode_gist_from_dto(dto) -> str:
+def _episode_gist_from_dto(dto: ProviderApiRequest) -> str:
     """Isolate the CURRENT episode's gist from a fact-extraction request so the
     fake routes on the episode being processed — never on a recalled neighbour.
 
@@ -185,9 +190,9 @@ def _episode_gist_from_dto(dto) -> str:
     .get_user_prompt emits (the gist sits before the 'Most similar known facts:'
     header), keeping neighbours out of the routing decision.
     """
-    body_parts = []
+    body_parts: list[str] = []
     for m in dto.messages or []:
-        body_parts.append(m.get("content", "") if isinstance(m, dict) else str(m))
+        body_parts.append(cast(str, m.get("content", "")) if isinstance(m, dict) else str(m))
     body = "\n".join(body_parts)
     marker = "Episode:\n"
     if marker in body:
@@ -196,12 +201,12 @@ def _episode_gist_from_dto(dto) -> str:
     return body
 
 
-def test_fact_extraction_tags_provenance_with_origin_channel(db, store):
+def test_fact_extraction_tags_provenance_with_origin_channel(db: sqlite3.Connection, store: object) -> None:
     _seed_episode(db, "User lives in Valletta.", channel="user", emb_index=3)
     _seed_episode(db, "Reflection notes the user prefers Mdina above all.",
                   channel="dmn", emb_index=8)
 
-    def _send(dto):
+    def _send(dto: ProviderApiRequest) -> ProviderApiResponse:
         # Route on the current episode's gist only (neighbours excluded). The
         # user gist mentions "Valletta"; the dmn gist mentions "Mdina".
         gist = _episode_gist_from_dto(dto)
@@ -220,16 +225,16 @@ def test_fact_extraction_tags_provenance_with_origin_channel(db, store):
 
     user_fact = _facts_for_value(db, "Valletta")
     assert user_fact, "user episode's fact did not land in data_graph"
-    assert user_fact[0][2] == "fact_extraction:user", (
+    assert cast("tuple[object, object, str]", user_fact[0])[2] == "fact_extraction:user", (
         f"user-origin fact must carry channel-tagged 'fact_extraction:user' "
-        f"source, got {user_fact[0][2]!r}"
+        f"source, got {cast('tuple[object, object, str]', user_fact[0])[2]!r}"
     )
 
     dmn_fact = _facts_for_value(db, "Mdina")
     assert dmn_fact, "dmn episode's fact did not land in data_graph"
-    assert dmn_fact[0][2] == "fact_extraction:dmn", (
+    assert cast("tuple[object, object, str]", dmn_fact[0])[2] == "fact_extraction:dmn", (
         f"dmn-origin fact must carry channel-tagged 'fact_extraction:dmn' "
-        f"source, got {dmn_fact[0][2]!r}"
+        f"source, got {cast('tuple[object, object, str]', dmn_fact[0])[2]!r}"
     )
 
 
@@ -256,7 +261,7 @@ def _sqlite_vec_available() -> bool:
         return False
 
 
-def _super_episodes(db, channel):
+def _super_episodes(db: sqlite3.Connection, channel: str) -> list[object]:
     """Super-episodes (consolidated_from non-empty) currently in a channel."""
     return db.execute(
         "SELECT id, gist, consolidated_from, level FROM episodes "
@@ -275,13 +280,13 @@ def _super_episodes(db, channel):
 # This is the same seeding idiom test_super_episode_pipeline.py uses, kept
 # consistent across the two files.
 
-def _pack(floats: list) -> bytes:
+def _pack(floats: list[float]) -> bytes:
     """Pack a float list into a sqlite-vec binary blob."""
     return struct.pack(f"{len(floats)}f", *floats)
 
 
 def _topic_vec(axis: int, *, jitter_axis: int, jitter: float = 0.0,
-               dim: int = _DIM) -> list:
+               dim: int = _DIM) -> list[float]:
     """An L2-normalised vector dominated by one ``axis`` with a small component on
     a second ``jitter_axis``. Identical primary axes are mutually cosine ~1.0 (one
     tight topic); distinct axes are orthogonal (separated topics). The per-leaf
@@ -295,7 +300,7 @@ def _topic_vec(axis: int, *, jitter_axis: int, jitter: float = 0.0,
     return [x / norm for x in v]
 
 
-def _insert_embedding(db, episode_id: str, emb: list) -> None:
+def _insert_embedding(db: sqlite3.Connection, episode_id: str, emb: list[float]) -> None:
     """Insert an embedding blob into episodes_vec for ``episode_id``."""
     row = db.execute(
         "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
@@ -308,7 +313,7 @@ def _insert_embedding(db, episode_id: str, emb: list) -> None:
         db.commit()
 
 
-def _seed_apex_cluster(db, channel, *, count, axis, jitter_axis, salience=7):
+def _seed_apex_cluster(db: sqlite3.Connection, channel: str, *, count: int, axis: int, jitter_axis: int, salience: int = 7) -> list[str]:
     """Seed ``count`` apex leaves on one tight topic (shared primary ``axis``)
     via the PRODUCTION write path (EpisodicService.store_episode), then attach a
     256-d clusterable embedding directly to episodes_vec. Returns the leaf ids."""
@@ -327,17 +332,17 @@ def _seed_apex_cluster(db, channel, *, count, axis, jitter_axis, salience=7):
     return ids
 
 
-def _apex_leaf_count(db, channel):
+def _apex_leaf_count(db: sqlite3.Connection, channel: str) -> int:
     """Count apex level-0 leaves (consolidated_into IS NULL, not deleted)."""
-    return db.execute(
+    return cast(int, db.execute(
         "SELECT COUNT(*) FROM episodes "
         "WHERE channel=? AND consolidated_into IS NULL AND deleted_at IS NULL "
         "  AND level=0",
         (channel,),
-    ).fetchone()[0]
+    ).fetchone()[0])
 
 
-def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
+def test_consolidation_is_per_channel_and_skips_muted_sources(db: sqlite3.Connection, store: object) -> None:
     """``_step_consolidate`` must consolidate EACH episode-producing channel into
     its OWN super-episode(s) (channel-scoped, never pooled across channels), and
     must NEVER consolidate a muted channel even when it carries an apex cluster.
@@ -377,7 +382,7 @@ def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
         "external-agent:bob": (4, 5),
     }
     muted_channel = "delegate:research"
-    seeded_leaves: dict[str, set] = {}
+    seeded_leaves: dict[str, set[str]] = {}
 
     for channel, (axis_a, axis_b) in consolidating.items():
         a = _seed_apex_cluster(db, channel, count=25, axis=axis_a,
@@ -392,7 +397,7 @@ def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
     _seed_apex_cluster(db, muted_channel, count=25, axis=7, jitter_axis=207)
     assert _apex_leaf_count(db, muted_channel) == 50
 
-    def _send(_dto):
+    def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
         # The SuperEpisode encoder expects a JSON object carrying at least a
         # non-empty 'gist'; the worker overwrites 'channel'/'level' itself.
         return _text_response(json.dumps({
@@ -419,8 +424,8 @@ def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
             f"super-episode — the count-triggered roll-up did not run for it"
         )
 
-        super_ids = set()
-        for sid, _gist, cfrom_json, level in supers:
+        super_ids: set[str] = set()
+        for sid, _gist, cfrom_json, level in cast("list[tuple[str, object, str, int]]", supers):
             super_ids.add(sid)
             assert level == 1, (
                 f"channel {channel!r} super-episode must be stamped level=1 "
@@ -474,7 +479,7 @@ def test_consolidation_is_per_channel_and_skips_muted_sources(db, store):
 # Scheduled two-stage (Decision 2 / §4)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _join_threads(prefix, timeout=15.0):
+def _join_threads(prefix: str, timeout: float = 15.0) -> None:
     """Join every live background thread whose name starts with ``prefix``.
 
     Joining by name synchronises on the real production threads — no sleep, no
@@ -488,9 +493,9 @@ def _join_threads(prefix, timeout=15.0):
             t.join(timeout)
 
 
-def _transcript_rows(db, channel, role=None):
+def _transcript_rows(db: sqlite3.Connection, channel: str, role: str | None = None) -> list[str]:
     sql = "SELECT content FROM transcript WHERE channel=?"
-    params = [channel]
+    params: list[str] = [channel]
     if role is not None:
         sql += " AND role=?"
         params.append(role)
@@ -498,7 +503,7 @@ def _transcript_rows(db, channel, role=None):
     return [r[0] for r in db.execute(sql, params).fetchall()]
 
 
-def test_scheduled_poll_claims_item_then_surfaces_two_stage_on_user(db, store):
+def test_scheduled_poll_claims_item_then_surfaces_two_stage_on_user(db: sqlite3.Connection, store: object) -> None:
     """Driving the FULL scheduler poll path ``_poll_and_fire`` over a genuine due
     prompt row must:
 
@@ -541,7 +546,7 @@ def test_scheduled_poll_claims_item_then_surfaces_two_stage_on_user(db, store):
     )
     db.commit()
 
-    def _send(_dto):
+    def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
         # Both stages finish in one turn with a plain reply. Stage-1's text is the
         # scheduled result the Stage-2 user turn relays; Stage-2 echoes it back.
         return _text_response(result_text)

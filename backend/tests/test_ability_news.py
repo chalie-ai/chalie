@@ -7,9 +7,11 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 
-
 import hashlib
 import json
+import sqlite3
+from collections.abc import Generator
+from typing import cast
 
 import pytest
 
@@ -26,18 +28,18 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def user_mp(db):
+def user_mp(db: sqlite3.Connection) -> MP:
     return MP(seed_transcript(db, "chat", "what's in the news"), UserConfig({}))
 
 
 @pytest.fixture
-def dmn_mp(db):
+def dmn_mp(db: sqlite3.Connection) -> MP:
     return MP(seed_transcript(db, "subconscious", "what's in the news"), DmnConfig())
 
 
 
 @pytest.fixture(autouse=True)
-def _reset_news_service():
+def _reset_news_service() -> Generator[None, None, None]:
     NewsAbility._service = None
     yield
     NewsAbility._service = None
@@ -52,7 +54,7 @@ def _cache_key(query: str, country_code: str = "US") -> str:
     return f"news:google:{digest}"
 
 
-def _seed_google_cache(query: str, articles: list, country_code: str = "US") -> None:
+def _seed_google_cache(query: str, articles: list[NewsArticle], country_code: str = "US") -> None:
     """Seed the REAL shared store at the production cache key so a dispatch of
     ``news`` for *query* returns these articles through the genuine cache-hit branch."""
     store = MemoryClientService.create_connection()
@@ -66,7 +68,7 @@ def _seed_google_cache(query: str, articles: list, country_code: str = "US") -> 
 # ── Invalid category: rejected by the param helper, never silently degraded ────
 
 
-def test_invalid_category_rejected_with_valid_enum(db, user_mp):
+def test_invalid_category_rejected_with_valid_enum(db: sqlite3.Connection, user_mp: MP) -> None:
     """invalid category must be rejected as ``code=invalid-param`` — not silently
     fall back to an uncategorised search."""
     out = ToolDispatcher(user_mp).dispatch(
@@ -85,7 +87,7 @@ def test_invalid_category_rejected_with_valid_enum(db, user_mp):
 # ── Provider unreachable: loud error + hint, NEVER an empty success ────────────
 
 
-def test_dead_provider_is_provider_unreachable_not_empty_success(db, user_mp, monkeypatch):
+def test_dead_provider_is_provider_unreachable_not_empty_success(db: sqlite3.Connection, user_mp: MP, monkeypatch: pytest.MonkeyPatch) -> None:
     """dead provider must surface ``code=provider-unreachable`` with a recovery Hint — NEVER an empty success."""
     monkeypatch.setattr(news_service, "GOOGLE_NEWS_BASE", "http://127.0.0.1:9/rss/search")
 
@@ -104,13 +106,13 @@ def test_dead_provider_is_provider_unreachable_not_empty_success(db, user_mp, mo
     assert body.strip() not in ("[]", ""), body
 
     trail = ActTrail().fetch_by_transcript_id(user_mp.uid)
-    assert any("code=provider-unreachable" in row["result"] for row in trail), trail
+    assert any("code=provider-unreachable" in cast(str, row["result"]) for row in trail), trail
 
 
 # ── Happy path (offline, real cache-hit branch): structured rows + count ───────
 
 
-def _sample_articles() -> list:
+def _sample_articles() -> list[NewsArticle]:
     return [
         NewsArticle(
             title="EU opens first audits under the AI Act",
@@ -135,7 +137,7 @@ def _sample_articles() -> list:
     ]
 
 
-def test_happy_path_structured_rows_offline_via_cache(db, dmn_mp):
+def test_happy_path_structured_rows_offline_via_cache(db: sqlite3.Connection, dmn_mp: MP) -> None:
     """real cache-hit returns rich ``count=N`` envelope with rows of {title, source, url, published_at, snippet}."""
     query = "tkt904 happy path query"
     _seed_google_cache(query, _sample_articles())
@@ -164,7 +166,7 @@ def test_happy_path_structured_rows_offline_via_cache(db, dmn_mp):
     assert len(first["snippet"]) <= 200, len(first["snippet"])
 
 
-def test_happy_path_user_broadcast_renders_rich_card(db, user_mp):
+def test_happy_path_user_broadcast_renders_rich_card(db: sqlite3.Connection, user_mp: MP) -> None:
     """user-broadcast pairs a rich card: body is payload JSON + blank line + span instruction; card rows carry {title, url, snippet, source}."""
     query = "tkt904 broadcast query"
     _seed_google_cache(query, _sample_articles())
@@ -191,10 +193,10 @@ def test_happy_path_user_broadcast_renders_rich_card(db, user_mp):
 # ── Zero-articles success: a provider that ANSWERED with nothing ───────────────
 
 
-def test_zero_articles_is_success_with_empty_list(db, dmn_mp, monkeypatch):
+def test_zero_articles_is_success_with_empty_list(db: sqlite3.Connection, dmn_mp: MP, monkeypatch: pytest.MonkeyPatch) -> None:
     """answered provider returning zero articles is SUCCESS with ``count=0`` and an empty list — never an error."""
 
-    def _empty_answer(self, query, country_code="US", timeout=5.0):
+    def _empty_answer(self: NewsService, query: str, country_code: str = "US", timeout: float = 5.0) -> list[NewsArticle]:
         return []
 
     monkeypatch.setattr(NewsService, "fetch_google_news", _empty_answer)

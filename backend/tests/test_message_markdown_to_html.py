@@ -2,12 +2,15 @@
 Chalie's HTML subset on user-facing channels — background channel output (DMN,
 encoders, compaction) is not mangled."""
 
+import sqlite3
+
 import pytest
 from unittest.mock import patch
 
 from configs.channels import UserConfig
 from configs.channels.dmn import DmnConfig
 from services.message_processor import MessageProcessor
+from services.processor_config import ProcessorConfig
 from services.provider_api import ProviderApiResponse
 from services.transcript_service import get_recent, write_input_row
 
@@ -21,22 +24,22 @@ class _RecordingProvider:
 
     CONTENT_FIELD_LABEL = "message.content"
 
-    def __init__(self, response_text: str):
+    def __init__(self, response_text: str) -> None:
         self._response_text = response_text
-        self.sends = []
+        self.sends: list[object] = []
 
-    def get_context_limit(self):
+    def get_context_limit(self) -> int:
         return 200000
 
-    def estimate_request_tokens(self, dto):
+    def estimate_request_tokens(self, dto: object) -> int:
         return 1
 
-    def send(self, dto):
+    def send(self, dto: object) -> ProviderApiResponse:
         self.sends.append(dto)
         return ProviderApiResponse(text=self._response_text, model="recorder", tool_calls=None)
 
 
-def _build_mp(config, raw_input: str) -> MessageProcessor:
+def _build_mp(config: ProcessorConfig, raw_input: str) -> MessageProcessor:
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, raw_input, {})
     mp.config = config
@@ -48,7 +51,7 @@ def _build_mp(config, raw_input: str) -> MessageProcessor:
     return mp
 
 
-def test_user_channel_markdown_is_converted_to_html(db):
+def test_user_channel_markdown_is_converted_to_html(db: sqlite3.Connection) -> None:
     leaked = "**bold** then *italic* then _under_ then `code()`"
     expected = "<b>bold</b> then <i>italic</i> then <u>under</u> then <code>code()</code>"
 
@@ -71,7 +74,7 @@ def test_user_channel_markdown_is_converted_to_html(db):
     assert "`" not in content
 
 
-def test_dmn_channel_markdown_is_left_verbatim(db):
+def test_dmn_channel_markdown_is_left_verbatim(db: sqlite3.Connection) -> None:
     leaked = "**bold** and _under_ and `code`"
 
     recorder = _RecordingProvider(leaked)
@@ -93,7 +96,7 @@ def test_dmn_channel_markdown_is_left_verbatim(db):
     assert "<code>" not in content
 
 
-def test_inline_code_protects_emphasis_markers(db):
+def test_inline_code_protects_emphasis_markers(db: sqlite3.Connection) -> None:
     """Markers INSIDE an inline code span survive verbatim — only the span itself
     becomes ``<code>``."""
     leaked = "run `a_b * c` not **real**"
@@ -110,7 +113,7 @@ def test_inline_code_protects_emphasis_markers(db):
     assert content == expected
 
 
-def test_snake_case_identifiers_are_not_underlined(db):
+def test_snake_case_identifiers_are_not_underlined(db: sqlite3.Connection) -> None:
     """``_`` between word chars (identifiers like ``snake_case``) must NOT be
     treated as an underline marker — the response is left verbatim."""
     leaked = "the field user_id maps to write_input_row"

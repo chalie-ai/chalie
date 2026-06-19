@@ -16,6 +16,8 @@ NOTE: ``test_web_delegate_act_trail.py`` covers the act-trail surface; this file
 covers the param-gate + delegate-result-mapping contract.
 """
 
+import sqlite3
+
 import pytest
 
 from abilities._delegate import delegate_result
@@ -27,7 +29,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> MP:
     """A real chat-channel mp bound to the test db, with a seeded transcript anchor
     so the dispatcher's act-trail record has a uid to key against."""
     return MP(seed_transcript(db, content="research something"), UserConfig({}))
@@ -45,7 +47,7 @@ def chat_mp(db):
         ("web_browse", "goal", {"goal": ""}),
     ],
 )
-def test_missing_param_blocked_before_delegate(db, chat_mp, tool, param, params):
+def test_missing_param_blocked_before_delegate(db: sqlite3.Connection, chat_mp: MP, tool: str, param: str, params: dict[str, str]) -> None:
     """A missing/empty required param renders ``code=missing-params`` through the
     real dispatch chokepoint. The pre-gate fires before the policy gate and before
     run(), so no ``MessageProcessor.process`` delegate is ever spawned — this test
@@ -64,7 +66,7 @@ def test_missing_param_blocked_before_delegate(db, chat_mp, tool, param, params)
 
 
 @pytest.mark.parametrize("empty", ["", "   ", "\n\t "])
-def test_empty_delegate_answer_is_no_answer_error(empty):
+def test_empty_delegate_answer_is_no_answer_error(empty: str) -> None:
     """An empty (or whitespace-only) delegate answer maps to an ERROR with the
     stable ``delegate-no-answer`` code and a self-correction hint — never a blank
     ``ok("")`` the outer model silently trusts."""
@@ -75,7 +77,7 @@ def test_empty_delegate_answer_is_no_answer_error(empty):
     assert tr.hint == "Narrow the query, then retry."
 
 
-def test_real_delegate_answer_is_success_verbatim():
+def test_real_delegate_answer_is_success_verbatim() -> None:
     """A real prose answer is returned as success with the body verbatim — the
     delegate's synthesis is never reshaped or summarised by the mapping."""
     answer = "Malta's population is about 540,000 (2024 estimate)."

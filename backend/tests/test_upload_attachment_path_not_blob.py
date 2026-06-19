@@ -31,6 +31,9 @@ deterministic OCR fork), so no provider seam is needed.
 
 import io
 import json
+import re
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -50,7 +53,7 @@ def _png_with_text(text: str) -> bytes:
 
     img = Image.new("RGB", (480, 160), "white")
     draw = ImageDraw.Draw(img)
-    font = None
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None
     for candidate in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "DejaVuSans.ttf"):
         try:
             font = ImageFont.truetype(candidate, 72)
@@ -73,7 +76,7 @@ def _write_attachment(label: str) -> str:
     return path
 
 
-def _build_parent(attachments: "list[str]") -> MessageProcessor:
+def _build_parent(attachments: list[str]) -> MessageProcessor:
     """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
     fires from: input row written, ``active_tools`` seeded, attachments on
     metadata, thinking OFF (no LLM boundary involved in this test)."""
@@ -86,7 +89,7 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
     return parent
 
 
-def test_turn0_upload_records_path_not_base64_blob(db):
+def test_turn0_upload_records_path_not_base64_blob(db: sqlite3.Connection) -> None:
     """The turn-0 ``document.upload`` trail row carries a PATH, not file bytes.
 
     Pre-fix the dispatch sends ``content=<base64>`` so ``tool_calls.params`` holds
@@ -108,7 +111,7 @@ def test_turn0_upload_records_path_not_base64_blob(db):
     )
     assert len(rows) == 1, f"expected exactly one document upload trail row, got {len(rows)}"
 
-    params_raw = rows[0]["params"]
+    params_raw = cast(str, rows[0]["params"])
     params = json.loads(params_raw)
 
     assert params.get("action") == "upload"
@@ -128,12 +131,12 @@ def test_turn0_upload_records_path_not_base64_blob(db):
 
     # The upload still landed a real, ready document with a content hash — the
     # structured ``{"id","hash",...}`` body the chat refresh link parses (TKT-893).
-    result = rows[0]["result"]
+    result = cast(str, rows[0]["result"])
     assert '"id":"' in result and '"hash":"' in result, (
         f"upload result lost its id/hash keys: {result!r}"
     )
     from services.message_processor import _SEED_UPLOAD_ID_RE
-    doc_id = _SEED_UPLOAD_ID_RE.search(result).group(1)
+    doc_id = cast(re.Match[str], _SEED_UPLOAD_ID_RE.search(result)).group(1)
 
     doc = DocumentService(get_shared_db_service()).get_document(doc_id)
     assert doc is not None, f"document {doc_id} was not persisted"

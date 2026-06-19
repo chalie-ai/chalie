@@ -1,9 +1,11 @@
 
-
 import json
+from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 
 import api.system as system_module
 from api.system import system_bp
@@ -15,7 +17,7 @@ from api.system import system_bp
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FlaskClient, Path]]:
 
     log_file = tmp_path / "chalie.log"
 
@@ -59,7 +61,7 @@ def _log_line(level: str, message: str, timestamp: str = "2026-05-03T10:00:00.00
 @pytest.mark.unit
 class TestObservabilityErrorsEndpoint:
 
-    def test_filter_order_and_malformed_skip(self, client):
+    def test_filter_order_and_malformed_skip(self, client: tuple[FlaskClient, Path]) -> None:
         tc, log_file = client
 
         lines = [
@@ -99,7 +101,7 @@ class TestObservabilityErrorsEndpoint:
         assert errors[0]["timestamp"] == "2026-05-03T09:03:00.000000Z"
         assert errors[1]["timestamp"] == "2026-05-03T09:02:00.000000Z"
 
-    def test_missing_log_file_returns_empty_list(self, client):
+    def test_missing_log_file_returns_empty_list(self, client: tuple[FlaskClient, Path]) -> None:
         tc, log_file = client
         # Deliberately do not create log_file — it must not exist
         assert not log_file.exists()
@@ -111,7 +113,7 @@ class TestObservabilityErrorsEndpoint:
         assert data["errors"] == []
         assert "generated_at" in data
 
-    def test_empty_log_file_returns_empty_list(self, client):
+    def test_empty_log_file_returns_empty_list(self, client: tuple[FlaskClient, Path]) -> None:
         tc, log_file = client
         log_file.write_text("", encoding="utf-8")
 
@@ -121,7 +123,7 @@ class TestObservabilityErrorsEndpoint:
         data = resp.get_json()
         assert data["errors"] == []
 
-    def test_cap_at_200_returns_newest_200(self, client):
+    def test_cap_at_200_returns_newest_200(self, client: tuple[FlaskClient, Path]) -> None:
         tc, log_file = client
 
         lines = []
@@ -145,7 +147,7 @@ class TestObservabilityErrorsEndpoint:
         assert errors[0]["message"] == "error-249"
         assert errors[-1]["message"] == "error-050"
 
-    def test_large_file_triggers_tail_seek(self, client):
+    def test_large_file_triggers_tail_seek(self, client: tuple[FlaskClient, Path]) -> None:
         """A log file larger than _LOG_TAIL_BYTES (256 KB) must trigger the seek branch
         without crashing — regression guard for the 'can't do nonzero end-relative seeks'
         bug where the helper used end-relative seek (whence=2) on a text-mode file.

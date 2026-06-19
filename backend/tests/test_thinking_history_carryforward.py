@@ -19,10 +19,16 @@ dispatcher/policy gate. The ONLY stand-in is the external LLM boundary
 that captures the EXACT request the thinking pass sends. Zero internal mocks.
 """
 
+import sqlite3
+from typing import TYPE_CHECKING, cast
+
 import pytest
 from unittest.mock import patch
 
-from services.provider_api import ProviderApiResponse, ThinkingLevel
+from services.provider_api import ProviderApiRequest, ProviderApiResponse, ThinkingLevel
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -44,17 +50,17 @@ class _RecordingProvider:
 
     CONTENT_FIELD_LABEL = "message.content"
 
-    def __init__(self):
-        self.sends = []
+    def __init__(self) -> None:
+        self.sends: list[dict[str, object]] = []
 
-    def get_context_limit(self):
+    def get_context_limit(self) -> int:
         return 200000
 
-    def estimate_request_tokens(self, dto):
+    def estimate_request_tokens(self, dto: object) -> int:
         """Return 1 so the pre-flight over-cap check never triggers."""
         return 1
 
-    def send(self, dto):
+    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         self.sends.append({
             "system": dto.system,
             "messages": dto.messages,
@@ -64,7 +70,7 @@ class _RecordingProvider:
         return ProviderApiResponse(text="NOTHING", model="recorder", tool_calls=None)
 
 
-def _build_parent(raw_input):
+def _build_parent(raw_input: str) -> "MessageProcessor":
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.transcript_service import write_input_row
@@ -79,7 +85,7 @@ def _build_parent(raw_input):
     return parent
 
 
-def test_thinking_prepass_mirrors_parent_user_message(db):
+def test_thinking_prepass_mirrors_parent_user_message(db: sqlite3.Connection) -> None:
     """The thinking request body IS the parent's, verbatim — history included.
 
     Pre-fix: ThinkingConfig.get_user_prompt returned only an exploration prefix +
@@ -107,7 +113,7 @@ def test_thinking_prepass_mirrors_parent_user_message(db):
 
     assert recorder.sends, "thinking pre-pass never reached the provider boundary"
     thinking_req = recorder.sends[-1]
-    content = thinking_req["messages"][0]["content"]
+    content = cast(str, cast(list[dict[str, object]], thinking_req["messages"])[0]["content"])
 
     # Sanity: this really is the high-deliberation pass (config pins 'high').
     # thinking_mode is now a ThinkingLevel enum, not a plain string.
@@ -124,7 +130,7 @@ def test_thinking_prepass_mirrors_parent_user_message(db):
     )
 
 
-def test_thinking_system_prompt_is_deliberation_overlay_only(db):
+def test_thinking_system_prompt_is_deliberation_overlay_only(db: sqlite3.Connection) -> None:
     """The ONLY delta vs the parent is the system prompt: a lean deliberation
     overlay, NOT the parent's persona/unified system prompt."""
     from abilities._dispatcher import ToolDispatcher
@@ -146,7 +152,7 @@ def test_thinking_system_prompt_is_deliberation_overlay_only(db):
     assert thinking_system != parent_system
 
 
-def test_thinking_prepass_mirrors_parent_tool_surface(db):
+def test_thinking_prepass_mirrors_parent_tool_surface(db: sqlite3.Connection) -> None:
     """The thinking pass offers the SAME tool list the parent's turn does —
     snapshotted from the parent's live ``active_tools`` (parent-config-agnostic)."""
     from services.transcript_service import write_input_row
@@ -165,12 +171,12 @@ def test_thinking_prepass_mirrors_parent_tool_surface(db):
     with patch(_PROVIDERS_RESOLVE, return_value=recorder):
         ToolDispatcher(parent).dispatch("thinking", {})
 
-    thinking_tools = recorder.sends[-1]["tools"] or []
+    thinking_tools = cast(list[dict[str, object]], recorder.sends[-1]["tools"] or [])
     thinking_tool_names = {t["name"] for t in thinking_tools}
 
     assert thinking_tool_names == parent_tool_names, (
         "thinking pass tool surface diverged from the parent's"
     )
     # And the conversation history rode along — not collapsed to a bare stub.
-    content = recorder.sends[-1]["messages"][0]["content"]
+    content = cast(str, cast(list[dict[str, object]], recorder.sends[-1]["messages"])[0]["content"])
     assert "project ATLAS" in content

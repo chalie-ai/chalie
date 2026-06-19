@@ -9,7 +9,9 @@
 """Feature tests for TKT-947 — durable tool_calls retention."""
 
 import json
+import sqlite3
 from datetime import timedelta
+from typing import cast
 
 import pytest
 
@@ -22,13 +24,13 @@ pytestmark = pytest.mark.unit
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _seed_transcript(db, channel="user", role="user", content="test") -> int:
+def _seed_transcript(db: sqlite3.Connection, channel: str = "user", role: str = "user", content: str = "test") -> int:
     db.execute(
         "INSERT INTO transcript (channel, role, content, xml_migrated) "
         "VALUES (?, ?, ?, 1)",
         (channel, role, content),
     )
-    return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return cast(int, db.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
 # ── B. Rich-card pipeline: row survives + SegmentService builds rich segment ──
@@ -68,7 +70,7 @@ _RICH_RESULT = (
 )
 
 
-def test_tool_calls_row_survives_turn_and_segment_service_builds_rich_card(db):
+def test_tool_calls_row_survives_turn_and_segment_service_builds_rich_card(db: sqlite3.Connection) -> None:
     """This is the direct proof that TKT-947's purge-before-segment-build bug is fixed."""
     tid = _seed_transcript(db, content="What's the weather in Valletta?")
     db.commit()
@@ -105,14 +107,14 @@ def test_tool_calls_row_survives_turn_and_segment_service_builds_rich_card(db):
     )
     assert rich[0]["tag"] == "weather_1"
     assert rich[0]["synthesis"] == "Sunny, 27°C."
-    assert rich[0]["payload"]["location"] == "Valletta, MT"
-    assert rich[0]["payload"]["temperature_c"] == pytest.approx(27.0)
+    assert cast(dict[str, object], rich[0]["payload"])["location"] == "Valletta, MT"
+    assert cast(dict[str, object], rich[0]["payload"])["temperature_c"] == pytest.approx(27.0)
 
 
 # ── B2. Live broadcast path: span pairs with tool_calls after assistant persist ──
 
 
-def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db):
+def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db: sqlite3.Connection) -> None:
     """The live WS broadcast must pair the span tag with the turn's tool_calls
     even though the assistant row is already persisted when it runs.
 
@@ -181,7 +183,7 @@ def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db):
 # ── C. Janitor: 7-day time-based purge ────────────────────────────────────────
 
 
-def test_janitor_deletes_old_rows_and_keeps_recent(db):
+def test_janitor_deletes_old_rows_and_keeps_recent(db: sqlite3.Connection) -> None:
     """DecayEngineService._purge_tool_calls() must delete rows older than 7 days
     and leave rows within the 7-day window intact.
 
@@ -231,7 +233,7 @@ def test_janitor_deletes_old_rows_and_keeps_recent(db):
 # ── D. review_tool_calls filters narration rows ───────────────────────────────
 
 
-def test_review_tool_calls_excludes_narration_rows(db):
+def test_review_tool_calls_excludes_narration_rows(db: sqlite3.Connection) -> None:
     """A narration row in the review window must be absent from results;
     a normal tool call in the same window must be present.
 

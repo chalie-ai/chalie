@@ -7,7 +7,7 @@ import uuid
 import numpy as np
 import pytest
 
-from services.embedding_service import get_embedding_service
+from services.embedding_service import get_embedding_service, EmbeddingService
 
 
 # ── Skip guard ───────────────────────────────────────────────────────────────
@@ -27,7 +27,7 @@ _SKIP = pytest.mark.skipif(
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
-def emb_svc():
+def emb_svc() -> EmbeddingService:
     svc = get_embedding_service()
     # Warm the ONNX session so setup cost doesn't inflate timing measurements.
     svc.generate_embedding("warmup")
@@ -51,7 +51,7 @@ class TestConcurrentCallsSerializeViaQueue:
     still distinguishing the two regimes.
     """
 
-    def test_concurrent_callers_all_succeed_and_execution_is_serialized(self, emb_svc):
+    def test_concurrent_callers_all_succeed_and_execution_is_serialized(self, emb_svc: EmbeddingService) -> None:
         N = 8
         # Unique texts so cache plays no role.
         texts = [f"concurrent-serialization-probe-{uuid.uuid4()}" for _ in range(N)]
@@ -67,10 +67,10 @@ class TestConcurrentCallsSerializeViaQueue:
         baseline_times.sort()
         single_call_time = baseline_times[1]  # median of 3
 
-        results = [None] * N
-        errors = []
+        results: list[object] = [None] * N
+        errors: list[Exception] = []
 
-        def worker(i):
+        def worker(i: int) -> None:
             try:
                 results[i] = emb_svc.generate_embedding(texts[i])
             except Exception as exc:
@@ -112,7 +112,7 @@ class TestConcurrentCallsSerializeViaQueue:
 @pytest.mark.integration
 class TestCacheHitBypassesQueue:
 
-    def test_cached_text_returns_in_fraction_of_cold_inference_time(self, emb_svc):
+    def test_cached_text_returns_in_fraction_of_cold_inference_time(self, emb_svc: EmbeddingService) -> None:
         # Cold baseline on a unique text.
         cold_text = f"cache-bypass-baseline-{uuid.uuid4()}"
         t0 = time.perf_counter()
@@ -151,29 +151,29 @@ class TestAllThreePublicMethodsProduceValidOutput:
     Spawning one thread per method exercises cross-method serialization.
     """
 
-    def test_all_three_methods_return_valid_output_under_concurrent_load(self, emb_svc):
+    def test_all_three_methods_return_valid_output_under_concurrent_load(self, emb_svc: EmbeddingService) -> None:
         # Unique inputs — no cache interference across methods.
         uid = uuid.uuid4()
         text_single   = f"method-test-single-{uid}"
         text_np       = f"method-test-np-{uid}"
         texts_batch   = [f"method-test-batch-{uid}-{i}" for i in range(3)]
 
-        results = {}
-        errors = []
+        results: dict[str, object] = {}
+        errors: list[Exception] = []
 
-        def call_generate_embedding():
+        def call_generate_embedding() -> None:
             try:
                 results["list"] = emb_svc.generate_embedding(text_single)
             except Exception as exc:
                 errors.append(exc)
 
-        def call_generate_embedding_np():
+        def call_generate_embedding_np() -> None:
             try:
                 results["np"] = emb_svc.generate_embedding_np(text_np)
             except Exception as exc:
                 errors.append(exc)
 
-        def call_generate_embeddings_batch():
+        def call_generate_embeddings_batch() -> None:
             try:
                 results["batch"] = emb_svc.generate_embeddings_batch(texts_batch)
             except Exception as exc:
@@ -205,9 +205,10 @@ class TestAllThreePublicMethodsProduceValidOutput:
         assert vec_np.dtype == np.float32
 
         # generate_embeddings_batch → list of 3 × (768,) ndarray
+        from typing import cast
         vec_batch = results.get("batch")
         assert vec_batch is not None
-        assert len(vec_batch) == 3
-        for v in vec_batch:
+        assert len(cast(list[object], vec_batch)) == 3
+        for v in cast(list[object], vec_batch):
             assert isinstance(v, np.ndarray)
             assert v.shape == (768,)

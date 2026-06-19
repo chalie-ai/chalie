@@ -37,25 +37,27 @@ canonical for this suite. ``_tag_helpers`` remains the generic helper for
 non-ToolResult callers.
 """
 
+import sqlite3
+from typing import cast
 import json
 
 
 class MP:
-    def __init__(self, uid: int, config) -> None:
+    def __init__(self, uid: int, config: object) -> None:
         self.config = config
         self.uid = uid
 
 
-def seed_transcript(db, channel: str = "chat", content: str = "do a thing") -> int:
+def seed_transcript(db: sqlite3.Connection, channel: str = "chat", content: str = "do a thing") -> int:
     cur = db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
         (channel, "user", content),
     )
     db.commit()
-    return cur.lastrowid
+    return cast(int, cur.lastrowid)
 
 
-def allow_policy(db, permission: str, channel: str = "chat") -> None:
+def allow_policy(db: sqlite3.Connection, permission: str, channel: str = "chat") -> None:
     """Flip the real ``policy`` table so *permission* is ``allow`` on *channel*.
 
     A permission that ships as ``ask``/``deny`` by seed would block on a headless

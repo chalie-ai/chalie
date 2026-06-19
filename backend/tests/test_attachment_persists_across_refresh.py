@@ -11,6 +11,7 @@ NO vision provider -> deterministic OCR fork, no network.
 
 import io
 import os
+from typing import cast
 
 import pytest
 
@@ -28,10 +29,11 @@ pytestmark = pytest.mark.unit
 
 def _png_with_text(text: str) -> bytes:
     from PIL import Image, ImageDraw, ImageFont
+    from PIL.ImageFont import FreeTypeFont
 
     img = Image.new("RGB", (480, 160), "white")
     draw = ImageDraw.Draw(img)
-    font = None
+    font: FreeTypeFont | ImageFont.ImageFont | None = None
     for candidate in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "DejaVuSans.ttf"):
         try:
             font = ImageFont.truetype(candidate, 72)
@@ -62,16 +64,16 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
     return parent
 
 
-def _linked_doc_ids(transcript_id: int) -> set:
+def _linked_doc_ids(transcript_id: int) -> set[str]:
     with get_shared_db_service().connection() as conn:
         rows = conn.execute(
             "SELECT doc_id FROM transcript_docs WHERE transcript_id = ?",
             (transcript_id,),
         ).fetchall()
-    return {r[0] for r in rows}
+    return {cast(str, r[0]) for r in rows}
 
 
-def test_attachments_are_linked_and_served_on_refresh(db):
+def test_attachments_are_linked_and_served_on_refresh(db: object) -> None:
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 
     img_path = _write_tmp("refresh_receipt.png", _png_with_text("INVOICE"))
@@ -92,7 +94,7 @@ def test_attachments_are_linked_and_served_on_refresh(db):
     img_doc, txt_doc = by_name[img_name], by_name[txt_name]
 
     # Step 1 assertion: BOTH uploads persisted a link to THIS user turn.
-    assert _linked_doc_ids(parent.uid) == {img_doc["id"], txt_doc["id"]}
+    assert _linked_doc_ids(cast(int, parent.uid)) == {img_doc["id"], txt_doc["id"]}
 
     # Step 2 assertion: the refresh rebuild serves those links on the user row.
     messages, _ = get_recent_history(limit=120, offset=0)
@@ -101,7 +103,7 @@ def test_attachments_are_linked_and_served_on_refresh(db):
     attachments = mine.get("attachments")
     assert attachments, "rebuilt user turn carries no attachments"
 
-    att_by_id = {a["doc_id"]: a for a in attachments}
+    att_by_id = {a["doc_id"]: a for a in cast(list[dict[str, object]], attachments)}
     assert set(att_by_id) == {img_doc["id"], txt_doc["id"]}
 
     img_att = att_by_id[img_doc["id"]]
@@ -114,7 +116,7 @@ def test_attachments_are_linked_and_served_on_refresh(db):
     assert txt_att["url"] == f"/documents/{txt_doc['id']}/preview"
 
 
-def test_skipped_upload_writes_no_link(db):
+def test_skipped_upload_writes_no_link(db: object) -> None:
     """Guards the 'link only successful uploads' contract — a skipped attachment
     must leave no orphan reference."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
@@ -134,15 +136,15 @@ def test_skipped_upload_writes_no_link(db):
     good_id = new_docs[0]["id"]
 
     # Exactly one link — the skipped upload left no orphan reference.
-    assert _linked_doc_ids(parent.uid) == {good_id}
+    assert _linked_doc_ids(cast(int, parent.uid)) == {good_id}
 
     messages, _ = get_recent_history(limit=120, offset=0)
     mine = next((m for m in messages if m["id"] == str(parent.uid)), None)
     assert mine is not None
-    assert [a["doc_id"] for a in mine.get("attachments", [])] == [good_id]
+    assert [a["doc_id"] for a in cast(list[dict[str, object]], mine.get("attachments", []))] == [good_id]
 
 
-def test_cancel_after_attachment_deletes_turn_and_cascades_link(db):
+def test_cancel_after_attachment_deletes_turn_and_cascades_link(db: object) -> None:
     """Cancelling a turn that attached a file must delete the transcript row even
     though a ``transcript_docs`` link references it (FK CASCADE).  Guards a data
     integrity regression: with foreign_keys=ON and no cascade, the real
@@ -157,10 +159,10 @@ def test_cancel_after_attachment_deletes_turn_and_cascades_link(db):
 
     parent = _build_parent([img])
     parent._seed_turn_zero()
-    uid = parent.uid
+    uid = cast(int, parent.uid)
     new_docs = [d for d in svc.get_all_documents() if d["id"] not in before]
     assert len(new_docs) == 1
-    doc_id = new_docs[0]["id"]
+    doc_id = cast(str, new_docs[0]["id"])
     assert _linked_doc_ids(uid) == {doc_id}  # link exists pre-cancel
 
     # REAL production cleanup — must not be blocked by the link.
