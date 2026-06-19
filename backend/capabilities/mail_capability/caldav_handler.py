@@ -15,6 +15,7 @@ from utils.data_utils import parse_json_column
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+    from types import ModuleType
     from typing import Protocol
 
     class _ICalProp(Protocol):
@@ -84,14 +85,14 @@ try:
     import caldav as _caldav_lib
     _CALDAV_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    _caldav_lib = None  # type: ignore
+    _caldav_lib = cast("ModuleType", None)
     _CALDAV_AVAILABLE = False
 
 try:
     import icalendar as _icalendar_lib
     _ICALENDAR_AVAILABLE = True
 except ImportError:  # pragma: no cover
-    _icalendar_lib = None  # type: ignore
+    _icalendar_lib = cast("ModuleType", None)
     _ICALENDAR_AVAILABLE = False
 
 # ---------------------------------------------------------------------------

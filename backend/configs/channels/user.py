@@ -6,7 +6,12 @@ from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from services.message_processor import MessageProcessor
+
+    class _UserDefCache(Protocol):
+        _user_definition_cached: str
 
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
@@ -97,12 +102,12 @@ class UserConfig(ProcessorConfig):
                 entry = by_key.get("user_summary")
             if entry and entry.get("value"):
                 result = cast(str, entry["value"])
-                mp._user_definition_cached = result  # type: ignore[attr-defined]
+                cast("_UserDefCache", mp)._user_definition_cached = result
                 return result
         except Exception:
             pass
 
-        mp._user_definition_cached = _FALLBACK  # type: ignore[attr-defined]
+        cast("_UserDefCache", mp)._user_definition_cached = _FALLBACK
         return _FALLBACK
 
     def get_system_prompt(self, mp: "MessageProcessor") -> str:

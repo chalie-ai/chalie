@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from services.message_processor import MessageProcessor
+
+    class _PatternState(Protocol):
+        _save_pattern_calls: int
+        _save_graph_calls: int
+        _save_graph_seen: "set[object]"
+        _touched_pattern_ids: "set[object]"
 
 # ── Pattern-match prompt builders and post_turn ───────────────────────────────
 
@@ -114,13 +122,13 @@ class PatternDecayHook(PostTurnHook):
 def _pattern_init_instance_state(mp: object) -> None:
     """Initialise per-instance counter/state attrs that SavePattern/SaveGraph read."""
     if not hasattr(mp, "_save_pattern_calls"):
-        mp._save_pattern_calls = 0  # type: ignore[attr-defined]
+        cast("_PatternState", mp)._save_pattern_calls = 0
     if not hasattr(mp, "_save_graph_calls"):
-        mp._save_graph_calls = 0  # type: ignore[attr-defined]
+        cast("_PatternState", mp)._save_graph_calls = 0
     if not hasattr(mp, "_save_graph_seen"):
-        mp._save_graph_seen = set()  # type: ignore[attr-defined]
+        cast("_PatternState", mp)._save_graph_seen = set()
     if not hasattr(mp, "_touched_pattern_ids"):
-        mp._touched_pattern_ids = set()  # type: ignore[attr-defined]
+        cast("_PatternState", mp)._touched_pattern_ids = set()
 
 
 class PatternConfig(ProcessorConfig):
