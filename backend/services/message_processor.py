@@ -391,8 +391,17 @@ class MessageProcessor:
         return formatted
 
     def _emit_interim(self, formatted: str) -> None:
-        """Broadcast a mid-turn assistant row live on the user channel."""
-        if self.config.broadcast_to == "user" and formatted.strip():
+        """Broadcast a tool-bearing step's boundary frame live on the user channel.
+
+        Fires once per tool-bearing step (the no-tool step ends the turn before
+        reaching here). The frame IS the per-step boundary the surface renders
+        on: it collapses the prior step's tool group and opens the next. Emit it
+        even when the step has no prose — an empty interim still delimits the
+        step (the surface self-no-ops the empty bubble), and without it the
+        next step's tools pile into the prior group and the whole turn reads as
+        one ever-growing ACT loop. Do NOT re-add a ``formatted.strip()`` guard.
+        """
+        if self.config.broadcast_to == "user":
             from api.chat import _broadcast_interim  # noqa: PLC0415
             _broadcast_interim(self._metadata, formatted)
 

@@ -521,6 +521,15 @@ function _unbindKeyboard(): void {
   }
 }
 
+/* A closed <dialog> must stay hidden. The author `display: flex` above
+   overrides the UA `dialog:not([open]) { display: none }` rule, so without
+   this guard the player renders permanently over the input dock even though
+   it was never opened. Re-gate visibility on the native `open` attribute so
+   it shows only after _showDialog()'s d.show() and hides again on _close(). */
+.voice-player-overlay:not([open]) {
+  display: none;
+}
+
 .voice-player__loading {
   display: flex;
   align-items: center;
