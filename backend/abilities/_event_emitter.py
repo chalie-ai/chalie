@@ -5,10 +5,13 @@ ACT tool start/end events to the UI; a background loop (``broadcast_to=None``)
 stays silent. This object encapsulates that one gate so every emit site shares
 the same rule and a dead socket never breaks the loop.
 
-Constructed per-config by the tool dispatcher (tool start/end). Mid-turn
-assistant text is no longer a separate WS event (narration was removed) and is
-no longer persisted at all: a turn emits exactly one end message, written once
-the loop settles.
+Constructed per-config by the tool dispatcher, this emitter carries only the
+tool ``act_tool_start`` / ``act_tool_end`` events. Mid-turn assistant prose is
+a separate concern: under the recursive turn chain (TKT-1070) each step that
+makes tool calls broadcasts its prose live as an interim ``message`` event
+(``MessageProcessor._emit_interim``) and persists it as its own transcript row
+(``_store_row``), so a single turn produces multiple assistant rows — one per
+step — not one end message at the end.
 """
 
 from __future__ import annotations

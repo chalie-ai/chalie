@@ -753,12 +753,14 @@ def latest_input_content(channel: str) -> "str | None":
 
 
 def write_assistant_row(channel: str, content: str, turn_id: "int | None" = None) -> int:
-    """Write a turn's end-message assistant row, grounded to its turn.
+    """Write one assistant row for a single chain step, grounded to its turn.
 
-    Every turn produces exactly ONE assistant row — the final chat text the MP
-    settles on (mid-turn interim text is no longer persisted). The MP supplies
-    its current ``turn_id`` so the end message shares the boundary of its input
-    row. A ``None`` turn_id falls back to the same fresh-turn allocation as
+    Under the recursive turn chain (TKT-1070) every step persists its own row
+    via ``MessageProcessor._store_row`` — the prose of each tool-bearing step
+    plus the final settle text — so one turn produces MULTIPLE assistant rows
+    that share a ``turn_id``, not a single end message. The MP supplies its
+    current ``turn_id`` so each row shares the boundary of the turn's input row.
+    A ``None`` turn_id falls back to the same fresh-turn allocation as
     write_input_row — the path an anchorless re-entry (no input row) takes to
     open its own turn."""
     from services.database_service import get_shared_db_service
