@@ -8,8 +8,9 @@
  * Port sources:
  *   - renderer.js: createActCycle, appendUserForm, appendChalieForm,
  *     replaceActWithResponse, replaceActWithError, appendToolPill,
- *     resolveToolPill (incl. 150ms min-display), setActNarrative,
- *     prependUserForm, prependChalieForm
+ *     resolveToolPill (incl. 150ms min-display), prependUserForm,
+ *     prependChalieForm. Under the chain model the per-step tool group also
+ *     collapses to summary-only (collapseAct) once superseded.
  *   - chat.js: _appendMessage, _prependMessage, _attachmentsFor, _finaliseTurn
  */
 import { defineStore } from 'pinia';
@@ -67,9 +68,13 @@ export interface ChalieForm {
 export interface ActForm {
   kind: 'act';
   id: number;
-  narration: string;
-  narrationStep?: number;
   tools: ToolPill[];
+  /**
+   * True once the step is superseded — its tools are done AND the next prose
+   * bubble (or the final reply) has landed. Collapsed groups render summary-only:
+   * the tool-name pill and running timer are dropped, leaving the act summaries.
+   */
+  collapsed: boolean;
 }
 
 export interface ErrorForm {
@@ -156,14 +161,14 @@ export const useConversationStore = defineStore('conversation', {
       return id;
     },
 
-    /** Create a new ACT placeholder and return its id. */
+    /** Create a new (live, expanded) ACT tool-group and return its id. */
     appendAct(): number {
       const id = nextId();
       const form: ActForm = {
         kind: 'act',
         id,
-        narration: '',
         tools: [],
+        collapsed: false,
       };
       this.forms.push(form);
       return id;
@@ -177,11 +182,13 @@ export const useConversationStore = defineStore('conversation', {
 
     // ── ACT-cycle mutations ──────────────────────────────────────────────────
 
-    setActNarration(actId: number, text: string, step?: number): void {
+    /**
+     * Collapse a step's tool group to summary-only. Called when the step is
+     * superseded — the next interim prose bubble or the final reply has landed.
+     */
+    collapseAct(actId: number): void {
       const form = this._findAct(actId);
-      if (!form) return;
-      form.narration = text;
-      if (step != null) form.narrationStep = step;
+      if (form) form.collapsed = true;
     },
 
     appendToolPill(actId: number, id: string, name: string, summary?: string): void {
@@ -338,22 +345,50 @@ export const useConversationStore = defineStore('conversation', {
       }));
     },
 
-    _appendMessage(msg: ConversationMessage, inWorkingMemory: boolean): void {
-      if (msg.role === 'user') {
-        const attachments = this._attachmentsFor(msg);
-        this.appendUser(msg.content, attachments, { inWorkingMemory });
-      } else if (msg.content || msg.segments?.length) {
+    /**
+     * Build the rendered forms for one assistant row, in display order:
+     * the prose bubble (when the row has content/segments) followed by a
+     * collapsed tool group (when the row drove tools). Under the chain model a
+     * turn is many assistant rows; each row owns its own tools, so the refresh
+     * path reconstructs the same prose-then-collapsed-summaries shape the live
+     * path produces. A tools-only step (empty prose) yields just the act group.
+     */
+    _assistantForms(msg: ConversationMessage, inWorkingMemory: boolean): ConversationForm[] {
+      const out: ConversationForm[] = [];
+      if (msg.content || msg.segments?.length) {
         const meta: ChalieMeta = { ts: msg.timestamp };
         if (msg.segments) meta.segments = msg.segments;
-        const id = nextId();
-        this.forms.push({
+        out.push({
           kind: 'chalie',
-          id,
+          id: nextId(),
           text: msg.segments ? undefined : msg.content || '',
           segments: msg.segments,
           meta,
           inWorkingMemory,
         });
+      }
+      if (msg.tool_calls?.length) {
+        const tools: ToolPill[] = msg.tool_calls.map((c) => ({
+          id: `hist-${nextId()}`,
+          name: c.tool_name,
+          summary: c.summary || undefined,
+          startedAt: 0,
+          ok: true,
+          resolved: true,
+        }));
+        out.push({ kind: 'act', id: nextId(), tools, collapsed: true });
+      }
+      return out;
+    },
+
+    _appendMessage(msg: ConversationMessage, inWorkingMemory: boolean): void {
+      if (msg.role === 'user') {
+        const attachments = this._attachmentsFor(msg);
+        this.appendUser(msg.content, attachments, { inWorkingMemory });
+        return;
+      }
+      for (const form of this._assistantForms(msg, inWorkingMemory)) {
+        this.forms.push(form);
       }
     },
 
@@ -368,18 +403,12 @@ export const useConversationStore = defineStore('conversation', {
           attachments,
           inWorkingMemory,
         });
-      } else if (msg.content || msg.segments?.length) {
-        const meta: ChalieMeta = { ts: msg.timestamp };
-        if (msg.segments) meta.segments = msg.segments;
-        const id = nextId();
-        this.forms.unshift({
-          kind: 'chalie',
-          id,
-          text: msg.segments ? undefined : msg.content || '',
-          segments: msg.segments,
-          meta,
-          inWorkingMemory,
-        });
+        return;
+      }
+      // Unshift in reverse so the prose bubble ends up before its tool group.
+      const forms = this._assistantForms(msg, inWorkingMemory);
+      for (let i = forms.length - 1; i >= 0; i--) {
+        this.forms.unshift(forms[i]);
       }
     },
   },

@@ -1,24 +1,69 @@
 <script setup lang="ts">
-import type { ActForm } from '../../stores/conversation';
+import { ref, computed, watch, onUnmounted } from 'vue';
+import type { ActForm, ToolPill } from '../../stores/conversation';
 import { useSessionStore } from '../../stores/session';
 
-defineProps<{ form: ActForm }>();
+const props = defineProps<{ form: ActForm }>();
 
 const session = useSessionStore();
 
-// FIX 7: wire stop button to the store's existing cancel action
+// Wire stop button to the store's cancel action.
 function onStop(): void {
   void session.requestStop();
+}
+
+// ── Live ticking clock ──────────────────────────────────────────────────────
+// Drives the running-timer readout. Runs ONLY while this step is live (not
+// collapsed) and at least one pill is still unresolved; torn down the instant
+// everything resolves or the step is superseded, so settled turns cost nothing.
+const now = ref(Date.now());
+let timer: ReturnType<typeof setInterval> | null = null;
+
+const hasRunning = computed(
+  () => !props.form.collapsed && props.form.tools.some((t) => !t.resolved),
+);
+
+function stopClock(): void {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
+
+watch(
+  hasRunning,
+  (running) => {
+    if (running && !timer) {
+      timer = setInterval(() => {
+        now.value = Date.now();
+      }, 100);
+    } else if (!running) {
+      stopClock();
+    }
+  },
+  { immediate: true },
+);
+
+onUnmounted(stopClock);
+
+/**
+ * Seconds shown on a pill: the server/client-measured duration once resolved,
+ * otherwise the live elapsed since the call started (ticks via `now`).
+ */
+function pillSeconds(pill: ToolPill): string {
+  const ms = pill.resolved
+    ? Math.max(0, pill.ms ?? 0)
+    : Math.max(0, pill.startedAt ? now.value - pill.startedAt : 0);
+  return (ms / 1000).toFixed(1);
 }
 </script>
 
 <template>
-  <div class="act-cycle">
-    <!-- Narration row: logo + narrative text + stop button -->
-    <div class="act-row">
+  <div class="act-cycle" :class="{ 'act-cycle--collapsed': form.collapsed }">
+    <!-- Live working anchor: pulsing logo + stop button. Dropped once the step
+         is superseded (collapsed) — only the summaries remain. -->
+    <div v-if="!form.collapsed" class="act-row">
       <span class="act-logo" />
-      <span class="act-narrative">{{ form.narration }}</span>
-      <!-- FIX 7: stop button — aria-label, icon, and click handler match legacy renderer.js:226-232 -->
       <button
         class="act-stop-btn"
         aria-label="Stop and undo"
@@ -32,9 +77,20 @@ function onStop(): void {
       </button>
     </div>
 
-    <!-- Tool pills — one per resolved/pending tool call -->
-    <!-- FIX 11: use legacy class names (.act-tool + --running/--done/--error, NO act-tool-pill) -->
-    <div class="act-tools">
+    <!-- Collapsed: summary-only lines. The red tool-name pill and the running
+         timer are dropped — only the act summary survives (Dylan's spec). -->
+    <div v-if="form.collapsed" class="act-summaries">
+      <span
+        v-for="pill in form.tools"
+        :key="pill.id"
+        class="act-tool__summary act-tool__summary--collapsed"
+      >
+        {{ pill.summary || pill.name }}
+      </span>
+    </div>
+
+    <!-- Live: running / done pills with name + ticking timer (green on done). -->
+    <div v-else class="act-tools">
       <div
         v-for="pill in form.tools"
         :key="pill.id"
@@ -55,10 +111,11 @@ function onStop(): void {
         <span v-else class="act-tool__name">{{ pill.name }}</span>
 
         <span class="act-tool__status">
-          <span v-if="!pill.resolved" class="act-spinner" />
-          <template v-else-if="pill.ok">
-            {{ ((Math.max(0, pill.ms ?? 0)) / 1000).toFixed(1) }}s
+          <template v-if="!pill.resolved">
+            <span class="act-spinner" />
+            <span class="act-tool__elapsed">{{ pillSeconds(pill) }}s</span>
           </template>
+          <template v-else-if="pill.ok">{{ pillSeconds(pill) }}s</template>
           <template v-else>error</template>
         </span>
       </div>

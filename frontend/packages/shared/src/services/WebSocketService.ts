@@ -19,6 +19,13 @@ export interface WsActToolEndEvent {
 }
 export interface WsMessageEvent {
   type: 'message';
+  /**
+   * True for a chain step's interim assistant prose (MessageProcessor._emit_interim):
+   * the model emitted a tool-bearing step, so its text streams live ahead of the
+   * step's tool batch and NO trailing `done` follows. Absent/false on the final
+   * turn result, which carries the rich segments and is followed by `done`.
+   */
+  interim?: boolean;
   [k: string]: unknown;
 }
 export interface WsErrorEvent {

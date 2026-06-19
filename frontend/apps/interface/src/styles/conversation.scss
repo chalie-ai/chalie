@@ -526,6 +526,35 @@
   opacity: 0.5;
 }
 
+// Status cluster: spinner + live elapsed readout while a call is running.
+.act-tool__elapsed {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+// Collapsed step — the tools are done and the step has been superseded by the
+// next prose bubble (or the final reply). The name pill and timer are dropped;
+// only the act summaries remain, indented to align with the live tool list.
+.act-cycle--collapsed {
+  gap: 2px;
+  padding: 0 0 2px;
+}
+
+.act-summaries {
+  margin-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.act-tool__summary--collapsed {
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.4;
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 // --------------------------------------------------------------------------
 // 14. Spinner
 // --------------------------------------------------------------------------

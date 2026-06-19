@@ -28,21 +28,30 @@ export interface ConversationMessage {
   attachments?: ConversationAttachment[];
   /** Present on assistant turns — one or more content segments. */
   segments?: ConversationSegment[];
+  /**
+   * Present on assistant turns that drove tools — the chips THIS row emitted,
+   * each carrying the ability's persisted `act_summary`. Under the chain model a
+   * turn is many assistant rows, and each row owns its own tools; the refresh
+   * path renders these as a collapsed (summary-only) tool group beneath the row,
+   * mirroring how the live path collapses a step once it is superseded.
+   */
+  tool_calls?: { tool_name: string; summary: string }[];
 }
 
 export const conversation = {
   /**
    * Fetch recent conversation turns.
    * @param limit  Max turns to return (1–120, default 12).
-   * @param before Transcript ID offset — for history pagination (maps to `offset` on
-   *               the legacy backend; the plan uses `before` as the param name).
+   * @param offset Row offset for scroll-up pagination — the backend
+   *               (`/conversation/recent`) reads `offset`, counting back from the
+   *               newest row.
    */
   recent(
     limit = 12,
-    before?: number,
+    offset?: number,
   ): Promise<{ messages: ConversationMessage[]; has_more: boolean }> {
     const q = new URLSearchParams({ limit: String(limit) });
-    if (before != null) q.set('before', String(before));
+    if (offset != null) q.set('offset', String(offset));
     return api.get(`/conversation/recent?${q.toString()}`);
   },
 };

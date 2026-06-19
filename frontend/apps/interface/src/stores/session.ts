@@ -202,19 +202,21 @@ export const useSessionStore = defineStore('session', {
       const presence = usePresenceStore();
 
       if (this.isSending) {
-        // Mid-ACT path (chat.js lines 143-153): append to existing user form,
-        // remove old ACT cycle, restart turn.
+        // Mid-ACT path (chat.js lines 143-153): append to the existing user
+        // form, discard everything the in-flight turn rendered after it (the
+        // chain may have laid down several interim prose bubbles + tool groups,
+        // not just one ACT form), then restart the turn. The backend cancels the
+        // active turn, concatenates the messages, and starts a fresh one.
         if (this._lastUserFormId != null) {
-          const form = convo.forms.find((f) => f.id === this._lastUserFormId);
-          if (form?.kind === 'user') {
-            form.text += '\n\n' + text;
+          const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
+          if (uidx !== -1) {
+            const uform = convo.forms[uidx];
+            if (uform.kind === 'user') uform.text += '\n\n' + text;
+            // Drop the partial turn rendering that followed the user message.
+            convo.forms.splice(uidx + 1);
           }
         }
-        if (this._activeActId != null) {
-          const actIdx = convo.forms.findIndex((f) => f.id === this._activeActId);
-          if (actIdx !== -1) convo.forms.splice(actIdx, 1);
-          this._activeActId = null;
-        }
+        this._activeActId = null;
         this._startTurn(text, source, false);
         return;
       }
@@ -257,13 +259,17 @@ export const useSessionStore = defineStore('session', {
         this._lastUserText = text;
       }
 
-      const actId = convo.appendAct();
-      this._activeActId = actId;
+      // No upfront ACT form: under the chain model a turn is a sequence of
+      // steps, each rendered as a prose bubble (interim message) followed by its
+      // own tool group. Groups open lazily on the step's first tool_start, and
+      // PresenceBar / InputDock carry the global working + stop affordances while
+      // a step has no in-feed group yet.
+      this._activeActId = null;
 
-      // Capture response data across onMessage / onDone callbacks
+      // Capture the FINAL turn result across onMessage(final) / onDone — interim
+      // steps render immediately and are never cached.
       let responseContent = '';
       let responseMeta: {
-        content?: string;
         topic?: string;
         exchange_id?: string;
         mode?: string;
@@ -281,21 +287,18 @@ export const useSessionStore = defineStore('session', {
             presence.setState(stage);
           },
 
-          onNarration: (data) => {
-            presence.setState('narrating');
-            const d = data as { text?: string; step?: number };
-            convo.setActNarration(actId, d.text ?? '', d.step);
-          },
-
-          // CRITICAL CORRECTION: backend emits act_tool_start = { type, name, id, summary }.
+          // backend emits act_tool_start = { type, name, id, summary }.
           // Use d.id (NOT d.call_id) — verified against backend abilities/_dispatcher.py.
+          // Lazily open the current step's tool group (its prose, if any, already
+          // landed via the interim message that preceded these frames).
           onToolStart: (data) => {
             const d = data as { id?: string; name?: string; summary?: string };
-            convo.appendToolPill(actId, d.id ?? '', d.name ?? '', d.summary);
+            if (this._activeActId == null) this._activeActId = convo.appendAct();
+            convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
           },
 
-          // CRITICAL CORRECTION: backend emits act_tool_end = { type, name, id, ok }.
-          // No duration field — pass ms=0 and let resolveToolPill compute client elapsed.
+          // backend emits act_tool_end = { type, name, id, ok }. No duration field —
+          // pass ms=0 and let resolveToolPill compute client elapsed.
           onToolEnd: (data) => {
             const d = data as { id?: string; ok?: boolean };
             convo.resolveToolPill(d.id ?? '', 0, !!d.ok);
@@ -311,6 +314,23 @@ export const useSessionStore = defineStore('session', {
               segments?: ConversationSegment[];
               timestamp?: string;
             };
+
+            if (d.interim) {
+              // A chain step's interim prose. Supersede the previous step
+              // (collapse its tool group to summary-only), then render this
+              // step's prose bubble; the upcoming tool batch opens a fresh group
+              // beneath it on the next onToolStart.
+              if (this._activeActId != null) {
+                convo.collapseAct(this._activeActId);
+                this._activeActId = null;
+              }
+              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' });
+              presence.setState('responding');
+              return;
+            }
+
+            // Final turn result — cache; rendered on done so duration_ms lands
+            // on the bubble (it also carries the turn-wide rich-media segments).
             responseContent = d.content ?? '';
             responseMeta = {
               topic: d.topic,
@@ -324,30 +344,39 @@ export const useSessionStore = defineStore('session', {
           },
 
           onError: (data) => {
-            // Port of chat.js onError (lines 290-300):
             // Turn-level errors (provider failure, quota/429) are NOT auth events.
-            // Only data.auth_failed triggers the login-redirect callback.
-            convo.replaceActWithError(actId, data.message);
+            // Collapse the in-flight step (its summaries stay) and surface the
+            // error as its own form. Only data.auth_failed redirects to login.
+            if (this._activeActId != null) {
+              convo.collapseAct(this._activeActId);
+              this._activeActId = null;
+            }
+            convo.appendError(data.message);
             const d = data as { auth_failed?: boolean };
             if (d.auth_failed) this._onAuthFailure?.();
           },
 
           onDone: (data) => {
-            // Port of chat.js _finaliseTurn (lines 313-328)
             responseMeta.duration_ms = data.duration_ms;
-            convo.replaceActWithResponse(actId, {
-              content: responseContent,
-              topic: responseMeta.topic,
-              exchange_id: responseMeta.exchange_id,
-              mode: responseMeta.mode,
-              confidence: responseMeta.confidence,
-              segments: responseMeta.segments,
-              timestamp: responseMeta.timestamp,
-              duration_ms: responseMeta.duration_ms,
-            });
+            // Collapse the final step's tools (the last step bore tools and no
+            // further interim arrived) before the final reply lands beneath it.
+            if (this._activeActId != null) {
+              convo.collapseAct(this._activeActId);
+              this._activeActId = null;
+            }
+            if (responseContent || responseMeta.segments?.length) {
+              convo.appendChalie(responseContent, {
+                topic: responseMeta.topic,
+                exchange_id: responseMeta.exchange_id,
+                mode: responseMeta.mode,
+                confidence: responseMeta.confidence,
+                segments: responseMeta.segments,
+                ts: responseMeta.timestamp,
+                duration_ms: responseMeta.duration_ms,
+              });
+            }
             // Port of app.js line 137: record ambient response timestamp.
             useAmbientSensor().recordResponse();
-            this._activeActId = null;
             presence.setState('resting');
             this.isSending = false;
             // Signal feed component to force-scroll (A1 listens to this)
@@ -366,36 +395,32 @@ export const useSessionStore = defineStore('session', {
     /**
      * Stop + undo the active turn — port of chat.js requestStop.
      *
-     * Removes the ACT placeholder and the last user form. Emits
-     * 'session:turn-interrupted' so InputDock (Task A3) can restore
-     * the textarea value.
+     * Undoes the whole in-flight turn: the user message and everything the
+     * chain rendered after it (every interim prose bubble + tool group). Emits
+     * 'session:turn-interrupted' so InputDock (Task A3) can restore the
+     * textarea value.
      */
     async requestStop(): Promise<void> {
       const convo = useConversationStore();
       const presence = usePresenceStore();
       const ws = getWebSocket();
 
-      // Remove ACT cycle
-      if (this._activeActId != null) {
-        const actIdx = convo.forms.findIndex((f) => f.id === this._activeActId);
-        if (actIdx !== -1) convo.forms.splice(actIdx, 1);
-        this._activeActId = null;
-      }
-
-      // Remove last user bubble and capture its LIVE text for restore.
-      // Legacy chat.js requestStop reads textContent off the bubble, which in a
-      // mid-ACT append holds the concatenated "A\n\nB" — not the original "A".
-      // _lastUserText is only a fallback when the form can no longer be found.
+      // Remove the user bubble AND every form after it (the partial turn), and
+      // capture the user bubble's LIVE text for restore. Legacy chat.js reads
+      // textContent off the bubble, which in a mid-ACT append holds the
+      // concatenated "A\n\nB" — not the original "A". _lastUserText is only a
+      // fallback when the form can no longer be found.
       let restoredText = this._lastUserText;
       if (this._lastUserFormId != null) {
         const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
         if (uidx !== -1) {
           const uform = convo.forms[uidx];
           if (uform.kind === 'user') restoredText = uform.text;
-          convo.forms.splice(uidx, 1);
+          convo.forms.splice(uidx);
         }
         this._lastUserFormId = null;
       }
+      this._activeActId = null;
       this._lastUserText = '';
 
       // Abort WS callbacks so stale events are ignored

@@ -41,7 +41,7 @@ Network failures in any gate → stay and mount; the API endpoints are still pro
 
 ## The Chat Surface
 
-**ACT cycle.** While a turn runs, the UI shows a chrome-less working state — a pulsing violet logo and a cumulative list of tool calls (name, optional `act_summary`, then duration or error). When the turn finishes, the whole ACT UI is replaced by the final reply bubble. The data comes from WebSocket events: `act_tool_start`, `act_tool_end`, then `message` + `done`.
+**ACT cycle.** A turn is a chain of steps, and each step renders progressively. As a step produces prose it lands as its own reply bubble, and the step's tool calls render beneath it as a live group — a pulsing violet logo plus each call's name, optional `act_summary`, and a running timer that settles to a duration (or error) on completion. When the step is superseded — the next step's prose arrives, or the final reply lands — its tool group collapses to summary-only: the name pill and timer drop away, leaving just the `act_summary` lines. The result is a turn-long trail of bubbles, each with its collapsed tool summaries below it. The data comes from WebSocket events, per step: an interim `message` (the step's prose), then its `act_tool_start` / `act_tool_end` pairs; the final step emits the closing `message` + `done`. Each step also persists as a durable transcript row, so a refresh reconstructs the same bubble-then-collapsed-summaries shape.
 
 **Rich-media cards.** Tools can return a structured payload that renders as an inline card instead of prose. The registry (`frontend/apps/interface/src/components/rich/richRegistry.ts`) maps tag prefixes to card components. Eight prefixes resolve to seven components — `news` and `search` share `ArticleCard.vue`:
 
