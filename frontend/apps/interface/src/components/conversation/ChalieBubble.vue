@@ -61,20 +61,6 @@ function onSpeak(): void {
       'message--faded': form.inWorkingMemory === false,
     }"
   >
-    <!-- Header row: glyph + timestamp -->
-    <div class="speech-form__header">
-      <svg class="sender-glyph" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-        <line x1="4" y1="14" x2="9" y2="5" stroke="currentColor" stroke-width="0.6" opacity="0.45" />
-        <line x1="9" y1="5" x2="14" y2="11" stroke="currentColor" stroke-width="0.6" opacity="0.45" />
-        <line x1="4" y1="14" x2="14" y2="11" stroke="currentColor" stroke-width="0.6" opacity="0.45" />
-        <circle class="sender-glyph__dot" cx="4" cy="14" r="1.4" fill="currentColor" />
-        <circle class="sender-glyph__dot" cx="9" cy="5" r="1.6" fill="currentColor" />
-        <circle class="sender-glyph__dot" cx="14" cy="11" r="1.3" fill="currentColor" />
-        <circle class="sender-glyph__dot" cx="11" cy="2" r="0.9" fill="currentColor" opacity="0.65" />
-      </svg>
-      <span class="speech-form__timestamp">{{ form.meta.ts ?? '' }}</span>
-    </div>
-
     <!-- Content: segments path or single text path -->
     <SegmentRenderer
       v-if="form.meta.segments && form.meta.segments.length"
@@ -86,44 +72,50 @@ function onSpeak(): void {
       v-html="renderMarkup(form.text ?? '')"
     />
 
-    <!-- Meta row: mode badge + remember + speak buttons -->
+    <!-- Footer row: glyph + timestamp (left) · mode badge + remember + speak (right) -->
     <div class="speech-form__meta">
+      <span class="sender-glyph" aria-hidden="true"></span>
+      <span class="speech-form__timestamp">{{ form.meta.ts ?? '' }}</span>
+
       <!-- FIX 6: mode badge -->
       <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>
 
-      <!-- FIX 4: disabled + active class when pinned. Turn-level: last row only. -->
-      <button
-        v-if="isLastInTurn"
-        class="speech-form__remember-btn"
-        :class="{ 'speech-form__remember-btn--active': pinActive }"
-        aria-label="Remember this"
-        type="button"
-        :disabled="pinned"
-        @click="onRemember"
-      >
-        <svg
-          width="14" height="14" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z" />
-        </svg>
-      </button>
+      <!-- Action buttons pushed to the right -->
+      <div class="speech-form__actions">
+        <!-- FIX 4: disabled + active class when pinned. Turn-level: last row only. -->
+        <button
+          v-if="isLastInTurn"
+          class="speech-form__remember-btn"
+          :class="{ 'speech-form__remember-btn--active': pinActive }"
+          aria-label="Remember this"
+          type="button"
+          :disabled="pinned"
+          @click="onRemember"
+        >
+          <svg
+            width="14" height="14" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z" />
+          </svg>
+        </button>
 
-      <!-- FIX 5: only render when there is speakable text; turn-level: last row only -->
-      <button
-        v-if="isLastInTurn && speakText"
-        class="speech-form__speak-btn"
-        aria-label="Listen to this message"
-        type="button"
-        @click="onSpeak"
-      >
-        <svg
-          width="14" height="14" viewBox="0 0 24 24" fill="none"
-          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-        </svg>
-      </button>
+        <!-- FIX 5: only render when there is speakable text; turn-level: last row only -->
+        <button
+          v-if="isLastInTurn && speakText"
+          class="speech-form__speak-btn"
+          aria-label="Listen to this message"
+          type="button"
+          @click="onSpeak"
+        >
+          <svg
+            width="14" height="14" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 </template>
