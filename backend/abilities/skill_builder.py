@@ -59,13 +59,14 @@ def _discover_tool_names() -> str:
 class SkillBuilderAbility(Ability):
     # The ACTION_REQUIRED pre-gate (consulted by the dispatcher BEFORE the policy
     # gate and BEFORE run()): an unknown action → one unknown-action error whose
-    # valid= names all four real actions; a known action missing required params →
-    # one missing-params error naming ALL of them. edit/delete need only a title
-    # (the existence/ownership checks live in run()); list needs nothing.
+    # valid= names all five real actions; a known action missing required params →
+    # one missing-params error naming ALL of them. edit/delete/read need only a
+    # title (the existence/ownership checks live in run()); list needs nothing.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "create": (Keys.title, Keys.use_for, Keys.content),
         "edit": (Keys.title,),
         "delete": (Keys.title,),
+        "read": (Keys.title,),
         "list": (),
     }
 
@@ -78,7 +79,7 @@ class SkillBuilderAbility(Ability):
 
     def get_summary(self) -> str:
         return (
-            "Create, edit, delete, or list custom skill playbooks. "
+            "Create, edit, delete, read, or list custom skill playbooks. "
             "Use this to save step-by-step procedures that Chalie should follow for recurring tasks."
         )
 
@@ -90,24 +91,25 @@ class SkillBuilderAbility(Ability):
             "edit my Track Flights skill to also check for delays",
             "delete the skill I created for meal planning",
             "show me all my custom skills",
+            "show me the steps in my Morning Briefing skill",
             "list the skills I've created",
-            "what custom playbooks do I have",
         ]
 
     def get_search_tooltip(self) -> str:
-        return "create, edit, delete, or list user-defined skill playbooks"
+        return "create, edit, delete, read, or list user-defined skill playbooks"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
                 "type": "string",
-                "enum": ["create", "edit", "delete", "list"],
+                "enum": ["create", "edit", "delete", "read", "list"],
                 "description": (
                     "create: save a new user skill playbook. "
                     "edit: update an existing user skill (identified by title). "
                     "delete: remove a user skill by title. "
-                    "list: list all skills (both curated and user-created)."
+                    "read: show the full content (every step) of one skill by title. "
+                    "list: list all skills (both curated and user-created), titles and use_for only."
                 ),
             },
             Keys.title: {
@@ -115,7 +117,7 @@ class SkillBuilderAbility(Ability):
                 "description": (
                     "The skill title — a short noun phrase describing what the skill does "
                     "(e.g. 'Track Package Delivery', 'Weekly Expense Review'). "
-                    "Required for create, edit, and delete."
+                    "Required for create, edit, delete, and read."
                 ),
             },
             Keys.use_for: {
@@ -158,21 +160,33 @@ class SkillBuilderAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         # The ACTION_REQUIRED pre-gate has already rejected an unknown action and
         # any missing required params before this point, so action is one of the
-        # four real actions and its required params are present. No try/except
+        # five real actions and its required params are present. No try/except
         # swallow: an unexpected failure bubbles to the dispatcher's _run, which
         # renders it as code=unhandled-exception (errors must surface).
         action = params.get(Keys.action, "list")
-        config = getattr(self.mp, "config", None)
-        channel = getattr(config, "channel", None)
+        channel = getattr(getattr(self.mp, "config", None), "channel", None)
         logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
 
         if action == "create":
-            return _handle_create(params)
-        if action == "edit":
-            return _handle_edit(params)
-        if action == "delete":
-            return _handle_delete(params)
-        return _handle_list(params)
+            result = _handle_create(params)
+        elif action == "edit":
+            result = _handle_edit(params)
+        elif action == "delete":
+            result = _handle_delete(params)
+        elif action == "read":
+            result = _handle_read(params)
+        else:
+            result = _handle_list(params)
+
+        # The background suggestion loop (channel 'skills_building') saves exactly
+        # ONE skill per turn: the instant a create/edit succeeds, halt the recursive
+        # ACT loop so the model cannot keep emitting near-duplicate writes. Other
+        # channels (a user explicitly building a skill) are unaffected.
+        if channel == "skills_building" and action in ("create", "edit") and result.status == "success":
+            cancel = getattr(self.mp, "cancel_event", None)
+            if cancel is not None:
+                cancel.set()
+        return result
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -398,6 +412,54 @@ def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
         for skill_id, title, use_for, tags, version, source, enabled in rows
     ]
     return ToolResult.ok(skills, action="list", count=len(skills))
+
+
+def _handle_read(params: dict[str, object]) -> ToolResult:
+    # title presence is guaranteed by the ACTION_REQUIRED pre-gate.
+    title = (cast("str", params.get(Keys.title)) or "").strip()
+
+    if not SKILLS_DB_PATH.exists():
+        return ToolResult.err(
+            "The skill store is unavailable.",
+            code="skill-db-unavailable",
+            action="read",
+        )
+
+    conn = sqlite3.connect(str(SKILLS_DB_PATH))
+    try:
+        # Match any source; prefer the editable user copy when a title collides
+        # with a curated skill. Unlike list, this returns the full `content` so
+        # the model can read a skill's steps before action=edit merges into them.
+        row = conn.execute(
+            "SELECT id, title, use_for, content, tags, version, source, enabled "
+            "FROM skills WHERE lower(title) = lower(?) ORDER BY (source = 'user') DESC",
+            (title,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        return ToolResult.err(
+            f'No skill titled "{title}" was found.',
+            code="skill-not-found",
+            hint="Call action=list to see the exact titles that exist",
+            action="read",
+        )
+
+    skill_id, title_, use_for, content, tags, version, source, enabled = row
+    return ToolResult.ok(
+        {
+            "id": skill_id,
+            "title": title_,
+            "use_for": use_for,
+            "content": content,
+            "tags": tags or "",
+            "version": version,
+            "source": source,
+            "enabled": bool(enabled),
+        },
+        action="read",
+    )
 
 
 class SkillManagerAbility(SkillBuilderAbility):

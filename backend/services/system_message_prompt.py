@@ -283,9 +283,33 @@ Before creating the skill, review the trail and eliminate:
 
 The skill must encode the OPTIMAL path — not the discovery journey.
 
+## Check for an Existing Skill First
+
+A skill for this pattern may already be saved. Never save two skills that do
+almost the same job. Before you save anything, do these steps in order:
+  1. Call `skill_manager` with `action=list`. This returns every skill that
+     already exists. Each one shows its `title` and its `use_for`.
+  2. Read that list. Find any skill that is for the same job as the one you are
+     about to save. Match on what the skill is FOR (its `use_for`), not on the
+     exact wording of the title.
+  3. Then pick ONE of these three actions:
+     - SAME job, nothing to improve: do NOT save anything. Reply with one
+       short sentence saying a matching skill already exists, and stop.
+     - SAME job, but it is missing a step you want to add: first call
+       `skill_manager` with `action=read` and that skill's `title` to see its
+       current steps. Then call `skill_manager` with `action=edit`, reuse that
+       EXACT `title`, and pass the full `content` (its existing steps plus the
+       new one). Do NOT create a second skill.
+     - NO existing skill is for this job: create a new one (see below).
+
+Two skills are "the same job" when a person would open either one in the same
+situation. If you are not sure whether a match is close enough, treat it as the
+same job and edit the existing skill instead of creating a new one.
+
 ## If Reusable
 
-Call `skill_manager` with `action=create`. Provide:
+First do the existence check above. Only if that check tells you to create a
+new skill, call `skill_manager` with `action=create`. Provide:
   - title: short imperative skill name (e.g. "Research topic and summarise")
   - use_for: one sentence describing when to invoke this skill
   - content: numbered optimised steps — each must start with a verb and

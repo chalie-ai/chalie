@@ -433,3 +433,121 @@ def test_skill_suggestion_prompt_contains_real_query_and_trail(db: sqlite3.Conne
     assert "2 iterations" in prompt, (
         f"Iteration count not found in suggestion prompt.\nPrompt:\n{prompt}"
     )
+
+
+# ===========================================================================
+# Feature tests — action=read surfaces content; skills_building loop self-halts
+# ===========================================================================
+
+
+@pytest.mark.unit
+def test_read_returns_full_content_that_list_omits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db: sqlite3.Connection
+) -> None:
+    """action=read surfaces a skill's full step content — which action=list omits —
+    so the suggestion model can inspect a candidate's steps before action=edit."""
+    from collections.abc import Sequence
+
+    import abilities.skill_builder as sb
+    import utils.skills_io as sio
+    from abilities._dispatcher import ToolDispatcher
+    from configs.channels import SkillSuggestionConfig
+    from tests._tool_result_harness import parse_body
+
+    dest = tmp_path / "skills.sqlite"
+    shutil.copy2(str(_REAL_DB), str(dest))
+    yaml_dir = tmp_path / "user_skills"
+    yaml_dir.mkdir()
+    monkeypatch.setattr(sio, "SKILLS_DB_PATH", dest)
+    monkeypatch.setattr(sio, "USER_SKILLS_DIR", yaml_dir)
+    monkeypatch.setattr(sb, "SKILLS_DB_PATH", dest)
+
+    title = "Morning Briefing Routine"
+    content = (
+        "1. Use `memory` to recall the user's briefing preferences.\n"
+        "2. Use `web_search` to fetch the latest headlines.\n"
+        "3. Use `weather` to fetch today's forecast."
+    )
+
+    # Create through the real dispatch hot path.
+    ToolDispatcher(_mp_for_skill_test(SkillSuggestionConfig(), db)).dispatch(
+        "skill_manager",
+        {
+            "action": "create",
+            "title": title,
+            "use_for": "delivering a morning briefing",
+            "content": content,
+            "act_summary": "x",
+        },
+    )
+
+    # read returns the full content + use_for...
+    read_rendered = ToolDispatcher(_mp_for_skill_test(SkillSuggestionConfig(), db)).dispatch(
+        "skill_manager", {"action": "read", "title": title, "act_summary": "x"}
+    )
+    assert _skill_head(read_rendered, "skill_manager").startswith("[skill_manager(status=success")
+    read_body = cast("dict[str, object]", parse_body(read_rendered, "skill_manager"))
+    assert read_body["content"] == content
+    assert read_body["use_for"] == "delivering a morning briefing"
+
+    # ...whereas list omits content entirely (titles + use_for only).
+    list_rendered = ToolDispatcher(_mp_for_skill_test(SkillSuggestionConfig(), db)).dispatch(
+        "skill_manager", {"action": "list", "act_summary": "x"}
+    )
+    list_body = cast("Sequence[dict[str, object]]", parse_body(list_rendered, "skill_manager"))
+    mine = next(r for r in list_body if r["title"] == title and r["source"] == "user")
+    assert "content" not in mine
+
+
+@pytest.mark.unit
+def test_skills_building_create_halts_loop_other_channels_unaffected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db: sqlite3.Connection
+) -> None:
+    """A successful create on the background suggestion channel sets the turn's
+    cancel_event — the signal _step checks to stop recursing — so the loop saves
+    exactly one skill. The same create on the user channel must NOT halt the
+    user's turn."""
+    import abilities.skill_builder as sb
+    import utils.skills_io as sio
+    from abilities._dispatcher import ToolDispatcher
+    from configs.channels import SkillSuggestionConfig, UserConfig
+
+    dest = tmp_path / "skills.sqlite"
+    shutil.copy2(str(_REAL_DB), str(dest))
+    yaml_dir = tmp_path / "user_skills"
+    yaml_dir.mkdir()
+    monkeypatch.setattr(sio, "SKILLS_DB_PATH", dest)
+    monkeypatch.setattr(sio, "USER_SKILLS_DIR", yaml_dir)
+    monkeypatch.setattr(sb, "SKILLS_DB_PATH", dest)
+
+    # Background suggestion loop (skill_manager on skills_building).
+    mgr_mp = _mp_for_skill_test(SkillSuggestionConfig(), db)
+    assert not mgr_mp.cancel_event.is_set()
+    rendered = ToolDispatcher(mgr_mp).dispatch(
+        "skill_manager",
+        {
+            "action": "create",
+            "title": "Background Briefing Routine",
+            "use_for": "delivering a morning briefing",
+            "content": "1. Use `memory` to recall preferences.\n2. Use `weather` to fetch the forecast.",
+            "act_summary": "x",
+        },
+    )
+    assert _skill_head(rendered, "skill_manager").startswith("[skill_manager(status=success")
+    assert mgr_mp.cancel_event.is_set()  # loop stops after the first write
+
+    # Same create via the user-facing skill_builder on the user channel.
+    user_mp = _mp_for_skill_test(UserConfig({}), db)
+    assert not user_mp.cancel_event.is_set()
+    rendered_user = ToolDispatcher(user_mp).dispatch(
+        "skill_builder",
+        {
+            "action": "create",
+            "title": "User Built Skill",
+            "use_for": "a user-authored playbook",
+            "content": "1. Use `memory` to recall context.",
+            "act_summary": "x",
+        },
+    )
+    assert _skill_head(rendered_user, "skill_builder").startswith("[skill_builder(status=success")
+    assert not user_mp.cancel_event.is_set()  # user's turn keeps running
