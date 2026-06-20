@@ -79,6 +79,10 @@ body::before {
   opacity: 0;
   transition: opacity 300ms ease;
 
+  &[data-ready='true'] {
+    opacity: 1;
+  }
+
   &[data-collapsed='true'] {
     grid-template-columns: var(--sidebar-w-collapsed) 1fr;
   }

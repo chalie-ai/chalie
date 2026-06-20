@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount } from 'vue';
+import { onMounted, onBeforeUnmount, ref } from 'vue';
 import { RouterView } from 'vue-router';
 import { useTheme } from '@chalie/shared';
 import { useShellStore } from './stores/shell';
@@ -14,9 +14,15 @@ const { init: initTheme } = useTheme();
 const shell = useShellStore();
 const heartbeat = useHeartbeat();
 
+// Reveal the shell once mounted — the shell starts at opacity:0 (see brain.scss)
+// so the 300ms fade-in runs on boot. Ports legacy app.js:375
+// (`appShell.style.opacity = '1'`), which the Vue cutover dropped.
+const ready = ref(false);
+
 onMounted(() => {
   initTheme();
   heartbeat.start();
+  ready.value = true;
 });
 
 onBeforeUnmount(() => {
@@ -39,6 +45,7 @@ function closeMobileScrim(): void {
     :data-collapsed="shell.sidebarCollapsed || undefined"
     :data-mobile-open="shell.mobileOpen || undefined"
     :data-providers-only="shell.providersOnly || undefined"
+    :data-ready="ready || undefined"
   >
     <!-- Mobile scrim -->
     <div id="mobileScrim" class="scrim" @click="closeMobileScrim"></div>
