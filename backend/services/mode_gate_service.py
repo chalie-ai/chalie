@@ -370,12 +370,12 @@ class ModeGateService:
             return state
 
         try:
-            from services import transcript_service
+            from services.transcript_service import Transcript
             # The 'user' channel interleaves role='user' and role='assistant'
-            # rows (see transcript_service.write_assistant_row). Fetch a
+            # rows (see Transcript.write_assistant_row). Fetch a
             # small window so that if the most recent row is an assistant
             # reply, we still find the user turn immediately before it.
-            rows = transcript_service.get_recent(channel='user', limit=5)
+            rows = Transcript.get_recent(channel='user', limit=5)
             # get_recent with no since_id returns oldest-first (DESC fetched,
             # then reversed). Walk newest → oldest to find the last user row.
             user_rows = [r for r in reversed(rows) if r.get('role') == 'user']

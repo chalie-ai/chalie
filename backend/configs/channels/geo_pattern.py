@@ -16,35 +16,24 @@ def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> st
     """Fetch location-tagged transcripts from the window and format them."""
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
-    # Bidirectional dependency: the per-source allowlist lives in
-    # services/source_profiles.py; this is the geo-window consumer.
-    from services.source_profiles import geo_user_channels_sql, non_compaction_sql  # noqa: PLC0415
     try:
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, role, content, created_at, "
-                "location_lat, location_lon, location_name "
-                "FROM transcript "
-                "WHERE id > ? AND id <= ? "
-                "AND location_lat IS NOT NULL AND location_lon IS NOT NULL "
-                "AND content IS NOT NULL AND content != '' "
-                f"AND {geo_user_channels_sql()} "
-                f"AND {non_compaction_sql()} "
-                "ORDER BY id ASC",
-                (window_start, window_end),
-            ).fetchall()
+        from services.transcript_service import Transcript  # noqa: PLC0415
+        rows = Transcript.window(
+            ["user"],
+            after_id=window_start,
+            before_id=window_end,
+            require_location=True,
+            require_content=True,
+            exclude_roles=("compaction",),
+        )
         if not rows:
             return "(no location-tagged transcripts in window)"
         lines = []
         for r in rows:
-            row_id, role, content, created_at, lat, lon, place_name = r
-            location_str = f"{lat},{lon}"
-            if place_name:
-                location_str = f"{lat},{lon} {place_name}"
+            lat, lon, place_name = r['location_lat'], r['location_lon'], r['location_name']
+            location_str = f"{lat},{lon}" if not place_name else f"{lat},{lon} {place_name}"
             lines.append(
-                f"[id={row_id} | {role} | {created_at} | {location_str}] {content}"
+                f"[id={r['id']} | {r['role']} | {r['created_at']} | {location_str}] {r['content']}"
             )
         return "\n".join(lines)
     except Exception as exc:

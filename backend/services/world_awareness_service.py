@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-from services.time_utils import utc_now
 
 if TYPE_CHECKING:
     from services.database_service import DatabaseService
@@ -96,36 +95,16 @@ class WorldAwarenessService:
         return candidates
 
     def _extract_topic_interests(self) -> list[dict[str, str | float]]:
-        try:
-            conn = self._db.get_connection()
-            cutoff = utc_now().isoformat()
-            cursor = conn.execute(
-                """SELECT channel, COUNT(*) as freq,
-                          MAX(created_at) as last_seen
-                   FROM transcript
-                   WHERE created_at >= datetime(?, '-' || ? || ' days')
-                     AND role = 'user'
-                     AND channel IS NOT NULL
-                     AND channel != ''
-                   GROUP BY channel
-                   ORDER BY freq DESC
-                   LIMIT 20""",
-                (cutoff, TOPIC_LOOKBACK_DAYS),
-            )
-            topics = cursor.fetchall()
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to query topics: {e}")
-            return []
-
-        candidates = []
+        from services.transcript_service import Transcript  # noqa: PLC0415
+        topics = Transcript.channel_activity(TOPIC_LOOKBACK_DAYS)
+        candidates: list[dict[str, str | float]] = []
         max_freq = max((row[1] for row in topics), default=1)
         for row in topics:
             topic_name = row[0].strip()
             if len(topic_name) < 2:
                 continue
             term = topic_name.replace("_", " ").replace("-", " ")
-            freq_score = row[1] / max_freq
-            candidates.append({"term": term, "score": freq_score, "source": "topic"})
+            candidates.append({"term": term, "score": row[1] / max_freq, "source": "topic"})
         return candidates
 
     def _deduplicate_by_embedding(self, candidates: list[dict[str, str | float]]) -> list[dict[str, str | float]]:

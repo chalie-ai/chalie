@@ -186,8 +186,8 @@ def _broadcast_turn_result(response: str, request_id: str, turn_start: float) ->
     # span tags with tool_calls identically.
     transcript_ids: list[int] = []
     try:
-        from services.transcript_service import get_recent  # noqa: PLC0415
-        rows = get_recent("user", limit=1)
+        from services.transcript_service import Transcript  # noqa: PLC0415
+        rows = Transcript.get_recent("user", limit=1)
         if rows:
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             from services.rich_media_parser import resolve_tool_call_transcript_ids  # noqa: PLC0415

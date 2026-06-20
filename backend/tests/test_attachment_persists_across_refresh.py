@@ -22,7 +22,7 @@ from services.document_service import DocumentService
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-from services.transcript_service import turn_id_of_row, write_input_row
+from services.transcript_service import Transcript
 from api.conversation import get_recent_history
 
 pytestmark = pytest.mark.unit
@@ -63,8 +63,8 @@ def _build_parent(attachments: list[str]) -> MessageProcessor:
     # the channel atomically inside the INSERT; read the allocated turn_id back by
     # row id. The turn's seeded tool calls and its _cleanup_cancelled delete both
     # key off the same (channel, turn_id) boundary.
-    parent.uid = write_input_row("user", "user", "Here is my receipt.")
-    parent.turn_id = turn_id_of_row(parent.uid)
+    parent.uid = Transcript.write_input_row("user", "user", "Here is my receipt.")
+    parent.turn_id = Transcript.turn_id_of_row(parent.uid)
     parent.active_tools = list(parent.config.always_available or [])
     return parent
 
@@ -102,7 +102,7 @@ def test_attachments_are_linked_and_served_on_refresh(db: sqlite3.Connection) ->
     assert _linked_doc_ids(cast(int, parent.uid)) == {img_doc["id"], txt_doc["id"]}
 
     # Step 2 assertion: the refresh rebuild serves those links on the user row.
-    messages, _ = get_recent_history(limit=120, offset=0)
+    messages, _, _ = get_recent_history(limit=120, offset=0)
     mine = next((m for m in messages if m["id"] == str(parent.uid)), None)
     assert mine is not None, "user turn missing from rebuilt history"
     attachments = mine.get("attachments")
@@ -143,7 +143,7 @@ def test_skipped_upload_writes_no_link(db: sqlite3.Connection) -> None:
     # Exactly one link — the skipped upload left no orphan reference.
     assert _linked_doc_ids(cast(int, parent.uid)) == {good_id}
 
-    messages, _ = get_recent_history(limit=120, offset=0)
+    messages, _, _ = get_recent_history(limit=120, offset=0)
     mine = next((m for m in messages if m["id"] == str(parent.uid)), None)
     assert mine is not None
     assert [a["doc_id"] for a in cast(list[dict[str, object]], mine.get("attachments", []))] == [good_id]

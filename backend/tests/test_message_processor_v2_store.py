@@ -250,11 +250,11 @@ _COMPACT_CHANNEL = 'test_compact_channel'
 class TestWrapWithCheckpoint:
     def test_row_with_content_exact_envelope_format(self, db: sqlite3.Connection) -> None:
         from services.message_processor import _wrap_with_checkpoint
-        from services import transcript_service
+        from services.transcript_service import Transcript
 
         # Production writes the compaction summary as a transcript row with
         # role='compaction'; its own id is the watermark.
-        transcript_service.write_input_row(_COMPACT_CHANNEL, 'compaction', 'checkpoint content')
+        Transcript.write_input_row(_COMPACT_CHANNEL, 'compaction', 'checkpoint content')
 
         result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'current body')
         expected = (

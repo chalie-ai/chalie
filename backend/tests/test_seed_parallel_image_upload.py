@@ -16,7 +16,7 @@ from services.document_service import DocumentService
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-from services.transcript_service import write_input_row
+from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -53,7 +53,7 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, "Here are some files.", {"attachments": attachments})
     parent.config = UserConfig()
-    parent.uid = write_input_row("user", "user", "Here are some files.")
+    parent.uid = Transcript.write_input_row("user", "user", "Here are some files.")
     parent.active_tools = list(parent.config.always_available or [])
     return parent
 

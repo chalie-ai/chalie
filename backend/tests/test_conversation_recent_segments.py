@@ -71,10 +71,10 @@ class TestConversationRecentSegments:
 
     def _seed_plain_turn(self, user_text: str, final_text: str) -> tuple[int, int]:
         """A turn with no tools: input row + a single final assistant row."""
-        from services import transcript_service as ts
-        uid = ts.write_input_row("user", "user", user_text)
-        turn = ts.turn_id_of_row(uid)
-        final_id = ts.write_assistant_row("user", final_text, turn_id=turn)
+        from services.transcript_service import Transcript
+        uid = Transcript.write_input_row("user", "user", user_text)
+        turn = Transcript.turn_id_of_row(uid)
+        final_id = Transcript.write_assistant_row("user", final_text, turn_id=turn)
         return uid, final_id
 
     def _seed_tool_turn(
@@ -91,12 +91,12 @@ class TestConversationRecentSegments:
 
         Seeded through the production writers + ActTrail.record — the same path
         the live chain takes — so the refresh path reads exactly what production
-        persists."""
-        from services import transcript_service as ts
+        persisTranscript."""
+        from services.transcript_service import Transcript
         from services.act_trail import ActTrail
-        uid = ts.write_input_row("user", "user", user_text)
-        turn = ts.turn_id_of_row(uid)
-        step_id = ts.write_assistant_row("user", step_text, turn_id=turn)
+        uid = Transcript.write_input_row("user", "user", user_text)
+        turn = Transcript.turn_id_of_row(uid)
+        step_id = Transcript.write_assistant_row("user", step_text, turn_id=turn)
         trail = ActTrail()
         for tc in tool_calls:
             trail.record(
@@ -106,14 +106,14 @@ class TestConversationRecentSegments:
                 transcript_id=step_id,
                 summary=cast(str, tc.get("summary", "")),
             )
-        final_id = ts.write_assistant_row("user", final_text, turn_id=turn)
+        final_id = Transcript.write_assistant_row("user", final_text, turn_id=turn)
         return uid, step_id, final_id
 
     def test_plain_assistant_row_gets_one_text_segment(self, db: sqlite3.Connection) -> None:
         self._seed_plain_turn("Hello", "Hi there!")
 
         from api.conversation import get_recent_history
-        messages, _ = get_recent_history(limit=10)
+        messages, _, _ = get_recent_history(limit=10)
 
         asst = next(m for m in messages if m["role"] == "assistant")
         assert asst["segments"] == [{"type": "text", "content": "Hi there!"}]
@@ -123,7 +123,7 @@ class TestConversationRecentSegments:
         self._seed_plain_turn("Hello", "Hi!")
 
         from api.conversation import get_recent_history
-        messages, _ = get_recent_history(limit=10)
+        messages, _, _ = get_recent_history(limit=10)
 
         user_msg = next(m for m in messages if m["role"] == "user")
         assert "segments" not in user_msg
@@ -131,7 +131,7 @@ class TestConversationRecentSegments:
     def test_final_row_pairs_a_rich_segment_from_the_step_rows_tool(self, db: sqlite3.Connection) -> None:
         """Turn-wide resolve: the weather tool ran on the STEP row, the synthesis
         span lives on the FINAL row. The refresh path must reach across the turn
-        to pair them — the rich card lands on the final row's segments."""
+        to pair them — the rich card lands on the final row's segmenTranscript."""
         _, _, final_id = self._seed_tool_turn(
             "What's the weather in London?",
             "Let me check the weather.",
@@ -141,7 +141,7 @@ class TestConversationRecentSegments:
         )
 
         from api.conversation import get_recent_history
-        messages, _ = get_recent_history(limit=10)
+        messages, _, _ = get_recent_history(limit=10)
 
         final = next(m for m in messages if m["id"] == str(final_id))
         rich = [s for s in cast(list[dict[str, object]], final["segments"]) if s["type"] == "rich"]
@@ -152,7 +152,7 @@ class TestConversationRecentSegments:
 
     def test_step_row_carries_its_own_tool_chip_with_summary(self, db: sqlite3.Connection) -> None:
         """Each assistant row surfaces ONLY the tools it emitted, with the
-        ability's persisted act_summary — the blue box the frontend prints."""
+        ability's persisted act_summary — the blue box the frontend prinTranscript."""
         _, step_id, final_id = self._seed_tool_turn(
             "What's the weather in London?",
             "Let me check the weather.",
@@ -162,7 +162,7 @@ class TestConversationRecentSegments:
         )
 
         from api.conversation import get_recent_history
-        messages, _ = get_recent_history(limit=10)
+        messages, _, _ = get_recent_history(limit=10)
         by_id = {m["id"]: m for m in messages}
 
         step = by_id[str(step_id)]
@@ -176,7 +176,7 @@ class TestConversationRecentSegments:
         _, final_id = self._seed_plain_turn("Q", "Plain response with no spans.")
 
         from api.conversation import get_recent_history
-        messages, _ = get_recent_history(limit=10)
+        messages, _, _ = get_recent_history(limit=10)
 
         asst = next(m for m in messages if m["id"] == str(final_id))
         assert asst["content"] == "Plain response with no spans."
@@ -196,7 +196,7 @@ class TestConversationRecentSegments:
         )
 
         from api.conversation import get_recent_history
-        messages, _ = get_recent_history(limit=10)
+        messages, _, _ = get_recent_history(limit=10)
         by_id = {m["id"]: m for m in messages}
 
         final = by_id[str(final_id)]
@@ -218,7 +218,7 @@ class TestConversationRecentSegments:
         self._seed_plain_turn("Thanks", "You are welcome!")
 
         from api.conversation import get_recent_history
-        messages, _ = get_recent_history(limit=10)
+        messages, _, _ = get_recent_history(limit=10)
 
         asst = [m for m in messages if m["role"] == "assistant"]
         # turn 1 yields a step + a final row; turn 2 yields one final row.

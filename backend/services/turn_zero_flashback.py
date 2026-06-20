@@ -342,11 +342,11 @@ class TurnZeroFlashback:
         centroid embedding read from this single definition so they never drift.
         An empty list means there is no prior conversation (session start).
         """
-        from services import transcript_service  # noqa: PLC0415
+        from services.transcript_service import Transcript  # noqa: PLC0415
 
         # Fetch one extra row so dropping the current turn still leaves a full
         # window of prior context.
-        rows = transcript_service.get_recent(
+        rows = Transcript.get_recent(
             cast("ProcessorConfig", self._mp.config).channel, limit=_CENTROID_WINDOW + 1
         )
         current_uid = self._mp.uid

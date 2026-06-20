@@ -85,35 +85,19 @@ def _collect_transcript_ids(episodes: list[object]) -> set[int]:
 def _fetch_transcript_spans(t_ids: set[int], db: "DatabaseService") -> str:
     """Returns '' if no transcript IDs found."""
     import logging as _logging  # noqa: PLC0415
+    from services.transcript_service import Transcript
     _log = _logging.getLogger(__name__)
     if not t_ids:
         return ""
 
     try:
-        placeholders = ",".join("?" * len(t_ids))
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, role, content, tool_name, created_at
-                FROM transcript
-                WHERE id IN ({placeholders})
-                ORDER BY id ASC
-                """,
-                list(t_ids),
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-
         lines = []
-        for r in rows:
-            entry_id, role, content, tool_name, created_at = r
-            if tool_name:
-                lines.append(f"[{entry_id}] ({created_at}) {role} [{tool_name}]: {content}")
+        for r in Transcript.by_ids(sorted(t_ids)):
+            if r["tool_name"]:
+                lines.append(f"[{r['id']}] ({r['created_at']}) {r['role']} [{r['tool_name']}]: {r['content']}")
             else:
-                lines.append(f"[{entry_id}] ({created_at}) {role}: {content}")
+                lines.append(f"[{r['id']}] ({r['created_at']}) {r['role']}: {r['content']}")
         return "\n".join(lines)
-
     except Exception as exc:
         _log.warning("%s _fetch_transcript_spans failed: %s", _SUPER_EP_LOG_PREFIX, exc)
         return ""

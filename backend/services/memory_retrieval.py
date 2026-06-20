@@ -437,7 +437,7 @@ def _expand_recursive(
     transcript_ids = _parse_json_list(episode.get("transcript_ids"))
 
     if transcript_ids and not consolidated_from:
-        results.extend(_fetch_transcript_entries(db, transcript_ids))
+        results.extend(_fetch_transcript_entries(transcript_ids))
         return
 
     if consolidated_from:
@@ -481,28 +481,15 @@ def _fetch_episodes_by_ids(db_service: "DatabaseService", episode_ids: list[obje
         return []
 
 
-def _fetch_transcript_entries(db_service: "DatabaseService", transcript_ids: list[object]) -> list[dict[str, object]]:
+def _fetch_transcript_entries(transcript_ids: list[object]) -> list[dict[str, object]]:
+    from services.transcript_service import Transcript
     if not transcript_ids:
         return []
     try:
-        with db_service.connection() as conn:
-            placeholders = ",".join("?" for _ in transcript_ids)
-            cursor = conn.execute(
-                f"SELECT id, role, content, tool_name, created_at FROM transcript "
-                f"WHERE id IN ({placeholders}) ORDER BY id",
-                list(transcript_ids),
-            )
-            rows = cursor.fetchall()
-
-        entries = []
-        for r in rows:
-            content = r[2] or ""
-            entries.append({
-                "type": "transcript",
-                "content": content,
-                "salience": None,
-            })
-        return entries
+        return [
+            {"type": "transcript", "content": r["content"] or "", "salience": None}
+            for r in Transcript.by_ids([int(cast(int, tid)) for tid in transcript_ids])
+        ]
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Transcript fetch failed: {exc}")
         return []
@@ -858,7 +845,7 @@ def _recall_payload(results: list[dict[str, object]]) -> list[dict[str, object]]
     episode hit carries one). ``score`` is the relevance label (high/medium/low);
     the raw confidence stays internal. The structured shape replaces the old
     ``[id:X,relevance:Y] text`` prose: it is machine-parseable for the model AND
-    is what ``transcript_service._fetch_referenced_episodes`` keys its episode
+    is what ``Transcript._fetch_referenced_episodes`` keys its episode
     back-reference on (the ``id`` field), so the format is load-bearing.
     """
     rows: list[dict[str, object]] = []

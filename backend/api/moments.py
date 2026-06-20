@@ -88,18 +88,11 @@ def _serialize_moment(row: "dict[str, object]") -> "dict[str, object]":
 
 
 def _fetch_transcript_row(db: "DatabaseService", transcript_id: int) -> "dict[str, object] | None":
-    with db.connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, role, content FROM transcript WHERE id = ?",
-            (transcript_id,),
-        )
-        row = cursor.fetchone()
-        cursor.close()
-
-    if row is None:
+    from services.transcript_service import Transcript
+    rows = Transcript.by_ids([transcript_id])
+    if not rows:
         return None
-    return {'id': row[0], 'role': row[1], 'content': row[2]}
+    return {'id': rows[0]['id'], 'role': rows[0]['role'], 'content': rows[0]['content']}
 
 
 def _normalise(text: str) -> str:
@@ -115,24 +108,14 @@ def _resolve_assistant_turn_by_text(db: "DatabaseService", message_text: str) ->
     the same plaintext the chat UI rendered, so an exact match is reliable for
     the message the user is looking at. Returns ``None`` when nothing matches.
     """
+    from services.transcript_service import Transcript
     target = _normalise(message_text)
     if not target:
         return None
 
-    with db.connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, role, content FROM transcript "
-            "WHERE channel = ? AND role = 'assistant' "
-            "ORDER BY id DESC LIMIT ?",
-            (_USER_CHANNEL, _RESOLVE_SCAN_LIMIT),
-        )
-        rows = cursor.fetchall()
-        cursor.close()
-
-    for row in rows:
-        if _normalise(extract_plaintext(row[2] or "")) == target:
-            return {'id': row[0], 'role': row[1], 'content': row[2]}
+    for row in reversed(Transcript.get_recent(_USER_CHANNEL, limit=_RESOLVE_SCAN_LIMIT, role='assistant')):
+        if _normalise(extract_plaintext(cast(str, row['content']) or "")) == target:
+            return {'id': row['id'], 'role': row['role'], 'content': row['content']}
     return None
 
 

@@ -47,7 +47,15 @@ export interface ToolPill {
   resolved: boolean;
 }
 
-export interface UserForm {
+/**
+ * The backend turn this form belongs to. Set on forms reconstructed from
+ * history; the `turns` getter groups by it (so a compaction-continuation turn
+ * with no leading user row is still its own group). Live forms leave it unset
+ * and fall back to user-form-boundary grouping.
+ */
+type TurnTagged = { turnId?: number | null };
+
+export interface UserForm extends TurnTagged {
   kind: 'user';
   id: number;
   text: string;
@@ -56,7 +64,7 @@ export interface UserForm {
   inWorkingMemory?: boolean;
 }
 
-export interface ChalieForm {
+export interface ChalieForm extends TurnTagged {
   kind: 'chalie';
   id: number;
   text?: string;
@@ -66,7 +74,7 @@ export interface ChalieForm {
   inWorkingMemory?: boolean;
 }
 
-export interface ActForm {
+export interface ActForm extends TurnTagged {
   kind: 'act';
   id: number;
   tools: ToolPill[];
@@ -78,7 +86,7 @@ export interface ActForm {
   collapsed: boolean;
 }
 
-export interface ErrorForm {
+export interface ErrorForm extends TurnTagged {
   kind: 'error';
   id: number;
   message: string;
@@ -120,15 +128,21 @@ export const useConversationStore = defineStore('conversation', {
 
   getters: {
     /**
-     * The flat forms array grouped into turns. A turn starts at each user form
-     * and runs until the next one; any forms before the first user form (e.g. a
-     * turn-zero flashback) form their own leading group. Drives turn-based
-     * spacing and whole-turn TTS.
+     * The flat forms array grouped into turns. History forms carry a backend
+     * `turnId`, so a turn boundary is any change of `turnId` — this keeps a
+     * compaction-continuation turn (assistant rows, no leading user row) as its
+     * own group. Live forms have no `turnId` and fall back to the old rule: a
+     * turn starts at each user form. Drives turn-based spacing and whole-turn TTS.
      */
     turns(state): Turn[] {
       const groups: Turn[] = [];
+      let key: number | null | undefined;
       for (const f of state.forms) {
-        if (f.kind === 'user' || groups.length === 0) groups.push({ id: f.id, forms: [] });
+        const boundary =
+          groups.length === 0 ||
+          (f.turnId != null ? f.turnId !== key : f.kind === 'user');
+        if (boundary) groups.push({ id: f.id, forms: [] });
+        key = f.turnId;
         groups[groups.length - 1].forms.push(f);
       }
       return groups;
@@ -169,7 +183,7 @@ export const useConversationStore = defineStore('conversation', {
     appendUser(
       text: string,
       attachments?: AttachmentPreview[],
-      opts?: { inWorkingMemory?: boolean },
+      opts?: { inWorkingMemory?: boolean; turnId?: number | null },
     ): number {
       const id = nextId();
       const form: UserForm = {
@@ -178,6 +192,7 @@ export const useConversationStore = defineStore('conversation', {
         text,
         attachments: attachments ?? [],
         inWorkingMemory: opts?.inWorkingMemory ?? true,
+        turnId: opts?.turnId,
       };
       this.forms.push(form);
       return id;
@@ -426,6 +441,7 @@ export const useConversationStore = defineStore('conversation', {
           segments: msg.segments,
           meta,
           inWorkingMemory,
+          turnId: msg.turn_id,
         });
       }
       if (msg.tool_calls?.length) {
@@ -437,7 +453,7 @@ export const useConversationStore = defineStore('conversation', {
           ok: true,
           resolved: true,
         }));
-        out.push({ kind: 'act', id: nextId(), tools, collapsed: true });
+        out.push({ kind: 'act', id: nextId(), tools, collapsed: true, turnId: msg.turn_id });
       }
       return out;
     },
@@ -445,7 +461,7 @@ export const useConversationStore = defineStore('conversation', {
     _appendMessage(msg: ConversationMessage, inWorkingMemory: boolean): void {
       if (msg.role === 'user') {
         const attachments = this._attachmentsFor(msg);
-        this.appendUser(msg.content, attachments, { inWorkingMemory });
+        this.appendUser(msg.content, attachments, { inWorkingMemory, turnId: msg.turn_id });
         return;
       }
       for (const form of this._assistantForms(msg, inWorkingMemory)) {
@@ -463,6 +479,7 @@ export const useConversationStore = defineStore('conversation', {
           text: msg.content,
           attachments,
           inWorkingMemory,
+          turnId: msg.turn_id,
         });
         return;
       }

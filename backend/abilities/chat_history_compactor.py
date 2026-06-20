@@ -81,7 +81,8 @@ class ChatHistoryCompactor(Ability):
 
     def run(self, params: dict[str, object]) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
-        from services import compaction_persistence, transcript_service  # noqa: PLC0415
+        from services import compaction_persistence  # noqa: PLC0415
+        from services.transcript_service import Transcript  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
         channel = mp.config.channel
@@ -112,7 +113,7 @@ class ChatHistoryCompactor(Ability):
         # The model's output IS the checkpoint — write it verbatim. The new
         # transcript row's own id becomes the watermark (advances unconditionally
         # on a non-empty backlog → no silent no-write, no infinite loop).
-        transcript_service.write_input_row(channel, "compaction", summary)
+        Transcript.write_input_row(channel, "compaction", summary)
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod

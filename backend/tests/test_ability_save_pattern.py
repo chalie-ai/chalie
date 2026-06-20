@@ -18,7 +18,7 @@ from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig
 from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
-from services.transcript_service import turn_id_of_row
+from services.transcript_service import Transcript
 from tests._tool_result_harness import body, head, seed_transcript
 
 pytestmark = pytest.mark.unit
@@ -43,7 +43,7 @@ def _mp(db: sqlite3.Connection) -> MessageProcessor:
     # The per-turn budget is derived from this turn's tool_calls rows, keyed by
     # (config.channel, turn_id) — set turn_id from the seeded input row exactly
     # as production's _setup does. No instance state.
-    mp.turn_id = turn_id_of_row(mp.uid)
+    mp.turn_id = Transcript.turn_id_of_row(mp.uid)
     return mp
 
 
@@ -74,7 +74,7 @@ def _geo_mp(db: sqlite3.Connection) -> MessageProcessor:
     mp.uid = seed_transcript(
         db, channel="geo_pattern", content="user goes to the gym at the harbour daily"
     )
-    mp.turn_id = turn_id_of_row(mp.uid)
+    mp.turn_id = Transcript.turn_id_of_row(mp.uid)
     return mp
 
 

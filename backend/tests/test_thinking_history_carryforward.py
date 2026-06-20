@@ -73,12 +73,12 @@ class _RecordingProvider:
 def _build_parent(raw_input: str) -> "MessageProcessor":
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
-    from services.transcript_service import write_input_row
+    from services.transcript_service import Transcript
 
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, raw_input, None)
     parent.config = UserConfig()
-    parent.uid = write_input_row("user", "user", raw_input)
+    parent.uid = Transcript.write_input_row("user", "user", raw_input)
     # _setup seeds active_tools BEFORE _seed_turn_zero dispatches thinking; put the
     # parent in that same pre-dispatch state so the snapshot is faithful.
     parent.active_tools = list(parent.config.always_available or [])
@@ -91,13 +91,13 @@ def test_thinking_prepass_mirrors_parent_user_message(db: sqlite3.Connection) ->
     Pre-fix: ThinkingConfig.get_user_prompt returned only an exploration prefix +
     raw input, so the captured request had no '## Previous Messages' and never
     mentioned BRATWURST. Post-fix it carries the parent's full rendered body."""
-    from services.transcript_service import write_input_row
+    from services.transcript_service import Transcript
     from abilities._dispatcher import ToolDispatcher
 
     # Prior conversation on the real 'user' channel — the SAME factory production
     # uses to persist turns. The codeword is the cross-turn marker.
-    write_input_row("user", "user", "Remember this: the codeword is BRATWURST.")
-    write_input_row("user", "assistant", "Got it — the codeword is BRATWURST.")
+    Transcript.write_input_row("user", "user", "Remember this: the codeword is BRATWURST.")
+    Transcript.write_input_row("user", "assistant", "Got it — the codeword is BRATWURST.")
 
     parent = _build_parent("What was the codeword again?")
 
@@ -157,13 +157,13 @@ def test_thinking_system_prompt_is_deliberation_overlay_only(db: sqlite3.Connect
 def test_thinking_prepass_mirrors_parent_tool_surface(db: sqlite3.Connection) -> None:
     """The thinking pass offers the SAME tool list the parent's turn does —
     snapshotted from the parent's live ``active_tools`` (parent-config-agnostic)."""
-    from services.transcript_service import write_input_row
+    from services.transcript_service import Transcript
     from abilities._dispatcher import ToolDispatcher
     from abilities._registry import AbilityRegistry
 
     for i in range(6):
-        write_input_row("user", "user", f"Earlier turn number {i} about project ATLAS.")
-        write_input_row("user", "assistant", f"Acknowledged turn {i} on project ATLAS.")
+        Transcript.write_input_row("user", "user", f"Earlier turn number {i} about project ATLAS.")
+        Transcript.write_input_row("user", "assistant", f"Acknowledged turn {i} on project ATLAS.")
 
     parent = _build_parent("Summarise where we are on ATLAS.")
     parent_tool_names = {t["name"] for t in AbilityRegistry.build_tools(parent)}

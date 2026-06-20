@@ -25,7 +25,7 @@ from services.provider_api import ProviderApiRequest, ProviderApiResponse, Think
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-from services.transcript_service import turn_id_of_row, write_input_row
+from services.transcript_service import Transcript
 
 if TYPE_CHECKING:
     from services.llm_clients.base import ProviderClient
@@ -105,8 +105,8 @@ def _build_parent(attachments: list[str]) -> MessageProcessor:
     # row id. That (channel, turn_id) boundary is what the upload's act-trail row
     # and the thinking pass's _render_act_trail snapshot both key off — without it
     # the snapshot is blind to the upload.
-    parent.uid = write_input_row("user", "user", "What is in this image?")
-    parent.turn_id = turn_id_of_row(parent.uid)
+    parent.uid = Transcript.write_input_row("user", "user", "What is in this image?")
+    parent.turn_id = Transcript.turn_id_of_row(parent.uid)
     parent.active_tools = list(parent.config.always_available or [])
     # The gate (user channel only) would set this before _seed_turn_zero fires.
     parent.thinking_level = "high"

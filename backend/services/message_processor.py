@@ -231,7 +231,7 @@ class MessageProcessor:
         # resolves it each turn. Empty for compaction/encoder channels by design.
         self.active_tools = list(self._cfg.always_available or [])
 
-        from services.transcript_service import turn_id_of_row, write_input_row
+        from services.transcript_service import Transcript  # noqa: PLC0415
 
         # Writing the input row allocates the next turn_id ATOMICALLY (a COALESCE
         # subquery inside the INSERT, under the writer lock) — never max+1 in
@@ -244,10 +244,10 @@ class MessageProcessor:
         # skip_input_row channel (vision, skill_association) leaves turn_id None
         # and lets its end message allocate its own turn.
         if not self._cfg.skip_input_row:
-            self.uid = write_input_row(
+            self.uid = Transcript.write_input_row(
                 self._cfg.channel, self._cfg.role, self._raw_input,
             )
-            self.turn_id = turn_id_of_row(self.uid)
+            self.turn_id = Transcript.turn_id_of_row(self.uid)
             self.anchor = self.uid
             if self.turn_id is not None:
                 self._chain_turn_ids.add(self.turn_id)
@@ -309,10 +309,10 @@ class MessageProcessor:
         # Scoped to the user-attachment seed: a model-issued upload mid-turn must
         # NOT render as a user attachment.
         if self.uid is not None:
-            from services.transcript_service import link_transcript_doc  # noqa: PLC0415
+            from services.transcript_service import Transcript  # noqa: PLC0415
             match = _SEED_UPLOAD_ID_RE.search(result)
             if match:
-                link_transcript_doc(self.uid, match.group(1))
+                Transcript.link_transcript_doc(self.uid, match.group(1))
 
     def _build_send_dto(self) -> "ProviderApiRequest":
         """Build a ProviderApiRequest from this mp's current state."""
@@ -391,11 +391,11 @@ class MessageProcessor:
         formatted = self._format_response(text or "")
         if self._cfg.skip_transcript:
             return formatted
-        from services.transcript_service import turn_id_of_row, write_assistant_row  # noqa: PLC0415
+        from services.transcript_service import Transcript  # noqa: PLC0415
 
-        row_id = write_assistant_row(self._cfg.channel, formatted, turn_id=self.turn_id)
+        row_id = Transcript.write_assistant_row(self._cfg.channel, formatted, turn_id=self.turn_id)
         if self.turn_id is None:
-            self.turn_id = turn_id_of_row(row_id)
+            self.turn_id = Transcript.turn_id_of_row(row_id)
             if self.turn_id is not None:
                 self._chain_turn_ids.add(self.turn_id)
         self.anchor = row_id
@@ -441,9 +441,9 @@ class MessageProcessor:
         child.thinking_override = self.thinking_override
         child.providers = self.providers
         if post_compaction:
-            from services.transcript_service import latest_input_content  # noqa: PLC0415
+            from services.transcript_service import Transcript  # noqa: PLC0415
             child.post_compaction_continuation = True
-            child.continuation_user_query = latest_input_content(self._cfg.channel)
+            child.continuation_user_query = Transcript.latest_input_content(self._cfg.channel)
             if "review_transcript" not in child.active_tools:
                 child.active_tools.append("review_transcript")
         return child
@@ -509,10 +509,11 @@ class MessageProcessor:
         """Watermark-bounded transcript rows for this channel, EXCLUDING the current turn."""
         if self._cfg.suppress_history:
             return []
-        from services import compaction_persistence, transcript_service  # noqa: PLC0415
+        from services import compaction_persistence  # noqa: PLC0415
+        from services.transcript_service import Transcript  # noqa: PLC0415
         compaction = compaction_persistence.get_compaction(self._cfg.channel)
         watermark = cast("int", compaction["compacted_up_to_id"]) if compaction else 0
-        rows = transcript_service.get_recent(self._cfg.channel, since_id=watermark)
+        rows = Transcript.get_recent(self._cfg.channel, since_id=watermark)
         if self.turn_id is None:
             return rows
         return [r for r in rows if cast("int", r.get("turn_id") or 0) < self.turn_id]
@@ -549,7 +550,7 @@ class MessageProcessor:
         """Fire chat-history compaction through the normal tool-dispatch chokepoint."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
         from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import turn_id_of_row  # noqa: PLC0415
+        from services.transcript_service import Transcript  # noqa: PLC0415
 
         before = compaction_persistence.get_compaction(self._cfg.channel)
         before_id = cast("int", before["compacted_up_to_id"]) if before else 0
@@ -562,7 +563,7 @@ class MessageProcessor:
         after_id = cast("int", after["compacted_up_to_id"]) if after else 0
         if after_id <= before_id:
             return
-        new_turn = turn_id_of_row(after_id)
+        new_turn = Transcript.turn_id_of_row(after_id)
         if new_turn is not None:
             self.turn_id = new_turn
             self._chain_turn_ids.add(new_turn)

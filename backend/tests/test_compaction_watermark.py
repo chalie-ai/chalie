@@ -2,7 +2,8 @@ import sqlite3
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from services import compaction_persistence, transcript_service
+from services import compaction_persistence
+from services.transcript_service import Transcript
 from services.database_service import get_shared_db_service
 
 if TYPE_CHECKING:
@@ -19,9 +20,9 @@ def _clear(db: sqlite3.Connection, channel: str) -> None:
 def test_get_compaction_reads_transcript_role_compaction(db: sqlite3.Connection) -> None:
     ch = "test_wm"
     _clear(db, ch)
-    transcript_service.write_input_row(ch, "user", "hello one")
-    transcript_service.write_input_row(ch, "assistant", "reply one")
-    cid = transcript_service.write_input_row(ch, "compaction", "SUMMARY: one happened")
+    Transcript.write_input_row(ch, "user", "hello one")
+    Transcript.write_input_row(ch, "assistant", "reply one")
+    cid = Transcript.write_input_row(ch, "compaction", "SUMMARY: one happened")
 
     row = compaction_persistence.get_compaction(ch)
     assert row is not None
@@ -34,11 +35,11 @@ def test_previous_rows_excludes_through_watermark_and_has_no_limit(db: sqlite3.C
     ch = "test_wm2"
     _clear(db, ch)
     for i in range(25):  # >20 — proves the old limit=20 bug is gone
-        transcript_service.write_input_row(ch, "user", f"msg {i}")
-    cid = transcript_service.write_input_row(ch, "compaction", "checkpoint")
-    after = transcript_service.write_input_row(ch, "user", "after compaction")
+        Transcript.write_input_row(ch, "user", f"msg {i}")
+    cid = Transcript.write_input_row(ch, "compaction", "checkpoint")
+    after = Transcript.write_input_row(ch, "user", "after compaction")
 
-    rows = transcript_service.get_recent(ch, since_id=cid)
+    rows = Transcript.get_recent(ch, since_id=cid)
     ids = [cast(int, r["id"]) for r in rows]
     assert after in ids
     assert cid not in ids               # watermark row itself excluded
@@ -108,7 +109,7 @@ def test_measure_true_when_full_request_reaches_threshold(db: sqlite3.Connection
     n_rows = 40
     big = " ".join(f"w{j}" for j in range(400))
     for i in range(n_rows):
-        transcript_service.write_input_row(ch, "user", f"row{i:03d} {big}")
+        Transcript.write_input_row(ch, "user", f"row{i:03d} {big}")
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
@@ -139,7 +140,7 @@ def test_measure_false_when_request_fits(db: sqlite3.Connection) -> None:
     ch = "user"
     _clear(db, ch)
     for i in range(3):
-        transcript_service.write_input_row(ch, "user", f"short {i}")
+        Transcript.write_input_row(ch, "user", f"short {i}")
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
@@ -172,7 +173,7 @@ def test_send_raises_request_over_cap_without_calling_provider(db: sqlite3.Conne
     _clear(db, ch)
     big = " ".join(f"w{j}" for j in range(400))
     for i in range(40):
-        transcript_service.write_input_row(ch, "user", f"row{i:03d} {big}")
+        Transcript.write_input_row(ch, "user", f"row{i:03d} {big}")
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
@@ -206,7 +207,7 @@ def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db: sqlite3.C
     n_rows = 40
     big = " ".join(f"w{j}" for j in range(400))
     for i in range(n_rows):
-        transcript_service.write_input_row(ch, "user", f"row{i:03d} {big}")
+        Transcript.write_input_row(ch, "user", f"row{i:03d} {big}")
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
@@ -249,7 +250,7 @@ def test_fit_compaction_input_no_drop_when_bare_request_fits(db: sqlite3.Connect
     ch = "user"
     _clear(db, ch)
     for i in range(3):
-        transcript_service.write_input_row(ch, "user", f"short {i}")
+        Transcript.write_input_row(ch, "user", f"short {i}")
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 

@@ -24,6 +24,12 @@ export interface ConversationMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  /**
+   * The turn this row belongs to. Under the chain model a turn is many rows
+   * (input → step rows → final synthesis row) sharing one `turn_id`; the feed
+   * groups by this. Null for legacy rows written before turn tracking existed.
+   */
+  turn_id: number | null;
   /** Present on user turns when attachments were uploaded. */
   attachments?: ConversationAttachment[];
   /** Present on assistant turns — one or more content segments. */
@@ -42,14 +48,15 @@ export const conversation = {
   /**
    * Fetch recent conversation turns.
    * @param limit  Max turns to return (1–120, default 12).
-   * @param offset Row offset for scroll-up pagination — the backend
-   *               (`/conversation/recent`) reads `offset`, counting back from the
-   *               newest row.
+   * @param offset Turn offset for scroll-up pagination — the backend
+   *               (`/conversation/recent`) reads `offset`, counting back whole
+   *               turns from the newest. `turns_returned` reports how many turns
+   *               this page actually held, so the caller advances by turns.
    */
   recent(
     limit = 12,
     offset?: number,
-  ): Promise<{ messages: ConversationMessage[]; has_more: boolean }> {
+  ): Promise<{ messages: ConversationMessage[]; has_more: boolean; turns_returned: number }> {
     const q = new URLSearchParams({ limit: String(limit) });
     if (offset != null) q.set('offset', String(offset));
     return api.get(`/conversation/recent?${q.toString()}`);

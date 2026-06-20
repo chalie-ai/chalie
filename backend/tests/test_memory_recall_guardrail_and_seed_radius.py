@@ -15,7 +15,7 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.message_processor import MessageProcessor
-from services.transcript_service import write_input_row
+from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -27,7 +27,7 @@ def _build_user_mp(text: str) -> MessageProcessor:
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, text, {})
     parent.config = UserConfig()
-    parent.uid = write_input_row("user", "user", text)
+    parent.uid = Transcript.write_input_row("user", "user", text)
     parent.active_tools = list(parent.config.always_available or [])
     return parent
 

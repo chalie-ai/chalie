@@ -148,7 +148,7 @@ def test_turn_zero_flashback_renders_the_full_untruncated_gist(db: sqlite3.Conne
     from typing import cast
     from configs.channels import UserConfig
     from services.message_processor import MessageProcessor
-    from services.transcript_service import write_input_row
+    from services.transcript_service import Transcript
 
     long_gist = (
         "Remind me about the Gozo ferry booking — the user booked it for the "
@@ -166,7 +166,7 @@ def test_turn_zero_flashback_renders_the_full_untruncated_gist(db: sqlite3.Conne
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "remind me about the Gozo ferry booking", {})
     mp.config = UserConfig()
-    mp.uid = write_input_row("user", "user", "remind me about the Gozo ferry booking")
+    mp.uid = Transcript.write_input_row("user", "user", "remind me about the Gozo ferry booking")
     mp.active_tools = list(mp.config.always_available or [])
     mp._seed_turn_zero()
 

@@ -34,6 +34,7 @@ _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+from services.transcript_service import Transcript  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -386,15 +387,7 @@ def run_once_on_boot(db_path: str | None = None, limit: int = 100) -> None:
 
     try:
         # Discover all channels that have transcript rows
-        conn = sqlite3.connect(db_path, timeout=30)
-        conn.row_factory = sqlite3.Row
-        all_channels = [
-            r["channel"]
-            for r in conn.execute(
-                "SELECT DISTINCT channel FROM transcript ORDER BY channel"
-            ).fetchall()
-        ]
-        conn.close()
+        all_channels = Transcript.distinct_channels()
 
         # Skip background/system channels
         channels = [
