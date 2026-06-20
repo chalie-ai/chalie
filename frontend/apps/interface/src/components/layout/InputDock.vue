@@ -35,7 +35,6 @@ const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
 const ambient = useAmbientSensor();
 
-const { isSending } = storeToRefs(session);
 const { available: voiceAvailable, recorderState, recError } = storeToRefs(voiceStore);
 const { level, levelLabel, usageDisplay } = storeToRefs(contextUsage);
 
@@ -116,23 +115,9 @@ async function handleSend(): Promise<void> {
   textareaRef.value?.focus();
 }
 
-async function handleStop(): Promise<void> {
-  await session.requestStop();
-  // requestStop dispatches session:turn-interrupted which the listener below
-  // catches to restore text; focus is handled there.
-}
-
-// ── Keyboard ──────────────────────────────────────────────────────────────────
-
-function handleKeydown(e: KeyboardEvent): void {
-  // Enter without Shift → send. Shift+Enter → newline (default behaviour).
-  // While a turn is in flight, Enter still sends: session.sendMessage appends
-  // the text to the active turn (the mid-ACT append is handled in the store).
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    handleSend();
-  }
-}
+// The compose box is a multi-line textarea: Enter inserts a newline (the native
+// default), and ONLY the send button submits — so there is no keydown handler.
+// Cancelling an in-flight turn is the act-trail's stop/undo button, not the dock.
 
 // ── Mic (voice recorder) ──────────────────────────────────────────────────────
 
@@ -339,7 +324,7 @@ onBeforeUnmount(() => {
           <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
 
-        <!-- Compose textarea -->
+        <!-- Compose textarea — Enter = newline; the send button is the only submit. -->
         <textarea
           id="chatInput"
           ref="textareaRef"
@@ -348,24 +333,18 @@ onBeforeUnmount(() => {
           placeholder="Talk to Chalie..."
           rows="1"
           @input="grow"
-          @keydown="handleKeydown"
         ></textarea>
 
-        <!-- Send / Stop button -->
+        <!-- Send button — the only submit. Cancelling a turn is the act-trail's job. -->
         <button
           class="btn-action btn-action--send"
-          :aria-label="isSending ? 'Stop' : 'Send message'"
-          :disabled="!isSending && !canSend"
-          @click="isSending ? handleStop() : handleSend()"
+          aria-label="Send message"
+          :disabled="!canSend"
+          @click="handleSend()"
         >
-          <!-- Send icon -->
-          <svg v-if="!isSending" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <line x1="22" y1="2" x2="11" y2="13"></line>
             <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
-          <!-- Stop icon (square) -->
-          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
           </svg>
         </button>
       </div>

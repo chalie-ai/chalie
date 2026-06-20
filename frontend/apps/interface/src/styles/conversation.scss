@@ -114,11 +114,6 @@
   text-shadow: none !important;
 }
 
-.speech-form .sender-glyph,
-.speech-form__header .sender-glyph {
-  filter: none !important;
-}
-
 // --------------------------------------------------------------------------
 // 3. Chalie bubble
 // --------------------------------------------------------------------------
@@ -141,34 +136,16 @@
   display: none;
 }
 
-// Header row: glyph + timestamp
-.speech-form--chalie .speech-form__header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: var(--space-sm);
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
-}
-
+// Chalie glyph now lives inline in the footer (meta) row; ErrorForm keeps a header
+.speech-form--chalie .speech-form__meta .sender-glyph,
 .speech-form--chalie .speech-form__header .sender-glyph {
   position: static;
-  left: auto;
-  right: auto;
-  top: auto;
-  width: 18px;
-  height: 18px;
-  color: var(--violet);
-  filter: drop-shadow(0 0 6px currentColor);
-}
-
-.speech-form--chalie .speech-form__header .speech-form__timestamp {
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
-  letter-spacing: 0.04em;
+  width: 16px;
+  height: 16px;
 }
 
 // --------------------------------------------------------------------------
-// 4. Sender glyph (general)
+// 4. Sender glyph (general) — SVG asset painted via mask so currentColor themes it
 // --------------------------------------------------------------------------
 .sender-glyph {
   position: absolute;
@@ -177,19 +154,26 @@
   height: 18px;
   z-index: 3;
   pointer-events: none;
-  filter: drop-shadow(0 0 6px currentColor);
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
 }
 
-.speech-form--chalie .sender-glyph { left: -9px;  color: var(--violet); }
-.speech-form--user   .sender-glyph { right: -9px; color: var(--dusk-blue); }
-
-.speech-form--chalie .sender-glyph circle.sender-glyph__dot {
+.speech-form--chalie .sender-glyph {
+  left: -9px;
+  color: var(--violet);
+  -webkit-mask-image: url(/icons/sender-glyph-chalie.svg);
+  mask-image: url(/icons/sender-glyph-chalie.svg);
   animation: glyphTwinkle 3.2s ease-in-out infinite;
 }
 
-.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(2) { animation-delay: 0.4s; }
-.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(3) { animation-delay: 0.9s; }
-.speech-form--chalie .sender-glyph circle.sender-glyph__dot:nth-of-type(4) { animation-delay: 1.4s; }
+.speech-form--user .sender-glyph {
+  right: -9px;
+  color: var(--dusk-blue);
+  -webkit-mask-image: url(/icons/sender-glyph-user.svg);
+  mask-image: url(/icons/sender-glyph-user.svg);
+}
 
 @keyframes glyphTwinkle {
   0%, 100% { opacity: 0.55; }
@@ -197,7 +181,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sender-glyph circle.sender-glyph__dot { animation: none; opacity: 0.85; }
+  .speech-form--chalie .sender-glyph { animation: none; opacity: 0.85; }
 }
 
 // --------------------------------------------------------------------------
@@ -269,7 +253,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  margin-top: var(--space-md);
+  margin-top: var(--space-sm);
   font-size: var(--font-size-sm);
   color: var(--text-tertiary);
   justify-content: flex-start;
@@ -277,6 +261,14 @@
   z-index: 2;
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
   letter-spacing: 0.04em;
+}
+
+// Action buttons (remember/speak) pushed to the right of the footer row
+.speech-form__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-left: auto;
 }
 
 .speech-form--user .speech-form__meta {
@@ -555,33 +547,35 @@
 }
 
 // Collapsed-cycle group — a run of superseded steps folds behind one chevron.
-// Collapsed shows the chevron + first summary line; expanded rotates the chevron
-// to a down caret and reveals the full trail, indented under it.
+// A 2-column grid: a narrow caret gutter + the content column. The caret is
+// top-aligned to the first content line in BOTH states (collapsed preview /
+// expanded trail), so expanding never inserts an empty caret-only row.
+$act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summaries
+
 .act-group {
   align-self: flex-start;
   max-width: 90%;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  column-gap: 4px;
+  align-items: start;
 }
 
 .act-group__toggle {
+  // Caret-only button sized to the first content line so it centers on it.
+  height: $act-group-line;
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   background: transparent;
   border: none;
-  padding: 2px 0;
+  padding: 0;
   cursor: pointer;
-  text-align: left;
-  color: var(--text-secondary);
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.82rem;
-  line-height: 1.4;
+  color: var(--text-muted);
 }
 
 .act-group__caret {
   flex-shrink: 0;
-  color: var(--text-muted);
   transition: transform 180ms var(--ease-out);
 }
 
@@ -589,17 +583,22 @@
   transform: rotate(90deg);
 }
 
+.act-group__content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .act-group__preview {
+  height: $act-group-line;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-// Indent the revealed cycles slightly right of the chevron.
-.act-group__body {
-  padding-left: 18px;
-  display: flex;
-  flex-direction: column;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 
 // --------------------------------------------------------------------------
