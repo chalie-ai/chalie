@@ -496,7 +496,7 @@ def search_documents() -> "ResponseReturnValue":
     if not query:
         return jsonify({"error": "Query cannot be empty"}), 400
 
-    limit = min(int(request.args.get('limit', 5)), 20)
+    limit = min(request.args.get('limit', 5, type=int), 20)
 
     try:
         from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT

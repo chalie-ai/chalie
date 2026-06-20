@@ -108,6 +108,30 @@ class TestDocumentUploadRealStack:
 
 
 @pytest.mark.unit
+class TestDocumentSearchRealStack:
+    """GET /documents/search query-param handling over the real DB + data_graph."""
+
+    def test_search_nonnumeric_limit_coerces_to_default_not_500(
+        self, authed_client: "tuple[FlaskClient, sqlite3.Connection, object]"
+    ) -> None:
+        """A non-numeric ?limit must degrade to the default, not raise a 500.
+
+        Drives the real endpoint through the real data_graph recall path. With a
+        raising int() parse the request 500s (ValueError); coercion to the
+        default makes the malformed request behave identically to limit=5.
+        """
+        client, _db_conn, _store = authed_client
+
+        good = client.get("/documents/search?q=quarterly+revenue&limit=5")
+        bad = client.get("/documents/search?q=quarterly+revenue&limit=abc")
+
+        assert good.status_code == 200, good.get_data(as_text=True)
+        assert bad.status_code == 200, bad.get_data(as_text=True)
+        # 'abc' coerced to the default 5 → byte-identical outcome to limit=5.
+        assert bad.get_json() == good.get_json()
+
+
+@pytest.mark.unit
 class TestHelpers:
 
     def test_sanitize_filename_security_and_fallback(self) -> None:
