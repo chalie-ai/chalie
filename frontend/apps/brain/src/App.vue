@@ -28,10 +28,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   heartbeat.stop();
 });
-
-function closeMobileScrim(): void {
-  shell.mobileOpen = false;
-}
 </script>
 
 <template>
@@ -47,16 +43,11 @@ function closeMobileScrim(): void {
     :data-providers-only="shell.providersOnly || undefined"
     :data-ready="ready || undefined"
   >
-    <!-- Mobile scrim -->
-    <div id="mobileScrim" class="scrim" @click="closeMobileScrim"></div>
+    <div id="mobileScrim" class="scrim" @click="shell.mobileOpen = false"></div>
 
-    <!-- Sidebar -->
     <BrainSidebar id="sidebar" />
-
-    <!-- Topbar -->
     <BrainTopbar id="topbar" />
 
-    <!-- Main content with panel root -->
     <main class="main">
       <div id="panelRoot" class="main-inner">
         <RouterView />

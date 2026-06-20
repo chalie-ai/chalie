@@ -81,8 +81,6 @@ const keyReady = computed(() => !needsKey.value || formKey.value.trim() !== '');
 
 const canFetch = computed(() => hostReady.value && keyReady.value);
 
-const showHostGroup = computed(() => needsHost.value);
-
 const showKeyGroup = computed(() => needsKey.value && hostReady.value);
 
 const showModelGroup = computed(() => canFetch.value || models.value.length > 0);
@@ -317,11 +315,7 @@ function backFromPicker(): void {
 }
 
 function backFromForm(): void {
-  if (isEditing.value) {
-    mode.value = 'list';
-  } else {
-    mode.value = 'picker';
-  }
+  mode.value = isEditing.value ? 'list' : 'picker';
 }
 
 function cancelForm(): void {
@@ -654,7 +648,7 @@ async function saveProvider(): Promise<void> {
         <div
           id="hostGroup"
           class="form-group wizard-step"
-          :hidden="!showHostGroup"
+          :hidden="!needsHost"
         >
           <label for="pHost">Host / Base URL</label>
           <input

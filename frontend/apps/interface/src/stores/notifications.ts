@@ -154,15 +154,11 @@ export const useNotificationsStore = defineStore('notifications', {
      * when a message arrives while the tab is not focused.
      */
     pushBackground(text: string): void {
-      if (!text) return;
-      this._notifyBackground(text);
-    },
-
-    _notifyBackground(text: string): void {
       // Port of notifications.js notifyBackground (50-58): the OS notification
       // AND the chime are gated behind notification permission — when it is not
       // granted the whole method is a no-op (legacy line 51). This is the
       // focus-gated path (session store only calls it while the tab is blurred).
+      if (!text) return;
       if (webPlatformAdapter.notificationPermission() !== 'granted') return;
       showOsNotification(text);
       playChime();

@@ -4,35 +4,23 @@ import { cognition } from '../../api/cognition';
 import type { UsageResponse } from '../../api/cognition';
 import EmptyState from '../../ui/EmptyState.vue';
 
-// ---------------------------------------------------------------------------
-// Constants — ported verbatim from cognition.js
-// ---------------------------------------------------------------------------
 const _MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const _DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const _TABLE_HEADERS: Record<string, string> = { hour: 'Hour', day: 'Hour', week: 'Day', month: 'Day', lifetime: 'Month' };
 
 type UsageWindow = 'hour' | 'day' | 'week' | 'month' | 'lifetime';
 
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 const usageWindow = ref<UsageWindow>('day');
 const data = ref<UsageResponse | null>(null);
 const loading = ref(true);
 const loadFailed = ref(false);
 
-// ---------------------------------------------------------------------------
-// _fmtTokens — verbatim port from cognition.js:383-387
-// ---------------------------------------------------------------------------
 function fmtTokens(n: number): string {
   if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
   if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
   return String(n);
 }
 
-// ---------------------------------------------------------------------------
-// Fetch
-// ---------------------------------------------------------------------------
 let fetchGen = 0;
 
 async function load(): Promise<void> {
@@ -58,13 +46,8 @@ function selectWindow(w: UsageWindow): void {
 
 onMounted(load);
 
-// ---------------------------------------------------------------------------
-// Computed helpers
-// ---------------------------------------------------------------------------
-
 interface BucketValue { input: number; output: number }
 
-/** Build bucketMap from entries — verbatim port of _renderUsage bucketMap logic. */
 const bucketMap = computed((): Record<string, BucketValue> => {
   const entries = data.value?.entries ?? [];
   const map: Record<string, BucketValue> = {};
@@ -77,7 +60,6 @@ const bucketMap = computed((): Record<string, BucketValue> => {
   return map;
 });
 
-/** Summary stat cards — verbatim port of _renderUsage summary array. */
 const windowLabels: Record<UsageWindow, string> = {
   hour: 'Last Hour',
   day: 'Last 24h',
@@ -96,23 +78,17 @@ const summaryCards = computed(() => {
   ];
 });
 
-/** Chart data — verbatim port of chart logic in _renderUsage. */
 interface ChartBar { label: string; input: number; output: number }
 
 const chartData = computed((): ChartBar[] => {
   return Object.entries(bucketMap.value)
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([bucket, v]) => {
-      let label: string;
-      if (usageWindow.value === 'hour' || usageWindow.value === 'day') label = bucket.slice(11, 16);
-      else label = bucket.slice(5, 10);
-      return { label, input: v.input, output: v.output };
-    });
+    .map(([bucket, v]) => ({
+      label: usageWindow.value === 'hour' || usageWindow.value === 'day' ? bucket.slice(11, 16) : bucket.slice(5, 10),
+      input: v.input,
+      output: v.output,
+    }));
 });
-
-// ---------------------------------------------------------------------------
-// Slot builders — verbatim ports from cognition.js:419-492
-// ---------------------------------------------------------------------------
 
 interface SlotRow { label: string; input: number; output: number }
 
@@ -200,10 +176,6 @@ function buildTableSlots(bm: Record<string, BucketValue>): SlotRow[] {
 const tableSlots = computed((): SlotRow[] => buildTableSlots(bucketMap.value));
 
 const tableHeader = computed((): string => _TABLE_HEADERS[usageWindow.value] ?? 'Date');
-
-// ---------------------------------------------------------------------------
-// Chart geometry — verbatim port from cognition.js:494-513
-// ---------------------------------------------------------------------------
 
 interface BarGeom {
   x: number;

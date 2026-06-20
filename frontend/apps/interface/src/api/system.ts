@@ -49,8 +49,7 @@ export const system = {
    */
   async readyCheck(): Promise<ReadyStatus> {
     try {
-      const result = await api.get<ReadyStatus>('/ready', NO_REDIRECT);
-      return { ready: Boolean(result?.ready) };
+      return { ready: Boolean((await api.get<ReadyStatus>('/ready', NO_REDIRECT))?.ready) };
     } catch {
       return { ready: false };
     }

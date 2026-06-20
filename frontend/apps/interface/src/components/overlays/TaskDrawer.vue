@@ -77,11 +77,10 @@ function openDrawerDom(): void {
 
 function closeDrawerDom(): void {
   const drawer = drawerRef.value;
-  const scrim = scrimRef.value;
   if (!drawer) return;
 
   drawer.classList.remove('open');
-  scrim?.classList.add('hidden');
+  scrimRef.value?.classList.add('hidden');
 
   drawer.addEventListener(
     'transitionend',

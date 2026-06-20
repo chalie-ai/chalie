@@ -46,7 +46,6 @@ const viewMode = ref<'list' | 'detail'>('list');
 const detailDoc = ref<Document | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-
 const filtered = computed<Document[]>(() => {
   let result = docs.value;
   if (props.statusFilter === 'active') {
@@ -75,10 +74,9 @@ type GroupEntry = { name: string; count: number };
 
 const groupEntries = computed<GroupEntry[]>(() => {
   if (groupBy.value === 'all') return [];
-  const key = groupBy.value;
   const groups: Record<string, number> = {};
   for (const d of filtered.value) {
-    const k = String(d[key] ?? 'Other') || 'Other';
+    const k = String(d[groupBy.value] ?? 'Other') || 'Other';
     groups[k] = (groups[k] ?? 0) + 1;
   }
   return Object.entries(groups)
@@ -88,9 +86,7 @@ const groupEntries = computed<GroupEntry[]>(() => {
 
 const drillDocs = computed<Document[]>(() => {
   if (!drillGroup.value) return filtered.value;
-  const key = groupBy.value;
-  const drill = drillGroup.value;
-  return filtered.value.filter((d) => (String(d[key] ?? 'Other') || 'Other') === drill);
+  return filtered.value.filter((d) => (String(d[groupBy.value] ?? 'Other') || 'Other') === drillGroup.value);
 });
 
 function statusClass(status: unknown): string {
@@ -121,8 +117,7 @@ async function onSearch(event: Event): Promise<void> {
 
 async function viewDoc(d: Document): Promise<void> {
   try {
-    const data = await documents.get(d.id);
-    detailDoc.value = data.item;
+    detailDoc.value = (await documents.get(d.id)).item;
     viewMode.value = 'detail';
   } catch (e) {
     // legacy documents.js: non-ok → 'Failed to load document'; network → 'Network error'

@@ -16,9 +16,8 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
   // ── Scroll-position tracking ───────────────────────────────────────────────
 
   function _onScroll(): void {
-    const scrollBottom =
-      document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-    userScrolledUp.value = scrollBottom > 100;
+    userScrolledUp.value =
+      document.documentElement.scrollHeight - window.scrollY - window.innerHeight > 100;
   }
 
   onMounted(() => {
@@ -80,8 +79,7 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
         const spine = feedRef.value;
         if (!spine) return;
 
-        const imgs = spine.querySelectorAll<HTMLImageElement>('img');
-        for (const img of imgs) {
+        for (const img of spine.querySelectorAll<HTMLImageElement>('img')) {
           if (img.complete) continue;
           // Re-scroll once the image lands, but only if the user hasn't
           // scrolled away since — matching renderer.js line 585-589.

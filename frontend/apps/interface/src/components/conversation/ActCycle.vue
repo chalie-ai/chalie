@@ -25,10 +25,8 @@ const hasRunning = computed(
 );
 
 function stopClock(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
+  if (timer) clearInterval(timer);
+  timer = null;
 }
 
 watch(
@@ -101,12 +99,10 @@ function pillSeconds(pill: ToolPill): string {
         }"
         :data-call-id="pill.id"
       >
-        <template v-if="pill.summary">
-          <span class="act-tool__label">
-            <span class="act-tool__name">{{ pill.name }}</span>
-            <span class="act-tool__summary">— {{ pill.summary }}</span>
-          </span>
-        </template>
+        <span v-if="pill.summary" class="act-tool__label">
+          <span class="act-tool__name">{{ pill.name }}</span>
+          <span class="act-tool__summary">— {{ pill.summary }}</span>
+        </span>
         <span v-else class="act-tool__name">{{ pill.name }}</span>
 
         <span class="act-tool__status">

@@ -70,10 +70,6 @@ let _mediaPollTimer: ReturnType<typeof setInterval> | null = null;
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function _isIdle(): boolean {
-  return (Date.now() - _lastActivityAt) >= IDLE_MS;
-}
-
 function _getActivityState(): 'active' | 'idle' | 'away' {
   const elapsed = Date.now() - _lastActivityAt;
   if (elapsed >= AWAY_MS) return 'away';
@@ -101,11 +97,9 @@ function _bindListeners(): void {
   const passive = { passive: true };
 
   const onActivity = () => {
-    const wasIdle = _isIdle();
+    const wasIdle = (Date.now() - _lastActivityAt) >= IDLE_MS;
     _lastActivityAt = Date.now();
-    if (wasIdle) {
-      _interruptionCount++;
-    }
+    if (wasIdle) _interruptionCount++;
   };
 
   window.addEventListener('mousemove', onActivity, passive);
@@ -167,9 +161,7 @@ function snapshot(): AmbientSnapshot {
   const cps = _getTypingCps();
   if (cps !== null) snap.typing_cps = cps;
 
-  if (_lastResponseAt !== null) {
-    snap.last_response_at = _lastResponseAt;
-  }
+  if (_lastResponseAt !== null) snap.last_response_at = _lastResponseAt;
 
   // Reset per-snapshot counters (match legacy behaviour exactly).
   _interruptionCount = 0;
@@ -191,9 +183,7 @@ function bindTypingInput(el: HTMLInputElement | HTMLTextAreaElement): void {
     _cadenceInputLen = newLen;
     if (chars > 0) {
       _cadenceBuffer.push({ ts: now, chars });
-      if (_cadenceBuffer.length > CADENCE_BUFFER_SIZE) {
-        _cadenceBuffer.shift();
-      }
+      if (_cadenceBuffer.length > CADENCE_BUFFER_SIZE) _cadenceBuffer.shift();
     }
   }, { passive: true });
 }
@@ -209,10 +199,8 @@ function recordResponse(): void {
  * Clean up the media poll timer.  Call when unmounting the app.
  */
 function destroy(): void {
-  if (_mediaPollTimer !== null) {
-    clearInterval(_mediaPollTimer);
-    _mediaPollTimer = null;
-  }
+  if (_mediaPollTimer !== null) clearInterval(_mediaPollTimer);
+  _mediaPollTimer = null;
 }
 
 const _sensorApi: AmbientSensorApi = { snapshot, bindTypingInput, recordResponse, destroy };

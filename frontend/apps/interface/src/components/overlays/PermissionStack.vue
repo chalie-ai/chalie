@@ -14,7 +14,6 @@
  */
 import { Info } from '@lucide/vue';
 import { usePermissionsStore } from '../../stores/permissions';
-import type { PermissionRequest } from '../../stores/permissions';
 
 const permissions = usePermissionsStore();
 
@@ -71,15 +70,6 @@ function actionLabel(actionId: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
-
-function allow(req: PermissionRequest): void {
-  void permissions.respond(req.request_id, true);
-}
-
-function deny(req: PermissionRequest): void {
-  void permissions.respond(req.request_id, false);
-}
 </script>
 
 <template>
@@ -115,13 +105,13 @@ function deny(req: PermissionRequest): void {
           <div class="perm-card__actions">
             <button
               class="perm-card__btn perm-card__btn--deny"
-              @click="deny(req)"
+              @click="permissions.respond(req.request_id, false)"
             >
               Deny
             </button>
             <button
               class="perm-card__btn perm-card__btn--allow"
-              @click="allow(req)"
+              @click="permissions.respond(req.request_id, true)"
             >
               Allow
             </button>

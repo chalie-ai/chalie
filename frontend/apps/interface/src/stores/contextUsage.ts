@@ -73,9 +73,7 @@ export const useContextUsageStore = defineStore('contextUsage', () => {
    * where the buttons are rendered in LEVELS order.
    */
   async function cycleLevel(): Promise<void> {
-    const idx = LEVELS.indexOf(level.value);
-    const next = LEVELS[(idx + 1) % LEVELS.length];
-    await setLevel(next);
+    await setLevel(LEVELS[(LEVELS.indexOf(level.value) + 1) % LEVELS.length]);
   }
 
   // ── Context-usage state ─────────────────────────────────────────────────────

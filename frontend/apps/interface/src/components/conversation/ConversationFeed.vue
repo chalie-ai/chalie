@@ -96,14 +96,7 @@ async function _onScrollPaginate(): Promise<void> {
 // document events are raw CustomEvents (not in the typed event bus).
 // session:turn-done → always force-scroll (spec: "always force-scroll on turn-end").
 // session:history-initial-loaded → force-scroll after initial load.
-
-function _onTurnDone(): void {
-  forceScrollToBottom();
-}
-
-function _onHistoryInitialLoaded(): void {
-  forceScrollToBottom();
-}
+// Both wire forceScrollToBottom directly (it ignores the Event arg).
 
 // ── Deep-watch forms for incremental reactive scrolling ───────────────────────
 //
@@ -116,20 +109,14 @@ function _onHistoryInitialLoaded(): void {
 // measures the settled height. scrollToBottom is the GUARDED smooth variant —
 // it self-skips when the user has scrolled up (turn-end uses the force variant).
 
-watch(
-  () => conversationStore.forms,
-  () => {
-    scrollToBottom();
-  },
-  { deep: true, flush: 'post' },
-);
+watch(() => conversationStore.forms, scrollToBottom, { deep: true, flush: 'post' });
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 onMounted(async () => {
   // Wire document events for force-scroll signals
-  document.addEventListener('session:turn-done', _onTurnDone);
-  document.addEventListener('session:history-initial-loaded', _onHistoryInitialLoaded);
+  document.addEventListener('session:turn-done', forceScrollToBottom);
+  document.addEventListener('session:history-initial-loaded', forceScrollToBottom);
 
   // Initial history load — this is the ONLY trigger (App.vue does NOT call it)
   await session.loadRecentConversation();
@@ -143,8 +130,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', _onScrollPaginate);
-  document.removeEventListener('session:turn-done', _onTurnDone);
-  document.removeEventListener('session:history-initial-loaded', _onHistoryInitialLoaded);
+  document.removeEventListener('session:turn-done', forceScrollToBottom);
+  document.removeEventListener('session:history-initial-loaded', forceScrollToBottom);
 });
 </script>
 

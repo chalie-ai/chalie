@@ -73,10 +73,7 @@ const dayLabel = computed<string>(() => DAYS[now.getDay()]);
 
 const timeLabel = computed<string>(() => formatHM(now));
 
-const captionHtml = computed<string>(() => {
-  if (props.synthesis) return renderMarkup(props.synthesis);
-  return '';
-});
+const captionHtml = computed<string>(() => (props.synthesis ? renderMarkup(props.synthesis) : ''));
 
 const fallbackCaption = computed<string>(() => {
   if (props.synthesis) return '';
@@ -85,10 +82,9 @@ const fallbackCaption = computed<string>(() => {
     props.payload.feels_like_c == null
       ? ''
       : ` Feels like ${Math.round(props.payload.feels_like_c)}°.`;
-  const p = phase.value;
-  if (p === 'sunset') return `Golden hour in ${loc}.${feels}`;
-  if (p === 'dawn') return `Sun's coming up over ${loc}.${feels}`;
-  if (p === 'night') return `Quiet night in ${loc}.${feels}`;
+  if (phase.value === 'sunset') return `Golden hour in ${loc}.${feels}`;
+  if (phase.value === 'dawn') return `Sun's coming up over ${loc}.${feels}`;
+  if (phase.value === 'night') return `Quiet night in ${loc}.${feels}`;
   return `${props.payload.condition || 'Steady weather'} in ${loc}.${feels}`;
 });
 
@@ -110,19 +106,16 @@ const hourCells = computed<HourCell[]>(() => {
   const min = temps.length ? Math.min(...temps) : 0;
   const max = temps.length ? Math.max(...temps) : 1;
   const span = Math.max(1, max - min);
-  const peakTemp = max;
   const currentHour = now.getHours();
 
   return hourly.map((h) => ({
     hour: h.hour,
     temp_c: h.temp_c,
     isCurrent: h.hour === currentHour,
-    isPeak: h.temp_c === peakTemp,
+    isPeak: h.temp_c === max,
     barWidth: 35 + Math.round(((h.temp_c - min) / span) * 65),
   }));
 });
-
-const hasRail = computed<boolean>(() => hourCells.value.length > 0);
 </script>
 
 <template>
@@ -168,7 +161,7 @@ const hasRail = computed<boolean>(() => hourCells.value.length > 0);
     </div>
 
     <!-- Hourly rail (hidden when hourly data is absent) -->
-    <div v-if="hasRail" class="weather-card__rail">
+    <div v-if="hourCells.length" class="weather-card__rail">
       <div
         v-for="cell in hourCells"
         :key="cell.hour"

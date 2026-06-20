@@ -24,11 +24,9 @@ export const voice = {
    * Returns raw Response so the caller can handle streaming/retry.
    */
   transcribe(file: File): Promise<Response> {
-    const host = getHost();
-    const base = host ? host.replace(/\/$/, '') : '';
     const formData = new FormData();
     formData.append('file', file, 'recording.wav');
-    return fetch(`${base}/voice/transcribe`, {
+    return fetch(`${getHost().replace(/\/$/, '')}/voice/transcribe`, {
       method: 'POST',
       credentials: 'same-origin',
       body: formData,
@@ -41,9 +39,7 @@ export const voice = {
    * handles the Retry-After retry loop.
    */
   speak(text: string): Promise<Response> {
-    const host = getHost();
-    const base = host ? host.replace(/\/$/, '') : '';
-    return fetch(`${base}/voice/synthesize`, {
+    return fetch(`${getHost().replace(/\/$/, '')}/voice/synthesize`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },

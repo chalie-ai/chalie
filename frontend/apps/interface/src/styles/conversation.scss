@@ -127,8 +127,7 @@
   align-self: stretch;
   width: 100%;
   max-width: 100%;
-  padding-left: 0;
-  padding-right: 0;
+  padding-inline: 0;
 }
 
 // No accent stripe on Chalie — full-bleed text on the spine
@@ -411,19 +410,6 @@
   background: var(--violet);
   flex-shrink: 0;
   animation: act-logo-pulse 1.4s ease-in-out infinite;
-}
-
-.act-narrative {
-  font-style: italic;
-  color: var(--text-primary);
-  opacity: 0.75;
-  line-height: 1.5;
-  font-size: 0.95rem;
-  letter-spacing: -0.005em;
-}
-
-.act-narrative:empty {
-  display: none;
 }
 
 // Stop button — embedded in .act-row

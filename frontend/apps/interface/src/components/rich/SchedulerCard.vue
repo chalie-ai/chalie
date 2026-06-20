@@ -51,8 +51,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 function parseDueAt(dueAtStr: string | null | undefined): Date | null {
   if (!dueAtStr) return null;
   const d = new Date(dueAtStr);
-  if (Number.isNaN(d.getTime())) return null;
-  return d;
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function formatTime(d: Date): string {
@@ -82,14 +81,12 @@ const metaText = computed((): string => {
   if (record.value.recurrence) textParts.push(record.value.recurrence);
   if (record.value.item_type === 'prompt') textParts.push('prompt');
   if (textParts.length === 0) return '';
-  const sep = dueAt.value ? ' · ' : '';
-  return sep + textParts.join(' · ');
+  return (dueAt.value ? ' · ' : '') + textParts.join(' · ');
 });
 
-const sameDay = computed(() => {
-  const items = props.payload.same_day_items;
-  return Array.isArray(items) ? items : [];
-});
+const sameDay = computed(() =>
+  Array.isArray(props.payload.same_day_items) ? props.payload.same_day_items : [],
+);
 </script>
 
 <template>

@@ -110,18 +110,12 @@ export function useAmbientCanvas(canvasRef: Ref<HTMLCanvasElement | null>): () =
   }
 
   function stop(): void {
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = 0;
-    }
-    if (resizeHandler) {
-      globalThis.removeEventListener('resize', resizeHandler);
-      resizeHandler = null;
-    }
-    if (themeHandler) {
-      document.removeEventListener('chalie:theme-changed', themeHandler);
-      themeHandler = null;
-    }
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
+    if (resizeHandler) globalThis.removeEventListener('resize', resizeHandler);
+    resizeHandler = null;
+    if (themeHandler) document.removeEventListener('chalie:theme-changed', themeHandler);
+    themeHandler = null;
   }
 
   start();

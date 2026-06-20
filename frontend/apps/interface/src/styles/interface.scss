@@ -479,11 +479,6 @@ body.speaker-user #ambientBloom {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes ambientFadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 0.85; transform: translateY(0); }
-}
-
 @keyframes loadingGlow {
   0%, 100% { box-shadow: 0 0 12px var(--violet, #8a5cff), 0 0 24px rgba(138, 92, 255, 0.3); }
   50%       { box-shadow: 0 0 24px var(--violet, #8a5cff), 0 0 48px rgba(138, 92, 255, 0.45); }
@@ -780,8 +775,7 @@ body.speaker-user #ambientBloom {
   .conversation-spine {
     width: 100%;
     max-width: 100%;
-    padding-left: var(--space-sm);
-    padding-right: var(--space-sm);
+    padding-inline: var(--space-sm);
   }
 
   .input-dock { padding: var(--space-sm) var(--space-md); }

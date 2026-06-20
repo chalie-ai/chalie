@@ -64,7 +64,6 @@
   --text-secondary:         rgba(234, 230, 242, 0.58);
   --text-muted:             rgba(234, 230, 242, 0.50);
   --text-tertiary:          rgba(234, 230, 242, 0.30);
-  --text-subtle:            rgba(234, 230, 242, 0.30);
   --border:                 rgba(255, 255, 255, 0.07);
   --border-subtle:          rgba(255, 255, 255, 0.07);
   --border-strong:          rgba(255, 255, 255, 0.12);
@@ -91,8 +90,6 @@
 
   /* Legacy aliases kept for backward compat */
   --accent:                 var(--violet);
-  --accent-hover:           var(--violet-hover);
-  --bg-dark:                var(--bg);
   --bg-card:                var(--bg-surface);
 }
 
@@ -148,7 +145,6 @@
   --text-secondary:         rgba(26, 22, 38, 0.62);
   --text-muted:             rgba(26, 22, 38, 0.50);
   --text-tertiary:          rgba(26, 22, 38, 0.34);
-  --text-subtle:            rgba(26, 22, 38, 0.34);
   --border:                 rgba(26, 22, 38, 0.08);
   --border-subtle:          rgba(26, 22, 38, 0.08);
   --border-strong:          rgba(26, 22, 38, 0.14);
@@ -172,8 +168,6 @@
   --scrim-dock:             rgba(246, 244, 241, 0.92);
   --scrim-fallback:         rgba(246, 244, 241, 0.98);
 
-  --accent-hover:           var(--violet-hover);
-  --bg-dark:                var(--bg);
   --bg-card:                var(--bg-surface);
 }
 

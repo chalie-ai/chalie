@@ -9,10 +9,6 @@ import { createPinia } from 'pinia';
 import OnboardingPage from './OnboardingPage.vue';
 import { auth } from '../api/auth';
 
-function mount(): void {
-  createApp(OnboardingPage).use(createPinia()).mount('#app');
-}
-
 // Pre-mount auth gate: if a master account already exists, redirect to /login/
 // and skip mounting entirely. Parity with auth-gate.js page='onboarding' rule:
 //   "onboarding : account → /login/"
@@ -30,5 +26,5 @@ function mount(): void {
     // Any failure to read status (network error or non-2xx) → stay and mount,
     // matching auth-gate.js, which treats a failed status read as "stay".
   }
-  mount();
+  createApp(OnboardingPage).use(createPinia()).mount('#app');
 })();

@@ -130,15 +130,15 @@ export class WebSocketService {
 
   constructor(private readonly getHost: GetHost) {}
 
+  private baseUrl(): string {
+    const host = this.getHost();
+    return host ? host.replace(/\/$/, '') : globalThis.location.origin;
+  }
   private buildWsUrl(): string {
-    const host = this.getHost() || '';
-    const base = host ? host.replace(/\/$/, '') : globalThis.location.origin;
-    return base.replace(/^http/, 'ws') + '/ws';
+    return this.baseUrl().replace(/^http/, 'ws') + '/ws';
   }
   private buildHttpUrl(path: string): string {
-    const host = this.getHost() || '';
-    const base = host ? host.replace(/\/$/, '') : globalThis.location.origin;
-    return base + path;
+    return this.baseUrl() + path;
   }
 
   onDrift(handler: (data: WsPushEvent) => void): void {

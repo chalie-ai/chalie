@@ -120,17 +120,7 @@ async function handleSend(): Promise<void> {
 // default), and ONLY the send button submits — so there is no keydown handler.
 // Cancelling an in-flight turn is the act-trail's stop/undo button, not the dock.
 
-// ── Mic (voice recorder) ──────────────────────────────────────────────────────
-
-function handleMicClick(): void {
-  void voiceStore.toggleRecording();
-}
-
 // ── Attach menu ───────────────────────────────────────────────────────────────
-
-function toggleAttachMenu(): void {
-  attachMenuOpen.value = !attachMenuOpen.value;
-}
 
 function chooseDocument(): void {
   attachMenuOpen.value = false;
@@ -150,10 +140,6 @@ function onFileInputChange(e: Event): void {
 }
 
 // ── Thinking-level dropdown ───────────────────────────────────────────────────
-
-function toggleThinkingMenu(): void {
-  thinkingMenuOpen.value = !thinkingMenuOpen.value;
-}
 
 function selectLevel(next: (typeof THINKING_ITEMS)[number]['level']): void {
   void contextUsage.setLevel(next);
@@ -291,7 +277,7 @@ onBeforeUnmount(() => {
           class="btn-action btn-action--attach"
           :class="{ active: attachMenuOpen }"
           aria-label="Attach"
-          @click.stop="toggleAttachMenu"
+          @click.stop="attachMenuOpen = !attachMenuOpen"
         >
           <Plus :size="20" />
         </button>
@@ -303,7 +289,7 @@ onBeforeUnmount(() => {
           class="btn-icon voice-rec-btn"
           aria-label="Record voice message"
           :data-state="recorderState"
-          @click="handleMicClick"
+          @click="voiceStore.toggleRecording()"
         >
           <Mic class="voice-rec-btn__mic" :size="18" />
           <span class="voice-rec-btn__dot" aria-hidden="true"></span>
@@ -342,7 +328,7 @@ onBeforeUnmount(() => {
           type="button"
           aria-haspopup="true"
           :aria-expanded="thinkingMenuOpen"
-          @click.stop="toggleThinkingMenu"
+          @click.stop="thinkingMenuOpen = !thinkingMenuOpen"
         >
           <span class="thinking-select__caption">Thinking</span>
           <span id="thinkingLabel" class="thinking-select__value">{{ levelLabel }}</span>

@@ -34,6 +34,5 @@ const richRegistry: Record<string, RichCardEntry> = {
  * prefixes so SegmentRenderer falls back to rendering the synthesis text.
  */
 export function resolveRichCard(tag: string): RichCardEntry | undefined {
-  const prefix = tag.split('_')[0] ?? '';
-  return richRegistry[prefix];
+  return richRegistry[tag.split('_')[0] ?? ''];
 }

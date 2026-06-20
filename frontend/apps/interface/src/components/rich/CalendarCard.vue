@@ -58,12 +58,8 @@ function dateKey(d: Date): string {
 const singleEvent = computed<CalendarEvent | null>(() => {
   if (props.payload.event) return props.payload.event;
   const evs = props.payload.events;
-  if (Array.isArray(evs) && evs.length === 1) return evs[0];
-  return null;
+  return Array.isArray(evs) && evs.length === 1 ? evs[0] : null;
 });
-
-/** Whether we are in single-event layout. */
-const isSingle = computed<boolean>(() => singleEvent.value !== null);
 
 // ── Single-event view helpers ────────────────────────────────────────────────
 
@@ -92,17 +88,11 @@ const singleMeta = computed<SingleMeta>(() => {
   const ev = singleEvent.value;
   if (!ev) return { timePart: null, calendarName: null };
 
-  let timePart: string | null = null;
-  if (ev.all_day) {
-    timePart = 'All day';
-  } else {
-    const dtstart = parseISO(ev.dtstart);
-    if (dtstart) {
-      const dtend = parseISO(ev.dtend);
-      timePart = dtend
-        ? `${formatTime(dtstart)} – ${formatTime(dtend)}`
-        : formatTime(dtstart);
-    }
+  const dtstart = ev.all_day ? null : parseISO(ev.dtstart);
+  const dtend = dtstart && parseISO(ev.dtend);
+  let timePart: string | null = ev.all_day ? 'All day' : null;
+  if (dtstart) {
+    timePart = dtend ? `${formatTime(dtstart)} – ${formatTime(dtend)}` : formatTime(dtstart);
   }
 
   return { timePart, calendarName: ev.calendar_name ?? null };
@@ -136,36 +126,27 @@ const dayGroups = computed<DayGroup[]>(() => {
       groupMap.set(key, { date: dt, rows: [] });
     }
 
-    let timeText = '';
-    if (ev.all_day) {
-      timeText = 'All day';
-    } else if (dt) {
-      timeText = formatTime(dt);
-    }
-
     groupMap.get(key)!.rows.push({
-      timeText,
+      timeText: ev.all_day ? 'All day' : dt ? formatTime(dt) : '',
       title: ev.title ?? '',
       location: ev.location ?? null,
     });
   }
 
-  const result: DayGroup[] = [];
-  for (const [key, group] of groupMap) {
-    const d = group.date;
-    const label = d
-      ? `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`
-      : null;
-    result.push({ key, label, rows: group.rows });
-  }
-  return result;
+  return [...groupMap].map(([key, group]) => ({
+    key,
+    label: group.date
+      ? `${DAYS[group.date.getDay()]} ${group.date.getDate()} ${MONTHS[group.date.getMonth()]}`
+      : null,
+    rows: group.rows,
+  }));
 });
 </script>
 
 <template>
   <!-- Single-event layout -->
   <div
-    v-if="isSingle && singleEvent"
+    v-if="singleEvent"
     class="rich-card calendar-card"
   >
     <!-- Date block -->
@@ -191,7 +172,7 @@ const dayGroups = computed<DayGroup[]>(() => {
       </div>
 
       <div
-        v-if="Array.isArray(singleEvent.attendees) && singleEvent.attendees.length > 0"
+        v-if="singleEvent.attendees?.length"
         class="calendar-card__attendees"
       >
         {{ singleEvent.attendees.join(', ') }}
@@ -201,7 +182,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 
   <!-- Multi-event list layout -->
   <div
-    v-else-if="!isSingle && dayGroups.length > 0"
+    v-else-if="dayGroups.length > 0"
     class="rich-card calendar-card calendar-card--list"
   >
     <div

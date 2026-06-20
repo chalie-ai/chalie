@@ -117,8 +117,7 @@ function initials(contact: Contact): string {
  * Exact port of primaryValue() in contacts.js lines 118-121.
  */
 function primaryValue(arr: Array<{ value?: string }> | undefined): string | null {
-  if (!Array.isArray(arr) || arr.length === 0) return null;
-  return arr[0]?.value ?? null;
+  return arr?.[0]?.value ?? null;
 }
 
 // ── Render mode ────────────────────────────────────────────────────────────
@@ -133,21 +132,13 @@ function primaryValue(arr: Array<{ value?: string }> | undefined): string | null
  */
 const singleContact = computed<Contact | null>(() => {
   if (props.payload.contact) return props.payload.contact;
-  if (Array.isArray(props.payload.contacts) && props.payload.contacts.length === 1) {
-    return props.payload.contacts[0] as Contact;
-  }
-  return null;
+  const cs = props.payload.contacts;
+  return Array.isArray(cs) && cs.length === 1 ? (cs[0] as Contact) : null;
 });
 
 const listContacts = computed<Contact[]>(() => {
-  if (
-    !props.payload.contact &&
-    Array.isArray(props.payload.contacts) &&
-    props.payload.contacts.length > 1
-  ) {
-    return props.payload.contacts;
-  }
-  return [];
+  const cs = props.payload.contacts;
+  return !props.payload.contact && Array.isArray(cs) && cs.length > 1 ? cs : [];
 });
 </script>
 
@@ -176,8 +167,8 @@ const listContacts = computed<Contact[]>(() => {
       <!-- Fields container — only rendered when it has children (line 112) -->
       <div
         v-if="
-          (singleContact.phones ?? []).some((p) => p.value) ||
-          (singleContact.emails ?? []).some((e) => e.value) ||
+          singleContact.phones?.some((p) => p.value) ||
+          singleContact.emails?.some((e) => e.value) ||
           (typeof singleContact.email === 'string' && singleContact.email)
         "
         class="ct__fields"

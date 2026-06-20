@@ -140,9 +140,8 @@ export const useSessionStore = defineStore('session', {
             .pin(text)
             .then((res) => {
               const transcriptId = res.item?.transcript_id ?? null;
-              const msg = res.duplicate ? 'Already remembered' : 'Remembered';
               showToast(
-                msg,
+                res.duplicate ? 'Already remembered' : 'Remembered',
                 transcriptId != null ? () => void moments.forget(transcriptId) : null,
               );
             })
@@ -163,8 +162,7 @@ export const useSessionStore = defineStore('session', {
             onDone?: (data: { duration_ms: number }) => void;
           };
           if (!d.payload) return;
-          const wsInner = getWebSocket();
-          wsInner.sendAction(d.payload, {
+          getWebSocket().sendAction(d.payload, {
             onMessage: d.onMessage ?? (() => { /* no-op */ }),
             onError: d.onError ?? (() => { /* no-op */ }),
             onDone: d.onDone ?? (() => { /* no-op */ }),
@@ -577,8 +575,7 @@ export const useSessionStore = defineStore('session', {
       // echo_id), so anything reaching here was sent from a DIFFERENT surface
       // and has no bubble yet. Render the user bubble so all surfaces match.
       if ((data.type as string) === 'user_message') {
-        const convo = useConversationStore();
-        convo.appendUser(content, [], { inWorkingMemory: true });
+        useConversationStore().appendUser(content, [], { inWorkingMemory: true });
         return;
       }
 
@@ -588,7 +585,6 @@ export const useSessionStore = defineStore('session', {
       // Chalie bubble (carrying any rich-media segments), so the reply shows on
       // all surfaces. This is rule 2 of the user-echo + assistant-render model.
       if ((data.type as string) === 'message') {
-        const convo = useConversationStore();
         const d = data as {
           topic?: string;
           exchange_id?: string;
@@ -598,7 +594,7 @@ export const useSessionStore = defineStore('session', {
           timestamp?: string;
         };
         this._notifyBackground(content);
-        convo.appendChalie(content, {
+        useConversationStore().appendChalie(content, {
           topic: d.topic,
           exchange_id: d.exchange_id,
           mode: d.mode ?? '',
@@ -612,15 +608,13 @@ export const useSessionStore = defineStore('session', {
 
       // Step 2: thought bypasses the send-guard
       if ((data.type as string) === 'thought') {
-        const convo = useConversationStore();
-        const meta = {
+        useConversationStore().appendChalie(content, {
           topic: (data as { topic?: string }).topic,
           type: data.type,
           ts: new Date().toISOString(),
           mode: (data as { mode?: string }).mode ?? '',
           confidence: (data as { confidence?: number }).confidence ?? 0,
-        };
-        convo.appendChalie(content, meta);
+        });
         return;
       }
 
@@ -635,10 +629,8 @@ export const useSessionStore = defineStore('session', {
       // chime UNCONDITIONALLY (no focus/permission gate) and refresh the task
       // strip. Distinct from the focus-gated background chime in step 4.
       if (data.type === 'notification') {
-        const notifications = useNotificationsStore();
-        const tasks = useTasksStore();
-        notifications.chime();
-        void tasks.loadActiveTasks();
+        useNotificationsStore().chime();
+        void useTasksStore().loadActiveTasks();
         return;
       }
 
@@ -651,34 +643,26 @@ export const useSessionStore = defineStore('session', {
      * Returns true when handled.
      */
     _routeSimpleEvent(data: WsPushEvent): boolean {
-      const tasks = useTasksStore();
-      const permissions = usePermissionsStore();
-      const notifications = useNotificationsStore();
-
       switch (data.type as string) {
         case 'app_update':
           // Update prompt (dormant — backend does not yet emit app_update).
-          notifications.handleUpdate(data as unknown as UpdateState);
+          useNotificationsStore().handleUpdate(data as unknown as UpdateState);
           return true;
+        // task + subagent lifecycle both feed the task drawer.
         case 'task':
-          tasks.applyDriftEvent(data);
+        case 'subagent_start':
+        case 'subagent_end':
+          useTasksStore().applyDriftEvent(data);
           return true;
         case 'capability_alert':
           // No-op: dormant capability-alert channel (no legacy UI consumer).
           return true;
         case 'permission_request':
-          permissions.enqueue(data);
+          usePermissionsStore().enqueue(data);
           return true;
         case 'quick_tip':
           // Quick-tip card (dormant — backend does not yet emit quick_tip).
-          notifications.handleTip(data as unknown as TipState);
-          return true;
-        case 'subagent_start':
-          // Subagent lifecycle feeds the task drawer's subagent list.
-          tasks.applyDriftEvent(data);
-          return true;
-        case 'subagent_end':
-          tasks.applyDriftEvent(data);
+          useNotificationsStore().handleTip(data as unknown as TipState);
           return true;
         default:
           return false;
@@ -691,16 +675,17 @@ export const useSessionStore = defineStore('session', {
      * Escalation gets an `escalation: true` flag (CSS `--escalation` modifier).
      */
     _renderContentEvent(data: WsPushEvent, content: string): void {
-      const convo = useConversationStore();
-      const isEscalation = (data.type as string) === 'escalation';
-      const meta = {
-        topic: (data as { topic?: string }).topic,
-        type: data.type,
-        ts: new Date().toISOString(),
-        mode: (data as { mode?: string }).mode ?? '',
-        confidence: (data as { confidence?: number }).confidence ?? 0,
-      };
-      convo.appendChalie(content, meta, { escalation: isEscalation });
+      useConversationStore().appendChalie(
+        content,
+        {
+          topic: (data as { topic?: string }).topic,
+          type: data.type,
+          ts: new Date().toISOString(),
+          mode: (data as { mode?: string }).mode ?? '',
+          confidence: (data as { confidence?: number }).confidence ?? 0,
+        },
+        { escalation: (data.type as string) === 'escalation' },
+      );
     },
 
     /**
@@ -712,12 +697,11 @@ export const useSessionStore = defineStore('session', {
      */
     _notifyBackground(content: string): void {
       if (document.hasFocus()) return;
-      const notifications = useNotificationsStore();
       // Plain text for the OS notification preview — the faithful markup_extract
       // equivalent (legacy chat.js/event_router.js use extractPlaintext): drops
       // <actions> button labels and substitutes <img alt>.
       const plain = extractText(content);
-      if (plain) notifications.pushBackground(plain);
+      if (plain) useNotificationsStore().pushBackground(plain);
     },
   },
 });

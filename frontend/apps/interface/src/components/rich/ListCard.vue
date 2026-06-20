@@ -34,14 +34,11 @@ const listData = computed<ListData>(() => props.payload.list ?? props.payload);
 // `items ?? []` guards a malformed/historic payload (legacy list.js:34).
 const items = ref<ListItem[]>((listData.value.items ?? []).map((i) => ({ ...i })));
 
-const progressPercent = computed<number>(() => {
-  const total = items.value.length;
-  if (total === 0) return 0;
-  const done = items.value.filter((i) => i.checked).length;
-  return (done / total) * 100;
-});
-
 const doneCount = computed<number>(() => items.value.filter((i) => i.checked).length);
+
+const progressPercent = computed<number>(() =>
+  items.value.length ? (doneCount.value / items.value.length) * 100 : 0,
+);
 
 function onToggle(item: ListItem): void {
   // Block re-toggling while a previous flip is still in flight (legacy list.js:87).

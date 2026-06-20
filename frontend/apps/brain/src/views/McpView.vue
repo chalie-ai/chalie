@@ -58,8 +58,7 @@ async function saveInbound(updates: Partial<McpServerConfig>): Promise<void> {
 }
 
 function onEnabledChange(e: Event): void {
-  const checked = (e.target as HTMLInputElement).checked;
-  saveInbound({ enabled: checked });
+  saveInbound({ enabled: (e.target as HTMLInputElement).checked });
 }
 
 function onPortBlur(): void {
@@ -122,14 +121,13 @@ function collectHeaders(list: { key: string; value: string }[]): Record<string, 
 async function addServer(): Promise<void> {
   const name = addName.value.trim();
   const host = addHost.value.trim();
-  const enabled = addEnabled.value;
   const headers = collectHeaders(addHeaders.value);
 
   if (!name) { showToast('Name is required', 'error'); return; }
   if (!host) { showToast('Host is required', 'error'); return; }
 
   try {
-    await mcp.createClient({ name, host, headers, enabled });
+    await mcp.createClient({ name, host, headers, enabled: addEnabled.value });
     showToast(`Server "${name}" added`, 'success');
     addName.value = '';
     addHost.value = '';
@@ -159,14 +157,13 @@ function cancelEdit(): void {
 async function saveEdit(id: string | number): Promise<void> {
   const name = editName.value.trim();
   const host = editHost.value.trim();
-  const enabled = editEnabled.value;
   const headers = collectHeaders(editHeaders.value);
 
   if (!name) { showToast('Name is required', 'error'); return; }
   if (!host) { showToast('Host is required', 'error'); return; }
 
   try {
-    await mcp.updateClient(id, { name, host, headers, enabled });
+    await mcp.updateClient(id, { name, host, headers, enabled: editEnabled.value });
     showToast(`Server "${name}" updated`, 'success');
     editingId.value = null;
     await testServer(id, true);

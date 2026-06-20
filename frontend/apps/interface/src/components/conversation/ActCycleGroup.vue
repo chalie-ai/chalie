@@ -17,7 +17,7 @@ const expanded = ref(false);
 // Collapsed preview: the first summary line of the first cycle.
 const preview = computed(() => {
   const pill = props.forms[0]?.tools[0];
-  return pill ? (pill.summary || pill.name) : '';
+  return pill?.summary || pill?.name || '';
 });
 </script>
 

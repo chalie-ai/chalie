@@ -32,7 +32,4 @@ export const usePresenceStore = defineStore('presence', {
       this.label = LABELS[newState];
     },
   },
-  getters: {
-    labels: () => LABELS,
-  },
 });

@@ -10,12 +10,7 @@ const props = defineProps<{ segments: ConversationSegment[] }>();
 // FIX 10: precompute resolved entries ONCE per segment so the template
 // never calls resolveRichCard() twice for the same segment and the
 // non-null assertion (!) is eliminated.
-interface ResolvedSegment {
-  seg: ConversationSegment;
-  richEntry: RichCardEntry | null;
-}
-
-const resolved = computed<ResolvedSegment[]>(() =>
+const resolved = computed<{ seg: ConversationSegment; richEntry: RichCardEntry | null }[]>(() =>
   props.segments.map((seg) => ({
     seg,
     richEntry: seg.type === 'rich' ? (resolveRichCard(seg.tag ?? '') ?? null) : null,

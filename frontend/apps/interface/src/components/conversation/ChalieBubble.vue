@@ -24,10 +24,7 @@ const MODE_LABELS: Record<string, string> = {
   ACKNOWLEDGE: 'noting',
 };
 
-const modeBadgeLabel = computed(() => {
-  const mode = props.form.meta.mode ?? '';
-  return MODE_LABELS[mode] ?? '';
-});
+const modeBadgeLabel = computed(() => MODE_LABELS[props.form.meta.mode ?? ''] ?? '');
 
 // ── FIX 5: only show Speak when there is speakable text ───────────────────
 const speakText = computed(() => chalieFormPlaintext(props.form));

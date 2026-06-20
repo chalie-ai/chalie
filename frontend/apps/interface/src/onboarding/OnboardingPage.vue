@@ -30,10 +30,7 @@ function showToast(message: string, type: Toast['type'] = 'info'): void {
   const id = ++nextId;
   toasts.value.push({ id, message, type });
   setTimeout(() => {
-    const idx = toasts.value.findIndex((t) => t.id === id);
-    if (idx !== -1) {
-      toasts.value.splice(idx, 1);
-    }
+    toasts.value = toasts.value.filter((t) => t.id !== id);
   }, TOAST_VISIBLE_MS);
 }
 
@@ -227,20 +224,12 @@ function skipVoice(): void {
   }
 }
 
-/* Warning box — critical callout */
-.warning-box {
-  background: color-mix(in srgb, var(--error) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
-  border-left: 3px solid var(--error);
+/* Warning / info callout boxes */
+.warning-box,
+.info-box {
   border-radius: 6px;
   padding: 16px;
   margin-bottom: 24px;
-
-  h3 {
-    color: var(--error);
-    font-size: 13px;
-    margin-bottom: 8px;
-  }
 
   p {
     font-size: 13px;
@@ -252,23 +241,22 @@ function skipVoice(): void {
   }
 }
 
-/* Info box */
+.warning-box {
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+  border-left: 3px solid var(--error);
+
+  h3 {
+    color: var(--error);
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+}
+
 .info-box {
   background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
   border-left: 3px solid var(--accent-primary);
-  border-radius: 6px;
-  padding: 16px;
-  margin-bottom: 24px;
-
-  p {
-    font-size: 13px;
-    color: var(--text);
-    line-height: 1.6;
-    margin-bottom: 6px;
-
-    &:last-child { margin-bottom: 0; }
-  }
 }
 
 /* Form group spacing */
@@ -315,17 +303,21 @@ function skipVoice(): void {
 }
 
 /* Buttons */
-.btn-primary {
+.btn-primary,
+.btn-secondary {
   flex: 1;
   padding: 0.65rem;
   font-size: 0.9rem;
   font-weight: 500;
-  color: #fff;
-  background: var(--accent-primary);
-  border: none;
   border-radius: var(--bs-border-radius);
   cursor: pointer;
   transition: opacity 0.2s;
+}
+
+.btn-primary {
+  color: #fff;
+  background: var(--accent-primary);
+  border: none;
 
   &:hover:not(:disabled) { opacity: 0.85; }
 
@@ -336,16 +328,9 @@ function skipVoice(): void {
 }
 
 .btn-secondary {
-  flex: 1;
-  padding: 0.65rem;
-  font-size: 0.9rem;
-  font-weight: 500;
   color: var(--text);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: var(--bs-border-radius);
-  cursor: pointer;
-  transition: opacity 0.2s;
 
   &:hover { opacity: 0.75; }
 }

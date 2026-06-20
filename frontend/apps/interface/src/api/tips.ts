@@ -16,9 +16,7 @@ export const tips = {
    * POST /api/tips/dismiss — mark a single tip as seen by its tip_id.
    */
   dismiss(id: string): Promise<Response> {
-    const host = getHost();
-    const base = host ? host.replace(/\/$/, '') : '';
-    return fetch(`${base}/api/tips/dismiss`, {
+    return fetch(`${getHost().replace(/\/$/, '')}/api/tips/dismiss`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
@@ -31,9 +29,7 @@ export const tips = {
    * Legacy quick_tip_card.js lines 141-146: POST with Content-Type header, no body.
    */
   mute(): Promise<Response> {
-    const host = getHost();
-    const base = host ? host.replace(/\/$/, '') : '';
-    return fetch(`${base}/api/tips/mute`, {
+    return fetch(`${getHost().replace(/\/$/, '')}/api/tips/mute`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },

@@ -17,9 +17,7 @@
  */
 export function relativeTime(isoStr: string): string {
   try {
-    const due = new Date(isoStr);
-    const now = Date.now();
-    const diffMs = due.getTime() - now;
+    const diffMs = new Date(isoStr).getTime() - Date.now();
     if (diffMs < 0) return 'overdue';
     const mins = Math.round(diffMs / 60_000);
     if (mins < 1) return 'now';

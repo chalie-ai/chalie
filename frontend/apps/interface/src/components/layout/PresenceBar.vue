@@ -19,11 +19,6 @@ function handleThemeToggle(): void {
   emit('chalie:theme-changed', { theme: theme.value });
 }
 
-/** Recall button → App.vue opens the moment-search dialog. */
-function handleRecall(): void {
-  emit('chalie:open-recall', {});
-}
-
 /** Settings button → open the Brain admin dashboard (port of app.js:266-267). */
 function handleSettings(): void {
   globalThis.open('/brain/', 'chalie-brain');
@@ -45,7 +40,7 @@ function handleSettings(): void {
         class="btn-icon"
         aria-label="Recall"
         title="Recall"
-        @click="handleRecall"
+        @click="emit('chalie:open-recall', {})"
       >
         <Star :size="18" />
       </button>

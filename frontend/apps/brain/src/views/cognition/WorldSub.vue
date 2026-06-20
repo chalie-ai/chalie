@@ -48,8 +48,7 @@ function mdToHtml(md: string): string {
     .replace(/^\* (.+)$/gm, '<li>$1</li>')
     .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`)
     .replace(/\[([^\]]+)\]/g, '<span class="world-tag">$1</span>')
-    .replace(/\n{2,}/g, '<br>')
-    .replace(/\n/g, '\n');
+    .replace(/\n{2,}/g, '<br>');
 }
 </script>
 

@@ -47,12 +47,8 @@ const REGION_CURRENCY_MAP: Record<string, string> = {
 /** Derive ISO 4217 currency code from the user's locale. */
 function _detectCurrency(locale: string): string {
   try {
-    const regionMatch = locale.match(/[-_]([A-Z]{2})$/i);
-    if (regionMatch) {
-      const region = regionMatch[1].toUpperCase();
-      const code = REGION_CURRENCY_MAP[region];
-      if (code) return code;
-    }
+    const region = locale.match(/[-_]([A-Z]{2})$/i)?.[1].toUpperCase();
+    if (region) return REGION_CURRENCY_MAP[region] ?? 'USD';
   } catch { /* fall through */ }
   return 'USD';
 }
@@ -187,8 +183,7 @@ function _getPreferences() {
 async function _getGrantedLocation(): Promise<{ lat: number; lon: number } | null> {
   if (!navigator.geolocation || !navigator.permissions) return null;
   try {
-    const perm = await navigator.permissions.query({ name: 'geolocation' });
-    if (perm.state !== 'granted') return null;
+    if ((await navigator.permissions.query({ name: 'geolocation' })).state !== 'granted') return null;
     const pos = await webPlatformAdapter.getCurrentPosition({
       timeout: 3_000,
       maximumAge: 300_000,   // accept 5-min cached position
@@ -232,8 +227,7 @@ async function _buildContextPayload(): Promise<Record<string, unknown>> {
 
   ctx['preferences'] = _getPreferences();
 
-  const sensor = _ambientSensor ?? useAmbientSensor();
-  ctx['behavioral'] = sensor.snapshot();
+  ctx['behavioral'] = (_ambientSensor ?? useAmbientSensor()).snapshot();
 
   ctx['location'] = await _getGrantedLocation();
 
@@ -251,9 +245,7 @@ async function _checkAuth(): Promise<void> {
     if (data.has_master_account && !data.has_session) {
       _authFailureFired = true;
       stop();
-      if (typeof _authFailureCb === 'function') {
-        _authFailureCb();
-      }
+      _authFailureCb?.();
     }
   } catch (e) {
     console.warn('[heartbeat] auth check failed:', e);
@@ -266,16 +258,10 @@ async function _checkAuth(): Promise<void> {
 
 async function _sendContext(): Promise<void> {
   try {
-    const ctx = await _buildContextPayload();
-    const result = await system.heartbeat(ctx);
-
-    const attentionResult = result as Record<string, unknown>;
-    if (attentionResult['attention']) {
-      emit('chalie:attention', { attention: attentionResult['attention'] as string });
-    }
+    const result = await system.heartbeat(await _buildContextPayload()) as Record<string, unknown>;
+    if (result['attention']) emit('chalie:attention', { attention: result['attention'] as string });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn('[CLIENT HEARTBEAT] Error sending context:', message);
+    console.warn('[CLIENT HEARTBEAT] Error sending context:', err instanceof Error ? err.message : String(err));
   }
 
   // Always verify the session is still valid.

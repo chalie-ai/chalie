@@ -49,15 +49,6 @@ const isManualMode = computed<boolean>(() => {
   return mode === 'docker' || mode === 'dev';
 });
 
-/** Banner action button label — port of update_system.js _showUpdateBanner() lines 34-37. */
-const bannerActionLabel = computed<string>(() => isManualMode.value ? 'Details' : 'Update');
-
-// ── Apply ─────────────────────────────────────────────────────────────────────
-
-async function applyUpdate(): Promise<void> {
-  await notifications.applyUpdate();
-}
-
 // ── Dismiss ───────────────────────────────────────────────────────────────────
 
 function dismissBanner(): void {
@@ -110,7 +101,7 @@ watch(visible, (v) => {
 
         <!-- Action button: "Details" for manual modes, "Update" otherwise -->
         <button class="update-banner__action" @click="openDialog">
-          {{ bannerActionLabel }}
+          {{ isManualMode ? 'Details' : 'Update' }}
         </button>
 
         <!-- Dismiss ✕ -->
@@ -172,7 +163,7 @@ watch(visible, (v) => {
             class="update-dialog__actions"
           >
             <button class="btn btn-secondary" @click="closeDialog">Cancel</button>
-            <button class="btn btn-primary" @click="applyUpdate">Apply update</button>
+            <button class="btn btn-primary" @click="notifications.applyUpdate()">Apply update</button>
           </div>
 
           <!--
