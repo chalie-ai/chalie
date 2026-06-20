@@ -11,16 +11,38 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useConversationStore } from '../../stores/conversation';
-import type { UserForm, ChalieForm, ActForm, ErrorForm } from '../../stores/conversation';
+import type { ConversationForm, UserForm, ChalieForm, ActForm, ErrorForm } from '../../stores/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
+import ActCycleGroup from './ActCycleGroup.vue';
 import ErrorFormVue from './ErrorForm.vue';
 
 const conversationStore = useConversationStore();
 const session = useSessionStore();
+
+// ── Render rows ───────────────────────────────────────────────────────────────
+// Consecutive superseded (collapsed) ACT cycles fold into one collapsible group;
+// everything else — including a live, non-collapsed act — renders on its own.
+type RenderRow =
+  | { type: 'single'; id: number; form: ConversationForm }
+  | { type: 'act-group'; id: number; forms: ActForm[] };
+
+function groupRows(forms: ConversationForm[]): RenderRow[] {
+  const rows: RenderRow[] = [];
+  for (const form of forms) {
+    const last = rows[rows.length - 1];
+    if (form.kind === 'act' && form.collapsed) {
+      if (last?.type === 'act-group') last.forms.push(form);
+      else rows.push({ type: 'act-group', id: form.id, forms: [form] });
+    } else {
+      rows.push({ type: 'single', id: form.id, form });
+    }
+  }
+  return rows;
+}
 
 // ── Feed element ref ──────────────────────────────────────────────────────────
 
@@ -142,23 +164,29 @@ onBeforeUnmount(() => {
          groups it produced share one `.turn` wrapper, so they render as a single
          visually-tight unit (intra-turn spacing < inter-turn spacing). -->
     <div v-for="turn in conversationStore.turns" :key="turn.id" class="turn">
-      <template v-for="form in turn.forms" :key="form.id">
-        <UserBubble
-          v-if="form.kind === 'user'"
-          :form="(form as UserForm)"
+      <template v-for="row in groupRows(turn.forms)" :key="row.id">
+        <ActCycleGroup
+          v-if="row.type === 'act-group'"
+          :forms="row.forms"
         />
-        <ChalieBubble
-          v-else-if="form.kind === 'chalie'"
-          :form="(form as ChalieForm)"
-        />
-        <ActCycle
-          v-else-if="form.kind === 'act'"
-          :form="(form as ActForm)"
-        />
-        <ErrorFormVue
-          v-else-if="form.kind === 'error'"
-          :form="(form as ErrorForm)"
-        />
+        <template v-else>
+          <UserBubble
+            v-if="row.form.kind === 'user'"
+            :form="(row.form as UserForm)"
+          />
+          <ChalieBubble
+            v-else-if="row.form.kind === 'chalie'"
+            :form="(row.form as ChalieForm)"
+          />
+          <ActCycle
+            v-else-if="row.form.kind === 'act'"
+            :form="(row.form as ActForm)"
+          />
+          <ErrorFormVue
+            v-else-if="row.form.kind === 'error'"
+            :form="(row.form as ErrorForm)"
+          />
+        </template>
       </template>
     </div>
   </main>

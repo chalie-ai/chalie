@@ -554,6 +554,54 @@
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+// Collapsed-cycle group — a run of superseded steps folds behind one chevron.
+// Collapsed shows the chevron + first summary line; expanded rotates the chevron
+// to a down caret and reveals the full trail, indented under it.
+.act-group {
+  align-self: flex-start;
+  max-width: 90%;
+  display: flex;
+  flex-direction: column;
+}
+
+.act-group__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.act-group__caret {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 180ms var(--ease-out);
+}
+
+.act-group--expanded .act-group__caret {
+  transform: rotate(90deg);
+}
+
+.act-group__preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+// Indent the revealed cycles slightly right of the chevron.
+.act-group__body {
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
 // --------------------------------------------------------------------------
 // 14. Spinner
 // --------------------------------------------------------------------------
