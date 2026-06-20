@@ -10,7 +10,7 @@ export type {
   ChatCallbacks,
   ActionCallbacks,
 } from './services/WebSocketService';
-export { getHost, setHost } from './config/host';
+export { getHost, setHost, getToken, setToken, getUsername, setUsername } from './config/host';
 export type { PlatformAdapter, WakeLockHandle } from './platform/PlatformAdapter';
 export { webPlatformAdapter } from './platform/webPlatformAdapter';
 export { useThemeStore } from './stores/theme';
