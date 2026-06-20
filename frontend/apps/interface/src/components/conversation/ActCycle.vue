@@ -111,7 +111,6 @@ function pillSeconds(pill: ToolPill): string {
 
         <span class="act-tool__status">
           <template v-if="!pill.resolved">
-            <span class="act-spinner" />
             <span class="act-tool__elapsed">{{ pillSeconds(pill) }}s</span>
           </template>
           <template v-else-if="pill.ok">{{ pillSeconds(pill) }}s</template>
