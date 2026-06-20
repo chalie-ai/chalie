@@ -1,32 +1,19 @@
 /**
  * Markup rendering and text extraction for Chalie chat content.
  *
- * Security model (preserved from markup_renderer.js):
- *   The backend services.markup.sanitize() (nh3) is the single chokepoint:
- *   every assistant response is stripped of disallowed tags/attributes before
- *   it reaches the frontend.  This composable therefore does NOT re-sanitize —
- *   it trusts the backend, renders via a detached DOM node, then:
- *     1. Auto-linkifies plain-text URLs/emails in text nodes.
- *     2. Wires <action> buttons to emit the 'chalie:action' CustomEvent.
- *     3. Adds lazy-loading to <img> tags (protocol-gated).
- *     4. Adds CSS classes to <code>, <actions>, <action> elements.
- *
- *   The result is returned as an HTML string for use with v-html.  Because the
- *   content is first parsed through the detached DOM (not concatenated as a raw
- *   string), the only element types that reach v-html output are those the
- *   backend's nh3 allowlist permits plus the safe wrappers added here
- *   (<a>, class attributes, data-* attributes, disabled attribute on buttons).
- *
- * extractText:
- *   Strips all tags for TTS. Ported from markup_extract.js.
+ * Security model: the backend nh3 sanitize() is the single chokepoint — every
+ * response is stripped of disallowed tags/attrs before reaching the frontend,
+ * so this composable does NOT re-sanitize. It parses through a detached DOM
+ * node (not raw string concat), then linkifies text, wires <action> buttons,
+ * lazy-loads (protocol-gated) <img>, and adds CSS classes. Because parsing
+ * goes through the DOM, only nh3-allowed elements plus the safe wrappers added
+ * here reach the v-html output. extractText strips all tags for TTS.
  */
 
 import { find as findLinks } from '../vendor/linkify.es.mjs';
 import { emit } from './useEventBus';
 
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
-
-// ── Linkifier ─────────────────────────────────────────────────────────────
 
 function _renderLinkAnchor(href: string, label: string): Node {
   const a = document.createElement('a');
@@ -87,8 +74,6 @@ function _linkifyTextNodesIn(root: Element): void {
   for (const t of targets) _linkifyTextNode(t);
 }
 
-// ── Image wiring ──────────────────────────────────────────────────────────
-
 function _wireImage(img: HTMLImageElement): void {
   const probe = document.createElement('a');
   probe.href = img.getAttribute('src') ?? '';
@@ -98,8 +83,6 @@ function _wireImage(img: HTMLImageElement): void {
   }
   img.loading = 'lazy';
 }
-
-// ── Action button wiring ───────────────────────────────────────────────────
 
 const _ACTION_DATA_ATTRS = ['execute', 'collect', 'target', 'open-url', 'payload'] as const;
 
@@ -148,15 +131,7 @@ function _wireProgrammatic(root: Element): void {
   for (const c of root.querySelectorAll('code')) c.classList.add('chalie-code');
 }
 
-// ── Public API ─────────────────────────────────────────────────────────────
-
-/**
- * Process backend-sanitized markup and return a safe HTML string for v-html.
- *
- * The returned string is produced by DOM manipulation (not string concatenation),
- * so it is safe to use with v-html on the assumption that the backend's nh3
- * sanitizer has already stripped disallowed tags/attributes.
- */
+/** Process backend-sanitized markup into a safe HTML string for v-html. */
 export function renderMarkup(content: string): string {
   if (!content) return '';
   const container = document.createElement('div');
@@ -166,9 +141,6 @@ export function renderMarkup(content: string): string {
   _wireProgrammatic(container);
   return container.innerHTML;
 }
-
-// ── Plain-text extraction (for TTS) ───────────────────────────────────────
-// Ported from markup_extract.js
 
 const _DROP_TAGS = new Set(['actions']);
 
@@ -192,10 +164,7 @@ function _walk(node: Node, out: string[]): void {
   }
 }
 
-/**
- * Strip markup tags and return plain text for TTS consumption.
- * Drops <actions> subtrees so button labels don't leak into speech.
- */
+/** Strip tags to plain text for TTS; drops <actions> so labels don't speak. */
 export function extractText(content: string): string {
   if (!content) return '';
   const template = document.createElement('template');

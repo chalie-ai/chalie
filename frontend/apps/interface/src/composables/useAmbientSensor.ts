@@ -1,14 +1,6 @@
 /**
- * Ambient Behavioral Sensor — Passive-only observer.
- *
- * Port of frontend/interface/ambient.js.
- *
- * Collects activity state, tab focus, visibility, typing cadence, online state,
- * audio device changes, media playback state, and interruption count.
- * Never initiates network requests — heartbeat pulls snapshot() every 5 min.
- *
- * Module-level singleton: the sensor is created once on first import and
- * shared across the app.
+ * Ambient Behavioral Sensor — passive-only observer (singleton, created once on
+ * first import). Never initiates network requests; heartbeat pulls snapshot().
  */
 
 const IDLE_MS = 2 * 60 * 1000;        // 2 min → idle
@@ -47,10 +39,6 @@ export interface AmbientSensorApi {
   destroy(): void;
 }
 
-// ---------------------------------------------------------------------------
-// Singleton state
-// ---------------------------------------------------------------------------
-
 const _pageLoadTime = Date.now();
 let _lastActivityAt = Date.now();
 let _tabFocused = document.hasFocus();
@@ -65,14 +53,6 @@ let _lastResponseAt: number | null = null;
 const _cadenceBuffer: CadenceEntry[] = [];
 let _cadenceInputLen = 0;
 let _mediaPollTimer: ReturnType<typeof setInterval> | null = null;
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-function _isIdle(): boolean {
-  return (Date.now() - _lastActivityAt) >= IDLE_MS;
-}
 
 function _getActivityState(): 'active' | 'idle' | 'away' {
   const elapsed = Date.now() - _lastActivityAt;
@@ -90,22 +70,16 @@ function _getTypingCps(): number | null {
   const totalChars = recent.reduce((sum, e) => sum + e.chars, 0);
   const span = (recent[recent.length - 1].ts - recent[0].ts) / 1000;
   if (span <= 0) return null;
-  return Math.round((totalChars / span) * 10) / 10; // 1 decimal
+  return Math.round((totalChars / span) * 10) / 10;
 }
-
-// ---------------------------------------------------------------------------
-// Listener setup
-// ---------------------------------------------------------------------------
 
 function _bindListeners(): void {
   const passive = { passive: true };
 
   const onActivity = () => {
-    const wasIdle = _isIdle();
+    const wasIdle = (Date.now() - _lastActivityAt) >= IDLE_MS;
     _lastActivityAt = Date.now();
-    if (wasIdle) {
-      _interruptionCount++;
-    }
+    if (wasIdle) _interruptionCount++;
   };
 
   window.addEventListener('mousemove', onActivity, passive);
@@ -146,10 +120,6 @@ function _startMediaPoll(): void {
 _bindListeners();
 _startMediaPoll();
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 function snapshot(): AmbientSnapshot {
   const snap: AmbientSnapshot = {
     activity: _getActivityState(),
@@ -167,21 +137,16 @@ function snapshot(): AmbientSnapshot {
   const cps = _getTypingCps();
   if (cps !== null) snap.typing_cps = cps;
 
-  if (_lastResponseAt !== null) {
-    snap.last_response_at = _lastResponseAt;
-  }
+  if (_lastResponseAt !== null) snap.last_response_at = _lastResponseAt;
 
-  // Reset per-snapshot counters (match legacy behaviour exactly).
+  // Counters are consumed on read — reset after each snapshot.
   _interruptionCount = 0;
   _audioDeviceChanged = false;
 
   return snap;
 }
 
-/**
- * Bind typing cadence tracking to a textarea or input element.
- * Records chars-per-second in a ring buffer — zero keystrokes captured.
- */
+/** Track typing cadence on an input — counts chars only, never keystrokes. */
 function bindTypingInput(el: HTMLInputElement | HTMLTextAreaElement): void {
   _cadenceInputLen = el.value.length;
   el.addEventListener('input', () => {
@@ -191,36 +156,23 @@ function bindTypingInput(el: HTMLInputElement | HTMLTextAreaElement): void {
     _cadenceInputLen = newLen;
     if (chars > 0) {
       _cadenceBuffer.push({ ts: now, chars });
-      if (_cadenceBuffer.length > CADENCE_BUFFER_SIZE) {
-        _cadenceBuffer.shift();
-      }
+      if (_cadenceBuffer.length > CADENCE_BUFFER_SIZE) _cadenceBuffer.shift();
     }
   }, { passive: true });
 }
 
-/**
- * Record timestamp of last Chalie response (for interaction tempo).
- */
 function recordResponse(): void {
   _lastResponseAt = Date.now();
 }
 
-/**
- * Clean up the media poll timer.  Call when unmounting the app.
- */
 function destroy(): void {
-  if (_mediaPollTimer !== null) {
-    clearInterval(_mediaPollTimer);
-    _mediaPollTimer = null;
-  }
+  if (_mediaPollTimer !== null) clearInterval(_mediaPollTimer);
+  _mediaPollTimer = null;
 }
 
 const _sensorApi: AmbientSensorApi = { snapshot, bindTypingInput, recordResponse, destroy };
 
-/**
- * Returns the module-level singleton ambient sensor.
- * Safe to call outside setup() — the singleton is created at module load.
- */
+/** Returns the singleton sensor — safe to call outside setup(). */
 export function useAmbientSensor(): AmbientSensorApi {
   return _sensorApi;
 }

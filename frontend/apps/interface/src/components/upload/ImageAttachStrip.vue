@@ -2,16 +2,9 @@
 /**
  * ImageAttachStrip — reactive preview strip for image and document attachments.
  *
- * Port of frontend/interface/image_attach.js strip rendering + enableDropTargets.
- *
- * Reads the attachments store; does NOT own any <input type=file> — those are in
- * InputDock (the controller). Drag-drop and paste are wired here on document so
- * the entire viewport acts as a drop target, matching legacy enableDropTargets.
- *
- * Image chips: thumbnail via the stored dataUrl.
- * Document chips: 📄 emoji + filename truncated to 20 chars + "…" (legacy _addDocChip:219).
- *
- * Strip is hidden when there are no previews (legacy strip.classList.add('hidden')).
+ * Reads the attachments store; does NOT own any <input type=file> (those are in
+ * InputDock). Drag-drop and paste are wired on document so the entire viewport
+ * acts as a drop target. Strip is hidden when there are no previews.
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useAttachmentsStore } from '../../stores/attachments';
@@ -21,12 +14,8 @@ const attachments = useAttachmentsStore();
 const hasPreviews = computed(() => attachments.previews.length > 0);
 
 function truncate(name: string): string {
-  // Legacy image_attach.js:219 — slice to 18 chars + ellipsis when > 20.
   return name.length > 20 ? name.slice(0, 18) + '…' : name;
 }
-
-// ── Drag-and-drop + paste handlers ──────────────────────────────────────────
-// Attached to document so the full viewport is a drop zone (legacy enableDropTargets).
 
 const dragging = ref(false);
 
@@ -42,7 +31,7 @@ function onDragOver(ev: DragEvent): void {
 }
 
 function onDragLeave(ev: DragEvent): void {
-  // Only clear when leaving to outside the document (relatedTarget == null).
+  // relatedTarget is null only when leaving to outside the document.
   if (ev.relatedTarget) return;
   dragging.value = false;
 }
@@ -100,7 +89,6 @@ onBeforeUnmount(() => {
       class="image-preview__thumb"
       :class="{ 'image-preview__thumb--doc': !preview.isImage }"
     >
-      <!-- Image thumbnail chip -->
       <template v-if="preview.isImage">
         <img
           v-if="preview.dataUrl"
@@ -109,13 +97,11 @@ onBeforeUnmount(() => {
         />
       </template>
 
-      <!-- Document chip: emoji + truncated filename -->
       <template v-else>
         <div class="image-preview__doc-icon" aria-hidden="true">📄</div>
         <span class="image-preview__doc-name">{{ truncate(preview.filename) }}</span>
       </template>
 
-      <!-- Remove (×) button -->
       <button
         class="image-preview__remove"
         type="button"
@@ -175,11 +161,9 @@ onBeforeUnmount(() => {
       width: auto;
       min-width: 64px;
       max-width: 120px;
-      // Image thumbs hide the frame behind the <img>; a doc thumb shows it, so
-      // it needs a theme-aware surface. The base --surface-raised/--surface vars
-      // don't exist in the interface theme and fell back to a hardcoded #222 —
-      // illegible dark-on-dark with the theme-aware --text-secondary filename in
-      // light mode. Use the real raised-surface token so both themes have contrast.
+      // A doc thumb shows its frame (unlike image thumbs), so it needs a real
+      // theme-aware token: --surface-raised/--surface don't exist here and fell
+      // back to #222 — illegible against the light-mode filename text.
       background: var(--bg-surface-2);
     }
   }

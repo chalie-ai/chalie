@@ -25,9 +25,9 @@ export interface ConversationMessage {
   content: string;
   timestamp: string;
   /**
-   * The turn this row belongs to. Under the chain model a turn is many rows
-   * (input → step rows → final synthesis row) sharing one `turn_id`; the feed
-   * groups by this. Null for legacy rows written before turn tracking existed.
+   * The turn this row belongs to — under the chain model a turn is many rows
+   * (input → steps → synthesis) sharing one `turn_id`; the feed groups by this.
+   * Null for legacy rows written before turn tracking existed.
    */
   turn_id: number | null;
   /** Present on user turns when attachments were uploaded. */
@@ -36,22 +36,18 @@ export interface ConversationMessage {
   segments?: ConversationSegment[];
   /**
    * Present on assistant turns that drove tools — the chips THIS row emitted,
-   * each carrying the ability's persisted `act_summary`. Under the chain model a
-   * turn is many assistant rows, and each row owns its own tools; the refresh
-   * path renders these as a collapsed (summary-only) tool group beneath the row,
-   * mirroring how the live path collapses a step once it is superseded.
+   * each with the ability's persisted `act_summary`. Each assistant row owns its
+   * own tools; the refresh path renders them as a collapsed (summary-only) group
+   * beneath the row, mirroring how the live path collapses a superseded step.
    */
   tool_calls?: { tool_name: string; summary: string }[];
 }
 
 export const conversation = {
   /**
-   * Fetch recent conversation turns.
-   * @param limit  Max turns to return (1–120, default 12).
-   * @param offset Turn offset for scroll-up pagination — the backend
-   *               (`/conversation/recent`) reads `offset`, counting back whole
-   *               turns from the newest. `turns_returned` reports how many turns
-   *               this page actually held, so the caller advances by turns.
+   * GET /conversation/recent — `offset` counts back whole TURNS (not rows) from
+   * the newest (limit 1–120); `turns_returned` reports the page size so the
+   * caller advances pagination by turns.
    */
   recent(
     limit = 12,

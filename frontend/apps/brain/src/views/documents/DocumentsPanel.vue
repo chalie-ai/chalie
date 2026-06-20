@@ -46,7 +46,6 @@ const viewMode = ref<'list' | 'detail'>('list');
 const detailDoc = ref<Document | null>(null);
 const fileInput = ref<HTMLInputElement | null>(null);
 
-
 const filtered = computed<Document[]>(() => {
   let result = docs.value;
   if (props.statusFilter === 'active') {
@@ -75,10 +74,9 @@ type GroupEntry = { name: string; count: number };
 
 const groupEntries = computed<GroupEntry[]>(() => {
   if (groupBy.value === 'all') return [];
-  const key = groupBy.value;
   const groups: Record<string, number> = {};
   for (const d of filtered.value) {
-    const k = String(d[key] ?? 'Other') || 'Other';
+    const k = String(d[groupBy.value] ?? 'Other') || 'Other';
     groups[k] = (groups[k] ?? 0) + 1;
   }
   return Object.entries(groups)
@@ -88,9 +86,7 @@ const groupEntries = computed<GroupEntry[]>(() => {
 
 const drillDocs = computed<Document[]>(() => {
   if (!drillGroup.value) return filtered.value;
-  const key = groupBy.value;
-  const drill = drillGroup.value;
-  return filtered.value.filter((d) => (String(d[key] ?? 'Other') || 'Other') === drill);
+  return filtered.value.filter((d) => (String(d[groupBy.value] ?? 'Other') || 'Other') === drillGroup.value);
 });
 
 function statusClass(status: unknown): string {
@@ -121,11 +117,9 @@ async function onSearch(event: Event): Promise<void> {
 
 async function viewDoc(d: Document): Promise<void> {
   try {
-    const data = await documents.get(d.id);
-    detailDoc.value = data.item;
+    detailDoc.value = (await documents.get(d.id)).item;
     viewMode.value = 'detail';
   } catch (e) {
-    // legacy documents.js: non-ok → 'Failed to load document'; network → 'Network error'
     showToast(e instanceof HttpError ? 'Failed to load document' : 'Network error', 'error');
   }
 }
@@ -191,7 +185,6 @@ async function onUpload(event: Event): Promise<void> {
     @change="onUpload"
   >
 
-  <!-- Detail view -->
   <template v-if="viewMode === 'detail'">
     <div class="provider-form-page" style="max-width:none">
       <div class="form-page-header">
@@ -210,9 +203,7 @@ async function onUpload(event: Event): Promise<void> {
     </div>
   </template>
 
-  <!-- List view -->
   <template v-else>
-    <!-- Group tabs -->
     <div class="doc-group-tabs">
       <button
         v-for="tab in GROUP_TABS"
@@ -225,7 +216,6 @@ async function onUpload(event: Event): Promise<void> {
       </button>
     </div>
 
-    <!-- Watched folders section -->
     <div v-if="!drillGroup && folders.length > 0" class="watched-folders-section">
       <h4 class="section-head">Watched Folders</h4>
       <div class="watched-folders-list">
@@ -241,10 +231,9 @@ async function onUpload(event: Event): Promise<void> {
       </div>
     </div>
 
-    <!-- Loading -->
     <div v-if="loading" class="loading">Loading…</div>
 
-    <!-- Empty state (takes precedence over grouping when nothing matches) -->
+    <!-- Empty state takes precedence over grouping when nothing matches -->
     <template v-else-if="filtered.length === 0">
       <div class="empty-state">
         <div class="empty-icon">
@@ -255,7 +244,6 @@ async function onUpload(event: Event): Promise<void> {
       </div>
     </template>
 
-    <!-- Group cards (groupBy !== 'all' and no drill) -->
     <template v-else-if="groupBy !== 'all' && !drillGroup">
       <div class="group-cards-grid">
         <button
@@ -270,9 +258,7 @@ async function onUpload(event: Event): Promise<void> {
       </div>
     </template>
 
-    <!-- Table (all docs or drill-down) -->
     <template v-else>
-      <!-- Drill-down header -->
       <div v-if="drillGroup" class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="drillGroup = null">
           <ChevronLeft :size="14" /> Back

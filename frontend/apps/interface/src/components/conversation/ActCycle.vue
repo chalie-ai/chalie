@@ -8,15 +8,12 @@ const props = defineProps<{ form: ActForm }>();
 
 const session = useSessionStore();
 
-// Wire stop button to the store's cancel action.
 function onStop(): void {
   void session.requestStop();
 }
 
-// ── Live ticking clock ──────────────────────────────────────────────────────
-// Drives the running-timer readout. Runs ONLY while this step is live (not
-// collapsed) and at least one pill is still unresolved; torn down the instant
-// everything resolves or the step is superseded, so settled turns cost nothing.
+// Live timer: ticks ONLY while the step is live and a pill is unresolved; torn
+// down the instant everything resolves, so settled turns cost nothing.
 const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -25,10 +22,8 @@ const hasRunning = computed(
 );
 
 function stopClock(): void {
-  if (timer) {
-    clearInterval(timer);
-    timer = null;
-  }
+  if (timer) clearInterval(timer);
+  timer = null;
 }
 
 watch(
@@ -47,10 +42,7 @@ watch(
 
 onUnmounted(stopClock);
 
-/**
- * Seconds shown on a pill: the server/client-measured duration once resolved,
- * otherwise the live elapsed since the call started (ticks via `now`).
- */
+// Seconds on a pill: measured duration once resolved, else live elapsed.
 function pillSeconds(pill: ToolPill): string {
   const ms = pill.resolved
     ? Math.max(0, pill.ms ?? 0)
@@ -61,8 +53,7 @@ function pillSeconds(pill: ToolPill): string {
 
 <template>
   <div class="act-cycle" :class="{ 'act-cycle--collapsed': form.collapsed }">
-    <!-- Live working anchor: pulsing logo + stop button. Dropped once the step
-         is superseded (collapsed) — only the summaries remain. -->
+    <!-- Live working anchor (logo + stop); dropped once superseded. -->
     <div v-if="!form.collapsed" class="act-row">
       <span class="act-logo" />
       <button
@@ -76,8 +67,7 @@ function pillSeconds(pill: ToolPill): string {
       </button>
     </div>
 
-    <!-- Collapsed: summary-only lines. The red tool-name pill and the running
-         timer are dropped — only the act summary survives (Dylan's spec). -->
+    <!-- Collapsed: summary-only lines; tool-name pill and timer dropped. -->
     <div v-if="form.collapsed" class="act-summaries">
       <span
         v-for="pill in form.tools"
@@ -101,12 +91,10 @@ function pillSeconds(pill: ToolPill): string {
         }"
         :data-call-id="pill.id"
       >
-        <template v-if="pill.summary">
-          <span class="act-tool__label">
-            <span class="act-tool__name">{{ pill.name }}</span>
-            <span class="act-tool__summary">— {{ pill.summary }}</span>
-          </span>
-        </template>
+        <span v-if="pill.summary" class="act-tool__label">
+          <span class="act-tool__name">{{ pill.name }}</span>
+          <span class="act-tool__summary">— {{ pill.summary }}</span>
+        </span>
         <span v-else class="act-tool__name">{{ pill.name }}</span>
 
         <span class="act-tool__status">

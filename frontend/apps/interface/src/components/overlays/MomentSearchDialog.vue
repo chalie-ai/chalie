@@ -1,17 +1,11 @@
 <script setup lang="ts">
 /**
- * MomentSearchDialog — full-screen recall overlay.
+ * MomentSearchDialog — full-screen recall overlay (recall-only; the Remember/pin
+ * flow lives in the session store). Opened via the exposed open().
  *
- * Port source: frontend/interface/moment_search.js (recall-only; the legacy
- * module has no pin mode). The Remember/pin flow lives entirely in the session
- * store's 'chalie:pin-moment' handler (port of app.js:474-508) — this dialog is
- * purely the semantic-recall search surface and is opened via expose open().
- *
- * Rendering adaptation: the backend returns { value, message_text } per item.
- * The legacy code looked for item.title / item.topic (non-existent) first, then
- * fell back to item.summary / item.message_text.  We render value as the primary
- * label and message_text as the body text, which covers both fields without
- * fabricating missing keys.
+ * Rendering: the backend returns { value, message_text } per item. We render
+ * value as the primary label and message_text as the body, avoiding the
+ * non-existent title/topic/summary keys.
  */
 import { ref, onBeforeUnmount } from 'vue';
 import { X } from '@lucide/vue';
@@ -21,12 +15,8 @@ import type { Moment } from '../../api/moments';
 const DEBOUNCE_MS = 500;
 const FOCUS_DEFER_MS = 100;
 
-// ── Refs ───────────────────────────────────────────────────────────────────────
-
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const inputRef = ref<HTMLInputElement | null>(null);
-
-// ── State ─────────────────────────────────────────────────────────────────────
 
 type ViewState = 'empty' | 'loading' | 'results' | 'error';
 
@@ -34,8 +24,6 @@ const query = ref('');
 const viewState = ref<ViewState>('empty');
 const results = ref<Moment[]>([]);
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-
-// ── Open / close ──────────────────────────────────────────────────────────────
 
 function openRecall(): void {
   query.value = '';
@@ -52,8 +40,6 @@ function close(): void {
   }
   dialogRef.value?.close();
 }
-
-// ── Search ────────────────────────────────────────────────────────────────────
 
 function handleInput(): void {
   if (debounceTimer !== null) clearTimeout(debounceTimer);
@@ -81,20 +67,15 @@ async function runSearch(q: string): Promise<void> {
   }
 }
 
-// ── Dialog cancel (native Escape key via <dialog>) ────────────────────────────
-
+// Native Escape key via <dialog>.
 function handleCancel(e: Event): void {
   e.preventDefault();
   close();
 }
 
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
-
 onBeforeUnmount(() => {
   if (debounceTimer !== null) clearTimeout(debounceTimer);
 });
-
-// ── Expose public API to parent (recall button opens via open()) ───────────────
 
 defineExpose({ open: openRecall });
 </script>
@@ -107,7 +88,6 @@ defineExpose({ open: openRecall });
     @cancel="handleCancel"
   >
     <div class="moment-search-dialog__content">
-      <!-- Header -->
       <div class="moment-search-dialog__header">
         <h2 class="moment-search-dialog__title">Recall</h2>
         <button
@@ -119,7 +99,6 @@ defineExpose({ open: openRecall });
         </button>
       </div>
 
-      <!-- Search input -->
       <input
         ref="inputRef"
         v-model="query"
@@ -131,14 +110,12 @@ defineExpose({ open: openRecall });
       />
 
       <div class="moment-search-dialog__results">
-        <!-- Loading shimmer -->
         <div v-if="viewState === 'loading'" class="moment-search-dialog__shimmer">
           <div></div>
           <div></div>
           <div></div>
         </div>
 
-        <!-- Results -->
         <template v-else-if="viewState === 'results'">
           <template v-if="results.length > 0">
             <div
@@ -150,15 +127,6 @@ defineExpose({ open: openRecall });
               @click="close"
               @keydown.enter="close"
             >
-              <!--
-                Rendering adaptation: the backend provides `value` and
-                `message_text` (an alias for value).  The legacy code fell
-                back through title → topic → 'Moment' for the heading, and
-                summary → message_text for the body — none of title/topic/
-                summary exist on the real endpoint.  We use `value` as the
-                primary label (it is the stored semantic key) and
-                `message_text` as body text when it differs from value.
-              -->
               <div class="moment-search-dialog__item-title">{{ item.value || item.key }}</div>
               <div
                 v-if="item.message_text && item.message_text !== item.value"
@@ -171,12 +139,10 @@ defineExpose({ open: openRecall });
           </div>
         </template>
 
-        <!-- Error -->
         <div v-else-if="viewState === 'error'" class="moment-search-dialog__empty">
           Something went wrong. Try again.
         </div>
 
-        <!-- Initial empty state -->
         <div v-else class="moment-search-dialog__empty">
           Your remembered answers will appear here.
         </div>
@@ -186,10 +152,7 @@ defineExpose({ open: openRecall });
 </template>
 
 <style scoped lang="scss">
-// ── Dialog backdrop ────────────────────────────────────────────────────────────
-
 .moment-search-dialog {
-  // <dialog> positioning
   position: fixed;
   top: 50%;
   left: 50%;
@@ -206,7 +169,6 @@ defineExpose({ open: openRecall });
   overflow: hidden;
   z-index: 300;
 
-  // Native <dialog> backdrop
   &::backdrop {
     background: rgba(0, 0, 0, 0.45);
   }
@@ -217,8 +179,6 @@ defineExpose({ open: openRecall });
   flex-direction: column;
   max-height: calc(100vh - 64px);
 }
-
-// ── Header ─────────────────────────────────────────────────────────────────────
 
 .moment-search-dialog__header {
   display: flex;
@@ -243,8 +203,6 @@ defineExpose({ open: openRecall });
   }
 }
 
-// ── Search input ───────────────────────────────────────────────────────────────
-
 .moment-search-dialog__input {
   display: block;
   width: 100%;
@@ -265,16 +223,12 @@ defineExpose({ open: openRecall });
   }
 }
 
-// ── Results area ───────────────────────────────────────────────────────────────
-
 .moment-search-dialog__results {
   flex: 1;
   overflow-y: auto;
   padding: 8px 0;
   min-height: 80px;
 }
-
-// ── Shimmer ────────────────────────────────────────────────────────────────────
 
 .moment-search-dialog__shimmer {
   padding: 8px 16px;
@@ -300,8 +254,6 @@ defineExpose({ open: openRecall });
   0%   { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
-
-// ── Result items ───────────────────────────────────────────────────────────────
 
 .moment-search-dialog__item {
   padding: 10px 16px;
@@ -333,8 +285,6 @@ defineExpose({ open: openRecall });
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
-
-// ── Empty / error state ────────────────────────────────────────────────────────
 
 .moment-search-dialog__empty {
   padding: 20px 16px;

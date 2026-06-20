@@ -28,10 +28,8 @@ const categories = computed<PolicyCategory[]>(() => {
   const byCat: Record<string, PolicyCategory> = {};
   for (const r of rows.value) {
     if (r.channel !== props.channel) continue;
-    const isMcp = !!r.group;
     const cat = r.group || r.permission.split('.')[0];
-    const label = r.label || r.permission;
-    (byCat[cat] ??= { cat, isMcp, rows: [] }).rows.push({ r, label });
+    (byCat[cat] ??= { cat, isMcp: !!r.group, rows: [] }).rows.push({ r, label: r.label || r.permission });
   }
   return Object.values(byCat).sort((a, b) => a.cat.localeCompare(b.cat));
 });

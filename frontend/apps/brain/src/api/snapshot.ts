@@ -20,7 +20,6 @@ export interface SnapshotImportResult {
 
 export const snapshot = {
   /**
-   * POST /api/snapshot/export → raw Response so the caller handles the blob.
    * Throws AuthError on 401; does NOT throw on other non-ok statuses — the
    * caller inspects res.ok and reads .blob()/.json() itself.
    */

@@ -22,17 +22,12 @@ const { init: initTheme } = useTheme();
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
 
-/** Imperative handle on the moment-search dialog (PresenceBar's recall button). */
 const recallRef = ref<InstanceType<typeof MomentSearchDialog> | null>(null);
 
-/** Unbind for the chalie:open-recall bus subscription. */
 let _unbindRecall: (() => void) | null = null;
 
-/**
- * Single auth-failure redirect — wired to BOTH the session store (turn-level
- * auth_failed / AuthError on history) and the heartbeat (periodic /auth/status
- * check). Mirrors the router gate's login redirect (router.ts:64-66).
- */
+// Single auth-failure redirect — wired to BOTH the session store (turn-level
+// auth_failed) and the heartbeat (periodic /auth/status). Mirrors the router gate.
 let _authRedirected = false;
 function handleAuthFailure(): void {
   if (_authRedirected) return;
@@ -43,64 +38,52 @@ function handleAuthFailure(): void {
 }
 
 onMounted(() => {
-  // Theme init first, then session (WS connect). Voice availability runs
-  // independently — it only governs mic/speaker visibility and must never gate
-  // the loading overlay (which polls /ready on its own; see LoadingOverlay.vue).
+  // Theme first, then session (WS connect). Voice availability runs independently —
+  // it only governs mic/speaker visibility and must never gate the loading overlay.
   initTheme();
 
   session.onAuthFailure(handleAuthFailure);
   session.init();
   voiceStore.checkAvailability();
 
-  // Recall button (PresenceBar) → open the moment-search dialog.
   _unbindRecall = on('chalie:open-recall', () => {
     recallRef.value?.open();
   });
 
-  // Client context heartbeat: also surfaces auth expiry via /auth/status.
+  // Heartbeat also surfaces auth expiry via /auth/status.
   const heartbeat = useHeartbeat();
   heartbeat.onAuthFailure(handleAuthFailure);
   heartbeat.start();
-  // Port of app.js line 280: prime geolocation permission once after start.
+  // Prime geolocation permission once after start.
   void heartbeat.requestLocationPermission();
 });
 
 onBeforeUnmount(() => {
   _unbindRecall?.();
-  _unbindRecall = null;
   useHeartbeat().stop();
   useAmbientSensor().destroy();
 });
 </script>
 
 <template>
-  <!-- Ambient background layers -->
   <AmbientCanvas />
   <div id="ambientBloom"></div>
   <div id="grainOverlay"></div>
 
-  <!-- Fixed presence bar -->
   <PresenceBar />
 
-  <!-- Loading overlay — polls /ready, fades once the backend is up -->
   <LoadingOverlay />
 
-  <!-- Scrollable conversation spine -->
   <ConversationFeed />
 
-  <!-- Fixed input dock -->
   <InputDock />
 
   <!-- Teleport targets for dialogs / permission cards -->
   <div id="permStack" class="permission-stack"></div>
   <div id="overlayRoot"></div>
 
-  <!-- Overlays / dialogs.
-       PermissionStack teleports into #permStack; the rest self-render
-       (TaskDrawer renders its own trigger; QuickTipCard / UpdatePrompt stay
-       dormant until the backend emits their events; VoicePlayerDialog and
-       MomentSearchDialog self-subscribe to their bus events — MomentSearchDialog
-       also exposes open() for the recall button). -->
+  <!-- PermissionStack teleports into #permStack; the rest self-render and
+       self-subscribe to bus events. MomentSearchDialog also exposes open() for recall. -->
   <PermissionStack />
   <TaskDrawer />
   <QuickTipCard />

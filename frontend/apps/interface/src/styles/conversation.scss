@@ -1,18 +1,6 @@
-// ==========================================================================
-// Conversation component styles — port of legacy style.css §8 Speech Forms,
-// §25 Cognitive Signals, §27 Critic Escalation, plus ACT cycle UI.
-//
-// THEME RULE (Rule 7): every color uses CSS-var tokens so dark + light
-// both work.  Legacy rgba() values that were theme-specific have been
-// replaced with color-mix() or the appropriate token.
-//
-// Depends on @chalie/shared/styles/main.scss + interface.scss being loaded
-// first (tokens, keyframes).
-// ==========================================================================
+// Conversation component styles. Colors use CSS-var tokens for dark+light (Rule 7).
+// Depends on @chalie/shared/styles/main.scss + interface.scss loaded first (tokens, keyframes).
 
-// --------------------------------------------------------------------------
-// 1. Speech Form — base bubble
-// --------------------------------------------------------------------------
 .speech-form {
   position: relative;
   padding: var(--space-lg);
@@ -62,7 +50,6 @@
   max-width: 100%;
 }
 
-// User text — preserve newlines
 .speech-form--user .speech-form__text {
   white-space: pre-wrap;
   font-weight: 600;
@@ -97,9 +84,6 @@
   text-shadow: none !important;
 }
 
-// --------------------------------------------------------------------------
-// 3. Chalie bubble
-// --------------------------------------------------------------------------
 .speech-form--chalie {
   border: none;
   box-shadow: none;
@@ -126,9 +110,7 @@
   height: 16px;
 }
 
-// --------------------------------------------------------------------------
-// 4. Sender glyph (general) — SVG asset painted via mask so currentColor themes it
-// --------------------------------------------------------------------------
+// Sender glyph — SVG asset painted via mask so currentColor themes it
 .sender-glyph {
   position: absolute;
   top: -9px;
@@ -159,16 +141,11 @@
   .speech-form--chalie .sender-glyph { animation: none; opacity: 0.85; }
 }
 
-// --------------------------------------------------------------------------
-// 5. Faded messages (outside working memory)
-// --------------------------------------------------------------------------
+// Faded messages — outside working memory
 .message--faded {
   opacity: 0.75;
 }
 
-// --------------------------------------------------------------------------
-// 6. Text body
-// --------------------------------------------------------------------------
 .speech-form__text {
   word-break: break-word;
   position: relative;
@@ -220,9 +197,6 @@
   white-space: nowrap;
 }
 
-// --------------------------------------------------------------------------
-// 8. Meta row (timestamp, remember, speak)
-// --------------------------------------------------------------------------
 .speech-form__meta {
   display: flex;
   align-items: center;
@@ -256,9 +230,6 @@
   letter-spacing: 0.04em;
 }
 
-// --------------------------------------------------------------------------
-// 9. Remember (pin) button
-// --------------------------------------------------------------------------
 .speech-form__remember-btn {
   background: none;
   border: none;
@@ -291,9 +262,6 @@
   cursor: default;
 }
 
-// --------------------------------------------------------------------------
-// 10. Speak button
-// --------------------------------------------------------------------------
 .speech-form__speak-btn {
   background: none;
   border: none;
@@ -315,9 +283,6 @@
   color: var(--dusk-blue);
 }
 
-// --------------------------------------------------------------------------
-// 11. Error form
-// --------------------------------------------------------------------------
 .speech-form--error {
   background: color-mix(in oklab, var(--error) 8%, transparent);
   border-color: color-mix(in oklab, var(--error) 20%, transparent);
@@ -327,9 +292,7 @@
   color: var(--error);
 }
 
-// --------------------------------------------------------------------------
-// 12. Escalation form (critic)
-// --------------------------------------------------------------------------
+// Escalation form (critic)
 .speech-form--escalation {
   border-color: color-mix(in oklab, #ffb432 25%, transparent);
   box-shadow: 0 0 16px color-mix(in oklab, #ffb432 6%, transparent);
@@ -358,9 +321,7 @@
   pointer-events: none;
 }
 
-// --------------------------------------------------------------------------
-// 13. ACT cycle
-// --------------------------------------------------------------------------
+// ACT cycle
 .act-cycle {
   align-self: flex-start;
   max-width: 90%;
@@ -387,20 +348,6 @@
   animation: act-logo-pulse 1.4s ease-in-out infinite;
 }
 
-.act-narrative {
-  font-style: italic;
-  color: var(--text-primary);
-  opacity: 0.75;
-  line-height: 1.5;
-  font-size: 0.95rem;
-  letter-spacing: -0.005em;
-}
-
-.act-narrative:empty {
-  display: none;
-}
-
-// Stop button — embedded in .act-row
 .act-stop-btn {
   background: transparent;
   border: none;
@@ -419,7 +366,7 @@
 .act-stop-btn:active { transform: scale(0.9); }
 .act-stop-btn--stopping { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
 
-// Tool list — indented under the logo (logo width 12 + gap 12 = 24)
+// Indented under the logo (logo 12 + gap 12 = 24) to align with the row.
 .act-tools {
   margin-left: 24px;
   display: flex;
@@ -476,7 +423,6 @@
   min-width: 32px;
 }
 
-// States
 .act-tool--running {
   color: color-mix(in oklab, var(--text-primary) 75%, transparent);
 }
@@ -491,15 +437,14 @@
   opacity: 0.5;
 }
 
-// Status cluster: spinner + live elapsed readout while a call is running.
+// Live elapsed readout shown beside the spinner while a call runs.
 .act-tool__elapsed {
   margin-left: 6px;
   font-variant-numeric: tabular-nums;
 }
 
-// Collapsed step — the tools are done and the step has been superseded by the
-// next prose bubble (or the final reply). The name pill and timer are dropped;
-// only the act summaries remain, indented to align with the live tool list.
+// Superseded step (tools done, replaced by next bubble): drop name pill + timer,
+// keep only the summaries indented to align with the live tool list.
 .act-cycle--collapsed {
   gap: 2px;
   padding: 0 0 2px;
@@ -520,10 +465,9 @@
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
-// Collapsed-cycle group — a run of superseded steps folds behind one chevron.
-// A 2-column grid: a narrow caret gutter + the content column. The caret is
-// top-aligned to the first content line in BOTH states (collapsed preview /
-// expanded trail), so expanding never inserts an empty caret-only row.
+// A run of superseded steps folds behind one chevron: a caret-gutter + content
+// grid. Caret top-aligned to the first content line in BOTH states so expanding
+// never inserts an empty caret-only row.
 $act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summaries
 
 .act-group {
@@ -593,9 +537,7 @@ $act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summa
   }
 }
 
-// --------------------------------------------------------------------------
-// 15. Meta-mode badge (cognitive signal)
-// --------------------------------------------------------------------------
+// Meta-mode badge (cognitive signal)
 .meta-mode-badge {
   font-size: 0.6rem;
   letter-spacing: 0.06em;

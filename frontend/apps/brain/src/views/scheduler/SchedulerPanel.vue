@@ -22,9 +22,7 @@ const { data: items, loading, reload: load } = useBrainResource(
   { initial: [] as ScheduleItem[], failMsg: 'Failed to load schedules' },
 );
 
-// Inline form state
-type FormMode = 'list' | 'form';
-const formMode = ref<FormMode>('list');
+const formMode = ref<'list' | 'form'>('list');
 const editingId = ref<string | number | null>(null);
 const formMsg = ref('');
 const formDue = ref('');
@@ -36,13 +34,7 @@ const filtered = computed<ScheduleItem[]>(() =>
 );
 
 function statusClass(status: string | null | undefined): string {
-  const map: Record<string, string> = {
-    pending: 'badge-warning',
-    fired: 'badge-success',
-    failed: 'badge-danger',
-    cancelled: 'badge-muted',
-  };
-  return map[status ?? ''] ?? 'badge-muted';
+  return ({ pending: 'badge-warning', fired: 'badge-success', failed: 'badge-danger', cancelled: 'badge-muted' } as Record<string, string>)[status ?? ''] ?? 'badge-muted';
 }
 
 function openForm(item: ScheduleItem | null): void {
@@ -91,7 +83,6 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
     showToast(apiErrorMessage(e, 'Cancel failed'), 'error');
   }
 }
-
 </script>
 
 <template>
@@ -104,92 +95,86 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
 
   <div v-if="loading" class="loading">Loading…</div>
 
-  <template v-else-if="formMode === 'form'">
-    <div class="provider-form-page">
-      <div class="form-page-header">
-        <button class="btn btn-secondary btn-sm back-btn" @click="formMode = 'list'">
-          <ChevronLeft :size="14" /> Back
-        </button>
-        <h3>{{ editingId != null ? 'Edit Schedule' : 'New Schedule' }}</h3>
-      </div>
-      <form @submit.prevent="save">
-        <div class="form-group">
-          <label for="schedMsg">Prompt / Message</label>
-          <textarea
-            id="schedMsg"
-            v-model="formMsg"
-            rows="3"
-            maxlength="1000"
-            placeholder="What Chalie should do when this fires"
-            required
-          ></textarea>
-        </div>
-        <div class="form-group">
-          <label for="schedDue">Due Date &amp; Time</label>
-          <input id="schedDue" v-model="formDue" type="datetime-local" required>
-        </div>
-        <div class="form-group">
-          <label for="schedType">Type</label>
-          <select id="schedType" v-model="formType">
-            <option value="notification">Notification</option>
-            <option value="prompt">Prompt</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label for="schedRecur">Recurrence</label>
-          <select id="schedRecur" v-model="formRecur">
-            <option value="">None (one-time)</option>
-            <option value="interval">Every X minutes</option>
-            <option value="hourly">Hourly</option>
-            <option value="daily">Daily</option>
-            <option value="weekdays">Weekdays</option>
-            <option value="weekly">Weekly</option>
-            <option value="monthly">Monthly</option>
-          </select>
-        </div>
-        <div class="form-actions">
-          <button type="button" class="btn btn-secondary" @click="formMode = 'list'">Cancel</button>
-          <button type="submit" class="btn btn-primary">Save</button>
-        </div>
-      </form>
+  <div v-else-if="formMode === 'form'" class="provider-form-page">
+    <div class="form-page-header">
+      <button class="btn btn-secondary btn-sm back-btn" @click="formMode = 'list'">
+        <ChevronLeft :size="14" /> Back
+      </button>
+      <h3>{{ editingId != null ? 'Edit Schedule' : 'New Schedule' }}</h3>
     </div>
-  </template>
-
-  <template v-else-if="filtered.length === 0">
-    <div class="empty-state">
-      <div class="empty-icon">
-        <Calendar :size="40" />
+    <form @submit.prevent="save">
+      <div class="form-group">
+        <label for="schedMsg">Prompt / Message</label>
+        <textarea
+          id="schedMsg"
+          v-model="formMsg"
+          rows="3"
+          maxlength="1000"
+          placeholder="What Chalie should do when this fires"
+          required
+        ></textarea>
       </div>
-      <h3>No schedules</h3>
-      <p>Create your first scheduled task.</p>
-    </div>
-  </template>
+      <div class="form-group">
+        <label for="schedDue">Due Date &amp; Time</label>
+        <input id="schedDue" v-model="formDue" type="datetime-local" required>
+      </div>
+      <div class="form-group">
+        <label for="schedType">Type</label>
+        <select id="schedType" v-model="formType">
+          <option value="notification">Notification</option>
+          <option value="prompt">Prompt</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="schedRecur">Recurrence</label>
+        <select id="schedRecur" v-model="formRecur">
+          <option value="">None (one-time)</option>
+          <option value="interval">Every X minutes</option>
+          <option value="hourly">Hourly</option>
+          <option value="daily">Daily</option>
+          <option value="weekdays">Weekdays</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-secondary" @click="formMode = 'list'">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
 
-  <template v-else>
-    <table class="records-table">
-      <thead>
-        <tr>
-          <th>Message</th>
-          <th>Status</th>
-          <th>Due</th>
-          <th>Recurrence</th>
-          <th>Type</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="s in filtered" :key="s.id">
-          <td class="key-cell">{{ s.message || s.prompt || '' }}</td>
-          <td><span class="badge" :class="statusClass(s.status)">{{ s.status || '' }}</span></td>
-          <td>{{ formatDate(s.due_at || s.due) }}</td>
-          <td>{{ s.recurrence || '—' }}</td>
-          <td><span class="badge badge-muted">{{ s.type || 'notification' }}</span></td>
-          <td class="row-actions">
-            <button class="btn btn-sm btn-secondary" @click="openForm(s)">Edit</button>
-            <button v-if="s.status === 'pending'" class="btn btn-sm btn-danger" @click="cancelSchedule(s)">Cancel</button>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </template>
+  <div v-else-if="filtered.length === 0" class="empty-state">
+    <div class="empty-icon">
+      <Calendar :size="40" />
+    </div>
+    <h3>No schedules</h3>
+    <p>Create your first scheduled task.</p>
+  </div>
+
+  <table v-else class="records-table">
+    <thead>
+      <tr>
+        <th>Message</th>
+        <th>Status</th>
+        <th>Due</th>
+        <th>Recurrence</th>
+        <th>Type</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr v-for="s in filtered" :key="s.id">
+        <td class="key-cell">{{ s.message || s.prompt || '' }}</td>
+        <td><span class="badge" :class="statusClass(s.status)">{{ s.status || '' }}</span></td>
+        <td>{{ formatDate(s.due_at || s.due) }}</td>
+        <td>{{ s.recurrence || '—' }}</td>
+        <td><span class="badge badge-muted">{{ s.type || 'notification' }}</span></td>
+        <td class="row-actions">
+          <button class="btn btn-sm btn-secondary" @click="openForm(s)">Edit</button>
+          <button v-if="s.status === 'pending'" class="btn btn-sm btn-danger" @click="cancelSchedule(s)">Cancel</button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
 </template>

@@ -1,11 +1,6 @@
 /**
- * Format a backend timestamp string to `YYYY-MM-DD HH:MM` in local time.
- *
- * Verbatim port of legacy `frontend/brain/app.js:385-393` (`BrainApp.formatDate`),
- * used by the Cognition / Scheduler / Documents / Skills / Policies panels:
- *   - empty / falsy input  → ''
- *   - a naive timestamp (no `T`, `+`, or `Z`) is treated as UTC: ' ' → 'T', then append 'Z'
- *   - an unparseable value  → returned as-is
+ * Backend timestamp → `YYYY-MM-DD HH:MM` local time. Falsy → ''; naive stamps
+ * (no `T`/`+`/`Z`) are treated as UTC; an unparseable value is returned as-is.
  */
 export function formatDate(raw: string | null | undefined): string {
   if (!raw) return '';
@@ -22,9 +17,7 @@ export function formatDate(raw: string | null | undefined): string {
 }
 
 /**
- * Escape HTML special characters. Verbatim port of legacy
- * `frontend/brain/app.js:380-383` (`BrainApp.escapeHtml`). Needed only where
- * markup is assembled for `v-html` (e.g. the World view's markdown renderer);
+ * Escape HTML special chars. Needed only where markup is assembled for `v-html`;
  * ordinary `{{ }}` interpolation already escapes its content.
  */
 export function escapeHtml(s: string | null | undefined): string {

@@ -19,14 +19,12 @@ const { data: listsData, loading, reload: load } = useBrainResource(
 
 const expanded = reactive<Record<string, boolean>>({});
 
-// Modal state
 const showNew = ref(false);
 const newListName = ref('');
 const showRename = ref(false);
 const renameName = ref('');
 const renameId = ref<string | number | null>(null);
 
-// --- counts helper (legacy lists.js:48-51) ---
 function counts(list: List): { done: number; total: number; pct: number } {
   const items = list.items ?? [];
   const done = list.items ? items.filter((i) => i.checked).length : (list.checked_count ?? 0);
@@ -35,11 +33,9 @@ function counts(list: List): { done: number; total: number; pct: number } {
   return { done, total, pct };
 }
 
-// Decorate each list with its counts once per render pass (the `list` object is the
-// same reference held in listsData, so toggle/fetchListDetail mutations still apply).
+// Reuses the same `list` reference from listsData so toggle/fetchListDetail mutations still apply.
 const decoratedLists = computed(() => listsData.value.map((list) => ({ list, c: counts(list) })));
 
-// --- fetchListDetail (legacy lists.js:113-123) ---
 async function fetchListDetail(list: List): Promise<void> {
   try {
     const d = await listsApi.get(list.id);
@@ -49,14 +45,12 @@ async function fetchListDetail(list: List): Promise<void> {
   }
 }
 
-// --- toggle expand/collapse (legacy lists.js:79-87) ---
 function toggle(list: List): void {
   const id = String(list.id);
   expanded[id] = !expanded[id];
   if (expanded[id]) fetchListDetail(list);
 }
 
-// --- toggleItem (legacy lists.js:125-136) ---
 async function toggleItem(list: List, item: ListItem, checked: boolean): Promise<void> {
   const endpoint = checked ? 'check' : 'uncheck';
   try {
@@ -67,7 +61,6 @@ async function toggleItem(list: List, item: ListItem, checked: boolean): Promise
   }
 }
 
-// --- onAddKey handler (legacy lists.js:96-103) ---
 function onAddKey(e: KeyboardEvent, list: List): void {
   const input = e.target as HTMLInputElement;
   const value = input.value.trim();
@@ -77,25 +70,22 @@ function onAddKey(e: KeyboardEvent, list: List): void {
   }
 }
 
-// --- addItem (legacy lists.js:138-143) ---
 async function addItem(list: List, text: string): Promise<void> {
   try {
     await listsApi.addItems(list.id, [text]);
     await fetchListDetail(list);
   } catch (e) {
-    // mirrors legacy lists.js:138-143 — silent on non-ok, toast on network error
+    // silent on non-ok; toast only on network error
     if (!(e instanceof HttpError)) showToast('Failed to add item', 'error');
   }
 }
 
-// --- openRename (legacy lists.js:169-192) ---
 function openRename(list: List): void {
   renameId.value = list.id;
   renameName.value = list.name;
   showRename.value = true;
 }
 
-// --- createList (legacy lists.js:159-166) ---
 async function createList(): Promise<void> {
   try {
     await listsApi.create(newListName.value.trim());
@@ -107,7 +97,6 @@ async function createList(): Promise<void> {
   }
 }
 
-// --- renameList (legacy lists.js:184-191) ---
 async function renameList(): Promise<void> {
   if (renameId.value == null) return;
   try {
@@ -120,7 +109,6 @@ async function renameList(): Promise<void> {
   }
 }
 
-// --- deleteList (legacy lists.js:194-213) ---
 async function deleteList(list: List): Promise<void> {
   const ok = await confirm({
     title: 'Delete List',
@@ -141,7 +129,6 @@ async function deleteList(list: List): Promise<void> {
 </script>
 
 <template>
-  <!-- Header (legacy lists.js:17-20) -->
   <div class="panel-header">
     <h2>Lists</h2>
     <button class="btn btn-primary" @click="showNew = true; newListName = ''">
@@ -149,10 +136,8 @@ async function deleteList(list: List): Promise<void> {
     </button>
   </div>
 
-  <!-- Loading state -->
   <div v-if="loading" class="loading">Loading…</div>
 
-  <!-- Empty state (legacy lists.js:43, empty-state inline pattern) -->
   <div v-else-if="listsData.length === 0" class="empty-state">
     <div class="empty-icon">
       <ListIcon :size="40" />
@@ -161,7 +146,6 @@ async function deleteList(list: List): Promise<void> {
     <p>Create your first list to get started.</p>
   </div>
 
-  <!-- List cards (legacy lists.js:47-77) -->
   <template v-else>
     <div v-for="{ list, c } in decoratedLists" :key="list.id" class="list-card">
       <div class="list-card-header" @click="toggle(list)">
@@ -208,7 +192,6 @@ async function deleteList(list: List): Promise<void> {
     </div>
   </template>
 
-  <!-- Create list modal (legacy lists.js:145-167) -->
   <BrainModal v-model="showNew" size="sm">
     <div class="modal-header">
       <h3>New List</h3>
@@ -235,7 +218,6 @@ async function deleteList(list: List): Promise<void> {
     </form>
   </BrainModal>
 
-  <!-- Rename list modal (legacy lists.js:169-192) -->
   <BrainModal v-model="showRename" size="sm">
     <div class="modal-header">
       <h3>Rename List</h3>

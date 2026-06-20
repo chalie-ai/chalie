@@ -1,6 +1,6 @@
 /**
- * Presence state machine — port of frontend/interface/presence.js.
- * CSS drives all visual animation via [data-state] selectors on the dot element.
+ * Presence state machine. CSS drives all visual animation via [data-state]
+ * selectors on the dot element.
  */
 import { defineStore } from 'pinia';
 
@@ -22,17 +22,11 @@ export const usePresenceStore = defineStore('presence', {
     label: LABELS['resting'] as string,
   }),
   actions: {
-    /**
-     * Transition to a new state.
-     * Unknown states are silently ignored (port of presence.js setState guard).
-     */
+    /** Unknown states are silently ignored. */
     setState(newState: string): void {
       if (!LABELS[newState]) return;
       this.state = newState;
       this.label = LABELS[newState];
     },
-  },
-  getters: {
-    labels: () => LABELS,
   },
 });

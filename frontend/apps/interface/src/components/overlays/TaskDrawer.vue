@@ -2,22 +2,11 @@
 /**
  * TaskDrawer — slide-out panel showing pending reminders and active subagents.
  *
- * Port source: frontend/interface/task_strip.js
+ * The trigger button lives in PresenceBar.vue; this component owns the scrim,
+ * panel, and close button only. Open/close state is driven by tasks.isOpen.
  *
- * The trigger button lives in PresenceBar.vue (legacy index.html lines 122-127).
- * This component owns the scrim, drawer panel, and close button only.
- * Open/close state is driven by tasks.isOpen (tasks store).
- *
- * D4 fix: hint fires when the drawer opens with content, not on mount.
- *   Legacy task_strip.js lines 207-210: hint is rendered inside _render() which
- *   early-returns when totalCount === 0 — so the hint can only appear with content.
- *
- * D5 fix: watcher closes drawer when count drops to 0.
- *   Legacy task_strip.js lines 164-169: _closeDrawer() called when totalCount === 0.
- *
- * Key adaptation: the backend /chat/subagents/active only returns { sub_id }.
- * There is no agent_type or description field, so each subagent is rendered
- * with a generic "Working…" label alongside its sub_id.
+ * The backend /chat/subagents/active returns only { sub_id } (no agent_type or
+ * description), so each subagent renders as a generic "Working…" label.
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { Square, X } from '@lucide/vue';
@@ -30,33 +19,19 @@ import { relativeTime } from '../../utils/time';
 const HINT_KEY = 'task_strip_hint_shown';
 const POLL_INTERVAL_MS = 60_000;
 
-// ── Store ──────────────────────────────────────────────────────────────────────
-
 const tasks = useTasksStore();
 const { reminders, subagents, totalCount, isOpen } = storeToRefs(tasks);
-
-// ── Local state ───────────────────────────────────────────────────────────────
 
 const hintShown = ref(webPlatformAdapter.getItem(HINT_KEY) === '1');
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-// ── Computed ──────────────────────────────────────────────────────────────────
-
 const hasReminders = computed(() => reminders.value.length > 0);
 const hasSubagents = computed(() => subagents.value.size > 0);
 
-/** Subagents as an array so v-for can iterate. */
 const subagentList = computed(() => Array.from(subagents.value.values()));
 
-/**
- * Whether the first-time hint should be shown.
- * D4: only show when the drawer is open AND there is content — mirrors legacy
- * task_strip.js where hint HTML is injected inside _render() after the
- * early-return guard at line 165 (totalCount === 0 → return).
- */
+/** First-time hint: only when the drawer is open AND has content. */
 const showHint = computed(() => !hintShown.value && isOpen.value && totalCount.value > 0);
-
-// ── Drawer DOM refs (for CSS transition choreography) ─────────────────────────
 
 const drawerRef = ref<HTMLElement | null>(null);
 const scrimRef = ref<HTMLElement | null>(null);
@@ -68,7 +43,7 @@ function openDrawerDom(): void {
   requestAnimationFrame(() => {
     drawerRef.value?.classList.add('open');
   });
-  // D4: mark hint shown on first open-with-content.
+  // Mark hint shown on first open-with-content.
   if (totalCount.value > 0 && !hintShown.value) {
     hintShown.value = true;
     webPlatformAdapter.setItem(HINT_KEY, '1');
@@ -77,11 +52,10 @@ function openDrawerDom(): void {
 
 function closeDrawerDom(): void {
   const drawer = drawerRef.value;
-  const scrim = scrimRef.value;
   if (!drawer) return;
 
   drawer.classList.remove('open');
-  scrim?.classList.add('hidden');
+  scrimRef.value?.classList.add('hidden');
 
   drawer.addEventListener(
     'transitionend',
@@ -94,8 +68,6 @@ function closeDrawerDom(): void {
   );
 }
 
-// ── Watch store isOpen ─────────────────────────────────────────────────────────
-
 watch(isOpen, (open) => {
   if (open) {
     openDrawerDom();
@@ -104,16 +76,12 @@ watch(isOpen, (open) => {
   }
 });
 
-// ── D5: Auto-close when count drops to 0 ─────────────────────────────────────
-// Legacy task_strip.js lines 164-169: closes drawer when totalCount === 0.
-
+// Auto-close when the count drops to 0.
 watch(totalCount, (count) => {
   if (count === 0 && isOpen.value) {
     tasks.close();
   }
 });
-
-// ── Stop subagent ─────────────────────────────────────────────────────────────
 
 async function stopSubagent(subId: string): Promise<void> {
   try {
@@ -123,20 +91,15 @@ async function stopSubagent(subId: string): Promise<void> {
   }
 }
 
-// ── Keyboard ──────────────────────────────────────────────────────────────────
-
 function handleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && isOpen.value) {
     tasks.close();
   }
 }
 
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
-
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown);
 
-  // Initial load + periodic poll.
   void tasks.loadActiveTasks();
   pollTimer = setInterval(() => { void tasks.loadActiveTasks(); }, POLL_INTERVAL_MS);
 });
@@ -151,7 +114,6 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- Scrim -->
   <div
     id="taskDrawerScrim"
     ref="scrimRef"
@@ -160,7 +122,6 @@ onBeforeUnmount(() => {
     @click="tasks.close()"
   ></div>
 
-  <!-- Slide-out panel -->
   <aside
     id="taskDrawer"
     ref="drawerRef"
@@ -181,7 +142,6 @@ onBeforeUnmount(() => {
     </div>
 
     <div id="taskDrawerList" class="task-drawer__list">
-      <!-- Reminders section -->
       <template v-if="hasReminders">
         <div
           v-for="r in reminders"
@@ -193,13 +153,11 @@ onBeforeUnmount(() => {
         </div>
       </template>
 
-      <!-- Divider between reminders and subagents -->
       <div
         v-if="hasReminders && hasSubagents"
         class="task-drawer__section-divider"
       ></div>
 
-      <!-- Subagents section — backend only provides sub_id -->
       <template v-if="hasSubagents">
         <div
           v-for="sa in subagentList"
@@ -220,7 +178,6 @@ onBeforeUnmount(() => {
         </div>
       </template>
 
-      <!-- First-time hint — shown on first open-with-content (D4). -->
       <div
         v-if="showHint"
         class="task-drawer__hint"
@@ -232,8 +189,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
-// ── Scrim ──────────────────────────────────────────────────────────────────────
-
 .task-drawer__scrim {
   position: fixed;
   inset: 0;
@@ -246,8 +201,6 @@ onBeforeUnmount(() => {
     display: none;
   }
 }
-
-// ── Drawer panel ───────────────────────────────────────────────────────────────
 
 .task-drawer {
   position: fixed;
@@ -298,8 +251,6 @@ onBeforeUnmount(() => {
     color: var(--text-primary);
   }
 }
-
-// ── List ───────────────────────────────────────────────────────────────────────
 
 .task-drawer__list {
   flex: 1;

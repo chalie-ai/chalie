@@ -11,11 +11,8 @@ import { router, authGateRedirected } from './router';
 
 const app = createApp(App).use(createPinia()).use(router);
 
-// Gate the mount behind the auth gate. router.isReady() resolves once the
-// initial navigation — including the async beforeEach guard — has settled.
-// If the gate issued a hard redirect, do not mount so the SPA shell does not
-// flash before the page navigates away.
-// Parity with legacy app.js:351 (`await chalieGateReady; if (!gate.stay) return;`).
+// isReady() resolves after the async beforeEach gate settles. Skip mount on a
+// hard redirect so the shell never flashes before navigating away.
 router.isReady().finally(() => {
   if (!authGateRedirected()) app.mount('#app');
 });

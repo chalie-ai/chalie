@@ -1,15 +1,8 @@
 /**
- * Client Context Heartbeat
- *
- * Port of frontend/interface/heartbeat.js.
- *
- * Periodically sends the user's timezone, location, system info, device context,
- * battery state, network quality, user preferences, and behavioral signals to
- * the backend. This provides a single source of truth for services to read
- * client context without per-request overhead.
- *
- * Module-level singleton: shared across the app; safe to call useHeartbeat()
- * outside setup().
+ * Client Context Heartbeat — periodically sends timezone, location, device,
+ * battery, network, preferences, and behavioral signals to the backend so
+ * services read client context without per-request overhead. Singleton; safe
+ * to call useHeartbeat() outside setup().
  */
 
 import { system } from '../api';
@@ -18,17 +11,9 @@ import { emit } from './useEventBus';
 import { useAmbientSensor } from './useAmbientSensor';
 import type { AmbientSensorApi } from './useAmbientSensor';
 
-// ---------------------------------------------------------------------------
-// Constants — port verbatim from heartbeat.js
-// ---------------------------------------------------------------------------
-
-const HEARTBEAT_INTERVAL = 5 * 60 * 1000;   // 5 min
-const GEO_TIMEOUT        = 10_000;           // 10 s for requestLocationPermission
+const HEARTBEAT_INTERVAL = 5 * 60 * 1000;
+const GEO_TIMEOUT        = 10_000;           // for requestLocationPermission
 const GEO_MAX_AGE        = 0;                // always fresh when prompting
-
-// ---------------------------------------------------------------------------
-// Locale → ISO-4217 currency map — port verbatim from heartbeat.js
-// ---------------------------------------------------------------------------
 
 const REGION_CURRENCY_MAP: Record<string, string> = {
   US: 'USD', GB: 'GBP', MT: 'EUR', DE: 'EUR', FR: 'EUR', IT: 'EUR',
@@ -47,19 +32,11 @@ const REGION_CURRENCY_MAP: Record<string, string> = {
 /** Derive ISO 4217 currency code from the user's locale. */
 function _detectCurrency(locale: string): string {
   try {
-    const regionMatch = locale.match(/[-_]([A-Z]{2})$/i);
-    if (regionMatch) {
-      const region = regionMatch[1].toUpperCase();
-      const code = REGION_CURRENCY_MAP[region];
-      if (code) return code;
-    }
+    const region = locale.match(/[-_]([A-Z]{2})$/i)?.[1].toUpperCase();
+    if (region) return REGION_CURRENCY_MAP[region] ?? 'USD';
   } catch { /* fall through */ }
   return 'USD';
 }
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 interface BatteryManager {
   level: number;
@@ -81,19 +58,11 @@ export interface HeartbeatApi {
   requestLocationPermission(): Promise<void>;
 }
 
-// ---------------------------------------------------------------------------
-// Singleton state
-// ---------------------------------------------------------------------------
-
 let _interval: ReturnType<typeof setInterval> | null = null;
 let _ambientSensor: AmbientSensorApi | null = null;
 let _authFailureCb: (() => void) | null = null;
 let _authFailureFired = false;
 let _onVisibilityChange: (() => void) | null = null;
-
-// ---------------------------------------------------------------------------
-// Device detection — port verbatim from heartbeat.js
-// ---------------------------------------------------------------------------
 
 function _classifyDeviceClass(coarse: boolean, minDim: number): 'phone' | 'tablet' | 'desktop' {
   if (coarse && minDim < 600) return 'phone';
@@ -130,10 +99,6 @@ function _detectDevice() {
   } as const;
 }
 
-// ---------------------------------------------------------------------------
-// Battery
-// ---------------------------------------------------------------------------
-
 async function _getBattery(): Promise<{ level: number; charging: boolean } | null> {
   const nav = navigator as Navigator & { getBattery?: () => Promise<BatteryManager> };
   if (!nav.getBattery) return null;
@@ -148,10 +113,6 @@ async function _getBattery(): Promise<{ level: number; charging: boolean } | nul
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Network
-// ---------------------------------------------------------------------------
 
 interface NetworkFields {
   effective_type?: string;
@@ -169,10 +130,6 @@ function _getNetwork(): NetworkFields | null {
   return Object.keys(net).length ? net : null;
 }
 
-// ---------------------------------------------------------------------------
-// Preferences
-// ---------------------------------------------------------------------------
-
 function _getPreferences() {
   return {
     color_scheme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
@@ -180,15 +137,11 @@ function _getPreferences() {
   } as const;
 }
 
-// ---------------------------------------------------------------------------
-// Geolocation (granted-only, no prompt)
-// ---------------------------------------------------------------------------
-
+/** Read location only if permission is already granted — never prompts. */
 async function _getGrantedLocation(): Promise<{ lat: number; lon: number } | null> {
   if (!navigator.geolocation || !navigator.permissions) return null;
   try {
-    const perm = await navigator.permissions.query({ name: 'geolocation' });
-    if (perm.state !== 'granted') return null;
+    if ((await navigator.permissions.query({ name: 'geolocation' })).state !== 'granted') return null;
     const pos = await webPlatformAdapter.getCurrentPosition({
       timeout: 3_000,
       maximumAge: 300_000,   // accept 5-min cached position
@@ -199,10 +152,6 @@ async function _getGrantedLocation(): Promise<{ lat: number; lon: number } | nul
     return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Payload builder
-// ---------------------------------------------------------------------------
 
 async function _buildContextPayload(): Promise<Record<string, unknown>> {
   const resolvedLocale = new Intl.NumberFormat().resolvedOptions().locale;
@@ -232,17 +181,12 @@ async function _buildContextPayload(): Promise<Record<string, unknown>> {
 
   ctx['preferences'] = _getPreferences();
 
-  const sensor = _ambientSensor ?? useAmbientSensor();
-  ctx['behavioral'] = sensor.snapshot();
+  ctx['behavioral'] = (_ambientSensor ?? useAmbientSensor()).snapshot();
 
   ctx['location'] = await _getGrantedLocation();
 
   return ctx;
 }
-
-// ---------------------------------------------------------------------------
-// Auth check
-// ---------------------------------------------------------------------------
 
 async function _checkAuth(): Promise<void> {
   if (_authFailureFired) return;
@@ -251,40 +195,24 @@ async function _checkAuth(): Promise<void> {
     if (data.has_master_account && !data.has_session) {
       _authFailureFired = true;
       stop();
-      if (typeof _authFailureCb === 'function') {
-        _authFailureCb();
-      }
+      _authFailureCb?.();
     }
   } catch (e) {
     console.warn('[heartbeat] auth check failed:', e);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Send context
-// ---------------------------------------------------------------------------
-
 async function _sendContext(): Promise<void> {
   try {
-    const ctx = await _buildContextPayload();
-    const result = await system.heartbeat(ctx);
-
-    const attentionResult = result as Record<string, unknown>;
-    if (attentionResult['attention']) {
-      emit('chalie:attention', { attention: attentionResult['attention'] as string });
-    }
+    const result = await system.heartbeat(await _buildContextPayload()) as Record<string, unknown>;
+    if (result['attention']) emit('chalie:attention', { attention: result['attention'] as string });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn('[CLIENT HEARTBEAT] Error sending context:', message);
+    console.warn('[CLIENT HEARTBEAT] Error sending context:', err instanceof Error ? err.message : String(err));
   }
 
-  // Always verify the session is still valid.
+  // Verify the session is still valid after every send.
   await _checkAuth();
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 function start(): void {
   if (_interval !== null) return;
@@ -321,9 +249,8 @@ function onAuthFailure(cb: () => void): void {
 }
 
 /**
- * Request geolocation permission from the browser (shows browser prompt if needed).
- * Call once after login to prime the permission so subsequent heartbeats capture coords.
- * Immediately resends a fresh heartbeat if permission is granted.
+ * Prompt for geolocation (call once after login) so later heartbeats capture
+ * coords. Resends a fresh heartbeat immediately if granted.
  */
 async function requestLocationPermission(): Promise<void> {
   if (!navigator.geolocation) return;
@@ -332,7 +259,6 @@ async function requestLocationPermission(): Promise<void> {
       timeout: GEO_TIMEOUT,
       maximumAge: GEO_MAX_AGE,
     });
-    // Permission was granted — resend context immediately with coordinates.
     await _sendContext();
   } catch (e) {
     console.warn('[heartbeat] geolocation request failed:', e);
@@ -347,10 +273,7 @@ const _heartbeatApi: HeartbeatApi = {
   requestLocationPermission,
 };
 
-/**
- * Returns the module-level singleton heartbeat controller.
- * Safe to call outside setup() — the singleton is created at module load.
- */
+/** Returns the singleton heartbeat controller — safe to call outside setup(). */
 export function useHeartbeat(): HeartbeatApi {
   return _heartbeatApi;
 }

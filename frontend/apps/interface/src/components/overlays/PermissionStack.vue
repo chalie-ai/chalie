@@ -2,23 +2,13 @@
 /**
  * PermissionStack — slide-up card stack for backend `permission_request` events.
  *
- * Port source: frontend/interface/permission_notifications.js
- *
- * Renders into the `#permStack` teleport target provided by App.vue.
- * Cards are stacked vertically (newest on top via flex-direction: column-reverse
- * in the parent `.permission-stack`), each with Allow / Deny buttons.
- * No auto-deny — the card waits indefinitely for user input.
- *
- * The session store wires WS `permission_request` frames to
- * `usePermissionsStore().enqueue(data)` before this component mounts.
+ * Renders into the `#permStack` teleport target. Cards stack newest-on-top
+ * (column-reverse in the parent); no auto-deny — each waits indefinitely for input.
  */
 import { Info } from '@lucide/vue';
 import { usePermissionsStore } from '../../stores/permissions';
-import type { PermissionRequest } from '../../stores/permissions';
 
 const permissions = usePermissionsStore();
-
-// ── Action label map — verbatim port from permission_notifications.js ─────────
 
 const ACTION_LABELS: Record<string, string> = {
   'email.read':            'Read Email',
@@ -59,11 +49,7 @@ const ACTION_LABELS: Record<string, string> = {
   'timer':                 'Set Timer',
 };
 
-/**
- * Convert an action_id to a readable label.
- * Falls back to formatting the id itself (dots/underscores → spaces, title case).
- * Matches the legacy `actionLabel()` function exactly.
- */
+/** Readable label for an action_id; falls back to formatting the id (dots/underscores → spaces, title case). */
 function actionLabel(actionId: string): string {
   if (ACTION_LABELS[actionId]) return ACTION_LABELS[actionId];
   return actionId
@@ -71,15 +57,6 @@ function actionLabel(actionId: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
-
-function allow(req: PermissionRequest): void {
-  void permissions.respond(req.request_id, true);
-}
-
-function deny(req: PermissionRequest): void {
-  void permissions.respond(req.request_id, false);
-}
 </script>
 
 <template>
@@ -100,7 +77,6 @@ function deny(req: PermissionRequest): void {
         :data-request-id="req.request_id"
       >
         <div class="perm-card__body">
-          <!-- Header: info icon + action label -->
           <div class="perm-card__header">
             <span class="perm-card__icon" aria-hidden="true">
               <Info :size="14" />
@@ -108,20 +84,18 @@ function deny(req: PermissionRequest): void {
             <p class="perm-card__title">{{ actionLabel(req.action_id) }}</p>
           </div>
 
-          <!-- Description — shown only when the backend provides it -->
           <p v-if="req.description" class="perm-card__desc">{{ req.description }}</p>
 
-          <!-- Deny first, Allow second — matches legacy DOM order -->
           <div class="perm-card__actions">
             <button
               class="perm-card__btn perm-card__btn--deny"
-              @click="deny(req)"
+              @click="permissions.respond(req.request_id, false)"
             >
               Deny
             </button>
             <button
               class="perm-card__btn perm-card__btn--allow"
-              @click="allow(req)"
+              @click="permissions.respond(req.request_id, true)"
             >
               Allow
             </button>
@@ -133,22 +107,14 @@ function deny(req: PermissionRequest): void {
 </template>
 
 <style scoped lang="scss">
-/*
- * The outer .permission-stack container is provided by App.vue (id="permStack").
- * The inner wrapper here carries the TransitionGroup tag so enter/leave
- * transforms apply directly to .perm-card elements.
- *
- * Legacy animation used CSS class toggling (perm-card--visible / perm-card--leaving).
- * In Vue we map that to TransitionGroup v-enter-from / v-leave-to.
- */
+// The inner wrapper carries the TransitionGroup tag so enter/leave transforms
+// apply directly to .perm-card elements (outer #permStack is in App.vue).
 
 .perm-stack-inner {
   display: flex;
   flex-direction: column-reverse;
   gap: var(--space-sm);
 }
-
-// ── Card shell ────────────────────────────────────────────────────────────────
 
 .perm-card {
   background: color-mix(in oklab, var(--surface, var(--bg-chalie)) 95%, transparent);
@@ -162,15 +128,13 @@ function deny(req: PermissionRequest): void {
   overflow: hidden;
 
   // Light theme: soften the lift so it reads as depth, not a dark halo.
-  // plain `[data-theme] &` — :global() drops the `&` and leaks this onto <html>.
+  // Plain `[data-theme] &` — :global() drops the `&` and leaks this onto <html>.
   [data-theme="light"] & {
     box-shadow:
       0 2px 8px rgba(0, 0, 0, 0.08),
       0 8px 32px rgba(0, 0, 0, 0.12);
   }
 }
-
-// ── TransitionGroup enter / leave — mirrors perm-card--visible / perm-card--leaving ──
 
 .perm-card-enter-from,
 .perm-card-leave-to {
@@ -194,8 +158,6 @@ function deny(req: PermissionRequest): void {
   opacity: 1;
   transform: none;
 }
-
-// ── Card body & layout ────────────────────────────────────────────────────────
 
 .perm-card__body {
   padding: var(--space-md);
@@ -236,8 +198,6 @@ function deny(req: PermissionRequest): void {
   gap: var(--space-xs);
   justify-content: flex-end;
 }
-
-// ── Buttons ───────────────────────────────────────────────────────────────────
 
 .perm-card__btn {
   padding: 5px var(--space-sm);

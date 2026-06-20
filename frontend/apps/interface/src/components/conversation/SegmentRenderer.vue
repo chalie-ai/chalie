@@ -7,15 +7,9 @@ import type { RichCardEntry } from '../rich/richRegistry';
 
 const props = defineProps<{ segments: ConversationSegment[] }>();
 
-// FIX 10: precompute resolved entries ONCE per segment so the template
-// never calls resolveRichCard() twice for the same segment and the
-// non-null assertion (!) is eliminated.
-interface ResolvedSegment {
-  seg: ConversationSegment;
-  richEntry: RichCardEntry | null;
-}
-
-const resolved = computed<ResolvedSegment[]>(() =>
+// Precompute resolved entries ONCE per segment so the template never calls
+// resolveRichCard() twice and the non-null assertion is eliminated.
+const resolved = computed<{ seg: ConversationSegment; richEntry: RichCardEntry | null }[]>(() =>
   props.segments.map((seg) => ({
     seg,
     richEntry: seg.type === 'rich' ? (resolveRichCard(seg.tag ?? '') ?? null) : null,
@@ -25,16 +19,14 @@ const resolved = computed<ResolvedSegment[]>(() =>
 
 <template>
   <template v-for="(item, idx) in resolved" :key="idx">
-    <!-- Text segment: render markup via v-html -->
     <div
       v-if="item.seg.type === 'text'"
       class="speech-form__text"
       v-html="renderMarkup(item.seg.content ?? '')"
     />
 
-    <!-- Rich segment: use precomputed entry to avoid double resolve. The guard
-         lives on a wrapping <template v-if> so vue-tsc narrows richEntry to
-         non-null for the <component :is> inside — no non-null assertion needed. -->
+    <!-- Guard on a wrapping <template v-if> so vue-tsc narrows richEntry to
+         non-null for the <component :is> inside — no non-null assertion. -->
     <template v-else-if="item.seg.type === 'rich'">
       <template v-if="item.richEntry">
         <component
@@ -43,7 +35,7 @@ const resolved = computed<ResolvedSegment[]>(() =>
           :synthesis="item.seg.synthesis"
         />
       </template>
-      <!-- Unknown-tag fallback: render synthesis or content as markup -->
+      <!-- Unknown-tag fallback: render synthesis or content as markup. -->
       <div
         v-else
         class="speech-form__text"

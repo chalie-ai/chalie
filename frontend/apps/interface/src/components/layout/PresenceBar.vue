@@ -19,12 +19,7 @@ function handleThemeToggle(): void {
   emit('chalie:theme-changed', { theme: theme.value });
 }
 
-/** Recall button → App.vue opens the moment-search dialog. */
-function handleRecall(): void {
-  emit('chalie:open-recall', {});
-}
-
-/** Settings button → open the Brain admin dashboard (port of app.js:266-267). */
+/** Settings button → open the Brain admin dashboard. */
 function handleSettings(): void {
   globalThis.open('/brain/', 'chalie-brain');
 }
@@ -39,19 +34,15 @@ function handleSettings(): void {
       <span class="presence-label">{{ label }}</span>
     </div>
     <div class="presence-bar__right">
-      <!-- Recall — opens the moment-search dialog (App.vue owns the dialog ref). -->
       <button
         id="recallBtn"
         class="btn-icon"
         aria-label="Recall"
         title="Recall"
-        @click="handleRecall"
+        @click="emit('chalie:open-recall', {})"
       >
         <Star :size="18" />
       </button>
-      <!-- Task drawer trigger — shown only when there is something to display.
-           Port of legacy index.html lines 122-127 (taskDrawerBtn).
-           Visibility matches task_strip.js _render(): trigger hidden when totalCount === 0. -->
       <button
         v-if="totalCount > 0"
         id="taskDrawerBtn"
@@ -63,7 +54,6 @@ function handleSettings(): void {
         <Clock :size="18" aria-hidden="true" />
         <span class="task-trigger__badge">{{ totalCount }}</span>
       </button>
-      <!-- Settings — opens the Brain admin dashboard (app.js:266-267). -->
       <button
         id="settingsBtn"
         class="btn-icon"
@@ -79,9 +69,7 @@ function handleSettings(): void {
         @click="handleThemeToggle"
       >
         <span class="theme-toggle__track" aria-hidden="true">
-          <!-- Sun icon -->
           <Sun />
-          <!-- Moon icon -->
           <Moon />
         </span>
         <span class="theme-toggle__thumb" aria-hidden="true"></span>
@@ -91,10 +79,6 @@ function handleSettings(): void {
 </template>
 
 <style scoped lang="scss">
-// --------------------------------------------------------------------------
-// Task drawer trigger (presence-bar placement)
-// --------------------------------------------------------------------------
-
 .task-drawer-trigger {
   position: relative;
   display: inline-flex;
@@ -119,11 +103,8 @@ function handleSettings(): void {
   pointer-events: none;
 }
 
-// --------------------------------------------------------------------------
-// Presence Dot + per-state animations
-// Port of legacy style.css §6 (lines 479–602).
+// Presence Dot + per-state animations.
 // All colors via CSS token vars so both dark and light themes work (Rule 7).
-// --------------------------------------------------------------------------
 
 .presence-dot {
   position: relative;
@@ -149,7 +130,6 @@ function handleSettings(): void {
   transition: color var(--duration-normal) var(--ease-out);
 }
 
-// ── Resting — breathe ──────────────────────────────────────────────────────
 .presence-dot[data-state="resting"] .presence-dot__inner {
   animation: pb-breathe 4s ease-in-out infinite;
   background: var(--sand);
@@ -161,7 +141,6 @@ function handleSettings(): void {
   50%       { transform: scale(1.2); opacity: 1;   }
 }
 
-// ── Processing — pulse ─────────────────────────────────────────────────────
 .presence-dot[data-state="processing"] .presence-dot__inner {
   animation: pb-pulse 1.5s ease-in-out infinite;
   background: var(--dusk-blue);
@@ -173,7 +152,6 @@ function handleSettings(): void {
   50%       { transform: scale(1.4); }
 }
 
-// ── Thinking — glow ────────────────────────────────────────────────────────
 .presence-dot[data-state="thinking"] .presence-dot__inner {
   animation: pb-glow 2s ease-in-out infinite;
   background: var(--violet);
@@ -184,7 +162,6 @@ function handleSettings(): void {
   50%       { box-shadow: 0 0 16px var(--violet), 0 0 32px color-mix(in oklab, var(--violet) 30%, transparent); }
 }
 
-// ── Retrieving memory — ripple ─────────────────────────────────────────────
 .presence-dot[data-state="retrieving_memory"] .presence-dot__inner {
   animation: pb-ripple 2s ease-out infinite;
   background: var(--dusk-blue);
@@ -197,7 +174,6 @@ function handleSettings(): void {
   100% { box-shadow: 0 0 0 0   color-mix(in oklab, var(--cyan)  0%, transparent); }
 }
 
-// ── Planning — shimmer ─────────────────────────────────────────────────────
 .presence-dot[data-state="planning"] .presence-dot__inner {
   background: linear-gradient(90deg, var(--violet), var(--dusk-blue), var(--violet));
   background-size: 200% 100%;
@@ -209,14 +185,12 @@ function handleSettings(): void {
   100% { background-position: -200% 0; }
 }
 
-// ── Narrating — shimmer (violet↔cyan, 3s) ─────────────────────────────────
 .presence-dot[data-state="narrating"] .presence-dot__inner {
   background: linear-gradient(90deg, var(--violet), var(--dusk-blue), var(--violet));
   background-size: 200% 100%;
   animation: pb-shimmer 3s ease-in-out infinite;
 }
 
-// ── Responding — waveform (dot widens to bar) ──────────────────────────────
 .presence-dot[data-state="responding"] {
   width: 24px;
 }
@@ -237,14 +211,12 @@ function handleSettings(): void {
   100% { transform: scaleY(1);   }
 }
 
-// ── Still working — same as processing ────────────────────────────────────
 .presence-dot[data-state="still_working"] .presence-dot__inner {
   animation: pb-pulse 1.5s ease-in-out infinite;
   background: var(--dusk-blue);
   box-shadow: 0 0 8px currentColor;
 }
 
-// ── Error — blink ──────────────────────────────────────────────────────────
 .presence-dot[data-state="error"] .presence-dot__inner {
   background: var(--error);
   animation: pb-blink 1.5s infinite;
@@ -255,10 +227,6 @@ function handleSettings(): void {
   50%       { opacity: 0.3; }
 }
 
-// --------------------------------------------------------------------------
-// Theme toggle — sliding pill with sun/moon glyphs
-// Port of legacy style.css §5 theme-toggle block (lines 429–474).
-// --------------------------------------------------------------------------
 .theme-toggle {
   position: relative;
   width: 56px;
@@ -310,11 +278,10 @@ function handleSettings(): void {
     0 0 0 1px color-mix(in oklab, var(--violet) 20%, transparent);
   transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  // NB: plain `[data-theme] &` — NOT `:global([data-theme]) &`. The :global()
-  // form drops the trailing `&` during scoped-CSS compilation, leaking
-  // `transform` onto the bare `[data-theme="light"]` (the <html> element). A
-  // transform on <html> makes it the containing block for every position:fixed
-  // descendant, so the fixed presence-bar scrolls away with the page.
+  // Plain `[data-theme] &`, NOT `:global([data-theme]) &`: the :global() form
+  // drops the trailing `&` in scoped-CSS compilation, leaking `transform` onto
+  // <html>, which then becomes the containing block for every position:fixed
+  // descendant — so the fixed presence-bar scrolls away with the page.
   [data-theme="light"] & {
     transform: translateX(26px);
   }

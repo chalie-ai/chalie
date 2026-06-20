@@ -1,14 +1,7 @@
 /**
- * Session heartbeat composable.
- *
- * Port of legacy app.js _checkSession / _startHeartbeat (lines 311-333):
- *   - Polls GET /auth/status every 5 minutes.
- *   - Also fires on visibilitychange → visible (tab comes back to foreground).
- *   - On a non-authed response (has_master_account && !has_session) → hard
- *     redirect to /login/?next=<path>.
- *
- * One singleton instance is shared across calls (useHeartbeat() always returns
- * the same object, matching the legacy single-instance pattern).
+ * Session heartbeat: polls GET /auth/status every 5 min and on tab refocus;
+ * a logged-out response (has_master_account && !has_session) hard-redirects to
+ * /login. Module-scoped state makes useHeartbeat() a process-wide singleton.
  */
 
 let _intervalId: ReturnType<typeof setInterval> | null = null;
@@ -32,7 +25,7 @@ async function _checkSession(): Promise<void> {
       );
     }
   } catch {
-    // Transient network error — ignore, try again next tick.
+    // Transient network error — retry next tick.
   }
 }
 

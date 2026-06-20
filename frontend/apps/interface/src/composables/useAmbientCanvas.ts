@@ -1,14 +1,9 @@
 /**
  * Animated background — drifting gradient orbs on canvas.
  *
- * Port of frontend/interface/ambient_canvas.js — EXACT behavioural parity:
- *  - Hardcoded orb RGB arrays (NOT from CSS custom properties).
- *  - Theme-aware background colour and alphaMul read from data-theme attribute.
- *  - prefers-reduced-motion → single static frame + redraw on theme change.
- *  - t increments by 0.0012 per rAF.
- *
- * Improvement over legacy: cleans up the rAF handle and event listeners
- * on unmount (legacy was a never-unmounted singleton and leaked them).
+ * Behavioural contract: orb RGB hardcoded (not CSS vars); bg colour + alphaMul
+ * read from data-theme; prefers-reduced-motion → static frame redrawn on theme
+ * change; t += 0.0012 per rAF. Cleans up rAF + listeners on unmount.
  */
 import type { Ref } from 'vue';
 
@@ -27,16 +22,12 @@ interface Orb {
 }
 
 const ORBS: Orb[] = [
-  // Large violet field — dominates top-left
   { cx: 0.22, cy: 0.20, r: 0.70, color: [100, 60, 220], alpha: 0.08,
     dx: 0.07, dy: 0.06, sx: 1,    sy: 0.75, rBreath: 0.06, phase: 0    },
-  // Magenta — lower-right — warm human counterpoint
   { cx: 0.78, cy: 0.65, r: 0.55, color: [180, 30, 140], alpha: 0.06,
     dx: 0.06, dy: 0.07, sx: 0.85, sy: 1.1,  rBreath: 0.06, phase: 2.4  },
-  // Cyan accent — top-right — "technology" colour
   { cx: 0.80, cy: 0.15, r: 0.30, color: [0, 180, 220],  alpha: 0.05,
     dx: 0.08, dy: 0.05, sx: 0.95, sy: 1.05, rBreath: 0.05, phase: 1.5  },
-  // Deep indigo anchor — bottom — grounds the composition
   { cx: 0.40, cy: 0.90, r: 0.50, color: [60, 40, 140],  alpha: 0.06,
     dx: 0.05, dy: 0.08, sx: 1.1,  sy: 0.9,  rBreath: 0.06, phase: 4.2  },
 ];
@@ -46,7 +37,6 @@ function drawFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, t: 
   const h = canvas.height;
   const m = Math.min(w, h);
 
-  // Theme-aware base colour — hardcoded exactly as legacy does it.
   const isLight = document.documentElement.dataset.theme === 'light';
   ctx.fillStyle = isLight ? '#F6F4F1' : '#06080e';
   ctx.fillRect(0, 0, w, h);
@@ -69,10 +59,7 @@ function drawFrame(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, t: 
   }
 }
 
-/**
- * Takes a canvas ref and starts/stops the ambient animation.
- * Returns a `stop` function — call it in `onBeforeUnmount`.
- */
+/** Starts the ambient animation; returns a `stop` for `onBeforeUnmount`. */
 export function useAmbientCanvas(canvasRef: Ref<HTMLCanvasElement | null>): () => void {
   let rafId = 0;
   let resizeHandler: (() => void) | null = null;
@@ -110,18 +97,12 @@ export function useAmbientCanvas(canvasRef: Ref<HTMLCanvasElement | null>): () =
   }
 
   function stop(): void {
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = 0;
-    }
-    if (resizeHandler) {
-      globalThis.removeEventListener('resize', resizeHandler);
-      resizeHandler = null;
-    }
-    if (themeHandler) {
-      document.removeEventListener('chalie:theme-changed', themeHandler);
-      themeHandler = null;
-    }
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = 0;
+    if (resizeHandler) globalThis.removeEventListener('resize', resizeHandler);
+    resizeHandler = null;
+    if (themeHandler) document.removeEventListener('chalie:theme-changed', themeHandler);
+    themeHandler = null;
   }
 
   start();

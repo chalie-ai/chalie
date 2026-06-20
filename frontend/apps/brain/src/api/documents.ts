@@ -34,8 +34,7 @@ export interface WatchedFolder {
 
 export const documents = {
   list(includeDeleted = false): Promise<{ items: Document[] }> {
-    const url = includeDeleted ? '/documents?include_deleted=true' : '/documents';
-    return api.get(url);
+    return api.get(includeDeleted ? '/documents?include_deleted=true' : '/documents');
   },
 
   watchedFolders(): Promise<{ items: WatchedFolder[] }> {

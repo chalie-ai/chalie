@@ -1,8 +1,4 @@
-<!--
-  CommandPalette — port of legacy _renderCommandPalette() in app.js.
-  Opened by ⌘K/Ctrl-K or the topbar search button.
-  Visibility is driven by shell.commandPaletteOpen (Pinia store).
--->
+<!-- Opened by ⌘K/Ctrl-K or the topbar search button; visibility driven by shell.commandPaletteOpen. -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import type { FunctionalComponent } from 'vue';
@@ -28,7 +24,6 @@ interface CPItem {
   path: string;
 }
 
-// Port of allItems in _renderCommandPalette (app.js:162-178).
 const ALL_ITEMS: CPItem[] = [
   { kind: 'Jump', label: 'Providers', icon: LayoutGrid, path: '/providers' },
   { kind: 'Jump', label: 'Cognition · Memory', icon: History, path: '/cognition/memory' },

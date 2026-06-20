@@ -48,8 +48,7 @@ function mdToHtml(md: string): string {
     .replace(/^\* (.+)$/gm, '<li>$1</li>')
     .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`)
     .replace(/\[([^\]]+)\]/g, '<span class="world-tag">$1</span>')
-    .replace(/\n{2,}/g, '<br>')
-    .replace(/\n/g, '\n');
+    .replace(/\n{2,}/g, '<br>');
 }
 </script>
 
@@ -58,7 +57,6 @@ function mdToHtml(md: string): string {
   <template v-else-if="loadFailed"><EmptyState message="Failed to load data." /></template>
   <template v-else>
     <div class="world-state-grid">
-      <!-- Device & Environment -->
       <div class="world-section">
         <h4>Device &amp; Environment</h4>
         <table class="records-table">
@@ -73,7 +71,6 @@ function mdToHtml(md: string): string {
         </table>
       </div>
 
-      <!-- Pending Schedules (conditional) -->
       <div v-if="pendingSched.length > 0" class="world-section">
         <h4>Pending Schedules</h4>
         <table class="records-table">
@@ -90,7 +87,6 @@ function mdToHtml(md: string): string {
         </table>
       </div>
 
-      <!-- Active Signals (conditional) -->
       <div v-if="signalEntries.length > 0" class="world-section">
         <h4>Active Signals</h4>
         <table class="records-table">
@@ -106,7 +102,6 @@ function mdToHtml(md: string): string {
         </table>
       </div>
 
-      <!-- Background Processes -->
       <div class="world-section">
         <h4>Background Processes</h4>
         <table v-if="bgProcs.length > 0" class="records-table">
@@ -119,7 +114,6 @@ function mdToHtml(md: string): string {
         <p v-else class="panel-desc">None running.</p>
       </div>
 
-      <!-- What Chalie Sees (conditional) -->
       <div v-if="worldState.rendered" class="world-section">
         <div class="world-sees-header">
           <h4>What Chalie Sees</h4>

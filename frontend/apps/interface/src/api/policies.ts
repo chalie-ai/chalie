@@ -8,8 +8,8 @@ export interface PolicyRespondPayload {
 
 export const policies = {
   /**
-   * POST /api/policies/respond — resolve a pending permission gate.
-   * Wakes the blocked ACT dispatch thread with the user's allow/deny decision.
+   * POST /api/policies/respond — resolve a pending permission gate, waking the
+   * blocked ACT dispatch thread with the user's allow/deny decision.
    */
   respond(payload: PolicyRespondPayload): Promise<{ ok: boolean }> {
     return api.post('/api/policies/respond', payload);

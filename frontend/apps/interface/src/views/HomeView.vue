@@ -17,8 +17,7 @@ const ready = ref<string>('checking…');
 const note = ref('');
 
 onMounted(async () => {
-  const r = await api.ready();
-  ready.value = r.ready ? 'ready' : 'not-ready';
+  ready.value = (await api.ready()).ready ? 'ready' : 'not-ready';
 });
 </script>
 

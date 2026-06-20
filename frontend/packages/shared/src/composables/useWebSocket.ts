@@ -9,8 +9,7 @@ let focusBound = false;
 
 /** Process-wide singleton so every view shares one socket. */
 export function getWebSocket(): WebSocketService {
-  if (!service) service = new WebSocketService(getHost);
-  return service;
+  return (service ??= new WebSocketService(getHost));
 }
 
 export function useWebSocket() {

@@ -26,24 +26,19 @@ export interface ActiveSubagent {
 }
 
 export const scheduler = {
-  /**
-   * GET /scheduler?status=pending — list pending scheduled items.
-   */
+  /** GET /scheduler?status=pending — list pending scheduled items. */
   pending(): Promise<{ items: ScheduledItem[]; total: number; limit: number; offset: number }> {
     return api.get('/scheduler?status=pending');
   },
 
-  /**
-   * GET /chat/subagents/active — list currently running async delegates.
-   */
+  /** GET /chat/subagents/active — running async delegates. */
   subagentsActive(): Promise<{ subagents: ActiveSubagent[] }> {
     return api.get('/chat/subagents/active');
   },
 
   /**
-   * POST /chat/subagent/<subId>/stop — request cancellation of a running delegate.
-   * Returns { ok, cancelled } on success or { ok, reason: 'not_found' } when the
-   * sub_id is unknown.
+   * POST /chat/subagent/<subId>/stop — cancel a running delegate. Returns
+   * { ok, cancelled } on success, { ok, reason: 'not_found' } for unknown sub_id.
    */
   subagentStop(subId: string): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
     return api.post(`/chat/subagent/${encodeURIComponent(subId)}/stop`, {});

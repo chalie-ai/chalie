@@ -12,24 +12,19 @@ const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 const shell = useShellStore();
 
-// ── List state ────────────────────────────────────────────────────
 const providerList = ref<Provider[]>([]);
 const selectedId = ref<number | null>(null);
 const loading = ref(true);
 
-// ── Role selectors (vision + delegate, consolidated — TKT-960) ────
-// source: 'explicit' (user-pinned) | 'auto' (fell back to main) | 'none'.
+// Role selectors. source: 'explicit' (user-pinned) | 'auto' (fell back to main) | 'none'.
 const visionId = ref<number | null>(null);
 const visionSource = ref('none');
 const delegateId = ref<number | null>(null);
 const delegateSource = ref('none');
 
-// ── Catalog cache ─────────────────────────────────────────────────
 const catalog = ref<CatalogEntry[]>([]);
 const catalogLoaded = ref(false);
 
-// ── Wizard state ──────────────────────────────────────────────────
-// 'list' | 'picker' | 'form'
 const mode = ref<'list' | 'picker' | 'form'>('list');
 
 const CUSTOM_PRESET: CatalogEntry = {
@@ -44,13 +39,11 @@ const preset = ref<CatalogEntry | null>(null);
 const editingId = ref<number | null>(null);
 const editModel = ref('');
 
-// Form fields
 const formName = ref('');
 const formHost = ref('');
 const formKey = ref('');
 const formModel = ref('');
 
-// Model fetch state
 const models = ref<string[]>([]);
 const modelsFetchInFlight = ref(false);
 const modelStatus = ref('');
@@ -60,15 +53,12 @@ let modelFetchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const MODEL_FETCH_DEBOUNCE_MS = 600;
 
-// FIX 6: suppress the debounced watch that fires right after openWizard() pre-populates
-// formHost/formKey and then directly calls fetchModels() itself. Without this, the watch
-// would schedule a second debounced fetch on top of the one already in flight.
+// Suppresses the debounced creds-watch when openWizard()/selectTile() pre-populate
+// host/key and call fetchModels() directly, avoiding a redundant second in-flight fetch.
 let suppressNextCredsWatch = false;
 
-// Test button state
 const testing = ref(false);
 
-// ── Computed helpers ──────────────────────────────────────────────
 const needsHost = computed(() =>
   preset.value?.platform === 'ollama' || preset.value?.platform === 'openai_compatible',
 );
@@ -81,8 +71,6 @@ const keyReady = computed(() => !needsKey.value || formKey.value.trim() !== '');
 
 const canFetch = computed(() => hostReady.value && keyReady.value);
 
-const showHostGroup = computed(() => needsHost.value);
-
 const showKeyGroup = computed(() => needsKey.value && hostReady.value);
 
 const showModelGroup = computed(() => canFetch.value || models.value.length > 0);
@@ -91,7 +79,6 @@ const saveDisabled = computed(() => !formModel.value);
 
 const isEditing = computed(() => editingId.value !== null);
 
-// ── Catalog tiles ─────────────────────────────────────────────────
 const catalogTiles = computed(() => [...catalog.value, CUSTOM_PRESET]);
 
 function avatar(name: string): string {
@@ -99,7 +86,6 @@ function avatar(name: string): string {
   return s ? s[0].toUpperCase() : '?';
 }
 
-// ── Mount ─────────────────────────────────────────────────────────
 onMounted(async () => {
   await load();
 });
@@ -111,10 +97,8 @@ onUnmounted(() => {
   }
 });
 
-// `loading` is initialized true (initial-mount placeholder, matching the
-// legacy mount() innerHTML). Reloads after CRUD must NOT re-flash the
-// placeholder — legacy _load() re-rendered the list in place — so this
-// function never re-sets loading to true.
+// Never re-sets `loading` to true: reloads after CRUD must not re-flash the
+// initial-mount placeholder, only the first mount shows it.
 async function load(): Promise<void> {
   try {
     const [provRes, selRes, visRes, delRes] = await Promise.all([
@@ -135,7 +119,6 @@ async function load(): Promise<void> {
   loading.value = false;
 }
 
-// ── Role selectors: options + current value ───────────────────────
 const visionCapable = computed(() => providerList.value.filter((p) => p.supports_vision));
 
 // "Use main provider" is only offered when the main provider itself can see.
@@ -177,7 +160,6 @@ async function setDelegate(value: string): Promise<void> {
   }
 }
 
-// ── Select provider ───────────────────────────────────────────────
 async function selectProvider(id: number): Promise<void> {
   try {
     await providers.setSelected(id);
@@ -188,9 +170,8 @@ async function selectProvider(id: number): Promise<void> {
   }
 }
 
-// ── Delete provider ───────────────────────────────────────────────
-// Role names a provider currently holds — mirrors the backend role logic.
-// A provider in any role cannot be deleted (clear/reassign the role first).
+// Roles a provider currently holds (mirrors backend). A provider in any role
+// cannot be deleted until the role is cleared/reassigned.
 function providerRoles(id: number): string[] {
   const roles: string[] = [];
   if (id === selectedId.value) roles.push('main');
@@ -218,7 +199,6 @@ async function confirmDelete(id: number): Promise<void> {
   }
 }
 
-// ── Wizard: open ─────────────────────────────────────────────────
 async function openWizard(id: number | null): Promise<void> {
   editingId.value = id;
   editModel.value = '';
@@ -243,9 +223,7 @@ async function openWizard(id: number | null): Promise<void> {
     models.value = editModel.value ? [editModel.value] : [];
     preset.value = presetFor(p);
     formName.value = p.name;
-    // Suppress the creds watch: we mutate formHost/formKey here and call
-    // fetchModels() directly below, so we must skip the debounced watch that
-    // would otherwise schedule a redundant second fetch.
+    // We mutate formHost/formKey then call fetchModels() directly, so skip the watch's duplicate.
     suppressNextCredsWatch = true;
     formHost.value = p.host || '';
     formKey.value = '';
@@ -283,15 +261,13 @@ async function ensureCatalog(): Promise<void> {
   try {
     const res = await providers.getCatalog();
     catalog.value = Array.isArray(res.catalog) ? res.catalog : [];
-    catalogLoaded.value = true;  // only mark loaded on success so next open retries
+    catalogLoaded.value = true;  // only on success, so a failed load retries next open
   } catch {
     catalog.value = [];
     showToast('Could not load provider catalog', 'error');
-    // catalogLoaded stays false → next wizard open will retry
   }
 }
 
-// ── Wizard: picker ────────────────────────────────────────────────
 function selectTile(p: CatalogEntry): void {
   preset.value = { ...p };
   editModel.value = '';
@@ -300,8 +276,7 @@ function selectTile(p: CatalogEntry): void {
   modelStatus.value = '';
   modelStatusClass.value = '';
   formName.value = p.name;
-  // FIX 6 (cont.): like openWizard(), this mutates formHost/formKey and may call
-  // fetchModels() directly below, so suppress the watch's redundant debounced fetch.
+  // Mutates formHost/formKey then may call fetchModels() directly, so skip the watch's duplicate.
   suppressNextCredsWatch = true;
   formHost.value = p.host || '';
   formKey.value = '';
@@ -317,22 +292,16 @@ function backFromPicker(): void {
 }
 
 function backFromForm(): void {
-  if (isEditing.value) {
-    mode.value = 'list';
-  } else {
-    mode.value = 'picker';
-  }
+  mode.value = isEditing.value ? 'list' : 'picker';
 }
 
 function cancelForm(): void {
   mode.value = 'list';
 }
 
-// ── Progressive reveal: watch creds inputs ────────────────────────
 watch([() => formHost.value, () => formKey.value], () => {
   if (mode.value !== 'form') return;
-  // FIX 6: openWizard() pre-populates these fields and calls fetchModels()
-  // directly. Skip the debounced duplicate triggered by that mutation.
+  // Skip the debounced duplicate when openWizard()/selectTile() pre-populated these and already fetched.
   if (suppressNextCredsWatch) {
     suppressNextCredsWatch = false;
     return;
@@ -340,7 +309,6 @@ watch([() => formHost.value, () => formKey.value], () => {
   debouncedFetchModels();
 });
 
-// ── Model fetch ───────────────────────────────────────────────────
 function debouncedFetchModels(): void {
   if (modelFetchTimer !== null) {
     clearTimeout(modelFetchTimer);
@@ -372,12 +340,11 @@ async function fetchModels(): Promise<void> {
       .filter(Boolean);
     models.value = fetched;
 
-    // Preserve the editModel selection: append it as an extra option if not in the fetched list
+    // Keep the editModel selectable even if the provider no longer lists it.
     if (editModel.value && !models.value.includes(editModel.value)) {
       models.value = [...models.value, editModel.value];
     }
 
-    // Restore the previously-selected model if it's in the new list
     if (editModel.value && models.value.includes(editModel.value)) {
       formModel.value = editModel.value;
     } else if (formModel.value && !models.value.includes(formModel.value)) {
@@ -396,7 +363,6 @@ async function fetchModels(): Promise<void> {
   }
 }
 
-// ── Test connection ───────────────────────────────────────────────
 async function testConnection(): Promise<void> {
   if (!preset.value) return;
   testing.value = true;
@@ -430,7 +396,6 @@ async function testConnection(): Promise<void> {
   }
 }
 
-// ── Save provider ─────────────────────────────────────────────────
 async function saveProvider(): Promise<void> {
   if (!preset.value || !formModel.value) {
     showToast('Select a model first', 'error');
@@ -483,7 +448,6 @@ async function saveProvider(): Promise<void> {
 </script>
 
 <template>
-  <!-- ── List view ─────────────────────────────────────────────── -->
   <template v-if="mode === 'list'">
     <div class="panel-header">
       <h2>LLM Providers</h2>
@@ -558,7 +522,6 @@ async function saveProvider(): Promise<void> {
       </template>
     </div>
 
-    <!-- ── Role selectors (vision + delegate) ─────────────────────── -->
     <template v-if="!loading && providerList.length > 0">
       <h4 class="section-head">Vision</h4>
       <p class="panel-desc">
@@ -596,7 +559,6 @@ async function saveProvider(): Promise<void> {
     </template>
   </template>
 
-  <!-- ── Picker ────────────────────────────────────────────────── -->
   <template v-else-if="mode === 'picker'">
     <div class="provider-wizard">
       <div class="form-page-header">
@@ -627,7 +589,6 @@ async function saveProvider(): Promise<void> {
     </div>
   </template>
 
-  <!-- ── Form ──────────────────────────────────────────────────── -->
   <template v-else-if="mode === 'form'">
     <div class="provider-wizard">
       <div class="form-page-header">
@@ -639,7 +600,6 @@ async function saveProvider(): Promise<void> {
       </div>
 
       <form class="wizard-form" autocomplete="off" @submit.prevent="saveProvider">
-        <!-- Name -->
         <div class="form-group">
           <label for="pName">Name</label>
           <input
@@ -650,11 +610,10 @@ async function saveProvider(): Promise<void> {
           />
         </div>
 
-        <!-- Host / Base URL -->
         <div
           id="hostGroup"
           class="form-group wizard-step"
-          :hidden="!showHostGroup"
+          :hidden="!needsHost"
         >
           <label for="pHost">Host / Base URL</label>
           <input
@@ -665,7 +624,6 @@ async function saveProvider(): Promise<void> {
           />
         </div>
 
-        <!-- API Key -->
         <div
           id="keyGroup"
           class="form-group wizard-step"
@@ -681,7 +639,6 @@ async function saveProvider(): Promise<void> {
           />
         </div>
 
-        <!-- Model -->
         <div
           id="modelGroup"
           class="form-group wizard-step"

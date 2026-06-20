@@ -18,27 +18,21 @@ export class HttpError extends Error {
   }
 }
 
-/** Per-call options accepted by every request method. */
 export interface RequestOpts {
   /**
-   * On HTTP 401, invoke the auth-error handler (by default a redirect to the
-   * login page) before throwing AuthError. Set `false` for the few callers that
-   * must read the 401 as *data* rather than treat it as session expiry — the
-   * login form (401 = bad credentials) and the auth-status gate probe (401 →
-   * routing decision). Defaults to `true`.
+   * Defaults to `true` (401 → run auth-error handler, then throw AuthError). Set
+   * `false` for callers that must read the 401 as *data*, not session expiry —
+   * the login form (401 = bad credentials) and the auth-status gate probe.
    */
   redirectOnAuthError?: boolean;
 }
 
-/** Handler invoked when a request gets a 401 and the caller didn't opt out. */
 export type AuthErrorHandler = () => void;
 
 /**
- * Default auth-error handler: hard-navigate to /login/, preserving the current
- * path + query string as `next`. Idempotency is owned by the client (see the
- * `_authErrorFired` latch in `fail401`), so this handler is pure — it just
- * navigates. Ports the `_authRedirected` guard the apps previously kept
- * individually.
+ * Default auth-error handler: hard-navigate to /login/ with the current
+ * path+query as `next`. Idempotency lives in the client's `_authErrorFired`
+ * latch, so this handler is pure navigation.
  */
 function redirectToLogin(): void {
   const next = window.location.pathname + window.location.search;
@@ -46,18 +40,14 @@ function redirectToLogin(): void {
 }
 
 /**
- * Centralised Chalie REST client. Configurable host; sends the same-origin
- * session cookie on every request. On 401 it runs the auth-error handler
- * (default: redirect to /login/) unless the caller passes
- * `{ redirectOnAuthError: false }`, then always throws AuthError so callers can
- * still react. Non-2xx → HttpError carrying the server's {error} message.
+ * Centralised Chalie REST client (configurable host, same-origin session
+ * cookie). On 401: runs the auth-error handler unless `redirectOnAuthError:
+ * false`, then always throws AuthError. Non-2xx → HttpError with the server's
+ * {error} message.
  */
 export class ApiClient {
-  /**
-   * Idempotency latch: once a 401 has triggered the auth-error handler, later
-   * 401s on this client are no-ops (we're already navigating away). Scoped to
-   * the client instance, not the module, so test/HMR lifetimes stay isolated.
-   */
+  // Idempotency latch: after the first 401 fires the handler, later 401s no-op
+  // (already navigating away). Instance-scoped so test/HMR lifetimes stay isolated.
   private _authErrorFired = false;
 
   constructor(
@@ -70,7 +60,6 @@ export class ApiClient {
     return host ? host.replace(/\/$/, '') + path : path;
   }
 
-  /** React to a 401: redirect (unless opted out), then always throw AuthError. */
   private fail401(opts?: RequestOpts): never {
     if ((opts?.redirectOnAuthError ?? true) && !this._authErrorFired) {
       this._authErrorFired = true;
@@ -79,7 +68,6 @@ export class ApiClient {
     throw new AuthError();
   }
 
-  /** Parse the response body and throw an HttpError carrying the server message, if any. */
   private async throwHttp(res: Response): Promise<never> {
     const body = await res.json().catch(() => null);
     const msg =
@@ -133,10 +121,9 @@ export class ApiClient {
   }
 
   /**
-   * POST returning the raw Response (for binary/blob downloads).
-   * Throws AuthError on 401 (redirecting unless opted out); does NOT throw on
-   * other non-ok statuses — the caller inspects res.ok and reads
-   * .blob()/.json() itself.
+   * POST returning the raw Response (binary/blob downloads). Throws AuthError on
+   * 401, but does NOT throw on other non-ok statuses — the caller inspects res.ok
+   * and reads .blob()/.json() itself.
    */
   async download(path: string, body?: unknown, opts?: RequestOpts): Promise<Response> {
     const res = await fetch(this.buildUrl(path), {
@@ -149,7 +136,6 @@ export class ApiClient {
     return res;
   }
 
-  // ── Foundation endpoints (feature endpoints added in P1/P2) ──────────────
   health(): Promise<{ status: string } | null> {
     return fetch(this.buildUrl('/health'), { credentials: 'same-origin' })
       .then((r) => r.json())

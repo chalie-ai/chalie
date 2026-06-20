@@ -10,25 +10,22 @@ export interface VoiceHealth {
 
 export const voice = {
   /**
-   * GET /voice/health — returns status in {ok, loading, unavailable}.
-   * Public probe (no auth, always 200), like /ready and /health, so it opts out
-   * of the client's redirect-on-401: a probe failure should mark voice
-   * unavailable (handled by the store's catch), never yank the user to /login/.
+   * GET /voice/health — public probe (no auth, always 200), so it opts out of
+   * redirect-on-401: a failure should mark voice unavailable, never yank the
+   * user to /login/.
    */
   health(): Promise<VoiceHealth> {
     return api.get('/voice/health', { redirectOnAuthError: false });
   },
 
   /**
-   * POST /voice/transcribe — multipart FormData with file=recording.wav.
-   * Returns raw Response so the caller can handle streaming/retry.
+   * POST /voice/transcribe — multipart FormData (file=recording.wav). Returns
+   * the raw Response so the caller can handle streaming/retry.
    */
   transcribe(file: File): Promise<Response> {
-    const host = getHost();
-    const base = host ? host.replace(/\/$/, '') : '';
     const formData = new FormData();
     formData.append('file', file, 'recording.wav');
-    return fetch(`${base}/voice/transcribe`, {
+    return fetch(`${getHost().replace(/\/$/, '')}/voice/transcribe`, {
       method: 'POST',
       credentials: 'same-origin',
       body: formData,
@@ -36,14 +33,12 @@ export const voice = {
   },
 
   /**
-   * POST /voice/synthesize — body: { text }. Returns raw Response (binary audio/wav blob).
-   * HTTP 503 + reason:'loading' means the TTS model is still warming up; the player
-   * handles the Retry-After retry loop.
+   * POST /voice/synthesize — body { text }, returns raw Response (audio/wav).
+   * HTTP 503 + reason:'loading' means the TTS model is warming up; the player
+   * runs the Retry-After loop.
    */
   speak(text: string): Promise<Response> {
-    const host = getHost();
-    const base = host ? host.replace(/\/$/, '') : '';
-    return fetch(`${base}/voice/synthesize`, {
+    return fetch(`${getHost().replace(/\/$/, '')}/voice/synthesize`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },

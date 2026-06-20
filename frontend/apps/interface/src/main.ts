@@ -13,12 +13,10 @@ import { router, authGateRedirected } from './router';
 
 const app = createApp(App).use(createPinia()).use(router);
 
-// Gate the mount behind the auth gate. `router.isReady()` resolves once the
-// initial navigation — including the async `beforeEach` gate — has settled, so
-// by the time it fires we know whether the gate issued a hard redirect. Mounting
-// only when it did not keeps App.vue's onMounted (and therefore the WebSocket
-// connect in session.init()) from firing on a page that is navigating away.
-// Parity with legacy app.js:58 (`await chalieGateReady; if (!gate.stay) return;`).
+// Gate the mount behind the auth gate. `router.isReady()` resolves after the async
+// `beforeEach` gate settles, so we know whether it issued a hard redirect. Mounting
+// only when it did not keeps App.vue's onMounted (the WebSocket connect in
+// session.init()) from firing on a page that is navigating away.
 router.isReady().finally(() => {
   if (!authGateRedirected()) app.mount('#app');
 });

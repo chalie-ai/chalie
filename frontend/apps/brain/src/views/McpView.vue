@@ -11,29 +11,23 @@ import { Copy } from '@lucide/vue';
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-// ── Inbound state ─────────────────────────────────────────────────────────
 const inConfig = ref<McpServerConfig>({});
 const inPort = ref<number>(8462);
 const loadingInbound = ref(true);
 
-// ── Outbound state ────────────────────────────────────────────────────────
 const outServers = ref<McpClient[]>([]);
 const editingId = ref<string | number | null>(null);
 const loadingOutbound = ref(true);
 
-// Add-form state
 const addEnabled = ref(true);
 const addName = ref('');
 const addHost = ref('');
 const addHeaders = ref<{ key: string; value: string }[]>([]);
 
-// Edit-form state
 const editEnabled = ref(true);
 const editName = ref('');
 const editHost = ref('');
 const editHeaders = ref<{ key: string; value: string }[]>([]);
-
-// ── Inbound ───────────────────────────────────────────────────────────────
 
 async function loadInbound(): Promise<void> {
   try {
@@ -58,8 +52,7 @@ async function saveInbound(updates: Partial<McpServerConfig>): Promise<void> {
 }
 
 function onEnabledChange(e: Event): void {
-  const checked = (e.target as HTMLInputElement).checked;
-  saveInbound({ enabled: checked });
+  saveInbound({ enabled: (e.target as HTMLInputElement).checked });
 }
 
 function onPortBlur(): void {
@@ -87,8 +80,6 @@ async function regenToken(): Promise<void> {
     showToast(e instanceof HttpError ? 'Regenerate failed' : 'Network error', 'error');
   }
 }
-
-// ── Outbound ──────────────────────────────────────────────────────────────
 
 async function loadOutbound(): Promise<void> {
   try {
@@ -122,14 +113,13 @@ function collectHeaders(list: { key: string; value: string }[]): Record<string, 
 async function addServer(): Promise<void> {
   const name = addName.value.trim();
   const host = addHost.value.trim();
-  const enabled = addEnabled.value;
   const headers = collectHeaders(addHeaders.value);
 
   if (!name) { showToast('Name is required', 'error'); return; }
   if (!host) { showToast('Host is required', 'error'); return; }
 
   try {
-    await mcp.createClient({ name, host, headers, enabled });
+    await mcp.createClient({ name, host, headers, enabled: addEnabled.value });
     showToast(`Server "${name}" added`, 'success');
     addName.value = '';
     addHost.value = '';
@@ -159,14 +149,13 @@ function cancelEdit(): void {
 async function saveEdit(id: string | number): Promise<void> {
   const name = editName.value.trim();
   const host = editHost.value.trim();
-  const enabled = editEnabled.value;
   const headers = collectHeaders(editHeaders.value);
 
   if (!name) { showToast('Name is required', 'error'); return; }
   if (!host) { showToast('Host is required', 'error'); return; }
 
   try {
-    await mcp.updateClient(id, { name, host, headers, enabled });
+    await mcp.updateClient(id, { name, host, headers, enabled: editEnabled.value });
     showToast(`Server "${name}" updated`, 'success');
     editingId.value = null;
     await testServer(id, true);
@@ -229,7 +218,6 @@ onMounted(async () => {
     <h2>MCP</h2>
   </div>
 
-  <!-- ── Inbound section ─────────────────────────────────────────────── -->
   <section class="mcp-section">
     <h3 class="mcp-section-title">Inbound</h3>
     <p class="panel-desc">
@@ -288,7 +276,6 @@ onMounted(async () => {
     </div>
   </section>
 
-  <!-- ── Outbound section ────────────────────────────────────────────── -->
   <section class="mcp-section" style="margin-top:28px">
     <h3 class="mcp-section-title">Outbound</h3>
     <p class="panel-desc">
@@ -299,9 +286,7 @@ onMounted(async () => {
     <div v-if="loadingOutbound" class="loading">Loading…</div>
 
     <template v-else>
-    <!-- Server cards -->
     <template v-for="server in outServers" :key="server.id">
-      <!-- Edit mode -->
       <div v-if="editingId === server.id" class="mcp-out-card mcp-out-card-editing">
         <h4 class="mcp-out-add-title">Edit MCP Server</h4>
 
@@ -378,7 +363,6 @@ onMounted(async () => {
         </div>
       </div>
 
-      <!-- Display mode -->
       <div v-else class="mcp-out-card">
         <div class="mcp-out-card-header">
           <div>
@@ -406,7 +390,6 @@ onMounted(async () => {
       </div>
     </template>
 
-    <!-- Add-server form -->
     <div class="mcp-out-add-form">
       <h4 class="mcp-out-add-title">Add Remote MCP Server</h4>
 

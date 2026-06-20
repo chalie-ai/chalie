@@ -26,69 +26,54 @@ export interface ReadyStatus {
   ready: boolean;
 }
 
-// authStatus / readyCheck / heartbeat are probes (the gate inspects the 401 to
-// route; /ready and /health are public best-effort), so they opt out of the
-// client's redirect-on-401. The authenticated settings calls below keep the
-// default: a 401 there means the session expired → redirect to /login/.
+// authStatus / readyCheck / heartbeat are probes, so they opt out of the
+// client's redirect-on-401 (the gate inspects the 401 itself; /ready and
+// /health are public). The authenticated settings calls below keep the default:
+// a 401 there means the session expired → redirect to /login/.
 const NO_REDIRECT = { redirectOnAuthError: false } as const;
 
 export const system = {
-  /**
-   * GET /auth/status — check master-account / session / provider readiness.
-   * Used by the auth gate in main.ts.
-   */
+  /** GET /auth/status — readiness probe used by the auth gate in main.ts. */
   authStatus(): Promise<AuthStatus> {
     return api.get('/auth/status', NO_REDIRECT);
   },
 
   /**
-   * GET /ready — backend readiness probe for the loading overlay.
-   *
-   * NEVER rejects: any failure resolves to { ready: false } so the overlay's
-   * poll loop can simply retry (port of legacy api.js readyCheck, lines 87-90).
+   * GET /ready — readiness probe for the loading overlay. NEVER rejects: any
+   * failure resolves to { ready: false } so the overlay's poll loop can retry.
    */
   async readyCheck(): Promise<ReadyStatus> {
     try {
-      const result = await api.get<ReadyStatus>('/ready', NO_REDIRECT);
-      return { ready: Boolean(result?.ready) };
+      return { ready: Boolean((await api.get<ReadyStatus>('/ready', NO_REDIRECT))?.ready) };
     } catch {
       return { ready: false };
     }
   },
 
-  /**
-   * POST /health — heartbeat with client telemetry payload.
-   * No auth required; always returns { status: 'ok', version: string }.
-   */
+  /** POST /health — heartbeat with client telemetry; no auth required. */
   heartbeat(payload: Record<string, unknown>): Promise<{ status: string; version: string }> {
     return api.post('/health', payload, NO_REDIRECT);
   },
 
-  /**
-   * GET /system/context-usage — last request token count + context window.
-   */
+  /** GET /system/context-usage — last request token count + context window. */
   contextUsage(): Promise<ContextUsage> {
     return api.get('/system/context-usage');
   },
 
-  /**
-   * GET /system/settings/thinking_level_override
-   */
+  /** GET /system/settings/thinking_level_override */
   thinkingLevel(): Promise<{ key: string; value: string | null }> {
     return api.get('/system/settings/thinking_level_override');
   },
 
   /**
-   * PUT /system/settings/thinking_level_override
-   * Empty value string deletes the row (reverts to auto).
+   * PUT /system/settings/thinking_level_override — empty value string deletes
+   * the row (reverts to auto).
    */
   setThinkingLevel(value: string): Promise<Record<string, unknown>> {
     return api.put('/system/settings/thinking_level_override', { value });
   },
 
-  /**
-   * POST /system/update/apply — apply an in-place installer update.
-   */
+  /** POST /system/update/apply — apply an in-place installer update. */
   updateApply(tag: string): Promise<UpdateApplyResult> {
     return api.post('/system/update/apply', { tag });
   },

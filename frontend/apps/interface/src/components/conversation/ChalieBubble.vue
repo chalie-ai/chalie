@@ -11,44 +11,35 @@ const conversationStore = useConversationStore();
 
 const props = defineProps<{ form: ChalieForm }>();
 
-// ── FIX 4: pinned ref — prevents double-fire ───────────────────────────────
+// Prevents double-fire of the remember click.
 const pinned = ref(false);
-// Glow is applied AFTER the 150ms delay, matching legacy renderer.js:487
-// (the button disables immediately on click, but the --active glow lands later).
+// Glow lands AFTER the 150ms delay (button disables immediately, --active later).
 const pinActive = ref(false);
 
-// ── FIX 6: mode badge label ────────────────────────────────────────────────
 const MODE_LABELS: Record<string, string> = {
   ACT: 'acting',
   CLARIFY: 'clarifying',
   ACKNOWLEDGE: 'noting',
 };
 
-const modeBadgeLabel = computed(() => {
-  const mode = props.form.meta.mode ?? '';
-  return MODE_LABELS[mode] ?? '';
-});
+const modeBadgeLabel = computed(() => MODE_LABELS[props.form.meta.mode ?? ''] ?? '');
 
-// ── FIX 5: only show Speak when there is speakable text ───────────────────
 const speakText = computed(() => chalieFormPlaintext(props.form));
 
-// Remember/speak controls live only on the LAST Chalie row of the turn — a
-// turn may now span several assistant transcript rows, and the controls act on
-// the whole turn (remember pins the whole turn's text, speak plays it all).
+// Remember/speak controls live only on the turn's LAST Chalie row — a turn may
+// span several assistant rows, and the controls act on the whole turn.
 const isLastInTurn = computed(() => conversationStore.isLastChalieInTurn(props.form.id));
 
-// ── FIX 4: Remember click — 150ms delay, guard against double-fire ─────────
 function onRemember(): void {
   if (pinned.value) return;
   pinned.value = true;
   setTimeout(() => {
-    // Pin the whole turn's plaintext — this control sits on the turn's last row.
     emit('chalie:pin-moment', { content: conversationStore.turnSpeechText(props.form.id) });
-    pinActive.value = true; // glow lands with the emit, per legacy timing
+    pinActive.value = true;
   }, 150);
 }
 
-// Speak plays the WHOLE turn (every Chalie row), not just this transcript row.
+// Speak plays the WHOLE turn (every Chalie row), not just this row.
 function onSpeak(): void {
   emit('chalie:speak-message', { text: conversationStore.turnSpeechText(props.form.id) });
 }
@@ -62,7 +53,6 @@ function onSpeak(): void {
       'message--faded': form.inWorkingMemory === false,
     }"
   >
-    <!-- Content: segments path or single text path -->
     <SegmentRenderer
       v-if="form.meta.segments && form.meta.segments.length"
       :segments="form.meta.segments"
@@ -73,18 +63,14 @@ function onSpeak(): void {
       v-html="renderMarkup(form.text ?? '')"
     />
 
-    <!-- Footer row lives only on the LAST Chalie row of the turn — interim rows
-         carry no meta (glyph, timestamp, mode badge, or actions) at all. -->
+    <!-- Footer lives only on the turn's LAST Chalie row; interim rows carry no meta. -->
     <div v-if="isLastInTurn" class="speech-form__meta">
       <span class="sender-glyph" aria-hidden="true"></span>
       <span class="speech-form__timestamp">{{ form.meta.ts ?? '' }}</span>
 
-      <!-- FIX 6: mode badge -->
       <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>
 
-      <!-- Action buttons pushed to the right -->
       <div class="speech-form__actions">
-        <!-- FIX 4: disabled + active class when pinned. -->
         <button
           class="speech-form__remember-btn"
           :class="{ 'speech-form__remember-btn--active': pinActive }"
@@ -96,7 +82,6 @@ function onSpeak(): void {
           <Star :size="14" />
         </button>
 
-        <!-- FIX 5: only render when there is speakable text -->
         <button
           v-if="speakText"
           class="speech-form__speak-btn"
@@ -116,9 +101,6 @@ function onSpeak(): void {
  * Styles targeting v-html'd inner content (chalie-markup, chalie-action-button,
  * chalie-code, auto-linkified <a>) MUST be global — Vue scoped CSS does not
  * reach nodes injected by v-html. Structural bubble layout lives in conversation.scss.
- *
- * FIX 8: replace hardcoded rgba(138,92,255,…) with color-mix(in oklab, var(--violet) …)
- * and rgba(224,108,108,…) with color-mix(in oklab, var(--error) …) so both themes work.
  */
 .chalie-markup {
   word-break: break-word;
@@ -234,8 +216,6 @@ function onSpeak(): void {
 }
 
 /* Action buttons (from <actions>/<action> custom elements wired by useMarkup) */
-/* FIX 8: replaced rgba(138,92,255,…) → color-mix(in oklab, var(--violet) …) */
-/*         replaced rgba(224,108,108,…) → color-mix(in oklab, var(--error) …)  */
 .chalie-actions-row {
   display: flex;
   gap: var(--space-sm);

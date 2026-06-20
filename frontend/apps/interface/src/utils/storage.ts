@@ -1,14 +1,7 @@
-/**
- * Safe localStorage wrappers.
- * Private-browsing mode on iOS Safari / Firefox throws SecurityError on access;
- * these wrappers swallow that so callers can use them unconditionally.
- *
- * Note: most browser-API access goes through PlatformAdapter, but localStorage
- * for the theme pre-paint and host config are handled here and in shared/config/host.ts
- * as a deliberate exception (matches the P0 pattern).
- */
+// Safe localStorage wrappers — private-browsing mode (iOS Safari / Firefox) throws
+// SecurityError on access, so these swallow it and callers can use them unconditionally.
+// A deliberate exception to routing browser-API access through PlatformAdapter.
 
-/** Return the stored value for key, or null when unavailable or on error. */
 export function lsGet(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -17,7 +10,6 @@ export function lsGet(key: string): string | null {
   }
 }
 
-/** Persist value under key. Silently ignores storage errors. */
 export function lsSet(key: string, val: string): void {
   try {
     localStorage.setItem(key, val);

@@ -1,25 +1,14 @@
 <script setup lang="ts">
 /**
- * Loading overlay — the "Waking up Chalie..." splash shown on every load until
- * the backend signals readiness (Task A5).
+ * Loading overlay — the "Waking up Chalie..." splash shown until the backend
+ * signals readiness.
  *
- * Gate (port of app.js _pollUntilReady, lines 204-216, + _dismissLoadingOverlay,
- * lines 733-748):
- *   poll GET /ready every 2s, up to 120s, until { ready: true } → fade out.
- *   The skip button stops the poll and dismisses immediately.
- *   On timeout the overlay dismisses anyway so the UI is never permanently
- *   blocked.
+ * Poll GET /ready every 2s, up to 120s, until { ready: true } → fade out. Skip
+ * stops the poll and dismisses; on timeout it dismisses anyway so the UI is
+ * never permanently blocked.
  *
- * Voice availability is a SEPARATE concern (voiceStore) governing only mic /
- * speaker visibility — it must NOT gate this overlay. Legacy runs
- * _initVoiceAvailability AFTER the overlay is already dismissed (app.js:238 vs
- * :246), so a slow or unavailable voice service can never block first paint.
- *
- * The overlay is an opaque full-screen layer (interface.scss: position:fixed;
- * inset:0; z-index:100; background:#06080e), so it covers the spine + dock on
- * its own — no need to toggle their display as the legacy DOM code did.
- *
- * Transition: 220ms opacity fade (CSS), then removal from the DOM.
+ * Voice availability is a SEPARATE concern (voiceStore) and must NOT gate this
+ * overlay — a slow/unavailable voice service can never block first paint.
  */
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { system } from '../../api/system';
@@ -35,10 +24,7 @@ const fading = ref(false);
 let pollActive = true;
 let removeTimer: ReturnType<typeof setTimeout> | null = null;
 
-/**
- * Begin the 220ms CSS fade, then remove from the DOM.
- * Idempotent — subsequent calls while already fading are no-ops.
- */
+/** Begin the CSS fade, then remove from the DOM. Idempotent while fading. */
 function dismiss(): void {
   if (fading.value) return;
   fading.value = true;
@@ -47,16 +33,12 @@ function dismiss(): void {
   }, FADE_MS);
 }
 
-/** Skip — stop polling and dismiss now (legacy: _readyPollActive = false). */
 function skip(): void {
   pollActive = false;
   dismiss();
 }
 
-/**
- * Poll the backend ready endpoint until it reports ready, the deadline passes,
- * or skip stops the loop. readyCheck never rejects, so no try/catch is needed.
- */
+/** readyCheck never rejects, so no try/catch is needed. */
 async function pollUntilReady(): Promise<void> {
   const deadline = Date.now() + MAX_WAIT_MS;
   while (pollActive && Date.now() < deadline) {

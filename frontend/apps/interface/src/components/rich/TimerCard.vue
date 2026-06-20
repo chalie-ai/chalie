@@ -1,61 +1,35 @@
 <script setup lang="ts">
 /**
- * TimerCard — Vue 3 SFC port of frontend/interface/rich_media/timer.js
- *
- * Ported from timer.js with two sanctioned changes:
- *   1. The legacy MutationObserver DOM-detach guard is replaced with Vue's
- *      onBeforeUnmount.
- *   2. The expiry alarm now auto-silences ALARM_AUTO_STOP_MS after it starts,
- *      so an unattended timer no longer bleeps forever (legacy rang until the
- *      user pressed Stop). The card stays on "Done"; only the audio and the
- *      ring's attention pulse stop. See onExpire / silenceAlarm.
- * Everything else — ring math, stale-reload guard, alarm scheduling, pause /
- * resume / stop state machine — is reproduced exactly.
+ * TimerCard — two intentional divergences from the legacy timer:
+ *   1. MutationObserver DOM-detach guard replaced with Vue onBeforeUnmount.
+ *   2. The expiry alarm auto-silences ALARM_AUTO_STOP_MS after it starts so an
+ *      unattended timer no longer bleeps forever (card stays "Done"; only audio
+ *      + ring pulse stop). See onExpire / silenceAlarm.
  */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { Pause, Play, Square } from '@lucide/vue';
 import { webPlatformAdapter } from '@chalie/shared';
 
-// ── Payload contract ───────────────────────────────────────────────────────
-
 export interface TimerPayload {
-  /** Opaque card identifier. */
   id: string | number;
-  /** Display title. Matches TimerAbility's `{title, duration_seconds}` payload. */
   title: string;
-  /** Timer duration in seconds. Matches TimerAbility's `duration_seconds`. */
   duration_seconds: number;
-  /**
-   * ISO-8601 wall-clock instant at which the timer was started.
-   * Grafted onto the payload by TimerAbility.enrich_rich_payload; the LLM
-   * never supplies it. Parsed via Date.parse — same as legacy parseStartedAt().
-   */
+  /** Wall-clock start instant grafted on by the backend; LLM never supplies it. */
   started_at: string;
 }
 
 const props = defineProps<{ payload: TimerPayload; synthesis?: string }>();
 
-// ── Constants (identical to timer.js) ─────────────────────────────────────
-
 /** pathLength / stroke-dasharray value for the SVG progress ring. */
 const RING_PATH_LENGTH = 100;
 
-/**
- * Grace window for stale-reload: if we open a conversation containing a timer
- * that already finished more than this ago, render "Ended" silently rather
- * than blasting the alarm on every page load.
- */
+/** Stale-reload grace: a timer that finished longer ago than this renders
+ *  "Ended" silently instead of blasting the alarm on every page load. */
 const STALE_RELOAD_GRACE_MS = 60 * 1_000;
 
-/**
- * How long the expiry alarm bleeps before it auto-silences. The legacy timer
- * rang until the user pressed Stop; an unattended timer would bleep forever.
- * After this window the audio stops and the ring drops its attention pulse,
- * while the card stays on "Done".
- */
+/** How long the expiry alarm bleeps before auto-silencing (card stays "Done";
+ *  audio + ring pulse stop) so an unattended timer doesn't bleep forever. */
 const ALARM_AUTO_STOP_MS = 30 * 1_000;
-
-// ── Helpers (ported 1:1 from timer.js) ────────────────────────────────────
 
 function parseStartedAt(s: string | undefined | null): number | null {
   if (!s) return null;
@@ -84,8 +58,6 @@ function formatHMS(d: Date): string {
   });
 }
 
-// ── Alarm (Web Audio API via platform adapter) ─────────────────────────────
-
 interface AlarmHandle {
   stop(): void;
 }
@@ -101,12 +73,7 @@ function startAlarm(): AlarmHandle {
   let burstTimer: ReturnType<typeof setTimeout> | null = null;
   let alive = true;
 
-  /**
-   * Schedule one 3-beep burst. Each beep is a sine oscillator @ 880 Hz.
-   * Beeps are spaced 0.22 s apart; each lasts 0.16 s.
-   * Gain ramps: 0 → 0.18 in 0.02 s (attack), holds, → 0 in 0.04 s (release).
-   * The entire burst repeats every 1 400 ms (via setTimeout).
-   */
+  /** Schedule one 3-beep sine burst, then repeat every 1 400 ms via setTimeout. */
   const burst = (): void => {
     if (!alive) return;
     const now = ctx.currentTime;
@@ -147,8 +114,6 @@ function startAlarm(): AlarmHandle {
   };
 }
 
-// ── Derived initial values ─────────────────────────────────────────────────
-
 const title = (props.payload.title || props.synthesis || 'Timer').toString();
 const totalSeconds = Number(props.payload.duration_seconds) || 0;
 const startedAtMs = parseStartedAt(props.payload.started_at);
@@ -157,14 +122,7 @@ const isInvalid = totalSeconds <= 0 || startedAtMs == null;
 const totalMs = isInvalid ? 0 : totalSeconds * 1_000;
 const initialEndsAtMs = isInvalid ? 0 : startedAtMs! + totalMs;
 
-/**
- * Stale-reload guard — if the timer finished more than STALE_RELOAD_GRACE_MS
- * ago (e.g. conversation reloaded long after the timer rang), render "Ended"
- * quietly instead of blasting the alarm. Exact condition from timer.js line 52.
- */
 const isStale = !isInvalid && Date.now() - initialEndsAtMs > STALE_RELOAD_GRACE_MS;
-
-// ── Reactive state ─────────────────────────────────────────────────────────
 
 type CardState = 'running' | 'paused' | 'done' | 'stopped' | 'stale' | 'error';
 
@@ -177,16 +135,12 @@ const state = ref<CardState>(
 /** SVG ring dashoffset (0 = empty, RING_PATH_LENGTH = full). */
 const ringOffset = ref<number>(RING_PATH_LENGTH);
 
-/** Human-readable countdown/status line. */
 const timeHtml = ref<string>('');
 
-/**
- * True once the expiry alarm has auto-silenced (after ALARM_AUTO_STOP_MS).
- * Drives `.timer-card--silenced`, which drops the ring's attention pulse.
- */
+/** True once the alarm auto-silenced; drives `.timer-card--silenced`. */
 const silenced = ref<boolean>(false);
 
-// ── Mutable runtime (not reactive — not rendered directly) ─────────────────
+// Mutable runtime below is not reactive (not rendered directly).
 
 /** Wall-clock ms at which the timer expires; recomputed on resume. */
 let endsAtMs: number = initialEndsAtMs;
@@ -201,20 +155,11 @@ let alarm: AlarmHandle | null = null;
 /** Pending auto-silence timer scheduled by onExpire; cleared on stop/unmount. */
 let autoStopId: ReturnType<typeof setTimeout> | null = null;
 
-// ── Ring helper ────────────────────────────────────────────────────────────
-
-/**
- * Set ring progress in [0, 1].
- * progress=0 → empty (dashoffset=RING_PATH_LENGTH).
- * progress=1 → full (dashoffset=0).
- * Matches legacy: `fill.style.strokeDashoffset = RING_PATH_LENGTH * (1 - p)`.
- */
+/** Set ring progress in [0, 1]: 0 → empty, 1 → full. */
 function setProgress(p: number): void {
   const clamped = Math.max(0, Math.min(1, p));
   ringOffset.value = RING_PATH_LENGTH * (1 - clamped);
 }
-
-// ── Display update ─────────────────────────────────────────────────────────
 
 /** Recompute ring + time line. Called every 1 s and on pause/resume. */
 function update(): void {
@@ -227,8 +172,6 @@ function update(): void {
   }
 }
 
-// ── Expiry ─────────────────────────────────────────────────────────────────
-
 function onExpire(): void {
   alarmId = null;
   if (displayId !== null) {
@@ -239,16 +182,11 @@ function onExpire(): void {
   state.value = 'done';
   setProgress(1);
   alarm = startAlarm();
-  // Auto-silence the alarm after the grace window so an unattended timer does
-  // not bleep indefinitely. Pressing Stop earlier cancels this via cleanup().
+  // Auto-silence after the grace window; pressing Stop earlier cancels via cleanup().
   autoStopId = setTimeout(silenceAlarm, ALARM_AUTO_STOP_MS);
 }
 
-/**
- * Silence the expiry alarm: stop the audio, cancel the auto-stop timer, and
- * flip `silenced` so the ring drops its attention pulse (card stays on "Done").
- * Idempotent — safe whether fired by the auto-stop timer or called again.
- */
+/** Stop the alarm audio + cancel auto-stop; flip `silenced`. Idempotent. */
 function silenceAlarm(): void {
   if (autoStopId !== null) {
     clearTimeout(autoStopId);
@@ -260,8 +198,6 @@ function silenceAlarm(): void {
   }
   silenced.value = true;
 }
-
-// ── Cleanup (replaces MutationObserver from timer.js) ─────────────────────
 
 /** Tears down all timers and the AudioContext. Called on unmount and stop. */
 function cleanup(): void {
@@ -282,8 +218,6 @@ function cleanup(): void {
     alarm = null;
   }
 }
-
-// ── Pause / Resume / Stop ──────────────────────────────────────────────────
 
 function onPause(): void {
   if (state.value !== 'running') return;
@@ -317,8 +251,6 @@ function onStop(): void {
   setProgress(0);
 }
 
-// ── Derived template helpers ───────────────────────────────────────────────
-
 const isPauseDisabled = computed<boolean>(
   () => state.value !== 'running' && state.value !== 'paused',
 );
@@ -326,8 +258,6 @@ const isPauseDisabled = computed<boolean>(
 const isStopDisabled = computed<boolean>(
   () => state.value === 'stopped' || state.value === 'stale' || state.value === 'error',
 );
-
-// ── Lifecycle ──────────────────────────────────────────────────────────────
 
 onMounted((): void => {
   if (isInvalid || isStale) {
@@ -339,9 +269,8 @@ onMounted((): void => {
     return;
   }
 
-  // Schedule alarm + display loop. If we land already past endsAtMs but within
-  // the grace window (isStale=false but remainingMs<=0), fire onExpire
-  // synchronously so Done renders immediately — exactly as timer.js does.
+  // If already past endsAtMs but within the grace window, fire onExpire
+  // synchronously so Done renders immediately.
   const remainingMs = endsAtMs - Date.now();
   if (remainingMs <= 0) {
     onExpire();
@@ -358,7 +287,6 @@ onBeforeUnmount((): void => {
 </script>
 
 <template>
-  <!-- Error: invalid payload -->
   <div
     v-if="state === 'error'"
     class="rich-card timer-card timer-card--error"
@@ -366,7 +294,6 @@ onBeforeUnmount((): void => {
     Invalid timer payload
   </div>
 
-  <!-- Normal card (running / paused / done / stopped / stale) -->
   <div
     v-else
     class="rich-card timer-card"
@@ -376,7 +303,6 @@ onBeforeUnmount((): void => {
       'timer-card--silenced': silenced,
     }"
   >
-    <!-- Progress ring (56 × 56 px; SVG viewBox 36 × 36; radius 16; pathLength 100) -->
     <div class="timer-card__ring" aria-hidden="true">
       <svg viewBox="0 0 36 36">
         <circle
@@ -397,16 +323,13 @@ onBeforeUnmount((): void => {
       </svg>
     </div>
 
-    <!-- Title + countdown line -->
     <div class="timer-card__info">
       <h4 class="timer-card__title">{{ title }}</h4>
       <!-- eslint-disable-next-line vue/no-v-html -->
       <div class="timer-card__time" v-html="timeHtml" />
     </div>
 
-    <!-- Pause/Resume + Stop buttons -->
     <div class="timer-card__actions">
-      <!-- Pause / Resume toggle -->
       <button
         type="button"
         class="timer-card__btn"
@@ -415,13 +338,11 @@ onBeforeUnmount((): void => {
         :disabled="isPauseDisabled"
         @click="state === 'paused' ? onResume() : onPause()"
       >
-        <!-- Pause icon -->
         <Pause
           v-if="state !== 'paused'"
           fill="currentColor"
           aria-hidden="true"
         />
-        <!-- Play / Resume icon -->
         <Play
           v-else
           fill="currentColor"
@@ -429,7 +350,6 @@ onBeforeUnmount((): void => {
         />
       </button>
 
-      <!-- Stop button -->
       <button
         type="button"
         class="timer-card__btn"
@@ -445,10 +365,7 @@ onBeforeUnmount((): void => {
 </template>
 
 <style scoped lang="scss">
-/*
- * Card-specific rules only. Base chrome (.rich-card, __divider, __synthesis,
- * card-enter animation) is declared globally in base_card.css — not repeated here.
- */
+/* Card-specific rules only; base .rich-card chrome lives globally in base_card.css. */
 
 .rich-card.timer-card {
   display: grid;
@@ -458,8 +375,6 @@ onBeforeUnmount((): void => {
   border: none;
   box-shadow: none;
 }
-
-/* ── Progress ring ──────────────────────────────────────────────────────── */
 
 .timer-card__ring {
   position: relative;
@@ -498,17 +413,13 @@ onBeforeUnmount((): void => {
 }
 
 /*
- * Auto-silenced alarm: keep the amber "Done" ring but stop the attention
- * pulse once the audio has auto-stopped (ALARM_AUTO_STOP_MS after expiry).
- * Compound `--done--silenced` selector (specificity 0-3-0) deliberately
- * outranks the `--done` pulse rule (0-2-0) so it wins by specificity, not by
- * source order — a silenced card always carries both classes.
+ * Compound `--done.--silenced` (specificity 0-3-0) deliberately outranks the
+ * `--done` pulse rule (0-2-0) by specificity, not source order — a silenced
+ * card always carries both classes — so it cancels the pulse while keeping amber.
  */
 .timer-card--done.timer-card--silenced .timer-card__ring-fill {
   animation: none;
 }
-
-/* ── Title + time ────────────────────────────────────────────────────────── */
 
 .timer-card__info {
   min-width: 0;
@@ -536,8 +447,6 @@ onBeforeUnmount((): void => {
     font-weight: 500;
   }
 }
-
-/* ── Action buttons ─────────────────────────────────────────────────────── */
 
 .timer-card__actions {
   display: flex;
@@ -574,8 +483,6 @@ onBeforeUnmount((): void => {
     display: block;
   }
 }
-
-/* ── Stopped + error variants ───────────────────────────────────────────── */
 
 .timer-card--stopped {
   opacity: 0.65;

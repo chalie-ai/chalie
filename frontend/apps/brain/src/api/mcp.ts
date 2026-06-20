@@ -41,8 +41,6 @@ export interface McpClientInput {
 }
 
 export const mcp = {
-  // ── Inbound ──────────────────────────────────────────────────────────────
-
   getServerConfig(): Promise<McpServerConfig> {
     return api.get('/api/mcp-server');
   },
@@ -54,8 +52,6 @@ export const mcp = {
   regenerateToken(): Promise<{ token: string }> {
     return api.post('/api/mcp-server/regenerate-token', {});
   },
-
-  // ── Outbound ─────────────────────────────────────────────────────────────
 
   listClients(): Promise<McpClient[]> {
     return api.get('/api/mcp-clients/');
