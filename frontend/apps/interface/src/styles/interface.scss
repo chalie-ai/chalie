@@ -1,17 +1,7 @@
-// ==========================================================================
-// Chalie Interface — interface.scss
-// Structural/layout styles for the app shell.
-//
-// Scope: app skeleton, fixed bars, ambient canvas layers, banners, loading
-// overlay, shell keyframes. Component-internal visual detail lives in each
-// SFC's scoped styles.
-//
-// Depends on @chalie/shared/styles/main.scss being imported first (tokens).
-// ==========================================================================
+// Structural/layout styles for the app shell (skeleton, fixed bars, ambient
+// layers, banners, loading overlay, keyframes). Component visual detail lives
+// in each SFC's scoped styles. Depends on @chalie/shared/styles/main.scss (tokens).
 
-// --------------------------------------------------------------------------
-// 1. Interface-specific Design Tokens
-// --------------------------------------------------------------------------
 :root {
   --sand:              var(--magenta);      // alias for accent-secondary
   --dusk-blue:         var(--cyan);         // alias for accent-tertiary
@@ -20,7 +10,6 @@
   --bg-surface-user:   var(--bg-user);
   --bg-surface-chalie: var(--bg-chalie);
 
-  // Spacing scale
   --space-xs:  4px;
   --space-sm:  8px;
   --space-md:  16px;
@@ -28,27 +17,21 @@
   --space-xl:  40px;
   --space-2xl: 64px;
 
-  // Typography (interface-specific sizes)
   --font-size-sm:  0.8125rem;
   --font-size-lg:  1.125rem;
   --font-size-xl:  1.5rem;
 
-  // Radii
   --radius-sm:   8px;
   --radius-md:   16px;
   --radius-lg:   24px;
   --radius-full: 9999px;
 
-  // Transitions
   --duration-fast:   150ms;
   --duration-normal: 300ms;
   --duration-slow:   500ms;
 }
 
-// --------------------------------------------------------------------------
-// 2. Base — interface-specific additions
-// (body bg/color/font handled by _tokens.scss + _reset.scss)
-// --------------------------------------------------------------------------
+// Base additions (body bg/color/font handled by _tokens.scss + _reset.scss).
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -66,13 +49,9 @@ body {
   outline-offset: 2px;
 }
 
-// Voice-button visibility (hidden until the voice-health check passes) is owned
-// by Task A5 via a reactive flag on the input dock, NOT by a `body.voice-loading`
-// class. The legacy body-class CSS rule is intentionally not ported here.
+// Voice-button visibility is driven by a reactive flag on the input dock, not a
+// `body.voice-loading` class, so the legacy body-class CSS rule is not ported.
 
-// --------------------------------------------------------------------------
-// 3. Ambient Background
-// --------------------------------------------------------------------------
 #ambientCanvas {
   position: fixed;
   inset: 0;
@@ -120,9 +99,6 @@ body.speaker-user #ambientBloom {
   background-size: 256px 256px;
 }
 
-// --------------------------------------------------------------------------
-// 4. Connection Banner
-// --------------------------------------------------------------------------
 .connection-banner {
   position: fixed;
   top: 56px;
@@ -161,9 +137,6 @@ body.speaker-user #ambientBloom {
   50%       { opacity: 0.3; }
 }
 
-// --------------------------------------------------------------------------
-// 4a. Capability Alert Banner
-// --------------------------------------------------------------------------
 .capability-alert-banner {
   position: fixed;
   top: 100px;
@@ -201,9 +174,6 @@ body.speaker-user #ambientBloom {
   color: var(--warning-banner-text);
 }
 
-// --------------------------------------------------------------------------
-// 4b. Update Banner
-// --------------------------------------------------------------------------
 .update-banner {
   position: fixed;
   top: 56px;
@@ -269,13 +239,8 @@ body.speaker-user #ambientBloom {
   color: var(--text-primary);
 }
 
-// --------------------------------------------------------------------------
-// 4c. Permission Stack (floating card tray above the input dock)
-// --------------------------------------------------------------------------
-// Port of legacy style.css §19 (.perm-stack, lines 3839-3850).
-// App.vue renders <div id="permStack" class="permission-stack">; PermissionStack.vue
-// teleports cards inside and applies flex layout on the inner wrapper (.perm-stack-inner).
-// This rule provides the fixed positioning for the outer container.
+// Permission Stack — outer container fixed-positioning only; PermissionStack.vue
+// teleports cards inside and lays out the inner wrapper (.perm-stack-inner).
 .permission-stack {
   position: fixed;
   bottom: calc(var(--input-dock-height, 80px) + var(--space-md));
@@ -286,9 +251,6 @@ body.speaker-user #ambientBloom {
   z-index: 200;
 }
 
-// --------------------------------------------------------------------------
-// 5. Presence Bar (structural layout)
-// --------------------------------------------------------------------------
 .presence-bar {
   position: fixed;
   top: 0;
@@ -319,9 +281,6 @@ body.speaker-user #ambientBloom {
   gap: var(--space-sm);
 }
 
-// --------------------------------------------------------------------------
-// 6. Conversation Spine (structural layout)
-// --------------------------------------------------------------------------
 .conversation-spine {
   position: relative;
   z-index: 10;
@@ -336,18 +295,14 @@ body.speaker-user #ambientBloom {
   mask-image: linear-gradient(to bottom, transparent, black 32px, black calc(100% - 32px), transparent);
 }
 
-// A turn groups the user message with the assistant rows / act groups it
-// produced. Inner forms keep their own align-self (user right, Chalie/act left);
-// the tighter intra-turn gap signals they belong together vs. the spine's gap.
+// Groups a user message with the assistant rows/act groups it produced; inner
+// forms keep their own align-self, the tighter gap signals they belong together.
 .turn {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
 }
 
-// --------------------------------------------------------------------------
-// 7. Input Dock (structural layout)
-// --------------------------------------------------------------------------
 .input-dock {
   position: fixed;
   bottom: 0;
@@ -406,17 +361,11 @@ body.speaker-user #ambientBloom {
   color: var(--text-tertiary);
 }
 
-// --------------------------------------------------------------------------
-// 8. Loading Overlay
-// --------------------------------------------------------------------------
 .loading-overlay {
   position: fixed;
   inset: 0;
-  // Boot screen must sit above every shell layer (presence bar / input dock at
-  // 100, banners at 1000) while it is visible. Legacy used z-index:100 and hid
-  // the dock via JS during load (app.js:722); until Task A5 wires the real
-  // ready-gate, we layer the overlay on top instead so the dock can't poke
-  // through.
+  // Must sit above every shell layer (bars at 100, banners at 1000); until the
+  // ready-gate is wired we layer the overlay on top so the dock can't poke through.
   z-index: 1100;
   background: #06080e; // always dark — stays consistent in both themes
   display: flex;
@@ -471,9 +420,6 @@ body.speaker-user #ambientBloom {
   outline-offset: 2px;
 }
 
-// --------------------------------------------------------------------------
-// 9. Shell Keyframes
-// --------------------------------------------------------------------------
 @keyframes formEntry {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -489,11 +435,7 @@ body.speaker-user #ambientBloom {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-// --------------------------------------------------------------------------
-// 10. Input dock controls + buttons (ported from legacy style.css §11–12, §33)
-// --------------------------------------------------------------------------
-
-// ── Action buttons (send / attach) ───────────────────────────────────────
+// Action buttons (send / attach)
 .btn-action {
   width: 28px;
   height: 28px;
@@ -548,7 +490,6 @@ body.speaker-user #ambientBloom {
   transform: rotate(45deg);
 }
 
-// ── Generic icon button (overlay close, etc.) ─────────────────────────────
 .btn-icon {
   background: none;
   border: none;
@@ -565,7 +506,6 @@ body.speaker-user #ambientBloom {
 .btn-icon:hover  { color: var(--text-primary); }
 .btn-icon--small { padding: var(--space-xs); }
 
-// ── Attach menu ───────────────────────────────────────────────────────────
 .attach-menu {
   max-width: 680px;
   margin: 0 auto;
@@ -611,7 +551,6 @@ body.speaker-user #ambientBloom {
 .attach-menu__item:hover { background: color-mix(in oklab, var(--violet) 8%, transparent); }
 .attach-menu__item svg   { color: var(--text-secondary); flex-shrink: 0; }
 
-// ── Dock controls row (thinking selector + context indicator) ─────────────
 .dock-controls {
   max-width: min(80%, 1200px);
   margin: var(--space-xs) auto 0;
@@ -621,7 +560,6 @@ body.speaker-user #ambientBloom {
   justify-content: space-between;
 }
 
-// ── Thinking-level dropdown ───────────────────────────────────────────────
 .thinking-select { position: relative; }
 
 .thinking-select__trigger {
@@ -675,7 +613,6 @@ body.speaker-user #ambientBloom {
 .thinking-select__item:hover  { background: color-mix(in oklab, var(--accent-primary) 8%, transparent); }
 .thinking-select__item.active { color: var(--accent-primary); font-weight: 600; }
 
-// ── Context display + indicator ───────────────────────────────────────────
 .context-display {
   display: flex;
   align-items: center;
@@ -693,7 +630,6 @@ body.speaker-user #ambientBloom {
   font-variant-numeric: tabular-nums;
 }
 
-// ── Mic record button ─────────────────────────────────────────────────────
 .voice-rec-btn {
   flex-shrink: 0;
   position: relative;
@@ -715,23 +651,19 @@ body.speaker-user #ambientBloom {
   background: color-mix(in oklab, var(--text) 5%, transparent);
 }
 
-// Idle state: show only the mic icon
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__mic     { display: block; }
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__dot     { display: none; }
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__spinner { display: none; }
 
-// Recording state: hide mic, show pulsing red dot
 .voice-rec-btn[data-state="recording"] { color: #E06C6C; }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__mic     { display: none; }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__dot     { display: block; }
 .voice-rec-btn[data-state="recording"] .voice-rec-btn__spinner { display: none; }
 
-// Uploading state: hide mic, show spinner
 .voice-rec-btn[data-state="uploading"] .voice-rec-btn__mic     { display: none; }
 .voice-rec-btn[data-state="uploading"] .voice-rec-btn__dot     { display: none; }
 .voice-rec-btn[data-state="uploading"] .voice-rec-btn__spinner { display: block; }
 
-// Red pulse dot
 .voice-rec-btn__dot {
   width: 10px;
   height: 10px;
@@ -745,7 +677,6 @@ body.speaker-user #ambientBloom {
   50%       { transform: scale(1.4); opacity: 0.6; }
 }
 
-// Upload spinner
 .voice-rec-btn__spinner {
   width: 14px;
   height: 14px;
@@ -759,7 +690,6 @@ body.speaker-user #ambientBloom {
   to { transform: rotate(360deg); }
 }
 
-// Inline error label
 .voice-rec-error {
   color: #E06C6C;
   font-size: var(--font-size-sm);
@@ -768,9 +698,6 @@ body.speaker-user #ambientBloom {
   line-height: 1.4;
 }
 
-// --------------------------------------------------------------------------
-// 11. Responsive adjustments
-// --------------------------------------------------------------------------
 @media (max-width: 640px) {
   .conversation-spine {
     width: 100%;
@@ -794,7 +721,7 @@ body.speaker-user #ambientBloom {
   .loading-overlay__skip { animation: none; opacity: 1; }
 }
 
-// No-backdrop-filter fallback (print / old browsers)
+// Backdrop-filter doesn't print — substitute the opaque scrim fallback.
 @media print {
   .presence-bar { background: var(--scrim-fallback); }
   .input-dock   { background: var(--scrim-fallback); }

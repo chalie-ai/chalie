@@ -1,20 +1,5 @@
-/**
- * Relative-time formatter for scheduler labels.
- * Ported from frontend/interface/utils.js — exact output strings preserved.
- */
-
-/**
- * Convert an ISO date string to a short relative label.
- *
- * Output examples (matching legacy utils.js exactly):
- *   "now"        — less than 1 minute in the future
- *   "in 5m"      — minutes
- *   "in 2h"      — hours (< 24h)
- *   "tomorrow"   — exactly 1 day
- *   "in 3d"      — more than 1 day
- *   "overdue"    — date is in the past
- *   ""           — parse error
- */
+// Short relative-time label for scheduler UI ("now", "in 5m", "tomorrow",
+// "overdue", "" on parse error).
 export function relativeTime(isoStr: string): string {
   try {
     const diffMs = new Date(isoStr).getTime() - Date.now();

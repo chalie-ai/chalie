@@ -1,24 +1,19 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
-// ── Types ──────────────────────────────────────────────────────────────────
-
 export interface SchedulerRecord {
   id: string | number;
   message: string;
   /**
-   * Localized ISO due time. ScheduleAbility's create record emits `due_at_local`
-   * (via TimeFormatterService.local) and `due_at_utc` — NOT a bare `due_at`.
-   * Legacy scheduler.js read `record.due_at`, which is never present on the
-   * create card, so the date block always rendered "—". This is the field the
-   * card actually needs; reading it is an intentional bug-fix divergence.
+   * The create record emits `due_at_local` (+`due_at_utc`), NOT a bare `due_at`;
+   * legacy read `record.due_at` so the date block always rendered "—". Reading
+   * this field instead is an intentional bug-fix divergence.
    */
   due_at_local: string | null;
-  /** UTC ISO due time. Echoed back for the model; not rendered by the card. */
   due_at_utc?: string | null;
   item_type?: string | null;
   recurrence?: string | null;
-  /** Present only on the already-existed dedup path (record omits item_type/recurrence). */
+  /** Present only on the already-existed dedup path (omits item_type/recurrence). */
   note?: string;
 }
 
@@ -34,19 +29,13 @@ export interface SchedulerPayload {
   same_day_items?: SchedulerSameDayItem[];
 }
 
-// ── Props ──────────────────────────────────────────────────────────────────
-
 const props = defineProps<{
   payload: SchedulerPayload;
   synthesis?: string;
 }>();
 
-// ── Constants (ported from scheduler.js) ──────────────────────────────────
-
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
-
-// ── Helpers (ported from scheduler.js) ────────────────────────────────────
 
 function parseDueAt(dueAtStr: string | null | undefined): Date | null {
   if (!dueAtStr) return null;
@@ -58,13 +47,9 @@ function formatTime(d: Date): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-// ── Derived state ──────────────────────────────────────────────────────────
-
 const record = computed(() => props.payload.record);
 
-// Read due_at_local — the field the create card actually carries. See the
-// SchedulerRecord.due_at_local doc-comment for why legacy's `record.due_at`
-// (always undefined here) made the date block render "—".
+// due_at_local is the field the create card actually carries (see its doc-comment).
 const dueAt = computed(() => parseDueAt(record.value.due_at_local));
 
 const whenDay = computed(() => (dueAt.value ? DAYS[dueAt.value.getDay()] : '—'));
@@ -75,7 +60,6 @@ const title = computed(() => record.value.message || props.synthesis || '');
 
 const metaTime = computed(() => (dueAt.value ? formatTime(dueAt.value) : null));
 
-// Reproduces buildMeta() textParts logic from scheduler.js
 const metaText = computed((): string => {
   const textParts: string[] = [];
   if (record.value.recurrence) textParts.push(record.value.recurrence);
@@ -91,14 +75,12 @@ const sameDay = computed(() =>
 
 <template>
   <div class="rich-card scheduler-card">
-    <!-- Date block (scheduler-card__when) -->
     <div class="scheduler-card__when">
       <div class="scheduler-card__when-day">{{ whenDay }}</div>
       <div class="scheduler-card__when-date">{{ whenDate }}</div>
       <div class="scheduler-card__when-mon">{{ whenMon }}</div>
     </div>
 
-    <!-- Info block (scheduler-card__info) -->
     <div class="scheduler-card__info">
       <h4 class="scheduler-card__title">{{ title }}</h4>
       <div class="scheduler-card__meta">
@@ -107,7 +89,6 @@ const sameDay = computed(() =>
       </div>
     </div>
 
-    <!-- Same-day secondary list (only when items exist) -->
     <div v-if="sameDay.length > 0" class="scheduler-card__same-day">
       <div class="scheduler-card__same-day-label">Also on this day · {{ sameDay.length }}</div>
       <div
@@ -126,8 +107,7 @@ const sameDay = computed(() =>
 </template>
 
 <style scoped lang="scss">
-// Card-specific overrides and layout (base .rich-card rules are global).
-// All colours use CSS custom properties so both light and dark themes work.
+// Card-specific overrides only; base .rich-card rules are global.
 
 .rich-card.scheduler-card {
   max-width: 620px;

@@ -1,49 +1,39 @@
-/* ── Bootstrap v5 variable overrides ──────────────────────────────────────── */
-/* Dark theme (default). `:root` so pages without `data-theme` still get it.   */
+/* `:root` so pages without `data-theme` still get the dark default. */
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Primary = violet #8A5CFF */
   --bs-primary:             #8A5CFF;
   --bs-primary-rgb:         138, 92, 255;
-  /* Secondary = magenta #FF2FD1 */
   --bs-secondary:           #FF2FD1;
   --bs-secondary-rgb:       255, 47, 209;
-  /* Info = cyan #00F0FF */
   --bs-info:                #00F0FF;
   --bs-info-rgb:            0, 240, 255;
-  /* Semantic */
   --bs-success:             #34d399;
   --bs-success-rgb:         52, 211, 153;
   --bs-danger:              #fb7185;
   --bs-danger-rgb:          251, 113, 133;
   --bs-warning:             #fbbf24;
   --bs-warning-rgb:         251, 191, 36;
-  /* Body */
   --bs-body-bg:             #06080e;
   --bs-body-color:          #eae6f2;
   --bs-body-font-family:    'Inter', system-ui, sans-serif;
   --bs-body-font-size:      0.9375rem;
   --bs-body-line-height:    1.6;
-  /* Borders */
   --bs-border-color:        rgba(255, 255, 255, 0.07);
   --bs-border-radius:       8px;
   --bs-border-radius-lg:    16px;
   --bs-border-radius-xl:    24px;
   --bs-border-radius-pill:  9999px;
-  /* Card */
   --bs-card-bg:             rgba(255, 255, 255, 0.03);
   --bs-card-border-color:   rgba(255, 255, 255, 0.07);
   --bs-card-cap-bg:         rgba(255, 255, 255, 0.02);
-  /* Link */
   --bs-link-color:          #8A5CFF;
   --bs-link-hover-color:    #a07dff;
   --bs-link-color-rgb:      138, 92, 255;
-  /* Form / Input */
   --bs-form-control-bg:     rgba(255, 255, 255, 0.05);
 
-  /* ── Radiant tokens (backward compat + Chalie-specific) ───────────────────── */
+  /* Radiant tokens: backward-compat + Chalie-specific aliases */
   --violet:                 #8A5CFF;
   --violet-hover:           #9B6FFF;
   --magenta:                #FF2FD1;
@@ -73,17 +63,16 @@
   --warning-banner-text:    #e89c50;
   --ease-out:               cubic-bezier(0.16, 1, 0.3, 1);
 
-  /* Effects */
   --shadow-card:            0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 40px rgba(0,0,0,0.35);
   --grain-opacity:          0.04;
   --grain-blend:            overlay;
 
-  /* Ambient orbs (drive the canvas + decorative orbs) */
+  /* Ambient orbs drive the canvas + decorative orbs */
   --orb-1:                  rgba(138, 92, 255, 0.55);
   --orb-2:                  rgba(255, 47, 209, 0.30);
   --orb-3:                  rgba(0, 240, 255, 0.22);
 
-  /* Surface scrim / dock backdrop — used by fixed bars */
+  /* Surface scrim / dock backdrop — consumed by fixed bars */
   --scrim-top:              rgba(6, 8, 14, 0.92);
   --scrim-dock:             rgba(6, 8, 14, 0.92);
   --scrim-fallback:         rgba(6, 8, 14, 0.98);
@@ -93,14 +82,11 @@
   --bg-card:                var(--bg-surface);
 }
 
-/* ── Light theme ──────────────────────────────────────────────────────────────
-   Mirrors the dark token system. Violet stays primary (nudged for AA on
-   light), warm paper background (never pure white), softer ambient orbs
+/* Light theme: violet nudged for AA, warm paper bg (never pure white), orbs
    blended via `multiply` so they tint the page rather than glow on it. */
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Bootstrap */
   --bs-primary:             #6E3DEB;
   --bs-primary-rgb:         110, 61, 235;
   --bs-secondary:           #DB1FAF;
@@ -124,7 +110,6 @@
   --bs-link-color-rgb:      110, 61, 235;
   --bs-form-control-bg:     rgba(255, 255, 255, 0.88);
 
-  /* Radiant tokens */
   --violet:                 #6E3DEB;
   --violet-hover:           #5B2DD8;
   --magenta:                #DB1FAF;
@@ -153,17 +138,14 @@
   --warning:                #B47B00;
   --warning-banner-text:    #8B5E00;
 
-  /* Effects */
   --shadow-card:            none;
   --grain-opacity:          0.035;
   --grain-blend:            multiply;
 
-  /* Ambient orbs — softer, more pastel on light */
   --orb-1:                  rgba(138, 92, 255, 0.28);
   --orb-2:                  rgba(255, 47, 209, 0.18);
   --orb-3:                  rgba(0, 200, 220, 0.18);
 
-  /* Surface scrims react to the warm paper bg */
   --scrim-top:              rgba(246, 244, 241, 0.88);
   --scrim-dock:             rgba(246, 244, 241, 0.92);
   --scrim-fallback:         rgba(246, 244, 241, 0.98);
@@ -171,22 +153,18 @@
   --bg-card:                var(--bg-surface);
 }
 
-/* ── Base resets ──────────────────────────────────────────────────────────── */
 body {
   background-color: var(--bs-body-bg);
   color: var(--bs-body-color);
   transition: background-color 420ms ease, color 420ms ease;
 }
 
-/* ── JS-coupled class aliases (cannot be renamed in JS) ───────────────────── */
+/* JS-coupled class aliases (cannot be renamed in JS) */
 .hidden       { display: none !important; }
 .form-group   { margin-bottom: 1rem; }
 .tab-panel    { display: none; }
 .tab-panel.active { display: block; }
 
-/* ── Bootstrap component dark-theme overrides ─────────────────────────────── */
-
-/* Forms */
 .form-control,
 .form-select {
   background-color: var(--bg-input);
@@ -203,7 +181,6 @@ body {
 .form-control::placeholder { color: var(--text-secondary); }
 .form-label { color: var(--bs-body-color); font-size: 0.8125rem; font-weight: 600; }
 
-/* Inputs / textareas inherit dark bg */
 input[type="text"],
 input[type="password"],
 input[type="email"],
@@ -222,7 +199,6 @@ select {
 input::placeholder,
 textarea::placeholder { color: var(--text-secondary); }
 
-/* Buttons */
 .btn-primary {
   --bs-btn-bg:              #8A5CFF;
   --bs-btn-border-color:    #8A5CFF;
@@ -260,7 +236,6 @@ textarea::placeholder { color: var(--text-secondary); }
   --bs-btn-hover-color:     #8A5CFF;
 }
 
-/* Cards */
 .card {
   background-color: var(--bg-surface);
   border-color: var(--bs-border-color);
@@ -272,7 +247,6 @@ textarea::placeholder { color: var(--text-secondary); }
   border-color: var(--bs-border-color);
 }
 
-/* Modals */
 .modal-content {
   background-color: var(--bg-2);
   border-color: var(--bs-border-color);
@@ -284,7 +258,6 @@ textarea::placeholder { color: var(--text-secondary); }
 }
 .modal-backdrop.show { opacity: 0.75; }
 
-/* Badges */
 .badge.bg-primary   { background-color: rgba(var(--bs-primary-rgb), 0.18) !important; color: var(--accent-primary); }
 .badge.bg-secondary { background-color: rgba(var(--bs-secondary-rgb), 0.14) !important; color: var(--accent-secondary); }
 .badge.bg-info      { background-color: rgba(var(--bs-info-rgb), 0.12) !important;  color: var(--accent-tertiary); }
@@ -292,7 +265,6 @@ textarea::placeholder { color: var(--text-secondary); }
 .badge.bg-danger    { background-color: rgba(var(--bs-danger-rgb), 0.14) !important; color: var(--error); }
 .badge.bg-warning   { background-color: rgba(var(--bs-warning-rgb), 0.14) !important;  color: var(--warning); }
 
-/* Alerts */
 .alert { border-radius: var(--bs-border-radius); }
 .alert-primary   { background-color: rgba(var(--bs-primary-rgb), 0.12); border-color: rgba(var(--bs-primary-rgb), 0.3); color: var(--accent-primary); }
 .alert-info      { background-color: rgba(var(--bs-info-rgb), 0.08);  border-color: rgba(var(--bs-info-rgb), 0.25); color: var(--accent-tertiary); }
@@ -300,15 +272,12 @@ textarea::placeholder { color: var(--text-secondary); }
 .alert-danger    { background-color: rgba(var(--bs-danger-rgb), 0.10); border-color: rgba(var(--bs-danger-rgb), 0.3); color: var(--error); }
 .alert-warning   { background-color: rgba(var(--bs-warning-rgb), 0.10);  border-color: rgba(var(--bs-warning-rgb), 0.3);  color: var(--warning); }
 
-/* Spinners */
 .spinner-border { color: var(--bs-primary); }
 
-/* Tables */
 .table         { --bs-table-color: var(--bs-body-color); --bs-table-border-color: var(--bs-border-color); }
 .table-dark    { --bs-table-bg: rgba(255, 255, 255, 0.03); }
 .table-striped { --bs-table-striped-bg: rgba(255, 255, 255, 0.02); }
 
-/* Nav tabs */
 .nav-tabs {
   border-color: var(--bs-border-color);
 }
@@ -326,7 +295,6 @@ textarea::placeholder { color: var(--text-secondary); }
   color: var(--bs-body-color);
 }
 
-/* Dropdowns */
 .dropdown-menu {
   background-color: var(--bg-2);
   border-color: var(--bs-border-color);
@@ -338,7 +306,6 @@ textarea::placeholder { color: var(--text-secondary); }
 }
 .dropdown-divider { border-color: var(--bs-border-color); }
 
-/* Accordion */
 .accordion-item {
   background-color: var(--bg-surface);
   border-color: var(--bs-border-color);
@@ -356,7 +323,6 @@ textarea::placeholder { color: var(--text-secondary); }
   filter: invert(1) brightness(0.7);
 }
 
-/* Toast */
 .toast {
   background-color: var(--bg-2);
   border-color: var(--bs-border-color);
@@ -368,7 +334,6 @@ textarea::placeholder { color: var(--text-secondary); }
   color: var(--bs-body-color);
 }
 
-/* Scrollbar */
 ::-webkit-scrollbar        { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  { background: rgba(255, 255, 255, 0.12); border-radius: 3px; }

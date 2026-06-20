@@ -1,13 +1,6 @@
 /**
- * Typed CustomEvent bus for Chalie interface events.
- *
- * All events are dispatched on / listened from `document`.  The 7 event types
- * exactly match §9.3 of the parity map.
- *
- * Usage:
- *   const unbind = on('chalie:action', (detail) => { ... });
- *   emit('chalie:theme-changed', { theme: 'dark' });
- *   unbind(); // inside onBeforeUnmount
+ * Typed CustomEvent bus for Chalie interface events — all dispatched on and
+ * listened from `document`.
  */
 
 export interface ChalieEventMap {
@@ -22,9 +15,6 @@ export interface ChalieEventMap {
   'chalie:open-recall': Record<string, never>;
 }
 
-/**
- * Dispatch a typed Chalie event on `document`.
- */
 export function emit<K extends keyof ChalieEventMap>(
   type: K,
   detail: ChalieEventMap[K],
@@ -32,10 +22,7 @@ export function emit<K extends keyof ChalieEventMap>(
   document.dispatchEvent(new CustomEvent(type, { detail }));
 }
 
-/**
- * Subscribe to a typed Chalie event on `document`.
- * Returns an unbind function — call it in `onBeforeUnmount`.
- */
+/** Subscribe to an event; returns an unbind for `onBeforeUnmount`. */
 export function on<K extends keyof ChalieEventMap>(
   type: K,
   handler: (detail: ChalieEventMap[K]) => void,

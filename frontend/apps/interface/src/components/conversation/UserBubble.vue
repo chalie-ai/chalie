@@ -9,10 +9,9 @@ defineProps<{ form: UserForm }>();
     class="speech-form speech-form--user"
     :class="{ 'message--faded': form.inWorkingMemory === false }"
   >
-    <!-- Sender glyph — user spark, positioned at cap of accent stripe -->
     <span class="sender-glyph" role="img" aria-label="You said"></span>
 
-    <!-- Attachment previews — ABOVE the text, matching legacy _appendUserAttachments -->
+    <!-- Attachment previews render ABOVE the text. -->
     <div
       v-if="form.attachments && form.attachments.length"
       class="speech-form__attachments"
@@ -32,7 +31,7 @@ defineProps<{ form: UserForm }>();
       </template>
     </div>
 
-    <!-- User text — suppressed when '[File attached]' placeholder + attachments shown -->
+    <!-- Text suppressed when it's the '[File attached]' placeholder + attachments shown. -->
     <div
       v-if="!(form.text === '[File attached]' && form.attachments && form.attachments.length)"
       class="speech-form__text"

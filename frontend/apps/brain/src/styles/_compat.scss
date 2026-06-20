@@ -1,30 +1,4 @@
-// ── Compat layer: legacy CSS var aliases → shared token names ──────────────
-//
-// The legacy brain/style.css uses the same var names as the shared design
-// tokens (_tokens.scss), so no aliases are needed. Both files define the same
-// set of CSS custom properties (--bg, --text, --border, --violet, etc.) under
-// [data-theme="dark"] and [data-theme="light"].
-//
-// This file exists as an extension point: if future panels introduce legacy
-// vars not present in _tokens.scss, add the aliases here rather than in the
-// component styles.
-//
-// Verified token parity (source: _tokens.scss vs frontend/shared/theme.css):
-//   --bg, --bg-2, --bg-surface, --bg-surface-2, --bg-input   ✓
-//   --text, --text-primary, --text-secondary, --text-muted    ✓
-//   --text-tertiary, --text-subtle                             ✓
-//   --border, --border-subtle, --border-strong                ✓
-//   --violet, --violet-hover, --magenta, --cyan                ✓
-//   --accent-primary, --accent-secondary, --accent-tertiary   ✓
-//   --success, --error, --warning                              ✓
-//   --ease-out, --shadow-card                                  ✓
-//   --grain-opacity, --grain-blend                             ✓
-//   --orb-1, --orb-2, --orb-3                                  ✓
-//   --scrim-top, --scrim-dock, --scrim-fallback               ✓
-//
-// The only legacy alias present in theme.css but NOT in _tokens.scss:
-//   --bg-dark → var(--bg)   (kept in _tokens.scss as legacy alias)
-//   --bg-card → var(--bg-surface)   (kept in _tokens.scss as legacy alias)
-//   --accent → var(--violet)
-//   --accent-hover → var(--violet-hover)
-// All four already aliased inside _tokens.scss — no additional compat needed.
+// Compat layer for legacy CSS var aliases. Intentionally empty: legacy var
+// names already match _tokens.scss (which also carries the legacy aliases
+// --bg-dark/--bg-card/--accent/--accent-hover). Add aliases here, not in
+// component styles, if a future panel introduces vars absent from _tokens.scss.

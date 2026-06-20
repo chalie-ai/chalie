@@ -9,21 +9,16 @@ import { createPinia } from 'pinia';
 import LoginPage from './LoginPage.vue';
 import { auth } from '../api/auth';
 
-// Pre-mount auth gate: if there is already a session, redirect to / and skip
-// mounting entirely. Parity with auth-gate.js page='login' rule:
-//   "login : session → /"
-// On network failure, stay on the page and mount so the user can still try.
+// Pre-mount auth gate: existing session → redirect to / and skip mounting.
 (async () => {
   try {
     const status = await auth.authStatus();
     if (status.has_session) {
       window.location.replace('/');
-      // Do not mount — the page is navigating away.
       return;
     }
   } catch {
-    // Any failure to read status (network error or non-2xx) → stay and mount,
-    // matching auth-gate.js, which treats a failed status read as "not signed in".
+    // Failed status read → stay and mount (treated as "not signed in").
   }
   createApp(LoginPage).use(createPinia()).mount('#app');
 })();

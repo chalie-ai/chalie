@@ -1,12 +1,7 @@
 /**
- * Tasks store — reminders + active subagents.
- *
- * Reminders are fetched from GET /scheduler?status=pending (filtered to items
- * with a due_at).  Active subagents come from GET /chat/subagents/active which
- * returns only { sub_id } per entry.
- *
- * Live updates arrive via applyDriftEvent(), called by the session store
- * whenever a task/reminder/subagent_start/subagent_end push event arrives.
+ * Tasks store — reminders (GET /scheduler?status=pending, filtered to items with
+ * a due_at) + active subagents (GET /chat/subagents/active, only { sub_id } per
+ * entry). Live updates arrive via applyDriftEvent() from the session store.
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
@@ -24,36 +19,29 @@ export const useTasksStore = defineStore('tasks', {
   state: () => ({
     /** Pending reminders with a due_at, cached from the last poll. */
     reminders: [] as ScheduledItem[],
-    /**
-     * Active subagents keyed by sub_id.
-     * The backend only returns { sub_id } — no agent_type or description.
-     */
+    /** Active subagents keyed by sub_id (backend returns only { sub_id }). */
     subagents: new Map<string, ActiveSubagent>() as Map<string, ActiveSubagent>,
-    /** Whether the task drawer panel is currently open. */
     isOpen: false,
   }),
 
   getters: {
-    /** Total number of visible items (reminders + subagents). */
     totalCount(state): number {
       return state.reminders.length + state.subagents.size;
     },
   },
 
   actions: {
-    /** Open the task drawer panel. */
     open(): void {
       this.isOpen = true;
     },
 
-    /** Close the task drawer panel. */
     close(): void {
       this.isOpen = false;
     },
 
     /**
-     * Fetch reminders and active subagents in parallel, then update state.
-     * On partial failure, the successful half still updates its slice of state.
+     * Fetch reminders and subagents in parallel. On partial failure the
+     * successful half still updates its slice of state.
      */
     async loadActiveTasks(): Promise<void> {
       const [schedResult, subagentResult] = await Promise.allSettled([
@@ -68,14 +56,13 @@ export const useTasksStore = defineStore('tasks', {
       }
 
       if (subagentResult.status === 'fulfilled') {
-        // Replace the full subagents map from the server snapshot.
-        // Preserves entries that appeared via WS but aren't in the server list
-        // because they may have started after the request was dispatched.
+        // Rebuild from the server snapshot, but keep WS-received entries the
+        // server hasn't listed yet — they may have started after the request
+        // was dispatched.
         const fresh = new Map<string, ActiveSubagent>();
         for (const sa of subagentResult.value.subagents ?? []) {
           fresh.set(sa.sub_id, sa);
         }
-        // Merge: keep existing WS-received entries not yet cleared by the server.
         for (const [id, sa] of this.subagents) {
           if (!fresh.has(id)) {
             fresh.set(id, sa);
@@ -86,26 +73,20 @@ export const useTasksStore = defineStore('tasks', {
     },
 
     /**
-     * Handle a task-category drift event from the WS push channel.
-     *
-     * Types handled:
-     *   task / reminder  — reload reminders (the server is the source of truth for
-     *                      scheduling changes; we refetch rather than mutate in place).
-     *   subagent_start   — add the sub_id to the active map.
-     *   subagent_end     — remove the sub_id from the active map.
+     * Handle a task-category drift event. task/reminder refetch reminders (server
+     * is the scheduling source of truth); subagent_start/_end add/remove the
+     * sub_id from the active map.
      */
     applyDriftEvent(data: WsPushEvent): void {
       const type = data.type as string;
 
       if (type === 'task' || type === 'reminder') {
-        // A scheduling change occurred; refresh the reminders list.
-        // We intentionally do not await — fire-and-forget update.
+        // Fire-and-forget refresh; leave existing reminders intact on error.
         void scheduler.pending().then((res) => {
           this.reminders = (res.items ?? []).filter(
             (r) => r.status === 'pending' && r.due_at != null,
           );
         }).catch(() => {
-          // Leave existing reminders intact on transient errors.
         });
         return;
       }
@@ -113,7 +94,6 @@ export const useTasksStore = defineStore('tasks', {
       if (type === 'subagent_start') {
         const sub_id = (data as { sub_id?: string }).sub_id;
         if (sub_id) {
-          // Backend only guarantees sub_id; store exactly that.
           this.subagents.set(sub_id, { sub_id });
         }
         return;

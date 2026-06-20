@@ -2,8 +2,6 @@
 import { computed } from 'vue';
 import { renderMarkup } from '../../composables/useMarkup';
 
-// ── Payload contract ───────────────────────────────────────────────────────
-
 export interface WeatherPayload {
   location?: string;
   temperature_c?: number;
@@ -19,11 +17,7 @@ export interface WeatherPayload {
 
 const props = defineProps<{ payload: WeatherPayload; synthesis?: string }>();
 
-// ── Constants ───────────────────────────────────────────────────────────────
-
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-
-// ── Time-of-day phase ───────────────────────────────────────────────────────
 
 /** Parse an Open-Meteo local ISO ("YYYY-MM-DDTHH:MM") into a Date. */
 function parseLocalISO(s: string | undefined): Date | null {
@@ -32,10 +26,7 @@ function parseLocalISO(s: string | undefined): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/**
- * Pick a sky phase from the current local hour and the daily sunrise/sunset
- * times. Falls back to a coarse day/night split when astro times are missing.
- */
+/** Sky phase from local hour + sunrise/sunset; coarse day/night when astro times missing. */
 function pickPhase(
   now: Date,
   sunrise: string | undefined,
@@ -58,8 +49,6 @@ function pickPhase(
 function formatHM(d: Date): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
-
-// ── Derived state ───────────────────────────────────────────────────────────
 
 const now = new Date();
 
@@ -87,8 +76,6 @@ const fallbackCaption = computed<string>(() => {
   if (phase.value === 'night') return `Quiet night in ${loc}.${feels}`;
   return `${props.payload.condition || 'Steady weather'} in ${loc}.${feels}`;
 });
-
-// ── Hourly rail ─────────────────────────────────────────────────────────────
 
 interface HourCell {
   hour: number;
@@ -120,27 +107,20 @@ const hourCells = computed<HourCell[]>(() => {
 
 <template>
   <div class="rich-card weather-card" :data-phase="phase">
-    <!-- Sky canvas -->
     <div class="weather-card__sky">
-      <!-- Sun / moon (phase-styled via CSS) -->
       <div class="weather-card__sun" aria-hidden="true" />
 
-      <!-- Drifting clouds -->
       <div class="weather-card__cloud weather-card__cloud--1" aria-hidden="true" />
       <div class="weather-card__cloud weather-card__cloud--2" aria-hidden="true" />
 
-      <!-- Skyline silhouette -->
       <div class="weather-card__skyline" aria-hidden="true" />
 
-      <!-- Overlay: readout + caption -->
       <div class="weather-card__overlay">
         <div class="weather-card__readout">
-          <!-- Big temperature top-left -->
           <div class="weather-card__temp">
             {{ roundedTemp }}<sup>°</sup>
           </div>
 
-          <!-- Location + day/time top-right -->
           <div class="weather-card__loc">
             <div>{{ payload.location || '—' }}</div>
             <div>{{ dayLabel }} · {{ timeLabel }}</div>
@@ -160,7 +140,6 @@ const hourCells = computed<HourCell[]>(() => {
       </div>
     </div>
 
-    <!-- Hourly rail (hidden when hourly data is absent) -->
     <div v-if="hourCells.length" class="weather-card__rail">
       <div
         v-for="cell in hourCells"
@@ -180,12 +159,9 @@ const hourCells = computed<HourCell[]>(() => {
 </template>
 
 <style scoped lang="scss">
-/*
- * Card-specific rules only. Base chrome (.rich-card, __divider, __synthesis,
- * card-enter animation) is declared globally in base_card.css — not repeated here.
- */
+/* Card-specific rules only; base .rich-card chrome lives globally in base_card.css. */
 
-/* Override base padding — the sky canvas IS the card body */
+/* padding:0 — the sky canvas IS the card body. */
 .rich-card.weather-card {
   padding: 0;
   overflow: hidden;
@@ -194,8 +170,6 @@ const hourCells = computed<HourCell[]>(() => {
   background: transparent;
   border: 1px solid var(--border, color-mix(in oklab, var(--violet) 22%, transparent));
 }
-
-/* ── Sky canvas ──────────────────────────────────────────────────────────── */
 
 .weather-card__sky {
   position: relative;
@@ -227,8 +201,6 @@ const hourCells = computed<HourCell[]>(() => {
     radial-gradient(ellipse 80% 50% at 20% 85%, rgba(138, 92, 255, 0.20), transparent 60%);
   pointer-events: none;
 }
-
-/* ── Sun / moon ──────────────────────────────────────────────────────────── */
 
 .weather-card__sun {
   position: absolute;
@@ -265,8 +237,6 @@ const hourCells = computed<HourCell[]>(() => {
   to   { transform: translateY(8px); }
 }
 
-/* ── Drifting clouds ─────────────────────────────────────────────────────── */
-
 .weather-card__cloud {
   position: absolute;
   background: rgba(255, 255, 255, 0.18);
@@ -298,8 +268,6 @@ const hourCells = computed<HourCell[]>(() => {
   from { transform: translateX(0); }
   to   { transform: translateX(160vw); }
 }
-
-/* ── Skyline silhouette ──────────────────────────────────────────────────── */
 
 .weather-card__skyline {
   position: absolute;
@@ -333,8 +301,6 @@ const hourCells = computed<HourCell[]>(() => {
     -webkit-mask-image: linear-gradient(to top, black 60%, transparent 100%);
   }
 }
-
-/* ── Overlay (readout + caption) ─────────────────────────────────────────── */
 
 .weather-card__overlay {
   position: absolute;
@@ -390,8 +356,6 @@ const hourCells = computed<HourCell[]>(() => {
   color: rgba(255, 255, 255, 0.92);
   text-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
-
-/* ── Hour rail ───────────────────────────────────────────────────────────── */
 
 .weather-card__rail {
   display: grid;

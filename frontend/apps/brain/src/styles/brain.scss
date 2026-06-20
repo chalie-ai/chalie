@@ -1,10 +1,5 @@
-// ── Brain app styles ──────────────────────────────────────────────
-// Port of frontend/brain/style.css re-expressed as SCSS over shared tokens.
-// All colors use CSS variables from @chalie/shared/styles/_tokens.scss — never
+// Colors must use CSS variables from @chalie/shared/styles/_tokens.scss — never
 // hardcode theme-specific rgba values for a single theme.
-// ─────────────────────────────────────────────────────────────────
-
-// ── Layout tokens ─────────────────────────────────────────────────
 :root {
   --sidebar-w: 248px;
   --sidebar-w-collapsed: 64px;
@@ -17,9 +12,7 @@
   box-sizing: border-box;
 }
 
-// Lucide icons render with stroke-width 2 by default; the brain app's house
-// weight is 1.75. One global override keeps every icon on-brand without
-// repeating :stroke-width on each call site.
+// Override Lucide's default stroke-width 2 to the brain house weight 1.75.
 .lucide {
   stroke-width: 1.75;
 }
@@ -36,7 +29,6 @@ body {
   line-height: 1.6;
 }
 
-// ── Ambient breathing background ──────────────────────────────────
 body::before {
   content: '';
   position: fixed;
@@ -61,7 +53,6 @@ body::before {
     radial-gradient(ellipse 60% 50% at 90% 100%, rgba(255, 47, 209, 0.05), transparent 70%);
 }
 
-// Grain overlay
 .grain {
   position: fixed;
   inset: 0;
@@ -73,7 +64,6 @@ body::before {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.5'/></svg>");
 }
 
-// ── App grid ──────────────────────────────────────────────────────
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
@@ -94,10 +84,9 @@ body::before {
   }
 }
 
-// Mobile overlay scrim — structural rules moved after .sidebar base styles
+// Mobile overlay scrim; structural rules live after .sidebar base styles.
 .scrim { display: none; }
 
-// ── Topbar ────────────────────────────────────────────────────────
 .topbar {
   grid-area: topbar;
   display: flex;
@@ -112,7 +101,6 @@ body::before {
   top: 0;
   z-index: 50;
 
-  // Neon hairline under topbar
   &::after {
     content: '';
     position: absolute;
@@ -222,7 +210,6 @@ body::before {
   .desktop-collapser { display: none; }
 }
 
-// ── Sidebar ───────────────────────────────────────────────────────
 .sidebar {
   grid-area: sidebar;
   display: flex;
@@ -292,7 +279,6 @@ body::before {
   border-top: 1px solid var(--border);
 }
 
-// Nav groups
 .nav-group { margin-bottom: 4px; }
 
 .nav-group-title {
@@ -306,7 +292,6 @@ body::before {
 
 [data-collapsed='true'] .nav-group-title { display: none; }
 
-// Nav items
 .nav-item {
   display: flex;
   align-items: center;
@@ -327,7 +312,6 @@ body::before {
 
   &:hover { color: var(--text-primary); background: var(--bg-surface); }
 
-  // Active state with gradient bleed + glowing rail
   &.active {
     color: var(--text-primary);
     background: linear-gradient(90deg, rgba(138, 92, 255, 0.12) 0%, transparent 100%);
@@ -375,7 +359,6 @@ body::before {
 
 [data-collapsed='true'] .nav-badge { display: none; }
 
-// Sub-list with slide animation
 .nav-sublist {
   overflow: hidden;
   max-height: 0;
@@ -409,7 +392,6 @@ body::before {
   .count { font-size: 11px; color: var(--text-tertiary); }
 }
 
-// ── Providers-only lock ───────────────────────────────────────────
 [data-providers-only='true'] {
   .nav-item:not([data-nav='providers']) {
     pointer-events: none;
@@ -438,7 +420,7 @@ body::before {
   .sidebar-lock-icon { flex-shrink: 0; margin-top: 1px; }
 }
 
-// ── Mobile sidebar overlay (must come after .sidebar base styles) ──
+// Mobile sidebar overlay — must come after .sidebar base styles (cascade order).
 @media (max-width: 900px) {
   html,
   body { overflow-x: hidden; }
@@ -479,11 +461,9 @@ body::before {
   .app-shell[data-mobile-open='true'] .scrim { opacity: 1; pointer-events: auto; }
 }
 
-// ── Main content area ─────────────────────────────────────────────
 .main { grid-area: main; padding: 24px; overflow-y: auto; }
 .main-inner { width: 100%; }
 
-// ── Panel headers ─────────────────────────────────────────────────
 .panel-header {
   display: flex;
   align-items: center;
@@ -511,7 +491,6 @@ body::before {
 .panel-header-actions { display: flex; align-items: center; gap: 10px; }
 .panel-desc { color: var(--text-secondary); font-size: 13px; margin: 0 0 20px; line-height: 1.5; }
 
-// ── Section head with glowing dot ─────────────────────────────────
 .section-head {
   display: flex;
   align-items: center;
@@ -536,7 +515,6 @@ body::before {
   }
 }
 
-// ── Buttons ───────────────────────────────────────────────────────
 .btn {
   display: inline-flex;
   align-items: center;
@@ -583,7 +561,6 @@ body::before {
   &[disabled] { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 }
 
-// ── Filter tabs ───────────────────────────────────────────────────
 .filter-tabs {
   display: flex;
   gap: 4px;
@@ -616,7 +593,6 @@ body::before {
 
 [data-theme='light'] .filter-tab.active { background: #fff; }
 
-// Group tabs (documents)
 .doc-group-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
 
 .group-tab {
@@ -638,7 +614,6 @@ body::before {
   }
 }
 
-// ── Cards / surfaces ──────────────────────────────────────────────
 .provider-card,
 .schedule-item,
 .cap-card,
@@ -671,7 +646,6 @@ body::before {
   background: rgba(138, 92, 255, 0.04);
 }
 
-// ── Provider card specifics ───────────────────────────────────────
 .providers-list { display: flex; flex-direction: column; gap: 4px; }
 
 .provider-radio {
@@ -735,7 +709,6 @@ body::before {
 .provider-warn { color: var(--warning); font-size: 14px; }
 .provider-card.disabled { opacity: 0.55; }
 
-// ── Badges ────────────────────────────────────────────────────────
 .badge {
   display: inline-flex;
   align-items: center;
@@ -764,7 +737,6 @@ body::before {
 .badge-enabled  { background: rgba(52, 211, 153, 0.10); color: var(--success); }
 .badge-disabled { background: var(--bg-surface-2); color: var(--text-secondary); }
 
-// ── Inputs ────────────────────────────────────────────────────────
 input[type='text'],
 input[type='password'],
 input[type='email'],
@@ -839,7 +811,6 @@ input[type='checkbox'] {
 
 .search-input { max-width: 260px; }
 
-// ── Tables ────────────────────────────────────────────────────────
 .records-table {
   width: 100%;
   border-collapse: collapse;
@@ -887,7 +858,6 @@ input[type='checkbox'] {
 
 .records-footer { display: flex; justify-content: center; padding: 12px 0; }
 
-// ── Stat cards ────────────────────────────────────────────────────
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -928,7 +898,6 @@ input[type='checkbox'] {
 .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
 .stat-sub { font-size: 11px; color: var(--text-tertiary); margin-top: 4px; }
 
-// ── Chart ─────────────────────────────────────────────────────────
 .chart-wrap { margin: 12px 0; overflow-x: auto; }
 .usage-chart { width: 100%; height: auto; }
 .bar-local { fill: var(--violet); opacity: 0.7; }
@@ -965,7 +934,6 @@ input[type='checkbox'] {
   vertical-align: middle;
 }
 
-// ── Usage table ───────────────────────────────────────────────────
 .usage-table {
   width: 100%;
   border-collapse: collapse;
@@ -996,7 +964,6 @@ input[type='checkbox'] {
   tbody tr:hover { background: var(--bg-surface-2); }
 }
 
-// ── Segmented controls (policies) ─────────────────────────────────
 .segmented {
   display: flex;
   gap: 2px;
@@ -1037,7 +1004,6 @@ input[type='checkbox'] {
   .seg-btn:hover { background: var(--bg-surface-2); }
 }
 
-// ── Status dots ───────────────────────────────────────────────────
 .status-dot {
   display: inline-block;
   width: 8px;
@@ -1057,7 +1023,6 @@ input[type='checkbox'] {
   50%       { box-shadow: 0 0 10px rgba(52, 211, 153, 0.6); }
 }
 
-// ── Progress bars ─────────────────────────────────────────────────
 .progress-bar {
   height: 3px;
   background: var(--bg-surface-2);
@@ -1087,7 +1052,6 @@ input[type='checkbox'] {
   100% { transform: translateX(100%); }
 }
 
-// ── Toggle switch ─────────────────────────────────────────────────
 .switch {
   display: inline-flex;
   cursor: pointer;
@@ -1125,7 +1089,6 @@ input[type='checkbox'] {
   }
 }
 
-// ── Toasts ────────────────────────────────────────────────────────
 .toast-host {
   position: fixed;
   bottom: 20px;
@@ -1169,7 +1132,6 @@ input[type='checkbox'] {
   to   { transform: translateY(0); opacity: 1; }
 }
 
-// ── Modals ────────────────────────────────────────────────────────
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -1252,7 +1214,7 @@ input[type='checkbox'] {
 .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 .form-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 2px; }
 
-// Tab selector (used for auth method toggle)
+// Auth method toggle.
 .tab-select {
   display: flex;
   gap: 2px;
@@ -1283,7 +1245,6 @@ input[type='checkbox'] {
   }
 }
 
-// Input group with prefix / suffix
 .input-group {
   display: flex;
   align-items: stretch;
@@ -1333,7 +1294,6 @@ input[type='checkbox'] {
   &:hover { background: rgba(138, 92, 255, 0.1); color: var(--violet); }
 }
 
-// ── Inline form pages (provider/scheduler/capability setup) ───────
 .provider-form-page { max-width: 560px; }
 
 .form-page-header {
@@ -1347,7 +1307,6 @@ input[type='checkbox'] {
 
 .switch-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
 
-// ── Provider setup wizard ─────────────────────────────────────────
 .provider-wizard { width: 100%; }
 .wizard-hint { font-size: 13px; color: var(--text-secondary); margin: 0 0 18px; line-height: 1.5; }
 
@@ -1394,7 +1353,7 @@ input[type='checkbox'] {
 .provider-tile-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
 .provider-tile-platform { font-size: 11px; color: var(--text-tertiary); }
 
-// Progressive reveal: each step is hidden until its prerequisite is met.
+// Progressive reveal: a step stays hidden until its prerequisite is met.
 .wizard-form { max-width: 460px; }
 .wizard-step[hidden] { display: none; }
 
@@ -1408,7 +1367,6 @@ input[type='checkbox'] {
   &.err { color: var(--error); }
 }
 
-// ── Command Palette ───────────────────────────────────────────────
 .cp-overlay {
   position: fixed;
   inset: 0;
@@ -1490,7 +1448,6 @@ input[type='checkbox'] {
   kbd { font-size: 10px; padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px; }
 }
 
-// ── Personality sliders ───────────────────────────────────────────
 .personality-grid { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
 
 .personality-field { display: flex; flex-direction: column; gap: 6px; }
@@ -1530,7 +1487,6 @@ input[type='checkbox'] {
 
 .personality-actions { display: flex; justify-content: flex-end; }
 
-// ── Capabilities grid ─────────────────────────────────────────────
 .caps-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 
 .cap-card { flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px; }
@@ -1541,7 +1497,6 @@ input[type='checkbox'] {
 .cap-version { font-size: 11px; color: var(--text-tertiary); }
 .cap-actions { margin-top: 8px; }
 
-// ── Policies ──────────────────────────────────────────────────────
 .policies-grid { display: flex; flex-direction: column; gap: 8px; }
 .policy-category { margin-bottom: 12px; }
 
@@ -1573,7 +1528,6 @@ input[type='checkbox'] {
 .blocked-item { gap: 10px; padding: 10px; font-size: 12px; }
 .blocked-time { margin-left: auto; color: var(--text-tertiary); font-size: 11px; }
 
-// ── MCP ───────────────────────────────────────────────────────────
 .mcp-settings { display: flex; flex-direction: column; gap: 16px; max-width: 600px; }
 .mcp-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; }
 .mcp-label { font-size: 13px; font-weight: 500; }
@@ -1581,7 +1535,6 @@ input[type='checkbox'] {
 .mcp-token-section h4 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
 .mcp-hint { font-size: 12px; color: var(--text-secondary); margin: 0 0 10px; }
 
-// MCP panel sections (Inbound / Outbound)
 .mcp-section-title {
   font-size: 13px;
   font-weight: 700;
@@ -1593,7 +1546,6 @@ input[type='checkbox'] {
   border-bottom: 1px solid var(--border);
 }
 
-// Outbound server cards
 .mcp-out-card {
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -1616,7 +1568,6 @@ input[type='checkbox'] {
 .mcp-out-card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .mcp-out-card-editing { padding: 16px; }
 
-// Outbound add-form
 .mcp-out-add-form {
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -1648,7 +1599,6 @@ input[type='checkbox'] {
   &:focus { outline: none; border-color: var(--violet); }
 }
 
-// Headers key-value rows
 .mcp-headers-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
 
 .mcp-header-row {
@@ -1662,7 +1612,6 @@ input[type='checkbox'] {
 .mcp-header-sep { color: var(--text-secondary); font-size: 13px; }
 .mcp-header-remove { flex-shrink: 0; }
 
-// ── Lists ─────────────────────────────────────────────────────────
 .list-card { flex-direction: column; align-items: stretch; gap: 0; padding: 0; overflow: hidden; }
 
 .list-card-header {
@@ -1696,7 +1645,6 @@ input[type='checkbox'] {
 .list-add-row { margin-top: 6px; }
 .list-add-input { font-size: 12px; padding: 6px 10px; }
 
-// ── Schedule items ────────────────────────────────────────────────
 .schedule-list { display: flex; flex-direction: column; gap: 4px; }
 .schedule-main { flex: 1; min-width: 0; }
 .schedule-message { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
@@ -1712,13 +1660,11 @@ input[type='checkbox'] {
 
 .schedule-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
-// ── Task cards (working on) ───────────────────────────────────────
 .task-cards { display: flex; flex-direction: column; gap: 8px; }
 .task-card { flex-direction: column; align-items: flex-start; gap: 6px; padding: 14px 16px; }
 .task-title { font-weight: 500; font-size: 14px; }
 .task-meta { font-size: 12px; color: var(--text-secondary); }
 
-// ── World state ───────────────────────────────────────────────────
 .world-state-grid { display: flex; flex-direction: column; gap: 20px; }
 .world-section h4 { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--text-primary); }
 .world-sees-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
@@ -1742,7 +1688,6 @@ input[type='checkbox'] {
   vertical-align: middle;
 }
 
-// ── Code block ────────────────────────────────────────────────────
 .code-block {
   padding: 16px;
   border-radius: 10px;
@@ -1775,13 +1720,11 @@ input[type='checkbox'] {
   }
 }
 
-// ── Error list ────────────────────────────────────────────────────
 .error-list { display: flex; flex-direction: column; gap: 4px; }
 .error-item { padding: 10px 14px; gap: 10px; align-items: flex-start; }
 .error-time { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; flex-shrink: 0; font-family: 'Inter', monospace; }
 .error-msg { font-size: 13px; color: var(--text-secondary); }
 
-// ── Watched folders ───────────────────────────────────────────────
 .watched-folders-section { margin-bottom: 20px; }
 .watched-folders-list { display: flex; flex-direction: column; gap: 4px; }
 
@@ -1803,7 +1746,6 @@ input[type='checkbox'] {
 .wf-meta { color: var(--text-tertiary); white-space: nowrap; }
 .wf-status { flex-shrink: 0; }
 
-// ── Doc preview ───────────────────────────────────────────────────
 .doc-content {
   white-space: pre-wrap;
   font-size: 13px;
@@ -1818,7 +1760,6 @@ input[type='checkbox'] {
 .doc-meta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
 .doc-meta-item { font-size: 12px; color: var(--text-secondary); }
 
-// ── Group cards (document category/project/date drill-down) ───────
 .group-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 
 .group-card {
@@ -1844,7 +1785,6 @@ input[type='checkbox'] {
 .group-card-name { font-size: 14px; font-weight: 500; }
 .group-card-count { font-size: 12px; color: var(--text-secondary); }
 
-// ── Loading / empty states ────────────────────────────────────────
 .loading { color: var(--text-secondary); font-size: 13px; padding: 40px 0; text-align: center; }
 
 .empty-state {
@@ -1857,12 +1797,10 @@ input[type='checkbox'] {
 .empty-state h3 { font-size: 16px; color: var(--text-primary); margin: 0 0 6px; font-weight: 600; }
 .empty-state p { font-size: 13px; margin: 0; }
 
-// ── Utility ───────────────────────────────────────────────────────
 .hidden { display: none !important; } // stylelint-disable-line declaration-no-important
 .panel-placeholder { padding: 40px; text-align: center; color: var(--text-secondary); }
 .panel-placeholder h2 { color: var(--text-primary); margin: 0 0 8px; }
 
-// ── Scrollbar ─────────────────────────────────────────────────────
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.08); border-radius: 3px; }
@@ -1871,7 +1809,6 @@ input[type='checkbox'] {
 [data-theme='light'] ::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.08); }
 [data-theme='light'] ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.15); }
 
-// ── Skills panel ──────────────────────────────────────────────────
 .skills-grid { display: flex; flex-direction: column; gap: 8px; }
 
 .skill-card { flex-direction: column; align-items: stretch; gap: 10px; padding: 16px; }
@@ -1922,7 +1859,7 @@ input[type='checkbox'] {
   margin: 0;
 }
 
-// ── Responsive — match the 900px sidebar breakpoint ───────────────
+// Responsive — breakpoint must match the 900px sidebar breakpoint above.
 @media (max-width: 900px) {
   .main { padding: 16px 12px; overflow-x: hidden; }
   .main-inner { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -1937,60 +1874,49 @@ input[type='checkbox'] {
   .personality-row { flex-direction: column; align-items: stretch; gap: 4px; }
   .pole { width: auto; text-align: left; }
 
-  // Tables scroll horizontally via parent overflow
   .records-table {
     min-width: 600px;
 
     .key-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
 
-  // Grids single column
   .group-cards-grid { grid-template-columns: 1fr; }
   .caps-grid { grid-template-columns: 1fr !important; } // stylelint-disable-line declaration-no-important
   .policies-grid { grid-template-columns: 1fr !important; } // stylelint-disable-line declaration-no-important
   .policy-rule { flex-wrap: wrap; gap: 6px; }
   .policy-label { flex: 1 1 100%; }
 
-  // MCP settings full width
   .mcp-settings { max-width: none !important; } // stylelint-disable-line declaration-no-important
   .mcp-row { flex-wrap: wrap; gap: 8px; }
   .input-group { width: 100%; }
 
-  // Provider / form pages full width
   .provider-form-page { max-width: none; }
 
-  // Chart responsive
   .chart-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
 
-  // List cards
   .list-card-header { flex-wrap: wrap; gap: 8px; }
   .list-card-actions { width: 100%; justify-content: flex-end; }
 
-  // Topbar
   .topbar { padding: 0 12px; gap: 8px; }
   .topbar-center { display: none; }
   .crumb { font-size: 12px; }
   .crumb .sep:first-of-type,
   .crumb span:first-child { display: none; }
 
-  // Modal full-width on mobile
   .modal { width: 92vw; padding: 16px; }
   .modal-sm { width: 92vw; }
 
-  // Filter/group tabs scroll
   .filter-tabs,
   .doc-group-tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
   .filter-tab,
   .group-tab { flex-shrink: 0; }
 
-  // Segmented controls compact
   .segmented { gap: 0; }
   .seg-btn { padding: 4px 8px; font-size: 11px; }
 }
 
-// ── Import/Export Time-Machine panel (ported from frontend/brain/import_export.js) ──
-// .form-hint (line 1239) and .form-input (line 1627) already exist above — not repeated.
-
+// Import/Export Time-Machine panel. .form-hint and .form-input are declared
+// above and intentionally not repeated here.
 .brain-overview {
   display: flex;
   flex-direction: column;
@@ -2017,10 +1943,8 @@ input[type='checkbox'] {
   margin-bottom: 8px;
 }
 
-// Legacy import_export.js uses the column-flex .form-label variant inside each
-// export card. The shared design tokens (_tokens.scss:210) already own a global
-// .form-label (bold inline label), imported before this file — so a top-level
-// re-declare here would silently clobber that token app-wide. Scope to the cards.
+// Scope to .export-card: a top-level .form-label re-declare would clobber the
+// global .form-label token (_tokens.scss) app-wide, since it imports before this file.
 .export-card .form-label {
   display: flex;
   flex-direction: column;

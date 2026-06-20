@@ -6,13 +6,11 @@ type Phase = 'account' | 'voice';
 
 const phase = ref<Phase>('account');
 
-// Account form fields
 const username = ref('');
 const password = ref('');
 const confirmPassword = ref('');
 const pending = ref(false);
 
-// Toast queue
 interface Toast {
   id: number;
   message: string;
@@ -21,9 +19,8 @@ interface Toast {
 let nextId = 0;
 const toasts = ref<Toast[]>([]);
 
-// Legacy onboarding (app.js) kept each toast visible for 3s, then faded it out
-// over 0.3s before removing it. The <TransitionGroup> leave transition plays the
-// 0.3s fade; we drop the toast from the queue after the 3s visible window.
+// Drop from the queue after the 3s visible window; the TransitionGroup leave
+// transition plays the 0.3s fade-out.
 const TOAST_VISIBLE_MS = 3000;
 
 function showToast(message: string, type: Toast['type'] = 'info'): void {
@@ -51,17 +48,14 @@ async function handleAccountSubmit(): Promise<void> {
   pending.value = true;
   try {
     await auth.register(username.value.trim(), password.value);
-    // Account created — show voice setup phase
     phase.value = 'voice';
   } catch (err) {
     if (err instanceof HttpError && err.status === 409) {
       showToast('Account already exists', 'error');
     } else if (err instanceof HttpError) {
-      // Faithful to legacy readErrorMessage(): surface the server's {error}
-      // message when present, else the generic fallback with the HTTP status.
+      // Surface the server's {error} message when present, else a generic fallback.
       showToast(err.error ?? `Failed to create account (HTTP ${err.status})`, 'error');
     } else {
-      // Non-HTTP throw (network failure) — matches the legacy outer catch.
       showToast('Network error', 'error');
     }
   } finally {
@@ -85,7 +79,6 @@ function skipVoice(): void {
 
 <template>
   <div class="ob-container">
-    <!-- Account Phase -->
     <div v-if="phase === 'account'" class="ob-card">
       <div class="ob-card-header">
         <h1>Create Master Account</h1>
@@ -139,7 +132,6 @@ function skipVoice(): void {
       </form>
     </div>
 
-    <!-- Voice Phase -->
     <div v-else-if="phase === 'voice'" class="ob-card">
       <div class="ob-card-header">
         <h1>Voice Support</h1>
@@ -158,7 +150,6 @@ function skipVoice(): void {
     </div>
   </div>
 
-  <!-- Toast Container -->
   <TransitionGroup tag="div" name="toast" class="toast-container">
     <div
       v-for="toast in toasts"
@@ -170,7 +161,6 @@ function skipVoice(): void {
 </template>
 
 <style scoped lang="scss">
-/* Ambient background animation */
 :global(body::before) {
   content: '';
   position: fixed;
@@ -188,7 +178,6 @@ function skipVoice(): void {
   50%       { transform: scale(1.06); opacity: 1; }
 }
 
-/* Container */
 .ob-container {
   width: 100%;
   display: flex;
@@ -196,7 +185,6 @@ function skipVoice(): void {
   justify-content: center;
 }
 
-/* Card */
 .ob-card {
   width: 100%;
   max-width: 500px;
@@ -206,7 +194,6 @@ function skipVoice(): void {
   border-radius: var(--bs-border-radius-lg);
 }
 
-/* Card header */
 .ob-card-header {
   text-align: center;
   margin-bottom: 32px;
@@ -224,7 +211,6 @@ function skipVoice(): void {
   }
 }
 
-/* Warning / info callout boxes */
 .warning-box,
 .info-box {
   border-radius: 6px;
@@ -259,7 +245,6 @@ function skipVoice(): void {
   border-left: 3px solid var(--accent-primary);
 }
 
-/* Form group spacing */
 .form-group {
   margin-bottom: 20px;
 
@@ -295,14 +280,12 @@ function skipVoice(): void {
   }
 }
 
-/* Form actions row */
 .form-actions {
   display: flex;
   gap: 12px;
   margin-top: 28px;
 }
 
-/* Buttons */
 .btn-primary,
 .btn-secondary {
   flex: 1;
@@ -335,7 +318,6 @@ function skipVoice(): void {
   &:hover { opacity: 0.75; }
 }
 
-/* Toast system */
 .toast-container {
   position: fixed;
   bottom: 20px;
@@ -368,7 +350,6 @@ function skipVoice(): void {
   to   { transform: translateX(0);     opacity: 1; }
 }
 
-/* Leave transition reproduces the legacy 0.3s opacity fade-out. */
 .toast-leave-active {
   transition: opacity 0.3s ease;
 }
@@ -376,7 +357,6 @@ function skipVoice(): void {
   opacity: 0;
 }
 
-/* Responsive */
 @media (max-width: 600px) {
   .ob-card { padding: 24px; }
 

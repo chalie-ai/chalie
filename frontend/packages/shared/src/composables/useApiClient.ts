@@ -9,11 +9,8 @@ export function useApiClient(): ApiClient {
 }
 
 /**
- * Ready-to-use singleton ApiClient — the same instance `useApiClient()` returns.
- *
- * Prefer this at call sites: `import { api } from '@chalie/shared'` then
- * `api.del('/documents/' + id)`. The client deals with auth itself (sends the
- * session cookie; redirects to /login/ on 401 unless the caller opts out), so
- * there is no per-call auth wrapper to remember.
+ * Same singleton `useApiClient()` returns; prefer this at call sites. The client
+ * handles auth itself (session cookie; redirects to /login/ on 401 unless the
+ * caller opts out), so there is no per-call auth wrapper.
  */
 export const api: ApiClient = useApiClient();

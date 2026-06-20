@@ -2,22 +2,11 @@
 /**
  * UpdatePrompt — update-available banner + detail dialog.
  *
- * Port of frontend/interface/update_system.js.
+ * DORMANT: the backend does not currently emit `app_update` WS events; ported
+ * for parity, activates automatically when the backend ships the event.
  *
- * DORMANT: the backend does not currently emit `app_update` WS events. This
- * component is ported for parity and will activate automatically when the
- * backend ships the event.
- *
- * State is owned by useNotificationsStore:
- *   Banner dismiss  → notifications.dismissUpdate()
- *   Apply           → notifications.applyUpdate()
- *   Dialog open     → showDialog = true (local, no store needed)
- *   Dialog close    → showDialog = false
- *
- * Deployment-mode instructions mirror update_system.js _applyDialogDeploymentMode():
- *   'docker' — docker pull + compose up instructions
- *   'dev'    — git pull origin main instruction
- *   other    — Apply button offered
+ * State is owned by useNotificationsStore (dialog open/close is local). Manual
+ * deployment modes ('docker' / 'dev') show instructions instead of an Apply button.
  */
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { CloudDownload, X } from '@lucide/vue';
@@ -27,8 +16,6 @@ const notifications = useNotificationsStore();
 
 const update = computed(() => notifications.currentUpdate);
 const visible = computed(() => update.value !== null);
-
-// ── Local dialog state ────────────────────────────────────────────────────────
 
 const showDialog = ref(false);
 
@@ -41,41 +28,32 @@ function closeDialog(): void {
   showDialog.value = false;
 }
 
-// ── Computed helpers ──────────────────────────────────────────────────────────
-
 /** True when the deployment mode does not support one-click apply. */
 const isManualMode = computed<boolean>(() => {
   const mode = update.value?.deployment_mode;
   return mode === 'docker' || mode === 'dev';
 });
 
-// ── Dismiss ───────────────────────────────────────────────────────────────────
-
 function dismissBanner(): void {
   notifications.dismissUpdate();
   closeDialog();
 }
 
-// ── Escape-to-close for <dialog open> (D9) ────────────────────────────────────
-// Legacy update_system.js used native <dialog>.showModal() which handles Escape
-// automatically. The Vue port uses <dialog open> (a static attribute), so the
-// browser @cancel event never fires. Wire a manual keydown handler instead.
-
+// <dialog open> (static attribute) never fires the browser @cancel event, so
+// Escape must be wired manually here.
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && showDialog.value) {
     closeDialog();
   }
 }
 
-// Add listener only while the component is alive; tear down on unmount.
 document.addEventListener('keydown', onKeydown);
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeydown);
 });
 
-// Keep the watcher in sync: if the banner is dismissed externally while the
-// dialog is open, close the dialog too.
+// If the banner is dismissed externally while the dialog is open, close it too.
 watch(visible, (v) => {
   if (!v) closeDialog();
 });
@@ -83,28 +61,21 @@ watch(visible, (v) => {
 
 <template>
   <template v-if="visible && update">
-    <!--
-      Update banner — port of #updateBanner from the legacy HTML + style.css lines 208-271.
-      Slides in from the top below the presence bar (top: 56px).
-    -->
     <Transition name="update-banner">
       <div v-if="visible" class="update-banner">
-        <!-- Icon -->
         <span class="update-banner__icon" aria-hidden="true">
           <CloudDownload :size="14" />
         </span>
 
-        <!-- Version text — port of #updateBannerVersion text content -->
         <span class="update-banner__text">
           New version available: <strong>v{{ update.latest_version }}</strong>
         </span>
 
-        <!-- Action button: "Details" for manual modes, "Update" otherwise -->
+        <!-- "Details" for manual modes, "Update" otherwise -->
         <button class="update-banner__action" @click="openDialog">
           {{ isManualMode ? 'Details' : 'Update' }}
         </button>
 
-        <!-- Dismiss ✕ -->
         <button
           class="update-banner__dismiss"
           aria-label="Dismiss update notification"
@@ -115,10 +86,6 @@ watch(visible, (v) => {
       </div>
     </Transition>
 
-    <!--
-      Update dialog — port of #updateDialog <dialog> element.
-      Uses a native <dialog> element to match the legacy showModal() / close() API.
-    -->
     <Transition name="update-dialog">
       <dialog
         v-if="showDialog"
@@ -129,7 +96,6 @@ watch(visible, (v) => {
         @cancel.prevent="closeDialog"
       >
         <div class="update-dialog__content">
-          <!-- Close button — port of #updateDialogClose -->
           <button
             class="update-dialog__close btn-icon"
             aria-label="Close"
@@ -138,26 +104,19 @@ watch(visible, (v) => {
             <X :size="16" aria-hidden="true" />
           </button>
 
-          <!-- Title -->
           <h2 class="update-dialog__title">Update available</h2>
 
-          <!-- Version line — port of #updateCurrentVer / #updateNewVer -->
           <p class="update-dialog__version">
             <strong>v{{ update.current_version }}</strong>
             &nbsp;→&nbsp;
             <strong>v{{ update.latest_version }}</strong>
           </p>
 
-          <!-- Release notes — port of #updateNotes -->
           <div class="update-dialog__notes">
             {{ update.release_notes || 'No release notes.' }}
           </div>
 
-          <!--
-            Actions section — port of #updateActions.
-            Hidden when deployment mode requires manual steps (docker / dev).
-            Also hidden while applying (replaced by progress).
-          -->
+          <!-- Hidden in manual modes and while applying (replaced by progress). -->
           <div
             v-if="!isManualMode && !notifications.applyingUpdate && !notifications.updateApplyMessage"
             class="update-dialog__actions"
@@ -166,10 +125,7 @@ watch(visible, (v) => {
             <button class="btn btn-primary" @click="notifications.applyUpdate()">Apply update</button>
           </div>
 
-          <!--
-            Progress section — port of #updateProgress.
-            Shown while applying. On failure, store restores actions after 3 s.
-          -->
+          <!-- Shown while applying; on failure the store restores actions after 3s. -->
           <div v-if="notifications.applyingUpdate || notifications.updateApplyMessage" class="update-dialog__progress">
             <div v-if="notifications.applyingUpdate" class="update-dialog__spinner" aria-hidden="true" />
             <p class="update-dialog__status">
@@ -177,19 +133,14 @@ watch(visible, (v) => {
             </p>
           </div>
 
-          <!--
-            Deployment-mode instructions — port of #updateInstructions.
-            Shown instead of actions when mode is 'docker' or 'dev'.
-          -->
+          <!-- Shown instead of actions when mode is 'docker' or 'dev'. -->
           <div v-if="isManualMode" class="update-dialog__instructions">
-            <!-- docker mode — port of _applyDialogDeploymentMode lines 86-94 -->
             <template v-if="update.deployment_mode === 'docker'">
               <p>You're running Chalie in Docker. To update:</p>
               <code>docker pull chalie/chalie:{{ update.latest_tag }}
 docker compose up -d</code>
             </template>
 
-            <!-- dev mode — port of _applyDialogDeploymentMode lines 95-98 -->
             <template v-else-if="update.deployment_mode === 'dev'">
               <p>You're running from a git clone. To update:</p>
               <code>git pull origin main</code>
@@ -199,7 +150,6 @@ docker compose up -d</code>
       </dialog>
     </Transition>
 
-    <!-- Dialog backdrop (scrim) when dialog is open -->
     <Transition name="update-scrim">
       <div v-if="showDialog" class="update-dialog-scrim" aria-hidden="true" @click="closeDialog" />
     </Transition>
@@ -207,14 +157,6 @@ docker compose up -d</code>
 </template>
 
 <style scoped lang="scss">
-/*
- * Styles are a faithful port of .update-banner / .update-dialog rules from
- * frontend/interface/style.css (lines 208-394).
- * No hardcoded rgba colors — CSS custom properties only.
- */
-
-// ── Banner (port of .update-banner, lines 208-271) ────────────────────────────
-
 .update-banner {
   position: fixed;
   top: 56px;
@@ -279,16 +221,14 @@ docker compose up -d</code>
   }
 }
 
-// ── Dialog (port of .update-dialog / .update-dialog__content, lines 273-295) ─
-
 .update-dialog {
   background: transparent;
   border: none;
   padding: 0;
   max-width: 480px;
   width: 90vw;
-  // Positioned manually — we use a scrim div instead of ::backdrop for
-  // Vue Transition support (native ::backdrop cannot be transitioned via JS).
+  // Positioned manually with a scrim div instead of ::backdrop, which cannot be
+  // transitioned via Vue Transition.
   position: fixed;
   top: 50%;
   left: 50%;
@@ -315,8 +255,6 @@ docker compose up -d</code>
     color: var(--text-primary);
   }
 }
-
-// ── Dialog body elements ───────────────────────────────────────────────────────
 
 .update-dialog__title {
   font-size: var(--font-size-lg);
@@ -355,8 +293,6 @@ docker compose up -d</code>
   gap: var(--space-sm);
 }
 
-// ── Progress (port of .update-dialog__progress / __spinner / __status) ────────
-
 .update-dialog__progress {
   display: flex;
   align-items: center;
@@ -384,8 +320,6 @@ docker compose up -d</code>
   margin: 0;
 }
 
-// ── Instructions (port of .update-dialog__instructions / code) ───────────────
-
 .update-dialog__instructions {
   padding: var(--space-md);
   background: color-mix(in oklab, var(--text) 3%, transparent);
@@ -409,8 +343,6 @@ docker compose up -d</code>
   }
 }
 
-// ── Backdrop scrim ────────────────────────────────────────────────────────────
-
 .update-dialog-scrim {
   position: fixed;
   inset: 0;
@@ -418,8 +350,6 @@ docker compose up -d</code>
   background: var(--overlay-scrim, rgba(6, 8, 14, 0.75));
   backdrop-filter: blur(4px);
 }
-
-// ── Vue Transitions ───────────────────────────────────────────────────────────
 
 .update-banner-enter-active,
 .update-banner-leave-active {

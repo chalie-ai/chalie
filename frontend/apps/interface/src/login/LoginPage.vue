@@ -2,8 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { auth, AuthError, HttpError } from '../api/auth';
 
-// Derive the post-login destination from ?next= — only honour paths starting
-// with '/' to prevent open-redirect. Matches legacy login/index.html:105-108.
+// Only honour ?next= paths starting with '/' to prevent open-redirect.
 function getNextDest(): string {
   const next = new URLSearchParams(window.location.search).get('next');
   return next && next.startsWith('/') ? next : '/';
@@ -23,7 +22,6 @@ onMounted(() => {
 async function handleSubmit() {
   errorMsg.value = '';
 
-  // Faithful guard: matches legacy login/index.html:125-129.
   if (!username.value.trim() || !password.value) {
     errorMsg.value = 'Username and password required.';
     return;
@@ -35,7 +33,6 @@ async function handleSubmit() {
     window.location.replace(getNextDest());
   } catch (err) {
     if (err instanceof AuthError) {
-      // AuthError is thrown by ApiClient on HTTP 401.
       errorMsg.value = 'Invalid credentials.';
     } else if (err instanceof HttpError) {
       errorMsg.value = 'Login failed.';

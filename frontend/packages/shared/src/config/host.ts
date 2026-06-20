@@ -1,6 +1,6 @@
 const HOST_KEY = 'chalie_backend_host';
 
-/** Returns the configured backend host, or '' for same-origin. */
+/** Configured backend host, or '' for same-origin. */
 export function getHost(): string {
   try {
     return localStorage.getItem(HOST_KEY) ?? '';

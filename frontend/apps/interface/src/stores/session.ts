@@ -4,13 +4,6 @@
  * Single WS owner rule: ONLY this store may touch WebSocketService handlers
  * (send/sendAction/abort/onDrift/onAny/onConnect/onDisconnect/connect/ensureAlive).
  * Everything else goes through this store or the event bus.
- *
- * Port sources:
- *   - chat.js: sendMessage, _startTurn, _finaliseTurn, requestStop,
- *     _postInterrupt, loadRecentConversation
- *   - event_router.js: _handleEvent, _routeSimpleEvent, _routeThoughtEvent,
- *     _routeNotificationEvent, _renderContentEvent
- *   - app.js: chalie:action / chalie:silent-action wiring, sendAction
  */
 import { defineStore } from 'pinia';
 import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
@@ -32,21 +25,14 @@ import { usePermissionsStore } from './permissions';
 import { useContextUsageStore } from './contextUsage';
 import { useAmbientSensor } from '../composables/useAmbientSensor';
 
-// ── Module-level state ────────────────────────────────────────────────────────
-
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
 
-/** Last pin-moment timestamp (ms) — 250ms debounce (port of app.js:475-479). */
+/** Last pin-moment timestamp (ms) — 250ms debounce. */
 let _pinDebounce = 0;
 
-/**
- * Unbind functions for event bus listeners registered in init().
- * Stored in an array so the guard can check it and future cleanup can call them.
- */
+/** Unbind fns for event-bus listeners registered in init() (for future cleanup). */
 const _busUnbinds: Array<() => void> = [];
-
-// ── Store ─────────────────────────────────────────────────────────────────────
 
 export const useSessionStore = defineStore('session', {
   state: () => ({
@@ -58,7 +44,6 @@ export const useSessionStore = defineStore('session', {
     /** Captured text from the last user turn (for requestStop restore). */
     _lastUserText: '',
 
-    // History pagination state
     historyOffset: 0,
     historyLoading: false,
     historyExhausted: false,
@@ -68,12 +53,7 @@ export const useSessionStore = defineStore('session', {
   }),
 
   actions: {
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
-
-    /**
-     * Wire the WebSocket singleton and start the connection.
-     * Idempotent — safe to call multiple times (HMR / StrictMode).
-     */
+    /** Wire the WebSocket singleton and connect. Idempotent (HMR / StrictMode). */
     init(): void {
       if (_initialized) return;
       _initialized = true;
@@ -95,9 +75,8 @@ export const useSessionStore = defineStore('session', {
         this.routeDrift(data);
       });
 
-      // onAny feeds the context-usage indicator — must never throw.
-      // refresh() is coalesced inside the store, so a per-frame call is safe
-      // (port of chat_controls.js `this._ws.onAny(() => this.refreshContext())`).
+      // onAny feeds the context-usage indicator — must never throw. refresh()
+      // is coalesced inside the store, so a per-frame call is safe.
       ws.onAny((data: WsInboundEvent) => {
         try {
           void data;
@@ -107,15 +86,14 @@ export const useSessionStore = defineStore('session', {
         }
       });
 
-      // Tab-refocus liveness check (port of app.js visibility listener)
+      // Tab-refocus liveness check.
       globalThis.addEventListener('focus', () => ws.ensureAlive());
 
-      // chalie:action — deterministic skill invocations (app.js lines 436-460).
-      // WS single-owner: register inside init() so only one listener is ever bound.
+      // chalie:action — deterministic skill invocations. Registered inside init()
+      // so the WS single-owner rule holds (only one listener ever bound).
       _busUnbinds.push(
         on('chalie:action', (payload) => {
-          // app.js reads `payload` from e.detail.payload but the bus emits
-          // the full detail; support both shapes.
+          // Bus emits the full detail; legacy read e.detail.payload — support both.
           const p =
             (payload as { payload?: Record<string, unknown> }).payload ??
             (payload as Record<string, unknown>);
@@ -123,12 +101,9 @@ export const useSessionStore = defineStore('session', {
         }),
       );
 
-      // chalie:pin-moment — Remember button: pin plaintext to moments store.
-      // Exact port of app.js:474-508: 250ms debounce, single POST /moments,
-      // then a "Remembered" / "Already remembered" toast with an Undo action
-      // (Undo → POST /moments/<transcript_id>/forget). The Remember flow has NO
-      // confirmation dialog — MomentSearchDialog is recall-only, matching
-      // legacy moment_search.js.
+      // chalie:pin-moment — Remember button: 250ms debounce, single POST
+      // /moments, then a "Remembered" toast with an Undo action (POST
+      // /moments/<id>/forget). No confirmation dialog — recall is a separate UI.
       _busUnbinds.push(
         on('chalie:pin-moment', (detail) => {
           const text = (detail as { content?: string }).content ?? '';
@@ -151,8 +126,8 @@ export const useSessionStore = defineStore('session', {
         }),
       );
 
-      // chalie:silent-action — rich-card interactions, no chat bubble (app.js 462-472).
-      // The caller supplies optional onMessage/onError/onDone for optimistic card UI.
+      // chalie:silent-action — rich-card interactions, no chat bubble. Caller
+      // supplies optional onMessage/onError/onDone for optimistic card UI.
       _busUnbinds.push(
         on('chalie:silent-action', (detail) => {
           const d = detail as {
@@ -178,15 +153,10 @@ export const useSessionStore = defineStore('session', {
       this._onAuthFailure = cb;
     },
 
-    // ── Turn actions ──────────────────────────────────────────────────────────
-
     /**
-     * Main send orchestrator — port of chat.js sendMessage.
-     *
-     * Mid-ACT path: when a turn is already in-flight, appends the new text
-     * to the existing user form, removes the ACT placeholder, and re-starts
-     * the turn. The backend cancels the active turn, concatenates messages,
-     * and starts a fresh turn.
+     * Main send orchestrator. Mid-ACT path: when a turn is in-flight, append the
+     * new text to the existing user form, drop the partial turn, and restart —
+     * the backend cancels the active turn, concatenates, and starts fresh.
      */
     async sendMessage(
       text: string,
@@ -200,17 +170,12 @@ export const useSessionStore = defineStore('session', {
       const presence = usePresenceStore();
 
       if (this.isSending) {
-        // Mid-ACT path (chat.js lines 143-153): append to the existing user
-        // form, discard everything the in-flight turn rendered after it (the
-        // chain may have laid down several interim prose bubbles + tool groups,
-        // not just one ACT form), then restart the turn. The backend cancels the
-        // active turn, concatenates the messages, and starts a fresh one.
         if (this._lastUserFormId != null) {
           const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
           if (uidx !== -1) {
             const uform = convo.forms[uidx];
             if (uform.kind === 'user') uform.text += '\n\n' + text;
-            // Drop the partial turn rendering that followed the user message.
+            // Drop the partial turn rendering (interim bubbles + tool groups).
             convo.forms.splice(uidx + 1);
           }
         }
@@ -219,7 +184,6 @@ export const useSessionStore = defineStore('session', {
         return;
       }
 
-      // Fresh path
       this.isSending = true;
       presence.setState('processing');
 
@@ -233,10 +197,8 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Wire and launch a turn — port of chat.js _startTurn.
-     *
-     * @param showUserBubble - true only for re-entries where sendMessage hasn't
-     *   already appended the user form (e.g. mid-ACT path).
+     * Wire and launch a turn. `showUserBubble` is true only for re-entries where
+     * sendMessage hasn't already appended the user form.
      */
     _startTurn(
       text: string,
@@ -257,11 +219,9 @@ export const useSessionStore = defineStore('session', {
         this._lastUserText = text;
       }
 
-      // No upfront ACT form: under the chain model a turn is a sequence of
-      // steps, each rendered as a prose bubble (interim message) followed by its
-      // own tool group. Groups open lazily on the step's first tool_start, and
-      // PresenceBar / InputDock carry the global working + stop affordances while
-      // a step has no in-feed group yet.
+      // No upfront ACT form: a turn is a sequence of steps (prose bubble + own
+      // tool group), and groups open lazily on the step's first tool_start.
+      // PresenceBar / InputDock carry the working + stop affordances meanwhile.
       this._activeActId = null;
 
       // Capture the FINAL turn result across onMessage(final) / onDone — interim
@@ -285,18 +245,17 @@ export const useSessionStore = defineStore('session', {
             presence.setState(stage);
           },
 
-          // backend emits act_tool_start = { type, name, id, summary }.
-          // Use d.id (NOT d.call_id) — verified against backend abilities/_dispatcher.py.
-          // Lazily open the current step's tool group (its prose, if any, already
-          // landed via the interim message that preceded these frames).
+          // Use d.id (NOT d.call_id) — frame is act_tool_start { type,name,id,summary }.
+          // Lazily open the step's tool group; its prose already landed via the
+          // preceding interim message.
           onToolStart: (data) => {
             const d = data as { id?: string; name?: string; summary?: string };
             if (this._activeActId == null) this._activeActId = convo.appendAct();
             convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
           },
 
-          // backend emits act_tool_end = { type, name, id, ok }. No duration field —
-          // pass ms=0 and let resolveToolPill compute client elapsed.
+          // act_tool_end has no duration field — pass ms=0, resolveToolPill
+          // computes client elapsed.
           onToolEnd: (data) => {
             const d = data as { id?: string; ok?: boolean };
             convo.resolveToolPill(d.id ?? '', 0, !!d.ok);
@@ -314,10 +273,9 @@ export const useSessionStore = defineStore('session', {
             };
 
             if (d.interim) {
-              // A chain step's interim prose. Supersede the previous step
-              // (collapse its tool group to summary-only), then render this
-              // step's prose bubble; the upcoming tool batch opens a fresh group
-              // beneath it on the next onToolStart.
+              // Interim prose: supersede the previous step (collapse its tool
+              // group), then render this step's bubble; the next onToolStart
+              // opens a fresh group beneath it.
               if (this._activeActId != null) {
                 convo.collapseAct(this._activeActId);
                 this._activeActId = null;
@@ -327,8 +285,8 @@ export const useSessionStore = defineStore('session', {
               return;
             }
 
-            // Final turn result — cache; rendered on done so duration_ms lands
-            // on the bubble (it also carries the turn-wide rich-media segments).
+            // Final result — cached, rendered on done so duration_ms lands on the
+            // bubble (also carries turn-wide rich-media segments).
             responseContent = d.content ?? '';
             responseMeta = {
               topic: d.topic,
@@ -342,9 +300,9 @@ export const useSessionStore = defineStore('session', {
           },
 
           onError: (data) => {
-            // Turn-level errors (provider failure, quota/429) are NOT auth events.
-            // Collapse the in-flight step (its summaries stay) and surface the
-            // error as its own form. Only data.auth_failed redirects to login.
+            // Turn-level errors (provider failure, quota/429) are NOT auth events:
+            // collapse the in-flight step and surface the error as its own form.
+            // Only data.auth_failed redirects to login.
             if (this._activeActId != null) {
               convo.collapseAct(this._activeActId);
               this._activeActId = null;
@@ -356,8 +314,7 @@ export const useSessionStore = defineStore('session', {
 
           onDone: (data) => {
             responseMeta.duration_ms = data.duration_ms;
-            // Collapse the final step's tools (the last step bore tools and no
-            // further interim arrived) before the final reply lands beneath it.
+            // Collapse the final step's tools before the reply lands beneath it.
             if (this._activeActId != null) {
               convo.collapseAct(this._activeActId);
               this._activeActId = null;
@@ -373,14 +330,11 @@ export const useSessionStore = defineStore('session', {
                 duration_ms: responseMeta.duration_ms,
               });
             }
-            // Port of app.js line 137: record ambient response timestamp.
             useAmbientSensor().recordResponse();
             presence.setState('resting');
             this.isSending = false;
-            // Signal feed component to force-scroll (A1 listens to this)
             document.dispatchEvent(new CustomEvent('session:turn-done'));
 
-            // Background notification (chat.js _notifyBackgroundIfUnfocused)
             if (responseContent && !document.hasFocus()) {
               this._notifyBackground(responseContent);
             }
@@ -391,23 +345,18 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Stop + undo the active turn — port of chat.js requestStop.
-     *
-     * Undoes the whole in-flight turn: the user message and everything the
-     * chain rendered after it (every interim prose bubble + tool group). Emits
-     * 'session:turn-interrupted' so InputDock (Task A3) can restore the
-     * textarea value.
+     * Stop + undo the whole in-flight turn (user message + everything the chain
+     * rendered after it). Emits 'session:turn-interrupted' so InputDock can
+     * restore the textarea value.
      */
     async requestStop(): Promise<void> {
       const convo = useConversationStore();
       const presence = usePresenceStore();
       const ws = getWebSocket();
 
-      // Remove the user bubble AND every form after it (the partial turn), and
-      // capture the user bubble's LIVE text for restore. Legacy chat.js reads
-      // textContent off the bubble, which in a mid-ACT append holds the
-      // concatenated "A\n\nB" — not the original "A". _lastUserText is only a
-      // fallback when the form can no longer be found.
+      // Capture the user bubble's LIVE text: a mid-ACT append holds the
+      // concatenated "A\n\nB", not the original "A". _lastUserText is only a
+      // fallback when the form is gone.
       let restoredText = this._lastUserText;
       if (this._lastUserFormId != null) {
         const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
@@ -421,22 +370,20 @@ export const useSessionStore = defineStore('session', {
       this._activeActId = null;
       this._lastUserText = '';
 
-      // Abort WS callbacks so stale events are ignored
+      // Abort WS callbacks so stale events are ignored.
       ws.abort();
 
       this.isSending = false;
       presence.setState('resting');
 
-      // Signal InputDock (Task A3) to restore the textarea
       document.dispatchEvent(
         new CustomEvent('session:turn-interrupted', { detail: { text: restoredText } }),
       );
 
-      // Best-effort cancel to backend
       await this._postInterrupt();
     },
 
-    /** POST /chat/interrupt — best-effort, never throws (port of chat.js _postInterrupt). */
+    /** POST /chat/interrupt — best-effort, never throws. */
     async _postInterrupt(): Promise<void> {
       try {
         const host = getHost();
@@ -448,14 +395,12 @@ export const useSessionStore = defineStore('session', {
           body: JSON.stringify({}),
         });
       } catch {
-        // Best-effort — swallow
+        // Best-effort — swallow.
       }
     },
 
     /**
-     * Send an action payload — port of app.js chalie:action handler (lines 436-460).
-     *
-     * Creates an ACT cycle, blocks concurrent sends, calls ws.sendAction with
+     * Create an ACT cycle, block concurrent sends, and call ws.sendAction with
      * callbacks that resolve the ACT into a Chalie form or error.
      */
     async sendAction(payload: Record<string, unknown>): Promise<void> {
@@ -493,14 +438,10 @@ export const useSessionStore = defineStore('session', {
       });
     },
 
-    // ── History ───────────────────────────────────────────────────────────────
-
     /**
-     * Load (or paginate) conversation history — port of chat.js loadRecentConversation.
-     *
-     * Safe to call multiple times; guards against concurrent loads and exhausted
-     * history. On initial load (offset=0), appends turns + emits force-scroll signal.
-     * On paginated loads (offset>0), prepends turns.
+     * Load (or paginate) conversation history. Guards against concurrent loads
+     * and exhaustion. Initial load (offset=0) appends turns + emits force-scroll;
+     * paginated loads (offset>0) prepend.
      */
     async loadRecentConversation(): Promise<void> {
       if (this.historyLoading || this.historyExhausted) return;
@@ -536,7 +477,6 @@ export const useSessionStore = defineStore('session', {
         }
 
         if (isInitialLoad && messages.length > 0) {
-          // Signal feed component (Task A1) to force-scroll to bottom
           document.dispatchEvent(new CustomEvent('session:history-initial-loaded'));
         }
       } catch (err) {
@@ -550,40 +490,29 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    // ── Drift router ──────────────────────────────────────────────────────────
-
     /**
-     * Route a drift push event — exact port of event_router.js._handleEvent.
-     *
-     * Routing order MUST match event_router.js:
-     *   1. Simple content-free types (app_update / task / capability_alert / etc.)
-     *   2. 'thought' (content, bypasses send-guard — always rendered)
-     *   3. 'response' while sending → IGNORED
-     *   4. Background notify
-     *   5. 'notification'
-     *   6. 'response' / 'escalation' / 'drift' → appendChalie
+     * Route a drift push event. Routing order is load-bearing:
+     *   1. Simple content-free types  2. 'thought' (bypasses send-guard)
+     *   3. 'response' while sending → IGNORED  4. Background notify
+     *   5. 'notification'  6. 'response' / 'escalation' / 'drift' → appendChalie
      */
     routeDrift(data: WsPushEvent): void {
-      // Step 1
       if (this._routeSimpleEvent(data)) return;
 
       const content = (data as { content?: string }).content ?? '';
       if (!content) return;
 
-      // Multi-surface sync — user message echoed from another device/tab.
-      // This surface's own echo was already dropped in WebSocketService (by
-      // echo_id), so anything reaching here was sent from a DIFFERENT surface
-      // and has no bubble yet. Render the user bubble so all surfaces match.
+      // Multi-surface sync — user echo. Own-surface echoes were dropped in
+      // WebSocketService (by echo_id), so this came from a DIFFERENT surface and
+      // has no bubble yet; render it so all surfaces match.
       if ((data.type as string) === 'user_message') {
         useConversationStore().appendUser(content, [], { inWorkingMemory: true });
         return;
       }
 
-      // Multi-surface sync — assistant reply. On the surface that sent the turn
-      // this arrives through the chat callbacks (ACT trail) and never reaches
-      // routeDrift; on every OTHER surface it lands here and renders a plain
-      // Chalie bubble (carrying any rich-media segments), so the reply shows on
-      // all surfaces. This is rule 2 of the user-echo + assistant-render model.
+      // Multi-surface sync — assistant reply (rule 2 of the echo+render model).
+      // The sending surface gets this via chat callbacks (never here); every
+      // OTHER surface lands here and renders a plain Chalie bubble.
       if ((data.type as string) === 'message') {
         const d = data as {
           topic?: string;
@@ -606,7 +535,7 @@ export const useSessionStore = defineStore('session', {
         return;
       }
 
-      // Step 2: thought bypasses the send-guard
+      // Step 2: thought bypasses the send-guard.
       if ((data.type as string) === 'thought') {
         useConversationStore().appendChalie(content, {
           topic: (data as { topic?: string }).topic,
@@ -618,34 +547,29 @@ export const useSessionStore = defineStore('session', {
         return;
       }
 
-      // Step 3: 'response' while /chat is in-flight → ignore (event_router.js line 78)
+      // Step 3: 'response' while /chat is in-flight → ignore.
       if ((data.type as string) === 'response' && this.isSending) return;
 
-      // Step 4: background notify
+      // Step 4: background notify.
       this._notifyBackground(content);
 
-      // Step 5: notification — scheduler fired (reminder/task done). Port of
-      // event_router.js._routeNotificationEvent → app.js onNotification (385-388):
-      // chime UNCONDITIONALLY (no focus/permission gate) and refresh the task
-      // strip. Distinct from the focus-gated background chime in step 4.
+      // Step 5: notification — scheduler fired (reminder/task done): chime
+      // UNCONDITIONALLY (no focus/permission gate, unlike step 4) and refresh
+      // the task strip.
       if (data.type === 'notification') {
         useNotificationsStore().chime();
         void useTasksStore().loadActiveTasks();
         return;
       }
 
-      // Step 6: response / escalation / drift
+      // Step 6: response / escalation / drift.
       this._renderContentEvent(data, content);
     },
 
-    /**
-     * Route content-free event types — port of event_router.js._routeSimpleEvent.
-     * Returns true when handled.
-     */
+    /** Route content-free event types; returns true when handled. */
     _routeSimpleEvent(data: WsPushEvent): boolean {
       switch (data.type as string) {
         case 'app_update':
-          // Update prompt (dormant — backend does not yet emit app_update).
           useNotificationsStore().handleUpdate(data as unknown as UpdateState);
           return true;
         // task + subagent lifecycle both feed the task drawer.
@@ -655,13 +579,12 @@ export const useSessionStore = defineStore('session', {
           useTasksStore().applyDriftEvent(data);
           return true;
         case 'capability_alert':
-          // No-op: dormant capability-alert channel (no legacy UI consumer).
+          // No-op: dormant channel (no UI consumer).
           return true;
         case 'permission_request':
           usePermissionsStore().enqueue(data);
           return true;
         case 'quick_tip':
-          // Quick-tip card (dormant — backend does not yet emit quick_tip).
           useNotificationsStore().handleTip(data as unknown as TipState);
           return true;
         default:
@@ -669,11 +592,7 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /**
-     * Render a response/escalation/drift event into the conversation spine.
-     * Port of event_router.js._renderContentEvent.
-     * Escalation gets an `escalation: true` flag (CSS `--escalation` modifier).
-     */
+    /** Escalation gets an `escalation: true` flag (CSS `--escalation` modifier). */
     _renderContentEvent(data: WsPushEvent, content: string): void {
       useConversationStore().appendChalie(
         content,
@@ -688,18 +607,10 @@ export const useSessionStore = defineStore('session', {
       );
     },
 
-    /**
-     * Fire a background notification when the tab is not focused.
-     * Port of event_router.js._notifyBackground + chat.js._notifyBackgroundIfUnfocused.
-     *
-     * Routes through notificationsStore.pushBackground so P1c can add system
-     * notifications / sound without touching this store.
-     */
+    /** Fire a background notification when the tab is not focused. */
     _notifyBackground(content: string): void {
       if (document.hasFocus()) return;
-      // Plain text for the OS notification preview — the faithful markup_extract
-      // equivalent (legacy chat.js/event_router.js use extractPlaintext): drops
-      // <actions> button labels and substitutes <img alt>.
+      // Plain text for the OS preview — drops <actions> labels, substitutes <img alt>.
       const plain = extractText(content);
       if (plain) useNotificationsStore().pushBackground(plain);
     },

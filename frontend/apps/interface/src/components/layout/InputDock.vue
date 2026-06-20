@@ -2,18 +2,8 @@
 /**
  * InputDock — compose / send / stop, plus the full peripheral controls.
  *
- * Port sources:
- *   legacy app.js   _initInput (auto-grow, send-on-click, onSendComplete focus),
- *                   _initAttachMenu (+ button, vision-provider gating),
- *                   _ambientSensor.bindTypingInput
- *   legacy chat.js  sendMessage (image files + previews; orchestration is in
- *                   the session store)
- *   legacy chat_controls.js thinking-level dropdown + context-usage indicator
- *   legacy voice_recorder.js mic button (toggle recording; state + error)
- *   legacy index.html .input-dock markup (classes preserved for interface.scss)
- *
- * WS single-owner rule is honoured: send/stop go through the session store;
- * this component never touches the WebSocket directly.
+ * WS single-owner rule: send/stop go through the session store; this component
+ * never touches the WebSocket directly.
  */
 import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { storeToRefs } from 'pinia';
@@ -28,8 +18,6 @@ import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/c
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import { FileText, Image, Plus, Mic, Send } from '@lucide/vue';
 
-// ── Stores / composables ────────────────────────────────────────────────────
-
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
 const attachments = useAttachmentsStore();
@@ -39,41 +27,33 @@ const ambient = useAmbientSensor();
 const { available: voiceAvailable, recorderState, recError } = storeToRefs(voiceStore);
 const { level, levelLabel, usageDisplay } = storeToRefs(contextUsage);
 
-// Thinking-level options — order + labels match legacy index.html lines 249-251.
 const THINKING_ITEMS = [
   { level: 'auto', label: 'Auto' },
   { level: 'medium', label: 'Medium' },
   { level: 'high', label: 'High' },
 ] as const;
 
-// ── Local state ───────────────────────────────────────────────────────────────
-
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const text = ref('');
 
-// Attach-menu UI
 const attachMenuOpen = ref(false);
 const attachBtnRef = ref<HTMLButtonElement | null>(null);
 const attachMenuRef = ref<HTMLDivElement | null>(null);
 const imageInputRef = ref<HTMLInputElement | null>(null);
 const docInputRef = ref<HTMLInputElement | null>(null);
-/** Hidden when no vision-capable provider is configured (legacy app.js:699-706). */
+/** Hidden when no vision-capable provider is configured. */
 const hasVisionProvider = ref(true);
 
-// Thinking-level dropdown UI
 const thinkingMenuOpen = ref(false);
 const thinkingWrapRef = ref<HTMLDivElement | null>(null);
 
-/** True when there is something to send: non-empty text OR ≥1 attachment
- *  (image OR document). Mirrors the handleSend guard exactly — both gate on
- *  getFiles(), the files that actually ride the multipart /chat request. */
+/** True when there is something to send: non-empty text OR ≥1 attachment.
+ *  Mirrors the handleSend guard — both gate on getFiles(). */
 const canSend = computed(
   () => text.value.trim().length > 0 || attachments.getFiles().length > 0,
 );
 
-// ── Auto-grow ─────────────────────────────────────────────────────────────────
-
-/** Port of app.js _initInput auto-resize: reset height then cap at 120px. */
+/** Auto-resize: reset height then cap at 120px. */
 function grow(): void {
   const el = textareaRef.value;
   if (!el) return;
@@ -81,13 +61,10 @@ function grow(): void {
   el.style.height = Math.min(el.scrollHeight, 120) + 'px';
 }
 
-// ── Send / Stop ───────────────────────────────────────────────────────────────
-
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
 
-  // Read files + previews BEFORE clear() wipes the strip (chat.js:132-136).
-  // Images AND documents both ride the multipart /chat and render in the bubble.
+  // Read files + previews BEFORE clear() wipes the strip.
   const files = attachments.getFiles();
   const previews: ConvoAttachmentPreview[] = attachments.previews.map((p) => ({
     filename: p.filename,
@@ -95,12 +72,11 @@ async function handleSend(): Promise<void> {
     isImage: p.isImage,
   }));
 
-  // session.sendMessage no-ops on empty input, but guard here too so we don't
-  // clear the textarea or re-grow unnecessarily (chat.js:138). Same gate as canSend.
+  // Guard here too so we don't clear/re-grow needlessly. Same gate as canSend.
   if (!trimmed && files.length === 0) return;
 
-  // Capture send-mode before the store flips isSending: legacy clears the image
-  // strip only on a fresh turn, not on the mid-ACT append path (chat.js:160).
+  // Clear the image strip only on a fresh turn, not the mid-ACT append path —
+  // so capture send-mode before the store flips isSending.
   const wasSending = session.isSending;
 
   // Clear textarea before awaiting so the UI feels instant.
@@ -112,15 +88,12 @@ async function handleSend(): Promise<void> {
 
   if (!wasSending) attachments.clear();
 
-  // Re-focus after the turn completes (port of app.js onSendComplete handler).
   textareaRef.value?.focus();
 }
 
-// The compose box is a multi-line textarea: Enter inserts a newline (the native
-// default), and ONLY the send button submits — so there is no keydown handler.
-// Cancelling an in-flight turn is the act-trail's stop/undo button, not the dock.
-
-// ── Attach menu ───────────────────────────────────────────────────────────────
+// Multi-line textarea: Enter inserts a newline and ONLY the send button submits,
+// so there is no keydown handler. Cancelling an in-flight turn is the act-trail's
+// stop/undo button, not the dock.
 
 function chooseDocument(): void {
   attachMenuOpen.value = false;
@@ -132,21 +105,17 @@ function chooseImage(): void {
   imageInputRef.value?.click();
 }
 
-/** Shared by both the image and document pickers — addFiles dispatches on type. */
+/** Shared by both pickers — addFiles dispatches on type. */
 function onFileInputChange(e: Event): void {
   const input = e.target as HTMLInputElement;
   if (input.files?.length) void attachments.addFiles(input.files);
   input.value = ''; // allow re-selecting the same file
 }
 
-// ── Thinking-level dropdown ───────────────────────────────────────────────────
-
 function selectLevel(next: (typeof THINKING_ITEMS)[number]['level']): void {
   void contextUsage.setLevel(next);
   thinkingMenuOpen.value = false;
 }
-
-// ── Outside-click / scroll close (port of app.js + chat_controls.js) ──────────
 
 function onDocumentClick(e: MouseEvent): void {
   const target = e.target as Node;
@@ -163,11 +132,8 @@ function onDocumentClick(e: MouseEvent): void {
 }
 
 function onWindowScroll(): void {
-  // Legacy closes the attach menu on body/window scroll (app.js:676-681).
   if (attachMenuOpen.value) attachMenuOpen.value = false;
 }
-
-// ── session:turn-interrupted listener ────────────────────────────────────────
 
 function onTurnInterrupted(e: Event): void {
   const detail = (e as CustomEvent<{ text: string }>).detail;
@@ -175,7 +141,7 @@ function onTurnInterrupted(e: Event): void {
   nextTick(() => {
     grow();
     textareaRef.value?.focus();
-    // Move cursor to end (port of app.js _pasteVoiceTranscript).
+    // Move cursor to end.
     const el = textareaRef.value;
     if (el) {
       el.selectionStart = el.selectionEnd = el.value.length;
@@ -183,21 +149,15 @@ function onTurnInterrupted(e: Event): void {
   });
 }
 
-// ── Voice transcript paste (faithful port of app.js _pasteVoiceTranscript) ───
-
-/** Unbind function returned by on('chalie:voice-transcript', …). */
 let _unsubVoiceTranscript: (() => void) | null = null;
 
-/**
- * Paste the voice transcript into the compose textarea for review — does NOT
- * auto-send.  Port of app.js _pasteVoiceTranscript (lines 357-368).
- */
+/** Paste the voice transcript into the compose textarea for review — does NOT auto-send. */
 function onVoiceTranscript({ text: transcript }: { text: string }): void {
   text.value = transcript;
   nextTick(() => {
     grow();
     textareaRef.value?.focus();
-    // Move cursor to end (app.js:367: selectionStart = selectionEnd = text.length).
+    // Move cursor to end.
     const el = textareaRef.value;
     if (el) {
       el.selectionStart = el.selectionEnd = el.value.length;
@@ -214,11 +174,10 @@ onMounted(() => {
   // Behavioral signals: typing cadence feeds the ambient snapshot.
   if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
 
-  // Thinking-level: load the persisted override; context indicator: first paint.
   void contextUsage.loadLevel();
   void contextUsage.refresh();
 
-  // Vision-provider gating for the image attach option (app.js:699-706).
+  // Vision-provider gating for the image attach option.
   system
     .authStatus()
     .then((s) => {
@@ -240,10 +199,8 @@ onBeforeUnmount(() => {
 
 <template>
   <footer class="input-dock">
-    <!-- Image / document preview strip (renders #imagePreview, self-handles drag-drop). -->
     <ImageAttachStrip />
 
-    <!-- Slide-up attachment menu -->
     <div
       id="attachMenu"
       ref="attachMenuRef"
@@ -270,7 +227,6 @@ onBeforeUnmount(() => {
 
     <div class="input-dock__outer">
       <div class="input-dock__inner">
-        <!-- + button: opens slide-up attachment menu -->
         <button
           id="attachBtn"
           ref="attachBtnRef"
@@ -282,7 +238,6 @@ onBeforeUnmount(() => {
           <Plus :size="20" />
         </button>
 
-        <!-- Mic button: record voice → transcript posted as a 'voice' turn -->
         <button
           v-if="voiceAvailable"
           id="voiceRecBtn"
@@ -296,7 +251,6 @@ onBeforeUnmount(() => {
           <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
 
-        <!-- Compose textarea — Enter = newline; the send button is the only submit. -->
         <textarea
           id="chatInput"
           ref="textareaRef"
@@ -307,7 +261,6 @@ onBeforeUnmount(() => {
           @input="grow"
         ></textarea>
 
-        <!-- Send button — the only submit. Cancelling a turn is the act-trail's job. -->
         <button
           class="btn-action btn-action--send"
           aria-label="Send message"
@@ -319,7 +272,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Composer controls: thinking-level override (left) + context-size indicator (right) -->
     <div class="dock-controls">
       <div ref="thinkingWrapRef" class="thinking-select">
         <button
@@ -359,11 +311,10 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Mic error label — shown below the dock when mic access / STT fails -->
     <p v-if="recError" id="voiceRecError" class="voice-rec-error">{{ recError }}</p>
 
-    <!-- Hidden image picker. No capture attr: lets mobile show the standard OS
-         picker (photo library + take-photo), WhatsApp-style. -->
+    <!-- No capture attr: lets mobile show the standard OS picker (library +
+         take-photo), WhatsApp-style. -->
     <input
       id="imageFileInput"
       ref="imageInputRef"
@@ -374,7 +325,6 @@ onBeforeUnmount(() => {
       @change="onFileInputChange"
     />
 
-    <!-- Hidden document picker — accepts the legacy document set (index.html:319). -->
     <input
       id="docFileInput"
       ref="docInputRef"

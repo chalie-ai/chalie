@@ -1,7 +1,4 @@
-<!--
-  BrainTopbar — port of legacy _renderTopbar() in app.js.
-  Shows hamburger (mobile), collapse toggle (desktop), breadcrumb, search button.
--->
+<!-- Hamburger (mobile), collapse toggle (desktop), breadcrumb, search button. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
@@ -37,12 +34,10 @@ function handleSearchKeydown(e: KeyboardEvent): void {
 
 <template>
   <header class="topbar">
-    <!-- Mobile hamburger -->
     <button class="icon-btn hamburger" aria-label="Open menu" @click="shell.openMobileSidebar()">
       <Menu :size="18" />
     </button>
 
-    <!-- Desktop sidebar collapser -->
     <button
       class="icon-btn desktop-collapser"
       aria-label="Toggle sidebar"
@@ -52,7 +47,6 @@ function handleSearchKeydown(e: KeyboardEvent): void {
       <PanelLeft :size="18" />
     </button>
 
-    <!-- Breadcrumb -->
     <div class="crumb">
       <span>Brain</span>
       <span class="sep">/</span>
@@ -63,7 +57,6 @@ function handleSearchKeydown(e: KeyboardEvent): void {
       </template>
     </div>
 
-    <!-- Search / command palette trigger -->
     <div class="topbar-center">
       <div
         class="topbar-search"

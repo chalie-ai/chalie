@@ -1,23 +1,11 @@
 /**
- * Conversation spine store — port of renderer.js into reactive Pinia state.
- *
- * Maintains an ordered list of `ConversationForm` items (the "forms" array).
- * Each item is a discriminated union: user / chalie / act / error.
- * Components render this list; this store owns all mutations.
- *
- * Port sources:
- *   - renderer.js: createActCycle, appendUserForm, appendChalieForm,
- *     replaceActWithResponse, replaceActWithError, appendToolPill,
- *     resolveToolPill (incl. 150ms min-display), prependUserForm,
- *     prependChalieForm. Under the chain model the per-step tool group also
- *     collapses to summary-only (collapseAct) once superseded.
- *   - chat.js: _appendMessage, _prependMessage, _attachmentsFor, _finaliseTurn
+ * Conversation spine store — the ordered `forms` array of discriminated-union
+ * items (user / chalie / act / error). Components render the list; this store
+ * owns all mutations.
  */
 import { defineStore } from 'pinia';
 import type { ConversationAttachment, ConversationMessage, ConversationSegment } from '../api/conversation';
 import { extractText } from '../composables/useMarkup';
-
-// ── Type definitions ──────────────────────────────────────────────────────────
 
 export interface AttachmentPreview {
   filename: string;
@@ -102,8 +90,8 @@ export interface Turn {
 
 /**
  * Plain-text (TTS / remember) for one Chalie form — segments concatenated, else
- * the single text path, both stripped of markup. Shared by the speak/remember
- * buttons and the turn-level speech aggregation so the two never diverge.
+ * the single text path, both markup-stripped. Shared by the speak/remember
+ * buttons and turn-level speech aggregation so the two never diverge.
  */
 export function chalieFormPlaintext(form: ChalieForm): string {
   const segs = form.meta.segments ?? form.segments;
@@ -113,13 +101,10 @@ export function chalieFormPlaintext(form: ChalieForm): string {
   return extractText(form.text ?? '');
 }
 
-// ── Module-scope monotonic id counter ─────────────────────────────────────────
 let _nextId = 1;
 function nextId(): number {
   return _nextId++;
 }
-
-// ── Store ─────────────────────────────────────────────────────────────────────
 
 export const useConversationStore = defineStore('conversation', {
   state: () => ({
@@ -128,11 +113,10 @@ export const useConversationStore = defineStore('conversation', {
 
   getters: {
     /**
-     * The flat forms array grouped into turns. History forms carry a backend
-     * `turnId`, so a turn boundary is any change of `turnId` — this keeps a
-     * compaction-continuation turn (assistant rows, no leading user row) as its
-     * own group. Live forms have no `turnId` and fall back to the old rule: a
-     * turn starts at each user form. Drives turn-based spacing and whole-turn TTS.
+     * Group forms into turns. History forms carry `turnId`, so a boundary is any
+     * change of it — this keeps a compaction-continuation turn (assistant rows,
+     * no leading user row) as its own group. Live forms have no `turnId` and
+     * fall back to: a turn starts at each user form.
      */
     turns(state): Turn[] {
       const groups: Turn[] = [];
@@ -164,9 +148,9 @@ export const useConversationStore = defineStore('conversation', {
       return null;
     },
     /**
-     * True when `formId` is the LAST Chalie row in its turn. A turn can now hold
-     * several assistant transcript rows; the per-turn remember/speak controls
-     * appear once, on that final row, so they act on the whole turn.
+     * True when `formId` is the LAST Chalie row in its turn. A turn can hold
+     * several assistant rows; the per-turn remember/speak controls appear once,
+     * on that final row, so they act on the whole turn.
      */
     isLastChalieInTurn(): (formId: number) => boolean {
       return (formId) => {
@@ -178,8 +162,6 @@ export const useConversationStore = defineStore('conversation', {
   },
 
   actions: {
-    // ── Append / create ──────────────────────────────────────────────────────
-
     appendUser(
       text: string,
       attachments?: AttachmentPreview[],
@@ -198,11 +180,7 @@ export const useConversationStore = defineStore('conversation', {
       return id;
     },
 
-    /**
-     * Append a Chalie speech form.
-     * When `meta.segments` is set, the form carries segments; otherwise `text`.
-     * Returns the new form's id.
-     */
+    /** When `meta.segments` is set the form carries segments; otherwise `text`. */
     appendChalie(
       textOrContent: string,
       meta: ChalieMeta,
@@ -241,11 +219,9 @@ export const useConversationStore = defineStore('conversation', {
       return id;
     },
 
-    // ── ACT-cycle mutations ──────────────────────────────────────────────────
-
     /**
-     * Collapse a step's tool group to summary-only. Called when the step is
-     * superseded — the next interim prose bubble or the final reply has landed.
+     * Collapse a step's tool group to summary-only — called when the step is
+     * superseded (next interim prose bubble or the final reply has landed).
      */
     collapseAct(actId: number): void {
       const form = this._findAct(actId);
@@ -267,14 +243,11 @@ export const useConversationStore = defineStore('conversation', {
     },
 
     /**
-     * Resolve a tool pill — port of renderer.js resolveToolPill.
-     *
      * Enforces a 150ms minimum visible duration. When `ms` is 0, falls back to
      * client-measured elapsed (from pill.startedAt).
      */
     resolveToolPill(pillId: string, ms: number, ok: boolean): void {
       if (!pillId) return;
-      // Find the pill across all act forms
       for (const form of this.forms) {
         if (form.kind !== 'act') continue;
         const pill = form.tools.find((t) => t.id === pillId);
@@ -282,11 +255,10 @@ export const useConversationStore = defineStore('conversation', {
 
         const elapsed = pill.startedAt ? Date.now() - pill.startedAt : 200;
         const wait = Math.max(0, 150 - elapsed);
-        // Client-measured elapsed fallback: if ms==0, compute from startedAt
         const effectiveMs = ms > 0 ? ms : (pill.startedAt ? Date.now() - pill.startedAt : 0);
 
         setTimeout(() => {
-          // Re-locate: forms array may have shifted
+          // Re-locate: forms array may have shifted.
           for (const f of this.forms) {
             if (f.kind !== 'act') continue;
             const p = f.tools.find((t) => t.id === pillId);
@@ -302,14 +274,9 @@ export const useConversationStore = defineStore('conversation', {
       }
     },
 
-    // ── ACT → response / error swap ──────────────────────────────────────────
-
     /**
-     * Replace an ACT form with the final Chalie response.
-     * Port of renderer.js replaceActWithResponse + chat.js _finaliseTurn.
-     *
-     * If the WS message carries no content, the ACT form is simply removed
-     * (port of _finaliseTurn's no-content branch).
+     * Replace an ACT form with the final Chalie response. A no-content message
+     * simply removes the ACT form.
      */
     replaceActWithResponse(
       actId: number,
@@ -329,7 +296,6 @@ export const useConversationStore = defineStore('conversation', {
 
       const content = data.content ?? '';
       if (!content && !data.segments?.length) {
-        // No content — remove the act placeholder
         this.forms.splice(idx, 1);
         return null;
       }
@@ -357,10 +323,6 @@ export const useConversationStore = defineStore('conversation', {
       return id;
     },
 
-    /**
-     * Replace an ACT form with an error speech-form.
-     * Port of renderer.js replaceActWithError.
-     */
     replaceActWithError(actId: number, message: string): void {
       const idx = this.forms.findIndex((f) => f.id === actId);
       if (idx === -1) return;
@@ -368,12 +330,7 @@ export const useConversationStore = defineStore('conversation', {
       this.forms.splice(idx, 1, { kind: 'error', id, message });
     },
 
-    // ── History pagination ───────────────────────────────────────────────────
-
-    /**
-     * Append history turns to the END of the spine (initial load).
-     * Port of chat.js _appendMessage.
-     */
+    /** Append history turns to the END of the spine (initial load). */
     appendTurns(messages: ConversationMessage[]): void {
       for (const msg of messages) {
         this._appendMessage(msg, true);
@@ -382,8 +339,7 @@ export const useConversationStore = defineStore('conversation', {
 
     /**
      * Prepend history turns to the START of the spine (scroll-up pagination).
-     * Oldest-first: messages are iterated in reverse so indices stay stable.
-     * Port of chat.js _prependMessage.
+     * Iterated in reverse so indices stay stable.
      */
     prependTurns(messages: ConversationMessage[]): void {
       for (let i = messages.length - 1; i >= 0; i--) {
@@ -392,9 +348,8 @@ export const useConversationStore = defineStore('conversation', {
     },
 
     /**
-     * Concatenated plaintext of every Chalie form in the turn that contains
-     * `formId` — so clicking speak on any bubble plays the whole turn, not just
-     * the single transcript row clicked.
+     * Concatenated plaintext of every Chalie form in `formId`'s turn — so speak
+     * on any bubble plays the whole turn, not just the row clicked.
      */
     turnSpeechText(formId: number): string {
       const turn = this.turns.find((t) => t.forms.some((f) => f.id === formId));
@@ -405,8 +360,6 @@ export const useConversationStore = defineStore('conversation', {
         .filter(Boolean)
         .join(' ');
     },
-
-    // ── Internal helpers ─────────────────────────────────────────────────────
 
     _findAct(actId: number): ActForm | undefined {
       const form = this.forms.find((f) => f.id === actId);
@@ -422,12 +375,10 @@ export const useConversationStore = defineStore('conversation', {
     },
 
     /**
-     * Build the rendered forms for one assistant row, in display order:
-     * the prose bubble (when the row has content/segments) followed by a
-     * collapsed tool group (when the row drove tools). Under the chain model a
-     * turn is many assistant rows; each row owns its own tools, so the refresh
-     * path reconstructs the same prose-then-collapsed-summaries shape the live
-     * path produces. A tools-only step (empty prose) yields just the act group.
+     * Forms for one assistant row in display order: prose bubble (when content/
+     * segments) then a collapsed tool group (when the row drove tools). Each row
+     * owns its own tools, so refresh reconstructs the live path's prose-then-
+     * collapsed-summaries shape. A tools-only step yields just the act group.
      */
     _assistantForms(msg: ConversationMessage, inWorkingMemory: boolean): ConversationForm[] {
       const out: ConversationForm[] = [];

@@ -1,16 +1,7 @@
-// ==========================================================================
-// Rich-Media Card — shared chrome (global)
-//
-// Port of legacy frontend/interface/rich_media/base_card.css. These classes
-// are shared by every card SFC (WeatherCard, ArticleCard, …) so they live in a
-// GLOBAL stylesheet rather than any one card's scoped block — a card renders
-// <div class="rich-card <name>-card">, inherits this base chrome, and adds its
-// own card-specific detail via its scoped styles.
-//
-// Theme: uses the shared design tokens (var(--violet), var(--bg-surface), …)
-// for automatic light/dark support — never hardcode colours (Rule 7).
-// Depends on @chalie/shared/styles/main.scss (tokens) being imported first.
-// ==========================================================================
+// Rich-Media Card shared chrome. GLOBAL (not scoped) because every card SFC
+// reuses it: a card renders <div class="rich-card <name>-card"> and adds detail
+// in its own scoped styles. Uses shared tokens for light/dark (Rule 7).
+// Depends on @chalie/shared/styles/main.scss (tokens) imported first.
 
 @keyframes card-enter {
   from {

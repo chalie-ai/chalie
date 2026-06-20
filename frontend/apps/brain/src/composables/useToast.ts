@@ -1,9 +1,4 @@
-/**
- * Toast notification composable.
- *
- * Port of legacy BrainApp.showToast() (app.js:73-91).
- * Reactive list consumed by ToastHost.vue.
- */
+/** Toast notifications; the reactive list is rendered by ToastHost.vue. */
 import { ref } from 'vue';
 
 export type ToastType = 'info' | 'success' | 'error' | 'warning';

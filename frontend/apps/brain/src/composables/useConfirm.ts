@@ -1,9 +1,4 @@
-/**
- * Promise-based confirm dialog composable.
- *
- * Replaces native confirm() calls in legacy JS panels.
- * ConfirmDialog.vue listens to the reactive state exposed here.
- */
+/** Promise-based confirm dialog; ConfirmDialog.vue renders the reactive state. */
 import { ref, shallowRef } from 'vue';
 
 export interface ConfirmOptions {

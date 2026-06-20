@@ -1,9 +1,4 @@
-<!--
-  BrainSidebar — port of frontend/brain/sidebar.js.
-  Renders the two NAV groups (Cognition + System) with collapsible sub-lists,
-  active-route highlighting via Vue Router, lock-banner when providersOnly,
-  and a theme toggle button at the bottom.
--->
+<!-- Two NAV groups with collapsible sub-lists, active-route highlight, providersOnly lock banner, theme toggle. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { FunctionalComponent } from 'vue';
@@ -30,9 +25,7 @@ const route = useRoute();
 const router = useRouter();
 const { theme, toggle: toggleTheme } = useTheme();
 
-// Absolute runtime URL — Flask serves /icons/icon.png regardless of Vue base path.
-// Using :src (dynamic binding) prevents Vite/Rollup from attempting to resolve
-// this as a local module import during build.
+// Absolute runtime URL; :src (dynamic binding) stops Vite/Rollup resolving it as a build-time module import.
 const brandIconUrl = '/icons/icon.png';
 
 interface SubItem {
@@ -48,7 +41,6 @@ interface NavItem {
   sub?: SubItem[];
 }
 
-// Port of BrainSidebar.NAV (sidebar.js:3-42).
 const NAV: NavItem[] = [
   { id: 'providers', label: 'Providers', icon: LayoutGrid, group: 'cognition' },
   {
@@ -100,9 +92,7 @@ const NAV: NavItem[] = [
 const cognitionItems = computed(() => NAV.filter((n) => n.group === 'cognition'));
 const systemItems = computed(() => NAV.filter((n) => n.group === 'system'));
 
-/** The active top-level section (first path segment after /). */
 const activeSection = computed(() => route.path.split('/')[1] || 'providers');
-/** The active sub-section (second path segment). */
 const activeSub = computed(() => route.path.split('/')[2] || '');
 
 function navigate(section: string, sub: string | null = null): void {
@@ -126,7 +116,6 @@ function isExpanded(item: NavItem): boolean {
 
 <template>
   <aside class="sidebar">
-    <!-- Brand -->
     <a class="sidebar-brand" href="/">
       <!-- eslint-disable-next-line vue/html-self-closing -->
       <img :src="brandIconUrl" alt="Chalie" width="28" height="28" />
@@ -136,15 +125,12 @@ function isExpanded(item: NavItem): boolean {
       </div>
     </a>
 
-    <!-- Navigation -->
     <nav class="sidebar-scroll">
-      <!-- Providers-only lock banner -->
       <div v-if="shell.providersOnly && !shell.sidebarCollapsed" class="sidebar-lock-banner">
         <span class="sidebar-lock-icon"><LayoutGrid :size="16" /></span>
         <span>Add a provider to unlock the full dashboard.</span>
       </div>
 
-      <!-- Cognition group -->
       <div class="nav-group">
         <div v-if="!shell.sidebarCollapsed" class="nav-group-title">Cognition</div>
         <template v-for="item in cognitionItems" :key="item.id">
@@ -176,7 +162,6 @@ function isExpanded(item: NavItem): boolean {
         </template>
       </div>
 
-      <!-- System group -->
       <div class="nav-group">
         <div v-if="!shell.sidebarCollapsed" class="nav-group-title">System</div>
         <template v-for="item in systemItems" :key="item.id">
@@ -196,7 +181,6 @@ function isExpanded(item: NavItem): boolean {
       </div>
     </nav>
 
-    <!-- Footer: theme toggle -->
     <div class="sidebar-footer">
       <button
         type="button"

@@ -1,41 +1,27 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 
-// ── Payload contract ───────────────────────────────────────────────────────
-
 export interface CalendarEvent {
-  /** ISO date-time string, e.g. "2026-06-14T09:00:00" */
   dtstart?: string;
-  /** ISO date-time string for end; omitted → open-ended */
   dtend?: string;
   title?: string;
-  /** When true the event spans the whole day (no specific time) */
   all_day?: boolean;
-  /** Human-readable calendar name, e.g. "Work" */
   calendar_name?: string;
   location?: string;
   attendees?: string[];
 }
 
 export interface CalendarPayload {
-  /** Single-event response (get_event / update_event) */
   event?: CalendarEvent;
-  /** Multi-event response (list_events), or single-item list */
   events?: CalendarEvent[];
-  /** Total count returned by the backend (informational) */
   count?: number;
-  /** Action that produced this payload, e.g. "list_events" */
   action_performed?: string;
 }
 
 const props = defineProps<{ payload: CalendarPayload; synthesis?: string }>();
 
-// ── Constants (match legacy exactly) ───────────────────────────────────────
-
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function parseISO(s: string | undefined | null): Date | null {
   if (!s) return null;
@@ -47,12 +33,9 @@ function formatTime(d: Date): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-/** Grouping key — matches legacy exactly: raw year/month(0-based)/date */
 function dateKey(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
-
-// ── Derived layout ───────────────────────────────────────────────────────────
 
 /** The single event to render, whether from payload.event or a 1-item list. */
 const singleEvent = computed<CalendarEvent | null>(() => {
@@ -60,8 +43,6 @@ const singleEvent = computed<CalendarEvent | null>(() => {
   const evs = props.payload.events;
   return Array.isArray(evs) && evs.length === 1 ? evs[0] : null;
 });
-
-// ── Single-event view helpers ────────────────────────────────────────────────
 
 interface WhenBlock {
   day: string;
@@ -97,8 +78,6 @@ const singleMeta = computed<SingleMeta>(() => {
 
   return { timePart, calendarName: ev.calendar_name ?? null };
 });
-
-// ── List-event view helpers ──────────────────────────────────────────────────
 
 interface ListRow {
   timeText: string;
@@ -144,19 +123,16 @@ const dayGroups = computed<DayGroup[]>(() => {
 </script>
 
 <template>
-  <!-- Single-event layout -->
   <div
     v-if="singleEvent"
     class="rich-card calendar-card"
   >
-    <!-- Date block -->
     <div class="calendar-card__when">
       <div class="calendar-card__when-day">{{ whenBlock.day }}</div>
       <div class="calendar-card__when-date">{{ whenBlock.date }}</div>
       <div class="calendar-card__when-mon">{{ whenBlock.mon }}</div>
     </div>
 
-    <!-- Info column -->
     <div class="calendar-card__info">
       <h4 class="calendar-card__title">{{ singleEvent.title ?? '' }}</h4>
 
@@ -180,7 +156,6 @@ const dayGroups = computed<DayGroup[]>(() => {
     </div>
   </div>
 
-  <!-- Multi-event list layout -->
   <div
     v-else-if="dayGroups.length > 0"
     class="rich-card calendar-card calendar-card--list"
@@ -208,16 +183,11 @@ const dayGroups = computed<DayGroup[]>(() => {
 </template>
 
 <style scoped lang="scss">
-/*
- * Card-specific rules only. Base chrome (.rich-card, __divider, __synthesis,
- * card-enter animation) is declared globally in base_card.css — not repeated here.
- */
+/* Card-specific rules only; base .rich-card chrome lives globally in base_card.css. */
 
 .rich-card.calendar-card {
   max-width: 620px;
 }
-
-/* --- Single event layout (date block + info) --- */
 
 .calendar-card:not(.calendar-card--list) {
   display: grid;
@@ -291,8 +261,6 @@ const dayGroups = computed<DayGroup[]>(() => {
   margin-top: 4px;
   line-height: 1.4;
 }
-
-/* --- List layout --- */
 
 .calendar-card--list {
   display: flex;

@@ -1,15 +1,12 @@
 <template>
-  <!-- Non-modal dialog (legacy: _overlay.show(), not showModal()) -->
+  <!-- Non-modal dialog: uses show(), not showModal(). -->
   <dialog ref="dialogEl" class="voice-player-overlay" @click.self="_close">
-    <!-- Loading state -->
     <div v-if="uiState === 'loading'" class="voice-player__loading">
       <span class="voice-player__spinner" aria-label="Loading audio…" />
     </div>
 
-    <!-- Error state -->
     <p v-if="errorMsg" class="voice-player__error">{{ errorMsg }}</p>
 
-    <!-- Playback controls — hidden while loading -->
     <div v-show="uiState !== 'loading'" class="voice-player__controls">
       <button
         ref="playBtnEl"
@@ -17,9 +14,7 @@
         :aria-label="isPlaying ? 'Pause' : 'Play'"
         @click="_togglePlayPause"
       >
-        <!-- Pause icon -->
         <Pause v-if="isPlaying" :size="20" />
-        <!-- Play icon -->
         <Play v-else :size="20" />
       </button>
 
@@ -53,17 +48,9 @@
 /**
  * VoicePlayerDialog — singleton non-modal TTS player.
  *
- * Port of frontend/interface/voice_player.js VoicePlayer.
- *
- * Design decision: player state is kept in local refs (not the Pinia voice
- * store) because the player is a self-contained singleton dialog that never
- * needs to expose playback state to other components. The store owns the
- * recorder (which must cross component boundaries to deliver transcripts),
- * but the player only talks to itself and the event bus.
- *
- * Constants are ported verbatim from voice_player.js:
- *   _LOADING_MAX_RETRIES   = 6
- *   _LOADING_DEFAULT_DELAY_MS = 3000
+ * Player state is kept in local refs (not the Pinia voice store) because this
+ * self-contained singleton never needs to expose playback state to other
+ * components — it only talks to itself and the event bus.
  */
 
 import { ref, onMounted, onBeforeUnmount } from 'vue';
@@ -73,18 +60,12 @@ import type { WakeLockHandle } from '@chalie/shared';
 import { on } from '../../composables/useEventBus';
 import { voice } from '../../api/voice';
 
-// ── Constants (port verbatim) ─────────────────────────────────────────────────
-
 const _LOADING_MAX_RETRIES = 6;
 const _LOADING_DEFAULT_DELAY_MS = 3000;
-
-// ── Template refs ─────────────────────────────────────────────────────────────
 
 const dialogEl = ref<HTMLDialogElement | null>(null);
 const playBtnEl = ref<HTMLButtonElement | null>(null);
 const progressEl = ref<HTMLInputElement | null>(null);
-
-// ── Reactive UI state ─────────────────────────────────────────────────────────
 
 /** 'idle' = controls visible, 'loading' = spinner visible */
 const uiState = ref<'idle' | 'loading'>('idle');
@@ -94,17 +75,14 @@ const duration = ref(0);
 const progressValue = ref(0);
 const timeLabel = ref('0:00 / 0:00');
 
-// ── Internal (non-reactive) playback state ────────────────────────────────────
-
-// Generation counter: incremented on every open() and close() so stale
-// fetches from superseded sessions are discarded (port of _openGeneration).
+// Generation counter: bumped on every open()/close() so stale fetches from
+// superseded sessions are discarded.
 let _openGeneration = 0;
 let _fetchAbort: AbortController | null = null;
 
 // AudioContext — created lazily on first open, reused thereafter.
 let _audioCtx: AudioContext | null = null;
 
-// Per-session playback state
 let _buffer: AudioBuffer | null = null;
 let _currentSource: AudioBufferSourceNode | null = null;
 let _sourceStartCtxTime = 0;
@@ -114,10 +92,8 @@ let _pausedOffset = 0;
 let _progressTimer: ReturnType<typeof setInterval> | null = null;
 let _wakeLock: WakeLockHandle | null = null;
 
-// Keyboard handler ref for add/removeEventListener symmetry
+// Held for add/removeEventListener symmetry.
 let _boundKeydown: ((e: KeyboardEvent) => void) | null = null;
-
-// ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 let _unsubSpeak: (() => void) | null = null;
 
@@ -133,13 +109,11 @@ onBeforeUnmount(() => {
   _unbindKeyboard();
 });
 
-// ── Session lifecycle ─────────────────────────────────────────────────────────
-
 async function _open(text: string): Promise<void> {
   _openGeneration += 1;
   const gen = _openGeneration;
 
-  // Abort any in-flight fetch from a previous session
+  // Abort any in-flight fetch from a previous session.
   _fetchAbort?.abort();
   _fetchAbort = new AbortController();
 
@@ -183,13 +157,9 @@ async function _open(text: string): Promise<void> {
 }
 
 /**
- * POST text to /voice/synthesize with cold-start retry.
- *
- * Returns the successful Response, or null if the session was aborted or
- * superseded mid-wait. Throws on any non-loading error.
- *
- * Port of voice_player.js._fetchWithLoadingRetry — constants and logic
- * are identical.
+ * POST text to /voice/synthesize with cold-start retry. Returns the successful
+ * Response, null if the session was aborted/superseded mid-wait, or throws on
+ * any non-loading error.
  */
 async function _fetchWithLoadingRetry(
   text: string,
@@ -278,8 +248,6 @@ function _resetPlayback(): void {
   void _wakeLock?.release();
 }
 
-// ── Playback ──────────────────────────────────────────────────────────────────
-
 function _playBufferFrom(buffer: AudioBuffer, offset: number): void {
   if (!_audioCtx) return;
 
@@ -344,7 +312,7 @@ function _togglePlayPause(): void {
     return;
   }
   if (!_currentSource) {
-    // Finished playing — clicking play restarts from the beginning.
+    // Finished — clicking play restarts from the beginning.
     _playBufferFrom(_buffer, 0);
     return;
   }
@@ -362,8 +330,6 @@ function _onScrub(e: Event): void {
   _stopCurrentSource();
   _playBufferFrom(_buffer, offset);
 }
-
-// ── Progress timer ────────────────────────────────────────────────────────────
 
 function _startProgressTimer(): void {
   _stopProgressTimer();
@@ -395,14 +361,10 @@ function _fmt(s: number): string {
   return `${m}:${sec}`;
 }
 
-// ── Dialog helpers ────────────────────────────────────────────────────────────
-
 function _showDialog(): void {
   const d = dialogEl.value;
-  if (d && !d.open) d.show(); // non-modal, matches legacy
+  if (d && !d.open) d.show(); // non-modal
 }
-
-// ── Keyboard ──────────────────────────────────────────────────────────────────
 
 function _bindKeyboard(): void {
   _unbindKeyboard();
@@ -446,7 +408,6 @@ function _unbindKeyboard(): void {
   color: var(--text);
   min-width: 280px;
 
-  /* <dialog> resets */
   margin: 0;
   max-width: none;
   max-height: none;
@@ -457,11 +418,9 @@ function _unbindKeyboard(): void {
   }
 }
 
-/* A closed <dialog> must stay hidden. The author `display: flex` above
-   overrides the UA `dialog:not([open]) { display: none }` rule, so without
-   this guard the player renders permanently over the input dock even though
-   it was never opened. Re-gate visibility on the native `open` attribute so
-   it shows only after _showDialog()'s d.show() and hides again on _close(). */
+/* Our `display: flex` above overrides the UA `dialog:not([open]){display:none}`
+   rule, so a closed dialog would render permanently over the input dock. Re-gate
+   visibility on the native `open` attribute. */
 .voice-player-overlay:not([open]) {
   display: none;
 }

@@ -1,17 +1,11 @@
 /**
  * Voice store — availability + recorder slices.
  *
- * Availability slice: port of app.js _initVoiceAvailability (lines 310-345).
- * Recorder slice: port of frontend/interface/voice_recorder.js VoiceRecorder.
- *
  * The recorder lives in the store (not a component) because the mic button
- * belongs to InputDock, but transcripts must reach the session without a
- * direct import chain.  Pinia cross-store calls are fine inside actions.
- *
- * WAV encoding: decodes the browser's native MediaRecorder output (webm /
- * mp4 / ogg) via AudioContext.decodeAudioData, then writes a 44-byte
- * RIFF/WAVE header with interleaved 16-bit PCM samples — exact algorithm
- * from voice_recorder.js._audioBufferToWav.
+ * belongs to InputDock but transcripts must reach the session without a direct
+ * import chain. WAV encoding decodes the browser's native MediaRecorder output
+ * (webm / mp4 / ogg) via AudioContext.decodeAudioData, then writes a 44-byte
+ * RIFF/WAVE header with interleaved 16-bit PCM samples.
  */
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
@@ -20,50 +14,33 @@ import type { WakeLockHandle } from '@chalie/shared';
 import { voice } from '../api/voice';
 import { emit } from '../composables/useEventBus';
 
-// ── Constants (port verbatim from voice_recorder.js) ─────────────────────────
-
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_MS = 60_000;
 
 export const MAX_RECORD_MS = 10 * 60 * 1000; // 10 minutes
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 export type RecorderState = 'idle' | 'recording' | 'uploading';
 
-// ── Store ─────────────────────────────────────────────────────────────────────
-
 export const useVoiceStore = defineStore('voice', () => {
-  // ── Availability state ────────────────────────────────────────────────────
-
   /** True once /voice/health returns status==='ok'. */
   const available = ref(false);
   /** True while the health poll is in flight (mic stays hidden until done). */
   const loading = ref(true);
 
-  // ── Recorder state ────────────────────────────────────────────────────────
-
-  /** Current recorder lifecycle phase. */
   const recorderState = ref<RecorderState>('idle');
   /** User-facing error from the recorder (permission denial, STT failure, etc.). */
   const recError = ref<string | null>(null);
 
-  // Internal refs — not reactive (raw objects, not observed by Vue)
+  // Internal refs — not reactive (raw objects, not observed by Vue).
   let _mediaRecorder: MediaRecorder | null = null;
   let _audioChunks: Blob[] = [];
   let _maxRecordTimer: ReturnType<typeof setTimeout> | null = null;
   let _wakeLock: WakeLockHandle | null = null;
 
-  // ── Availability actions ──────────────────────────────────────────────────
-
   /**
-   * Poll GET /voice/health until it terminates, then set `available`.
-   *
-   * status 'ok'          → available=true  (reveal mic), stop
-   * status 'unavailable' → available=false (hide mic),  stop
-   * status 'loading'     → service warming up; re-poll every 2s up to 60s
-   * timeout              → available=false
-   * thrown error         → available=false, stop
+   * Poll GET /voice/health until it terminates, then set `available`:
+   *   'ok' → available, stop · 'unavailable' → hidden, stop
+   *   'loading' → re-poll every 2s up to 60s · timeout/error → unavailable
    */
   async function checkAvailability(): Promise<void> {
     const deadline = Date.now() + MAX_POLL_MS;
@@ -80,7 +57,7 @@ export const useVoiceStore = defineStore('voice', () => {
           loading.value = false;
           return;
         }
-        // 'loading' — re-poll until deadline
+        // 'loading' — re-poll until deadline.
         if (Date.now() >= deadline) {
           available.value = false;
           loading.value = false;
@@ -95,19 +72,14 @@ export const useVoiceStore = defineStore('voice', () => {
     }
   }
 
-  // ── Recorder actions ──────────────────────────────────────────────────────
-
-  /**
-   * Toggle recording on/off — the single entry point for the mic button.
-   * Maps to legacy VoiceRecorder._handleClick().
-   */
+  /** Single entry point for the mic button. */
   async function toggleRecording(): Promise<void> {
     if (recorderState.value === 'recording') {
       await _stopAndUpload();
     } else if (recorderState.value === 'idle') {
       await _startRecording();
     }
-    // 'uploading' — button is effectively disabled; ignore clicks
+    // 'uploading' — button is effectively disabled; ignore clicks.
   }
 
   async function _startRecording(): Promise<void> {
@@ -124,8 +96,7 @@ export const useVoiceStore = defineStore('voice', () => {
       } else {
         recError.value = 'Could not start recording';
       }
-      // Leave available=false-ish — the mic button is already gated by
-      // `available`, but a race can still reach here; leave disabled.
+      // Mic is gated by `available`, but a race can reach here; leave disabled.
       available.value = false;
       return;
     }
@@ -133,8 +104,8 @@ export const useVoiceStore = defineStore('voice', () => {
     recError.value = null;
     _audioChunks = [];
 
-    // No mimeType constraint — we always convert to WAV via AudioContext
-    // before upload so the browser's default (webm/Chrome, mp4/iOS) is fine.
+    // No mimeType constraint — we always convert to WAV before upload, so the
+    // browser's default (webm/Chrome, mp4/iOS) is fine.
     _mediaRecorder = new MediaRecorder(stream);
     _mediaRecorder.ondataavailable = (e: BlobEvent) => {
       if (e.data.size > 0) _audioChunks.push(e.data);
@@ -146,7 +117,7 @@ export const useVoiceStore = defineStore('voice', () => {
     _wakeLock = webPlatformAdapter.createWakeLock();
     void _wakeLock.acquire();
 
-    // Auto-stop at 10-minute limit
+    // Auto-stop at the 10-minute limit.
     _maxRecordTimer = setTimeout(() => {
       if (recorderState.value === 'recording') void _stopAndUpload();
     }, MAX_RECORD_MS);
@@ -209,8 +180,7 @@ export const useVoiceStore = defineStore('voice', () => {
 
   /**
    * Decode audio chunks (any format) and re-encode as 16-bit PCM WAV.
-   * AudioContext.decodeAudioData handles webm, mp4, ogg — whatever the browser recorded.
-   * Port of voice_recorder.js._convertToWav.
+   * decodeAudioData handles webm, mp4, ogg — whatever the browser recorded.
    */
   async function _convertToWav(chunks: Blob[], mimeType: string): Promise<File> {
     const blob = new Blob(chunks, { type: mimeType });
@@ -223,11 +193,7 @@ export const useVoiceStore = defineStore('voice', () => {
     return _audioBufferToWav(audioBuffer);
   }
 
-  /**
-   * Encode an AudioBuffer as a 16-bit PCM WAV File.
-   * 44-byte RIFF/WAVE header + interleaved samples — exact port of
-   * voice_recorder.js._audioBufferToWav.
-   */
+  /** Encode an AudioBuffer as a 16-bit PCM WAV File (44-byte RIFF/WAVE header). */
   function _audioBufferToWav(audioBuffer: AudioBuffer): File {
     const numChannels = audioBuffer.numberOfChannels;
     const sampleRate = audioBuffer.sampleRate;
@@ -270,10 +236,7 @@ export const useVoiceStore = defineStore('voice', () => {
     return new File([buffer], 'recording.wav', { type: 'audio/wav' });
   }
 
-  /**
-   * Upload wav to /voice/transcribe; return the transcript text or null.
-   * Port of voice_recorder.js._transcribe (multipart field name: 'file').
-   */
+  /** Upload wav to /voice/transcribe; return the transcript text or null. */
   async function _transcribe(file: File): Promise<string | null> {
     const resp = await voice.transcribe(file);
 
@@ -296,10 +259,7 @@ export const useVoiceStore = defineStore('voice', () => {
     return data.text ?? null;
   }
 
-  /**
-   * Release the mic track and reset state.
-   * Call this on page unload / component teardown.
-   */
+  /** Release the mic track and reset state — call on unload / teardown. */
   function destroyRecorder(): void {
     if (_maxRecordTimer !== null) {
       clearTimeout(_maxRecordTimer);
@@ -321,18 +281,13 @@ export const useVoiceStore = defineStore('voice', () => {
   }
 
   return {
-    // Availability
     available,
     loading,
     checkAvailability,
-
-    // Recorder
     recorderState,
     recError,
     toggleRecording,
     destroyRecorder,
-
-    // Exported for tests / docs
     MAX_RECORD_MS,
   };
 });

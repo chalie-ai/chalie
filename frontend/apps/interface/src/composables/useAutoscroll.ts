@@ -1,19 +1,13 @@
 /**
- * useAutoscroll — port of renderer.js forceScrollToBottom + _initScrollTracking.
- *
- * The feed layout scrolls at document/window level (no overflow:auto on the
- * <main> element), so scroll events and position measurements use window /
- * document, exactly as the legacy renderer does.  `feedRef` is used only for
- * querying <img> elements inside the spine (matching renderer.js line 579:
- * `this._spine?.querySelectorAll('img')`).
+ * Document/window-level autoscroll: the feed has no overflow:auto, so scroll
+ * events and position measurements use window/document. `feedRef` is used only
+ * for querying <img> elements inside the spine.
  */
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import type { Ref } from 'vue';
 
 export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
   const userScrolledUp = ref(false);
-
-  // ── Scroll-position tracking ───────────────────────────────────────────────
 
   function _onScroll(): void {
     userScrolledUp.value =
@@ -28,19 +22,10 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
     window.removeEventListener('scroll', _onScroll);
   });
 
-  // ── Guarded scroll to bottom (incremental appends) ─────────────────────────
-
   /**
-   * Smooth scroll to the bottom, but ONLY if the user has not scrolled up.
-   *
-   * Port of renderer.js _scrollToBottom (lines 550-558): used for every
-   * incremental content mutation — new form, ACT narration, tool-pill add /
-   * resolve — so the feed follows growing content without yanking a user who
-   * has deliberately scrolled up to read history. A single rAF defers the
-   * measurement until the browser has laid out the just-appended nodes.
-   *
-   * (The legacy method also calls _updateAmbientBloom(); that speaker-bloom
-   * highlight is a separate concern wired by the ambient task, not autoscroll.)
+   * Smooth scroll to bottom on incremental appends, but ONLY if the user hasn't
+   * scrolled up (so reading history isn't yanked). The rAF defers measurement
+   * until the just-appended nodes are laid out.
    */
   function scrollToBottom(): void {
     if (userScrolledUp.value) return;
@@ -49,21 +34,10 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
     });
   }
 
-  // ── Force-scroll to bottom ─────────────────────────────────────────────────
-
   /**
-   * Unconditionally scroll to the very bottom.
-   *
-   * Port of renderer.js forceScrollToBottom (lines 571-593):
-   *   1. Reset the userScrolledUp guard.
-   *   2. Two nested rAFs — first fires after the browser applies layout for
-   *      just-appended nodes; second fires a frame later for any remaining
-   *      paint work.
-   *   3. After the inner rAF, query every <img> inside the feed and re-scroll
-   *      once each late-loading image fires `load` or `error` — images arrive
-   *      async and shift scrollHeight after the initial scroll.
-   *
-   * Safe when feedRef.value is null (guards at each access point).
+   * Unconditionally scroll to the very bottom. Two nested rAFs straddle layout
+   * + paint of just-appended nodes; then re-scroll once each late-loading <img>
+   * fires load/error, since async images shift scrollHeight after the scroll.
    */
   function forceScrollToBottom(): void {
     userScrolledUp.value = false;
@@ -81,8 +55,7 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
 
         for (const img of spine.querySelectorAll<HTMLImageElement>('img')) {
           if (img.complete) continue;
-          // Re-scroll once the image lands, but only if the user hasn't
-          // scrolled away since — matching renderer.js line 585-589.
+          // Re-scroll once the image lands, unless the user scrolled away since.
           const retry = (): void => {
             if (!userScrolledUp.value) scroll();
           };

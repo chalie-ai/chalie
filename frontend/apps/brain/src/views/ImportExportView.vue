@@ -1,10 +1,6 @@
 <script setup lang="ts">
-// Import / Export panel — whole-instance snapshot Time-Machine (TKT-949).
-// Port of frontend/brain/import_export.js.
-//
-// Export: optional password → POST /api/snapshot/export → download the .zip.
-// Import: file + optional password → confirm a FULL WIPE → multipart POST to
-// /api/snapshot/import, which stages the restore and restarts the instance.
+// Whole-instance snapshot Time-Machine. Import stages a FULL WIPE restore and
+// restarts the instance (not a merge).
 import { ref } from 'vue';
 import { snapshot } from '../api/snapshot';
 import { useToast } from '../composables/useToast';
@@ -19,7 +15,6 @@ const exportPass = ref('');
 const importFile = ref<File | null>(null);
 const importPass = ref('');
 
-// ── Export (import_export.js:_doExport) ───────────────────────────
 async function doExport(): Promise<void> {
   showToast('Exporting snapshot…', 'info');
   try {
@@ -41,7 +36,6 @@ async function doExport(): Promise<void> {
   }
 }
 
-// ── Import (import_export.js:_confirmImport / _doImport) ───────────
 function onFileChosen(e: Event): void {
   importFile.value = (e.target as HTMLInputElement).files?.[0] ?? null;
 }
@@ -84,7 +78,6 @@ async function confirmImport(): Promise<void> {
   </div>
 
   <div class="brain-overview">
-    <!-- Export a full snapshot -->
     <div class="export-card">
       <div class="export-card-icon"><Download :size="24" /></div>
       <div class="export-card-label">Export a full snapshot</div>
@@ -105,7 +98,6 @@ async function confirmImport(): Promise<void> {
       </button>
     </div>
 
-    <!-- Restore from a snapshot -->
     <div class="export-card">
       <div class="export-card-icon"><Upload :size="24" /></div>
       <div class="export-card-label">Restore from a snapshot</div>

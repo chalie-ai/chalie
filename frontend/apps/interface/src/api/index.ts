@@ -1,9 +1,5 @@
 /**
- * Typed endpoint wrappers for the Chalie interface app.
- *
- * The generic ApiClient lives in @chalie/shared. This module composes
- * domain-namespaced wrappers over it so callers get typed request/response
- * shapes for every REST endpoint the interface uses.
+ * Typed REST endpoint wrappers over the generic ApiClient (@chalie/shared).
  *
  * Note: /chat, /chat/interrupt, and /action are owned by WebSocketService /
  * stores/session.ts and are NOT exposed here.

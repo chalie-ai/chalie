@@ -2,17 +2,10 @@ import type { Component } from 'vue';
 import { defineAsyncComponent } from 'vue';
 
 /**
- * Rich-media card registry (Task B0, P1b).
- *
- * Port of legacy frontend/interface/rich_media/registry.js: maps a tag PREFIX
- * (the part before the first underscore, e.g. "weather" in "weather_1") to the
- * card component that renders it. Six prefixes → six components. (The `news`
- * and `search` tools no longer emit a rich envelope — TKT-1067 made their
- * results text-only — so no ArticleCard producer remains.)
- *
- * Cards are loaded via `defineAsyncComponent` so each card + its scoped styles
- * code-split into their own chunk — the chat spine stays light until a card of
- * that type actually appears.
+ * Maps a tag PREFIX (before the first underscore, e.g. "weather" in "weather_1")
+ * to the card component that renders it. news/search are text-only, so there is
+ * no ArticleCard. Cards are async so each + its scoped styles code-split into
+ * their own chunk, keeping the chat spine light until that card type appears.
  */
 export interface RichCardEntry {
   component: Component;
@@ -28,10 +21,8 @@ const richRegistry: Record<string, RichCardEntry> = {
 };
 
 /**
- * Resolve a rich card for a full tag string (e.g. "weather_1" → WeatherCard).
- * Splits on the first underscore to get the prefix, exactly like the legacy
- * `renderCard` did (`tag.split('_')[0]`). Returns undefined for unknown
- * prefixes so SegmentRenderer falls back to rendering the synthesis text.
+ * Resolve a card for a full tag (e.g. "weather_1" → WeatherCard) by its prefix.
+ * Returns undefined for unknown prefixes so the caller falls back to synthesis text.
  */
 export function resolveRichCard(tag: string): RichCardEntry | undefined {
   return richRegistry[tag.split('_')[0] ?? ''];

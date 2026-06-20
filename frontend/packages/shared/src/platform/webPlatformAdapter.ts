@@ -2,9 +2,9 @@ import type { PlatformAdapter, WakeLockHandle } from './PlatformAdapter';
 
 export const webPlatformAdapter: PlatformAdapter = {
   getUserMedia: (constraints) =>
-    // navigator.mediaDevices is undefined in non-secure (HTTP) contexts; guard so
-    // the PlatformAdapter contract (always returns a Promise) holds — a bare call
-    // would throw synchronously and escape callers' .catch() handlers.
+    // navigator.mediaDevices is undefined in non-secure (HTTP) contexts; a bare
+    // call would throw synchronously and escape callers' .catch(), so guard to
+    // keep the always-returns-a-Promise contract.
     navigator.mediaDevices
       ? navigator.mediaDevices.getUserMedia(constraints)
       : Promise.reject(
@@ -62,7 +62,6 @@ export const webPlatformAdapter: PlatformAdapter = {
     globalThis.open('/brain/', '_blank');
   },
   createWakeLock: (): WakeLockHandle => {
-    // Ported from frontend/interface/utils.js createWakeLock().
     // The Screen Wake Lock API auto-releases when the page becomes hidden
     // (tab-switch, lock-screen), so we re-request on visibilitychange while
     // still active. No-op on browsers without navigator.wakeLock.

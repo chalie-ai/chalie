@@ -32,24 +32,19 @@ const viewMode = ref<'list' | 'create'>('list');
 const userSkills = computed<Skill[]>(() => skills.value.filter((s) => s.source === 'user'));
 const curatedSkills = computed<Skill[]>(() => skills.value.filter((s) => s.source === 'curated'));
 
-// Create-form refs
 const createTitle = ref('');
 const createUseFor = ref('');
 const createTags = ref('');
 const createContent = ref('');
 
-// Edit-form refs (only one card is ever in edit mode at a time)
+// Only one card is ever in edit mode at a time, so these are shared.
 const editUseFor = ref('');
 const editTags = ref('');
 const editContent = ref('');
 
-// ── Expand ───────────────────────────────────────────────────────────
-
 function toggleExpand(skill: Skill): void {
   expandedId.value = expandedId.value === skill.id ? null : skill.id;
 }
-
-// ── Edit ─────────────────────────────────────────────────────────────
 
 function startEdit(skill: Skill): void {
   editUseFor.value = skill.use_for;
@@ -74,8 +69,6 @@ async function saveEdit(skill: Skill): Promise<void> {
   }
 }
 
-// ── Toggle ───────────────────────────────────────────────────────────
-
 async function toggleSkill(skill: Skill): Promise<void> {
   try {
     const data = await skillsApi.toggle(skill.id);
@@ -87,8 +80,6 @@ async function toggleSkill(skill: Skill): Promise<void> {
     showToast(apiErrorMessage(e, 'Failed to toggle skill'), 'error');
   }
 }
-
-// ── Delete ───────────────────────────────────────────────────────────
 
 async function deleteSkill(skill: Skill): Promise<void> {
   const ok = await confirm({
@@ -108,8 +99,6 @@ async function deleteSkill(skill: Skill): Promise<void> {
   }
 }
 
-// ── Copy ─────────────────────────────────────────────────────────────
-
 async function copySkill(skill: Skill): Promise<void> {
   const ok = await confirm({
     title: 'Customise Skill',
@@ -126,8 +115,6 @@ async function copySkill(skill: Skill): Promise<void> {
     showToast(apiErrorMessage(e, 'Failed to copy skill'), 'error');
   }
 }
-
-// ── Create ───────────────────────────────────────────────────────────
 
 function openCreate(): void {
   createTitle.value = '';
@@ -156,7 +143,6 @@ async function submitCreate(): Promise<void> {
 </script>
 
 <template>
-  <!-- Header -->
   <div class="panel-header">
     <h2><BookOpen :size="20" /> Skills</h2>
     <div class="panel-header-actions">
@@ -168,7 +154,6 @@ async function submitCreate(): Promise<void> {
 
   <div v-if="loading" class="loading">Loading…</div>
 
-  <!-- Create form -->
   <template v-else-if="viewMode === 'create'">
     <div class="provider-form-page">
       <div class="form-page-header">
@@ -221,9 +206,7 @@ async function submitCreate(): Promise<void> {
     </div>
   </template>
 
-  <!-- List view -->
   <template v-else>
-    <!-- My Skills -->
     <h4 class="section-head">My Skills</h4>
 
     <div
@@ -240,7 +223,6 @@ async function submitCreate(): Promise<void> {
 
     <div v-else id="userSkillsGrid" class="skills-grid">
       <template v-for="skill in userSkills" :key="skill.id">
-        <!-- Edit mode -->
         <div v-if="editingId === skill.id" class="cap-card skill-card">
           <div class="skill-card-header">
             <strong>{{ skill.title }}</strong>
@@ -281,7 +263,6 @@ async function submitCreate(): Promise<void> {
           </form>
         </div>
 
-        <!-- Display mode -->
         <div
           v-else
           class="cap-card skill-card"
@@ -335,7 +316,6 @@ async function submitCreate(): Promise<void> {
       </template>
     </div>
 
-    <!-- Curated Skills -->
     <h4 class="section-head" style="margin-top:32px;">Curated Skills</h4>
 
     <div v-if="curatedSkills.length === 0" class="empty-state">
@@ -397,7 +377,6 @@ async function submitCreate(): Promise<void> {
       </div>
     </div>
 
-    <!-- Skill Associations -->
     <template v-if="associations.length > 0">
       <h4 class="section-head" style="margin-top:32px;">Skill Associations</h4>
       <p class="panel-desc">Patterns discovered from your behaviour, linked to skills.</p>

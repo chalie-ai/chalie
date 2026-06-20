@@ -11,10 +11,7 @@ export interface ListData {
 }
 
 export interface ListPayload extends ListData {
-  /**
-   * Some payloads nest the list under `list`. Legacy list.js:34 unwrapped
-   * `payload.list || payload`; we replicate that so both shapes render.
-   */
+  /** Some payloads nest the list under `list`; both shapes must render. */
   list?: ListData;
 }
 
@@ -27,11 +24,9 @@ interface ListItem {
 
 const props = defineProps<{ payload: ListPayload; synthesis?: string }>();
 
-// Unwrap the nested-or-flat shape (legacy list.js:34: `payload.list || payload`).
 const listData = computed<ListData>(() => props.payload.list ?? props.payload);
 
-// Local reactive copy for optimistic UI — toggles update the DOM immediately.
-// `items ?? []` guards a malformed/historic payload (legacy list.js:34).
+// Local reactive copy for optimistic UI; `?? []` guards a malformed payload.
 const items = ref<ListItem[]>((listData.value.items ?? []).map((i) => ({ ...i })));
 
 const doneCount = computed<number>(() => items.value.filter((i) => i.checked).length);
@@ -41,11 +36,10 @@ const progressPercent = computed<number>(() =>
 );
 
 function onToggle(item: ListItem): void {
-  // Block re-toggling while a previous flip is still in flight (legacy list.js:87).
   if (item.busy) return;
   const newState = !item.checked;
 
-  // Optimistic flip — revert on backend error (legacy list.js:91-114).
+  // Optimistic flip — revert on backend error.
   item.checked = newState;
   item.busy = true;
 
@@ -54,8 +48,8 @@ function onToggle(item: ListItem): void {
     item.busy = false;
   };
 
-  // The session store's chalie:silent-action listener reads detail.payload and
-  // posts it via ws.sendAction; onMessage/onError/onDone drive the optimistic UI.
+  // The session store's chalie:silent-action listener posts payload via
+  // ws.sendAction; onMessage/onError/onDone drive the optimistic UI.
   emit('chalie:silent-action', {
     payload: {
       skill: 'list',
@@ -76,7 +70,6 @@ function onToggle(item: ListItem): void {
 
 <template>
   <div class="rich-card list-card">
-    <!-- Header: title + progress count -->
     <div class="list-card__head">
       <h4 class="list-card__title">{{ listData.name }}</h4>
       <div class="list-card__progress">
@@ -84,12 +77,10 @@ function onToggle(item: ListItem): void {
       </div>
     </div>
 
-    <!-- Progress bar -->
     <div class="list-card__bar">
       <div class="list-card__bar-fill" :style="{ width: progressPercent + '%' }" />
     </div>
 
-    <!-- Checklist items -->
     <div class="list-card__items">
       <div
         v-for="(item, index) in items"

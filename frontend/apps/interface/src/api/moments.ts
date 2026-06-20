@@ -6,32 +6,23 @@ export interface Moment {
   transcript_id: number | null;
   key: string;
   value: string;
-  /** Alias for value — rendered by moment_search.js as item.message_text. */
+  /** Alias for `value` — moment_search.js renders item.message_text. */
   message_text: string;
   created_at: string | null;
 }
 
 export const moments = {
-  /**
-   * Semantic search over pinned moments.
-   * GET /moments/search?q=<query>
-   */
+  /** GET /moments/search?q=<query> — semantic search over pinned moments. */
   search(q: string): Promise<{ items: Moment[] }> {
     return api.get(`/moments/search?q=${encodeURIComponent(q)}`);
   },
 
-  /**
-   * Pin an assistant message as a moment.
-   * POST /moments — body: { message_text } or { transcript_id }
-   */
+  /** POST /moments — pin an assistant message; body { message_text }. */
   pin(content: string): Promise<{ item: Moment; duplicate: boolean }> {
     return api.post('/moments', { message_text: content });
   },
 
-  /**
-   * Soft-delete (forget) a moment by its transcript ID.
-   * POST /moments/<tid>/forget
-   */
+  /** POST /moments/<tid>/forget — soft-delete a moment by transcript ID. */
   forget(tid: number): Promise<{ ok: boolean }> {
     return api.post(`/moments/${tid}/forget`, {});
   },

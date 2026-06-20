@@ -51,11 +51,9 @@ async function openForm(c: Capability): Promise<void> {
   // Stale-guard: a newer openForm() may have superseded this one during the await above.
   if (formCap.value !== c) return;
 
-  // Clear both records
   for (const key of Object.keys(textValues)) delete textValues[key];
   for (const key of Object.keys(boolValues)) delete boolValues[key];
 
-  // Seed per field
   for (const f of c.fields ?? []) {
     if (f.type === 'checkbox') {
       boolValues[f.name] =
@@ -116,7 +114,6 @@ async function disconnect(c: Capability): Promise<void> {
       </div>
       <form @submit.prevent="submit">
         <template v-for="f in formFields" :key="f.name">
-          <!-- checkbox -->
           <div v-if="f.type === 'checkbox'" class="form-group">
             <label class="switch-label">
               <label class="switch">
@@ -127,7 +124,6 @@ async function disconnect(c: Capability): Promise<void> {
             </label>
           </div>
 
-          <!-- select -->
           <div v-else-if="f.type === 'select'" class="form-group">
             <label>{{ f.label }}</label>
             <div class="tab-select">
@@ -142,7 +138,6 @@ async function disconnect(c: Capability): Promise<void> {
             </div>
           </div>
 
-          <!-- textarea -->
           <div v-else-if="f.type === 'textarea'" class="form-group">
             <label>{{ f.label }}</label>
             <textarea
@@ -152,7 +147,6 @@ async function disconnect(c: Capability): Promise<void> {
             ></textarea>
           </div>
 
-          <!-- text / password -->
           <div
             v-else
             v-show="isVisible(f)"

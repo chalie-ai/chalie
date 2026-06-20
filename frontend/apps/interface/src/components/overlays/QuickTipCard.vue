@@ -2,15 +2,10 @@
 /**
  * QuickTipCard — slide-up feature-discovery card above the input dock.
  *
- * Port of frontend/interface/quick_tip_card.js.
+ * DORMANT: the backend does not currently emit `quick_tip` WS events; ported for
+ * parity, activates automatically when the backend ships the event.
  *
- * DORMANT: the backend does not currently emit `quick_tip` WS events. This
- * component is ported for parity and will activate automatically when the
- * backend ships the event.
- *
- * State is owned by useNotificationsStore. The component is purely presentational:
- *   Dismiss (✕ / Escape) → notifications.dismissTip()
- *   Mute                 → notifications.muteTip()
+ * State is owned by useNotificationsStore; this component is purely presentational.
  */
 import { computed, onMounted, onBeforeUnmount } from 'vue';
 import { Lightbulb, X } from '@lucide/vue';
@@ -20,8 +15,6 @@ const notifications = useNotificationsStore();
 
 const tip = computed(() => notifications.currentTip);
 const visible = computed(() => tip.value !== null);
-
-// ── Escape key dismiss (port of quick_tip_card.js lines 88-90) ───────────────
 
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && visible.value) {
@@ -39,12 +32,6 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!--
-    Port of the .tip element built in quick_tip_card.js _buildCard().
-    Visibility is driven by the `tip--visible` / `tip--leaving` class pattern
-    from the legacy CSS, replicated here via Transition + CSS.
-    aria-hidden mirrors the legacy setAttribute('aria-hidden', ...) pattern.
-  -->
   <Transition name="tip">
     <div
       v-if="visible"
@@ -52,7 +39,6 @@ onBeforeUnmount(() => {
       role="status"
       aria-live="polite"
     >
-      <!-- Dismiss ✕ (port of .tip__dismiss button, lines 56-62) -->
       <button
         class="tip__dismiss"
         aria-label="Dismiss tip"
@@ -61,7 +47,6 @@ onBeforeUnmount(() => {
         <X :size="12" :stroke-width="2.4" aria-hidden="true" />
       </button>
 
-      <!-- Header: icon + label (port of .tip__head, lines 63-67) -->
       <div class="tip__head">
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div v-if="tip?.icon_svg" class="tip__icon" v-html="tip.icon_svg" />
@@ -71,16 +56,13 @@ onBeforeUnmount(() => {
         <div class="tip__label">Quick tip</div>
       </div>
 
-      <!-- Body (port of .tip__body, line 68) -->
       <p class="tip__body">{{ tip?.body ?? '' }}</p>
 
-      <!-- "Try saying" example (port of .tip__example, lines 69-72) -->
       <div v-if="tip?.example" class="tip__example">
         <div class="tip__example-label">Try saying</div>
         <div class="tip__example-prompt">{{ tip.example }}</div>
       </div>
 
-      <!-- Footer: mute button (port of .tip__foot, lines 73-75) -->
       <div class="tip__foot">
         <button class="tip__mute" @click="notifications.muteTip()">
           Don't show more tips
@@ -91,14 +73,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
-/*
- * Styles are a scoped port of the .tip / .tip--visible / .tip--leaving rules
- * from frontend/interface/style.css (lines 3965-4131).
- * Theme-sensitive colors use CSS custom properties. Some box-shadow and inset
- * rgba values are theme-neutral (black transparency) and are ported verbatim
- * from the legacy source to preserve the exact visual output (Rule 7).
- */
-
 .tip {
   position: fixed;
   left: 50%;
@@ -113,12 +87,13 @@ onBeforeUnmount(() => {
   border-top: 1px solid color-mix(in oklab, var(--accent-primary, #8a5cff) 55%, transparent);
   backdrop-filter: blur(16px) saturate(140%);
   -webkit-backdrop-filter: blur(16px) saturate(140%);
+  // Shadow rgba(0,0,0,…)/rgba(255,255,255,…) are theme-neutral transparency — kept hardcoded, not tokenized, for identical shadow parity in both themes.
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.04) inset,
     0 2px 8px rgba(0, 0, 0, 0.2),
     0 8px 32px rgba(0, 0, 0, 0.35);
 
-  // plain `[data-theme] &` — :global() drops the `&` and leaks these onto <html>.
+  // Plain `[data-theme] &` — :global() drops the `&` and leaks these onto <html>.
   [data-theme='light'] & {
     background: color-mix(in oklab, var(--bg-2, #f5f3f0) 95%, transparent);
     box-shadow:
@@ -127,8 +102,6 @@ onBeforeUnmount(() => {
       0 8px 32px rgba(0, 0, 0, 0.12);
   }
 }
-
-// ── Dismiss button (port of .tip__dismiss) ────────────────────────────────────
 
 .tip__dismiss {
   position: absolute;
@@ -156,8 +129,6 @@ onBeforeUnmount(() => {
     height: 12px;
   }
 }
-
-// ── Header (port of .tip__head / .tip__icon / .tip__label) ───────────────────
 
 .tip__head {
   display: flex;
@@ -192,8 +163,6 @@ onBeforeUnmount(() => {
   color: var(--text-tertiary, rgba(234, 230, 242, 0.3));
 }
 
-// ── Body (port of .tip__body) ─────────────────────────────────────────────────
-
 .tip__body {
   font-size: 0.92rem;
   color: var(--text-primary, #eae6f2);
@@ -201,8 +170,6 @@ onBeforeUnmount(() => {
   margin: 0 0 12px;
   letter-spacing: -0.005em;
 }
-
-// ── Example block (port of .tip__example / .tip__example-label / .tip__example-prompt) ──
 
 .tip__example {
   padding: 10px 12px;
@@ -231,8 +198,6 @@ onBeforeUnmount(() => {
   &::after  { content: '\201D'; }
 }
 
-// ── Footer / mute (port of .tip__foot / .tip__mute) ──────────────────────────
-
 .tip__foot {
   display: flex;
   justify-content: flex-end;
@@ -256,18 +221,13 @@ onBeforeUnmount(() => {
   }
 }
 
-// ── Visible resting state (port of legacy style.css .tip--visible, lines 3989-3993) ──
-// The element carries class="tip tip--visible" statically when visible.
-// This rule establishes the resting position/opacity so the card sits correctly
-// when the Transition has completed its enter phase.
-
+// Static resting position/opacity for the always-present "tip--visible" class,
+// so the card sits correctly once the Transition's enter phase completes.
 .tip--visible {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
   pointer-events: auto;
 }
-
-// ── Vue Transition — mirrors .tip--visible / .tip--leaving CSS animation ──────
 
 .tip-enter-active,
 .tip-leave-active {
@@ -276,19 +236,16 @@ onBeforeUnmount(() => {
     transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-// Enter: start translated down + invisible (port of base .tip: opacity:0, translateY(20px))
 .tip-enter-from {
   opacity: 0;
   transform: translateX(-50%) translateY(20px);
 }
 
-// Enter-to: land at the resting state (translateY(0), full opacity).
 .tip-enter-to {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
 
-// Leave: slide up + fade (port of .tip--leaving: translateY(-12px), opacity:0)
 .tip-leave-to {
   opacity: 0;
   transform: translateX(-50%) translateY(-12px);

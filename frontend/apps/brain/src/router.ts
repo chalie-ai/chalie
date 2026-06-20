@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { AuthError, HttpError } from '@chalie/shared';
 import { system } from './api/system';
 
-// ── Views ────────────────────────────────────────────────────────────────────
 import ProvidersView from './views/ProvidersView.vue';
 import CognitionView from './views/CognitionView.vue';
 import SchedulerView from './views/SchedulerView.vue';
@@ -14,7 +13,6 @@ import SkillsView from './views/SkillsView.vue';
 import McpView from './views/McpView.vue';
 import ImportExportView from './views/ImportExportView.vue';
 
-// ── Cognition sub-views ──────────────────────────────────────────────────────
 import MemorySub from './views/cognition/MemorySub.vue';
 import ToolsSub from './views/cognition/ToolsSub.vue';
 import WorldSub from './views/cognition/WorldSub.vue';
@@ -23,20 +21,18 @@ import ErrorsSub from './views/cognition/ErrorsSub.vue';
 import UsageSub from './views/cognition/UsageSub.vue';
 import CompactionSub from './views/cognition/CompactionSub.vue';
 
-// ── Scheduler sub-views (filter tabs — routed for deep-link / breadcrumb) ───
+// Scheduler filter tabs are routed for deep-link / breadcrumb support.
 import SchedulerAllSub from './views/scheduler/AllSub.vue';
 import SchedulerPendingSub from './views/scheduler/PendingSub.vue';
 import SchedulerFiredSub from './views/scheduler/FiredSub.vue';
 import SchedulerFailedSub from './views/scheduler/FailedSub.vue';
 import SchedulerCancelledSub from './views/scheduler/CancelledSub.vue';
 
-// ── Documents sub-views ──────────────────────────────────────────────────────
 import DocumentsActiveSub from './views/documents/ActiveSub.vue';
 import DocumentsProcessingSub from './views/documents/ProcessingSub.vue';
 import DocumentsUploadsSub from './views/documents/UploadsSub.vue';
 import DocumentsDeletedSub from './views/documents/DeletedSub.vue';
 
-// ── Policies sub-views ───────────────────────────────────────────────────────
 import PoliciesChatSub from './views/policies/ChatSub.vue';
 import PoliciesBackgroundSub from './views/policies/BackgroundSub.vue';
 import PoliciesExternalSub from './views/policies/ExternalSub.vue';
@@ -44,7 +40,6 @@ import PoliciesExternalSub from './views/policies/ExternalSub.vue';
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
-    // Default redirect: match legacy app.js _readHash() which defaults to 'providers'.
     { path: '/', redirect: '/providers' },
 
     { path: '/providers', name: 'providers', component: ProvidersView },
@@ -61,8 +56,7 @@ export const router = createRouter({
         { path: 'personality', name: 'cognition-personality', component: PersonalitySub },
         { path: 'errors', name: 'cognition-errors', component: ErrorsSub },
         { path: 'usage', name: 'cognition-usage', component: UsageSub },
-        // FIX: legacy SUB_ROUTES.cognition omits 'compaction', silently coercing
-        // #/cognition/compaction to memory. Registered here so the route resolves.
+        // Legacy omitted 'compaction', coercing it to memory; registered so it resolves.
         { path: 'compaction', name: 'cognition-compaction', component: CompactionSub },
       ],
     },
@@ -114,17 +108,12 @@ export const router = createRouter({
     { path: '/mcp', name: 'mcp', component: McpView },
     { path: '/import-export', name: 'import-export', component: ImportExportView },
 
-    // Catch-all → providers (matches legacy _readHash() fallback to 'providers').
+    // Catch-all → providers.
     { path: '/:pathMatch(.*)*', redirect: '/providers' },
   ],
 });
 
-/**
- * Whether the auth gate issued a hard redirect on the initial navigation.
- *
- * main.ts reads this after `router.isReady()` to decide whether to mount the
- * app at all. Parity with legacy app.js:351 (`await chalieGateReady; if (!gate.stay) return;`).
- */
+// True if the gate hard-redirected on initial nav; main.ts reads it to skip the mount.
 let _gateRedirected = false;
 export function authGateRedirected(): boolean {
   return _gateRedirected;
@@ -137,14 +126,9 @@ function hardRedirect(to: string): false {
 }
 
 /**
- * Auth gate — port of frontend/shared/auth-gate.js `brain` page branch.
- *
- * Brain rules (from auth-gate.js:65-67):
- *   !account → hard-redirect /on-boarding/
- *   !session → hard-redirect /login/?next=<path>
- *   !providers → providersOnly LOCK (stay in Brain, force Providers panel, no hard redirect)
- *
- * Network failure → stay (server guards the real API endpoints anyway).
+ * Brain auth gate: !account → /on-boarding; !session → /login; !providers →
+ * providersOnly LOCK (stay mounted, force Providers panel, NOT a hard redirect).
+ * Network failure → stay; the real API endpoints guard themselves.
  */
 router.beforeEach(async () => {
   const { useShellStore } = await import('./stores/shell');
@@ -155,10 +139,10 @@ router.beforeEach(async () => {
     status = await system.authStatus();
   } catch (err) {
     if (err instanceof HttpError || err instanceof AuthError) {
-      // Server responded but not ok — treat as all-false → onboarding redirect.
+      // Server responded not-ok — treat as all-false → onboarding.
       return hardRedirect('/on-boarding/');
     }
-    // Network / server unreachable — stay; guards on real endpoints still apply.
+    // Server unreachable — stay; real endpoints still guard.
     return true;
   }
 
@@ -173,11 +157,8 @@ router.beforeEach(async () => {
     );
   }
 
-  // Brain-specific: no providers → providersOnly LOCK (NOT a hard redirect).
-  // Stay in the Brain app; force providers panel and prevent navigating away.
   if (!has_providers) {
     shell.providersOnly = true;
-    // Force navigation to providers regardless of the requested route.
     if (router.currentRoute.value.name !== 'providers') {
       return { name: 'providers' };
     }

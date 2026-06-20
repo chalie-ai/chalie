@@ -11,7 +11,6 @@ import { HttpError } from '@chalie/shared';
  * Resolve a user-facing message for a thrown API error.
  * - HTTP (non-2xx) error → the server's {error} message if present, else `httpFallback`.
  * - anything else (network/unexpected) → `networkFallback`.
- * Mirrors the legacy panels' `data.error || '<fallback>'` (non-ok) vs catch-branch message split.
  */
 export function apiErrorMessage(e: unknown, httpFallback: string, networkFallback = 'Network error'): string {
   if (e instanceof HttpError) return e.error || httpFallback;

@@ -8,15 +8,9 @@ export const router = createRouter({
   routes: [{ path: '/', name: 'home', component: HomeView }],
 });
 
-/**
- * Whether the auth gate issued a hard redirect on the initial navigation.
- *
- * main.ts reads this (after `router.isReady()`) to decide whether to mount the
- * app at all. Gating the mount keeps the WebSocket from connecting when the gate
- * is about to navigate the page away — parity with legacy app.js:58
- * (`await chalieGateReady; if (!gate.stay) return;`), which wired *nothing*
- * until the gate resolved to "stay".
- */
+// Whether the auth gate issued a hard redirect on the initial navigation.
+// main.ts reads this (after router.isReady()) to decide whether to mount — gating
+// the mount keeps the WebSocket from connecting when the gate is navigating away.
 let _gateRedirected = false;
 export function authGateRedirected(): boolean {
   return _gateRedirected;
@@ -28,30 +22,20 @@ function redirect(to: string): false {
   return false;
 }
 
-/**
- * Auth gate — port of frontend/shared/auth-gate.js `chat` page branch.
- *
- * Runs once on the initial navigation to `/`. On missing account/session/
- * providers it performs a hard redirect to the appropriate legacy route.
- *
- * Error handling mirrors legacy auth-gate.js:22-27 exactly:
- *   - A reachable server that answers with a non-ok status (HttpError, incl.
- *     500; AuthError, i.e. 401) is treated as "all false" → the chain below
- *     sends the user to /on-boarding/.
- *   - A genuine network failure (fetch rejects, no response) → stay; the
- *     backend guards the real endpoints anyway.
- */
+// Auth gate — runs once on the initial navigation to `/`. On a missing
+// account/session/providers it hard-redirects to the appropriate route.
+// Error handling:
+//   - Reachable server with a non-ok status (HttpError/AuthError) → treated as
+//     all-false, which resolves to the onboarding redirect below.
+//   - Genuine network failure → stay; the backend guards the real endpoints.
 router.beforeEach(async () => {
   let status;
   try {
     status = await system.authStatus();
   } catch (err) {
     if (err instanceof HttpError || err instanceof AuthError) {
-      // Server responded, but not ok — legacy substitutes all-false, which
-      // resolves to the onboarding redirect (has_master_account === false).
       return redirect('/on-boarding/');
     }
-    // Network / server unreachable — stay; server guards anyway.
     return true;
   }
 

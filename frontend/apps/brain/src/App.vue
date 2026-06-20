@@ -14,9 +14,7 @@ const { init: initTheme } = useTheme();
 const shell = useShellStore();
 const heartbeat = useHeartbeat();
 
-// Reveal the shell once mounted — the shell starts at opacity:0 (see brain.scss)
-// so the 300ms fade-in runs on boot. Ports legacy app.js:375
-// (`appShell.style.opacity = '1'`), which the Vue cutover dropped.
+// Shell starts at opacity:0 (brain.scss); flip ready on mount so the fade-in runs.
 const ready = ref(false);
 
 onMounted(() => {
@@ -31,10 +29,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- Grain overlay (decorative, matches legacy .grain) -->
   <div class="grain"></div>
 
-  <!-- Main app shell — grid: sidebar | topbar / main -->
   <div
     id="appShell"
     class="app-shell"
@@ -55,12 +51,10 @@ onBeforeUnmount(() => {
     </main>
   </div>
 
-  <!-- Toast host (outside the grid, fixed-position) -->
   <ToastHost id="toastHost" />
 
-  <!-- Command palette overlay -->
   <CommandPalette id="cpOverlay" />
 
-  <!-- Confirm dialog (singleton, always mounted so useConfirm() resolves) -->
+  <!-- Singleton, always mounted so useConfirm() resolves -->
   <ConfirmDialog />
 </template>
