@@ -42,7 +42,6 @@ def _authenticate_ws(flask_request: object) -> bool:
     invalid token yields no wrapper id => caller closes the handshake unchanged.
     """
     from flask import Request
-    from flask.wrappers import Request as FlaskRequest
     from services.auth_session_service import validate_session
 
     if validate_session(cast("Request", flask_request)):
@@ -55,7 +54,7 @@ def _authenticate_ws(flask_request: object) -> bool:
     from services.wrapper_auth_service import WrapperAuthService
     from services.database_service import get_shared_db_service
 
-    bearer_request = cast(FlaskRequest, FlaskRequest.from_values(
+    bearer_request = cast(Request, Request.from_values(
         headers={"Authorization": "Bearer " + token}
     ))
     try:
