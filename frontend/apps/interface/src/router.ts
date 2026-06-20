@@ -5,7 +5,12 @@ import { system } from './api/system';
 
 export const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
-  routes: [{ path: '/', name: 'home', component: HomeView }],
+  routes: [
+    { path: '/', name: 'home', component: HomeView },
+    // Native-only pairing screen. Lazy import keeps the barcode-scanner plugin
+    // out of the web bundle's eager graph; the gate only routes here on Tauri.
+    { path: '/pairing/', name: 'pairing', component: () => import('./views/LinkDevice.vue') },
+  ],
 });
 
 // Whether the auth gate issued a hard redirect on the initial navigation.
