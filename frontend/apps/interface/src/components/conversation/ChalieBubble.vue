@@ -72,8 +72,9 @@ function onSpeak(): void {
       v-html="renderMarkup(form.text ?? '')"
     />
 
-    <!-- Footer row: glyph + timestamp (left) · mode badge + remember + speak (right) -->
-    <div class="speech-form__meta">
+    <!-- Footer row lives only on the LAST Chalie row of the turn — interim rows
+         carry no meta (glyph, timestamp, mode badge, or actions) at all. -->
+    <div v-if="isLastInTurn" class="speech-form__meta">
       <span class="sender-glyph" aria-hidden="true"></span>
       <span class="speech-form__timestamp">{{ form.meta.ts ?? '' }}</span>
 
@@ -82,9 +83,8 @@ function onSpeak(): void {
 
       <!-- Action buttons pushed to the right -->
       <div class="speech-form__actions">
-        <!-- FIX 4: disabled + active class when pinned. Turn-level: last row only. -->
+        <!-- FIX 4: disabled + active class when pinned. -->
         <button
-          v-if="isLastInTurn"
           class="speech-form__remember-btn"
           :class="{ 'speech-form__remember-btn--active': pinActive }"
           aria-label="Remember this"
@@ -99,9 +99,9 @@ function onSpeak(): void {
           </svg>
         </button>
 
-        <!-- FIX 5: only render when there is speakable text; turn-level: last row only -->
+        <!-- FIX 5: only render when there is speakable text -->
         <button
-          v-if="isLastInTurn && speakText"
+          v-if="speakText"
           class="speech-form__speak-btn"
           aria-label="Listen to this message"
           type="button"
