@@ -77,17 +77,25 @@ def snapshot_import() -> "ResponseReturnValue":
     uploaded = request.files["file"]
     password = request.form.get("password") or None
 
+    # Bound before the try so the except clause can name SnapshotError even if
+    # uploaded.save() raises OSError before stage_import() is reached.
+    from services.snapshot_service import SnapshotError, SnapshotService
+
     tmp_dir = Path(tempfile.mkdtemp(prefix="chalie-snapshot-upload-"))
     try:
         safe_name = secure_filename(uploaded.filename or _DEFAULT_UPLOAD_NAME)
         upload_path = tmp_dir / safe_name
         uploaded.save(str(upload_path))
-
-        from services.snapshot_service import SnapshotService
         SnapshotService().stage_import(upload_path, password)
+    except SnapshotError as e:
+        # Curated, admin-facing rejection (bad manifest, checksum, schema guard).
+        logger.warning(f"[REST API] snapshot/import rejected: {e}")
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
+        # Raw text (pyzipper password detail, sqlite/OS paths) stays server-side
+        # only — the caller gets a generic message, mirroring _safe_validation_msg.
         logger.exception(f"[REST API] snapshot/import staging error: {e}")
-        return jsonify({"error": f"Snapshot import failed: {e}"}), 400
+        return jsonify({"error": "Snapshot import failed"}), 400
     finally:
         import shutil
         shutil.rmtree(str(tmp_dir), ignore_errors=True)
