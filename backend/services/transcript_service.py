@@ -367,31 +367,24 @@ class Transcript:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
 
-            # Build a list of (channel, watermark) pairs from the append-only
-            # tool_calls compaction audit rows.
+            # Resolve each channel's compaction watermark through the single
+            # canonical source — compaction_persistence.get_compaction reads the
+            # latest role='compaction' transcript row, whose own id IS the
+            # watermark. The all-channels discovery uses that SAME source so the
+            # two can never silently drift apart again (TKT-1097).
             if channel:
-                row = compaction_persistence.get_compaction(channel)
-                watermarks = [(channel, row['compacted_up_to_id'])] if row else []
+                channels = [channel]
             else:
                 with db.connection() as conn:
-                    rows = conn.execute(
-                        """
-                        SELECT DISTINCT t.channel
-                        FROM tool_calls tc
-                        JOIN transcript t ON t.id = tc.transcript_id
-                        WHERE tc.tool_name = 'compaction'
-                          AND json_extract(tc.params, '$.status') = 'success'
-                        """
-                    ).fetchall()
-                channels = [r[0] for r in rows]
-                watermarks = []
-                for ch in channels:
-                    row = compaction_persistence.get_compaction(ch)
-                    if row:
-                        watermarks.append((ch, row['compacted_up_to_id']))
+                    channels = [r[0] for r in conn.execute(
+                        "SELECT DISTINCT channel FROM transcript WHERE role = 'compaction'"
+                    ).fetchall()]
 
-            if not watermarks:
-                return 0
+            watermarks = []
+            for ch in channels:
+                row = compaction_persistence.get_compaction(ch)
+                if row:
+                    watermarks.append((ch, row['compacted_up_to_id']))
 
             with db.connection() as conn:
                 cursor = conn.cursor()
@@ -447,8 +440,13 @@ class Transcript:
 
                 cursor.close()
 
-            if total_deleted > 0:
-                logger.info(f"{LOG_PREFIX} Cleaned up {total_deleted} unlinked transcript entries")
+            # Always log the count — a steady 0 across channels is the signature
+            # of a watermark/discovery regression (the TKT-1097 no-op) and must
+            # not stay invisible. info, never debug.
+            logger.info(
+                f"{LOG_PREFIX} Transcript GC: deleted {total_deleted} unlinked "
+                f"entries across {len(watermarks)} watermarked channel(s)"
+            )
             return total_deleted
 
         except Exception as e:

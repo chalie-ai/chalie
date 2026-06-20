@@ -332,7 +332,7 @@ class DecayEngineService:
             from services.transcript_service import Transcript
             return Transcript.cleanup_unlinked_entries()
         except Exception as e:
-            logger.debug(f"[DECAY ENGINE] Transcript cleanup non-fatal: {e}")
+            logger.warning(f"[DECAY ENGINE] Transcript cleanup failed: {e}")
             return 0
 
     def _purge_tool_calls(self) -> int:
