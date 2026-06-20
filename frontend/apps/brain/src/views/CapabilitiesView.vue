@@ -6,7 +6,7 @@ import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useBrainResource } from '../composables/useBrainResource';
-import { ChevronRight, Settings } from '@lucide/vue';
+import { ChevronLeft, Settings } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 
@@ -110,7 +110,7 @@ async function disconnect(c: Capability): Promise<void> {
     <div class="provider-form-page">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="viewMode = 'list'">
-          <ChevronRight :size="14" /> Back
+          <ChevronLeft :size="14" /> Back
         </button>
         <h3>{{ formCap.name }} {{ formConnected ? 'Settings' : 'Setup' }}</h3>
       </div>

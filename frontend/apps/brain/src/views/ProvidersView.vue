@@ -6,7 +6,7 @@ import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useShellStore } from '../stores/shell';
-import { Plus, LayoutGrid, ChevronRight } from '@lucide/vue';
+import { Plus, LayoutGrid, ChevronLeft } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -189,6 +189,16 @@ async function selectProvider(id: number): Promise<void> {
 }
 
 // ── Delete provider ───────────────────────────────────────────────
+// Role names a provider currently holds — mirrors the backend role logic.
+// A provider in any role cannot be deleted (clear/reassign the role first).
+function providerRoles(id: number): string[] {
+  const roles: string[] = [];
+  if (id === selectedId.value) roles.push('main');
+  if (visionSource.value === 'explicit' && id === visionId.value) roles.push('vision');
+  if (delegateSource.value === 'explicit' && id === delegateId.value) roles.push('delegate');
+  return roles;
+}
+
 async function confirmDelete(id: number): Promise<void> {
   const p = providerList.value.find((x) => x.id === id);
   const name = p?.name || 'this provider';
@@ -536,7 +546,13 @@ async function saveProvider(): Promise<void> {
           </div>
           <div class="provider-actions">
             <button class="btn btn-sm btn-secondary" @click="openWizard(p.id)">Edit</button>
-            <button class="btn btn-sm btn-danger" @click="confirmDelete(p.id)">Delete</button>
+            <button
+              class="btn btn-sm btn-danger"
+              :disabled="providerRoles(p.id).length > 0"
+              :title="providerRoles(p.id).length > 0 ? `In use as the ${providerRoles(p.id).join(', ')} provider — clear or reassign this role before deleting` : ''"
+              :aria-disabled="providerRoles(p.id).length > 0"
+              @click="confirmDelete(p.id)"
+            >Delete</button>
           </div>
         </div>
       </template>
@@ -585,7 +601,7 @@ async function saveProvider(): Promise<void> {
     <div class="provider-wizard">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="backFromPicker">
-          <ChevronRight :size="14" />
+          <ChevronLeft :size="14" />
           Back
         </button>
         <h3>Choose a provider</h3>
@@ -616,7 +632,7 @@ async function saveProvider(): Promise<void> {
     <div class="provider-wizard">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="backFromForm">
-          <ChevronRight :size="14" />
+          <ChevronLeft :size="14" />
           {{ isEditing ? 'Back' : 'Providers' }}
         </button>
         <h3>{{ isEditing ? 'Edit Provider' : `Set up ${preset?.name ?? ''}` }}</h3>

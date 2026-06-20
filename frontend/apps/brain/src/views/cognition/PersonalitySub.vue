@@ -65,10 +65,10 @@ async function save() {
   <template v-else>
     <p class="panel-desc">Adjust how Chalie communicates. Changes take effect on the next message.</p>
     <div class="personality-grid">
-      <div v-for="s in sliders" :key="s.key" class="personality-row">
-        <span class="pole pole-left">{{ s.left }}</span>
-        <div class="personality-track">
-          <label class="personality-label">{{ s.label }}</label>
+      <div v-for="s in sliders" :key="s.key" class="personality-field">
+        <label class="personality-label">{{ s.label }}</label>
+        <div class="personality-row">
+          <span class="pole pole-left">{{ s.left }}</span>
           <input
             v-model.number="personality[s.key]"
             type="range"
@@ -78,8 +78,8 @@ async function save() {
             class="personality-range"
             :data-key="s.key"
           />
+          <span class="pole pole-right">{{ s.right }}</span>
         </div>
-        <span class="pole pole-right">{{ s.right }}</span>
       </div>
     </div>
     <div class="personality-actions">

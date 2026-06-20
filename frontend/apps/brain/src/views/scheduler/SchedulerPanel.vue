@@ -7,7 +7,7 @@ import { apiErrorMessage } from '../../api/http';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { useBrainResource } from '../../composables/useBrainResource';
-import { Plus, ChevronRight, Calendar } from '@lucide/vue';
+import { Plus, ChevronLeft, Calendar } from '@lucide/vue';
 
 const props = defineProps<{ statusFilter: 'all' | 'pending' | 'fired' | 'failed' | 'cancelled' }>();
 
@@ -108,7 +108,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
     <div class="provider-form-page">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="formMode = 'list'">
-          <ChevronRight :size="14" /> Back
+          <ChevronLeft :size="14" /> Back
         </button>
         <h3>{{ editingId != null ? 'Edit Schedule' : 'New Schedule' }}</h3>
       </div>

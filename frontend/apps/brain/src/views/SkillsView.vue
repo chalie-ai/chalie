@@ -7,7 +7,7 @@ import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useBrainResource } from '../composables/useBrainResource';
-import { BookOpen, Plus, ChevronRight, ChevronDown, SquarePen, Trash2, Copy } from '@lucide/vue';
+import { BookOpen, Plus, ChevronLeft, ChevronRight, ChevronDown, SquarePen, Trash2, Copy } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -173,7 +173,7 @@ async function submitCreate(): Promise<void> {
     <div class="provider-form-page">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm" @click="viewMode = 'list'">
-          <ChevronRight :size="14" /> Back
+          <ChevronLeft :size="14" /> Back
         </button>
         <h3>New Skill</h3>
       </div>

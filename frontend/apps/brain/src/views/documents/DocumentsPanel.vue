@@ -7,7 +7,7 @@ import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { HttpError } from '@chalie/shared';
 import { useBrainResource } from '../../composables/useBrainResource';
-import { Upload, ChevronRight, Eye, FileText, Trash2 } from '@lucide/vue';
+import { Upload, ChevronLeft, Eye, FileText, Trash2 } from '@lucide/vue';
 
 const props = defineProps<{
   statusFilter: 'active' | 'processing' | 'uploads' | 'deleted';
@@ -196,7 +196,7 @@ async function onUpload(event: Event): Promise<void> {
     <div class="provider-form-page" style="max-width:none">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="viewMode = 'list'">
-          <ChevronRight :size="14" /> Back
+          <ChevronLeft :size="14" /> Back
         </button>
         <h3>{{ (detailDoc?.original_name as string) || 'Document' }}</h3>
       </div>
@@ -275,7 +275,7 @@ async function onUpload(event: Event): Promise<void> {
       <!-- Drill-down header -->
       <div v-if="drillGroup" class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="drillGroup = null">
-          <ChevronRight :size="14" /> Back
+          <ChevronLeft :size="14" /> Back
         </button>
         <h3>{{ drillGroup }}</h3>
         <span class="doc-meta-item">{{ drillDocs.length }} document{{ drillDocs.length === 1 ? '' : 's' }}</span>

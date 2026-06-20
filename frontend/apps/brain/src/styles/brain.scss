@@ -9,7 +9,6 @@
   --sidebar-w: 248px;
   --sidebar-w-collapsed: 64px;
   --topbar-h: 56px;
-  --content-max: 1100px;
 }
 
 *,
@@ -250,9 +249,9 @@ body::before {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 14px 16px;
+  height: var(--topbar-h);
+  padding: 0 16px;
   border-bottom: 1px solid var(--border);
-  min-height: var(--topbar-h);
   text-decoration: none;
   color: inherit;
 
@@ -482,7 +481,7 @@ body::before {
 
 // ── Main content area ─────────────────────────────────────────────
 .main { grid-area: main; padding: 24px; overflow-y: auto; }
-.main-inner { max-width: var(--content-max); margin: 0 auto; }
+.main-inner { width: 100%; }
 
 // ── Panel headers ─────────────────────────────────────────────────
 .panel-header {
@@ -506,6 +505,7 @@ body::before {
   }
 
   h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+  h2:has(svg) { display: flex; align-items: center; gap: 8px; }
 }
 
 .panel-header-actions { display: flex; align-items: center; gap: 10px; }
@@ -579,6 +579,8 @@ body::before {
   border-color: rgba(251, 113, 133, 0.3);
 
   &:hover { background: rgba(251, 113, 133, 0.08); border-color: rgba(251, 113, 133, 0.5); }
+
+  &[disabled] { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 }
 
 // ── Filter tabs ───────────────────────────────────────────────────
@@ -881,6 +883,7 @@ input[type='checkbox'] {
   margin-bottom: 16px;
   flex-wrap: wrap;
 }
+.records-controls .filter-tabs { margin-bottom: 0; }
 
 .records-footer { display: flex; justify-content: center; padding: 12px 0; }
 
@@ -1340,7 +1343,6 @@ input[type='checkbox'] {
   margin-bottom: 20px;
 
   h3 { margin: 0; font-size: 18px; font-weight: 600; }
-  .back-btn svg { transform: rotate(90deg); }
 }
 
 .switch-label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); cursor: pointer; }
@@ -1491,24 +1493,22 @@ input[type='checkbox'] {
 // ── Personality sliders ───────────────────────────────────────────
 .personality-grid { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
 
+.personality-field { display: flex; flex-direction: column; gap: 6px; }
+
 .personality-row { display: flex; align-items: center; gap: 12px; }
 
 .pole { font-size: 12px; color: var(--text-secondary); width: 90px; }
 .pole-left  { text-align: right; }
 .pole-right { text-align: left; }
 
-.personality-track { flex: 1; }
-
 .personality-label {
-  display: block;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-tertiary);
-  margin-bottom: 4px;
 }
 
 .personality-range {
-  width: 100%;
+  flex: 1;
   height: 4px;
   -webkit-appearance: none;
   appearance: none;
@@ -1777,7 +1777,7 @@ input[type='checkbox'] {
 
 // ── Error list ────────────────────────────────────────────────────
 .error-list { display: flex; flex-direction: column; gap: 4px; }
-.error-item { padding: 10px 14px; gap: 10px; }
+.error-item { padding: 10px 14px; gap: 10px; align-items: flex-start; }
 .error-time { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; flex-shrink: 0; font-family: 'Inter', monospace; }
 .error-msg { font-size: 13px; color: var(--text-secondary); }
 
@@ -1913,7 +1913,7 @@ input[type='checkbox'] {
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-secondary);
-  background: var(--bg-secondary, var(--bg-surface));
+  background: var(--bg-surface-2);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 12px;
@@ -1992,7 +1992,6 @@ input[type='checkbox'] {
 // .form-hint (line 1239) and .form-input (line 1627) already exist above — not repeated.
 
 .brain-overview {
-  max-width: 640px;
   display: flex;
   flex-direction: column;
   gap: 24px;
