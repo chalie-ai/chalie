@@ -130,10 +130,19 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 .image-preview {
+  // Docked tray: a panel centred over the input box, sharing its width and
+  // sitting just above it — not a strip stranded at the dock's left edge.
+  max-width: var(--dock-width);
+  margin: 0 auto var(--space-sm);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-xs, 6px);
-  padding: var(--space-xs, 6px);
+  padding: var(--space-sm);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(20px) saturate(120%);
+  -webkit-backdrop-filter: blur(20px) saturate(120%);
 
   &--drag {
     outline: 2px dashed var(--accent, currentColor);

@@ -41,48 +41,29 @@
 // --------------------------------------------------------------------------
 // 2. User bubble
 // --------------------------------------------------------------------------
+// The wrapper owns the outer spacing (clearing the neighbouring rows) and stacks
+// the attachment list above its bubble. The bubble itself is a full-width flat
+// panel — no border, no accent stripe, no spark glyph; a slightly-elevated
+// surface sets it apart from the page.
+.user-message {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  margin: var(--space-lg) 0;
+}
+
 .speech-form--user {
-  background: var(--bg-surface-user);
-  border-color: color-mix(in oklab, var(--cyan) 12%, transparent);
-  align-self: flex-end;
-  max-width: 85%;
-}
-
-.speech-form--user::before {
-  right: -1px;
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    var(--dusk-blue) 12%,
-    color-mix(in oklab, var(--cyan) 85%, #fff) 38%,
-    var(--dusk-blue) 60%,
-    color-mix(in oklab, var(--cyan) 70%, transparent) 80%,
-    transparent 100%
-  );
-  background-size: 100% 240%;
-  animation: stripeFlow 7s ease-in-out infinite;
-  filter: saturate(1.15);
-  box-shadow: 0 0 8px var(--dusk-blue), 0 0 18px color-mix(in oklab, var(--cyan) 33%, transparent);
-}
-
-@keyframes stripeFlow {
-  0%, 100% { background-position: 0% 0%; }
-  50%      { background-position: 0% 100%; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .speech-form--user::before { animation: none; }
+  background: var(--bg-surface-2);
+  border: none;
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
 }
 
 // User text — preserve newlines
 .speech-form--user .speech-form__text {
   white-space: pre-wrap;
   font-weight: 600;
-}
-
-// Light theme user bubble
-[data-theme="light"] .speech-form--user {
-  background: color-mix(in oklab, var(--bg) 0%, #ffffff 80%);
 }
 
 // Hover lift (pointer devices only)
@@ -127,8 +108,7 @@
   align-self: stretch;
   width: 100%;
   max-width: 100%;
-  padding-left: 0;
-  padding-right: 0;
+  padding: 0;
 }
 
 // No accent stripe on Chalie — full-bleed text on the spine
@@ -168,13 +148,6 @@
   animation: glyphTwinkle 3.2s ease-in-out infinite;
 }
 
-.speech-form--user .sender-glyph {
-  right: -9px;
-  color: var(--dusk-blue);
-  -webkit-mask-image: url(/icons/sender-glyph-user.svg);
-  mask-image: url(/icons/sender-glyph-user.svg);
-}
-
 @keyframes glyphTwinkle {
   0%, 100% { opacity: 0.55; }
   50%      { opacity: 1; }
@@ -201,46 +174,45 @@
 }
 
 // --------------------------------------------------------------------------
-// 7. Attachments
+// 7. Attachments — condensed right-aligned list, act-trail idiom
 // --------------------------------------------------------------------------
-.speech-form__attachments {
-  position: relative;
-  z-index: 2;
+.user-attachments {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  margin-bottom: var(--space-sm);
+  flex-direction: column;
+  align-items: flex-end; // hug the right edge
+  gap: 0; // condensed — line-height carries the row rhythm
+  margin: 0;
+  padding: 0 var(--space-lg) 0 0; // line names up under the bubble's right padding
+  list-style: none;
 }
 
-.speech-form__attachments:last-child {
-  margin-bottom: 0;
-}
-
-.speech-form__attachment-img {
-  max-width: min(320px, 100%);
-  max-height: 320px;
-  width: auto;
-  height: auto;
-  border-radius: 12px;
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-card);
-  object-fit: contain;
-  display: block;
-}
-
-.speech-form__attachment-doc {
+.user-attachments__item {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-xs);
-  padding: var(--space-xs) var(--space-sm);
-  border-radius: 10px;
-  border: 1px solid var(--border);
-  background: var(--bg-chalie);
-  font-size: 0.85em;
+  gap: var(--space-sm);
   max-width: 100%;
+  padding: 1px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  color: var(--text-secondary);
+  transition: color 150ms ease;
 }
 
-.speech-form__attachment-doc-name {
+.user-attachments__item:hover {
+  color: var(--accent-primary);
+}
+
+.user-attachments__icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.user-attachments__name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -599,6 +571,13 @@ $act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summa
   font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;
   line-height: 1.4;
+}
+
+// Inside the folded group there is no live logo to indent under, so drop the
+// 24px summary indent — the expanded trail then lines up exactly with the
+// collapsed preview text (no rightward jump on expand).
+.act-group .act-summaries {
+  margin-left: 0;
 }
 
 // --------------------------------------------------------------------------

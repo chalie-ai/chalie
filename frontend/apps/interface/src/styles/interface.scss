@@ -39,6 +39,10 @@
   --radius-lg:   24px;
   --radius-full: 9999px;
 
+  // Layout — the input box and its trays (attachment preview, controls) all
+  // share this width so they line up as one stacked unit above the dock.
+  --dock-width:  min(80%, 1200px);
+
   // Transitions
   --duration-fast:   150ms;
   --duration-normal: 300ms;
@@ -360,7 +364,7 @@ body.speaker-user #ambientBloom {
 }
 
 .input-dock__outer {
-  max-width: min(80%, 1200px);
+  max-width: var(--dock-width);
   margin: 0 auto;
   display: flex;
   align-items: stretch;
@@ -618,7 +622,7 @@ body.speaker-user #ambientBloom {
 
 // ── Dock controls row (thinking selector + context indicator) ─────────────
 .dock-controls {
-  max-width: min(80%, 1200px);
+  max-width: var(--dock-width);
   margin: var(--space-xs) auto 0;
   padding: 0 var(--space-sm);
   display: flex;
@@ -784,13 +788,13 @@ body.speaker-user #ambientBloom {
     padding-right: var(--space-sm);
   }
 
-  .input-dock { padding: var(--space-sm) var(--space-md); }
-  .input-dock__outer { max-width: 100%; }
+  // Input box (and its trays, via --dock-width) span 90% of the viewport,
+  // centred by their auto margins. Dock horizontal padding is dropped so the
+  // box is exactly 90vw, not 90vw minus the padding.
+  :root { --dock-width: 90vw; }
+  .input-dock { padding: var(--space-sm) 0; }
 
   .presence-bar { padding: 0 var(--space-md); }
-
-  // Match the controls row to full-width input box on mobile
-  .dock-controls { max-width: 100%; }
 
   .btn-action { width: 32px; height: 32px; }
 }
