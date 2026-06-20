@@ -114,7 +114,7 @@ Four layers, each on a different timescale:
  
 | Layer | What it stores | Decays? |
 |---|---|---|
-| **Transcript** | Append-only record of every turn, channel-scoped, optionally GPS-tagged | Pruned after 90 days |
+| **Transcript** | Append-only record of every turn, channel-scoped, optionally GPS-tagged | Pruned once a row falls below its channel's compaction watermark and is no longer cited by a live episode (no age term) |
 | **Compaction** | LLM-written continuity summaries; the newest `role='compaction'` transcript row is the history watermark | No |
 | **Episodes** | Narrative snapshots extracted from transcript windows (see per-source profiles below), with salience and emotional scores; episodes form a three-level hierarchy — leaf (0), topic super-episode (1), era digest (2) — via periodic density-clustering roll-ups | Yes — exponential decay on last relevance, per-level tau |
 | **Data graph** | Structured facts (`user_specific`, `behavioral_pattern`, `place`, `document`, …) with per-kind decay and contradiction/canonicalisation rules | Yes — per-kind policy |
