@@ -13,11 +13,12 @@ The framework ``async`` boolean is exposed on a tool's schema ONLY on a
 channel (DmnConfig) and never when there is no live processor.  This is the
 schema-exposure gate, not a routing gate (§4.8d).
 
-The async LLM follow-up turn delivery is exercised end-to-end in the QA-env /
-scenario run, not here — it requires a real model.  This test proves the
-*decision* and the *non-blocking* contract without firing the LLM by cancelling
-the delegate before releasing it, which makes ``AsyncDelegateRunner._run`` skip
-delivery (§4.4).
+The async LLM follow-up turn delivery — and the on-cancel "cancelled by the
+user" notice turn — is exercised end-to-end where a real model is available,
+not here.  This test proves the *decision* and the
+*non-blocking* contract without firing the LLM: the captured mp carries no
+config, so the post-run delivery bails at ``deliver_async_result``'s no-config
+guard instead of synthesising a turn (§4.4).
 """
 
 import threading
@@ -38,7 +39,7 @@ pytestmark = pytest.mark.unit
 
 
 class _Ctx:
-    def __init__(self, config: ProcessorConfig) -> None:
+    def __init__(self, config: "ProcessorConfig | None") -> None:
         self.config = config
 
 
@@ -171,7 +172,10 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate() -> Non
             finished.append(True)
             return ToolResult.ok("done")
 
-    ctx = _Ctx(DmnConfig())
+    # Config-less captured mp: the dispatcher's async branch needs no config
+    # (the emitter no-ops on None), and on cancel the notice delivery bails at
+    # deliver_async_result's no-config guard — keeping this test LLM-free.
+    ctx = _Ctx(None)
     ability = _BlockingAbility(mp=ctx)
 
     before = {cast(str, d["sub_id"]) for d in async_delegate_runner.active()}
@@ -187,12 +191,13 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate() -> Non
     delegate_id = new.pop()
     assert delegate_id.startswith("test_per_call_blocking_")
 
-    # Cancel BEFORE releasing → AsyncDelegateRunner._run skips delivery
-    # (cancel_event.is_set()), so no real-LLM synthesis turn is spawned.
+    # Cancel BEFORE releasing → on completion _run builds the "cancelled by the
+    # user" notice and routes it to delivery; the captured mp has no config, so
+    # deliver_async_result bails at its no-config guard — no real-LLM turn.
     async_delegate_runner.cancel(delegate_id)
     release.set()
 
-    # The daemon finishes run(), skips delivery, and deregisters in `finally`.
+    # The daemon finishes run(), the notice delivery bails, and it deregisters in `finally`.
     for _ in range(100):
         if delegate_id not in {cast(str, d["sub_id"]) for d in async_delegate_runner.active()}:
             break

@@ -127,9 +127,16 @@ class AsyncDelegateRunner:
         delegate_id: str,
         cancel_event: threading.Event,
     ) -> None:
-        """Run the tool, deliver its result as a later turn through the captured
-        ``mp`` (cancellable via the delegate's event), and always deregister and
-        emit ``subagent_end`` on exit.
+        """Run the tool and deliver its outcome as a later turn through the
+        captured ``mp``, then always deregister and emit ``subagent_end`` on exit.
+
+        A normal result is delivered with the delegate's ``cancel_event`` threaded
+        into the synthesis turn, so stopping the delegate also aborts a spiralling
+        synthesis at its next boundary. If the delegate was cancelled while the
+        tool was still running, the now-unwanted result is replaced by a short
+        "cancelled by the user" notice — delivered under a FRESH event so the
+        notice itself always lands — telling the model the work stopped so it can
+        ask the user what to do next (never a silent drop).
 
         Lazy imports break the mutual deferral: the dispatcher imports this
         runner for its async branch, and api.chat imports this module for the
@@ -138,19 +145,29 @@ class AsyncDelegateRunner:
 
         try:
             try:
-                result = ToolDispatcher._run(ability, params)
-                result_text = ToolDispatcher._render(ability.get_name(), result)
+                body = ToolDispatcher._render(ability.get_name(), ToolDispatcher._run(ability, params))
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "[AsyncDelegateRunner] execution failed for %s: %s",
                     delegate_id, exc,
                 )
-                result_text = None
+                body = None
 
-            if result_text is not None and not cancel_event.is_set():
+            if cancel_event.is_set():
+                body = (
+                    f"`{ability.get_name()}` was cancelled by the user. "
+                    "Ask the user for follow-up actions."
+                )
+                logger.info(
+                    "[AsyncDelegateRunner] %s cancelled by user — delivering notice: %s",
+                    delegate_id, body,
+                )
+                cancel_event = threading.Event()
+
+            if body is not None:
                 try:
                     from api.chat import deliver_async_result  # noqa: PLC0415
-                    deliver_async_result(mp, result_text, cancel_event)
+                    deliver_async_result(mp, body, cancel_event)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "[AsyncDelegateRunner] delivery failed for %s: %s",

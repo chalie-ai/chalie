@@ -66,6 +66,20 @@ def _sanitize_llm_args(value: object) -> object:
     return value
 
 
+#: Appended to the system prompt on any channel whose config sets
+#: ``SUPPORTS_ASYNC`` — the SAME gate that exposes the ``async`` tool parameter —
+#: so enabling async on a new ProcessorConfig surfaces this guidance with zero
+#: extra wiring. Appended trailing (constant text) to keep the cached system
+#: prefix byte-stable across turns.
+_ASYNC_GUIDANCE = """
+
+## Background tasks
+
+Some tools accept an `async` flag. Set `async: true` to run a tool in the background: you get an immediate acknowledgement, the current turn ends, and the moment the tool finishes you are automatically invoked again with its result as a new turn — so you can keep talking to the user while the work runs.
+
+Choose `async: true` when the user asks for something to happen "in the background" or "while" they do something else, or when a call is likely to be slow (web research, browsing, lengthy shell or file work) and the user should not have to wait. Call tools normally (synchronously) for quick results the user is actively waiting on."""
+
+
 class MessageProcessor:
     """Single flat message processor for every channel — one instance per turn."""
 
@@ -321,6 +335,8 @@ class MessageProcessor:
         from services.providers import resolve_thinking_mode  # noqa: PLC0415
 
         system = self._cfg.get_system_prompt(self)
+        if self._cfg.SUPPORTS_ASYNC:
+            system += _ASYNC_GUIDANCE
         messages = self._build_send_messages()
         tools = AbilityRegistry.build_tools(self)
 

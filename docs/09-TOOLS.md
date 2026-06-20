@@ -94,7 +94,7 @@ Every call — model-issued, framework seed, or background pass — goes through
 2. pre-validate required params (`ACTION_REQUIRED`),
 3. classify the action's risk and check it against the **policy gate** — every action is allow / ask / deny per context (Chat, Background, External Agent), editable in Brain → Policies,
 4. execute (inline, or on a background thread when the model sets the `async` flag — user channel only),
-5. render the envelope and record the call in the `tool_calls` audit trail (7-day retention).
+5. render the envelope and record the call in the `tool_calls` audit trail (retained as long as its transcript turn is — reaped together with the turn by the transcript GC).
 
 ## Adding a Tool — Checklist
 

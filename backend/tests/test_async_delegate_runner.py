@@ -16,12 +16,16 @@ lifecycle events are observed through the REAL WebSocketBroker fan-out via an
 in-process client implementing the broker's send Protocol — the same seam the
 WS route uses — so a dropped event or a missing payload key fails the test loud.
 
-cancel() sets the cooperative cancel event, which also makes ``_run`` skip the
-captured-mp delivery — so the happy lifecycle is provable without firing the
-real-LLM synthesis turn (that is QA-env / end-to-end territory).
+cancel() sets the cooperative cancel event; on completion ``_run`` then delivers
+a "cancelled by the user" notice to the model instead of dropping the result.
+These fixtures capture a config-less mp, so that notice delivery bails at
+``deliver_async_result``'s no-config guard — the lifecycle AND the cancel→notice
+decision are provable on the real daemon path without firing the real-LLM
+synthesis turn (that needs a real model — end-to-end territory).
 """
 
 import json
+import logging
 import threading
 import time
 from typing import cast
@@ -115,8 +119,9 @@ def test_spawn_pushes_rich_snapshot_then_emits_end_on_deregister() -> None:
         assert starts[0]["summary"] == "Drafting the weekly digest"
         assert starts[0]["started_at"] == row["started_at"]  # snapshot == pushed frame
 
-        # Stop control: flip the cancel event → _run skips delivery (no real LLM),
-        # finishes run(), and deregisters + emits subagent_end in `finally`.
+        # Stop control: flip the cancel event → run() finishes, _run delivers the
+        # cancel notice (bails on the no-config mp, so no real LLM), then
+        # deregisters + emits subagent_end in `finally`.
         assert runner.cancel(delegate_id) is True
         release.set()
         for _ in range(100):
@@ -130,6 +135,49 @@ def test_spawn_pushes_rich_snapshot_then_emits_end_on_deregister() -> None:
         assert len(ends) == 1
     finally:
         WebSocketBroker().disconnect(client)
+
+
+def test_cancel_delivers_notice_to_model_instead_of_dropping(caplog: pytest.LogCaptureFixture) -> None:
+    """A user-cancelled delegate whose tool still finishes must NOT silently drop
+    the result: ``_run`` builds a "cancelled by the user" notice and routes it to
+    ``deliver_async_result`` so the model is told and can ask for follow-up.
+
+    Driven on the real daemon path. The captured mp has no config, so the notice
+    delivery bails at ``deliver_async_result``'s no-config guard — the bail's
+    warning is the proof that delivery was ENTERED (not skipped), and the runner's
+    own info log carries the exact notice the model would receive."""
+    release = threading.Event()
+    started = threading.Event()
+    done: list[bool] = []
+    ability = _GatedAbility(release, started, done)
+    ability.mp = object()  # config-less → notice delivery bails LLM-free (see module docstring)
+
+    runner = AsyncDelegateRunner()
+    with caplog.at_level(logging.INFO):
+        runner.spawn(ability, {}, ability.mp, "Researching the Maltese election")
+        assert started.wait(timeout=2), "background run() never started"
+        delegate_id = cast(str, runner.active()[0]["sub_id"])
+
+        # User stops the delegate; the tool then finishes cooperatively.
+        assert runner.cancel(delegate_id) is True
+        release.set()
+        for _ in range(100):
+            if not runner.active():
+                break
+            time.sleep(0.05)
+        assert runner.active() == [], "delegate never deregistered"
+        assert done == [True], "the gated tool did not finish"
+
+    messages = [r.getMessage() for r in caplog.records]
+    # The exact notice the model is told — NOT a dropped result.
+    notice = "`test_runner_gated` was cancelled by the user. Ask the user for follow-up actions."
+    assert any(notice in m for m in messages), f"cancel notice not delivered; saw {messages}"
+    # Delivery was ENTERED on cancel: the no-config captured mp makes
+    # deliver_async_result bail here, and that warning only fires if the
+    # now-unwanted result reached delivery rather than being silently dropped.
+    assert any("async delivery skipped: captured mp has no config" in m for m in messages), (
+        f"result was dropped, not routed to delivery; saw {messages}"
+    )
 
 
 def test_cancel_unknown_id_returns_false() -> None:
